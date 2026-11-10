@@ -58,7 +58,7 @@ export function canReinstate(agent: AgentWorkforceAgent, now: Date): boolean {
   return new Date(agent.reinstate_until).getTime() > now.getTime();
 }
 
-export function isOpen(proposal: Pick<AgentWorkforceProposal, 'status'>): boolean {
+function isOpen(proposal: Pick<AgentWorkforceProposal, 'status'>): boolean {
   return proposal.status === 'proposed' || proposal.status === 'asked_owner';
 }
 

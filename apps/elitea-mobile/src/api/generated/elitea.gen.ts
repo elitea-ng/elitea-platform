@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.44
+ * client contract:    1.45
  * operations sha256:  27f1115f052a1dce26cdb61fca19d2e7d60270ce0bc0d49003e54f0955abb678
  */
 export interface paths {
@@ -2114,6 +2114,33 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description ADR-0050 decision 6: an agent version's avatar pack. Each slot names one uploaded media file for one state; only `still` is required, and a client animates a state with no slot from the still with the default motion pack. Lottie and Rive are not accepted. */
+        AgentAvatarPackV1: {
+            /** @description The document version. Always `elitea.avatar_pack/v1`. */
+            schema: string;
+            slots: {
+                error?: components["schemas"]["AgentAvatarSlot"];
+                idle?: components["schemas"]["AgentAvatarSlot"];
+                speaking?: components["schemas"]["AgentAvatarSlot"];
+                still: components["schemas"]["AgentAvatarSlot"];
+                success?: components["schemas"]["AgentAvatarSlot"];
+                thinking?: components["schemas"]["AgentAvatarSlot"];
+                waiting?: components["schemas"]["AgentAvatarSlot"];
+                waking?: components["schemas"]["AgentAvatarSlot"];
+                working?: components["schemas"]["AgentAvatarSlot"];
+            };
+        };
+        /** @description One avatar pack slot. `still` takes PNG, JPEG, WebP or SVG; the other slots take a still, an animated WebP, or a muted MP4 (H.264) or WebM (VP9 or AV1). Every animation is at most 4 s, 512 px and 2 MiB, and an animated WebP loops forever. */
+        AgentAvatarSlot: {
+            /** @description The model that generated the file, when it was generated. */
+            generated_by?: string;
+            /** @description Derived from the url's extension on every write (image/png, image/jpeg, image/webp, image/svg+xml, video/mp4, video/webm); a value the client sends is ignored. */
+            media_type?: string;
+            /** @description The still a video shows before it plays and under reduced motion. Required for MP4 and WebM; dropped for any other file. */
+            poster_url?: string;
+            /** @description `/api/v2/agent_media/{project_id}/{sha256}.{ext}`, the url the upload or the generation answered. */
+            url: string;
+        };
         /** @description NOTE(W2): internal/domain/contextview/contextview.go, Parse. */
         AgentContextSettings: {
             /** @description Stored and validated; the notes come with turn taking (issue 1611). */
@@ -2259,6 +2286,61 @@ export interface components {
         };
         /** @enum {string} */
         AgentMemoryStatus: "pending" | "active" | "archived";
+        /**
+         * @description The heartbeat block of an agent version (ADR-0050 decision 2), meta.proactivity. The heartbeat reads the block of the agent's published release, never of a draft. Every field is optional; an empty object is mode heartbeat with the defaults.
+         * @example {
+         *       "mode": "heartbeat",
+         *       "interval": "1h",
+         *       "quiet_hours": "22:00-07:00 Europe/Berlin",
+         *       "watch": [
+         *         {
+         *           "kind": "conversation"
+         *         },
+         *         {
+         *           "kind": "schedule_note"
+         *         }
+         *       ],
+         *       "act_target": "home_thread",
+         *       "limits": {
+         *         "wakes_per_day": 24,
+         *         "acts_per_day": 4,
+         *         "spend_per_day_usd": 2
+         *       }
+         *     }
+         */
+        AgentProactivity: {
+            /**
+             * @description Where an act runs. Default home_thread. workspace_thread is not available in v1 (422).
+             * @enum {string}
+             */
+            act_target?: "home_thread" | "new_conversation";
+            /** @description Whole minutes from 15m to 24h, as a Go duration ("1h", "30m"). Default 1h. */
+            interval?: string;
+            /** @description A whole percentage of the interval from 0 to 50, as a number or "10%". Default 10. */
+            jitter?: number | string;
+            /** @description The agent's daily envelope. The platform's maximums (section proactivity) apply when they are lower; a personal project also has its own act limit. */
+            limits?: {
+                /** @description Default 4. */
+                acts_per_day?: number;
+                /** @description The triage and the runs it starts. Default 2.0. */
+                spend_per_day_usd?: number;
+                /** @description Default 24. */
+                wakes_per_day?: number;
+            };
+            /**
+             * @description off (the default when the block is absent) or heartbeat.
+             * @enum {string}
+             */
+            mode?: "off" | "heartbeat";
+            /** @description "HH:MM-HH:MM Zone" with an IANA zone, for example "22:00-07:00 Europe/Berlin". No wake starts inside the window. */
+            quiet_hours?: string;
+            /** @description What a wake reads. Default conversation and schedule_note. toolkit_read names a read-only tool for the triage; v1 lists it in the digest and does not call it. */
+            watch?: {
+                /** @description conversation, schedule_note or toolkit_read. */
+                kind: string;
+                tool?: string;
+            }[];
+        };
         /**
          * @description ADR-0050 decision 1a: an agent version's soul document, the JSON form of a `SOUL.md` file (YAML front matter holding every key but `body`, then `body` as the markdown after the closing `---`). It shapes how the agent speaks and behaves and GRANTS NOTHING: no key names a tool, a toolkit, a credential, a secret, a permission or a scope, and Main refuses an unknown key outright (400 `soul_capability_key` for a capability-shaped one, `soul_invalid` for any other), so a soul can never be read as a grant. At most 16384 bytes of text: the UTF-8 bytes of every string value (keys not counted) are summed, which reads the same in every client and in SOUL.md (400 `soul_too_large`). Prompt order: platform system text, organization guardrails, the soul, the instructions, recalled memory. `proactive_goals` is not put into the prompt; the heartbeat reads it. Self-contained (no $ref, no `nullable`) so it is valid JSON Schema as written.
          * @example {
@@ -2432,6 +2514,8 @@ export interface components {
             application_id: string;
             author?: components["schemas"]["Author"];
             author_id?: string;
+            /** @description ADR-0050 decision 6: the version's avatar pack, or null when it has none (the client then reads `meta.icon_meta`). Served by the version-detail read and both write echoes. */
+            avatar_pack?: components["schemas"]["AgentAvatarPackV1"] | null;
             conversation_starters?: components["schemas"]["ConversationStarters"];
             /** Format: date-time */
             created_at?: string;
@@ -2928,6 +3012,8 @@ export interface components {
             offline_enabled: boolean;
             /** @description The client must refuse to run without a device passcode or biometric lock. */
             require_device_lock: boolean;
+            /** @description Client contract 1.45 (ADR-0052 decision 7). The IT support line the apps show in About and Settings, one line of text (an email address, a phone number or an https address among it is a link); empty means none. A device's managed `support_contact` wins over it. A server before 1.45 sends none. */
+            support_contact?: string;
         };
         /** @description The 426 answer to a native client whose `X-Client-Version` is below the minimum (ADR-0025 decision 5). Only callers authenticated by a native access token, and the native token endpoint, are judged. NOTE(W2): internal/api/middleware/client_version.go:176 (`WriteClientUpgradeRequired`). */
         ClientUpgradeRequiredError: {
@@ -3952,6 +4038,8 @@ export interface components {
             offline_retention_days: number;
             /** @description Refuse to run on a device without a passcode or biometric lock. */
             require_device_lock: boolean;
+            /** @description Client contract 1.45 (ADR-0052 decision 7). The IT support line the apps show in About and Settings; empty means none. The same value as the discovery document's `client_policy.support_contact`. A device's managed `support_contact` wins over it. */
+            support_contact?: string;
         };
         /** @description One native device session (refresh-token family). NOTE(W2): internal/api/nativeauth/devices.go:36 (`UserDevice`). */
         NativeDevice: {
@@ -4037,7 +4125,7 @@ export interface components {
             event_type: string;
             id: number;
             is_seen: boolean;
-            /** @description Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds. For `run_finished` (client contract 1.32, ADR-0045 decision 5) the server writes ids and the outcome only, never content: `outcome` (`completed`, `failed`, `waiting` or `limit_reached`), `limit` (`continuations`, `spend` or `deadline`, only for `limit_reached`), `project_id`, `conversation_uuid`, `thread_id` (a desktop chain, when known), `chain_root_execution_id`, `execution_id` (the chain's last run), `origin` (`cloud` or `desktop`) and `continuations` (internal/infra/db/repos/run_finished.go). One row per chain end. */
+            /** @description Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds. For `run_finished` (client contract 1.32, ADR-0045 decision 5) the server writes ids and the outcome only, never content: `outcome` (`completed`, `failed`, `waiting` or `limit_reached`), `limit` (`continuations`, `spend` or `deadline`, only for `limit_reached`), `project_id`, `conversation_uuid`, `thread_id` (a desktop chain, when known), `chain_root_execution_id`, `execution_id` (the chain's last run), `origin` (`cloud` or `desktop`) and `continuations` (internal/infra/db/repos/run_finished.go). One row per chain end. For `agent_heartbeat` (ADR-0050 decision 2) a proactive agent wrote to its owner: `conversation_id` (the home thread UUID), `message_id`, `project_id`, `application_id`, `agent_name`, `outcome` (`notify`, `act_degraded` or `paused`), `reason_code` `text` (the first 280 bytes of the message) and `message` (the agent's name, the text and an empty `[...]()` link to the conversation) (internal/infra/db/repos/agent_heartbeats.go, PostToOwner). */
             meta: {
                 /** @description `chat_user_mentioned`: who mentioned the recipient. `name` is empty when it could not be resolved. */
                 sender?: {
@@ -4639,6 +4727,8 @@ export interface components {
             parent_author_id?: string;
             parent_entity_id?: string;
             parent_project_id?: string;
+            /** @description The agent's heartbeat (ADR-0050 decision 2): how often it wakes, its quiet hours, what it reads, where it acts and its daily limits. The heartbeat reads the block of the published release. A save with an invalid block is refused with 422 proactivity_invalid. */
+            proactivity?: components["schemas"]["AgentProactivity"] | null;
             /** @description The author's run caps of this agent (ADR-0041 decision 3). Each key LOWERS the platform's cap for the agent's risk tier (Configuration › Run caps); the lower value applies. A save that sets a value above the tier's cap is refused with 422 RUN_CAP_ABOVE_TIER. Omit a key, or set it to null, to keep the tier's cap. `step_limit` still bounds each agent loop: with `max_model_turns` the lower of the two stops first. */
             run_caps?: components["schemas"]["VersionRunCaps"] | null;
             source_version_id?: string;
@@ -4687,6 +4777,8 @@ export interface components {
         VersionWriteRequest: {
             /** @description Defaults to "openai" when empty on the CREATE paths (handler.go:398-400, 731-733). On the PUT, omit the key to leave the stored value alone; an explicit empty string is REFUSED with a 400, for the same reason as `name` (issue 824). */
             agent_type?: string;
+            /** @description ADR-0050 decision 6. Omit the key to leave the stored pack alone; null clears it; an object replaces it whole and also writes its still into `meta.icon_meta`, so a client that reads only the old field shows it. Every url must be media uploaded to this project (`/api/v2/agent_media/{this project}/...`). A pack that breaks a rule is REFUSED with a 400 `avatar_pack_invalid` before anything is written. */
+            avatar_pack?: components["schemas"]["AgentAvatarPackV1"] | null;
             conversation_starters?: components["schemas"]["ConversationStarters"];
             /** @description Omit the key to leave the stored text alone. An explicit empty string CLEARS the column — it is the clearing value, since the property is not nullable and a client must be able to erase the text it wrote (issue 824). */
             instructions?: string;

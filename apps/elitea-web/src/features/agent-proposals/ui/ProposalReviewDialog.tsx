@@ -26,12 +26,13 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import type { AgentProposal } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { triggerBlobDownload } from '@/shared/lib/download';
+import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { agentsMarkdownOf, fileStemOf, reviewDraftOf, soulMarkdownOf, type ReviewDraft } from '../lib/proposalDraft';
-import { proposalErrorMessage } from '../lib/proposalErrors';
+import { AgentMadeError, proposalErrorMessage } from '../lib/proposalErrors';
 import { useProposalDecisions, type CreatedAgent } from '../model/useAgentProposals';
 import { ProposalToolList } from './ProposalToolList';
 
@@ -44,18 +45,22 @@ export interface ProposalReviewDialogProps {
   readonly onCreated?: ((created: CreatedAgent) => void) | undefined;
 }
 
+/** The runtime's sub-agent display name bound (agentproposal.MaxDisplayNameChars). */
+const MAX_DISPLAY_NAME_LENGTH = 60;
+
 export function ProposalReviewDialog({ projectId, proposal, onClose, onCreated }: ProposalReviewDialogProps): ReactNode {
   if (proposal === undefined) return null;
   return <ProposalReviewForm key={proposal.id} projectId={projectId} proposal={proposal} onClose={onClose} onCreated={onCreated} />;
 }
-
-const MAX_NAME_CHARS = 128;
 
 function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: ProposalReviewDialogProps & { readonly proposal: AgentProposal }): ReactNode {
   const { create, dismiss } = useProposalDecisions(projectId);
   const [review, setReview] = useState<ReviewDraft>(() => reviewDraftOf(proposal));
   const [kept, setKept] = useState<ReadonlySet<number>>(() => new Set(proposal.memory_seeds.map((_seed, index) => index)));
   const [error, setError] = useState<string | undefined>(undefined);
+  // The agent an attempt created before recording the proposal failed: a
+  // retry records this one instead of creating a second agent.
+  const [madeId, setMadeId] = useState<number | undefined>(undefined);
   const busy = create.isPending || dismiss.isPending;
   const decided = proposal.status !== 'proposed';
   const nameMissing = review.name.trim() === '';
@@ -77,13 +82,25 @@ function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: Proposa
     if (nameMissing || busy || decided) return;
     setError(undefined);
     create.mutate(
-      { proposal, review, seeds: [...kept].sort((a, b) => a - b) },
+      { proposal, review, seeds: [...kept].sort((a, b) => a - b), existingApplicationId: madeId },
       {
         onSuccess: (created) => {
           onCreated?.(created);
           onClose();
         },
-        onError: (cause) => setError(proposalErrorMessage(cause, t('features.agentProposals.review.createFailed', 'The agent was not created. Try again.'))),
+        onError: (cause) => {
+          if (cause instanceof AgentMadeError) {
+            setMadeId(cause.applicationId);
+            setError(
+              proposalErrorMessage(
+                cause.cause,
+                t('features.agentProposals.review.recordFailed', 'The agent was created, but the proposal was not updated. Try again to finish.'),
+              ),
+            );
+            return;
+          }
+          setError(proposalErrorMessage(cause, t('features.agentProposals.review.createFailed', 'The agent was not created. Try again.')));
+        },
       },
     );
   };
@@ -140,7 +157,7 @@ function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: Proposa
             value={review.name}
             onChange={field('name')}
             error={nameMissing}
-            slotProps={{ htmlInput: { maxLength: MAX_NAME_CHARS, 'data-testid': 'agent-proposal-name' } }}
+            slotProps={{ htmlInput: { maxLength: MAX_NAME_LENGTH, 'data-testid': 'agent-proposal-name' } }}
           />
           <TextField
             label={t('features.agentProposals.review.description', 'Description')}
@@ -148,7 +165,7 @@ function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: Proposa
             onChange={field('description')}
             multiline
             minRows={2}
-            slotProps={{ htmlInput: { 'data-testid': 'agent-proposal-description' } }}
+            slotProps={{ htmlInput: { maxLength: MAX_DESCRIPTION_LENGTH, 'data-testid': 'agent-proposal-description' } }}
           />
           <TextField
             label={t('features.agentProposals.review.instructions', 'Instructions')}
@@ -162,7 +179,7 @@ function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: Proposa
             label={t('features.agentProposals.review.displayName', 'Display name')}
             value={review.displayName}
             onChange={field('displayName')}
-            slotProps={{ htmlInput: { maxLength: 64, 'data-testid': 'agent-proposal-display-name' } }}
+            slotProps={{ htmlInput: { maxLength: MAX_DISPLAY_NAME_LENGTH, 'data-testid': 'agent-proposal-display-name' } }}
           />
           <TextField
             label={t('features.agentProposals.review.soul', 'Soul')}

@@ -1,6 +1,6 @@
 package repos
 
-// The workforce policy (shared 0250, ADR-0050 decisions 5c and 5k, issue
+// The workforce policy (shared 0237, ADR-0050 decisions 5c and 5k, issue
 // 1617): a project's automatic hiring and automatic dismissal, OFF by
 // default. The pass (WorkforcePolicyPass) runs from the
 // main.agent_workforce_policy routine; a person sets the policy and acts on

@@ -13,7 +13,6 @@ import (
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
@@ -125,6 +124,13 @@ ORDER BY id DESC LIMIT 1 FOR UPDATE`, schema), agent.ApplicationID).Scan(&draftI
 		applied["draft_version_id"] = draftID
 		applied["detached_toolkit_ids"] = detached
 	}
+	if narrowing.ProactivityOff {
+		stopped, err := stopHeartbeat(ctx, tx, schema, agent.ApplicationID)
+		if err != nil {
+			return nil, err
+		}
+		applied["heartbeat_stopped"] = stopped
+	}
 	if narrowing.RemoveLead {
 		leads, err := dropLeads(ctx, tx, schema, agent.ApplicationID, agent.ProjectID)
 		if err != nil {
@@ -135,6 +141,25 @@ ORDER BY id DESC LIMIT 1 FOR UPDATE`, schema), agent.ApplicationID).Scan(&draftI
 	applied["narrowing"] = narrowing
 	applied["publish_needed"] = narrowing.TouchesVersion()
 	return applied, nil
+}
+
+// stopHeartbeat disables the agent's heartbeat (tenant 0166, #1618) at
+// once. The heartbeat reads the block of the RELEASE, which keeps it until
+// the narrowed draft is published; a demotion or a retirement takes the
+// heartbeat away now. stopped is false without an enabled row, or on a
+// tenant schema older than 0166.
+func stopHeartbeat(ctx context.Context, tx pgx.Tx, schema string, applicationID int64) (bool, error) {
+	exists, err := relationExists(ctx, tx, schema+".agent_heartbeat_settings")
+	if err != nil || !exists {
+		return false, err
+	}
+	tag, err := tx.Exec(ctx, fmt.Sprintf(`
+UPDATE %s.agent_heartbeat_settings SET enabled = false, updated_at = clock_timestamp()
+WHERE application_id = $1 AND enabled`, schema), applicationID)
+	if err != nil {
+		return false, fmt.Errorf("agent workforce: stop the heartbeat: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // detachToolkits removes the named toolkits, and those of a type outside
@@ -252,6 +277,8 @@ type retireSnapshot struct {
 	Schedules         []int64           `json:"schedules"`
 	Triggers          []int64           `json:"triggers"`
 	Teams             []snapshotTeam    `json:"teams"`
+	// Heartbeat: retirement disabled the agent's heartbeat row (#1618).
+	Heartbeat bool `json:"heartbeat,omitempty"`
 }
 
 type snapshotVersion struct {
@@ -422,6 +449,10 @@ RETURNING mapping.conversation_id, mapping.participant_id, mapping.entity_settin
 		}
 	}
 
+	if snap.Heartbeat, err = stopHeartbeat(ctx, tx, schema, agent.ApplicationID); err != nil {
+		return nil, err
+	}
+
 	encoded, err := json.Marshal(snap)
 	if err != nil {
 		return nil, fmt.Errorf("agent workforce: encode the retire snapshot: %w", err)
@@ -440,13 +471,8 @@ WHERE tenant_project_id = $1 AND application_id = $2`,
 		"unpublished_versions": len(snap.PublishedVersions), "withdrawn_releases": len(snap.WithdrawnReleases),
 		"rosters_left": len(snap.Rosters), "leads_removed": len(snap.Leads), "teams_left": len(snap.Teams),
 		"schedules_off": len(snap.Schedules), "triggers_revoked": len(snap.Triggers),
-		"reinstate_until": reinstateUntil,
+		"heartbeat_stopped": snap.Heartbeat, "reinstate_until": reinstateUntil,
 	}, nil
-}
-
-func undefinedRelation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
 }
 
 func collect(ctx context.Context, tx pgx.Tx, statement string, args []any, scan func(pgx.Rows) error) error {
@@ -670,6 +696,16 @@ UPDATE %s.pipeline_schedules SET active = true, updated_at = now() WHERE id = AN
 UPDATE %s.pipeline_triggers SET revoked_at = NULL, revoked_by = NULL WHERE id = ANY($1::int[]) AND application_id = $2`, schema),
 			snap.Triggers, agent.ApplicationID); err != nil {
 			return nil, fmt.Errorf("agent workforce: restore the triggers: %w", err)
+		}
+	}
+	if snap.Heartbeat {
+		// The next wake is now, not the stale next_wake_at of before the
+		// retirement; a pause from back then is over.
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+UPDATE %s.agent_heartbeat_settings
+SET enabled = true, next_wake_at = clock_timestamp(), paused_until = NULL, updated_at = clock_timestamp()
+WHERE application_id = $1 AND NOT enabled`, schema), agent.ApplicationID); err != nil {
+			return nil, fmt.Errorf("agent workforce: restart the heartbeat: %w", err)
 		}
 	}
 	resumed, err := resumeDismissalSuspension(ctx, tx, agent, actorID, "Reinstated.")

@@ -6,7 +6,7 @@ package agentworkforce
 // and every action goes through the ladder of this package, audited with the
 // actor policy:<rule>.
 //
-// AUTO HIRE. An open agent proposal (shared/0235) becomes an agent without a
+// AUTO HIRE. An open agent proposal (shared/0234) becomes an agent without a
 // click when ALL of these hold (CheckHire):
 //   - the suggested tier of its proposed tools is low: every tool is
 //     read-only (a wildcard or an undeclared tool reads as write);

@@ -57,6 +57,9 @@ pub struct HostState {
     pub client_version: String,
     pub client_id: String,
     pub policy: Option<Value>,
+    /// The IT support line the device management set (`support_contact`,
+    /// src/managed.rs); it beats the policy's.
+    pub managed_support_contact: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -182,6 +185,12 @@ impl AuthService {
 
     // ---- state ---------------------------------------------------------
 
+    /// The stored `client_policy`, without the session read [`Self::state`]
+    /// does (no keychain access): for the menu bar's About panel.
+    pub fn stored_policy(&self) -> Option<Value> {
+        self.files.policy().ok().flatten()
+    }
+
     pub fn state(&self) -> Result<HostState, HostError> {
         let settings = self.files.settings()?;
         let session = load_session(self.store.as_ref())?;
@@ -200,6 +209,7 @@ impl AuthService {
             } else {
                 None
             },
+            managed_support_contact: crate::managed::support_contact(),
         })
     }
 

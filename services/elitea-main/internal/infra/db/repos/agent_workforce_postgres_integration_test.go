@@ -1,6 +1,6 @@
 package repos
 
-// The agent workforce (shared/0245, ADR-0050 decisions 5g-5j, #1616)
+// The agent workforce (shared/0236, ADR-0050 decisions 5g-5j, #1616)
 // against a REAL migrated database: one case per ladder stage, the HR-agent
 // guards, the appeal by a different manager and the reinstatement. It SKIPS
 // without ELITEA_TEST_DATABASE_URL, and a skip prints the same `ok`, so each
@@ -160,7 +160,8 @@ func TestWorkforceDemoteNarrowsTheDraftAndDropsTheLead(t *testing.T) {
 	ctx := context.Background()
 	const app int64 = 991702
 	published, draft := seedWorkforceAgent(t, pool, app, "low",
-		`{"capabilities":{"can_propose_agents":true,"can_review_agents":true},"memory":{"write":"auto"}}`)
+		`{"capabilities":{"can_propose_agents":true,"can_review_agents":true},"memory":{"write":"auto"},"proactivity":{"mode":"heartbeat","interval":"30m"}}`)
+	wfExec(t, pool, `INSERT INTO p_1.agent_heartbeat_settings (application_id, enabled, owner_user_id) VALUES ($1, true, 4)`, app)
 	wfExec(t, pool, `INSERT INTO p_1.elitea_tools (id, type, name, description, settings, author_id, meta, created_at)
 VALUES (9917021, 'github', 'gh', '', '{}'::jsonb, 4, '{}'::jsonb, now() AT TIME ZONE 'UTC'), (9917022, 'jira', 'jira', '', '{}'::jsonb, 4, '{}'::jsonb, now() AT TIME ZONE 'UTC')
 ON CONFLICT (id) DO NOTHING`)
@@ -169,7 +170,7 @@ VALUES (9917021, $1, $2, 'agent', '[]'::jsonb), (9917022, $1, $2, 'agent', '[]':
 	conversation, _ := seedRoster(t, pool, app, true)
 
 	decided := approve(t, store, propose(t, store, app, agentworkforce.StageDemote, agentworkforce.Narrowing{
-		RemoveToolkitIDs: []int64{9917021}, MemoryReview: true, RemoveCapabilities: []string{"can_review_agents"}, RemoveLead: true,
+		RemoveToolkitIDs: []int64{9917021}, MemoryReview: true, RemoveCapabilities: []string{"can_review_agents"}, RemoveLead: true, ProactivityOff: true,
 	}), false)
 	if decided.Kind != "demote" || decided.Applied["draft_version_id"] != float64(draft) {
 		t.Fatalf("applied = %v", decided.Applied)
@@ -177,6 +178,13 @@ VALUES (9917021, $1, $2, 'agent', '[]'::jsonb), (9917022, $1, $2, 'agent', '[]':
 	var meta string
 	if err := pool.QueryRow(ctx, `SELECT meta::text FROM p_1.application_versions WHERE id = $1`, draft).Scan(&meta); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(meta, `"mode": "off"`) || !strings.Contains(meta, `"interval": "30m"`) || decided.Applied["heartbeat_stopped"] != true {
+		t.Fatalf("the heartbeat was not narrowed: %s applied=%v", meta, decided.Applied)
+	}
+	var heartbeatEnabled bool
+	if err := pool.QueryRow(ctx, `SELECT enabled FROM p_1.agent_heartbeat_settings WHERE application_id = $1`, app).Scan(&heartbeatEnabled); err != nil || heartbeatEnabled {
+		t.Fatalf("the heartbeat row still runs: %v %v", heartbeatEnabled, err)
 	}
 	if want := `"write": "review"`; !strings.Contains(meta, want) || strings.Contains(meta, "can_review_agents") || !strings.Contains(meta, "can_propose_agents") {
 		t.Fatalf("draft meta = %s", meta)
@@ -278,6 +286,17 @@ VALUES (1, $1, $2, 'v1', decode(repeat('ab', 32), 'hex'), '{}'::jsonb, '[]'::jso
 SELECT 1, $1, id, 'publish' FROM elitea_lifecycle.application_releases WHERE tenant_project_id = 1 AND application_id = $1`, app)
 	conversation, participant := seedRoster(t, pool, app, true)
 	wfExec(t, pool, `INSERT INTO p_1.pipeline_schedules (application_id, version_id, cron, active, author_id) VALUES ($1, $2, '0 * * * *', true, 4)`, app, published)
+	// A proactive agent (#1618): retirement stops its heartbeat.
+	wfExec(t, pool, `INSERT INTO p_1.agent_heartbeat_settings (application_id, enabled, owner_user_id, next_wake_at, paused_until)
+VALUES ($1, true, 4, now() - interval '40 days', now() - interval '39 days')`, app)
+	heartbeatOn := func() (enabled, fresh bool) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, `SELECT enabled, next_wake_at > now() - interval '1 minute' AND paused_until IS NULL
+FROM p_1.agent_heartbeat_settings WHERE application_id = $1`, app).Scan(&enabled, &fresh); err != nil {
+			t.Fatal(err)
+		}
+		return enabled, fresh
+	}
 	// The parent nests the agent.
 	wfExec(t, pool, `INSERT INTO p_1.elitea_tools (id, type, name, description, settings, author_id, meta, created_at)
 VALUES (9917051, 'application', 'child', '', jsonb_build_object('application_id', $1::bigint::text, 'application_version_id', $2::bigint::text), 4, '{}'::jsonb, now() AT TIME ZONE 'UTC')
@@ -309,6 +328,9 @@ VALUES (9917051, $1, $2, 'agent', '[]'::jsonb)`, parent, parentDraft)
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM p_1.pipeline_schedules WHERE application_id = $1 AND active`, app).Scan(&active)
 	if status != "draft" || heads != 0 || rosters != 0 || active != 0 {
 		t.Fatalf("after retire: status=%s heads=%d rosters=%d schedules=%d", status, heads, rosters, active)
+	}
+	if enabled, _ := heartbeatOn(); enabled {
+		t.Fatal("the heartbeat still runs after retirement")
 	}
 
 	// Admission's read: the agent and its parent are refused.
@@ -342,6 +364,9 @@ VALUES (9917051, $1, $2, 'agent', '[]'::jsonb)`, parent, parentDraft)
 	_ = pool.QueryRow(ctx, `SELECT meta -> 'floor' ->> 'lead_participant_id' FROM p_1.chat_conversations WHERE id = $1`, conversation).Scan(&lead)
 	if status != "published" || heads != 1 || rosters != 1 || active != 1 || lead == nil || *lead != strconv.FormatInt(participant, 10) {
 		t.Fatalf("after reinstate: status=%s heads=%d rosters=%d schedules=%d lead=%v", status, heads, rosters, active, lead)
+	}
+	if enabled, fresh := heartbeatOn(); !enabled || !fresh {
+		t.Fatalf("after reinstate: heartbeat enabled=%v rescheduled=%v", enabled, fresh)
 	}
 	retired, _ = store.RetiredAgents(ctx, wfProject, []int64{app})
 	if retired[app] {

@@ -684,6 +684,11 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 		if request.normalizedKind() != CurrentContinuationOutputLimit {
 			return CurrentApplicationStartOutcome{}, ErrInvalidCurrentAgentStart
 		}
+		// A heartbeat chain's output-limit continuation keeps the heartbeat
+		// floor: nobody waits on it either (ADR-0050 decision 2).
+		if start := request.UnattendedContinuation.Chain.Grant.Start; start != nil && start.Heartbeat {
+			input.Floor = heartbeatFloor(input.Floor, true)
+		}
 		var grant *runtimev1.UnattendedGrantV1
 		grant, chain, err = service.admitUnattended(ctx, unattendedTarget{
 			continuation: request.UnattendedContinuation, capabilityID: capabilityID, input: input,

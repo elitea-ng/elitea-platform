@@ -25,8 +25,8 @@ interface AgentEditorParticipantDetails {
 export interface UseChatBoxParticipantParams {
   readonly activeParticipant: unknown;
   readonly conversationParticipants: unknown[] | undefined;
-  /** The agent the history last addressed (ADR-0050 D7c), for the attachments gate. */
-  readonly stickyParticipantId?: string | undefined;
+  /** The participant the send goes to (`useResolvedTarget`), for the attachments gate. */
+  readonly target: unknown;
   /** #905: the agent/pipeline EDITOR surface computes the attachments gate from its own (unsaved) form state — the gate below stands down there. */
   readonly isAgentsPage: boolean | undefined;
 }
@@ -52,14 +52,14 @@ export interface UseChatBoxParticipantResult {
    * paperclip, and the drop/paste bridge.
    */
   readonly areAttachmentsGated: boolean;
-  /** The tools of the active agent's version that an unattended grant can name (ADR-0045); undefined without an agent. */
+  /** The tools of the target agent's version (the active one in the editor) that an unattended grant can name (ADR-0045); undefined without an agent. */
   readonly grantableTools: readonly SensitiveToolRef[] | undefined;
 }
 
 export function useChatBoxParticipant({
   activeParticipant,
   conversationParticipants,
-  stickyParticipantId,
+  target,
   isAgentsPage,
 }: UseChatBoxParticipantParams): UseChatBoxParticipantResult {
   const participantForEditor = useMemo(() => toParticipant(activeParticipant), [activeParticipant]);
@@ -83,8 +83,10 @@ export function useChatBoxParticipant({
     return { ...(id !== undefined ? { id } : {}), ...(name !== undefined ? { name } : {}), ...(versions !== undefined ? { versions } : {}) };
   }, [rawParticipantDetails]);
 
-  const areAttachmentsGated = useChatBoxAttachmentsGate({ activeParticipant, participants: conversationParticipants, stickyParticipantId, isAgentsPage });
-  const versionDetails = participantForEditor === undefined ? undefined : rawParticipantDetails['version_details'];
+  const gate = useChatBoxAttachmentsGate({ target, isAgentsPage });
+  const areAttachmentsGated = gate.gated;
+  // The tools the grant names are the TARGET's (the agent the send goes to); the editor surface keeps its own participant's.
+  const versionDetails = isAgentsPage ? (participantForEditor === undefined ? undefined : rawParticipantDetails['version_details']) : gate.versionDetails;
   const tools = useMemo(() => (versionDetails === undefined ? undefined : grantableTools(versionDetails)), [versionDetails]);
 
   return {

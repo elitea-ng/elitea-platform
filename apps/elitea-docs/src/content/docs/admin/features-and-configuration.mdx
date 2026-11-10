@@ -73,6 +73,8 @@ What this deployment requires of its mobile and desktop apps. The policy goes ou
 
 The device and data-control keys: `require_device_lock`, `idle_lock_seconds`, `allow_screenshots`, `offline_retention_days`, `offline_max_mb`, `offline_attachments`, `min_client_version`, `allow_share_out`, `allow_share_in`, `allow_cloud_stt`, `notification_preview`, `allow_notification_actions` and `allow_system_surfaces`.
 
+**IT Support Contact** (`support_contact`): one line of at most 200 characters, shown as "IT support" in the apps' About and Settings, for example `IT Service Desk, +1 555 0100`. It is public: the discovery document carries it, so the apps show it before sign-in too. A device's managed configuration can set its own, which wins (see [Managed devices](/admin/managed-devices#it-support-contact)). Empty shows nothing.
+
 **Local work** (the desktop app runs agents on the user's machine). Every key but the first shows only while **Allow Local Work** is on:
 
 | Key | Default | Effect |

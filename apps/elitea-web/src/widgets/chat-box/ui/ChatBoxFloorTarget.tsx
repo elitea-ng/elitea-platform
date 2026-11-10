@@ -6,7 +6,7 @@
  * With a lead (`meta.floor`), the lead answers, whatever agent is selected:
  * only an address overrides it, so picking another agent here addresses this
  * message to it (`@Name` in the composer). Without a lead, the selected or
- * sticky agent answers (`resolveTargetParticipant`), and a pick here selects
+ * sticky agent answers (`useResolvedTarget`), and a pick here selects
  * that agent, as the participants panel does.
  */
 import type { ReactNode } from 'react';
@@ -22,14 +22,11 @@ import type { Theme } from '@mui/material/styles';
 import { FLOOR_POLICY, floorOf, type AddressableAgent } from '@elitea/client-core/conversation';
 import { t } from '@/shared/i18n';
 
-import { resolveTargetParticipant } from './hooks/useChatBoxSend.helpers';
-
 export interface FloorTargetInput {
   readonly agents: readonly AddressableAgent[];
   readonly meta: unknown;
-  readonly activeParticipant: unknown;
-  readonly participants: readonly unknown[] | undefined;
-  readonly stickyParticipantId: string | undefined;
+  /** The participant an unaddressed message goes to without a lead (`useResolvedTarget`). */
+  readonly target: unknown;
 }
 
 export interface FloorTarget {
@@ -38,20 +35,21 @@ export interface FloorTarget {
 }
 
 /** The agent that answers an unaddressed message, or `undefined` when the person has to pick (or there is one agent). */
-export function floorTarget({ agents, meta, activeParticipant, participants, stickyParticipantId }: FloorTargetInput): FloorTarget | undefined {
+export function floorTarget({ agents, meta, target: resolved }: FloorTargetInput): FloorTarget | undefined {
   if (agents.length < 2) return undefined;
   const floor = floorOf(meta);
   if (floor.policy === FLOOR_POLICY.Lead) {
     const lead = agents.find((agent) => agent.participantId === floor.leadParticipantId);
     if (lead !== undefined) return { agent: lead, isLead: true };
   }
-  const target = resolveTargetParticipant(activeParticipant, participants, stickyParticipantId) as { readonly id?: unknown } | null | undefined;
-  const id = Number(target?.id);
+  const id = Number((resolved as { readonly id?: unknown } | null | undefined)?.id);
   const agent = agents.find((candidate) => candidate.participantId === id);
   return agent === undefined ? undefined : { agent, isLead: false };
 }
 
 export interface ChatBoxFloorTargetProps extends FloorTargetInput {
+  /** The roster a pick here selects from. */
+  readonly participants: readonly unknown[] | undefined;
   /** Selects the agent as the composer's target (no lead). */
   readonly onSelect: (participant: unknown) => void;
   /** Addresses the message to the agent (a lead is set). */

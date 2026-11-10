@@ -53,6 +53,7 @@ describe('parseManagedConfig', () => {
       requireDeviceLock: true,
       idleLockSeconds: 60,
       allowScreenshots: false,
+      supportContact: null,
     });
   });
 
@@ -82,6 +83,7 @@ describe('parseManagedConfig', () => {
       requireDeviceLock: true,
       idleLockSeconds: 60,
       allowScreenshots: false,
+      supportContact: null,
     });
     expect(parseManagedConfig({ require_device_lock: 2, allow_screenshots: -1 })).toEqual(NO_MANAGED_CONFIG);
   });

@@ -1,6 +1,6 @@
 package repos
 
-// The workforce policy (shared/0250, ADR-0050 decisions 5c and 5k, #1617)
+// The workforce policy (shared/0237, ADR-0050 decisions 5c and 5k, #1617)
 // against a REAL migrated database: off by default, auto_hire's invariants
 // (low tier, read-only, unpublished, no tool bound, probation, the 14-day
 // undo, max_auto_hired, min successful runs), auto_dismiss's (never demote
@@ -71,6 +71,21 @@ VALUES ($1, $2, 'cmd', 1, 1, $3, 'call', 1, $4, $5, now())`,
 			fmt.Sprintf("exec-spawn-%d-%d", n, i), fmt.Sprintf("a_%08x", i), policyProposer, digest, status)
 	}
 	return id
+}
+
+// seedHeartbeat seeds an enabled heartbeat row (#1618) for app and returns
+// a probe of it: the policy retires through the ladder, which stops it.
+func seedHeartbeat(t *testing.T, pool *pgxpool.Pool, app int64) func() bool {
+	t.Helper()
+	wfExec(t, pool, `INSERT INTO p_1.agent_heartbeat_settings (application_id, enabled, owner_user_id) VALUES ($1, true, 4)`, app)
+	return func() bool {
+		t.Helper()
+		var enabled bool
+		if err := pool.QueryRow(context.Background(), `SELECT enabled FROM p_1.agent_heartbeat_settings WHERE application_id = $1`, app).Scan(&enabled); err != nil {
+			t.Fatal(err)
+		}
+		return enabled
+	}
 }
 
 func actionsOf(t *testing.T, store *AgentWorkforce, filter ActionFilter) []AutomaticAction {
@@ -227,6 +242,7 @@ WHERE event->'data'->>'action' IN ('agent.workforce.auto_hired', 'agent.proposal
 	if _, err := store.UndoAutoHire(ctx, wfProject, hireAction.ID, WorkforceActor{UserID: wfOwner}, "", false); refusalCode(err) != agentworkforce.ForbiddenCode {
 		t.Fatalf("the owner undid: %v", err)
 	}
+	hiredHeartbeat := seedHeartbeat(t, pool, hired)
 	undone, err := store.UndoAutoHire(ctx, wfProject, hireAction.ID, managerActor(wfManager), "Not needed.", false)
 	if err != nil || undone.Status != agentworkforce.ActionUndone || undone.CanUndo {
 		t.Fatalf("undo: %+v %v", undone, err)
@@ -234,6 +250,9 @@ WHERE event->'data'->>'action' IN ('agent.workforce.auto_hired', 'agent.proposal
 	agent, _ = store.Agent(ctx, wfProject, hired)
 	if agent.State != agentworkforce.StateRetired || agent.ReinstateUntil == nil || agent.OnProbation() {
 		t.Fatalf("undone agent: %+v", agent)
+	}
+	if hiredHeartbeat() {
+		t.Fatal("the undone hire's heartbeat still runs")
 	}
 	if _, err := store.UndoAutoHire(ctx, wfProject, hireAction.ID, managerActor(wfManager), "", false); refusalCode(err) != agentworkforce.ActionClosedCode {
 		t.Fatalf("undo twice: %v", err)
@@ -293,6 +312,7 @@ func TestWorkforceAutoDismissStagesGraceObjectionAndExemptions(t *testing.T) {
 	card(objected, "last_used_at = now() - interval '120 days'")
 	card(critical, "breaker_trips_7d = 9, last_used_at = now() - interval '120 days'")
 	card(held, "breaker_trips_7d = 9")
+	unusedHeartbeat := seedHeartbeat(t, pool, unused)
 
 	summary, err := store.WorkforcePolicyPass(ctx)
 	if err != nil || summary.Applied != 2 || summary.Noticed != 2 {
@@ -311,6 +331,9 @@ func TestWorkforceAutoDismissStagesGraceObjectionAndExemptions(t *testing.T) {
 		if a.State != agentworkforce.StateActive {
 			t.Fatalf("retired before the grace period: %+v", a)
 		}
+	}
+	if !unusedHeartbeat() {
+		t.Fatal("a retire notice stopped the heartbeat before the grace period ended")
 	}
 	for _, app := range []int64{critical, held} {
 		a, _ = store.Agent(ctx, wfProject, app)
@@ -360,6 +383,9 @@ WHERE source <> 'policy' OR stage NOT IN ('watch', 'suspend', 'retire') OR decid
 	a, _ = store.Agent(ctx, wfProject, unused)
 	if a.State != agentworkforce.StateRetired || a.ReinstateUntil == nil {
 		t.Fatalf("retired after notice: %+v", a)
+	}
+	if unusedHeartbeat() {
+		t.Fatal("the automatically retired agent's heartbeat still runs")
 	}
 	a, _ = store.Agent(ctx, wfProject, objected)
 	if a.State != agentworkforce.StateActive {

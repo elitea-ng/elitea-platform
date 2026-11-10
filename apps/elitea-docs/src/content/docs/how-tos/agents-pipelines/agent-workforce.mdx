@@ -26,7 +26,7 @@ The tab shows the latest scorecard and the failure-rate trend. Scorecards are ke
 | **Watch** | Flags the agent as under review. Nothing else changes. |
 | **Demote** | Opens a change on the agent's draft that takes away exactly what the proposal names: toolkits, the heartbeat, the capabilities `can_propose_agents` and `can_review_agents`, or its lead role in conversations; or sets its memory writes to need review. |
 | **Suspend** | Suspends the agent with the agent kill switch, so its runs are refused. Any admin can lift it. |
-| **Retire** | Unpublishes the agent and removes it from conversations, saved teams and other agents' nesting, turns its schedules off and revokes its triggers. Agents that nest it then fail with `nested_agent_retired` until someone fixes them. Its history stays. |
+| **Retire** | Unpublishes the agent and removes it from conversations and saved teams, drops it as a lead, turns its schedules and its heartbeat off and revokes its triggers. Other agents keep it as a sub-agent; their runs fail with `nested_agent_retired` until someone fixes them. Its history stays. |
 | **Delete** | Only after a retirement and its 30-day window, and never under legal hold: removes the agent's memory, schedules, triggers and versions. |
 
 Before you approve a suspension, retirement or deletion, the dialog shows what it touches: conversations, saved teams, agents that nest it, schedules, triggers and published versions. Retiring an agent other agents nest needs a confirmation.
@@ -61,7 +61,7 @@ The owner of an agent can **Appeal** an approved demotion, suspension or retirem
 
 ## Reinstate a retired agent
 
-For 30 days after retirement, a manager can select **Reinstate**. The agent's published versions and release head, its conversation memberships, its saved team seats, its nesting and its schedules come back, and its suspension is lifted. After the window it can only be deleted.
+For 30 days after retirement, a manager can select **Reinstate**. The agent's published versions and release head, its conversation memberships, its lead roles, its saved team seats, its schedules, its triggers and its heartbeat come back, and its suspension is lifted. After the window it can only be deleted.
 
 ## Automatic hiring and dismissal
 

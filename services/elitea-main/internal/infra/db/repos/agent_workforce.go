@@ -1,6 +1,6 @@
 package repos
 
-// The agent workforce (shared 0245, ADR-0050 decisions 5b, 5g-5j and 5l,
+// The agent workforce (shared 0236, ADR-0050 decisions 5b, 5g-5j and 5l,
 // issue 1616): dismissal and demotion proposals, their decision by a person,
 // the ladder stages they apply (agent_workforce_ladder.go), the appeal and
 // the reinstatement. Every change is a security audit event in the change's

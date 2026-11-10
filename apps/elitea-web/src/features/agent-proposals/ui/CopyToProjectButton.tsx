@@ -32,7 +32,7 @@ import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { copyMemoryInto, fetchCopyableMemory, forkAgentInto } from '../api/agentProposalsApi';
-import { proposalErrorMessage } from '../lib/proposalErrors';
+import { AgentMadeError, proposalErrorMessage } from '../lib/proposalErrors';
 
 export interface CopyTargetProject {
   readonly id: string;
@@ -93,6 +93,9 @@ function CopyToProjectDialog({
   const [target, setTarget] = useState(projects[0]?.id ?? '');
   const [picked, setPicked] = useState<ReadonlySet<number>>(new Set());
   const [error, setError] = useState<string | undefined>(undefined);
+  // The copy an attempt forked before its memory copy failed, by target
+  // project: a retry copies the memory into it instead of forking again.
+  const [made, setMade] = useState<{ readonly target: string; readonly copyId: number } | undefined>(undefined);
   const memory = useQuery({
     queryKey: ['agent-copy-memory', projectId, applicationId],
     queryFn: () => fetchCopyableMemory(projectId, applicationId),
@@ -101,10 +104,15 @@ function CopyToProjectDialog({
   const entries = copyableEntries(memory.data?.rows ?? []);
   const copy = useMutation({
     mutationFn: async ({ targetProjectId, entryIds }: CopyVariables) => {
-      const copyId = await forkAgentInto(projectId, applicationId, targetProjectId);
+      const copyId = made?.target === targetProjectId ? made.copyId : await forkAgentInto(projectId, applicationId, targetProjectId);
       if (copyId === undefined) throw new Error('fork answered no agent');
-      const copied = entryIds.length === 0 ? 0 : await copyMemoryInto(targetProjectId, copyId, Number(projectId), applicationId, entryIds);
-      return { copyId, copied };
+      try {
+        const copied = entryIds.length === 0 ? 0 : await copyMemoryInto(targetProjectId, copyId, Number(projectId), applicationId, entryIds);
+        return { copyId, copied };
+      } catch (cause) {
+        setMade({ target: targetProjectId, copyId });
+        throw new AgentMadeError(copyId, cause);
+      }
     },
   });
 
@@ -126,7 +134,15 @@ function CopyToProjectDialog({
           onCopied?.(target, copyId, copied);
           onClose();
         },
-        onError: (cause) => setError(proposalErrorMessage(cause, t('features.agentProposals.copy.failed', 'The agent was not copied. Try again.'))),
+        onError: (cause) =>
+          setError(
+            cause instanceof AgentMadeError
+              ? proposalErrorMessage(
+                  cause.cause,
+                  t('features.agentProposals.copy.memoryFailed', 'The agent was copied, but its memory was not. Try again to copy the memory.'),
+                )
+              : proposalErrorMessage(cause, t('features.agentProposals.copy.failed', 'The agent was not copied. Try again.')),
+          ),
       },
     );
   };

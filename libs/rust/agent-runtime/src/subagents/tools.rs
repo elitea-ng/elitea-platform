@@ -122,7 +122,7 @@ fn spawn_arguments(args: &Value) -> Result<(String, Option<String>, Profile, Bri
 fn brief_refused(code: &str) -> Value {
     let message = match code {
         BRIEF_EXCERPT_NOT_VISIBLE => {
-            "An excerpt in `context.excerpts` is not an exact quote of a message you can see here. Quote only messages of this conversation, by their message id."
+            "An excerpt in `context.excerpts` is not an exact quote of a message you can see here. Name the message by the id on its `[message m-...]` line and quote its text after that line."
         }
         BRIEF_ATTACHMENT_NOT_READABLE => {
             "An attachment in `context.attachments` is not one you can read in this turn. Name only this turn's attachment ids."
@@ -199,13 +199,13 @@ fn spawn_schema() -> Value {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "message_id": {"type": "string"},
+                                "message_id": {"type": "string", "description": "The id on the message's `[message m-...]` line, such as \"m-0123456789\""},
                                 "quote": {"type": "string", "maxLength": MAX_BRIEF_TEXT_CHARS}
                             },
                             "required": ["message_id", "quote"],
                             "additionalProperties": false
                         },
-                        "description": "Exact quotes of messages in this conversation, by message id"
+                        "description": "Exact quotes of messages in this conversation that carry a `[message m-...]` line"
                     },
                     "attachments": {
                         "type": "array",
@@ -413,7 +413,7 @@ impl SubAgentTool {
             Ok(steps) => steps,
             Err(refusal) => return refusal,
         };
-        let identity = match self.identity(ctx, label, SpawnRecord::new(&profile, &brief)) {
+        let mut identity = match self.identity(ctx, label, SpawnRecord::new(&profile, &brief)) {
             Ok(identity) => identity,
             Err(refusal) => return refusal,
         };
@@ -423,10 +423,13 @@ impl SubAgentTool {
             task
         } else {
             match self.registry.host.check_brief(&identity, &brief) {
-                Ok(checked) => match profile::render(&brief, &checked) {
-                    Some(rendered) => format!("{rendered}\n\n{task}"),
-                    None => task,
-                },
+                Ok(checked) => {
+                    identity.record.resolve_messages(&checked);
+                    match profile::render(&brief, &checked) {
+                        Some(rendered) => format!("{rendered}\n\n{task}"),
+                        None => task,
+                    }
+                }
                 Err(code) => return brief_refused(code),
             }
         };

@@ -41,6 +41,7 @@ services:
 
   postgres:
     image: postgres:18
+    restart: unless-stopped
     shm_size: '2g'
     environment:
       POSTGRES_USER: elitea
@@ -67,6 +68,7 @@ services:
   # on the monitoring port from outside. Wait on `nats-health`, not on `nats`.
   nats:
     image: nats:2.12.0
+    restart: unless-stopped
     command: ["-js", "-sd", "/data", "-m", "8222"]
 
   # The NATS readiness probe, from outside the scratch server container. It
@@ -77,6 +79,7 @@ services:
   # wget). SIGINT stops it at once: Python handles SIGINT, not SIGTERM, as PID 1.
   nats-health:
     image: docker.io/library/python:3.12.14-slim-trixie
+    restart: unless-stopped
     command: ["python3", "-c", "import time; time.sleep(1 << 30)"]
     stop_signal: SIGINT
     healthcheck:
@@ -96,6 +99,7 @@ services:
   # posture is the opt-in overlay docker-compose.nats-secure.yml.
   nats-bootstrap:
     image: docker.io/natsio/nats-box:0.19.7
+    restart: "no"
     command: ["sh", "/bootstrap/bootstrap.sh"]
     environment:
       NATS_URL: "nats://nats:4222"
@@ -107,6 +111,7 @@ services:
 
   rustfs:
     image: docker.io/rustfs/rustfs:1.0.0
+    restart: unless-stopped
     environment:
       RUSTFS_ACCESS_KEY: elitea
       RUSTFS_SECRET_KEY: elitea-dev-secret
@@ -181,6 +186,7 @@ services:
   # this stack. The default is unchanged, so CI sees exactly what it saw before.
   oidc-mock:
     image: ghcr.io/geigerzaehler/oidc-provider-mock:latest
+    restart: unless-stopped
     # The image entrypoint is `oidc-provider-mock --host 0.0.0.0`; this appends
     # the port, which it defaults to 9400 on its own.
     command: ["--port", "${E2E_OIDC_PORT:-9400}"]
@@ -221,6 +227,7 @@ services:
 
   elitea-main:
     image: ghcr.io/elitea-ng/elitea-main:${E2E_IMAGE_TAG:-e2e}
+    restart: unless-stopped
     # `image:` alone made compose PULL when the tag was absent locally, and the
     # tag has never been published — so CI died at bring-up with
     # `Head https://ghcr.io/v2/eliteaai/elitea-main/manifests/e2e: denied`
@@ -447,6 +454,7 @@ services:
     # the Python shell's place: same ELITEA_DEEPWIKI_* settings, same fixture
     # runner, one static binary. ELITEA_SUBAPP names the application.
     image: ghcr.io/elitea-ng/elitea-subapp-host:${E2E_IMAGE_TAG:-e2e}
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: services/elitea-subapp-host/Containerfile
@@ -505,6 +513,7 @@ services:
   # (not used on this stack).
   elitea-inventory:
     image: ghcr.io/elitea-ng/elitea-subapp-host:${E2E_IMAGE_TAG:-e2e}
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: services/elitea-subapp-host/Containerfile
@@ -545,6 +554,7 @@ services:
 
   elitea-web:
     image: ghcr.io/elitea-ng/elitea-web:${E2E_IMAGE_TAG:-e2e}
+    restart: unless-stopped
     # See the elitea-main `build:` comment above (issue #154).
     build:
       context: ..

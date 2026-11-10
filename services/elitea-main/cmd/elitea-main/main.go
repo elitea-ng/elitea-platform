@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nats-io/nats.go"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/observability"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
@@ -2410,6 +2411,21 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			); scheduleErr != nil {
 				return fmt.Errorf("compose pipeline schedule job: %w", scheduleErr)
 			}
+			// The heartbeat of proactive agents (ADR-0050 decision 2): the
+			// same scheduler, the same start use case, the owner's mandate
+			// and the kill switch. Its triage shares the run brief's
+			// completer, which the gateway composition sets below.
+			if runBriefCompleter != nil {
+				if heartbeatErr := startAgentHeartbeatRunner(ctx, agentHeartbeatDeps{
+					Pool: runtimePools.Admission, Start: publicRoutes.AgentStart, Mandates: governedTriggers.Runs,
+					Gate: executionSuspensions.gate, Completer: runBriefCompleter,
+					Models:      lowTierModels{catalog: runBriefCatalog, publicProjectID: currentConfigurationsConfig.PublicProjectID},
+					Permissions: legacyrbac.NewPostgresResolver(pool), InstanceID: runtimeConfig.SchedulerInstanceID,
+					Logger: logger,
+				}); heartbeatErr != nil {
+					return fmt.Errorf("compose agent heartbeat job: %w", heartbeatErr)
+				}
+			}
 			// The server's hand-off of leftover steering messages: it starts
 			// the next turn through the same use case as the chat composer.
 			if publicRoutes.Steering != nil {
@@ -2680,6 +2696,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// `completer == nil` check is false and it calls a method on a nil
 	// receiver instead of reporting "not configured".
 	var predictCompleter predictapi.Completer
+	// The avatar generation routes (ADR-0050 decision 6) take the gateway as
+	// an interface: a nil *GatewayClient must stay a nil interface.
+	var imageGateway llmproxy.Gateway
+	if llmGateway != nil {
+		imageGateway = llmGateway
+	}
 	if llmGateway != nil {
 		completer := predictapi.NewGatewayCompleter(llmGateway)
 		predictCompleter = completer
@@ -2998,6 +3020,25 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose the Entra credential re-consent: %w", err)
 	}
 
+	readinessNATS := []func() nats.Status{}
+	if eventsNATS != nil {
+		readinessNATS = append(readinessNATS, eventsNATS.Status)
+	}
+	var readinessRunners degradedRunnerSource
+	if runtimeRoot != nil {
+		readinessNATS = append(readinessNATS, runtimeRoot.RuntimeNATSStatus)
+		readinessRunners = runtimeRoot
+	}
+	readinessMonitor, monitorErr := health.NewMonitor(mainReadinessChecks([]*pgxpool.Pool{pool}, readinessNATS, readinessRunners), logger, readinessMonitorInterval)
+	if monitorErr != nil {
+		return monitorErr
+	}
+	// Logs each dependency's loss and recovery once per outage, also when
+	// nothing probes Main. It ends with run, before the deferred pool closes,
+	// so it never reads a pool Main closed on its way out as an outage.
+	monitorCtx, stopMonitor := context.WithCancel(ctx)
+	defer stopMonitor()
+	go readinessMonitor.Run(monitorCtx)
 	r := api.NewRouter(api.RouterConfig{
 		RetentionAdmin:                v2retention.NewHandler(dbrepos.NewRetentionPolicyRepo(pool)),
 		AgentIdentityAdmin:            agentIdentity.Admin,
@@ -3007,6 +3048,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		ExecutionSuspensions:          executionSuspensions.handler,
 		MandateAttachments:            governedTriggers.Attachments,
+		AgentHeartbeatMandates:        governedTriggers.Runs,
 		CredentialReferencesAdmin:     credentialReferencesHandler,
 		AgentAssertionWellKnown:       eliteaNative.WellKnown,
 		GovernedMCPInbound:            governedMCPComposed.Inbound,
@@ -3053,11 +3095,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ToolkitRegistry:               toolkitArgumentSchemas,
 		DelegatedAuthToolkitSettings:  delegatedAuthToolkitSettings,
 		WorkerImplementation:          workerImplementation,
-		// Readiness is the database alone. The Form graph's sign-in state is
-		// in this same database (shared migration 0153), so it adds no
-		// dependency of its own; the auth Redis it once pinged is gone.
+		// Readiness is the database (every pool), NATS and the runtime
+		// runners (FU-275); see mainReadinessChecks. The Form graph's sign-in
+		// state is in this same database (shared migration 0153), so it adds
+		// no dependency of its own; the auth Redis it once pinged is gone.
 		HealthDeps: health.Deps{
-			DB: &poolChecker{pool: pool},
+			Checks:  readinessMonitor.Checks(),
+			Monitor: readinessMonitor,
 		},
 		AuthValidator:      apiGroupAuth.Validator,
 		PrincipalValidator: apiGroupAuth.PrincipalValidator,
@@ -3136,6 +3180,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		RunTokens:                      runTokens.Validator,
 		ConfigConnectionChecker:        configConnectionChecker,
 		PredictCompleter:               predictCompleter,
+		ImageGateway:                   imageGateway,
 		GatewayStatus:                  gatewayStatus,
 		ConfigProviderAdmission:        configProviderAdmission,
 		ConfigStoredResolver:           configStoredResolver,
@@ -3625,14 +3670,6 @@ func configureObjectStoreRetentionLifecycle(ctx context.Context, store storage.O
 		return nil
 	}
 	return configurer.ConfigureRetentionLifecycle(ctx)
-}
-
-type poolChecker struct {
-	pool *pgxpool.Pool
-}
-
-func (p *poolChecker) Ping(ctx context.Context) error {
-	return p.pool.Ping(ctx)
 }
 
 // backfillProjectSecretsHeaderValues gives every existing project an `X-SECRET`

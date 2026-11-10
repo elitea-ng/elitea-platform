@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.44"
+  x-elitea-client-contract: "1.45"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -6595,6 +6595,14 @@ components:
             `chain_root_execution_id`, `execution_id` (the chain's last run),
             `origin` (`cloud` or `desktop`) and `continuations`
             (internal/infra/db/repos/run_finished.go). One row per chain end.
+            For `agent_heartbeat` (ADR-0050 decision 2) a proactive agent
+            wrote to its owner: `conversation_id` (the home thread UUID),
+            `message_id`, `project_id`, `application_id`, `agent_name`,
+            `outcome` (`notify`, `act_degraded` or `paused`), `reason_code`
+            `text` (the first 280 bytes of the message) and `message` (the
+            agent's name, the text and an empty `[...]()` link to the
+            conversation)
+            (internal/infra/db/repos/agent_heartbeats.go, PostToOwner).
           properties:
             sender:
               type: object
@@ -6880,6 +6888,119 @@ components:
         enabled: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    AgentTeamMember:
+      type: object
+      description: >
+        One agent of a saved team (issue 1620). NOTE(W2):
+        internal/api/v2/agentteams/handler.go:89 (`MemberJSON`).
+      required: [application_id, project_id, version_id, name]
+      properties:
+        application_id: { type: integer, format: int64, minimum: 1 }
+        project_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The project that owns the agent (the team's own, or the public catalogue).
+        version_id: { type: integer, format: int64, minimum: 1 }
+        name:
+          type: string
+          maxLength: 256
+          description: The agent's name when the team was saved.
+
+    AgentTeam:
+      type: object
+      description: >
+        A saved team: a project's roster of agents with its floor policy and
+        lead (ADR-0050 decision 8, issue 1620). `lead_position` is the
+        1-based position of the lead member, null under `addressed`.
+        NOTE(W2): internal/api/v2/agentteams/handler.go:97 (`TeamJSON`).
+      required: [id, project_id, name, description, floor_policy, lead_position, members, created_by, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+        floor_policy:
+          type: string
+          description: "`addressed` or `lead`, as the conversation floor (meta.floor)."
+        lead_position:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 16
+        members:
+          type: array
+          maxItems: 16
+          items: { $ref: '#/components/schemas/AgentTeamMember' }
+        created_by: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AgentTeamList:
+      type: object
+      required: [rows, total]
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentTeam' }
+        total: { type: integer }
+
+    AgentTeamWrite:
+      type: object
+      description: >
+        The body of createAgentTeam and updateAgentTeam (a full-record
+        replace). Unknown fields are refused (400). NOTE(W2):
+        internal/api/v2/agentteams/handler.go:126 (`teamBody`).
+      required: [name, members]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+        floor_policy:
+          type: string
+          description: "`addressed` (the default) or `lead`."
+        lead_position:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 16
+          description: The lead member's 1-based position; required with `lead`, refused with `addressed`.
+        members:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items: { $ref: '#/components/schemas/AgentTeamMember' }
+
+    AgentTeamFromConversation:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+
+    AgentTeamStart:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: The conversation's name; the team's name when blank.
+        is_private: { type: boolean }
+
+    AgentTeamRefusal:
+      type: object
+      description: >
+        A team route's refusal. `code` is `not_found`, `team_name_taken`,
+        `team_invalid` or `team_member_unavailable`; `position` comes with
+        `team_member_unavailable`. NOTE(W2):
+        internal/api/v2/agentteams/handler.go:411 (`writeError`).
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string }
+        position: { type: integer, minimum: 1 }
 
     MemoryEntryList:
       type: object
@@ -8696,6 +8817,229 @@ components:
         kind: { type: string, enum: [fact, preference, episode] }
         pinned: { type: boolean }
         status: { $ref: '#/components/schemas/AgentMemoryStatus' }
+    AgentProactivity:
+      type: object
+      additionalProperties: false
+      description: >
+        The heartbeat block of an agent version (ADR-0050 decision 2),
+        meta.proactivity. The heartbeat reads the block of the agent's
+        published release, never of a draft. Every field is optional; an
+        empty object is mode heartbeat with the defaults.
+      properties:
+        mode: { type: string, enum: ['off', heartbeat], description: 'off (the default when the block is absent) or heartbeat.' }
+        interval:
+          type: string
+          description: Whole minutes from 15m to 24h, as a Go duration ("1h", "30m"). Default 1h.
+        jitter:
+          description: A whole percentage of the interval from 0 to 50, as a number or "10%". Default 10.
+          oneOf:
+            - { type: integer, minimum: 0, maximum: 50 }
+            - { type: string, pattern: '^[0-9]{1,2}%?$' }
+        quiet_hours:
+          type: string
+          description: '"HH:MM-HH:MM Zone" with an IANA zone, for example "22:00-07:00 Europe/Berlin". No wake starts inside the window.'
+        watch:
+          type: array
+          maxItems: 16
+          description: >
+            What a wake reads. Default conversation and schedule_note.
+            toolkit_read names a read-only tool for the triage; v1 lists it
+            in the digest and does not call it.
+          items:
+            type: object
+            additionalProperties: false
+            required: [kind]
+            properties:
+              kind: { type: string, description: 'conversation, schedule_note or toolkit_read.' }
+              tool: { type: string, maxLength: 128 }
+        act_target:
+          type: string
+          enum: [home_thread, new_conversation]
+          description: Where an act runs. Default home_thread. workspace_thread is not available in v1 (422).
+        limits:
+          type: object
+          additionalProperties: false
+          description: >
+            The agent's daily envelope. The platform's maximums (section
+            proactivity) apply when they are lower; a personal project also
+            has its own act limit.
+          properties:
+            wakes_per_day: { type: integer, minimum: 1, maximum: 96, description: 'Default 24.' }
+            acts_per_day: { type: integer, minimum: 0, maximum: 96, description: 'Default 4.' }
+            spend_per_day_usd: { type: number, minimum: 0, maximum: 1000, description: 'The triage and the runs it starts. Default 2.0.' }
+      example:
+        mode: heartbeat
+        interval: 1h
+        quiet_hours: 22:00-07:00 Europe/Berlin
+        watch: [{ kind: conversation }, { kind: schedule_note }]
+        act_target: home_thread
+        limits: { wakes_per_day: 24, acts_per_day: 4, spend_per_day_usd: 2 }
+    AgentHeartbeatSave:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        mandate_id:
+          type: string
+          description: A delegated mandate of the caller (a UUID). An empty string removes the mandate; absent keeps it.
+      example: { enabled: true, mandate_id: 7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f }
+    AgentHeartbeatSettings:
+      type: object
+      description: >
+        NOTE(W2): internal/api/v2/agentheartbeat/handler.go:107 (Settings),
+        which embeds internal/infra/db/repos/agent_heartbeats.go:731
+        (HeartbeatSettings).
+      required: [application_id, enabled, owner_user_id, mandate_id, home_conversation_uuid, release_id,
+        next_wake_at, last_wake_at, paused_until, last_skip_reason, updated_at, configured, governance, release]
+      properties:
+        application_id: { type: integer, format: int64 }
+        configured: { type: boolean, description: 'false when nobody turned the heartbeat on yet.' }
+        enabled: { type: boolean }
+        owner_user_id: { type: integer, format: int64 }
+        mandate_id: { type: string, nullable: true }
+        home_conversation_uuid: { type: string, nullable: true, description: 'The agent''s home thread, created at its first message.' }
+        release_id: { type: integer, format: int64, nullable: true, description: 'The release the last wake read.' }
+        next_wake_at: { type: string, format: date-time }
+        last_wake_at: { type: string, format: date-time, nullable: true }
+        paused_until: { type: string, format: date-time, nullable: true, description: 'A daily limit paused the heartbeat until this time.' }
+        last_skip_reason:
+          type: string
+          description: Why the last due wake did not reach the triage (quiet_hours, suspended, previous_run_active, review_required, ...). Empty after a triaged wake.
+        updated_at: { type: string, format: date-time }
+        governance: { $ref: '#/components/schemas/AgentHeartbeatGovernance' }
+        release:
+          allOf: [{ $ref: '#/components/schemas/AgentHeartbeatRelease' }]
+          nullable: true
+          description: The published release's block. Null without a published release.
+      example:
+        application_id: 31
+        configured: true
+        enabled: true
+        owner_user_id: 11
+        mandate_id: 7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f
+        home_conversation_uuid: 10000000-0000-4000-8000-000000000031
+        release_id: 5
+        next_wake_at: '2026-11-09T15:00:00Z'
+        last_wake_at: '2026-11-09T14:00:00Z'
+        paused_until: null
+        last_skip_reason: ''
+        updated_at: '2026-11-09T14:00:00Z'
+        governance:
+          platform_enabled: true
+          project_enabled: true
+          tier: medium
+          personal: false
+          can_enable: true
+          wakes_per_day: 24
+          acts_per_day: 4
+          spend_per_day_usd: 2
+        release:
+          release_id: 5
+          version_id: 42
+          mode: heartbeat
+          interval: 1h0m0s
+          quiet_hours: 22:00-07:00 Europe/Berlin
+          act_target: home_thread
+          goal_count: 1
+    AgentHeartbeatGovernance:
+      type: object
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:117 (Governance).
+      required: [platform_enabled, project_enabled, tier, personal, can_enable, wakes_per_day, acts_per_day, spend_per_day_usd]
+      properties:
+        platform_enabled: { type: boolean }
+        project_enabled: { type: boolean }
+        tier: { $ref: '#/components/schemas/AgentRiskTier' }
+        personal: { type: boolean, description: 'The project is the caller''s personal project.' }
+        can_enable: { type: boolean }
+        reason:
+          type: string
+          enum: [proactivity_platform_off, proactivity_tier_too_low, proactivity_no_release, proactivity_not_reviewed,
+            proactivity_block_off]
+          description: Why can_enable is false. Absent when it is true.
+        wakes_per_day: { type: integer, description: 'The effective limit after the platform maximums.' }
+        acts_per_day: { type: integer }
+        spend_per_day_usd: { type: number }
+    AgentHeartbeatRelease:
+      type: object
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:130 (ReleaseView).
+      required: [release_id, version_id, mode, interval, act_target, goal_count]
+      properties:
+        release_id: { type: integer, format: int64 }
+        version_id: { type: integer, format: int64 }
+        mode: { type: string, enum: ['off', heartbeat] }
+        interval: { type: string }
+        quiet_hours: { type: string }
+        act_target: { type: string }
+        goal_count: { type: integer, description: 'How many soul proactive_goals the release has.' }
+    AgentHeartbeatRefusal:
+      type: object
+      required: [error, code]
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:261 (Put).
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          description: >
+            proactivity_platform_off, proactivity_tier_too_low,
+            proactivity_no_release, proactivity_not_reviewed, proactivity_block_off,
+            proactivity_mandate_refused, proactivity_mandate_not_owner or
+            proactivity_not_owner (403: the heartbeat is on and belongs to
+            another person, and the caller is not an owner of the agent).
+      example: { error: A proactive agent must be at least medium risk., code: proactivity_tier_too_low }
+    AgentHeartbeatEntry:
+      type: object
+      description: NOTE(W2) internal/infra/db/repos/agent_heartbeats.go:808 (HeartbeatEntry).
+      required: [id, wake_id, woke_at, outcome, reason_code, reason, release_id, digest_sha256, triage_spend_usd,
+        execution_id, conversation_uuid, paused_until]
+      properties:
+        id: { type: integer, format: int64 }
+        wake_id: { type: string }
+        woke_at: { type: string, format: date-time }
+        outcome:
+          type: string
+          description: >
+            no_op, notify, act, act_degraded, failed or paused. act_degraded is an act that became a notify (no mandate, the act
+            limit, a refused start); reason_code says why.
+        reason_code: { type: string }
+        reason: { type: string, description: 'The triage''s reason, or why the wake failed or paused.' }
+        release_id: { type: integer, format: int64, nullable: true }
+        digest_sha256: { type: string, nullable: true, description: 'The SHA-256 of the wake digest the triage read.' }
+        triage_spend_usd: { type: number }
+        execution_id: { type: string, nullable: true, description: 'The run an act started.' }
+        conversation_uuid: { type: string, nullable: true }
+        paused_until: { type: string, format: date-time, nullable: true }
+    AgentHeartbeatList:
+      type: object
+      required: [total, rows]
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:365 (History).
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentHeartbeatEntry' }
+      example:
+        total: 1
+        rows:
+          - id: 1
+            wake_id: 3f2b8d4e-1a2c-4b5d-9e8f-7a6b5c4d3e2f
+            woke_at: '2026-11-09T14:00:00Z'
+            outcome: notify
+            reason_code: ''
+            reason: The nightly build failed.
+            release_id: 5
+            digest_sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+            triage_spend_usd: 0.0004
+            execution_id: null
+            conversation_uuid: 10000000-0000-4000-8000-000000000031
+            paused_until: null
+    ProjectProactivity:
+      type: object
+      additionalProperties: false
+      required: [proactive_agents_enabled]
+      properties:
+        proactive_agents_enabled: { type: boolean }
+      example: { proactive_agents_enabled: true }
     AgentMemoryRefusal:
       type: object
       required: [error, code]
@@ -8787,7 +9131,7 @@ components:
       required: [error, code]
       properties:
         error: { type: string }
-        code: { type: string, enum: [not_found, proposal_decided, proposal_decision_forbidden, copy_forbidden] }
+        code: { type: string, enum: [not_found, proposal_decided, proposal_decision_forbidden, copy_forbidden, not_your_new_agent] }
       description: >
         NOTE(W2): internal/api/v2/agentproposals/handler.go, writeError.
     AgentWorkforceNarrowing:
@@ -11150,6 +11494,130 @@ components:
         llm_settings:
           $ref: '#/components/schemas/DraftLlmSettings'
 
+    AgentAvatarPackV1:
+      type: object
+      additionalProperties: false
+      required: [schema, slots]
+      description: >
+        ADR-0050 decision 6: an agent version's avatar pack. Each slot names
+        one uploaded media file for one state; only `still` is required, and
+        a client animates a state with no slot from the still with the
+        default motion pack. Lottie and Rive are not accepted.
+      properties:
+        schema:
+          type: string
+          description: The document version. Always `elitea.avatar_pack/v1`.
+        slots:
+          type: object
+          additionalProperties: false
+          required: [still]
+          properties:
+            still: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            idle: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            thinking: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            speaking: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            working: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            waiting: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            success: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            error: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            waking: { $ref: '#/components/schemas/AgentAvatarSlot' }
+    AgentAvatarSlot:
+      type: object
+      additionalProperties: false
+      required: [url]
+      description: >
+        One avatar pack slot. `still` takes PNG, JPEG, WebP or SVG; the
+        other slots take a still, an animated WebP, or a muted MP4 (H.264)
+        or WebM (VP9 or AV1). Every animation is at most 4 s, 512 px and
+        2 MiB, and an animated WebP loops forever.
+      properties:
+        url:
+          type: string
+          maxLength: 160
+          description: >
+            `/api/v2/agent_media/{project_id}/{sha256}.{ext}`, the url the
+            upload or the generation answered.
+        media_type:
+          type: string
+          description: >
+            Derived from the url's extension on every write (image/png,
+            image/jpeg, image/webp, image/svg+xml, video/mp4, video/webm); a
+            value the client sends is ignored.
+        poster_url:
+          type: string
+          maxLength: 160
+          description: >
+            The still a video shows before it plays and under reduced motion.
+            Required for MP4 and WebM; dropped for any other file.
+        generated_by:
+          type: string
+          maxLength: 256
+          description: The model that generated the file, when it was generated.
+    AgentMediaObject:
+      type: object
+      required: [url, media_type, format, width, height, duration_ms, bytes]
+      description: >
+        NOTE(W2): internal/api/v2/agentmediaapi/handler.go, MediaObject. One
+        stored, validated media file.
+      properties:
+        url: { type: string }
+        media_type: { type: string }
+        format:
+          type: string
+          description: png, jpeg, webp, webp_animated, svg, mp4 or webm, read from the bytes.
+        width: { type: integer, description: "0 for an SVG." }
+        height: { type: integer, description: "0 for an SVG." }
+        duration_ms: { type: integer, description: "One loop's length; 0 for a still." }
+        bytes: { type: integer }
+        generated_by: { type: string }
+    AgentMediaRefusal:
+      type: object
+      required: [error, code]
+      description: >
+        NOTE(W2): internal/api/v2/agentmediaapi/handler.go, writeRefusal.
+        `avatar_media_invalid` is a file the validator refused (the reason
+        names the rule); the other codes name a missing dependency or a bad
+        request.
+      properties:
+        error: { type: string }
+        code: { type: string }
+    AgentMediaGenerateRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, model]
+      description: >
+        ADR-0050 decision 6, "Generation". `kind` `still` turns the soul's
+        display name, role and voice into a prompt for
+        `/llm/v1/images/generations` and answers `count` candidates. `kind`
+        `loop` asks `/llm/v1/images/edits` for `frames` poses of `still_url`
+        in `state` and assembles them into an animated WebP. There is no
+        video kind.
+      properties:
+        kind: { type: string, description: "still or loop." }
+        model:
+          type: string
+          maxLength: 256
+          description: An image_generation_model of the project's catalogue.
+        display_name: { type: string, maxLength: 1000 }
+        role: { type: string, maxLength: 1000 }
+        voice:
+          type: array
+          maxItems: 16
+          items: { type: string, maxLength: 1000 }
+        prompt: { type: string, maxLength: 1000, description: "An optional extra direction." }
+        count: { type: integer, minimum: 1, maximum: 4, description: "Still candidates; default 4." }
+        state:
+          type: string
+          description: The slot a loop is for, one of idle, thinking, speaking, working, waiting, success, error, waking.
+        still_url: { type: string, maxLength: 160, description: "A PNG, JPEG or WebP still of this project." }
+        frames: { type: integer, minimum: 4, maximum: 8, description: "Loop frames; default 6." }
+    AgentMediaGenerateResponse:
+      type: object
+      required: [media]
+      properties:
+        media:
+          type: array
+          items: { $ref: '#/components/schemas/AgentMediaObject' }
     AgentSoulV1:
       type: object
       additionalProperties: false
@@ -11904,6 +12372,15 @@ components:
             indicator on the answer (`meta.grounding` of the message). Null,
             absent or `off` is no citation rule. A save with another value is
             refused with 400. Pipelines and nested agents ignore it.
+        proactivity:
+          allOf: [{ $ref: '#/components/schemas/AgentProactivity' }]
+          nullable: true
+          description: >
+            The agent's heartbeat (ADR-0050 decision 2): how often it wakes,
+            its quiet hours, what it reads, where it acts and its daily
+            limits. The heartbeat reads the block of the published release.
+            A save with an invalid block is refused with 422
+            proactivity_invalid.
         tool_envelope:
           allOf: [{ $ref: '#/components/schemas/AgentToolEnvelope' }]
           nullable: true
@@ -12246,6 +12723,13 @@ components:
           description: >
             ADR-0050 decision 1a: the version's soul document, or null when it
             has none. Served by the version-detail read and both write echoes.
+        avatar_pack:
+          allOf: [{ $ref: '#/components/schemas/AgentAvatarPackV1' }]
+          nullable: true
+          description: >
+            ADR-0050 decision 6: the version's avatar pack, or null when it
+            has none (the client then reads `meta.icon_meta`). Served by the
+            version-detail read and both write echoes.
         notes:
           type: string
           description: >
@@ -12504,6 +12988,17 @@ components:
             `soul_capability_key` names a key that would read as a grant
             (tools, credentials, permissions and the like), `soul_too_large`
             a document over 16384 bytes of text, `soul_invalid` anything else.
+        avatar_pack:
+          allOf: [{ $ref: '#/components/schemas/AgentAvatarPackV1' }]
+          nullable: true
+          description: >
+            ADR-0050 decision 6. Omit the key to leave the stored pack alone;
+            null clears it; an object replaces it whole and also writes its
+            still into `meta.icon_meta`, so a client that reads only the old
+            field shows it. Every url must be media uploaded to this project
+            (`/api/v2/agent_media/{this project}/...`). A pack that breaks a
+            rule is REFUSED with a 400 `avatar_pack_invalid` before anything
+            is written.
         llm_settings: { $ref: '#/components/schemas/LlmSettings' }
         conversation_starters: { $ref: '#/components/schemas/ConversationStarters' }
         variables:
@@ -18209,6 +18704,15 @@ components:
             Client contract 1.5 (ADR-0029 decision 6). The token policy's
             `local_work.allowed`: a desktop app may offer local work. The rest
             of the `local_work` group travels only with a token. Default false.
+        support_contact:
+          type: string
+          maxLength: 200
+          description: >-
+            Client contract 1.45 (ADR-0052 decision 7). The IT support line
+            the apps show in About and Settings, one line of text (an email
+            address, a phone number or an https address among it is a link);
+            empty means none. A device's managed `support_contact` wins over
+            it. A server before 1.45 sends none.
     NativeOAuthError:
       type: object
       description: >-
@@ -18351,6 +18855,14 @@ components:
             False means counts only. Default false.
         local_work:
           $ref: '#/components/schemas/LocalWorkPolicy'
+        support_contact:
+          type: string
+          maxLength: 200
+          description: >-
+            Client contract 1.45 (ADR-0052 decision 7). The IT support line
+            the apps show in About and Settings; empty means none. The same
+            value as the discovery document's `client_policy.support_contact`.
+            A device's managed `support_contact` wins over it.
     LocalWorkPolicy:
       type: object
       description: >-
@@ -28855,6 +29367,133 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
 
+  /elitea_core/agent_heartbeat/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentHeartbeat
+      summary: Read an agent's heartbeat settings
+      description: >
+        The heartbeat of a proactive agent (ADR-0050 decision 2): whether it
+        is on, its owner, its mandate, its clock, the block of the published
+        release, and whether the caller may turn it on (governance). An
+        agent nobody configured answers configured false. Requires
+        `models.applications.versions.get`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The heartbeat settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatSettings' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    put:
+      operationId: saveAgentHeartbeat
+      summary: Turn an agent's heartbeat on or off and attach its mandate
+      description: >
+        Turning the heartbeat on needs the platform switch on, an agent of at
+        least medium risk (or a personal project that approves its own
+        agents), and a published release with a proactivity block of mode
+        heartbeat. The caller becomes the owner: the person the agent
+        notifies and acts for. mandate_id attaches a delegated mandate of the
+        owner (an empty string removes it); without one the agent can notify
+        but not act. Requires `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentHeartbeatSave' }
+      responses:
+        '200':
+          description: The stored heartbeat settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatSettings' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '422':
+          description: The heartbeat cannot be turned on, or the mandate cannot be attached
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatRefusal' }
+
+  /elitea_core/agent_heartbeats/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: listAgentHeartbeats
+      summary: List an agent's heartbeat history
+      description: >
+        One row per wake that reached the triage, or that paused the
+        heartbeat at a daily limit, newest first. A skipped wake (quiet
+        hours, kill switch, a run still active) writes no row; the settings
+        show the last skip reason. Requires `models.applications.versions.get`.
+      tags: [applications]
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: The heartbeat rows
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatList' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_heartbeat_project/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getProjectProactivity
+      summary: Read the project's proactive agents switch
+      description: Requires `models.applications.versions.get`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The switch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectProactivity' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    put:
+      operationId: setProjectProactivity
+      summary: Turn every heartbeat of the project on or off
+      description: >
+        Off stops every heartbeat of the project at its next wake; the
+        settings of each agent stay. Requires
+        `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectProactivity' }
+      responses:
+        '200':
+          description: The stored switch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectProactivity' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
   /elitea_core/agent_proposals/prompt_lib/{project_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -28991,7 +29630,15 @@ paths:
                   memory_seeded: { type: integer }
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
+        '403':
+          description: >
+            The caller lacks applications.create, or (code not_your_new_agent)
+            the agent is not one the caller just created from this proposal:
+            created before it, its first version another person's, or linked
+            to another proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
         '404':
           description: (code not_found) No such proposal, or no such agent in this project
           content:
@@ -29823,7 +30470,10 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403':
-          description: (code copy_forbidden) The source is not a personal agent of the caller, or its memory is not readable
+          description: >
+            (code copy_forbidden) The source is not a personal agent of the
+            caller, or its memory is not readable; (code not_your_new_agent)
+            the path's agent is not the caller's own fork of the source
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
@@ -29832,6 +30482,148 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_media/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: uploadAgentMedia
+      summary: Upload one avatar pack media file
+      description: >
+        ADR-0050 decision 6. Stores one file in the project's `agent-media`
+        bucket under its SHA-256 and answers its url. The type is read from
+        the bytes, never from the file name or the part's Content-Type. A
+        still is PNG, JPEG, WebP or SVG (an SVG with a script, an event
+        handler, an external reference or a DOCTYPE is refused); an
+        animation is an animated WebP that loops forever, or a muted MP4
+        (H.264) or WebM (VP9 or AV1); every file is at most 2 MiB and 512 px,
+        and an animation at most 4 s. A refused file answers 400
+        `avatar_media_invalid` and is not stored. Requires
+        `models.applications.upload_icon.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: The stored file
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaObject' }
+        '400':
+          description: (code avatar_media_invalid) The validator refused the file
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '413':
+          description: (code avatar_media_invalid) The request is larger than the 2 MiB file cap
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '503':
+          description: (code storage_unavailable) No object store is configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+
+  /elitea_core/agent_media_generate/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: generateAgentMedia
+      summary: Generate avatar still candidates or one state loop
+      description: >
+        ADR-0050 decision 6, "Generation". Calls the LLM gateway under the
+        caller's identity, so the project budget pays and the request log
+        records it. Every result passes the upload validator and is stored as
+        a draft in `agent-media`; nothing joins a pack until the version is
+        saved with it. A gateway refusal passes through as 400, 402, 403 or
+        429 (code generation_refused); any other provider failure is 502.
+        Requires `models.applications.upload_icon.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentMediaGenerateRequest' }
+      responses:
+        '201':
+          description: The stored drafts
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaGenerateResponse' }
+        '400':
+          description: (code invalid_request or generation_refused) The request is not valid, or the image model refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '402':
+          description: (code generation_refused) The project budget refused the call
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '403': { $ref: '#/components/responses/403' }
+        '429':
+          description: (code generation_refused) The gateway rate limit refused the call
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '502':
+          description: (code generation_failed or avatar_media_invalid) The provider failed, or its image failed validation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '503':
+          description: (code gateway_unavailable or storage_unavailable) The gateway or the object store is not configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+
+  /agent_media/{project_id}/{file}:
+    # Served OUTSIDE the auth group like /icons: an <img> or <video> request
+    # carries no credential. The path is a content address and the route
+    # admits no other shape; every response carries nosniff, a sandboxing CSP
+    # and an attachment disposition (internal/api/v2/agentmediaapi/handler.go).
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: file
+        in: path
+        required: true
+        description: "<sha256 hex>.<ext>, ext one of png, jpg, webp, svg, mp4, webm"
+        schema: { type: string }
+    get:
+      operationId: getAgentMedia
+      summary: Download one avatar pack media file
+      description: >
+        Immutable for a year. A `Range` request answers 206, as a <video>
+        element asks.
+      tags: [applications]
+      security: []
+      responses:
+        '200':
+          description: The file bytes
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            image/svg+xml: { schema: { type: string, format: binary } }
+            video/mp4: { schema: { type: string, format: binary } }
+            video/webm: { schema: { type: string, format: binary } }
+        '206':
+          description: The requested byte range
+          content:
+            video/mp4: { schema: { type: string, format: binary } }
+            video/webm: { schema: { type: string, format: binary } }
+        '404': { $ref: '#/components/responses/404' }
 
   /elitea_core/permission_trimming/prompt_lib/{project_id}:
     parameters:
@@ -35176,6 +35968,318 @@ paths:
           description: Deleted (or already absent).
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_teams/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listAgentTeams
+      summary: List the project's saved teams of agents
+      description: |
+        internal/api/v2/agentteams/handler.go's List (ADR-0050 decision 8,
+        issue 1620). A saved team is a project's roster of agents with its
+        floor policy and lead. Gated on `models.teams.list`. Most recently
+        updated first; `query` filters by a case-insensitive substring of the
+        name.
+      tags: [chat]
+      parameters:
+        - name: query
+          in: query
+          required: false
+          schema: { type: string, maxLength: 128 }
+          description: Case-insensitive substring of the team name.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: One page of the project's teams.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamList'
+        '400':
+          description: limit, offset or query is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+    post:
+      operationId: createAgentTeam
+      summary: Save a team of agents
+      description: |
+        internal/api/v2/agentteams/handler.go's Create (issue 1620). Gated on
+        `models.teams.create`. A team grants nothing: starting a conversation
+        from it adds its agents through the ordinary participant path, under
+        the caller's own access.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamWrite'
+            example:
+              name: Release crew
+              description: Writes the release notes and checks CI.
+              floor_policy: lead
+              lead_position: 1
+              members:
+                - { application_id: 31, project_id: 1, version_id: 41, name: Mira }
+                - { application_id: 32, project_id: 1, version_id: 42, name: CI Doctor }
+      responses:
+        '201':
+          description: The saved team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '400':
+          description: The body is not valid JSON for this route (an unknown field, a wrong type).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: The project already has a team with this name (`team_name_taken`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '422':
+          description: The team breaks a rule (`team_invalid`); the message says which.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_team/prompt_lib/{project_id}/{team_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: team_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentTeam
+      summary: Read one saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Get (issue 1620). Gated on
+        `models.teams.list`. A team of another project answers 404.
+      tags: [chat]
+      responses:
+        '200':
+          description: The team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+    put:
+      operationId: updateAgentTeam
+      summary: Replace a saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Update (issue 1620). Gated on
+        `models.teams.update`. A full-record replace: the roster sent is the
+        roster kept.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamWrite'
+      responses:
+        '200':
+          description: The updated team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '400':
+          description: The body is not valid JSON for this route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '409':
+          description: Another team of the project has this name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '422':
+          description: The team breaks a rule (`team_invalid`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: deleteAgentTeam
+      summary: Delete a saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Delete (issue 1620). Gated on
+        `models.teams.delete`. Conversations started from the team are not
+        touched.
+      tags: [chat]
+      responses:
+        '204':
+          description: Deleted.
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_team_from_conversation/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The conversation's numeric id or uuid.
+    post:
+      operationId: createAgentTeamFromConversation
+      summary: Save a conversation's agents as a team
+      description: |
+        internal/api/v2/agentteams/handler.go's CreateFromConversation
+        (issue 1620). Gated on `models.teams.create` and the conversation
+        read permission; the caller must be able to read the conversation.
+        The team's members are the conversation's agent participants in the
+        order they joined, with the version each one runs; its floor policy
+        and lead are the conversation's floor (`meta.floor`).
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamFromConversation'
+            example: { name: Release crew }
+      responses:
+        '201':
+          description: The saved team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '400':
+          description: The body is not valid JSON for this route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such conversation visible to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The project already has a team with this name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '422':
+          description: The conversation has no agents, or the name breaks a rule (`team_invalid`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_team_conversation/prompt_lib/{project_id}/{team_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: team_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: startAgentTeamConversation
+      summary: Start a conversation with a saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Start (issue 1620). Gated on
+        `models.teams.list` and `models.chat.conversations.create`. Creates
+        the conversation through the same path as `createConversation`, so
+        every agent is added with the participant checks a hand-made add
+        applies: a team adds no capability. An agent of the team's project
+        that no longer exists is refused as `team_member_unavailable` with
+        its position; an agent of another project the caller cannot use is
+        refused by the participant path. With floor policy `lead` the new
+        conversation's `meta.floor` names the lead's new participant.
+      tags: [chat]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamStart'
+            example: { name: Release 1.62 }
+      responses:
+        '201':
+          description: The created conversation, as `createConversation` answers it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedConversation'
+        '400':
+          description: The body is not valid JSON for this route, or the participant path refused a participant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project, or an agent the caller cannot use.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: An agent of the team no longer exists (`team_member_unavailable`, with `position`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
         '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/message_feedback/prompt_lib/{project_id}/{message_id}:

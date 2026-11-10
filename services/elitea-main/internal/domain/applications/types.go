@@ -131,6 +131,11 @@ type Version struct {
 	// checked, or nil for none. On an UPDATE, Present.Soul with a nil Soul
 	// clears the column; without the flag the stored soul is left alone.
 	Soul json.RawMessage `json:"soul,omitempty"`
+	// AvatarPack is the version's avatar pack (ADR-0050 decision 6): the
+	// canonical JSON of an AgentAvatarPackV1 that internal/domain/agentmedia
+	// has checked, or nil for none. Present.AvatarPack with a nil pack clears
+	// the column on an UPDATE; without the flag the stored pack is left alone.
+	AvatarPack json.RawMessage `json:"avatar_pack,omitempty"`
 
 	// Present names the string-valued columns above that the caller
 	// EXPLICITLY sent. The map-valued and slice-valued fields carry their own
@@ -175,6 +180,8 @@ type VersionFieldSet struct {
 	WelcomeMessage bool
 	// Soul: the write carries `soul` (an object or null).
 	Soul bool
+	// AvatarPack: the write carries `avatar_pack` (an object or null).
+	AvatarPack bool
 }
 
 // VersionConfig is a derived projection over the application_versions columns

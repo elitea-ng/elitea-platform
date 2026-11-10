@@ -68,6 +68,49 @@ func TestCheckRefusesWithTheInvalidOutcome(t *testing.T) {
 	}
 }
 
+// A spawn the runtime accepted is never refused for its form: a soul with
+// CRLF line breaks or other control characters, model text with CRLF, and a
+// tool key up to the runtime's 512-byte bound all pass.
+func TestCheckAcceptsWhatTheRuntimeAccepted(t *testing.T) {
+	request := valid()
+	request.Profile.Soul = "Be careful.\r\n\x07Cite sources."
+	request.Rationale = "It found\r\nthe bug fast."
+	request.Instructions = "Step one.\r\nStep two."
+	request.Profile.Tools = []Tool{{Key: "github/" + strings.Repeat("t", 300)}}
+	checked, err := Check(request)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if checked.Profile.Soul != "Be careful.\r\n\x07Cite sources." {
+		t.Fatalf("soul changed: %q", checked.Profile.Soul)
+	}
+	request = valid()
+	request.Profile.Soul = "nul\x00"
+	if _, err := Check(request); err == nil {
+		t.Fatal("a NUL in the soul cannot be stored")
+	}
+	request = valid()
+	request.Profile.Tools = []Tool{{Key: "github/" + strings.Repeat("t", MaxToolKeyBytes)}}
+	if _, err := Check(request); err == nil {
+		t.Fatal("a tool key past the runtime bound")
+	}
+}
+
+// The rationale opens as the description, cut to the agent description
+// bound so the editor can save the created agent.
+func TestDraftCutsTheDescriptionToTheAgentBound(t *testing.T) {
+	request := valid()
+	request.Rationale = strings.Repeat("r", MaxRationaleBytes)
+	checked, err := Check(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	description, _ := Draft(checked)["description"].(string)
+	if len([]rune(description)) != MaxDescriptionChars {
+		t.Fatalf("description %d characters", len([]rune(description)))
+	}
+}
+
 func TestCheckKeepsAbsentToolsApartFromAnEmptyList(t *testing.T) {
 	request := valid()
 	request.Profile.Tools = nil

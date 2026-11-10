@@ -36,7 +36,7 @@ import {
 } from '../api/agentWorkforceApi';
 
 /** The trend the panel shows: the last 30 daily scorecards. */
-export const SCORECARD_DAYS = 30;
+const SCORECARD_DAYS = 30;
 const PROPOSAL_PAGE_SIZE = 20;
 
 function enabledFor(projectId: string | undefined, applicationId: number | undefined): boolean {

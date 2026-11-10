@@ -33,6 +33,8 @@ export interface AssistantCaptionProps {
   readonly personaRole?: string | undefined;
   /** The agent's icon URL; absent shows the brand mark. */
   readonly iconUrl?: string | undefined;
+  /** The agent's avatar pack (ADR-0050 decision 6); its slots win over `iconUrl`. */
+  readonly pack?: unknown;
   readonly messageClass?: MessageClass | undefined;
   readonly motion?: AvatarMotion | undefined;
 }
@@ -46,7 +48,7 @@ function classMarker(messageClass: MessageClass | undefined): string | undefined
 }
 
 /** The answering participant's avatar, name and role. */
-export function AssistantCaption({ name, personaRole, iconUrl, messageClass, motion }: AssistantCaptionProps): ReactNode {
+export function AssistantCaption({ name, personaRole, iconUrl, pack, messageClass, motion }: AssistantCaptionProps): ReactNode {
   const marker = classMarker(messageClass);
   return (
     <Box
@@ -54,7 +56,7 @@ export function AssistantCaption({ name, personaRole, iconUrl, messageClass, mot
       data-message-class={messageClass}
       sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}
     >
-      <AgentAvatar iconUrl={iconUrl} motion={motion} ephemeral={messageClass === MESSAGE_CLASS.Ephemeral} />
+      <AgentAvatar iconUrl={iconUrl} pack={pack} motion={motion} ephemeral={messageClass === MESSAGE_CLASS.Ephemeral} />
       <Typography variant="bodySmall" noWrap sx={mutedSx}>
         {name}
       </Typography>

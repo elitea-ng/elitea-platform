@@ -3,6 +3,8 @@ import { DeviceEventEmitter, Platform, Settings } from 'react-native';
 import { useSyncExternalStore } from 'react';
 import { z } from 'zod';
 
+import { normalizeSupportContact } from '@elitea/client-core/support';
+
 import { log } from '@/lib/log';
 
 /**
@@ -21,7 +23,9 @@ import { log } from '@/lib/log';
  * - `lock_server`: with `server_url`, the app keeps only that workspace;
  * - `require_device_lock`, `idle_lock_seconds`, `allow_screenshots`: a lock
  *   policy FLOOR. It only ever tightens what a workspace sends (true lock,
- *   the shorter idle time, never "0 = no relock"; screenshots off); it never loosens one.
+ *   the shorter idle time, never "0 = no relock"; screenshots off); it never loosens one;
+ * - `support_contact`: the IT support line shown in About and Settings; it
+ *   beats the workspace's (src/security/supportContact.ts).
  *
  * Device configuration, not workspace data: it is not wiped with a
  * workspace, and a value of the wrong type is ignored (never trusted half).
@@ -35,6 +39,7 @@ export interface ManagedConfig {
   requireDeviceLock: boolean | null;
   idleLockSeconds: number | null;
   allowScreenshots: boolean | null;
+  supportContact: string | null;
 }
 
 export const NO_MANAGED_CONFIG: Readonly<ManagedConfig> = Object.freeze({
@@ -43,6 +48,7 @@ export const NO_MANAGED_CONFIG: Readonly<ManagedConfig> = Object.freeze({
   requireDeviceLock: null,
   idleLockSeconds: null,
   allowScreenshots: null,
+  supportContact: null,
 });
 
 const field = <T extends z.ZodType>(schema: T) => schema.optional().catch(undefined);
@@ -58,6 +64,8 @@ const Managed = z.looseObject({
   require_device_lock: field(plistBoolean),
   idle_lock_seconds: field(z.number().int().min(0).max(86_400)),
   allow_screenshots: field(plistBoolean),
+  // One line (normalizeSupportContact: trimmed, at most 200 characters, no control characters).
+  support_contact: field(z.string().refine((v) => normalizeSupportContact(v) !== null).transform((v) => v.trim())),
 });
 
 /** The managed dictionary as the app uses it; anything that is not a dictionary is "none". */
@@ -72,6 +80,7 @@ export function parseManagedConfig(raw: unknown): ManagedConfig {
     requireDeviceLock: d.require_device_lock ?? null,
     idleLockSeconds: d.idle_lock_seconds ?? null,
     allowScreenshots: d.allow_screenshots ?? null,
+    supportContact: d.support_contact ?? null,
   };
 }
 
@@ -104,6 +113,7 @@ export function managedDelivery(raw: unknown, parsed: ManagedConfig = parseManag
     require_device_lock: parsed.requireDeviceLock,
     idle_lock_seconds: parsed.idleLockSeconds,
     allow_screenshots: parsed.allowScreenshots,
+    support_contact: parsed.supportContact,
   };
   const ignoredKeys = MANAGED_KEYS.filter((key) => key in dict && dict[key] !== undefined && byKey[key] === null);
   return { present: Object.keys(dict).length > 0, ignoredKeys: Object.freeze(ignoredKeys) };

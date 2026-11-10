@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/proactivity"
 )
 
 func TestCheckProposal(t *testing.T) {
@@ -55,8 +57,17 @@ func TestNarrowMetaOnlyTakesAway(t *testing.T) {
 	if memory["write"] != "review" || memory["scope"] != "project" {
 		t.Fatalf("memory = %v", memory)
 	}
-	if out["proactivity"].(map[string]any)["enabled"] != false || out["other"] != 1 {
+	if out["proactivity"].(map[string]any)["mode"] != "off" || out["other"] != 1 {
 		t.Fatalf("out = %v", out)
+	}
+	if block, err := proactivity.Parse(out["proactivity"]); err != nil || block.Enabled() {
+		t.Fatalf("the narrowed block must parse and be off: %+v %v", block, err)
+	}
+	// A heartbeat block keeps its other keys and still parses off.
+	on := NarrowMeta(map[string]any{"proactivity": map[string]any{"mode": "heartbeat", "interval": "30m"}},
+		Narrowing{ProactivityOff: true})
+	if block, err := proactivity.Parse(on["proactivity"]); err != nil || block.Enabled() || block.Interval.Minutes() != 30 {
+		t.Fatalf("narrowed heartbeat block = %+v %v", block, err)
 	}
 	if meta["memory"].(map[string]any)["write"] != "auto" {
 		t.Fatal("the input was modified")

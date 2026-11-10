@@ -18,6 +18,7 @@ import {
   fetchAgentProposals,
   markProposalCreated,
 } from '../api/agentProposalsApi';
+import { AgentMadeError } from '../lib/proposalErrors';
 import { createRequestOf, type ReviewDraft } from '../lib/proposalDraft';
 
 /** The inbox shows at most this many open proposals at once (3 per proposing agent). */
@@ -56,6 +57,8 @@ interface CreateVariables {
   readonly review: ReviewDraft;
   /** Indexes into `proposal.memory_seeds` the person kept. */
   readonly seeds: readonly number[];
+  /** The agent an earlier attempt already created (AgentMadeError): a retry only records it. */
+  readonly existingApplicationId?: number | undefined;
 }
 
 export interface CreatedAgent {
@@ -68,11 +71,14 @@ export function useProposalDecisions(projectId: string) {
   const queryClient = useQueryClient();
   const invalidate = useCallback(() => queryClient.invalidateQueries({ queryKey: proposalsKey(projectId) }), [queryClient, projectId]);
   const create = useMutation<CreatedAgent, Error, CreateVariables>({
-    mutationFn: async ({ proposal, review, seeds }) => {
-      const created = await createProposedAgent(projectId, createRequestOf(review));
-      const applicationId = Number(created.id);
-      const marked = await markProposalCreated(projectId, proposal.id, applicationId, seeds);
-      return { applicationId, memorySeeded: marked.memory_seeded };
+    mutationFn: async ({ proposal, review, seeds, existingApplicationId }) => {
+      const applicationId = existingApplicationId ?? Number((await createProposedAgent(projectId, createRequestOf(review))).id);
+      try {
+        const marked = await markProposalCreated(projectId, proposal.id, applicationId, seeds);
+        return { applicationId, memorySeeded: marked.memory_seeded };
+      } catch (cause) {
+        throw new AgentMadeError(applicationId, cause);
+      }
     },
     onSettled: invalidate,
   });

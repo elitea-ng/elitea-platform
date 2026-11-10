@@ -8,6 +8,7 @@
 import { useNavigate } from '@tanstack/react-router';
 
 import { isPublicProject } from '@/entities/project';
+import { useTeamAbilities } from '@/features/agent-teams';
 import { useForkConversation } from '@/features/chat-conversation-list';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { unwrapBody } from '@/shared/api/unwrap';
@@ -37,6 +38,7 @@ export function useRowActions(rail: ChatRail, openId: string, projectId: string 
   const navigate = useNavigate();
   const fork = useForkConversation({ projectId, toastError: onError });
   const canChangeVisibility = useCanChangeVisibility(projectId);
+  const { canCreate: canSaveAsTeam } = useTeamAbilities(projectId);
   const openChat = (conversationId: string): void => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
   return {
     open: (conversation) => openChat(conversation.id),
@@ -46,6 +48,7 @@ export function useRowActions(rail: ChatRail, openId: string, projectId: string 
     canArchive: rights.canArchive,
     canMoveToFolder: rights.canMoveToFolder,
     canChangeVisibility,
+    canSaveAsTeam,
     // The open conversation stays open when it is archived (an archive changes the lists, not the chat).
     archive: rail.archive,
     fork: (conversation) =>

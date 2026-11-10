@@ -1,11 +1,11 @@
--- 0250_agent_workforce_policies.sql — the project's automatic hiring and
+-- 0237_agent_workforce_policies.sql — the project's automatic hiring and
 -- automatic dismissal policies (ADR-0050 decisions 5c and 5k, issue 1617).
 -- Both are OFF by default: a project without a row here has neither.
 --
 --   elitea_lifecycle.agent_workforce_policies
 --       One row per project, written by an agent manager
 --       (agents.workforce.manage).
---       auto_hire_*      turn an open agent proposal (shared/0235) into an
+--       auto_hire_*      turn an open agent proposal (shared/0234) into an
 --                        agent without a click, only when its tools are all
 --                        read-only (computed tier low), its spec has at least
 --                        min_successful_runs completed spawns and no failed or
@@ -15,7 +15,7 @@
 --                        unpublished, with no tools bound, private to the
 --                        person the proposing run served, on probation; an
 --                        agent manager can undo the hire for 14 days.
---       auto_dismiss_*   rules that map scorecard conditions (shared/0245)
+--       auto_dismiss_*   rules that map scorecard conditions (shared/0236)
 --                        to watch, suspend or retire. watch and suspend apply
 --                        at once; retire posts a notice and applies after
 --                        grace_days unless the owner or an agent manager

@@ -15,7 +15,7 @@ reinstated for 30 days.
     Until Main is upgraded, a new worker's `propose_dismissal` call answers
     `workforce_unavailable` to the model and nothing is stored; an old worker
     never offers the tool.
-  - Shared migration `0245_agent_workforce.sql` adds
+  - Shared migration `0236_agent_workforce.sql` adds
     `elitea_lifecycle.agent_workforce_proposals` and
     `elitea_lifecycle.agent_scorecards`, the workforce columns of the agent
     registry (watch flag, `lifecycle_state` retired/deleted, reinstate and
@@ -32,6 +32,9 @@ reinstated for 30 days.
     that nests a retired agent is refused with 409 `nested_agent_retired`
     until someone removes the nesting. This applies to chat, the agent run
     route, the support assistant and pipeline triggers.
+  - Retiring an agent turns its heartbeat off; reinstating it turns the
+    heartbeat back on. A demotion with "turn the heartbeat off" stops the
+    heartbeat at once and sets the draft's `proactivity.mode` to `off`.
   - A critical-tier agent and one under legal hold cannot be proposed for any
     stage; delete is refused before the 30-day retention ends and under legal
     hold.

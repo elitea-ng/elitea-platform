@@ -1,5 +1,11 @@
 /**
- * The agent editor's tab strip: Configuration, Persona, Evaluation, Memory, then History.
+ * The agent editor's tab strip: Configuration, Persona, Avatar, Evaluation, Memory, Heartbeat, then History.
+ *
+ * AVATAR (ADR-0050 decision 6, issue 1619) is the version's avatar pack with
+ * a preview of every state; like Persona it edits unsaved version state.
+ *
+ * HEARTBEAT (ADR-0050 decision 2, issue 1618) turns the agent's heartbeat on
+ * or off and shows its history — `features/agent-heartbeat`'s `HeartbeatPanel`.
  *
  * MEMORY (ADR-0050 decision 1b, issue 1608) is what the agent remembers in
  * this project — `features/agent-memory`'s `MemoryPanel`; the server decides
@@ -47,6 +53,7 @@ import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { EvaluationPanel } from '@/features/agent-evaluation';
+import { HeartbeatPanel } from '@/features/agent-heartbeat';
 import { MemoryPanel } from '@/features/agent-memory';
 import { WorkforcePanel } from '@/features/agent-workforce';
 import { RunHistoryPanel } from '@/entities/run-history';
@@ -57,8 +64,10 @@ import { BaseTabs } from '@/shared/ui/BaseTabs';
 const EDITOR_TABS = {
   configuration: 'configuration',
   persona: 'persona',
+  avatar: 'avatar',
   evaluation: 'evaluation',
   memory: 'memory',
+  heartbeat: 'heartbeat',
   workforce: 'workforce',
   history: 'history',
 } as const;
@@ -89,12 +98,14 @@ export interface EditApplicationEditorTabsProps {
    * the page's Save button writes.
    */
   readonly personaPanel?: ReactNode;
+  /** ADR-0050 decision 6 — the Avatar tab's panel (the version's avatar pack), passed in for the same reason. */
+  readonly avatarPanel?: ReactNode;
   /** #955 — this agent's own versions, so the History tab can name which one produced each run. */
   readonly versions?: readonly { readonly id: string | number; readonly name: string }[] | undefined;
 }
 
 export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps): ReactNode {
-  const { projectId, applicationId, applicationVersionId, configurationPanel, personaPanel, versions } = props;
+  const { projectId, applicationId, applicationVersionId, configurationPanel, personaPanel, avatarPanel, versions } = props;
   const [tab, setTab] = useState<EditorTab>(EDITOR_TABS.configuration);
 
   const handleChange = (_event: SyntheticEvent, value: EditorTab): void => setTab(value);
@@ -119,6 +130,13 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
             data-testid="edit-application-tab-persona"
           />
         )}
+        {avatarPanel !== undefined && (
+          <BaseTab
+            value={EDITOR_TABS.avatar}
+            label={t('pages.agents.editApplication.tabs.avatar', 'Avatar')}
+            data-testid="edit-application-tab-avatar"
+          />
+        )}
         <BaseTab
           value={EDITOR_TABS.evaluation}
           label={t('pages.agents.editApplication.tabs.evaluation', 'Evaluation')}
@@ -128,6 +146,11 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
           value={EDITOR_TABS.memory}
           label={t('pages.agents.editApplication.tabs.memory', 'Memory')}
           data-testid="edit-application-tab-memory"
+        />
+        <BaseTab
+          value={EDITOR_TABS.heartbeat}
+          label={t('pages.agents.editApplication.tabs.heartbeat', 'Heartbeat')}
+          data-testid="edit-application-tab-heartbeat"
         />
         <BaseTab
           value={EDITOR_TABS.workforce}
@@ -153,6 +176,7 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
       <Box hidden={tab !== EDITOR_TABS.configuration}>{configurationPanel}</Box>
       {/* Mounted while hidden for the same reason: it holds unsaved edits. */}
       {personaPanel !== undefined && <Box hidden={tab !== EDITOR_TABS.persona}>{personaPanel}</Box>}
+      {avatarPanel !== undefined && <Box hidden={tab !== EDITOR_TABS.avatar}>{avatarPanel}</Box>}
       <Box hidden={tab !== EDITOR_TABS.evaluation}>
         {tab === EDITOR_TABS.evaluation && (
           <EvaluationPanel
@@ -164,6 +188,9 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
       </Box>
       <Box hidden={tab !== EDITOR_TABS.memory}>
         {tab === EDITOR_TABS.memory && <MemoryPanel projectId={projectId} applicationId={applicationId} />}
+      </Box>
+      <Box hidden={tab !== EDITOR_TABS.heartbeat}>
+        {tab === EDITOR_TABS.heartbeat && <HeartbeatPanel projectId={projectId} applicationId={applicationId} />}
       </Box>
       <Box hidden={tab !== EDITOR_TABS.workforce}>
         {tab === EDITOR_TABS.workforce && <WorkforcePanel projectId={projectId} applicationId={applicationId} />}

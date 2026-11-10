@@ -217,6 +217,9 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("build current ad-hoc execution input: %w", err)
 	}
 	input.ContextSettings = contextSettings
+	// #1831: this turn writes its question under QuestionID.
+	questionMessageID := request.QuestionID
+	input.CurrentMessageId = &questionMessageID
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
 	questionMeta := request.ThreadRun.questionMeta(

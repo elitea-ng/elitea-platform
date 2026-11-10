@@ -156,3 +156,9 @@ an older server the entry points are hidden. A 404 on the list without a `code` 
 `{error: "not found"}`) reads as a server without the routes; the memory handler's own 404 carries `code`.
 A delete answered 404 `not_found` drops the note: it is already gone. The screen pins the project it was
 opened in; a project or workspace switch while it is open shows "moved" and reads nothing more.
+
+## Client contract 1.45
+
+| Area | What |
+|---|---|
+| IT support line (ADR-0052 W6.2) | `support_contact` in `NativeClientPolicy` (the token response's `client_policy`) and in `ClientPublicPolicy` (discovery): one line, at most 200 characters, empty for none. The app shows it as "IT support" in Settings › About and in About (`src/security/supportContact.ts`); the device's managed `support_contact` (`src/security/managedConfig.ts`) wins. Normalised and linked by `@elitea/client-core/support` (at most one `https:`, `mailto:` or `tel:` link). A server before 1.45 sends none, and the row is absent. |

@@ -1,4 +1,4 @@
--- 0235_agent_proposals.sql — an agent proposes promoting a temporary
+-- 0234_agent_proposals.sql — an agent proposes promoting a temporary
 -- sub-agent to a saved agent; a person reviews and creates it, or dismisses
 -- the proposal (ADR-0050 decision 5a, issue 1615).
 --

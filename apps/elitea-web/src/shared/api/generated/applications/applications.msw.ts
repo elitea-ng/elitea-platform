@@ -58,6 +58,10 @@ import type {
   AgentChangeApprovalOutcome,
   AgentChangeRequest,
   AgentChangeRequestList,
+  AgentHeartbeatList,
+  AgentHeartbeatSettings,
+  AgentMediaGenerateResponse,
+  AgentMediaObject,
   AgentMemoryEntry,
   AgentMemoryList,
   AgentProposal,
@@ -115,6 +119,7 @@ import type {
   ProjectContext,
   ProjectInfo,
   ProjectInfoUpdateResponse,
+  ProjectProactivity,
   ProjectQuota,
   ProjectStatistics,
   ProjectWithGroups,
@@ -1486,6 +1491,104 @@ export const getSetAgentMemoryOptOutResponseMock = (
 ): SetAgentMemoryOptOut200 => ({
   opted_out: faker.datatype.boolean(),
   ...overrideResponse,
+});
+
+export const getGetAgentHeartbeatResponseMock = (): AgentHeartbeatSettings => ({
+  application_id: 31,
+  configured: true,
+  enabled: true,
+  owner_user_id: 11,
+  mandate_id: "7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f",
+  home_conversation_uuid: "10000000-0000-4000-8000-000000000031",
+  release_id: 5,
+  next_wake_at: "2026-11-09T15:00:00Z",
+  last_wake_at: "2026-11-09T14:00:00Z",
+  paused_until: null,
+  last_skip_reason: "",
+  updated_at: "2026-11-09T14:00:00Z",
+  governance: {
+    platform_enabled: true,
+    project_enabled: true,
+    tier: "medium",
+    personal: false,
+    can_enable: true,
+    wakes_per_day: 24,
+    acts_per_day: 4,
+    spend_per_day_usd: 2,
+  },
+  release: {
+    release_id: 5,
+    version_id: 42,
+    mode: "heartbeat",
+    interval: "1h0m0s",
+    quiet_hours: "22:00-07:00 Europe/Berlin",
+    act_target: "home_thread",
+    goal_count: 1,
+  },
+});
+
+export const getSaveAgentHeartbeatResponseMock =
+  (): AgentHeartbeatSettings => ({
+    application_id: 31,
+    configured: true,
+    enabled: true,
+    owner_user_id: 11,
+    mandate_id: "7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f",
+    home_conversation_uuid: "10000000-0000-4000-8000-000000000031",
+    release_id: 5,
+    next_wake_at: "2026-11-09T15:00:00Z",
+    last_wake_at: "2026-11-09T14:00:00Z",
+    paused_until: null,
+    last_skip_reason: "",
+    updated_at: "2026-11-09T14:00:00Z",
+    governance: {
+      platform_enabled: true,
+      project_enabled: true,
+      tier: "medium",
+      personal: false,
+      can_enable: true,
+      wakes_per_day: 24,
+      acts_per_day: 4,
+      spend_per_day_usd: 2,
+    },
+    release: {
+      release_id: 5,
+      version_id: 42,
+      mode: "heartbeat",
+      interval: "1h0m0s",
+      quiet_hours: "22:00-07:00 Europe/Berlin",
+      act_target: "home_thread",
+      goal_count: 1,
+    },
+  });
+
+export const getListAgentHeartbeatsResponseMock = (): AgentHeartbeatList => ({
+  total: 1,
+  rows: [
+    {
+      id: 1,
+      wake_id: "3f2b8d4e-1a2c-4b5d-9e8f-7a6b5c4d3e2f",
+      woke_at: "2026-11-09T14:00:00Z",
+      outcome: "notify",
+      reason_code: "",
+      reason: "The nightly build failed.",
+      release_id: 5,
+      digest_sha256:
+        "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      triage_spend_usd: 0.0004,
+      execution_id: null,
+      conversation_uuid: "10000000-0000-4000-8000-000000000031",
+      paused_until: null,
+    },
+  ],
+});
+
+export const getGetProjectProactivityResponseMock = (): ProjectProactivity => ({
+  proactive_agents_enabled: true,
+});
+
+export const getSetProjectProactivityResponseMock = (): ProjectProactivity => ({
+  proactive_agents_enabled: true,
 });
 
 export const getListAgentProposalsResponseMock = (
@@ -3307,6 +3410,57 @@ export const getCopyAgentMemoryResponseMock = (
   overrideResponse: Partial<Extract<CopyAgentMemory200, object>> = {},
 ): CopyAgentMemory200 => ({ copied: faker.number.int(), ...overrideResponse });
 
+export const getUploadAgentMediaResponseMock = (
+  overrideResponse: Partial<Extract<AgentMediaObject, object>> = {},
+): AgentMediaObject => ({
+  url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  media_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  format: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  width: faker.number.int(),
+  height: faker.number.int(),
+  duration_ms: faker.number.int(),
+  bytes: faker.number.int(),
+  generated_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGenerateAgentMediaResponseMock = (
+  overrideResponse: Partial<Extract<AgentMediaGenerateResponse, object>> = {},
+): AgentMediaGenerateResponse => ({
+  media: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    media_type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    format: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    width: faker.number.int(),
+    height: faker.number.int(),
+    duration_ms: faker.number.int(),
+    bytes: faker.number.int(),
+    generated_by: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+  })),
+  ...overrideResponse,
+});
+
+export const getGetAgentMediaResponseMock = (): ArrayBuffer =>
+  faker.helpers.arrayElement([
+    new ArrayBuffer(faker.number.int({ min: 1, max: 64 })),
+    new ArrayBuffer(faker.number.int({ min: 1, max: 64 })),
+    new ArrayBuffer(faker.number.int({ min: 1, max: 64 })),
+    new ArrayBuffer(faker.number.int({ min: 1, max: 64 })),
+    new ArrayBuffer(faker.number.int({ min: 1, max: 64 })),
+    new ArrayBuffer(faker.number.int({ min: 1, max: 64 })),
+    new ArrayBuffer(faker.number.int({ min: 1, max: 64 })),
+    new ArrayBuffer(faker.number.int({ min: 1, max: 64 })),
+  ]);
+
 export const getListProjectPermissionTrimmingResponseMock = (
   overrideResponse: Partial<Extract<PermissionTrimmingReport, object>> = {},
 ): PermissionTrimmingReport => ({
@@ -4658,6 +4812,176 @@ export const getCreateApplicationResponseMock = (
         ]),
         undefined,
       ]),
+      avatar_pack: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            schema: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            slots: {
+              still: {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              idle: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              thinking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              speaking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              working: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              waiting: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              success: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              error: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              waking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+            },
+          },
+          null,
+        ]),
+        undefined,
+      ]),
       notes: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -4887,6 +5211,24 @@ export const getCreateApplicationResponseMock = (
             citations: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 faker.helpers.arrayElement(["off", "required"] as const),
+                null,
+              ]),
+              undefined,
+            ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
                 null,
               ]),
               undefined,
@@ -5091,6 +5433,176 @@ export const getCreateApplicationResponseMock = (
         ]),
         undefined,
       ]),
+      avatar_pack: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            schema: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            slots: {
+              still: {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              idle: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              thinking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              speaking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              working: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              waiting: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              success: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              error: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              waking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+            },
+          },
+          null,
+        ]),
+        undefined,
+      ]),
       notes: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -5320,6 +5832,24 @@ export const getCreateApplicationResponseMock = (
             citations: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 faker.helpers.arrayElement(["off", "required"] as const),
+                null,
+              ]),
+              undefined,
+            ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
                 null,
               ]),
               undefined,
@@ -5692,6 +6222,24 @@ export const getListPublicApplicationsResponseMock = (
           ]),
           undefined,
         ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         tool_envelope: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -5979,6 +6527,24 @@ export const getGetApplicationResponseMock = (
             ]),
             undefined,
           ]),
+          proactivity: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                mode: "heartbeat",
+                interval: "1h",
+                quiet_hours: "22:00-07:00 Europe/Berlin",
+                watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                act_target: "home_thread",
+                limits: {
+                  wakes_per_day: 24,
+                  acts_per_day: 4,
+                  spend_per_day_usd: 2,
+                },
+              },
+              null,
+            ]),
+            undefined,
+          ]),
           tool_envelope: faker.helpers.arrayElement([
             faker.helpers.arrayElement([
               {
@@ -6077,6 +6643,176 @@ export const getGetApplicationResponseMock = (
             ],
             proactive_goals: ["watch release branches for red CI"],
             body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+          },
+          null,
+        ]),
+        undefined,
+      ]),
+      avatar_pack: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            schema: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            slots: {
+              still: {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              idle: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              thinking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              speaking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              working: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              waiting: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              success: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              error: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              waking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+            },
           },
           null,
         ]),
@@ -6311,6 +7047,24 @@ export const getGetApplicationResponseMock = (
             citations: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 faker.helpers.arrayElement(["off", "required"] as const),
+                null,
+              ]),
+              undefined,
+            ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
                 null,
               ]),
               undefined,
@@ -6524,6 +7278,176 @@ export const getEditApplicationResponseMock = (
         ]),
         undefined,
       ]),
+      avatar_pack: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            schema: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            slots: {
+              still: {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              idle: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              thinking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              speaking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              working: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              waiting: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              success: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              error: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              waking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+            },
+          },
+          null,
+        ]),
+        undefined,
+      ]),
       notes: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -6757,6 +7681,24 @@ export const getEditApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             tool_envelope: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -6957,6 +7899,176 @@ export const getGetPublicApplicationResponseMock = (
           ],
           proactive_goals: ["watch release branches for red CI"],
           body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+        },
+        null,
+      ]),
+      undefined,
+    ]),
+    avatar_pack: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        {
+          schema: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          slots: {
+            still: {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            idle: faker.helpers.arrayElement([
+              {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              undefined,
+            ]),
+            thinking: faker.helpers.arrayElement([
+              {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              undefined,
+            ]),
+            speaking: faker.helpers.arrayElement([
+              {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              undefined,
+            ]),
+            working: faker.helpers.arrayElement([
+              {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              undefined,
+            ]),
+            waiting: faker.helpers.arrayElement([
+              {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              undefined,
+            ]),
+            success: faker.helpers.arrayElement([
+              {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              undefined,
+            ]),
+            error: faker.helpers.arrayElement([
+              {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              undefined,
+            ]),
+            waking: faker.helpers.arrayElement([
+              {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              undefined,
+            ]),
+          },
         },
         null,
       ]),
@@ -7188,6 +8300,24 @@ export const getGetPublicApplicationResponseMock = (
           citations: faker.helpers.arrayElement([
             faker.helpers.arrayElement([
               faker.helpers.arrayElement(["off", "required"] as const),
+              null,
+            ]),
+            undefined,
+          ]),
+          proactivity: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                mode: "heartbeat",
+                interval: "1h",
+                quiet_hours: "22:00-07:00 Europe/Berlin",
+                watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                act_target: "home_thread",
+                limits: {
+                  wakes_per_day: 24,
+                  acts_per_day: 4,
+                  spend_per_day_usd: 2,
+                },
+              },
               null,
             ]),
             undefined,
@@ -7614,6 +8744,176 @@ export const getGetApplicationVersionDetailResponseMock = (
     ]),
     undefined,
   ]),
+  avatar_pack: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        schema: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        slots: {
+          still: {
+            url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+            media_type: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            poster_url: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 160 } }),
+              undefined,
+            ]),
+            generated_by: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 256 } }),
+              undefined,
+            ]),
+          },
+          idle: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          thinking: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          speaking: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          working: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          waiting: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          success: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          error: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          waking: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+        },
+      },
+      null,
+    ]),
+    undefined,
+  ]),
   notes: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -7840,6 +9140,24 @@ export const getGetApplicationVersionDetailResponseMock = (
         citations: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             faker.helpers.arrayElement(["off", "required"] as const),
+            null,
+          ]),
+          undefined,
+        ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
             null,
           ]),
           undefined,
@@ -8036,6 +9354,176 @@ export const getUpdateApplicationVersionResponseMock = (
     ]),
     undefined,
   ]),
+  avatar_pack: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        schema: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        slots: {
+          still: {
+            url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+            media_type: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            poster_url: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 160 } }),
+              undefined,
+            ]),
+            generated_by: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 256 } }),
+              undefined,
+            ]),
+          },
+          idle: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          thinking: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          speaking: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          working: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          waiting: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          success: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          error: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          waking: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+        },
+      },
+      null,
+    ]),
+    undefined,
+  ]),
   notes: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -8266,6 +9754,24 @@ export const getUpdateApplicationVersionResponseMock = (
           ]),
           undefined,
         ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         tool_envelope: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -8453,6 +9959,176 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
             ],
             proactive_goals: ["watch release branches for red CI"],
             body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+          },
+          null,
+        ]),
+        undefined,
+      ]),
+      avatar_pack: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            schema: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            slots: {
+              still: {
+                url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                media_type: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                poster_url: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  undefined,
+                ]),
+                generated_by: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 256 } }),
+                  undefined,
+                ]),
+              },
+              idle: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              thinking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              speaking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              working: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              waiting: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              success: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              error: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+              waking: faker.helpers.arrayElement([
+                {
+                  url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                  media_type: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  poster_url: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    undefined,
+                  ]),
+                  generated_by: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 256 } }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+            },
           },
           null,
         ]),
@@ -8691,6 +10367,24 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
               ]),
               undefined,
             ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             tool_envelope: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -8903,6 +10597,176 @@ export const getSaveApplicationNewVersionResponseMock = (
         ],
         proactive_goals: ["watch release branches for red CI"],
         body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+      },
+      null,
+    ]),
+    undefined,
+  ]),
+  avatar_pack: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        schema: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        slots: {
+          still: {
+            url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+            media_type: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            poster_url: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 160 } }),
+              undefined,
+            ]),
+            generated_by: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 256 } }),
+              undefined,
+            ]),
+          },
+          idle: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          thinking: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          speaking: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          working: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          waiting: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          success: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          error: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+          waking: faker.helpers.arrayElement([
+            {
+              url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+              media_type: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              poster_url: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 160 } }),
+                undefined,
+              ]),
+              generated_by: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 256 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
+        },
       },
       null,
     ]),
@@ -9134,6 +10998,24 @@ export const getSaveApplicationNewVersionResponseMock = (
         citations: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             faker.helpers.arrayElement(["off", "required"] as const),
+            null,
+          ]),
+          undefined,
+        ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
             null,
           ]),
           undefined,
@@ -9450,6 +11332,244 @@ export const getImportWizardResponseMock = (
                 ]),
                 undefined,
               ]),
+              avatar_pack: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  {
+                    schema: faker.string.alpha({
+                      length: { min: 10, max: 20 },
+                    }),
+                    slots: {
+                      still: {
+                        url: faker.string.alpha({
+                          length: { min: 10, max: 160 },
+                        }),
+                        media_type: faker.helpers.arrayElement([
+                          faker.string.alpha({ length: { min: 10, max: 20 } }),
+                          undefined,
+                        ]),
+                        poster_url: faker.helpers.arrayElement([
+                          faker.string.alpha({ length: { min: 10, max: 160 } }),
+                          undefined,
+                        ]),
+                        generated_by: faker.helpers.arrayElement([
+                          faker.string.alpha({ length: { min: 10, max: 256 } }),
+                          undefined,
+                        ]),
+                      },
+                      idle: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      thinking: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      speaking: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      working: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      waiting: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      success: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      error: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      waking: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                    },
+                  },
+                  null,
+                ]),
+                undefined,
+              ]),
               notes: faker.helpers.arrayElement([
                 faker.string.alpha({ length: { min: 10, max: 20 } }),
                 undefined,
@@ -9694,6 +11814,27 @@ export const getImportWizardResponseMock = (
                           "off",
                           "required",
                         ] as const),
+                        null,
+                      ]),
+                      undefined,
+                    ]),
+                    proactivity: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          mode: "heartbeat",
+                          interval: "1h",
+                          quiet_hours: "22:00-07:00 Europe/Berlin",
+                          watch: [
+                            { kind: "conversation" },
+                            { kind: "schedule_note" },
+                          ],
+                          act_target: "home_thread",
+                          limits: {
+                            wakes_per_day: 24,
+                            acts_per_day: 4,
+                            spend_per_day_usd: 2,
+                          },
+                        },
                         null,
                       ]),
                       undefined,
@@ -9977,6 +12118,244 @@ export const getImportWizardResponseMock = (
                 ]),
                 undefined,
               ]),
+              avatar_pack: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  {
+                    schema: faker.string.alpha({
+                      length: { min: 10, max: 20 },
+                    }),
+                    slots: {
+                      still: {
+                        url: faker.string.alpha({
+                          length: { min: 10, max: 160 },
+                        }),
+                        media_type: faker.helpers.arrayElement([
+                          faker.string.alpha({ length: { min: 10, max: 20 } }),
+                          undefined,
+                        ]),
+                        poster_url: faker.helpers.arrayElement([
+                          faker.string.alpha({ length: { min: 10, max: 160 } }),
+                          undefined,
+                        ]),
+                        generated_by: faker.helpers.arrayElement([
+                          faker.string.alpha({ length: { min: 10, max: 256 } }),
+                          undefined,
+                        ]),
+                      },
+                      idle: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      thinking: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      speaking: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      working: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      waiting: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      success: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      error: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                      waking: faker.helpers.arrayElement([
+                        {
+                          url: faker.string.alpha({
+                            length: { min: 10, max: 160 },
+                          }),
+                          media_type: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          poster_url: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 160 },
+                            }),
+                            undefined,
+                          ]),
+                          generated_by: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 256 },
+                            }),
+                            undefined,
+                          ]),
+                        },
+                        undefined,
+                      ]),
+                    },
+                  },
+                  null,
+                ]),
+                undefined,
+              ]),
               notes: faker.helpers.arrayElement([
                 faker.string.alpha({ length: { min: 10, max: 20 } }),
                 undefined,
@@ -10221,6 +12600,27 @@ export const getImportWizardResponseMock = (
                           "off",
                           "required",
                         ] as const),
+                        null,
+                      ]),
+                      undefined,
+                    ]),
+                    proactivity: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          mode: "heartbeat",
+                          interval: "1h",
+                          quiet_hours: "22:00-07:00 Europe/Berlin",
+                          watch: [
+                            { kind: "conversation" },
+                            { kind: "schedule_note" },
+                          ],
+                          act_target: "home_thread",
+                          limits: {
+                            wakes_per_day: 24,
+                            acts_per_day: 4,
+                            spend_per_day_usd: 2,
+                          },
+                        },
                         null,
                       ]),
                       undefined,
@@ -10680,6 +13080,192 @@ export const getForkAgentResponseMock = (
             ]),
             undefined,
           ]),
+          avatar_pack: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                schema: faker.string.alpha({ length: { min: 10, max: 20 } }),
+                slots: {
+                  still: {
+                    url: faker.string.alpha({ length: { min: 10, max: 160 } }),
+                    media_type: faker.helpers.arrayElement([
+                      faker.string.alpha({ length: { min: 10, max: 20 } }),
+                      undefined,
+                    ]),
+                    poster_url: faker.helpers.arrayElement([
+                      faker.string.alpha({ length: { min: 10, max: 160 } }),
+                      undefined,
+                    ]),
+                    generated_by: faker.helpers.arrayElement([
+                      faker.string.alpha({ length: { min: 10, max: 256 } }),
+                      undefined,
+                    ]),
+                  },
+                  idle: faker.helpers.arrayElement([
+                    {
+                      url: faker.string.alpha({
+                        length: { min: 10, max: 160 },
+                      }),
+                      media_type: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 20 } }),
+                        undefined,
+                      ]),
+                      poster_url: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 160 } }),
+                        undefined,
+                      ]),
+                      generated_by: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 256 } }),
+                        undefined,
+                      ]),
+                    },
+                    undefined,
+                  ]),
+                  thinking: faker.helpers.arrayElement([
+                    {
+                      url: faker.string.alpha({
+                        length: { min: 10, max: 160 },
+                      }),
+                      media_type: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 20 } }),
+                        undefined,
+                      ]),
+                      poster_url: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 160 } }),
+                        undefined,
+                      ]),
+                      generated_by: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 256 } }),
+                        undefined,
+                      ]),
+                    },
+                    undefined,
+                  ]),
+                  speaking: faker.helpers.arrayElement([
+                    {
+                      url: faker.string.alpha({
+                        length: { min: 10, max: 160 },
+                      }),
+                      media_type: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 20 } }),
+                        undefined,
+                      ]),
+                      poster_url: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 160 } }),
+                        undefined,
+                      ]),
+                      generated_by: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 256 } }),
+                        undefined,
+                      ]),
+                    },
+                    undefined,
+                  ]),
+                  working: faker.helpers.arrayElement([
+                    {
+                      url: faker.string.alpha({
+                        length: { min: 10, max: 160 },
+                      }),
+                      media_type: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 20 } }),
+                        undefined,
+                      ]),
+                      poster_url: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 160 } }),
+                        undefined,
+                      ]),
+                      generated_by: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 256 } }),
+                        undefined,
+                      ]),
+                    },
+                    undefined,
+                  ]),
+                  waiting: faker.helpers.arrayElement([
+                    {
+                      url: faker.string.alpha({
+                        length: { min: 10, max: 160 },
+                      }),
+                      media_type: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 20 } }),
+                        undefined,
+                      ]),
+                      poster_url: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 160 } }),
+                        undefined,
+                      ]),
+                      generated_by: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 256 } }),
+                        undefined,
+                      ]),
+                    },
+                    undefined,
+                  ]),
+                  success: faker.helpers.arrayElement([
+                    {
+                      url: faker.string.alpha({
+                        length: { min: 10, max: 160 },
+                      }),
+                      media_type: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 20 } }),
+                        undefined,
+                      ]),
+                      poster_url: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 160 } }),
+                        undefined,
+                      ]),
+                      generated_by: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 256 } }),
+                        undefined,
+                      ]),
+                    },
+                    undefined,
+                  ]),
+                  error: faker.helpers.arrayElement([
+                    {
+                      url: faker.string.alpha({
+                        length: { min: 10, max: 160 },
+                      }),
+                      media_type: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 20 } }),
+                        undefined,
+                      ]),
+                      poster_url: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 160 } }),
+                        undefined,
+                      ]),
+                      generated_by: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 256 } }),
+                        undefined,
+                      ]),
+                    },
+                    undefined,
+                  ]),
+                  waking: faker.helpers.arrayElement([
+                    {
+                      url: faker.string.alpha({
+                        length: { min: 10, max: 160 },
+                      }),
+                      media_type: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 20 } }),
+                        undefined,
+                      ]),
+                      poster_url: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 160 } }),
+                        undefined,
+                      ]),
+                      generated_by: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 256 } }),
+                        undefined,
+                      ]),
+                    },
+                    undefined,
+                  ]),
+                },
+              },
+              null,
+            ]),
+            undefined,
+          ]),
           notes: faker.helpers.arrayElement([
             faker.string.alpha({ length: { min: 10, max: 20 } }),
             undefined,
@@ -10911,6 +13497,27 @@ export const getForkAgentResponseMock = (
                 citations: faker.helpers.arrayElement([
                   faker.helpers.arrayElement([
                     faker.helpers.arrayElement(["off", "required"] as const),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                proactivity: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    {
+                      mode: "heartbeat",
+                      interval: "1h",
+                      quiet_hours: "22:00-07:00 Europe/Berlin",
+                      watch: [
+                        { kind: "conversation" },
+                        { kind: "schedule_note" },
+                      ],
+                      act_target: "home_thread",
+                      limits: {
+                        wakes_per_day: 24,
+                        acts_per_day: 4,
+                        spend_per_day_usd: 2,
+                      },
+                    },
                     null,
                   ]),
                   undefined,
@@ -12302,6 +14909,136 @@ export const getSetAgentMemoryOptOutMockHandler = (
   );
 };
 
+export const getGetAgentHeartbeatMockHandler = (
+  overrideResponse?:
+    | AgentHeartbeatSettings
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentHeartbeatSettings> | AgentHeartbeatSettings),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_heartbeat/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentHeartbeatResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSaveAgentHeartbeatMockHandler = (
+  overrideResponse?:
+    | AgentHeartbeatSettings
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<AgentHeartbeatSettings> | AgentHeartbeatSettings),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/agent_heartbeat/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSaveAgentHeartbeatResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAgentHeartbeatsMockHandler = (
+  overrideResponse?:
+    | AgentHeartbeatList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentHeartbeatList> | AgentHeartbeatList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_heartbeats/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentHeartbeatsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetProjectProactivityMockHandler = (
+  overrideResponse?:
+    | ProjectProactivity
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ProjectProactivity> | ProjectProactivity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_heartbeat_project/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetProjectProactivityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetProjectProactivityMockHandler = (
+  overrideResponse?:
+    | ProjectProactivity
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<ProjectProactivity> | ProjectProactivity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/agent_heartbeat_project/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetProjectProactivityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListAgentProposalsMockHandler = (
   overrideResponse?:
     | AgentProposalList
@@ -12923,6 +15660,86 @@ export const getCopyAgentMemoryMockHandler = (
             : overrideResponse
           : getCopyAgentMemoryResponseMock(),
         { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUploadAgentMediaMockHandler = (
+  overrideResponse?:
+    | AgentMediaObject
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentMediaObject> | AgentMediaObject),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_media/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUploadAgentMediaResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGenerateAgentMediaMockHandler = (
+  overrideResponse?:
+    | AgentMediaGenerateResponse
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentMediaGenerateResponse> | AgentMediaGenerateResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_media_generate/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGenerateAgentMediaResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentMediaMockHandler = (
+  overrideResponse?:
+    | ArrayBuffer
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ArrayBuffer> | ArrayBuffer),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/agent_media/:projectId/:file",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      const binaryBody =
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentMediaResponseMock();
+      return HttpResponse.arrayBuffer(
+        binaryBody instanceof ArrayBuffer ? binaryBody : new ArrayBuffer(0),
+        { status: 200, headers: { "Content-Type": "image/png" } },
       );
     },
     options,
@@ -15273,6 +18090,11 @@ export const getApplicationsMock = () => [
   getUpdateAgentMemoryEntryMockHandler(),
   getDeleteAgentMemoryEntryMockHandler(),
   getSetAgentMemoryOptOutMockHandler(),
+  getGetAgentHeartbeatMockHandler(),
+  getSaveAgentHeartbeatMockHandler(),
+  getListAgentHeartbeatsMockHandler(),
+  getGetProjectProactivityMockHandler(),
+  getSetProjectProactivityMockHandler(),
   getListAgentProposalsMockHandler(),
   getGetAgentProposalMockHandler(),
   getDismissAgentProposalMockHandler(),
@@ -15297,6 +18119,9 @@ export const getApplicationsMock = () => [
   getKeepAgentAutoHireMockHandler(),
   getObjectAgentAutomaticActionMockHandler(),
   getCopyAgentMemoryMockHandler(),
+  getUploadAgentMediaMockHandler(),
+  getGenerateAgentMediaMockHandler(),
+  getGetAgentMediaMockHandler(),
   getListProjectPermissionTrimmingMockHandler(),
   getRemoveProjectPermissionTrimmingItemMockHandler(),
   getMarkAgentDueMockHandler(),

@@ -7,7 +7,7 @@ default: nothing changes for a project until a person with
 
 - **Who is affected:** operators upgrading Main. Nothing to do for the worker.
 - **What to do:**
-  - Shared migration `0250_agent_workforce_policies.sql` adds
+  - Shared migration `0237_agent_workforce_policies.sql` adds
     `elitea_lifecycle.agent_workforce_policies` (one row per project that
     saved a policy) and `elitea_lifecycle.agent_automatic_actions`, the
     probation and orphan columns of the agent registry, and a `policy` source
