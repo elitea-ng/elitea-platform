@@ -20,6 +20,48 @@ type SavedCodeInputPolicy struct {
 // Use only exact instructions from immutable root input or the registered owning
 // child definition. This function establishes saved membership, not authority.
 func OriginalSavedCodeInputPolicy(instructions, yamlSHA256, nodeID string) (SavedCodeInputPolicy, error) {
+	return originalSavedCodeInputPolicy(instructions, yamlSHA256, nodeID, nil)
+}
+
+// mapItemInputKind is a Map item channel a Code worker reads (W3-2): any JSON
+// the frozen source holds. It is never a business root.
+const mapItemInputKind = "__map_item_json"
+
+// OriginalMapItemCodeInputPolicy is the input policy of a Code node run as the
+// worker of Map node mapNodeID: the declared business roots plus the Map's
+// item channel (any JSON) and index channel (int), as the Worker's Code
+// boundary admits them. The caller has already resolved the Map as the owner
+// of nodeID inside its own transaction (FanoutCodeChildOwner).
+func OriginalMapItemCodeInputPolicy(instructions, yamlSHA256, nodeID, mapNodeID string) (SavedCodeInputPolicy, error) {
+	empty := SavedCodeInputPolicy{}
+	nodes, err := savedCodeNodes(instructions)
+	if err != nil {
+		return empty, ErrContentUnauthorized
+	}
+	var item, index string
+	for _, raw := range nodes.Content {
+		fields, err := savedCodeShallowFields(raw)
+		if err != nil {
+			return empty, ErrContentUnauthorized
+		}
+		id, err := savedCodeScalar(fields["id"])
+		if err != nil || normalizeCodeDebugID(id) != mapNodeID {
+			continue
+		}
+		if item, err = savedCodeScalar(fields["item"]); err != nil {
+			return empty, ErrContentUnauthorized
+		}
+		if index, err = savedCodeScalar(fields["index"]); err != nil {
+			return empty, ErrContentUnauthorized
+		}
+	}
+	if !savedCodeStateKey(item) || !savedCodeStateKey(index) || item == index || savedCodeReservedStateKey(item) || savedCodeReservedStateKey(index) {
+		return empty, ErrContentUnauthorized
+	}
+	return originalSavedCodeInputPolicy(instructions, yamlSHA256, nodeID, map[string]string{item: mapItemInputKind, index: "int"})
+}
+
+func originalSavedCodeInputPolicy(instructions, yamlSHA256, nodeID string, local map[string]string) (SavedCodeInputPolicy, error) {
 	empty := SavedCodeInputPolicy{}
 	raw, err := OriginalSavedCodePolicy(instructions, yamlSHA256, nodeID)
 	if err != nil {
@@ -63,6 +105,13 @@ func OriginalSavedCodeInputPolicy(instructions, yamlSHA256, nodeID string) (Save
 				types[key] = kind
 			}
 		}
+	}
+	// A Map's item and index are child-local: they never shadow a business root.
+	for key, kind := range local {
+		if _, declared := types[key]; declared || key == "messages" {
+			return empty, ErrContentRejected
+		}
+		types[key] = kind
 	}
 	selected := make(map[string]bool, len(selections))
 	for _, raw := range selections {
@@ -178,6 +227,8 @@ func savedCodeInputValueMatches(kind string, value any) bool {
 	case "dict":
 		_, ok := value.(map[string]any)
 		return ok
+	case mapItemInputKind:
+		return true
 	default:
 		return false
 	}

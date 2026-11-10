@@ -280,7 +280,7 @@ func (r *CodeIntentRepository) RegisterOriginalCodeVisit(ctx context.Context, cl
 		if err != nil {
 			return err
 		}
-		inputPolicy, err := storage.OriginalSavedCodeInputPolicy(source.Instructions, v.YAML, v.Node)
+		inputPolicy, err := originalVisitInputPolicy(source.Instructions, v)
 		if err != nil {
 			return err
 		}
@@ -310,6 +310,16 @@ func (r *CodeIntentRepository) RegisterOriginalCodeVisit(ctx context.Context, cl
 		return nil
 	})
 	return out, err
+}
+
+// originalVisitInputPolicy is the saved input policy of the visit's Code node.
+// A Map item's Code worker also reads its item and index; the scope was
+// resolved against the run's root source in this same transaction.
+func originalVisitInputPolicy(instructions string, v originalCodeVisitRecord) (storage.SavedCodeInputPolicy, error) {
+	if child, ok := decodeFanoutCodeChildScope(v.Scope); ok && child.Kind == "map_item" {
+		return storage.OriginalMapItemCodeInputPolicy(instructions, v.YAML, v.Node, child.NodeID)
+	}
+	return storage.OriginalSavedCodeInputPolicy(instructions, v.YAML, v.Node)
 }
 func (r *CodeIntentRepository) readVisit(ctx context.Context, tx sqlExecutor, claim storage.ContentClaim, a codeAccess, ref code.OriginalVisitRef, purpose string) (originalCodeVisitRecord, storage.SavedCodeDeclaration, error) {
 	if !originalCodePurpose(purpose) || ref.Validate() != nil {
