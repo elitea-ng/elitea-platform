@@ -48,6 +48,9 @@ struct MainScript {
     /// The intent answer takes this long: time spent inside the slot after
     /// admission and before the first submission (W3-2, N3).
     intent_delay: Option<Duration>,
+    /// The first this many original visit calls answer `UNAVAILABLE`, as
+    /// Main does on a serialization failure or a busy request slot.
+    visit_unavailable: usize,
     effects: Effects,
 }
 #[derive(Default)]
@@ -61,6 +64,8 @@ struct MainCalls {
     visit_attempts: Vec<u64>,
     /// The dispatch activation of every intent Main signed, in order.
     intent_dispatches: Vec<String>,
+    /// Every original visit call, answered or not.
+    visit_calls: usize,
 }
 struct FakeMain {
     script: MainScript,
@@ -147,6 +152,14 @@ impl FakeMain {
         body: serde_json::Value,
     ) -> Result<Vec<u8>, Status> {
         if path == "visits" {
+            let call = {
+                let mut calls = self.calls.lock().unwrap();
+                calls.visit_calls += 1;
+                calls.visit_calls
+            };
+            if call <= self.script.visit_unavailable {
+                return Err(Status::unavailable("Node recovery control is busy"));
+            }
             if let Some(attempt) = body["attempt"].as_u64() {
                 self.calls.lock().unwrap().visit_attempts.push(attempt);
             }
@@ -777,6 +790,7 @@ const QUIET: MainScript = MainScript {
     refuse_visit: false,
     first_step_delay: None,
     intent_delay: None,
+    visit_unavailable: 0,
     effects: Effects::None,
 };
 const REFUSED_VISIT: MainScript = MainScript {

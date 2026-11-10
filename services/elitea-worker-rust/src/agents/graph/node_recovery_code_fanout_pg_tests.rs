@@ -416,3 +416,87 @@ async fn real_pg_per_child_code_overhead_is_within_its_budget() {
         "per-child Code overhead p99 {overhead_p99:.1} ms"
     );
 }
+
+/// B1: a Parallel whose branches are Code nodes (two languages) runs on the
+/// production checkpoint family: each branch is a path-free child (no
+/// application subgraph), runs its Code attempt and lands.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_a_parallel_of_code_branches_runs_on_the_production_family() {
+    let h = harness_with(
+        QUIET,
+        Duration::ZERO,
+        Some(2),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await;
+    install(&h).await;
+    h.answers
+        .lock()
+        .unwrap()
+        .extend((0..4).map(|_| completed()));
+    let definition = PipelineDefinition::from_yaml(
+        "entry_point: gather\nstate:\n  topic: {type: str, value: slots}\n  count: {type: int, value: 0}\n  joined: {type: list, value: []}\nnodes:\n  - {id: gather, type: parallel, branches: [{id: left, node: code_a}, {id: right, node: code_b}], max_concurrency: 2, wait: all, output: [joined], transition: END}\n  - {id: code_a, type: code, language: python, code: 'return 41', input: [topic], output: [count]}\n  - {id: code_b, type: code, language: python, code: 'return 41', input: [topic], output: [count]}\n",
+    )
+    .unwrap();
+    let graph = compiled(&h, 1, "parallel-root", &definition).await;
+    let state = graph
+        .invoke(HashMap::new(), ExecutionConfig::new("parallel-root"))
+        .await
+        .expect("a Parallel of Code branches runs");
+    let joined = state["joined"].as_array().unwrap();
+    assert_eq!(joined.len(), 2, "{joined:?}");
+    for entry in joined {
+        assert_eq!(entry["status"], "succeeded", "{entry}");
+        assert_eq!(entry["outputs"]["count"], 41);
+    }
+    assert_eq!(h.supervisor.lock().unwrap().submits, 2);
+}
+
+/// B5 shapes: the first Worker dies while its children are still registering
+/// visits (Main answering `UNAVAILABLE` to the first ones) or after their
+/// intents and before their submissions; the replacement completes every
+/// item exactly once.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_a_worker_killed_mid_registration_is_resumed_by_the_replacement() {
+    for (shape, stop) in [("visits", 0_usize), ("intents", 1_usize)] {
+        let h = harness_with(
+            MainScript {
+                visit_unavailable: 4,
+                intent_delay: Some(Duration::from_millis(300)),
+                ..QUIET
+            },
+            Duration::from_millis(400),
+            Some(4),
+            tokio::time::Instant::now() + Duration::from_secs(3600),
+        )
+        .await;
+        install(&h).await;
+        h.answers
+            .lock()
+            .unwrap()
+            .extend((0..32).map(|_| completed()));
+        let definition = PipelineDefinition::from_yaml(&map_yaml(4, false)).unwrap();
+        let graph = compiled(&h, 1, "fanout-root", &definition).await;
+        let killed = run_until(&graph, items(8), "fanout-root", || {
+            let main = h.main.lock().unwrap();
+            if stop == 0 {
+                !main.visit_attempts.is_empty()
+            } else {
+                main.intent_dispatches.len() >= stop
+            }
+        })
+        .await;
+        assert!(killed.is_none(), "{shape}: the first Worker died");
+        drop(graph);
+        let graph = compiled(&h, 2, "fanout-root", &definition).await;
+        let state = graph
+            .invoke(HashMap::new(), ExecutionConfig::new("fanout-root"))
+            .await
+            .unwrap_or_else(|error| panic!("{shape}: the replacement completes: {error}"));
+        assert_all_landed(&state, 8);
+        assert_eq!(identities(&h).len(), 8, "{shape}: one identity per item");
+        assert_eq!(dispatch_rows(&h).await, (8, 0), "{shape}");
+    }
+}

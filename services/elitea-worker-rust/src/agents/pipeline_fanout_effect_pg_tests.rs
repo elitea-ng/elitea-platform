@@ -6530,3 +6530,99 @@ async fn measure_64_saved_agent_items_with_model_latency_at_concurrency_8() {
 async fn measure_64_saved_agent_items_with_model_latency_at_concurrency_1() {
     measure_saved_agent_map_with_latency(1).await;
 }
+
+/// B1 (W3-2a): a Parallel whose branches are Code nodes, through the real
+/// assembly path: the production assembler opens the run's checkpoint
+/// family from its composition paths (none for Code) and binds a real
+/// `CodeRuntimeFactory` with the claim's sandbox authority. No sandbox
+/// answers, so each branch's Code attempt fails typed at its own boundary.
+/// The fan-out itself must start both branches: before the fix it failed at
+/// once (`checkpoint.invalid_scope`: no application family for a Code
+/// branch) and no Code attempt ran.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_parallel_of_code_branches_starts_each_branch_through_assembly() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the Code fan-out assembly proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let control = Arc::new(
+        crate::protocol::control::AgentControlClient::from_channel(
+            tonic::transport::Endpoint::from_static("https://127.0.0.1:1").connect_lazy(),
+            crate::transport::control_grpc::ControlGrpcConfig {
+                deadline: Duration::from_secs(1),
+                workload_session_id: "workload-1".into(),
+                producer_id: "worker-1".into(),
+            },
+        )
+        .unwrap(),
+    );
+    let profiles = ["python", "javascript"]
+        .into_iter()
+        .map(|language| {
+            let config: crate::config::SandboxRuntimeConfig = serde_json::from_value(json!({
+                "language": language, "target": "sandbox.internal:9446",
+                "audience": format!("sandbox-{language}"),
+                "image_digest": format!("sha256:{}", "a".repeat(64)),
+                "policy_revision": "isolated-v1", "timeout_seconds": 30
+            }))
+            .unwrap();
+            let client = crate::sandbox::client::SandboxClient::from_channel(
+                tonic::transport::Endpoint::from_static("https://127.0.0.1:1").connect_lazy(),
+                config.audience.clone(),
+                Duration::from_secs(1),
+            )
+            .unwrap();
+            (config, client, None)
+        })
+        .collect();
+    let factory = Arc::new(crate::agents::graph::CodeRuntimeFactory::new(
+        control,
+        profiles,
+        db.pool.clone(),
+    ));
+    let (assembler, _) = assembler_on(
+        &db.pool,
+        saved_runtime(Vec::new(), json!({})),
+        pipeline_connector(),
+    );
+    let assembler = assembler.with_sandbox(Some(factory));
+    let mut request = super::pipeline_request();
+    request
+        .payload
+        .application
+        .get_mut("version_details")
+        .and_then(Value::as_object_mut)
+        .expect("application version fixture")
+        .insert(
+            "instructions".to_owned(),
+            json!("entry_point: gather\nstate:\n  input: {type: str, value: ''}\n  topic: {type: str, value: slots}\n  detail: {type: str, value: ''}\n  joined: {type: list, value: []}\nnodes:\n  - {id: gather, type: parallel, branches: [{id: left, node: js_a}, {id: right, node: js_b}], max_concurrency: 2, wait: all, on_error: continue, output: [joined], transition: END}\n  - {id: js_a, type: code, language: javascript, code: \"export default async (state) => 'a:' + state.topic;\", input: [topic], output: [detail]}\n  - {id: js_b, type: code, language: javascript, code: \"export default async (state) => 'b:' + state.topic;\", input: [topic], output: [detail]}\n"),
+        );
+    let invocation = assembler
+        .with_fanout_decisions_for_tests(
+            crate::agents::graph::fanout_test_ledger::TestLedger::new().client(1),
+        )
+        .assemble(claim(&request, 1).with_sandbox_for_tests(Arc::new(
+            crate::protocol::control::ClaimBoundSandboxAuthority::original_code_visit_conformance_fixture(),
+        )))
+        .await
+        .unwrap_or_else(|error| panic!("the Parallel of Code branches assembles: {error:?}"));
+    // The sandbox here is unreachable, so each Code branch fails typed as a
+    // member and, every member failed, the fan-out ends with the registered
+    // member failure. Before B1 the branch never started: its checkpoint
+    // family was refused (`agent.legacy` / `checkpoint.invalid_scope`).
+    let error = run_to_end(invocation)
+        .await
+        .expect_err("every Code branch failed against an unreachable sandbox");
+    assert!(
+        error.contains("Some(\"graph.fanout.member_failed\")"),
+        "each Code branch started and failed as a member: {error}"
+    );
+    assert!(!error.contains("invalid_scope"), "{error}");
+    db.pool.close().await;
+}
