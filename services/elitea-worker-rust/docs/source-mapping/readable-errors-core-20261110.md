@@ -107,7 +107,7 @@ search covered the repository and the local handoff tooling for:
 ## Where each gate runs (C5)
 
 All the Go gates are tests in `libs/go/faults`. `scripts/go/workspace-run.sh` tests every `go.work` module in the
-`ci-go.yml` test, coverage and lint jobs, and its path filter includes `libs/go/**`. No workflow changed.
+`ci-go.yml` test, coverage and lint jobs, and its path filter includes `libs/go/**`. No Go workflow changed.
 
 | Gate | Test |
 |---|---|
