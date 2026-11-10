@@ -232,6 +232,18 @@ pub struct CodeSlots {
 pub struct CodeSlot {
     _permit: OwnedSemaphorePermit,
     waited: Duration,
+    /// This slot set the attempt's R1 marker: dropping it clears the marker,
+    /// so the attempt may admit again once it no longer holds a slot.
+    marks_attempt: bool,
+}
+
+impl Drop for CodeSlot {
+    fn drop(&mut self) {
+        if self.marks_attempt {
+            // Outside the attempt's task (or scope) this is a no-op.
+            let _ = CODE_SLOT_HELD.try_with(|held| held.set(false));
+        }
+    }
 }
 
 impl CodeSlot {
@@ -299,9 +311,12 @@ fn code_slot_held() -> bool {
     CODE_SLOT_HELD.try_with(Cell::get).unwrap_or(false)
 }
 
-fn mark_code_slot_held() {
+/// Mark the attempt as holding `slot`; the slot clears the mark when it is
+/// dropped (M1, #1896).
+fn mark_code_slot_held(mut slot: CodeSlot) -> CodeSlot {
     // Outside a scope there is no attempt to mark.
-    let _ = CODE_SLOT_HELD.try_with(|held| held.set(true));
+    slot.marks_attempt = CODE_SLOT_HELD.try_with(|held| held.set(true)).is_ok();
+    slot
 }
 
 /// N3 (W3-2): re-admit a fresh attempt after its preparation and hydration,
@@ -378,6 +393,7 @@ impl CodeSlots {
             Ok(Ok(permit)) => Ok(CodeSlot {
                 _permit: permit,
                 waited: started.elapsed(),
+                marks_attempt: false,
             }),
             Ok(Err(_)) => unreachable!("Code slots are never closed"),
             Err(_) => Err(SlotWaitExpired {
@@ -423,8 +439,7 @@ impl CodeSlots {
             drop(slot);
             return Err(refuse(CodeRefusalCause::SlotWait, waited));
         }
-        mark_code_slot_held();
-        Ok(slot)
+        Ok(mark_code_slot_held(slot))
     }
 
     /// A slot for an attempt that may already have started (recovery
@@ -447,8 +462,7 @@ impl CodeSlots {
             .acquire_until(execution_deadline)
             .await
             .map_err(StartedSlotRefusal::Expired)?;
-        mark_code_slot_held();
-        Ok(slot)
+        Ok(mark_code_slot_held(slot))
     }
 }
 
@@ -660,6 +674,46 @@ mod tests {
         assert_eq!(slots.available(), 2);
         // Outside any attempt there is no marker: an acquire only waits.
         drop(slots.admit_fresh(deadline, required).await.unwrap());
+    }
+
+    /// M1 (#1896): the marker follows the slot. Inside one attempt with one
+    /// slot, a slot dropped and then admitted again is admitted (fresh and
+    /// started); admitting while still holding it is refused as nested.
+    #[tokio::test(start_paused = true)]
+    async fn a_slot_dropped_inside_an_attempt_can_be_admitted_again() {
+        let slots = CodeSlots::new(1);
+        let deadline = Instant::now() + MINUTE * 10;
+        let required = required_window(1, 1, 1, MINUTE);
+        code_attempt_scope(async {
+            let first = slots.admit_fresh(deadline, required).await.unwrap();
+            assert_eq!(
+                slots
+                    .admit_fresh(deadline, required)
+                    .await
+                    .unwrap_err()
+                    .cause,
+                CodeRefusalCause::NestedSlot,
+                "held: nested"
+            );
+            drop(first);
+            let second = slots
+                .admit_fresh(deadline, required)
+                .await
+                .expect("released: admitted again");
+            drop(second);
+            let started = slots
+                .admit_started(deadline)
+                .await
+                .expect("released: a started attempt is admitted again");
+            assert_eq!(
+                slots.admit_started(deadline).await.unwrap_err(),
+                StartedSlotRefusal::NestedSlot,
+                "held: nested"
+            );
+            drop(started);
+        })
+        .await;
+        assert_eq!(slots.available(), 1);
     }
 
     /// C3: two sibling attempts polled by one task, one slot. The marker is
