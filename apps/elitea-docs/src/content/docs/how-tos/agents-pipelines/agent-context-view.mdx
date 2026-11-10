@@ -41,6 +41,10 @@ When you add an agent to a conversation that is already going, you can set the p
 
 The view decides what is sent to the agent on each turn. The agent's own session keeps what it already received. If an agent's mode is narrowed later, or a conversation started before this release, the session can still hold messages it saw earlier. Start a new conversation when that matters.
 
+## Pipelines
+
+A pipeline that takes part in a conversation gets its view the same way. Its graph state holds the view as `chat_history`, set once when the run starts. See [Pipeline structure](/how-tos/pipelines/structure/#chat_history-the-conversation-so-far).
+
 ## How the worker checks it
 
 Main sends the view with a digest over its mode, its window, and the exact history and references. The worker recomputes the digest and refuses a turn whose history does not match it, so a view is never widened on the way.

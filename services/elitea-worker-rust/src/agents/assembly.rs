@@ -827,6 +827,105 @@ fn current_text_history(history: &[Value]) -> Result<Vec<Content>, NativeAgentAs
 }
 
 fn current_text_history_message(value: &Value) -> Result<Content, NativeAgentAssemblyError> {
+    let entry = admitted_history_entry(value)?;
+    let mut content = Content::new(entry.role);
+    match entry.author {
+        // One envelope per message: the parts are one author's words.
+        Some((kind, name)) => {
+            content = content.with_text(elitea_agent_runtime::untrusted::message_envelope(
+                kind,
+                name,
+                &entry.texts.join("\n\n"),
+            ));
+        }
+        None => {
+            for text in entry.texts {
+                content = content.with_text(text);
+            }
+        }
+    }
+    Ok(content)
+}
+
+/// The additional-kwargs key that marks a graph-state message as seeded from
+/// the reader's context view (#1668), never written by a node of this run.
+pub(crate) const CONTEXT_VIEW_MARKER_KEY: &str = "elitea_context_view";
+
+/// The most a pipeline's seeded view carries, JSON-encoded (#1668). An LLM
+/// node bounds its whole prompt at 512 KiB and one text block at 64 KiB, so
+/// the seed keeps the newest part of the view that fits, never a message a
+/// node would refuse, and leaves room for the node's own task.
+const MAX_PIPELINE_VIEW_BYTES: usize = 256 * 1024;
+const MAX_PIPELINE_VIEW_MESSAGE_BYTES: usize = 60 * 1024;
+
+/// ADR-0050 decision 9 (#1668): the reader's view as graph-state messages,
+/// the shape a pipeline's `chat_history` and `messages` channels hold.
+///
+/// Each item has the role an LLM node reads (`user`, or `assistant` for the
+/// reader's own answers) and its text as blocks. A message by another agent,
+/// or by a person other than the asker, is a `user` message whose one block
+/// is the untrusted author envelope, exactly as an ordinary agent reads it
+/// (`current_text_history`); its `additional_kwargs` keep `elitea_author`.
+/// Every item carries [`CONTEXT_VIEW_MARKER_KEY`], so a result fallback never
+/// takes an earlier turn's answer for this run's. Entries are admitted by the
+/// same rules as the ordinary history; past the size bound the oldest drop.
+pub(crate) fn pipeline_state_history(
+    history: &[Value],
+) -> Result<Vec<Value>, NativeAgentAssemblyError> {
+    if history.len() > MAX_CHAT_HISTORY_MESSAGES {
+        return Err(resource_exhausted_profile());
+    }
+    let mut items = Vec::with_capacity(history.len());
+    let mut total = 0_usize;
+    for value in history.iter().rev() {
+        let entry = admitted_history_entry(value)?;
+        let mut additional = Map::new();
+        additional.insert(CONTEXT_VIEW_MARKER_KEY.to_owned(), Value::Bool(true));
+        let texts = match entry.author {
+            Some((kind, name)) => {
+                additional.insert(
+                    "elitea_author".to_owned(),
+                    serde_json::json!({"kind": kind.as_str(), "name": name}),
+                );
+                vec![elitea_agent_runtime::untrusted::message_envelope(
+                    kind,
+                    name,
+                    &entry.texts.join("\n\n"),
+                )]
+            }
+            None => entry.texts.iter().map(|text| (*text).to_owned()).collect(),
+        };
+        if texts.iter().map(String::len).sum::<usize>() > MAX_PIPELINE_VIEW_MESSAGE_BYTES {
+            break;
+        }
+        let blocks = texts
+            .into_iter()
+            .map(|text| serde_json::json!({"type": "text", "text": text}))
+            .collect::<Vec<_>>();
+        let item = serde_json::json!({
+            "role": if entry.role == "model" { "assistant" } else { "user" },
+            "content": blocks,
+            "additional_kwargs": additional,
+        });
+        total = total.saturating_add(item.to_string().len());
+        if total > MAX_PIPELINE_VIEW_BYTES {
+            break;
+        }
+        items.push(item);
+    }
+    items.reverse();
+    Ok(items)
+}
+
+/// One admitted `chat_history` entry: its model role, its author when
+/// someone other than the reader or the asker wrote it, and its text parts.
+struct HistoryEntry<'a> {
+    role: &'static str,
+    author: Option<(elitea_agent_runtime::untrusted::MessageAuthorKind, &'a str)>,
+    texts: Vec<&'a str>,
+}
+
+fn admitted_history_entry(value: &Value) -> Result<HistoryEntry<'_>, NativeAgentAssemblyError> {
     let message = value.as_object().ok_or_else(invalid_profile)?;
     let additional = message
         .get("additional_kwargs")
@@ -878,23 +977,11 @@ fn current_text_history_message(value: &Value) -> Result<Content, NativeAgentAss
             .ok_or_else(invalid_profile)?;
         texts.push(text);
     }
-    let mut content = Content::new(role);
-    match author {
-        // One envelope per message: the parts are one author's words.
-        Some((kind, name)) => {
-            content = content.with_text(elitea_agent_runtime::untrusted::message_envelope(
-                kind,
-                name,
-                &texts.join("\n\n"),
-            ));
-        }
-        None => {
-            for text in texts {
-                content = content.with_text(text);
-            }
-        }
-    }
-    Ok(content)
+    Ok(HistoryEntry {
+        role,
+        author,
+        texts,
+    })
 }
 
 /// The `elitea_author` of a history message, when it names one; the only

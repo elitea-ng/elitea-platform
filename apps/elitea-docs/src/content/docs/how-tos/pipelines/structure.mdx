@@ -24,6 +24,28 @@ Beyond those two, a pipeline has a fixed set of reserved keys the runtime manage
 
 Add a custom state from the flow editor's States panel (next to the **+** button for adding nodes), or define it directly in YAML mode.
 
+### `chat_history`: the conversation so far
+
+When a pipeline answers in a conversation, its state holds the pipeline's own [view of that conversation](/how-tos/agents-pipelines/agent-context-view/) as `chat_history`. That is the earlier messages it may see, oldest first, without the current message. In a conversation with several agents, it holds what this pipeline may see and nothing else. Side talk between two other agents is never in it.
+
+- **Map it into an LLM node.** Set the node's `chat_history` input to the variable `chat_history`:
+
+  ```yaml
+  input_mapping:
+    task: {type: fstring, value: "Answer {input}"}
+    chat_history: {type: variable, value: chat_history}
+  input: [input, chat_history]
+  ```
+
+  You don't declare it in `state`, and no node can write it.
+- **Labelled and untrusted.** A message from another agent, or from a person other than the one asking, reaches the model as a user message wrapped in an untrusted envelope that names its author. The model never takes a peer's words for its own answers or for instructions. The pipeline's own earlier answers are assistant messages.
+- **`messages` too, unless you declare it.** A pipeline that declares no `messages` state starts with the same history ahead of the current message in `messages`. A pipeline that declares `messages` keeps its own value and gets only the current message.
+- **Set once per run.** The history is set when the run starts. A run that resumes after a pause, an approval or a recovery keeps the history it started with. Messages posted in between are not added.
+- **Never the answer.** `chat_history` is not shown as the pipeline's output. An earlier answer that is in the history is never taken for this run's result.
+- **Bounded.** A very long history keeps its newest messages that fit, about 256 KB of text. One message longer than about 60 KB ends the history at that point.
+
+A saved pipeline that runs as a node of another pipeline gets no `chat_history` of its own. Its parent passes in what the child should read.
+
 ## Entry point
 
 Every pipeline has exactly one entry point — the node that runs first.
