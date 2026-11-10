@@ -58,8 +58,15 @@ type PolicyView struct {
 	CanManage bool `json:"can_manage"`
 }
 
+// policyForbidden refuses a read of the policy page to anyone but an agent
+// manager: the rules, the automatic actions and their evidence (scorecards)
+// are of the sensitivity #1616 keeps to managers and owners, and an owner
+// reads their own agent's notices in its Workforce tab.
+var policyForbidden = agentworkforce.Refuse(agentworkforce.ForbiddenCode,
+	"Only an agent manager can read the workforce policy and its automatic actions.")
+
 // GetPolicy answers the project's policy (the defaults, everything off,
-// when none was saved).
+// when none was saved). Agent managers only.
 func (h *Handler) GetPolicy(w http.ResponseWriter, r *http.Request) {
 	store, ok := h.policyStore(w)
 	if !ok {
@@ -71,6 +78,10 @@ func (h *Handler) GetPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	actor, ok := h.actor(w, r, projectID)
 	if !ok {
+		return
+	}
+	if !actor.Manager {
+		writeError(w, r, policyForbidden)
 		return
 	}
 	policy, err := store.Policy(r.Context(), projectID)
@@ -108,6 +119,7 @@ func (h *Handler) SetPolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListActions answers the project's automatic actions, newest first.
+// Agent managers only.
 func (h *Handler) ListActions(w http.ResponseWriter, r *http.Request) {
 	store, ok := h.policyStore(w)
 	if !ok {
@@ -115,6 +127,14 @@ func (h *Handler) ListActions(w http.ResponseWriter, r *http.Request) {
 	}
 	projectID, ok := pathID(w, r, "projectID")
 	if !ok {
+		return
+	}
+	actor, ok := h.actor(w, r, projectID)
+	if !ok {
+		return
+	}
+	if !actor.Manager {
+		writeError(w, r, policyForbidden)
 		return
 	}
 	query := r.URL.Query()

@@ -88,6 +88,19 @@ func TestPolicyReadIsOffByDefaultAndSaysWhoMayManage(t *testing.T) {
 	}
 }
 
+func TestPolicyAndActionsAreReadByAgentManagersOnly(t *testing.T) {
+	store := &fakePolicyStore{}
+	for _, path := range []string{"/agent_workforce/prompt_lib/7/policy", "/agent_workforce/prompt_lib/7/automatic_actions"} {
+		recorder := servePolicy(t, store, false, http.MethodGet, path, "")
+		if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), agentworkforce.ForbiddenCode) {
+			t.Fatalf("%s as a member: %d %s", path, recorder.Code, recorder.Body.String())
+		}
+		if recorder := servePolicy(t, store, true, http.MethodGet, path, ""); recorder.Code != http.StatusOK {
+			t.Fatalf("%s as a manager: %d", path, recorder.Code)
+		}
+	}
+}
+
 func TestSetPolicyCarriesTheManagerFlagAndRefusesUnknownFields(t *testing.T) {
 	store := &fakePolicyStore{}
 	body := `{"auto_hire_enabled":true,"min_successful_runs":3,"max_auto_hired":5,"auto_dismiss_enabled":false,"auto_dismiss_rules":[],"grace_days":7}`

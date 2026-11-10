@@ -12526,7 +12526,7 @@ export const getGetAgentWorkforcePolicyUrl = (projectId: string) => {
 };
 
 /**
- * The project's workforce policy (ADR-0050 decisions 5c and 5k). Off by default: a project that never saved one answers saved false with both policies off and the platform's default numbers and rules. Requires `models.applications.applications.list`.
+ * The project's workforce policy (ADR-0050 decisions 5c and 5k). Off by default: a project that never saved one answers saved false with both policies off and the platform's default numbers and rules. Requires `models.applications.applications.list` and `agents.workforce.manage` (403 workforce_forbidden otherwise).
  * @summary Read the project's automatic hiring and dismissal policy
  */
 export const getAgentWorkforcePolicy = async (
@@ -13020,7 +13020,7 @@ export const getListAgentAutomaticActionsUrl = (
 };
 
 /**
- * Every hire, stage, retire notice and orphan flag the workforce policy made, newest first. status narrows them (open is pending and flagged); application_id narrows them to one agent. Requires `models.applications.applications.list`.
+ * Every hire, stage, retire notice and orphan flag the workforce policy made, newest first. status narrows them (open is pending, flagged and held); application_id narrows them to one agent. Requires `models.applications.applications.list` and `agents.workforce.manage` (403 workforce_forbidden otherwise).
  * @summary List the workforce policy's automatic actions
  */
 export const listAgentAutomaticActions = async (

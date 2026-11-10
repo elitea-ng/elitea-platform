@@ -32,7 +32,16 @@ export interface SettingsSectionGates {
   readonly analyticsVisible: boolean;
   /** `cost_budgets_enabled` on platform settings. */
   readonly usageVisible: boolean;
+  /**
+   * The caller holds `agents.workforce.manage` in the selected project
+   * (issue 1617): the workforce policy page is the agent manager's, and the
+   * server refuses its reads to anyone else.
+   */
+  readonly workforceManager: boolean;
 }
+
+/** The permission the Agent workforce page requires. */
+export const WORKFORCE_MANAGE_PERMISSION = 'agents.workforce.manage';
 
 /** Tabs that exist only in the public project (`publicOnly` in the reference). */
 const PUBLIC_ONLY_TABS = ['prompts', 'environment'] as const;
@@ -50,11 +59,12 @@ export function isTabHidden(tab: string | undefined, gates: SettingsSectionGates
   }
   if (tab === 'users') return gates.isPersonalProject;
   if (tab === 'project-params') return gates.isPublicProject;
+  if (tab === 'agent-workforce') return !gates.workforceManager;
   return false;
 }
 
 export function buildSettingsSections(gates: SettingsSectionGates): SettingsSection[] {
-  const { isPublicProject, isPersonalProject, analyticsVisible, usageVisible } = gates;
+  const { isPublicProject, isPersonalProject, analyticsVisible, usageVisible, workforceManager } = gates;
 
   const projectTabs = [
     { id: 'project-general', label: 'General' },
@@ -69,8 +79,8 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
     { id: 'secrets', label: 'Secrets' },
     { id: 'webhooks', label: 'Webhooks' },
     // ADR-0050 decisions 5c and 5k (issue 1617): the automatic hiring and
-    // dismissal policy. Ungated: the page says when the caller cannot edit.
-    { id: 'agent-workforce', label: 'Agent workforce' },
+    // dismissal policy, for agent managers only.
+    ...(workforceManager ? [{ id: 'agent-workforce', label: 'Agent workforce' }] : []),
     ...(isPersonalProject ? [] : [{ id: 'users', label: 'Users' }]),
     ...(analyticsVisible ? [{ id: 'analytics', label: 'Analytics' }] : []),
     ...(usageVisible ? [{ id: 'usage', label: 'Usage' }] : []),

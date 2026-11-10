@@ -4835,9 +4835,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(readWorkforce).Post(v2agentworkforce.AppealPath, workforce.Appeal)
 					r.With(readWorkforce).Post(v2agentworkforce.AppealDecidePath, workforce.DecideAppeal)
 					// The workforce policy (ADR-0050 decisions 5c and 5k,
-					// #1617): setting it, undoing or keeping a hire take
-					// agents.workforce.manage; objecting takes it or the
-					// agent's ownership (decided in the store).
+					// #1617): reading it and its automatic actions, setting
+					// it, undoing or keeping a hire take
+					// agents.workforce.manage (decided in the handler and
+					// the store); objecting takes it or the agent's
+					// ownership.
 					r.With(readWorkforce).Get(v2agentworkforce.PolicyPath, workforce.GetPolicy)
 					r.With(readWorkforce).Put(v2agentworkforce.PolicyPath, workforce.SetPolicy)
 					r.With(readWorkforce).Get(v2agentworkforce.ActionsPath, workforce.ListActions)
