@@ -387,30 +387,58 @@ impl crate::agents::session::FrozenRecoveryLevel for BTreeMap<String, Arc<Admitt
 /// B4 (W3-2b): a Code node of a saved pipeline that another saved pipeline
 /// runs has no owner scope Main can prove from the run root (a saved
 /// pipeline's Code owner is a root-level Agent node), so the run is refused
-/// before it starts, readably, by the path of that Code node; it is never
+/// before it starts, readably (`pipeline.saved_code.nested`); it is never
 /// resolved by a capture alone.
 pub(super) fn refuse_nested_saved_code(
     definition: &PipelineDefinition,
     children: &BTreeMap<String, Arc<AdmittedSavedPipeline>>,
 ) -> Result<(), NativeAgentAssemblyError> {
-    for (path, child) in composition_definitions_for(definition, children) {
-        if !path.contains('/') {
-            continue;
-        }
-        if let Some(code) = child.code_node_ids().into_iter().next() {
-            let refusal = crate::agents::graph::compiler::PipelineConfigurationError::FanoutChildUnsupported {
-                node: format!("{path}/{code}"),
-                refusal: crate::agents::graph::compiler::FanoutChildRefusal::NestedSavedCode,
-            };
-            return Err(
-                crate::agents::runtime::pipeline_configuration_assembly_error(
-                    &refusal,
-                    "the saved pipeline runs Code below another saved pipeline",
-                ),
-            );
-        }
+    if composition_definitions_for(definition, children)
+        .iter()
+        .any(|(path, child)| path.contains('/') && child.has_code_nodes())
+    {
+        return Err(saved_code_refusal(
+            elitea_faults::codes::PIPELINE_SAVED_CODE_NESTED.as_str(),
+            "the saved pipeline runs Code below another saved pipeline",
+        ));
     }
     Ok(())
+}
+
+/// C2 (W3-2b): a conversation continued on the unscoped resolver an older
+/// Worker paused with names no saved-pipeline Code owner, so a saved pipeline
+/// with Code run as a Map worker or Parallel branch is refused before the
+/// run starts (`pipeline.saved_code.unscoped`), as `ContainsCode` refused it
+/// before W3-2b; nested Code is refused as on the scoped path.
+pub(super) fn refuse_unscoped_saved_code(
+    definition: &PipelineDefinition,
+    children: &BTreeMap<String, Arc<AdmittedSavedPipeline>>,
+) -> Result<(), NativeAgentAssemblyError> {
+    refuse_nested_saved_code(definition, children)?;
+    if definition
+        .fanout_owned_application_aliases()
+        .into_iter()
+        .filter_map(|alias| children.get(alias))
+        .any(|child| child.profile.definition().has_code_nodes())
+    {
+        return Err(saved_code_refusal(
+            elitea_faults::codes::PIPELINE_SAVED_CODE_UNSCOPED.as_str(),
+            "the saved pipeline's Code has no owner in this continued conversation",
+        ));
+    }
+    Ok(())
+}
+
+fn saved_code_refusal(code: &'static str, message: &'static str) -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(NativeAgentAssemblyErrorCode::UnsupportedCapability, message)
+        .with_cause(code, None)
+}
+
+/// Whether `code` is a saved-pipeline Code refusal, fixed by editing the
+/// pipeline (or, unscoped, by a new conversation).
+pub(crate) fn is_saved_code_refusal(code: &str) -> bool {
+    code == elitea_faults::codes::PIPELINE_SAVED_CODE_NESTED.as_str()
+        || code == elitea_faults::codes::PIPELINE_SAVED_CODE_UNSCOPED.as_str()
 }
 
 pub(super) fn composition_definitions(
@@ -716,11 +744,11 @@ mod tests {
         let nested = BTreeMap::from([("child_0".to_owned(), middle)]);
         let refusal = refuse_nested_saved_code(&root, &nested).expect_err("refused");
         let cause = refusal.cause().expect("a typed cause");
+        // C7: a non-fan-out refusal with its own code.
         assert_eq!(
             cause.code(),
-            elitea_faults::codes::GRAPH_FANOUT_NESTED_SAVED_CODE.as_str()
+            elitea_faults::codes::PIPELINE_SAVED_CODE_NESTED.as_str()
         );
-        assert_eq!(cause.detail(), Some("nested_saved_code"));
     }
 
     fn fallback() -> OrdinaryNoToolProfile {

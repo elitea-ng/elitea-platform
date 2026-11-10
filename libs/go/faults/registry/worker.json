@@ -98,7 +98,15 @@
       "owner": "elitea-worker-rust"
     },
     {
-      "code": "graph.fanout.nested_saved_code",
+      "code": "graph.fanout.deadline_insufficient",
+      "sentence": "A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline.",
+      "action": "Nothing on the platform; the user lowers the item count or raises the node's concurrency, or the run is given more time.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.saved_code.nested",
       "sentence": "A Code node sits in a saved pipeline that another saved pipeline runs, so the pipeline was refused before it started: Code runs only in a saved pipeline the started pipeline runs directly, for now.",
       "action": "Nothing on the platform; the author moves the Code into the saved pipeline the started pipeline runs, or runs that saved pipeline directly from the started pipeline.",
       "audience": "operator",
@@ -106,9 +114,9 @@
       "owner": "elitea-worker-rust"
     },
     {
-      "code": "graph.fanout.deadline_insufficient",
-      "sentence": "A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline.",
-      "action": "Nothing on the platform; the user lowers the item count or raises the node's concurrency, or the run is given more time.",
+      "code": "pipeline.saved_code.unscoped",
+      "sentence": "A conversation an older Worker paused continues on the unscoped resolver, where a saved pipeline's Code run as a Map worker or Parallel branch has no owner scope, so the pipeline was refused before it started.",
+      "action": "Nothing on the platform; the user starts a new conversation, which runs on the scoped resolver.",
       "audience": "operator",
       "retryable": "no",
       "owner": "elitea-worker-rust"

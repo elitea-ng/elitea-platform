@@ -1163,6 +1163,22 @@ impl PipelineDefinition {
                 .any(|node| node.id() == id && matches!(node, PipelineNodeDefinition::Code(_)))
     }
 
+    /// The aliases the Agent nodes a Map or Parallel owns select (W3-2b C2).
+    pub(crate) fn fanout_owned_application_aliases(&self) -> BTreeSet<&str> {
+        self.nodes
+            .iter()
+            .filter_map(|node| match node {
+                PipelineNodeDefinition::Application(agent)
+                    if self.parallel_owned_nodes.contains(agent.id())
+                        || self.map_owned_nodes.contains(agent.id()) =>
+                {
+                    Some(agent.selection().alias())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Whether the graph starts at an unowned Code node: a saved child lost
     /// inside that first attempt has saved no row yet (W3-2b).
     pub(crate) fn starts_at_code(&self) -> bool {
@@ -1897,20 +1913,19 @@ impl PipelineDefinition {
             .ok_or(PipelineConfigurationError::Unsupported(
                 "Code execution requires an admitted sandbox backend",
             ))?;
-        let (runtime, journals) = match runtimes.saved_child_scope_provider() {
-            Some(provider) => {
-                // W3-2b: a saved child's Code journals through the run's (or
-                // its fan-out member's) family, scoped to the child's visit,
-                // as its direct tool nodes do (FU-248).
-                let Some(journals) = runtimes
-                    .node_recovery
-                    .clone()
-                    .or_else(|| runtimes.direct_tool_recovery.clone())
-                else {
-                    return Err(PipelineConfigurationError::Unsupported(
-                        "Scoped Code requires its current fenced node writer",
-                    ));
-                };
+        // W3-2b: a saved child's Code journals through the run's (or its
+        // fan-out member's) family, scoped to the child's visit, as its
+        // direct tool nodes do (FU-248). C1: with node recovery off there are
+        // no journals; the Code then compiles as before W3-2b, with no owner
+        // scope, and fails readably only if it is reached.
+        let scoped = runtimes.saved_child_scope_provider().zip(
+            runtimes
+                .node_recovery
+                .clone()
+                .or_else(|| runtimes.direct_tool_recovery.clone()),
+        );
+        let (runtime, journals) = match scoped {
+            Some((provider, journals)) => {
                 let runtime = runtime
                     .bind_saved_child_scope(provider.clone())
                     .map_err(|_| {
@@ -3570,11 +3585,6 @@ pub(crate) enum FanoutChildRefusal {
     /// A Code worker or branch of a Map or Parallel inside a saved child
     /// pipeline: its visit scope is the run root's only (R4, W3-2b; FU-317).
     CodeBelowRoot,
-    /// A Code node of a saved pipeline that another saved pipeline runs (an
-    /// Agent node, at the root or in a fan-out member, runs a saved pipeline
-    /// whose own Agent node runs it): Main proves a saved pipeline's Code
-    /// owner only from the run root's own Agent nodes (W3-2b, B4).
-    NestedSavedCode,
 }
 
 impl FanoutChildRefusal {
@@ -3585,7 +3595,6 @@ impl FanoutChildRefusal {
             Self::ContainsParallel => "graph.fanout.parallel_in_child_pipeline",
             Self::AgentCallsPipeline => "graph.fanout.agent_calls_saved_pipeline",
             Self::CodeBelowRoot => elitea_faults::codes::GRAPH_FANOUT_CODE_BELOW_ROOT.as_str(),
-            Self::NestedSavedCode => elitea_faults::codes::GRAPH_FANOUT_NESTED_SAVED_CODE.as_str(),
         }
     }
 
@@ -3598,7 +3607,6 @@ impl FanoutChildRefusal {
             Self::ContainsParallel,
             Self::AgentCallsPipeline,
             Self::CodeBelowRoot,
-            Self::NestedSavedCode,
         ]
         .iter()
         .any(|refusal| refusal.code() == code)
@@ -3620,9 +3628,6 @@ impl std::fmt::Display for FanoutChildRefusal {
             }
             Self::CodeBelowRoot => {
                 "a Code worker or branch runs only in a Map or Parallel of the started pipeline, not inside a saved child pipeline yet"
-            }
-            Self::NestedSavedCode => {
-                "a Code node runs in a saved pipeline the started pipeline runs, not in a saved pipeline another saved pipeline runs yet"
             }
         })
     }
@@ -3665,7 +3670,6 @@ impl PipelineConfigurationError {
                 FanoutChildRefusal::ContainsParallel => "parallel_in_child_pipeline",
                 FanoutChildRefusal::AgentCallsPipeline => "fanout_agent_calls_pipeline",
                 FanoutChildRefusal::CodeBelowRoot => "fanout_code_below_root",
-                FanoutChildRefusal::NestedSavedCode => "nested_saved_code",
             }),
         }
     }

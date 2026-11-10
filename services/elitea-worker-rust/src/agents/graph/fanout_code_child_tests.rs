@@ -914,3 +914,171 @@ async fn a_saved_pipeline_with_code_and_a_router_runs_as_a_map_worker_admitted_p
     );
     assert_eq!(*code.attempts.lock().unwrap(), 0, "no item started");
 }
+
+// ------------------------- W3-2b review C1, C6: node recovery off
+
+const SAVED_CODE_CHILD: &str = "entry_point: validate\nstate:\n  messages: list\n  item_result: str\nnodes:\n  - id: validate\n    type: code\n    code: 'print(1)'\n    input: [messages]\n    output: [item_result]\n    transition: END\n";
+const ROOT_SAVED_CODE: &str = "entry_point: run_saved\nstate:\n  messages: {type: list, value: []}\n  item_result: {type: str, value: ''}\nnodes:\n  - {id: run_saved, type: agent, tool: silver_partition, input_mapping: {task: {type: fixed, value: partition}}, output: [item_result], transition: END}\n";
+
+/// The production saved-pipeline resolver with a proved participant
+/// fingerprint (the Map worker identity a scoped call owner gives it).
+struct ProvedSaved(Arc<dyn PipelineApplicationResolver>);
+
+impl PipelineApplicationResolver for ProvedSaved {
+    fn fixed_parallel_definition_digest(
+        &self,
+        _node: &str,
+    ) -> Result<[u8; 32], ApplicationExecutionError> {
+        Ok([9; 32])
+    }
+    fn for_saved_code_member(
+        &self,
+        member: &crate::agents::pipeline::saved_code_child::SavedCodeFanoutMember,
+    ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+        self.0
+            .for_saved_code_member(member)
+            .map(|inner| Arc::new(Self(inner)) as Arc<dyn PipelineApplicationResolver>)
+    }
+    fn resolve(
+        &self,
+        selection: &PipelineApplicationSelection,
+        checkpointer: Arc<dyn Checkpointer>,
+    ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+        self.0.resolve(selection, checkpointer)
+    }
+    fn resolve_node(
+        &self,
+        node: &str,
+        selection: &PipelineApplicationSelection,
+        checkpointer: Arc<dyn Checkpointer>,
+    ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+        self.0.resolve_node(node, selection, checkpointer)
+    }
+}
+
+/// The production resolver over the saved pipeline `child`, run by Agent
+/// node `node`, its owner Main's freeze, with node recovery off (no journals).
+fn saved_resolver(
+    node: &str,
+    child: &PipelineDefinition,
+    code: &Arc<FakeCode>,
+    owned: bool,
+) -> Arc<dyn PipelineApplicationResolver> {
+    let mut runtimes = with_code(PipelineNodeRuntimes::default(), code);
+    if owned {
+        runtimes = runtimes.with_saved_code_owner(
+            crate::agents::pipeline::saved_code_child::SavedCodeOwner::new(
+                23,
+                29,
+                &[0xab; 32],
+                child.code_node_ids(),
+            ),
+        );
+    }
+    let (events, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
+    tokio::spawn(async move {
+        if let Ok(mut drain) = receiver.drain("invocation", "saved", "saved").await {
+            while drain.recv().await.is_some() {}
+        }
+    });
+    Arc::new(ProvedSaved(
+        crate::agents::pipeline::saved_pipeline_resolver_for_tests(
+            vec![(
+                node.to_owned(),
+                "silver_partition".to_owned(),
+                child.clone(),
+                runtimes,
+            )],
+            &events,
+        ),
+    ))
+}
+
+/// C1: with node recovery off (no journals), a saved pipeline whose Code
+/// has an owner compiles as it did before W3-2b, at the root: the saved
+/// subgraph is never refused whole for Code it may never reach.
+#[tokio::test]
+async fn a_saved_pipeline_with_code_compiles_at_the_root_with_node_recovery_off() {
+    let child = PipelineDefinition::from_yaml(SAVED_CODE_CHILD).unwrap();
+    let code = Arc::new(FakeCode::default());
+    let runtimes = with_code(
+        PipelineNodeRuntimes::new(
+            None,
+            None,
+            Some(saved_resolver("run_saved", &child, &code, true)),
+        ),
+        &code,
+    );
+    let root = PipelineDefinition::from_yaml(ROOT_SAVED_CODE).unwrap();
+    let graph = root
+        .compile_subgraph_with_runtime(Arc::new(MemoryCheckpointer::new()), &runtimes)
+        .expect("the root compiles with node recovery off");
+    graph
+        .invoke(
+            HashMap::new(),
+            ExecutionConfig::new("root-saved-no-recovery"),
+        )
+        .await
+        .expect("the saved child runs");
+    assert_eq!(*code.attempts.lock().unwrap(), 1);
+}
+
+/// C1: the same in a fan-out member: every item's saved pipeline compiles
+/// and runs with node recovery off.
+#[tokio::test]
+async fn a_saved_pipeline_with_code_runs_as_a_map_worker_with_node_recovery_off() {
+    let child = PipelineDefinition::from_yaml(SAVED_CODE_CHILD).unwrap();
+    let code = Arc::new(FakeCode::default());
+    let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(MemoryAuthority::default());
+    let checkpointer: Arc<dyn Checkpointer> = authority.clone();
+    let runtimes = with_code(
+        PipelineNodeRuntimes::new(
+            None,
+            None,
+            Some(saved_resolver("silver", &child, &code, true)),
+        ),
+        &code,
+    )
+    .with_parallel(ParallelCompilerBinding::for_tests(
+        authority,
+        tokio::time::Instant::now() + Duration::from_secs(30),
+        None,
+    ))
+    .with_composition_definitions(std::collections::BTreeMap::from([(
+        "silver".to_owned(),
+        child,
+    )]));
+    let state = PipelineDefinition::from_yaml(SAVED_CODE_MAP)
+        .unwrap()
+        .compile_subgraph_with_runtime(checkpointer, &runtimes)
+        .expect("the Map compiles")
+        .invoke(
+            HashMap::from([("partitions".to_owned(), json!(["p1", "p2"]))]),
+            ExecutionConfig::new("root-saved-map-no-recovery"),
+        )
+        .await
+        .expect("every item's saved pipeline runs");
+    assert_eq!(state["mapped"].as_array().unwrap().len(), 2, "{state:?}");
+    assert_eq!(*code.attempts.lock().unwrap(), 2);
+}
+
+/// C6: a resolver whose saved pipelines have no Code owner is kept as is for
+/// a member: nothing is rebuilt or cloned per branch.
+#[tokio::test]
+async fn a_member_resolver_without_saved_code_owners_is_kept() {
+    let child = PipelineDefinition::from_yaml(SAVED_CODE_CHILD).unwrap();
+    let code = Arc::new(FakeCode::default());
+    let member = crate::agents::pipeline::saved_code_child::SavedCodeFanoutMember::for_tests(
+        "map_item", "each", 0, 2, "m1:item",
+    );
+    assert!(
+        saved_resolver("silver", &child, &code, false)
+            .for_saved_code_member(&member)
+            .is_none()
+    );
+    assert!(
+        saved_resolver("silver", &child, &code, true)
+            .for_saved_code_member(&member)
+            .is_some()
+    );
+}

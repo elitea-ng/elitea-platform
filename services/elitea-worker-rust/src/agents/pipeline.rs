@@ -937,6 +937,7 @@ impl PipelineNativeAgentAssembler {
             .as_ref()
             .ok_or_else(unsupported_pipeline_runtime)?;
         let runtime = runtime.ok_or_else(unsupported_pipeline_runtime)?;
+        composition::refuse_unscoped_saved_code(profile.definition(), &composition.children)?;
         let expected = profile
             .definition()
             .application_selections()
@@ -1710,7 +1711,8 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
         &self,
         member: &saved_code_child::SavedCodeFanoutMember,
     ) -> Option<Arc<dyn PipelineApplicationResolver>> {
-        Some(Arc::new(self.rebind_saved_code_member(member)))
+        self.rebind_saved_code_member(member)
+            .map(|resolver| Arc::new(resolver) as Arc<dyn PipelineApplicationResolver>)
     }
 
     fn agent_calls_saved_pipeline(&self, node: &str, alias: &str) -> bool {
