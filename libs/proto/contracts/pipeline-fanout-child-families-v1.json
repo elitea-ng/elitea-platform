@@ -1,6 +1,6 @@
 {
   "contract": "pipeline-fanout-child-families-v1",
-  "description": "The node types a fan-out node runs directly as its child, per family. Read by the Worker compiler test (services/elitea-worker-rust src/agents/graph/fanout_families_parity_tests.rs), the Main save-time check test (services/elitea-main internal/domain/pipelinelimits) and the Web editor test (apps/elitea-web graphExtensions.types.test.ts). Kept next to pipeline-node-admission-v1.json; a family is added here and in every layer in the same change. A direct router child is refused in every layer with its own text: it runs inside a child pipeline.",
+  "description": "The node types a fan-out node runs directly as its child, per family. Read by the Worker compiler test (services/elitea-worker-rust src/agents/graph/fanout_families_parity_tests.rs), the Main save-time check test (services/elitea-main internal/domain/pipelinelimits) and the Web editor test (apps/elitea-web graphExtensions.types.test.ts). Kept next to pipeline-node-admission-v1.json; a family is added here and in every layer in the same change. A direct router child is refused in every layer with its own text: it runs inside a child pipeline. max_children is the per-activation child bound: the Worker's MAX_FANOUT_CHILDREN, Main's fan-out Code child scope bound (maxFanoutChildren) and the Web editor's Map max_items bound (MAP_MAX_ITEMS).",
   "parallel_branch": [
     "agent",
     "code",
@@ -14,5 +14,6 @@
   ],
   "refused_with_own_text": [
     "router"
-  ]
+  ],
+  "max_children": 64
 }

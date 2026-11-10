@@ -11,6 +11,8 @@ import {
 
 /** The node types a Map item runs on the shared fan-out adapter (T-2A3, W3-2). */
 export const MAP_WORKER_TYPES: readonly string[] = FANOUT_CHILD_FAMILIES.mapWorker;
+/** The per-activation child bound (contract `max_children`, R9). */
+export const MAP_MAX_ITEMS = 64;
 const isMapWorker = (node: YamlPipelineNode): boolean => MAP_WORKER_TYPES.includes(node.type ?? '');
 
 /** Map On Error and Join (v2), as a fixed Parallel's. */
@@ -114,7 +116,7 @@ function mapIssues(document: YamlPipelineDocument, node: YamlPipelineNode): read
     values.forEach((value, index) => validateDeclaredExtensionChannel(document, value, `${field}[${String(index)}]`, undefined, check));
     validateDistinctExtensionNames(values, field, check);
   }
-  validateExtensionInteger(node['max_items'], 'max_items', 64, check);
+  validateExtensionInteger(node['max_items'], 'max_items', MAP_MAX_ITEMS, check);
   validateExtensionInteger(node['max_concurrency'], 'max_concurrency', 8, check);
   if (node.transition !== undefined && node.transition !== null && typeof node.transition !== 'string') {
     check.issue('transition', 'Declare a node id, END, or null.');

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { parallelYaml } from '../__tests__/parallelTestUtils';
 import type { YamlPipelineDocument, YamlPipelineNode } from './flow-editor/helpers/pipelineFlow.types';
 import { FANOUT_CHILD_FAMILIES, ROUTER_CHILD_TEXT } from './graphExtensions.types';
-import { graphMapIssues, MAP_WORKER_TYPES } from './graphMapAdmission.helpers';
+import { graphMapIssues, MAP_MAX_ITEMS, MAP_WORKER_TYPES } from './graphMapAdmission.helpers';
 import { graphParallelIssues } from './graphParallelAdmission.helpers';
 import { parallelOwnedAgent } from './graphParallel.helpers';
 import { parsePipelineYamlDocument } from './pipelineYamlDocument.helpers';
@@ -20,6 +20,7 @@ interface FamiliesContract {
   readonly parallel_branch: readonly string[];
   readonly map_worker: readonly string[];
   readonly refused_with_own_text: readonly string[];
+  readonly max_children: number;
 }
 const CONTRACT_PATH = resolve(import.meta.dirname, '../../../../../../libs/proto/contracts/pipeline-fanout-child-families-v1.json');
 const contract = JSON.parse(readFileSync(CONTRACT_PATH, 'utf8')) as FamiliesContract;
@@ -40,6 +41,10 @@ describe('fan-out child families match the shared contract', () => {
     expect([...FANOUT_CHILD_FAMILIES.mapWorker].sort()).toEqual([...contract.map_worker].sort());
     expect(MAP_WORKER_TYPES).toBe(FANOUT_CHILD_FAMILIES.mapWorker);
     expect(contract.refused_with_own_text).toEqual(['router']);
+  });
+
+  it('bounds a Map at the contract child bound (R9)', () => {
+    expect(MAP_MAX_ITEMS).toBe(contract.max_children);
   });
 
   it('admits a Code node as a Parallel branch and owns it', () => {

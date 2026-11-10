@@ -74,3 +74,12 @@ fn the_compiler_admits_exactly_the_contract_fanout_families() {
         assert!(source.contains("refusal: FanoutChildRefusal::Router"));
     }
 }
+
+/// R9: the per-activation child bound is the contract's `max_children`.
+#[test]
+fn the_fanout_child_bound_is_the_contract_bound() {
+    assert_eq!(
+        contract()["max_children"].as_u64(),
+        Some(crate::agents::graph::fanout_budget::MAX_FANOUT_CHILDREN as u64)
+    );
+}
