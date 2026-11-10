@@ -1379,6 +1379,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-faults"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "elitea-llm-wire"
 version = "0.1.0"
 dependencies = [
@@ -1475,6 +1485,7 @@ dependencies = [
  "elitea-content-source",
  "elitea-doc-chunk",
  "elitea-doc-extract",
+ "elitea-faults",
  "elitea-llm-wire",
  "elitea-model-rpc",
  "elitea-office-core",

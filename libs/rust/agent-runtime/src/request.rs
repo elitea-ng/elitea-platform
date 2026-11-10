@@ -128,6 +128,11 @@ pub struct AgentExecutionPayload {
     /// from before the envelope; no per-tool limit, and unattended turns and
     /// sub-agents get read-only tools.
     pub tool_envelope: Option<crate::tool_envelope::ToolEnvelope>,
+    /// The chat message group uuid of this turn's own question (#1831),
+    /// lowercase and hyphenated. `None`: a turn that writes no question of
+    /// its own (a regeneration of an addressed turn, a continuation), or an
+    /// input from before field 75.
+    pub current_message_id: Option<String>,
 }
 
 /// The turn-taking floor this invocation holds (ADR-0050 decision 11).
@@ -146,6 +151,9 @@ pub struct AgentFloor {
 pub enum FloorCause {
     HumanMessage,
     AgentMention,
+    /// A run that a proactive agent's heartbeat started (ADR-0050 decision
+    /// 2). Nobody waits on it, so Main also sets `unattended_tools_only`.
+    Heartbeat,
 }
 
 /// One agent the floor can be handed to.

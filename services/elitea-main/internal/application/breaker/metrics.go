@@ -41,7 +41,7 @@ type Metrics struct {
 
 var (
 	allScopes  = []safety.Scope{safety.ScopePlatform, safety.ScopeProject, safety.ScopeAgent, safety.ScopeToolkitType}
-	allSources = []safety.Source{safety.SourceManual, safety.SourceBreaker, safety.SourceCertification, safety.SourceSelfTest}
+	allSources = []safety.Source{safety.SourceManual, safety.SourceBreaker, safety.SourceCertification, safety.SourceSelfTest, safety.SourceDismissal}
 )
 
 // NewMetrics builds the registry with every series at 0: a counter series

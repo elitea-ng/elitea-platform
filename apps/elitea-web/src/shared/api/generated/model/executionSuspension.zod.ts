@@ -71,7 +71,7 @@ export const ExecutionSuspension = zod
       ),
     source: zod
       .string()
-      .describe("One of manual, breaker, certification, self_test."),
+      .describe("One of manual, breaker, certification, self_test, dismissal."),
     resume_requires: zod
       .string()
       .describe("One of any_admin, governance_role, two_person."),

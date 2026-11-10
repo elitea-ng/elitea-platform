@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"sync"
@@ -17,6 +18,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/keepalive"
+
+	"github.com/elitea-ng/elitea-platform/libs/go/faults/grpcrecover"
 )
 
 const (
@@ -196,6 +199,10 @@ func validateGRPCServerPolicy(policy GRPCServerPolicy) error {
 func privateGRPCServerOptions(codec *StrictProtoCodec, serverTLS *tls.Config, policy GRPCServerPolicy) []grpc.ServerOption {
 	options := StrictServerOptions(codec)
 	return append(options,
+		// A panic in a handler is one fault line and an Internal status that
+		// carries the sentence and the code only (FU-299).
+		grpc.ChainUnaryInterceptor(grpcrecover.UnaryServerInterceptor(slog.Default())),
+		grpc.ChainStreamInterceptor(grpcrecover.StreamServerInterceptor(slog.Default())),
 		grpc.Creds(credentials.NewTLS(serverTLS.Clone())),
 		grpc.MaxConcurrentStreams(policy.MaxConcurrentStreams),
 		grpc.KeepaliveEnforcementPolicy(RuntimeKeepaliveEnforcementPolicy()),

@@ -1276,6 +1276,9 @@ async fn a_retried_release_marks_the_session_for_reseeding() {
         command: None,
         images: Vec::new(),
         unattended: None,
+        addressed_to: Vec::new(),
+        floor_turn: None,
+        cloud: false,
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
@@ -2275,6 +2278,9 @@ async fn a_take_back_makes_the_next_local_turn_see_the_cloud_turns() {
         command: None,
         images: Vec::new(),
         unattended: None,
+        addressed_to: Vec::new(),
+        floor_turn: None,
+        cloud: false,
     };
     let emitter = h.emitter.clone();
     let run = |prompt: &'static str| {
@@ -2454,6 +2460,9 @@ async fn a_partial_take_back_never_seeds_the_later_cloud_turns() {
         command: None,
         images: Vec::new(),
         unattended: None,
+        addressed_to: Vec::new(),
+        floor_turn: None,
+        cloud: false,
     };
     h.host
         .send(&h.workspace_id, CONVERSATION, Vec::new(), false)
@@ -2700,6 +2709,9 @@ async fn running_turn_in(
             command: None,
             images: Vec::new(),
             unattended,
+            addressed_to: Vec::new(),
+            floor_turn: None,
+            cloud: false,
         })
         .await
         .unwrap();

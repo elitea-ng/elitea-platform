@@ -294,6 +294,7 @@ func configSections() []map[string]any {
 		runCapsSection(),
 		delegationSection(),
 		agentToolsSection(),
+		proactivitySection(),
 		approvalsSection(),
 		notificationsSection(),
 		approvalPolicySection(),

@@ -43,14 +43,24 @@ type ChainLimit = 'continuations' | 'spend' | 'deadline';
  * Why the host continued the chain: the step limit, the 512 tool-call cap, a goal check that found the goal not met, or
  * an app restart while the chain ran (`resume`, ADR-0045 decision 7).
  */
-export type ContinuationKind = 'step_limit' | 'tool_call_cap' | 'goal_not_met' | 'resume';
+export type ContinuationKind = 'step_limit' | 'tool_call_cap' | 'goal_not_met' | 'resume' | 'floor';
+
+/** Where an agent of a thread runs (ADR-0050 decision 7f): here with the workspace, or in the cloud with the text only. */
+export type AgentExecutor = 'local' | 'cloud';
 
 interface TurnContinuedPayload {
   next_turn_id: string;
   execution_id: string;
+  /** The chain's n-th continuation; for kind `floor`, the next agent's position in the message's order (from 1). */
   continuation_index: number;
-  chain_root_execution_id: string;
+  /** An unattended chain's root; absent for kind `floor`. */
+  chain_root_execution_id?: string;
+  /** `floor`: the next agent of a message addressed to several (ADR-0050 decision 7f), not a chain's continuation. */
   kind?: ContinuationKind;
+  /** Kind `floor`: the agent that answers next, and where it runs. */
+  participant_id?: number;
+  agent_name?: string;
+  executor?: AgentExecutor;
   /** The host continued the chain after an app restart (with `kind` `resume`), on the turn that ran when the app stopped. */
   resumed_after_restart?: boolean;
 }
@@ -128,7 +138,9 @@ export type UnattendedEvent =
   /** On the checked turn, before its `turn_continued` (`not_met`) or `chain_ended` (the other outcomes). */
   | { kind: 'goal_checked'; payload: GoalCheckResult & { turn_id: string } }
   /** On a turn that ran when the app stopped, after the next start, when the host does not continue it by itself: offer Continue. */
-  | { kind: 'resume_offered'; payload: { workspace_id: string; conversation_id: string | number } };
+  | { kind: 'resume_offered'; payload: { workspace_id: string; conversation_id: string | number } }
+  /** On a turn whose `done` named a `floor_next` (ADR-0050 decision 7f): that agent does not answer (`floor_turn_superseded`: a newer message took the floor). */
+  | { kind: 'floor_stopped'; payload: { code: string; message: string } };
 
 /** The fields a `status` `running` of an unattended turn adds. */
 export interface UnattendedStatusFields {
@@ -140,4 +152,21 @@ export interface UnattendedStatusFields {
   continuation_kind?: ContinuationKind;
   /** On the first `running` of any unattended turn: the grant it runs under. */
   unattended?: Omit<UnattendedGrant, 'chain'> & { grant_id: string };
+  /** A message Main routed to several agents (ADR-0050 decision 7f): which of them answers this turn, and where it runs. */
+  floor?: TurnFloorStatus;
+}
+
+/** What `done` adds when the message goes to another agent next (ADR-0050 decision 7f). */
+export interface FloorDoneFields {
+  /** The message's next agent, started once this turn's commit lands. */
+  floor_next?: { participant_id: number; agent_name: string; position: number };
+}
+
+/** `status` `running`'s `floor`: this turn's agent of the message's order (`position` from 0 of `targets` agents). */
+export interface TurnFloorStatus {
+  position: number;
+  targets: number;
+  participant_id: number;
+  agent_name: string;
+  executor: AgentExecutor;
 }

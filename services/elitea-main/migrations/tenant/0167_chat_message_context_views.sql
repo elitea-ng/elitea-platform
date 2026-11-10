@@ -1,4 +1,4 @@
--- 0166_chat_message_context_views.sql — the view each agent answer was given
+-- 0167_chat_message_context_views.sql — the view each agent answer was given
 -- (ADR-0050 decision 9, issue 1669: the "What the agent saw" inspector).
 --
 -- chat_message_context_views

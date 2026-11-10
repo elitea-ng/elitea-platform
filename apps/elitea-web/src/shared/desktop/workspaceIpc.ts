@@ -16,7 +16,7 @@ import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayloa
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
 import { steeringCommands, type SteeringCommands, type SteeringEvent } from './steeringIpc';
 import { threadForkCommands, type ThreadForkCommands } from './threadForkIpc';
-import type { UnattendedEvent, UnattendedStatusFields } from './unattendedIpc';
+import type { FloorDoneFields, UnattendedEvent, UnattendedStatusFields } from './unattendedIpc';
 import type { UsagePayload, UsageTotalPayload } from './turnUsage';
 import type { Workspace } from './workspace';
 
@@ -135,7 +135,7 @@ interface EventBase {
 }
 
 /** The `done` event's payload. */
-export interface TurnDonePayload {
+export interface TurnDonePayload extends FloorDoneFields {
   /** True once the turn is saved in its conversation: `done` comes before the commit, so the event says `false` and `agent_turn_status` says how it settled. */
   committed: boolean;
   /** `pending` (being saved after `done`), `committed`, `failed` (see `commit_failed`) or `none` (a cancelled turn saves nothing). */
@@ -144,7 +144,7 @@ export interface TurnDonePayload {
   conversation_id: string;
   message_ids: string[];
   changed_files: number;
-  /** An unattended turn the host continues by itself: the UI stays busy until `turn_continued` or `chain_ended`. */
+  /** The host continues by itself (a chain, or the message's next agent): busy until `turn_continued`, `chain_ended` or `floor_stopped`. */
   continuing?: boolean;
 }
 

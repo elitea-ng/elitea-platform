@@ -73,7 +73,10 @@ fn classify(error: &ToolCodeError) -> AnalysisCodeFailure {
         ToolCodeError::Unavailable => AnalysisCodeFailure::Unavailable,
         ToolCodeError::Cancelled => AnalysisCodeFailure::Cancelled,
         ToolCodeError::Uncertain => AnalysisCodeFailure::Uncertain,
-        ToolCodeError::Refused => AnalysisCodeFailure::Rejected,
+        // Nothing ran: the run had too little time left (W3-1).
+        ToolCodeError::Refused | ToolCodeError::DeadlineInsufficient => {
+            AnalysisCodeFailure::Rejected
+        }
         ToolCodeError::Sandbox { code } => match code.as_str() {
             "sandbox.output_limit" | "sandbox.receipt_limit" => AnalysisCodeFailure::ResultTooLarge,
             "sandbox.invalid_request" => AnalysisCodeFailure::Rejected,
@@ -317,6 +320,10 @@ mod tests {
             (ToolCodeError::Cancelled, AnalysisCodeFailure::Cancelled),
             (ToolCodeError::Uncertain, AnalysisCodeFailure::Uncertain),
             (ToolCodeError::Refused, AnalysisCodeFailure::Rejected),
+            (
+                ToolCodeError::DeadlineInsufficient,
+                AnalysisCodeFailure::Rejected,
+            ),
             (ToolCodeError::Submission, AnalysisCodeFailure::Failed),
             (
                 ToolCodeError::Untyped("memory time exceeds cancel authorized".into()),

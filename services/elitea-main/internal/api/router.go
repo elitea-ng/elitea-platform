@@ -28,6 +28,7 @@ import (
 	nativeapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/nativeauth"
 	scimapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/scim"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	v2agentheartbeat "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentheartbeat"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2agentlifecycle "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentlifecycle"
 	v2agentmedia "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentmediaapi"
@@ -35,6 +36,7 @@ import (
 	v2agentproposals "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentproposals"
 	v2agentreleases "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentreleases"
 	v2agentteams "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentteams"
+	v2agentworkforce "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentworkforce"
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2apps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
 	v2applicationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
@@ -104,6 +106,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runevidence"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
@@ -801,6 +804,10 @@ type RouterConfig struct {
 	// 1122). Set only with the credential governance flag on; nil mounts
 	// none of its routes.
 	MandateAttachments *v2mandateattachments.Handler
+	// AgentHeartbeatMandates checks the mandate an owner attaches to an
+	// agent's heartbeat (ADR-0050 decision 2). Nil with credential
+	// governance off: then a mandate attach is refused.
+	AgentHeartbeatMandates *runmandate.Service
 	// CredentialReferencesAdmin serves the credential reference lifecycle,
 	// toolkit attachment and agent toolkit binding routes (ADR-0039, issue
 	// 1124). Set only with the credential governance flag on; nil mounts
@@ -1739,11 +1746,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"*"},
-		ExposedHeaders:   []string{"Content-Length"},
+		ExposedHeaders:   []string{"Content-Length", "X-Elitea-Support-Ref"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
 	r.Use(apimw.RequestID)
+	// The support reference a person quotes (FU-299): generated here, never
+	// taken from the client's X-Request-Id.
+	r.Use(apimw.SupportRef)
 	// Response headers that stop a browser reading an API body as a document.
 	// Mounted here, in front of every route, because the per-handler copies
 	// covered only the routes somebody remembered (see the middleware doc).
@@ -4459,7 +4469,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post(v2agentteams.StartPath, teams.Start)
 
 					// "What the agent saw" (ADR-0050 decision 9, #1669;
-					// tenant/0166): the view one answer was given. The
+					// tenant/0167): the view one answer was given. The
 					// message read's permission, and the handler applies the
 					// conversation's rule to the message before it reads.
 					contextViews := v2contextviews.NewHandler(dbrepos.NewContextViews(cfg.Pool), cfg.ConvsRepo)
@@ -4752,6 +4762,24 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(readMemory).Delete(v2agentmemory.EntryPath, memory.Delete)
 					r.With(readMemory).Put(v2agentmemory.OptOutPath, memory.SetOptOut)
 				}
+				// The heartbeat of a proactive agent (ADR-0050 decision 2,
+				// #1618): reads take models.applications.versions.get, saves
+				// take models.applications.publish.post; the handler applies
+				// the tier rule and checks the mandate.
+				{
+					var heartbeatStore *dbrepos.AgentHeartbeats
+					if cfg.Pool != nil {
+						heartbeatStore = dbrepos.NewAgentHeartbeats(cfg.Pool)
+					}
+					beats := v2agentheartbeat.NewHandler(heartbeatStore, cfg.AgentHeartbeatMandates)
+					readBeats := projectPermission(v2agentheartbeat.ReadPermission)
+					writeBeats := projectPermission(v2agentheartbeat.WritePermission)
+					r.With(readBeats).Get(v2agentheartbeat.SettingsPath, beats.Get)
+					r.With(writeBeats).Put(v2agentheartbeat.SettingsPath, beats.Put)
+					r.With(readBeats).Get(v2agentheartbeat.HistoryPath, beats.History)
+					r.With(readBeats).Get(v2agentheartbeat.ProjectPath, beats.GetProject)
+					r.With(writeBeats).Put(v2agentheartbeat.ProjectPath, beats.PutProject)
+				}
 				// Agent proposals and Copy to project (ADR-0050 decisions 5a
 				// and 1, #1615). Reading takes applications.list; Create
 				// records and memory copies take applications.create in the
@@ -4788,6 +4816,48 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(readProposals).Post(v2agentproposals.DismissPath, proposals.Dismiss)
 					r.With(createAgents).Post(v2agentproposals.CreatedPath, proposals.MarkCreated)
 					r.With(createAgents).Post(v2agentproposals.CopyMemoryPath, proposals.CopyMemory)
+				}
+				// The agent workforce (ADR-0050 decisions 5b, 5g-5j, #1616).
+				// Every route takes applications.list; who may read the
+				// scorecards, the impact and the proposals, and who may
+				// propose, decide, reinstate, comment or appeal, is decided
+				// in the handler and the store (agents.workforce.manage, or
+				// the agent's owner). Anyone else reads the ladder state only.
+				{
+					var workforceStore *dbrepos.AgentWorkforce
+					if cfg.Pool != nil {
+						workforceStore, _ = dbrepos.ComposeAgentWorkforce(cfg.Pool, cfg.SuspensionChanged)
+					}
+					workforce := v2agentworkforce.NewHandler(workforceStore,
+						func(r *http.Request, projectID, permission string) (bool, error) {
+							return apimw.HoldsPermissionIn(coreResolver, platformauth.PermissionModeDefault, permission)(r, projectID)
+						})
+					readWorkforce := projectPermission(v2agentworkforce.ListPermission)
+					r.With(readWorkforce).Get(v2agentworkforce.AgentPath, workforce.GetAgent)
+					r.With(readWorkforce).Get(v2agentworkforce.ScorecardsPath, workforce.ListScorecards)
+					r.With(readWorkforce).Get(v2agentworkforce.ImpactPath, workforce.GetImpact)
+					r.With(readWorkforce).Post(v2agentworkforce.ReinstatePath, workforce.Reinstate)
+					r.With(readWorkforce).Get(v2agentworkforce.ProposalsPath, workforce.List)
+					r.With(readWorkforce).Post(v2agentworkforce.ProposalsPath, workforce.Propose)
+					r.With(readWorkforce).Get(v2agentworkforce.ProposalPath, workforce.Get)
+					r.With(readWorkforce).Post(v2agentworkforce.ApprovePath, workforce.Approve)
+					r.With(readWorkforce).Post(v2agentworkforce.RejectPath, workforce.Reject)
+					r.With(readWorkforce).Post(v2agentworkforce.AskOwnerPath, workforce.AskOwner)
+					r.With(readWorkforce).Post(v2agentworkforce.CommentPath, workforce.Comment)
+					r.With(readWorkforce).Post(v2agentworkforce.AppealPath, workforce.Appeal)
+					r.With(readWorkforce).Post(v2agentworkforce.AppealDecidePath, workforce.DecideAppeal)
+					// The workforce policy (ADR-0050 decisions 5c and 5k,
+					// #1617): reading it and its automatic actions, setting
+					// it, undoing or keeping a hire take
+					// agents.workforce.manage (decided in the handler and
+					// the store); objecting takes it or the agent's
+					// ownership.
+					r.With(readWorkforce).Get(v2agentworkforce.PolicyPath, workforce.GetPolicy)
+					r.With(readWorkforce).Put(v2agentworkforce.PolicyPath, workforce.SetPolicy)
+					r.With(readWorkforce).Get(v2agentworkforce.ActionsPath, workforce.ListActions)
+					r.With(readWorkforce).Post(v2agentworkforce.ActionUndoPath, workforce.UndoAction)
+					r.With(readWorkforce).Post(v2agentworkforce.ActionKeepPath, workforce.KeepAction)
+					r.With(readWorkforce).Post(v2agentworkforce.ActionObjectPath, workforce.ObjectAction)
 				}
 				// Run step records (ADR-0042 decisions 1 and 2): every read,
 				// the content's included, takes runs.evidence.read; a content

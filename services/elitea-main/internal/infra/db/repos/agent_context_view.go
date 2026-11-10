@@ -3,7 +3,7 @@ package repos
 // The view each agent answer was given (ADR-0050 decision 9, issue 1669):
 // the admission writes it with the answer, in the same transaction, and the
 // "What the agent saw" inspector reads it back
-// (internal/api/v2/contextviews). tenant/0166 declares the table.
+// (internal/api/v2/contextviews). tenant/0167 declares the table.
 
 import (
 	"context"

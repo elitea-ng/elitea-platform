@@ -80,7 +80,7 @@ export function Avatar({ name, kind = 'person', imageUri, mark = false, size = 3
   if (imageUri) {
     return (
       <View {...a11y} style={[styles.frame, frame, style]}>
-        <Image source={{ uri: imageUri }} style={frame} resizeMode="cover" />
+        <Image testID="avatar-image" source={{ uri: imageUri }} style={frame} resizeMode="cover" />
       </View>
     );
   }

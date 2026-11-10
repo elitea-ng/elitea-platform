@@ -313,6 +313,11 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
 		return
 	}
+	// The proactive agents' maximums (ADR-0050 decision 2).
+	if reason := validateProactivityValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
 	// The circuit breaker's ranges and resume rules (ADR-0041 decision 2).
 	if reason := validateCircuitBreakerValues(section.id, body.Values); reason != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})

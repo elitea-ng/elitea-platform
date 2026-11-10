@@ -17,6 +17,7 @@ import (
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/turntaking"
 	"github.com/google/uuid"
 )
 
@@ -250,6 +251,11 @@ type CurrentApplicationStartRequest struct {
 	// FloorTurn is set only when Main's floor hook starts a later agent
 	// turn of a human message (floor_hook.go); never from a request body.
 	FloorTurn *FloorTurn
+	// Heartbeat is set only when a proactive agent's heartbeat starts an
+	// act (ADR-0050 decision 2, internal/application/heartbeat); never from
+	// a request body. The turn binds only its unattended tools and its
+	// question carries cause heartbeat. It needs the schedule origin.
+	Heartbeat bool
 	// projectSkills is ProjectSkillIDs, read and frozen by the service for
 	// this one turn. Unexported so no caller can hand the service skill
 	// content of its own.
@@ -266,7 +272,9 @@ func (request CurrentApplicationStartRequest) Validate() error {
 		!validProjectSkillIDs(request.ProjectSkillIDs) || request.ReleaseID < 0 ||
 		!request.ThreadRun.valid(request.TriggerOrigin) ||
 		!validAddressedTo(request.AddressedTo) || !request.FloorTurn.valid() ||
-		(request.FloorTurn != nil && (len(request.AddressedTo) > 0 || request.Unattended != nil)) {
+		(request.FloorTurn != nil && (len(request.AddressedTo) > 0 || request.Unattended != nil)) ||
+		(request.Heartbeat && (request.TriggerOrigin != executiondomain.TriggerOriginSchedule ||
+			request.FloorTurn != nil || request.ThreadRun != nil || len(request.AddressedTo) > 0)) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -470,7 +478,8 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		return CurrentApplicationStartOutcome{}, err
 	}
 	input.ContextSettings = contextSettings
-	input.Floor = floor.input(request.TargetParticipantID)
+	input.Floor = heartbeatFloor(floor.input(request.TargetParticipantID), request.Heartbeat)
+	input.CurrentMessageId = currentMessageID(request)
 	grant, chain, err := service.admitUnattended(ctx, unattendedTarget{
 		request: request.Unattended, continuation: request.UnattendedContinuation,
 		capabilityID: executiondomain.AgentApplicationCapability, input: input,
@@ -480,6 +489,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		triggerOrigin: request.TriggerOrigin, cloudWorkspace: target.CloudWorkspace,
 		start: &unattended.CloudStart{
 			Contract: CloudStartContractApplication, ParticipantID: request.TargetParticipantID,
+			Heartbeat: request.Heartbeat,
 		},
 	})
 	if err != nil {
@@ -502,6 +512,9 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		ContextView: newContextViewRecord(request.TargetParticipantID, target.ParticipantContextHistory, view, input),
 	}
 	applyFloorTurn(currentTurn, floor, request)
+	if request.Heartbeat {
+		currentTurn.QuestionCause = turntaking.CauseHeartbeat
+	}
 	projectID := strconv.FormatInt(request.ProjectID, 10)
 	actorID := strconv.FormatInt(request.ActorUserID, 10)
 	outcome, err := service.admissions.Submit(ctx, SubmitRequest{

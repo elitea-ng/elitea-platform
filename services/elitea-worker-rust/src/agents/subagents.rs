@@ -16,8 +16,11 @@
 //! # Profiles, briefs and the record (#1614)
 //!
 //! A `spawn_agent` brief is checked against the creator's own view of this
-//! turn ([`BriefView`]): an excerpt must quote, exactly, a history entry of
-//! a message in the reader's `chat_history_refs`; an attachment must be one
+//! turn ([`BriefView`]): an excerpt must quote, exactly (each run of
+//! whitespace read as one space), the text the model reads of a message it
+//! was shown with a `[message m-...]` line (#1831), by that short id: a
+//! user-role history entry of the reader's `chat_history_refs`, or this
+//! turn's question; an attachment must be one
 //! of this turn's input attachments (`att-` ids); a memory entry must have
 //! been returned by `recall` earlier in the turn. Each spawn and its end go
 //! into the execution's sub-agent ledger, which the settlement path reports
@@ -35,6 +38,7 @@ use adk_rust::{GenerateContentConfig, Llm, Toolset};
 use async_trait::async_trait;
 use elitea_agent_runtime::delegation::DelegationScope;
 use elitea_agent_runtime::host::{HostError, HostErrorCode};
+use elitea_agent_runtime::subagents::message_ref::normalize_whitespace;
 use elitea_agent_runtime::subagents::profile::{
     BRIEF_ATTACHMENT_NOT_READABLE, BRIEF_EXCERPT_NOT_VISIBLE, BRIEF_MEMORY_NOT_RECALLED,
 };
@@ -53,13 +57,24 @@ pub(crate) const WITHHELD_TOOLSETS: [&str; 2] = [
     elitea_agent_runtime::lazy_tools::TOOLSET_NAME,
 ];
 
+/// One message a brief's excerpt may quote (#1831).
+pub(crate) struct QuotableMessage {
+    /// The short id the model reads on its `[message m-...]` line.
+    pub(crate) short_id: String,
+    /// The chat message uuid it stands for, for the record.
+    pub(crate) message_id: String,
+    /// The text the model reads after the id line, whitespace-normalized.
+    pub(crate) text: String,
+}
+
 /// What the creator (the turn's root agent) itself sees, for checking a
 /// brief: its history by message, this turn's attachments by id, and the
 /// memory entries it recalled.
 #[derive(Default)]
 pub(crate) struct BriefView {
-    /// Each history entry's message id and text, in order.
-    pub(crate) history: Vec<(String, String)>,
+    /// Each quotable message, in order
+    /// (`OrdinaryNativeAgentPlan::tag_message_refs`).
+    pub(crate) history: Vec<QuotableMessage>,
     /// This turn's input attachments: id and display name.
     pub(crate) attachments: Vec<(String, String)>,
     /// What `recall` returned this turn; `None` without agent memory.
@@ -67,14 +82,22 @@ pub(crate) struct BriefView {
 }
 
 impl BriefView {
-    /// The view of this turn.
+    /// The view of this turn. `history` is each quotable message's short
+    /// id, chat message uuid and text as the model reads it.
     pub(crate) fn new(
-        history: Vec<(String, String)>,
+        history: Vec<(String, String, String)>,
         attachments: &[super::attachments::AttachmentReference],
         recalled: Option<Arc<super::agent_memory_tools::RecalledEntries>>,
     ) -> Self {
         Self {
-            history,
+            history: history
+                .into_iter()
+                .map(|(short_id, message_id, text)| QuotableMessage {
+                    short_id,
+                    message_id,
+                    text: normalize_whitespace(&text),
+                })
+                .collect(),
             attachments: attachments
                 .iter()
                 .map(|reference| {
@@ -90,12 +113,22 @@ impl BriefView {
 
     /// ADR-0050 decision 9d: every reference of `brief` is in this view.
     pub(crate) fn check(&self, brief: &Brief) -> Result<CheckedBrief, &'static str> {
+        let mut message_ids: Vec<(String, String)> = Vec::new();
         for excerpt in &brief.excerpts {
-            let quoted = self.history.iter().any(|(message_id, text)| {
-                *message_id == excerpt.message_id && text.contains(excerpt.quote.as_str())
-            });
-            if !quoted {
-                return Err(BRIEF_EXCERPT_NOT_VISIBLE);
+            // `spawn_agent` admits no empty or blank quote.
+            let quote = normalize_whitespace(&excerpt.quote);
+            let message = self
+                .history
+                .iter()
+                .find(|message| {
+                    message.short_id == excerpt.message_id && message.text.contains(quote.as_str())
+                })
+                .ok_or(BRIEF_EXCERPT_NOT_VISIBLE)?;
+            if !message_ids
+                .iter()
+                .any(|(short, _)| *short == message.short_id)
+            {
+                message_ids.push((message.short_id.clone(), message.message_id.clone()));
             }
         }
         let attachments = brief
@@ -123,6 +156,7 @@ impl BriefView {
         Ok(CheckedBrief {
             attachments,
             memory_entries,
+            message_ids,
         })
     }
 }

@@ -45,6 +45,7 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
+import { LocalTurnExecutor } from "../model";
 import type {
   AgentTeam,
   AgentTeamList,
@@ -1306,6 +1307,29 @@ export const getStartLocalTurnResponseMock = (
   ]),
   computer_use: faker.helpers.arrayElement([
     { upload_screenshots: faker.datatype.boolean() },
+    undefined,
+  ]),
+  executor: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(Object.values(LocalTurnExecutor)),
+    undefined,
+  ]),
+  floor: faker.helpers.arrayElement([
+    {
+      question_id: faker.string.uuid(),
+      position: faker.number.int({ min: 0 }),
+      targets: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.number.int()),
+      agents: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        participant_id: faker.number.int(),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        executor: faker.helpers.arrayElement(Object.values(LocalTurnExecutor)),
+      })),
+    },
     undefined,
   ]),
   ...overrideResponse,

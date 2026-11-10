@@ -1,7 +1,7 @@
 package repos
 
 // The "What the agent saw" read (ADR-0050 decision 9, issue 1669) over
-// tenant/0166's chat_message_context_views: the view one agent answer was
+// tenant/0167's chat_message_context_views: the view one agent answer was
 // given, its entries labelled with their authors, and the answer's own
 // context measurement. agent_context_view.go writes the row.
 //

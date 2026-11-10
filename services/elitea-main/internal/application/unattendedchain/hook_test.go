@@ -206,3 +206,19 @@ func TestSettleReplayOfAStartedContinuationIsDone(t *testing.T) {
 		t.Fatalf("ended = %v, refused = %v", chains.ended, chains.refused)
 	}
 }
+
+// ADR-0050 decision 2: every run of a heartbeat act's chain is a heartbeat
+// run (unattended tools only), not only the first.
+func TestSettleKeepsTheHeartbeatOnAContinuation(t *testing.T) {
+	chains := &chainsStub{view: cloudView()}
+	chains.view.Chain.TriggerOrigin = "schedule"
+	chains.view.Chain.Grant.Start.Heartbeat = true
+	chains.view.StepLimitReached = true
+	starter := &starterStub{}
+	if err := New(chains, starter, nil).Settle(t.Context(), chains.view.Chain.ExecutionID, executionapp.SettlementSucceeded); err != nil {
+		t.Fatal(err)
+	}
+	if len(starter.applications) != 1 || !starter.applications[0].Heartbeat {
+		t.Fatalf("starts = %+v", starter.applications)
+	}
+}

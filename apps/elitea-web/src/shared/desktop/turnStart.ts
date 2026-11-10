@@ -46,6 +46,14 @@ export interface TurnStartRequest {
   command?: TurnCommand | undefined;
   /** Images attached to the message (IPC.md "Image input"), by the tokens `attachment_add` / `attachment_add_bytes` answered; at most five. */
   images?: TurnImagePick[] | undefined;
+  /**
+   * Several agents in one thread (ADR-0050 decision 7f): the agent participants the message addresses ("@Name"), in the
+   * order the text names them (client-core `addressedTo`). Main routes the message by them; the host starts each next
+   * agent itself (`turn_continued` kind `floor`). Absent or empty: the composer's agent answers.
+   */
+  addressed_to?: number[] | undefined;
+  /** The answering agent is a cloud agent of the thread (participant `executor: cloud`): text only, never the workspace. */
+  cloud_agent?: boolean | undefined;
 }
 
 /** `agent_turn_start.images[]`: where the image came from, and its token. */

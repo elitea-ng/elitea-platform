@@ -201,13 +201,47 @@ pub struct SessionIdentity {
     pub project_id: i64,
     /// The conversation's UUID, lowercase.
     pub conversation_uuid: String,
+    /// The agent participant that reads the thread, in a thread with
+    /// several agents (ADR-0050 decision 7f): each agent has a session of
+    /// its own, seeded with itself as the reader. `None`: the thread's one
+    /// session.
+    pub reader: Option<i64>,
 }
 
 impl SessionIdentity {
     #[must_use]
     pub fn key(&self) -> String {
-        session_key(&self.deployment, self.user_id, &self.conversation_uuid)
+        match self.reader {
+            None => session_key(&self.deployment, self.user_id, &self.conversation_uuid),
+            Some(reader) => reader_session_key(
+                &self.deployment,
+                self.user_id,
+                &self.conversation_uuid,
+                reader,
+            ),
+        }
     }
+}
+
+/// The session key of one agent's reading of a thread with several agents:
+/// the conversation's key, a separator byte none of the parts holds, and the
+/// agent participant's id; never a thread's one key.
+#[must_use]
+pub fn reader_session_key(
+    deployment: &str,
+    user_id: i64,
+    conversation_uuid: &str,
+    reader: i64,
+) -> String {
+    let mut hash = Sha256::new();
+    hash.update(deployment.trim_end_matches('/').as_bytes());
+    hash.update([0]);
+    hash.update(user_id.to_string().as_bytes());
+    hash.update([0]);
+    hash.update(conversation_uuid.to_ascii_lowercase().as_bytes());
+    hash.update([1]);
+    hash.update(reader.to_string().as_bytes());
+    lower_hex(&hash.finalize())
 }
 
 /// `sha256(deployment ‖ user id ‖ conversation UUID)` in hex. The parts are
@@ -998,11 +1032,18 @@ impl SessionStore {
         conversation_uuid: &str,
     ) -> Result<bool, HostError> {
         let key = session_key(deployment, user_id, conversation_uuid);
+        let (deployment, conversation) = (
+            deployment.trim_end_matches('/').to_owned(),
+            conversation_uuid.to_ascii_lowercase(),
+        );
+        // Every agent's session of the conversation too (ADR-0050
+        // decision 7f): each reads what the server holds again.
         self.call("could not mark the session", move |conn| {
             let changed = conn.execute(
                 "UPDATE sessions SET seeded_from_server = 0, server_cursor = NULL
-                 WHERE session_key = ?1",
-                params![key],
+                 WHERE session_key = ?1
+                    OR (rtrim(deployment, '/') = ?2 AND user_id = ?3 AND lower(conversation_uuid) = ?4)",
+                params![key, deployment, user_id, conversation],
             )?;
             Ok(changed > 0)
         })
@@ -1243,12 +1284,22 @@ impl SessionStore {
         conversation_uuid: &str,
     ) -> Result<bool, HostError> {
         let key = session_key(deployment, user_id, conversation_uuid);
+        let (deployment, conversation) = (
+            deployment.trim_end_matches('/').to_owned(),
+            conversation_uuid.to_ascii_lowercase(),
+        );
+        // Every agent's session of the conversation too (ADR-0050
+        // decision 7f).
         self.call("could not delete the session", move |conn| {
             conn.execute(
                 "DELETE FROM seed_skips WHERE session_key = ?1",
                 params![key],
             )?;
-            Ok(conn.execute("DELETE FROM sessions WHERE session_key = ?1", params![key])? > 0)
+            Ok(conn.execute(
+                "DELETE FROM sessions WHERE session_key = ?1
+                    OR (rtrim(deployment, '/') = ?2 AND user_id = ?3 AND lower(conversation_uuid) = ?4)",
+                params![key, deployment, user_id, conversation],
+            )? > 0)
         })
         .await
     }
@@ -1277,22 +1328,36 @@ impl SessionStore {
         conversation_uuid: &str,
     ) -> Result<Option<SessionInfo>, HostError> {
         let key = session_key(deployment, user_id, conversation_uuid);
+        let (deployment, conversation) = (
+            deployment.trim_end_matches('/').to_owned(),
+            conversation_uuid.to_ascii_lowercase(),
+        );
+        // The thread's one session, or, in a thread with several agents
+        // (ADR-0050 decision 7f), every agent's session of it summed: one
+        // conversation's size and turns, whichever agent read them.
         self.call("could not read the session", move |conn| {
             conn.query_row(
-                "SELECT seeded_from_server, bytes,
-                        (SELECT COUNT(DISTINCT turn_execution_id) FROM events e
-                         WHERE e.session_key = s.session_key)
-                 FROM sessions s WHERE session_key = ?1",
-                params![key],
+                "WITH matched AS (
+                     SELECT session_key, seeded_from_server, bytes FROM sessions
+                     WHERE session_key = ?1
+                        OR (rtrim(deployment, '/') = ?2 AND user_id = ?3 AND lower(conversation_uuid) = ?4)
+                 )
+                 SELECT COUNT(*), COALESCE(MIN(seeded_from_server), 0), COALESCE(SUM(bytes), 0),
+                        (SELECT COUNT(DISTINCT e.turn_execution_id) FROM events e
+                         WHERE e.session_key IN (SELECT session_key FROM matched))
+                 FROM matched",
+                params![key, deployment, user_id, conversation],
                 |row| {
-                    Ok(SessionInfo {
-                        seeded_from_server: row.get::<_, i64>(0)? != 0,
-                        bytes: u64::try_from(row.get::<_, i64>(1)?).unwrap_or_default(),
-                        turns: u64::try_from(row.get::<_, i64>(2)?).unwrap_or_default(),
-                    })
+                    if row.get::<_, i64>(0)? == 0 {
+                        return Ok(None);
+                    }
+                    Ok(Some(SessionInfo {
+                        seeded_from_server: row.get::<_, i64>(1)? != 0,
+                        bytes: u64::try_from(row.get::<_, i64>(2)?).unwrap_or_default(),
+                        turns: u64::try_from(row.get::<_, i64>(3)?).unwrap_or_default(),
+                    }))
                 },
             )
-            .optional()
         })
         .await
     }

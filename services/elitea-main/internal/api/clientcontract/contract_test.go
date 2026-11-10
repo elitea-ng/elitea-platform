@@ -699,6 +699,10 @@ func TestMajor(t *testing.T) {
 var notVersionGated = map[string]bool{
 	"getClientDiscovery": true, "getBrandingPackJSON": true,
 	"authorizeNativeClient": true, "revokeNativeToken": true,
+	// The avatar pack media (contract 1.46) is root-mounted with no
+	// credential, like /icons (router_cross_cutting_gates_test.go exempts
+	// /api/v2/agent_media/ from every API-group gate).
+	"getAgentMedia": true,
 }
 
 // TestClientOperationsDeclareTheVersionGate: apimw.ClientVersion runs over the

@@ -13,6 +13,8 @@ COPY libs/go/observability ./libs/go/observability
 COPY libs/go/natsconn ./libs/go/natsconn
 # The routine registry (#1369), the module's third local replace.
 COPY libs/go/routines ./libs/go/routines
+# The shared error registry and fault convention (FU-299).
+COPY libs/go/faults ./libs/go/faults
 COPY services/elitea-scheduler/go.mod services/elitea-scheduler/go.sum ./services/elitea-scheduler/
 WORKDIR /src/services/elitea-scheduler
 # A TRANSIENT proxy.golang.org failure must not fail the build.

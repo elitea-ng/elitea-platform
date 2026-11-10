@@ -1022,7 +1022,7 @@ BEGIN
         )', schema_name);
 
     -- The view each agent answer was given (ADR-0050 decision 9, issue
-    -- 1669). The same shape as tenant/0166_chat_message_context_views.sql,
+    -- 1669). The same shape as tenant/0167_chat_message_context_views.sql,
     -- which carries the full account.
     EXECUTE format('
         CREATE TABLE IF NOT EXISTS %I.chat_message_context_views (
@@ -1440,6 +1440,15 @@ CROSS JOIN (VALUES
     ('models.teams.delete')
 ) AS grant_row(permission)
 WHERE role.mode = 'default' AND role.name IN ('admin', 'editor')
+ON CONFLICT (role_id, permission) DO NOTHING;
+
+-- Issue 1616, the agent workforce (ADR-0050 decision 5b): the project admin
+-- is the agent manager. Existing databases get the grant from
+-- migrations/shared/0236_agent_workforce.sql.
+INSERT INTO auth_core__role_permission (role_id, permission)
+SELECT role.id, 'agents.workforce.manage'
+FROM auth_core__role AS role
+WHERE role.mode = 'default' AND role.name = 'admin'
 ON CONFLICT (role_id, permission) DO NOTHING;
 
 -- Default dev user

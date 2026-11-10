@@ -30,6 +30,14 @@ Rust uses a separate broker listener with policy `cargo-broker-execute-v1`.
 The existing pure Rust selection remains unchanged.
 The Worker language limit remains four. The Supervisor profile limit remains eight.
 
+Each language entry also sets `code_slots`: how many Code attempts this Worker runs at once on that entry's Supervisor.
+Set it to that Supervisor's `concurrency`; both example Supervisors use 4.
+Entries on one Supervisor must agree: Python, JavaScript and TypeScript share `sandbox.internal:9446` here.
+A broker `platform_client` target uses its language entry's value.
+Without `code_slots` the Worker uses 4 and logs the value per target at startup (`code_slots_configured`).
+The Worker refuses values outside 1 through 1024 and entries on one Supervisor that disagree.
+Set the same field per language in any other Worker `runtime.json` that carries `sandbox_runtimes`, such as a standalone stack's generated Code material.
+
 The `supervisors` array contains two separate Supervisor deployment examples.
 Install each object as its own existing Supervisor configuration file.
 Set `code_platform_profile` to `true` only for an admitted broker image and wrapper.
