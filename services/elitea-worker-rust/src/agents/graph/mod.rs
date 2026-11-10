@@ -85,6 +85,8 @@ pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
     with_decision,
 };
 mod fanout_code_child;
+#[cfg(test)]
+mod fanout_families_parity_tests;
 mod fanout_source;
 #[cfg(test)]
 pub(crate) use fanout_source::{FanoutSource, MapSource};

@@ -16,8 +16,8 @@ const graph = (node: YamlPipelineNode, child: YamlPipelineNode = worker): YamlPi
 const fields = (document: YamlPipelineDocument): readonly string[] => graphMapIssues(document).map((issue) => issue.field);
 
 describe('Map v2 policy and worker families', () => {
-  it('admits a State Modifier, a saved Agent and an LLM worker, and owns their item channels', () => {
-    expect(MAP_WORKER_TYPES).toEqual(['state_modifier', 'agent', 'llm']);
+  it('admits a State Modifier, a saved Agent, an LLM and a Code worker, and owns their item channels', () => {
+    expect(MAP_WORKER_TYPES).toEqual(['state_modifier', 'agent', 'llm', 'code']);
     for (const type of MAP_WORKER_TYPES) {
       const child = { ...worker, type, input_mapping: { task: { type: 'fixed', value: 'render' } } };
       expect(fields(graph(v1, child))).toEqual([]);

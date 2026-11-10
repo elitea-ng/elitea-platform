@@ -6079,5 +6079,6 @@
   "features.agentWorkforce.status.rejected": "Rejected",
   "features.agentWorkforce.trend": "Failure rate over {{days}} days: {{rates}}",
   "features.agentWorkforce.unsaved": "Save the agent first to see its scorecard.",
-  "pages.agents.editApplication.tabs.workforce": "Workforce"
+  "pages.agents.editApplication.tabs.workforce": "Workforce",
+  "pipelines.parallel.codeScope": "Code node {{node}} runs as this branch. Edit its code and inputs on the Code card."
 }

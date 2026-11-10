@@ -176,10 +176,20 @@ func check(instructions string, attached *[]string) error {
 	return nil
 }
 
+// parallelBranchTypes are the node types a fixed Parallel branch can run
+// (libs/proto/contracts/pipeline-fanout-child-families-v1.json): a saved
+// Agent or pipeline, an inline LLM node, or a Code node (W3-2).
+var parallelBranchTypes = map[string]struct{}{"agent": {}, "llm": {}, "code": {}}
+
+// routerChildText is the readable reason a direct Router child is refused;
+// the Worker compiler and the Web editor say the same.
+const routerChildText = "a Router runs inside a child pipeline, not as a Parallel branch or Map worker"
+
 // checkParallelBranches refuses a fixed Parallel branch whose `node` names a
-// declared node with a string type other than `agent`. As the compiler, the
-// branch runs the first node with that id; a missing node, a non-string type
-// or a malformed branch is left to the compiler, which refuses it.
+// declared node with a string type outside parallelBranchTypes. As the
+// compiler, the branch runs the first node with that id; a missing node, a
+// non-string type or a malformed branch is left to the compiler, which
+// refuses it.
 func checkParallelBranches(declared []map[string]*yaml.Node) error {
 	var typeOf map[string]*yaml.Node
 	for _, owner := range declared {
@@ -202,13 +212,24 @@ func checkParallelBranches(declared []map[string]*yaml.Node) error {
 			if target == "" {
 				continue
 			}
-			if nodeType, ok := stringScalar(typeOf[target]); ok && nodeType != "agent" && nodeType != "llm" {
+			nodeType, ok := stringScalar(typeOf[target])
+			if _, admitted := parallelBranchTypes[nodeType]; !ok || admitted {
+				continue
+			}
+			if nodeType == "router" {
 				return &apierr.APIError{
 					Status: http.StatusBadRequest,
 					Code:   CodeParallelBranchUnsupported,
-					Message: fmt.Sprintf("%s runs node %s as a Parallel branch, but a branch can only run an Agent node (a saved agent or pipeline) or an LLM node. Put the %s node in a saved pipeline and run that pipeline from an Agent node.",
-						nodeLabel(owner["id"]), quoted(target), quoted(nodeType)),
+					Message: fmt.Sprintf("%s runs node %s, a %s node, as a Parallel branch, but %s. Put the Router in a saved pipeline and run that pipeline from an Agent node.",
+						nodeLabel(owner["id"]), quoted(target), quoted(nodeType), routerChildText),
 				}
+			}
+			return &apierr.APIError{
+				Status: http.StatusBadRequest,
+				Code:   CodeParallelBranchUnsupported,
+				// The Web editor mirrors this text exactly (graphParallelAdmission.helpers.ts).
+				Message: fmt.Sprintf("%s runs node %s as a Parallel branch, but a branch can only run an Agent node (a saved agent or pipeline) or an LLM node. Put the %s node in a saved pipeline and run that pipeline from an Agent node.",
+					nodeLabel(owner["id"]), quoted(target), quoted(nodeType)),
 			}
 		}
 	}
@@ -216,8 +237,25 @@ func checkParallelBranches(declared []map[string]*yaml.Node) error {
 }
 
 // mapWorkerTypes are the node types a Map item can run: the Worker's
-// shared fan-out branch families (State Modifier, saved Agent, LLM).
-var mapWorkerTypes = map[string]struct{}{"state_modifier": {}, "agent": {}, "llm": {}}
+// shared fan-out branch families (State Modifier, saved Agent, LLM, Code;
+// libs/proto/contracts/pipeline-fanout-child-families-v1.json).
+var mapWorkerTypes = map[string]struct{}{"state_modifier": {}, "agent": {}, "llm": {}, "code": {}}
+
+// ParallelBranchTypes returns the node types a fixed Parallel branch can run,
+// sorted (the shared families contract pins them).
+func ParallelBranchTypes() []string { return sortedKeys(parallelBranchTypes) }
+
+// MapWorkerTypes returns the node types a Map worker can be, sorted.
+func MapWorkerTypes() []string { return sortedKeys(mapWorkerTypes) }
+
+func sortedKeys(set map[string]struct{}) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 // checkMapForms refuses a Map node whose `worker` names a declared node of a
 // type a Map item cannot run, or that sets both `reduction` and `join`. As
@@ -271,10 +309,18 @@ func checkMapForms(declared []map[string]*yaml.Node) error {
 		}
 		if workerType, ok := stringScalar(typeOf[worker]); ok {
 			if _, admitted := mapWorkerTypes[workerType]; !admitted {
+				if workerType == "router" {
+					return &apierr.APIError{
+						Status: http.StatusBadRequest,
+						Code:   CodeMapFormUnsupported,
+						Message: fmt.Sprintf("%s runs node %s, a %s node, as its worker, but %s. Put the Router in a saved pipeline and run that pipeline from an Agent node before saving.",
+							nodeLabel(owner["id"]), quoted(worker), quoted(workerType), routerChildText),
+					}
+				}
 				return &apierr.APIError{
 					Status: http.StatusBadRequest,
 					Code:   CodeMapFormUnsupported,
-					Message: fmt.Sprintf("%s runs node %s as its worker, but a Map worker can only be a State Modifier, an Agent node (a saved agent or pipeline) or an LLM node, not a %s node. Choose another worker before saving.",
+					Message: fmt.Sprintf("%s runs node %s as its worker, but a Map worker can only be a State Modifier, an Agent node (a saved agent or pipeline), an LLM node or a Code node, not a %s node. Choose another worker before saving.",
 						nodeLabel(owner["id"]), quoted(worker), quoted(workerType)),
 				}
 			}

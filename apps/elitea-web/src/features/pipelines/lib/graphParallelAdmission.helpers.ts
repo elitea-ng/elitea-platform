@@ -2,6 +2,7 @@ import type { YamlPipelineDocument, YamlPipelineNode } from './flow-editor/helpe
 import { isValidGraphId, routeTargetsOf } from './graphAdmission.nodeReads';
 import type { GraphAdmissionIssue } from './graphAdmission.types';
 import { extensionStrings, extensionValues } from './graphExtensions.helpers';
+import { FANOUT_CHILD_FAMILIES, ROUTER_CHILD_TEXT } from './graphExtensions.types';
 import { parallelAgentReferenceCounts } from './graphParallel.helpers';
 import {
   extensionValidator, validateDeclaredExtensionChannel, validateExtensionEnum, validateExtensionInteger,
@@ -16,19 +17,20 @@ function validateOwnedAgentTopology(document: YamlPipelineDocument, agent: YamlP
     check.issue(field, 'A parent route cannot target the owned Agent.');
   }
 }
-/** An Agent (saved Agent or Pipeline) or an inline LLM node (T-2A D1, FU-247). */
-const BRANCH_NODE_TYPES: ReadonlySet<string | undefined> = new Set(['agent', 'llm']);
+/** An Agent (saved Agent or Pipeline), an inline LLM node (T-2A D1, FU-247) or a Code node (W3-2). */
+const BRANCH_NODE_TYPES: ReadonlySet<string | undefined> = new Set(FANOUT_CHILD_FAMILIES.parallelBranch);
 /** A declared node of another kind is named with its kind (Main's PIPELINE_PARALLEL_BRANCH_UNSUPPORTED text). */
 function branchKindMessage(id: string, matches: readonly YamlPipelineNode[]): string {
   const kind = matches.length === 1 ? matches[0]?.type : undefined;
-  if (typeof kind !== 'string') return 'Select one exact declared Agent or LLM node id.';
+  if (typeof kind !== 'string') return 'Select one exact declared Agent, LLM or Code node id.';
+  if (kind === 'router') return `Node "${id}" is a "router" node, but ${ROUTER_CHILD_TEXT}.`;
   return `Node "${id}" is a "${kind}" node, but a branch can only run an Agent node (a saved agent or pipeline) or an LLM node. `
     + `Put the "${kind}" node in a saved pipeline and run that pipeline from an Agent node.`;
 }
 /** yaml.rs::RawParallelBranchDefinition and parallel_compiler.rs::validate_parallel_ownership. */
 function validateOwnedAgent(document: YamlPipelineDocument, owner: YamlPipelineNode, value: unknown, field: string, check: ExtensionValidator): void {
   if (typeof value !== 'string' || !isValidGraphId(value) || value === owner.id) {
-    check.issue(field, 'Select a different declared Agent or LLM node id.');
+    check.issue(field, 'Select a different declared Agent, LLM or Code node id.');
     return;
   }
   const matches = (document.nodes ?? []).filter((node) => node.id === value);

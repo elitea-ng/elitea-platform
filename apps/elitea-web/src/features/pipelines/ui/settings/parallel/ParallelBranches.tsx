@@ -7,6 +7,7 @@ import { t } from '@/shared/i18n';
 import { FlowEditorContext } from '../../../lib/flow-editor/flowEditorContext';
 import { extensionRecord, extensionStrings, extensionText, extensionValues, patchGraphExtensionNode } from '../../../lib/graphExtensions.helpers';
 import { moveParallelBranch, nextParallelBranchId, parallelAgentReferenceCounts, parallelOwnedAgent, patchParallelBranch } from '../../../lib/graphParallel.helpers';
+import { FANOUT_CHILD_FAMILIES } from '../../../lib/graphExtensions.types';
 import { ExtensionChoice, ExtensionField } from '../graph-extensions/ExtensionFields';
 
 interface ParallelBranchesProps {
@@ -29,7 +30,9 @@ function OwnedAgentSummary({ ownerId, ordinal, disabled }: { readonly ownerId: s
   return <Stack spacing={1}>
     <Typography variant="bodySmall">{agent.type === 'llm'
       ? t('pipelines.parallel.llmScope', 'LLM node {{node}} runs as this branch. Edit its prompt and tools on the LLM card.', { node: agent.id })
-      : t('pipelines.parallel.agentScope', 'Agent {{node}} uses participant {{tool}}. Edit its own input mapping on the Agent card.', { node: agent.id, tool: extensionText(agent['tool']) })}</Typography>
+      : agent.type === 'code'
+        ? t('pipelines.parallel.codeScope', 'Code node {{node}} runs as this branch. Edit its code and inputs on the Code card.', { node: agent.id })
+        : t('pipelines.parallel.agentScope', 'Agent {{node}} uses participant {{tool}}. Edit its own input mapping on the Agent card.', { node: agent.id, tool: extensionText(agent['tool']) })}</Typography>
     <Typography variant="bodySmall">{t('pipelines.parallel.agentOutputs', 'Declared outputs: {{outputs}}. Task mapping: {{mode}}.', { outputs, mode: extensionText(task['type']) })}</Typography>
     {agent.transition !== undefined && agent.transition !== null && <Button disabled={disabled} onClick={removeTransition}>
       {t('pipelines.parallel.removeTransition', 'Remove transition from {{node}}', { node: agent.id })}
@@ -42,7 +45,8 @@ export function ParallelBranches({ ownerId, branches, disabled, change }: Parall
   const rows = extensionValues(branches);
   const document = context?.yamlJsonObject ?? {};
   const counts = parallelAgentReferenceCounts(document);
-  const choices = (document.nodes ?? []).filter((node) => (node.type === 'agent' || node.type === 'llm') && node.id !== ownerId
+  const branchTypes: readonly string[] = FANOUT_CHILD_FAMILIES.parallelBranch;
+  const choices = (document.nodes ?? []).filter((node) => branchTypes.includes(node.type ?? '') && node.id !== ownerId
     && !counts.has(node.id) && !document.nodes?.some((entry) => entry.type === 'map' && entry['worker'] === node.id)).map((node) => node.id);
   const update = (value: readonly unknown[]): void => { if (!disabled) change(value); };
   return <Stack spacing={2}>
