@@ -35,6 +35,9 @@ fn saved_yaml(platform_client: bool) -> String {
 /// The root case: the root's Agent node runs the saved pipeline.
 const ROOT_YAML: &str = "entry_point: run_saved\nstate:\n  input: {type: str, value: p0}\n  messages: {type: list, value: []}\n  count: {type: int, value: 0}\nnodes:\n  - {id: run_saved, type: agent, tool: silver_partition, input_mapping: {task: {type: fixed, value: partition}}, output: [count], transition: END}\n";
 
+/// Depth 2: a Parallel whose two Agent branches each run the saved pipeline.
+const PARALLEL_YAML: &str = "entry_point: gather\nstate:\n  input: {type: str, value: p0}\n  count: {type: int, value: 0}\n  joined: {type: list, value: []}\nnodes:\n  - {id: gather, type: parallel, branches: [{id: left, node: left_saved}, {id: right, node: right_saved}], max_concurrency: 2, wait: all, output: [joined], transition: END}\n  - {id: left_saved, type: agent, tool: silver_partition, input: [input], input_mapping: {task: {type: fixed, value: partition}}, output: [count]}\n  - {id: right_saved, type: agent, tool: silver_partition, input: [input], input_mapping: {task: {type: fixed, value: partition}}, output: [count]}\n";
+
 /// Depth 2: a Map whose Agent worker runs the saved pipeline.
 const MAP_YAML: &str = "entry_point: each\nstate:\n  items: {type: list, value: []}\n  count: {type: int, value: 0}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: each, type: map, worker: silver, source: items, item: entity, index: item_index, outputs: [count], destination: mapped, max_items: 8, max_concurrency: 2, reduction: ordered_collection, transition: END}\n  - {id: silver, type: agent, tool: silver_partition, input: [entity, item_index], input_mapping: {task: {type: fixed, value: partition}}, output: [count]}\n";
 
@@ -93,8 +96,8 @@ impl PipelineApplicationResolver for Activations {
     }
 }
 
-/// One claim's fenced writer family on `thread`, admitting `path` (the Agent
-/// node's saved child), and the runtimes the production composition binds:
+/// One claim's fenced writer family on `thread`, admitting `paths` (the Agent
+/// nodes running the saved child), and the runtimes the production composition binds:
 /// the root's Code runtime, journals and fan-out binding, and the saved
 /// pipeline as the Agent node's participant with Main's freeze as its owner.
 async fn compiled(
@@ -102,7 +105,7 @@ async fn compiled(
     attempt: u64,
     thread: &str,
     root: &PipelineDefinition,
-    path: &str,
+    paths: &[&str],
     platform_client: bool,
 ) -> CompiledGraph {
     let fence = [u8::try_from(attempt).unwrap(); 32];
@@ -133,7 +136,12 @@ async fn compiled(
         )
         .await
         .unwrap()
-        .with_application_paths(&[path.to_owned()])
+        .with_application_paths(
+            &paths
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect::<Vec<_>>(),
+        )
         .await
         .unwrap(),
     );
@@ -152,12 +160,17 @@ async fn compiled(
         }
     });
     let resolver = crate::agents::pipeline::saved_pipeline_resolver_for_tests(
-        vec![(
-            path.to_owned(),
-            "silver_partition".to_owned(),
-            saved.clone(),
-            participant,
-        )],
+        paths
+            .iter()
+            .map(|path| {
+                (
+                    (*path).to_owned(),
+                    "silver_partition".to_owned(),
+                    saved.clone(),
+                    participant.clone(),
+                )
+            })
+            .collect(),
         &events,
     );
     let runtimes = PipelineNodeRuntimes::new(None, None, Some(Arc::new(Activations(resolver))))
@@ -168,7 +181,12 @@ async fn compiled(
             tokio::time::Instant::now() + Duration::from_secs(3600),
             None,
         ))
-        .with_composition_definitions(std::collections::BTreeMap::from([(path.to_owned(), saved)]));
+        .with_composition_definitions(
+            paths
+                .iter()
+                .map(|path| ((*path).to_owned(), saved.clone()))
+                .collect(),
+        );
     let checkpointer: Arc<dyn Checkpointer> = authority;
     root.compile_subgraph_with_runtime(checkpointer, &runtimes)
         .unwrap()
@@ -179,8 +197,9 @@ fn scopes(h: &Harness) -> Vec<serde_json::Value> {
 }
 
 /// Every visit names the saved pipeline Main froze, its Agent node and its
-/// own subgraph thread under `parent`; `fanout` is the member, or none.
-fn assert_saved_scopes(h: &Harness, agent: &str, fanout: Option<&str>) {
+/// own subgraph thread under `parent`; `fanout` is the member's family kind
+/// and fan-out node, or none.
+fn assert_saved_scopes(h: &Harness, agents: &[&str], fanout: Option<(&str, &str)>) {
     let scopes = scopes(h);
     assert!(!scopes.is_empty(), "no visit was registered");
     for scope in scopes {
@@ -188,7 +207,8 @@ fn assert_saved_scopes(h: &Harness, agent: &str, fanout: Option<&str>) {
         assert_eq!(scope["application_id"], 23);
         assert_eq!(scope["version_id"], 29);
         assert_eq!(scope["definition_sha256"], "ab".repeat(32));
-        assert_eq!(scope["agent_node_id"], agent);
+        let agent = scope["agent_node_id"].as_str().unwrap();
+        assert!(agents.contains(&agent), "{scope}");
         let parent = scope["parent_thread_id"].as_str().unwrap();
         assert_eq!(scope["child_thread_id"], format!("{parent}/{agent}"));
         assert!(
@@ -200,10 +220,11 @@ fn assert_saved_scopes(h: &Harness, agent: &str, fanout: Option<&str>) {
         );
         match fanout {
             None => assert!(scope["fanout"].is_null(), "{scope}"),
-            Some(node) => {
-                assert_eq!(scope["fanout"]["kind"], "map_item", "{scope}");
+            Some((kind, node)) => {
+                assert_eq!(scope["fanout"]["kind"], kind, "{scope}");
                 assert_eq!(scope["fanout"]["node_id"], node);
-                assert!(parent.starts_with("m1:"), "{scope}");
+                let prefix = if kind == "map_item" { "m1:" } else { "p1:" };
+                assert!(parent.starts_with(prefix), "{scope}");
             }
         }
     }
@@ -229,7 +250,7 @@ async fn real_pg_a_saved_child_code_at_the_root_survives_worker_replacement() {
         .unwrap()
         .extend((0..16).map(|_| completed()));
     let root = PipelineDefinition::from_yaml(ROOT_YAML).unwrap();
-    let graph = compiled(&h, 1, "saved-root", &root, "run_saved", false).await;
+    let graph = compiled(&h, 1, "saved-root", &root, &["run_saved"], false).await;
     let killed = run_until(&graph, HashMap::new(), "saved-root", || {
         h.supervisor.lock().unwrap().submits >= 1
     })
@@ -241,7 +262,7 @@ async fn real_pg_a_saved_child_code_at_the_root_survives_worker_replacement() {
     drop(graph);
     let before = identities(&h);
     assert_eq!(before.len(), 1, "validate reached its intent");
-    let graph = compiled(&h, 2, "saved-root", &root, "run_saved", false).await;
+    let graph = compiled(&h, 2, "saved-root", &root, &["run_saved"], false).await;
     let state = graph
         .invoke(HashMap::new(), ExecutionConfig::new("saved-root"))
         .await
@@ -253,7 +274,7 @@ async fn real_pg_a_saved_child_code_at_the_root_survives_worker_replacement() {
     assert_eq!(dispatch_rows(&h).await, (2, 0), "all resolved");
     // validate, its re-attachment, normalize: nothing ran twice.
     assert_eq!(h.supervisor.lock().unwrap().submits, 3);
-    assert_saved_scopes(&h, "run_saved", None);
+    assert_saved_scopes(&h, &["run_saved"], None);
 }
 
 /// Root case, Supervisor kill (I): the Supervisor loses `validate`'s runtime;
@@ -273,7 +294,7 @@ async fn real_pg_a_supervisor_losing_a_saved_child_code_attempt_at_the_root_reru
         std::iter::once(terminal("sandbox.runtime_lost")).chain((0..4).map(|_| completed())),
     );
     let root = PipelineDefinition::from_yaml(ROOT_YAML).unwrap();
-    let graph = compiled(&h, 1, "saved-root", &root, "run_saved", false).await;
+    let graph = compiled(&h, 1, "saved-root", &root, &["run_saved"], false).await;
     let state = graph
         .invoke(HashMap::new(), ExecutionConfig::new("saved-root"))
         .await
@@ -286,7 +307,7 @@ async fn real_pg_a_supervisor_losing_a_saved_child_code_attempt_at_the_root_reru
         "one new identity for the lost attempt"
     );
     assert_eq!(dispatch_rows(&h).await, (3, 0));
-    assert_saved_scopes(&h, "run_saved", None);
+    assert_saved_scopes(&h, &["run_saved"], None);
 }
 
 /// Root case, a platform-client Code attempt killed after dispatch, then its
@@ -313,7 +334,7 @@ async fn real_pg_a_saved_child_platform_client_code_at_the_root_is_reconciled_ne
             terminal("sandbox.runtime_lost"),
         ]);
         let root = PipelineDefinition::from_yaml(ROOT_YAML).unwrap();
-        let graph = compiled(&h, 1, "saved-root", &root, "run_saved", true).await;
+        let graph = compiled(&h, 1, "saved-root", &root, &["run_saved"], true).await;
         let killed = run_until(&graph, HashMap::new(), "saved-root", || {
             h.supervisor.lock().unwrap().submits >= 1
         })
@@ -321,7 +342,7 @@ async fn real_pg_a_saved_child_platform_client_code_at_the_root_is_reconciled_ne
         assert!(killed.is_none());
         drop(graph);
         for attempt in [2, 3] {
-            let graph = compiled(&h, attempt, "saved-root", &root, "run_saved", true).await;
+            let graph = compiled(&h, attempt, "saved-root", &root, &["run_saved"], true).await;
             let error = graph
                 .invoke(HashMap::new(), ExecutionConfig::new("saved-root"))
                 .await
@@ -341,7 +362,7 @@ async fn real_pg_a_saved_child_platform_client_code_at_the_root_is_reconciled_ne
             assert_eq!(identities(&h).len(), 1, "never re-run with a new identity");
         }
         assert_eq!(dispatch_rows(&h).await.0, 1, "one dispatch identity");
-        assert_saved_scopes(&h, "run_saved", None);
+        assert_saved_scopes(&h, &["run_saved"], None);
     }
 }
 
@@ -365,7 +386,7 @@ async fn real_pg_a_map_of_saved_children_with_code_survives_worker_replacement()
         .unwrap()
         .extend((0..32).map(|_| completed()));
     let root = PipelineDefinition::from_yaml(MAP_YAML).unwrap();
-    let graph = compiled(&h, 1, "saved-map", &root, "silver", false).await;
+    let graph = compiled(&h, 1, "saved-map", &root, &["silver"], false).await;
     let killed = run_until(&graph, items(4), "saved-map", || {
         h.supervisor.lock().unwrap().submits >= 4
     })
@@ -373,7 +394,7 @@ async fn real_pg_a_map_of_saved_children_with_code_survives_worker_replacement()
     assert!(killed.is_none(), "the first Worker died mid-Map");
     drop(graph);
     let before = identities(&h);
-    let graph = compiled(&h, 2, "saved-map", &root, "silver", false).await;
+    let graph = compiled(&h, 2, "saved-map", &root, &["silver"], false).await;
     let state = graph
         .invoke(HashMap::new(), ExecutionConfig::new("saved-map"))
         .await
@@ -391,7 +412,7 @@ async fn real_pg_a_map_of_saved_children_with_code_survives_worker_replacement()
         "every started attempt kept its identity"
     );
     assert_eq!(dispatch_rows(&h).await, (8, 0), "all resolved");
-    assert_saved_scopes(&h, "silver", Some("each"));
+    assert_saved_scopes(&h, &["silver"], Some(("map_item", "each")));
     let members = scopes(&h)
         .iter()
         .map(|scope| scope["fanout"]["ordinal"].as_u64().unwrap())
@@ -421,7 +442,7 @@ async fn real_pg_a_supervisor_losing_saved_child_code_in_a_map_reruns_each_once(
         .chain((0..8).map(|_| completed())),
     );
     let root = PipelineDefinition::from_yaml(MAP_YAML).unwrap();
-    let graph = compiled(&h, 1, "saved-map", &root, "silver", false).await;
+    let graph = compiled(&h, 1, "saved-map", &root, &["silver"], false).await;
     let state = graph
         .invoke(items(2), ExecutionConfig::new("saved-map"))
         .await
@@ -435,7 +456,7 @@ async fn real_pg_a_supervisor_losing_saved_child_code_in_a_map_reruns_each_once(
         "two lost attempts, one new identity each"
     );
     assert_eq!(dispatch_rows(&h).await, (6, 0));
-    assert_saved_scopes(&h, "silver", Some("each"));
+    assert_saved_scopes(&h, &["silver"], Some(("map_item", "each")));
 }
 
 /// Depth 2, a platform-client Code attempt of a Map item killed after
@@ -458,7 +479,7 @@ async fn real_pg_a_saved_child_platform_client_code_in_a_map_is_reconciled_never
             terminal("sandbox.runtime_lost"),
         ]);
         let root = PipelineDefinition::from_yaml(MAP_YAML).unwrap();
-        let graph = compiled(&h, 1, "saved-map", &root, "silver", true).await;
+        let graph = compiled(&h, 1, "saved-map", &root, &["silver"], true).await;
         let killed = run_until(&graph, items(1), "saved-map", || {
             h.supervisor.lock().unwrap().submits >= 1
         })
@@ -466,7 +487,7 @@ async fn real_pg_a_saved_child_platform_client_code_in_a_map_is_reconciled_never
         assert!(killed.is_none());
         drop(graph);
         for attempt in [2, 3] {
-            let graph = compiled(&h, attempt, "saved-map", &root, "silver", true).await;
+            let graph = compiled(&h, attempt, "saved-map", &root, &["silver"], true).await;
             let error = graph
                 .invoke(HashMap::new(), ExecutionConfig::new("saved-map"))
                 .await
@@ -491,6 +512,70 @@ async fn real_pg_a_saved_child_platform_client_code_in_a_map_is_reconciled_never
             assert_eq!(identities(&h).len(), 1, "never re-run with a new identity");
         }
         assert_eq!(dispatch_rows(&h).await.0, 1, "one dispatch identity");
-        assert_saved_scopes(&h, "silver", Some("each"));
+        assert_saved_scopes(&h, &["silver"], Some(("map_item", "each")));
     }
+}
+
+/// Depth 2, Parallel branches, Worker kill (R/I): each branch runs the saved
+/// pipeline; the Worker dies once both `validate` attempts completed and the
+/// `normalize` attempts were submitted. The replacement resumes the frozen
+/// occurrence: the completed attempts replay and are never dispatched again,
+/// the in-flight ones re-attach to their own identity, and each branch lands
+/// one answer under its own member scope.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_a_parallel_of_saved_children_with_code_survives_worker_replacement() {
+    let h = harness_with(
+        QUIET,
+        Duration::from_millis(400),
+        Some(2),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await;
+    install(&h).await;
+    h.answers
+        .lock()
+        .unwrap()
+        .extend((0..16).map(|_| completed()));
+    let root = PipelineDefinition::from_yaml(PARALLEL_YAML).unwrap();
+    let paths = ["left_saved", "right_saved"];
+    let graph = compiled(&h, 1, "saved-parallel", &root, &paths, false).await;
+    let killed = run_until(&graph, HashMap::new(), "saved-parallel", || {
+        h.supervisor.lock().unwrap().submits >= 4
+    })
+    .await;
+    assert!(killed.is_none(), "the first Worker died mid-Parallel");
+    drop(graph);
+    let before = identities(&h);
+    assert_eq!(before.len(), 4, "both branches reached normalize");
+    let graph = compiled(&h, 2, "saved-parallel", &root, &paths, false).await;
+    let state = graph
+        .invoke(HashMap::new(), ExecutionConfig::new("saved-parallel"))
+        .await
+        .expect("the replacement Worker completes the Parallel");
+    let joined = state["joined"].as_array().unwrap();
+    assert_eq!(joined.len(), 2, "one answer per branch: {joined:?}");
+    for entry in joined {
+        assert_eq!(entry["status"], "succeeded", "{entry}");
+        assert_eq!(entry["outputs"]["count"], 41);
+    }
+    assert_eq!(
+        identities(&h),
+        before,
+        "nothing was dispatched again under a new identity"
+    );
+    assert_eq!(dispatch_rows(&h).await, (4, 0), "all resolved");
+    // 4 first submissions + the 2 in-flight re-attachments: the completed
+    // validate attempts were never submitted again.
+    assert_eq!(h.supervisor.lock().unwrap().submits, 6);
+    assert_saved_scopes(
+        &h,
+        &["left_saved", "right_saved"],
+        Some(("parallel_branch", "gather")),
+    );
+    let members = scopes(&h)
+        .iter()
+        .map(|scope| scope["fanout"]["ordinal"].as_u64().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(members, std::collections::BTreeSet::from([0, 1]));
 }
