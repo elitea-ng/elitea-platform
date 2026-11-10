@@ -68,7 +68,7 @@ export interface ContentControlErrors {
 }
 
 /** The version meta controls only the pages that save the meta render. */
-export interface AdvanceContentControls {
+interface AdvanceContentControls {
   /** `meta.citations` (ADR-0043 decision 5) and its setter. */
   readonly citations: { readonly value: unknown; readonly onChange: (next: CitationsValue) => void };
   /**

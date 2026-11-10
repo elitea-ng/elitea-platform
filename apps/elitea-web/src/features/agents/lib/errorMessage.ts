@@ -97,7 +97,7 @@ function serverBodyMessage(body: unknown): string | undefined {
 }
 
 /** The `code` of the server's refusal of a bad `meta.context` block (ADR-0050 decision 9). */
-export const CONTEXT_BLOCK_INVALID = 'context_block_invalid';
+const CONTEXT_BLOCK_INVALID = 'context_block_invalid';
 
 /**
  * The server's text when a save was refused for the agent's `meta.context`
