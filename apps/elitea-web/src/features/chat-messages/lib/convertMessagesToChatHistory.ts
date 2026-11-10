@@ -1,3 +1,4 @@
+import { parseSubAgentLanes, settleSubAgentLanes } from '@elitea/client-core/stream';
 import { nodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
 import { staticPauseBinding } from './staticPipelinePause';
 import { getParticipantName } from './participantName';
@@ -335,6 +336,7 @@ export function convertMessagesToChatHistory(
       staticPause: staticPauseBinding(uuid, meta?.execution_generation, meta?.thread_id, meta?.pipeline_static_v1, meta?.pipeline_static_tools_v1),
       ...(meta?.skipped_capabilities === undefined ? {} : { skippedCapabilities: meta.skipped_capabilities }),
       ...(meta?.grounding === undefined ? {} : { grounding: meta.grounding }),
+      ...subAgentsOf(meta?.subagents_v1, messageGroup.is_streaming === true),
       ...answerMarks(meta, reply_to_id === undefined ? false : continuedRows.has(String(reply_to_id))),
     };
     if (messageGroup.persisted_trace) Object.assign(aiMessage, { persistedTrace: messageGroup.persisted_trace });
@@ -354,6 +356,16 @@ export function convertMessagesToChatHistory(
 }
 
 /** An answer's unattended marks: without the continuation mark when its question carries it. */
+/**
+ * Client contract 1.47: the answer's sub-agent lanes. A lane still running
+ * on a settled answer was stopped with the run.
+ */
+function subAgentsOf(raw: unknown, streaming: boolean): Pick<ChatMessage, 'subAgents'> {
+  const lanes = parseSubAgentLanes(raw);
+  if (lanes.length === 0) return {};
+  return { subAgents: streaming ? lanes : settleSubAgentLanes(lanes) };
+}
+
 function answerMarks(meta: unknown, questionContinued: boolean): ReturnType<typeof unattendedMarksOf> {
   const { continuedAutomatically, continuationIndex, ...rest } = unattendedMarksOf(meta);
   if (questionContinued || continuedAutomatically === undefined) return rest;

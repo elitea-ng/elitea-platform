@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.45",
+  "client_contract": "1.47",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -8882,6 +8882,111 @@
                           },
                           "mentions_everyone": {
                             "type": "boolean"
+                          },
+                          "subagents_v1": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "agent_id",
+                                "items",
+                                "ordinal",
+                                "parent_call_id",
+                                "status"
+                              ],
+                              "properties": {
+                                "agent_id": {
+                                  "type": "string"
+                                },
+                                "avatar": {
+                                  "type": "string",
+                                  "max_length": 120
+                                },
+                                "display_name": {
+                                  "type": "string",
+                                  "max_length": 120
+                                },
+                                "error": {
+                                  "type": "string"
+                                },
+                                "input_tokens": {
+                                  "type": "integer"
+                                },
+                                "items": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "type"
+                                    ],
+                                    "properties": {
+                                      "args_summary": {
+                                        "type": "string",
+                                        "max_length": 240
+                                      },
+                                      "call_id": {
+                                        "type": "string"
+                                      },
+                                      "ok": {
+                                        "type": "boolean"
+                                      },
+                                      "summary": {
+                                        "type": "string",
+                                        "max_length": 240
+                                      },
+                                      "text": {
+                                        "type": "string",
+                                        "max_length": 600
+                                      },
+                                      "tool": {
+                                        "type": "string",
+                                        "max_length": 120
+                                      },
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "text",
+                                          "tool"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "max_items": 96
+                                },
+                                "label": {
+                                  "type": "string",
+                                  "max_length": 120
+                                },
+                                "ordinal": {
+                                  "type": "integer",
+                                  "minimum": 1
+                                },
+                                "output_tokens": {
+                                  "type": "integer"
+                                },
+                                "parent_call_id": {
+                                  "type": "string"
+                                },
+                                "result": {
+                                  "type": "string",
+                                  "max_length": 2000
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "budget_exhausted",
+                                    "cancelled",
+                                    "completed",
+                                    "failed",
+                                    "running"
+                                  ]
+                                },
+                                "steps": {
+                                  "type": "integer"
+                                }
+                              }
+                            },
+                            "max_items": 24
                           }
                         },
                         "open": true
@@ -32374,6 +32479,133 @@
             "waking",
             "working"
           ]
+        },
+        "stream_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "open": true
+    },
+    "agent_subagent": {
+      "type": "object",
+      "required": [
+        "response_metadata",
+        "type"
+      ],
+      "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "content": {
+          "nullable": true
+        },
+        "created_at": {
+          "type": "string",
+          "nullable": true
+        },
+        "message_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
+        },
+        "response_metadata": {
+          "type": "object",
+          "required": [
+            "subagent_v1"
+          ],
+          "properties": {
+            "subagent_v1": {
+              "type": "object",
+              "required": [
+                "agent_id",
+                "kind"
+              ],
+              "properties": {
+                "agent_id": {
+                  "type": "string"
+                },
+                "args_summary": {
+                  "type": "string"
+                },
+                "avatar": {
+                  "type": "string"
+                },
+                "call_id": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "error": {
+                  "type": "string"
+                },
+                "input_tokens": {
+                  "type": "integer"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "finished",
+                    "resumed",
+                    "started",
+                    "text",
+                    "tool_end",
+                    "tool_start"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "ordinal": {
+                  "type": "integer"
+                },
+                "output_tokens": {
+                  "type": "integer"
+                },
+                "parent_call_id": {
+                  "type": "string"
+                },
+                "result": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "budget_exhausted",
+                    "cancelled",
+                    "completed",
+                    "failed",
+                    "running"
+                  ]
+                },
+                "steps": {
+                  "type": "integer"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "open": true
         },
         "stream_id": {
           "type": "string",

@@ -69,6 +69,23 @@ A refusal is a tool result that the model reads. No sub-agent starts. The sub-ag
 
 The desktop app accepts facts only for now. It refuses an excerpt, an attachment or a memory entry.
 
+## Watch a sub-agent work
+
+In a cloud run, each sub-agent shows as a temporary participant under the `spawn_agent` call that started it. The row shows the sub-agent's `display_name` (or **Sub-agent 1**, **Sub-agent 2** and so on), a dashed avatar ring, a **Temporary** badge and its status: running, done, failed, out of budget or stopped. While the sub-agent runs, the row is open and shows its own tool calls, each with a short summary of its arguments and result, and its text. When it ends, the row folds. Open the row to see its final answer, its steps and its tokens.
+
+The row is the same after you reload the conversation. The answer keeps each sub-agent's lane, so the lane does not depend on the live stream.
+
+The lane is a summary, not a transcript:
+
+- The platform masks secret arguments (keys such as `api_key`, `token` and `password`) before it sends a tool call.
+- A tool call's arguments are one line of at most 160 characters. Its result is at most 240 characters, a text at most 600 characters and a final answer at most 2,000 characters.
+- One sub-agent run shows at most 48 tool calls and texts. A sub-agent that `send_input` continues runs again, and the lane keeps at most 96 in total.
+- Every text is the model's or a tool's output. The apps show it as plain text.
+
+If the run ends while a sub-agent still runs, the sub-agent's row shows **Stopped**.
+
+The web app, the desktop app and the mobile app show the lane. The mobile app shows each sub-agent's tool calls and its final answer in the answer's tool card, under the sub-agent's name and **temporary**.
+
 ## The record
 
 Each spawn of a cloud run writes one row to `elitea_runtime.ephemeral_agents`. The row keeps:

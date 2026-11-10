@@ -250,6 +250,65 @@ fn capture() -> BTreeMap<&'static str, Value> {
         "mcp_authorization",
         first_of(&projected, "mcp_authorization_required"),
     );
+    // Client contract 1.47 (#1823): a cloud sub-agent's lane, from its start
+    // to its end.
+    let child = elitea_agent_runtime::subagents::ChildIdentity {
+        agent_id: "a_0000beef".to_owned(),
+        parent_call_id: "call-spawn".to_owned(),
+        label: Some("callers".to_owned()),
+        ordinal: 1,
+        record: elitea_agent_runtime::subagents::profile::SpawnRecord::new(
+            &elitea_agent_runtime::subagents::profile::Profile {
+                display_name: Some("Owl".to_owned()),
+                avatar: Some("default:owl".to_owned()),
+                ..elitea_agent_runtime::subagents::profile::Profile::default()
+            },
+            &elitea_agent_runtime::subagents::profile::Brief::default(),
+        ),
+    };
+    let lane = crate::agents::subagent_lane::SubAgentLane::default();
+    lane.started(&child);
+    lane.event(
+        &child,
+        &model_event(
+            "event-subagent",
+            3,
+            vec![Part::FunctionCall {
+                name: "read_file".to_owned(),
+                args: json!({"path": "src/main.rs"}),
+                id: Some("call-child-1".to_owned()),
+                thought_signature: None,
+            }],
+        ),
+    );
+    lane.finished(
+        &child,
+        &elitea_agent_runtime::subagents::ChildReport {
+            agent_id: child.agent_id.clone(),
+            status: elitea_agent_runtime::subagents::ChildStatus::Completed,
+            result: Some("Two callers.".to_owned()),
+            steps: 2,
+            input_tokens: 100,
+            output_tokens: 20,
+            error: None,
+        },
+    );
+    let lane_frames: Vec<Value> = projector
+        .project_subagent_entries(lane.drain(), timestamp(3))
+        .expect("sub-agent lane projection")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    for (name, frame) in [
+        "subagent_started",
+        "subagent_tool_start",
+        "subagent_finished",
+    ]
+    .into_iter()
+    .zip(lane_frames)
+    {
+        captured.insert(name, frame);
+    }
     captured
 }
 

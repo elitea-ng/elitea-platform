@@ -14,7 +14,8 @@
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { approval, TurnTranscript } from '@/features/workspace';
+import { AgentAvatar } from '@/features/chat-messages';
+import { approval, TurnTranscript, type SubAgentLane } from '@/features/workspace';
 import { t } from '@/shared/i18n';
 
 import type { Card } from './cloudPrompts';
@@ -64,6 +65,15 @@ function PromptCard({ chat }: { chat: CloudChat }): React.JSX.Element | null {
   );
 }
 
+/**
+ * A temporary sub-agent's avatar: the dashed ring of an ephemeral participant
+ * (ADR-0050 decision 7e). Its profile's avatar key names no image yet, so the
+ * ring holds the brand mark.
+ */
+function TemporaryAvatar(_props: { lane: SubAgentLane }): React.JSX.Element {
+  return <AgentAvatar ephemeral size="1rem" />;
+}
+
 export function CloudTranscript({ chat }: { chat: CloudChat }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   if (chat.loading && chat.history.length === 0) {
@@ -79,7 +89,7 @@ export function CloudTranscript({ chat }: { chat: CloudChat }): React.JSX.Elemen
         <Box key={exchange.key} sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           {exchange.prompt !== undefined && <YourPrompt text={exchange.prompt.content} />}
           {exchange.answers.map((answer) => (
-            <TurnTranscript key={answer.id} view={turnViewOf(answer)} busy={chat.streaming && answer.isStreaming === true} onTextContextMenu={copyMenu} />
+            <TurnTranscript key={answer.id} view={turnViewOf(answer)} busy={chat.streaming && answer.isStreaming === true} onTextContextMenu={copyMenu} subAgentAvatar={TemporaryAvatar} />
           ))}
         </Box>
       ))}

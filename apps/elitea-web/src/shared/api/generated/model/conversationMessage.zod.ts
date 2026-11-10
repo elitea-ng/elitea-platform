@@ -43,8 +43,11 @@
 import * as zod from "zod";
 import { AttachmentMessageItem } from "./attachmentMessageItem.zod";
 import { GroundingIndicator } from "./groundingIndicator.zod";
+import { SubAgentLane } from "./subAgentLane.zod";
 
 export const conversationMessageAddressedToMax = 64;
+
+export const conversationMessageMetadataSubagentsV1Max = 24;
 
 export const ConversationMessage = zod
   .object({
@@ -116,6 +119,13 @@ export const ConversationMessage = zod
             "Client contract 1.14. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise.",
           ),
         grounding: GroundingIndicator.optional(),
+        subagents_v1: zod
+          .array(SubAgentLane)
+          .max(conversationMessageMetadataSubagentsV1Max)
+          .optional()
+          .describe(
+            'Client contract 1.47 (ADR-0050 decision 4). On a cloud answer whose agent started temporary sub-agents (`spawn_agent`): one lane per child, as its `agent_subagent` frames left it. Show each under the `spawn_agent` tool row whose call id is its `parent_call_id`, with its display name and a "temporary" badge. Absent when the answer started none.',
+          ),
       })
       .optional(),
     message_items: zod

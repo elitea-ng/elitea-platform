@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.45
+ * client contract:    1.47
  * operations sha256:  27f1115f052a1dce26cdb61fca19d2e7d60270ce0bc0d49003e54f0955abb678
  */
 export interface paths {
@@ -3315,6 +3315,8 @@ export interface components {
                 mentioned_user_ids?: number[];
                 /** @description Client contract 1.14. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise. */
                 mentions_everyone?: boolean;
+                /** @description Client contract 1.47 (ADR-0050 decision 4). On a cloud answer whose agent started temporary sub-agents (`spawn_agent`): one lane per child, as its `agent_subagent` frames left it. Show each under the `spawn_agent` tool row whose call id is its `parent_call_id`, with its display name and a "temporary" badge. Absent when the answer started none. */
+                subagents_v1?: components["schemas"]["SubAgentLane"][];
             } & {
                 [key: string]: unknown;
             };
@@ -4417,6 +4419,46 @@ export interface components {
         SteeringMessageRequest: {
             /** @description The message, at most 16 KiB of UTF-8 and not only white space. */
             content: string;
+        };
+        /** @description Client contract 1.47 (ADR-0050 decision 4). A temporary sub-agent a cloud run started with `spawn_agent`, as the answer keeps it (`metadata.subagents_v1`). Untrusted text: render it as plain text. */
+        SubAgentLane: {
+            agent_id: string;
+            /** @description The profile's avatar key (`default:<name>`); display only. */
+            avatar?: string;
+            /** @description The profile's display name; absent when the spawn named none. */
+            display_name?: string;
+            /** @description Why it stopped short (`subagent_failed`, `subagent_cancelled`, ...). */
+            error?: string;
+            input_tokens?: number;
+            items: components["schemas"]["SubAgentLaneItem"][];
+            label?: string;
+            ordinal: number;
+            output_tokens?: number;
+            /** @description The `tool_run_id` of the `spawn_agent` call that started it. */
+            parent_call_id: string;
+            /** @description Its final text (or the text it had when it stopped). */
+            result?: string;
+            /**
+             * @description `running` on a lane whose answer is still streaming; a settled answer's children are settled (a child the run's end stopped is `cancelled`).
+             * @enum {string}
+             */
+            status: "running" | "completed" | "failed" | "budget_exhausted" | "cancelled";
+            steps?: number;
+        };
+        /** @description Client contract 1.47. One of a sub-agent's own tool calls (`tool`) or one of its texts (`text`). Untrusted text: render it as plain text. */
+        SubAgentLaneItem: {
+            /** @description The call's arguments as one short line, secrets masked. */
+            args_summary?: string;
+            /** @description The child's own call id (`tool`). */
+            call_id?: string;
+            /** @description Set once the call returned; false when it failed. */
+            ok?: boolean;
+            /** @description The first characters of the call's result or error. */
+            summary?: string;
+            text?: string;
+            tool?: string;
+            /** @enum {string} */
+            type: "tool" | "text";
         };
         /** @description A refused `changes_since` request (ADR-0025 WP6). `error` is `invalid_sync_cursor` (400: the cursor does not decode, or was issued for another list, scope or filter), `invalid_limit` (400) or `sync_cursor_expired` (410: the cursor is older than the tombstone retention, 97 days; resync with `changes_since=0`). NOTE(W2): internal/application/changesync/changesync.go (`ErrorBody`). */
         SyncCursorError: {

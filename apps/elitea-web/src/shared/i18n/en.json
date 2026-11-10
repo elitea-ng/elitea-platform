@@ -5981,5 +5981,12 @@
   "features.agentTeams.unnamedAgent": "Agent {{id}}",
   "features.agentTeams.deleteAction": "Delete",
   "features.agentTeams.editAction": "Edit",
-  "desktop.account.itSupport": "IT support"
+  "desktop.account.itSupport": "IT support",
+  "features.chatMessages.subAgents.budgetExhausted": "Out of budget",
+  "features.chatMessages.subAgents.cancelled": "Stopped",
+  "features.chatMessages.subAgents.completed": "Done",
+  "features.chatMessages.subAgents.failed": "Failed",
+  "features.chatMessages.subAgents.running": "Running",
+  "features.chatMessages.subAgents.temporary": "Temporary",
+  "features.chatMessages.subAgents.title": "Sub-agent {{n}}"
 }

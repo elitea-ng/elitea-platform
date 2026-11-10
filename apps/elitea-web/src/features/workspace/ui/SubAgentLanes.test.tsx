@@ -44,3 +44,31 @@ describe('SubAgentLanes', () => {
     expect(screen.getByTestId('subagent-result')).toHaveTextContent('Two callers: turn.rs and tests.rs');
   });
 });
+
+describe('SubAgentLanes for a cloud temporary child (client contract 1.47)', () => {
+  const cloud = (displayName: string): TurnView => {
+    const base = view('running');
+    return { ...base, subAgents: (base.subAgents ?? []).map((lane) => ({ ...lane, label: 'callers', displayName, temporary: true })) };
+  };
+
+  it('names it by its profile, with its avatar and a temporary badge', () => {
+    const Avatar = ({ lane }: { lane: { agentId: string } }) => <span data-testid="lane-avatar">{lane.agentId}</span>;
+    renderWithTheme(<TurnTranscript view={cloud('Owl')} busy subAgentAvatar={Avatar} />);
+    const lane = screen.getByTestId('subagent-lane');
+    expect(lane).toHaveTextContent('Owl · callers');
+    expect(lane).not.toHaveTextContent('Sub-agent 1');
+    expect(screen.getByTestId('subagent-temporary')).toHaveTextContent('Temporary');
+    expect(screen.getByTestId('lane-avatar')).toHaveTextContent('a_1');
+  });
+
+  it('renders untrusted text as text', () => {
+    renderWithTheme(<TurnTranscript view={cloud('<img src=x onerror=alert(1)>')} busy />);
+    expect(screen.getByTestId('subagent-lane')).toHaveTextContent('<img src=x onerror=alert(1)>');
+    expect(screen.getByTestId('subagent-lane').querySelector('img')).toBeNull();
+  });
+
+  it('a local child shows no badge', () => {
+    renderWithTheme(<TurnTranscript view={view('running')} busy />);
+    expect(screen.queryByTestId('subagent-temporary')).toBeNull();
+  });
+});

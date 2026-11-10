@@ -42,6 +42,7 @@ pub(crate) mod runtime;
 pub(crate) mod sensitive_tools;
 pub(crate) mod session;
 pub(crate) mod skipped_capabilities;
+pub(crate) mod subagent_lane;
 pub(crate) mod subagents;
 pub(crate) use elitea_agent_runtime::thinking;
 pub(crate) mod unattended;

@@ -23,6 +23,8 @@ import { ThreadRenameField } from './ui/ThreadRenameField';
 
 export { ChangedFilesCard } from './ui/ChangedFilesCard';
 export { TurnTranscript } from './ui/TurnTranscript';
+export type { SubAgentAvatar } from './ui/SubAgentLanes';
+export type { SubAgentLane } from './model/subAgentEvents';
 export { WorkspaceList } from './ui/WorkspaceList';
 export { WorkspaceIpcProvider, useWorkspaceIpc } from './model/ipcContext';
 export { useWorkspaceTurn } from './model/useWorkspaceTurn';

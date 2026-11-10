@@ -1,4 +1,13 @@
-import { ANSWER_DELTA_TYPES, FRAME_TYPE, TURN_FAILURE_TYPES, mergeSteeringAll, type SteeringItem } from '@elitea/client-core/stream';
+import {
+  ANSWER_DELTA_TYPES,
+  FRAME_TYPE,
+  TURN_FAILURE_TYPES,
+  foldSubAgentEntry,
+  mergeSteeringAll,
+  subAgentEntryOf,
+  type CloudSubAgentLane,
+  type SteeringItem,
+} from '@elitea/client-core/stream';
 
 import type { Frame, NodeEvent } from '@/features/chat/frames';
 import { budgetRefusalText, budgetScopeOf, type BudgetScope } from '@/features/usage/budgetRefusal';
@@ -72,6 +81,11 @@ export interface TurnState {
    * order: from the `steer.*` frames and from the steering calls' answers.
    */
   steering: SteeringItem[];
+  /**
+   * Client contract 1.47: the temporary sub-agents this cloud turn started
+   * (`agent_subagent`), shown as tool groups (`subAgentSteps`).
+   */
+  subAgents: readonly CloudSubAgentLane[];
 }
 
 /**
@@ -95,6 +109,7 @@ export const INITIAL_TURN: TurnState = {
   pause: null,
   stopped: false,
   steering: [],
+  subAgents: [],
 };
 /** The `execution.failed` code of a run that was stopped. */
 export const CANCELLED_CODE = 'CANCELLED';
@@ -181,6 +196,14 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
 
   const { node } = frame;
   const streaming: TurnState = state.phase === 'sending' ? { ...state, phase: 'streaming' } : state;
+  if (node.type === FRAME_TYPE.AgentSubAgent) {
+    const subAgents = foldSubAgentEntry(streaming.subAgents, subAgentEntryOf(node));
+    return subAgents === streaming.subAgents ? streaming : { ...streaming, subAgents };
+  }
+  return reduceNode(streaming, node);
+}
+
+function reduceNode(streaming: TurnState, node: NodeEvent): TurnState {
 
   if (ANSWER_DELTA_TYPES.has(node.type)) {
     return appendDelta(streaming, textOf(node.content));

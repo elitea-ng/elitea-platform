@@ -16,6 +16,12 @@ export interface SubAgentLane {
   parentCallId: string;
   ordinal: number;
   label?: string;
+  /** Client contract 1.47: a cloud child's profile name; absent when the spawn named none. */
+  displayName?: string;
+  /** Client contract 1.47: a cloud child's profile avatar key (display only). */
+  avatar?: string;
+  /** A cloud child (ADR-0050 decision 4): the lane says it is a temporary participant. */
+  temporary?: boolean;
   status: SubAgentStatus;
   /** Its own tool rows and text, in order. */
   items: TranscriptItem[];

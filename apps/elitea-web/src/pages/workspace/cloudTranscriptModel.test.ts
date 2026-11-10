@@ -28,3 +28,41 @@ describe('turnViewOf', () => {
     expect(view.items[0]).toMatchObject({ result: { summary: '{"message":"x"}' } });
   });
 });
+
+describe('the cloud sub-agent lanes (client contract 1.47)', () => {
+  it('shows each temporary child under its spawn_agent row, named, as a remote lane', () => {
+    const message = {
+      ...answer([{ id: 'call-spawn', type: 'tool', name: 'spawn_agent', status: 'complete', toolOutputs: '{}' }]),
+      subAgents: [
+        {
+          agentId: 'a_1',
+          parentCallId: 'call-spawn',
+          ordinal: 1,
+          displayName: 'Owl',
+          avatar: 'default:owl',
+          status: 'completed',
+          items: [
+            { type: 'tool', callId: 'k1', tool: 'grep', argsSummary: 'run_agent', ok: false, summary: 'no match' },
+            { type: 'tool', callId: 'k2', tool: 'read_file' },
+            { type: 'text', text: 'Found it.' },
+          ],
+          steps: 2,
+          result: 'Found it.',
+        },
+      ],
+    } as unknown as ChatMessage;
+    const view = turnViewOf(message);
+    expect(view.subAgents).toHaveLength(1);
+    const lane = view.subAgents?.[0];
+    expect(lane).toMatchObject({ agentId: 'a_1', parentCallId: 'call-spawn', displayName: 'Owl', avatar: 'default:owl', temporary: true, status: 'completed', steps: 2, result: 'Found it.' });
+    expect(lane?.items).toEqual([
+      { type: 'tool', key: 'ck1', callId: 'k1', tool: 'grep', argsSummary: 'run_agent', remote: true, result: { ok: false, summary: 'no match', truncated: false } },
+      { type: 'tool', key: 'ck2', callId: 'k2', tool: 'read_file', argsSummary: '', remote: true },
+      { type: 'text', key: 'ta_1-2', text: 'Found it.' },
+    ]);
+  });
+
+  it('an answer without sub-agents has no lanes', () => {
+    expect(turnViewOf(answer([])).subAgents).toBeUndefined();
+  });
+});

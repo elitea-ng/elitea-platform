@@ -7,7 +7,9 @@
 import type { ChatMessage } from '@/features/chat-messages';
 import type { ComponentProps } from 'react';
 
-import type { TurnTranscript } from '@/features/workspace';
+import type { CloudSubAgentLane } from '@elitea/client-core/stream';
+
+import type { SubAgentLane, TurnTranscript } from '@/features/workspace';
 import { forgeLinkLabel, forgeLinkOf, GIT_PUSH, OPEN_PULL_REQUEST } from '@/shared/lib/forgeLink';
 
 /** What the local transcript renders for one turn, and one entry of it. */
@@ -82,6 +84,48 @@ function toolItem(action: RawAction, index: number): TranscriptItem | undefined 
   };
 }
 
+/**
+ * A cloud answer's temporary sub-agents (client contract 1.47, ADR-0050
+ * decision 4) as the local lanes: under the `spawn_agent` row whose call id
+ * started them, with their profile name and a "temporary" badge.
+ */
+export function laneOf(lane: CloudSubAgentLane): SubAgentLane {
+  const items: TranscriptItem[] = lane.items.map((item, index) =>
+    item.type === 'tool'
+      ? {
+          type: 'tool',
+          key: `c${item.callId}`,
+          callId: item.callId,
+          tool: item.tool === '' ? 'tool' : item.tool,
+          argsSummary: item.argsSummary ?? '',
+          remote: true,
+          ...(item.ok === undefined ? {} : { result: { ok: item.ok, summary: item.summary ?? '', truncated: false } }),
+        }
+      : { type: 'text', key: `t${lane.agentId}-${String(index)}`, text: item.text },
+  );
+  return {
+    agentId: lane.agentId,
+    parentCallId: lane.parentCallId,
+    ordinal: lane.ordinal,
+    status: lane.status,
+    items,
+    temporary: true,
+    ...(lane.label === undefined ? {} : { label: lane.label }),
+    ...(lane.displayName === undefined ? {} : { displayName: lane.displayName }),
+    ...(lane.avatar === undefined ? {} : { avatar: lane.avatar }),
+    ...(lane.steps === undefined ? {} : { steps: lane.steps }),
+    ...(lane.inputTokens === undefined ? {} : { inputTokens: lane.inputTokens }),
+    ...(lane.outputTokens === undefined ? {} : { outputTokens: lane.outputTokens }),
+    ...(lane.result === undefined ? {} : { result: lane.result }),
+    ...(lane.error === undefined ? {} : { error: lane.error }),
+  };
+}
+
+function lanesOfAnswer(message: ChatMessage): Pick<TurnView, 'subAgents'> {
+  const lanes = message.subAgents ?? [];
+  return lanes.length === 0 ? {} : { subAgents: lanes.map(laneOf) };
+}
+
 /** What an assistant message shows: its tool steps, then its text, and its error. */
 export function turnViewOf(message: ChatMessage): TurnView {
   const tools = ((message.toolActions ?? []) as readonly RawAction[]).map(toolItem).filter((item): item is TranscriptItem => item !== undefined);
@@ -94,6 +138,7 @@ export function turnViewOf(message: ChatMessage): TurnView {
     phase: running ? 'running' : paused ? null : 'done',
     items,
     approvals: [],
+    ...lanesOfAnswer(message),
     ...(exception !== undefined && exception !== null && exception !== '' ? { error: { code: message.failureCode ?? 'error', message: typeof exception === 'string' ? exception : JSON.stringify(exception) } } : {}),
   };
 }

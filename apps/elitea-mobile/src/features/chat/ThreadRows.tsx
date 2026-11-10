@@ -11,6 +11,7 @@ import { useDesign } from '@/design/DesignProvider';
 import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { ThinkingDots } from '@/features/chat/ThinkingDots';
 import { ToolActivity } from '@/features/chat/ToolCalls';
+import { subAgentSteps } from '@/features/chat/subAgentLanes';
 import type { ToolStep } from '@/features/chat/toolActivity';
 import type { LiveTurn } from '@/features/chat/turnController';
 import type { SendExtras } from '@/features/chat/useTurn';
@@ -270,7 +271,7 @@ export function LiveReply({
       status={status}
       error={turn.phase === 'failed' ? (turn.error?.message ?? null) : null}
       actions={<RowActions actions={actions} />}
-      footer={<ToolActivity steps={turn.tools} streaming={turn.phase === 'streaming'} onOpen={onOpenTool} />}>
+      footer={<ToolActivity steps={[...turn.tools, ...subAgentSteps(turn.subAgents, turn.phase !== 'streaming' && turn.phase !== 'sending')]} streaming={turn.phase === 'streaming'} onOpen={onOpenTool} />}>
       {turn.content !== '' ? <Markdown value={turn.content} streaming={turn.phase === 'streaming'} caret={streaming} /> : waiting && !turn.stopped ? <ThinkingDots /> : ''}
     </MessageBubble>
   );

@@ -1148,5 +1148,6 @@
   "desktop.nativeMenu.computerUsing": "Using {app}",
   "desktop.nativeMenu.computerPausedButton": "Paused",
   "desktop.doctor.itSupport": "IT support:",
-  "desktop.nativeMenu.aboutSupport": "IT support: {contact}"
+  "desktop.nativeMenu.aboutSupport": "IT support: {contact}",
+  "workspace.subagent.temporary": "Temporary"
 }

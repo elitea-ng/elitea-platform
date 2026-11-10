@@ -162,3 +162,9 @@ opened in; a project or workspace switch while it is open shows "moved" and read
 | Area | What |
 |---|---|
 | IT support line (ADR-0052 W6.2) | `support_contact` in `NativeClientPolicy` (the token response's `client_policy`) and in `ClientPublicPolicy` (discovery): one line, at most 200 characters, empty for none. The app shows it as "IT support" in Settings › About and in About (`src/security/supportContact.ts`); the device's managed `support_contact` (`src/security/managedConfig.ts`) wins. Normalised and linked by `@elitea/client-core/support` (at most one `https:`, `mailto:` or `tel:` link). A server before 1.45 sends none, and the row is absent. |
+
+## Client contract 1.47
+
+| Area | What |
+|---|---|
+| Cloud sub-agent lane (ADR-0050 decision 4, #1823) | A cloud run's temporary sub-agents (`spawn_agent`) stream as `agent_subagent` frames on the answer's own `execution.node_event` stream: `response_metadata.subagent_v1` is one entry (`started` with `display_name`, `avatar`, `label`, `parent_call_id`; `tool_start`; `tool_end`; `text`; `finished` with `status`; `resumed`). The answer keeps the folded lanes as `metadata.subagents_v1` (`SubAgentLane`), so a reload shows them. The app folds both with `@elitea/client-core/stream` (`foldSubAgentEntry`, `parseSubAgentLanes`) and shows each child's tool calls, then its final answer, in the tool card under "<name> · temporary" (`src/features/chat/subAgentLanes.ts`); its in-between text is web and desktop only for now. A server before 1.47 sends neither, and nothing shows. |

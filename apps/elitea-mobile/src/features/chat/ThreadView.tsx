@@ -47,6 +47,7 @@ import type { SendExtras, StopResult } from '@/features/chat/useTurn';
 import { useMessageTraces } from '@/api/queries/messageTraces';
 import { ToolDetailSheet } from '@/features/chat/ToolDetailSheet';
 import { markPausedSteps, type ToolStep, type TurnPause } from '@/features/chat/toolActivity';
+import { subAgentSteps } from '@/features/chat/subAgentLanes';
 import { PauseCard } from '@/features/chat/pauses/PauseCard';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAgents, useAgentVersion } from '@/api/queries/agents';
@@ -917,8 +918,11 @@ export function ThreadView({
                           onOpenFile={canOpenFiles ? (a) => void opener.open(a) : null}
                           tools={
                             message.groupId !== null
-                              ? markPausedSteps(traces.data?.get(message.groupId) ?? [], message.key === newest?.key ? persistedPause : null)
-                              : []
+                              ? [
+                                  ...markPausedSteps(traces.data?.get(message.groupId) ?? [], message.key === newest?.key ? persistedPause : null),
+                                  ...subAgentSteps(message.subAgents ?? [], !message.isStreaming),
+                                ]
+                              : subAgentSteps(message.subAgents ?? [], !message.isStreaming)
                           }
                           onOpenTool={setOpenStep}
                           onActions={() => setActionsFor({ message, dislike: false })}
