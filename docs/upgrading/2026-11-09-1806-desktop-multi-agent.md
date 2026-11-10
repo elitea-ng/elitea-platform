@@ -8,7 +8,7 @@
     (`409 floor_turn_refused` / `floor_turn_superseded`).
   - An agent participant whose mapping says `entity_settings.executor: "cloud"` is a **cloud agent**: the desktop
     relays the conversation's text to it through `startLocalChildTurn` on the turn's own agent version, never the
-    workspace, and Main stamps its answer `executed_by: cloud`. Its turn's remote toolkit calls are refused (403).
+    workspace, and Main stamps its answer `agent_executor: cloud` (its `executed_by` stays `desktop`). Its turn's remote toolkit calls are refused (403).
   - Client contract **1.47** (`x-elitea-client-contract`): `LocalTurnStart.addressed_to`, `floor_turn`;
     `LocalTurnStarted.floor`, `executor`.
   - Shared migration **0238** (`0238_local_turn_floor.sql`) adds `floor_question_id`, `floor_position`,

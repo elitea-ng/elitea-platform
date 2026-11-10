@@ -3813,8 +3813,10 @@ impl AgentHost {
             application_id: target.application_id,
             version_id: target.version_id,
             prompt: floor::FLOOR_NOTE.to_owned(),
-            plan_mode: false,
-            bypass: next.bypass && !target.cloud,
+            // The message's plan mode carries to a later local agent: it
+            // must not get the workspace's write tools the person withheld.
+            plan_mode: next.plan_mode && !target.cloud,
+            bypass: next.bypass && !target.cloud && !next.plan_mode,
             mentions: Vec::new(),
             skills: Vec::new(),
             compact: false,

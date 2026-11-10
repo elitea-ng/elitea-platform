@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { companionParticipant, threadAgentsOf, type ThreadAgent } from './useEnsureConversation';
+import { companionParticipant, executorFixes, threadAgentsOf, type ThreadAgent } from './useEnsureConversation';
 import { floorFields, routedRequest } from './useSendPrompt';
 
 const coder: ThreadAgent = { participantId: 77, applicationId: 5, name: 'Coder', versionId: 9, cloud: false };
@@ -44,6 +44,15 @@ describe('routedRequest', () => {
     expect(routedRequest({ ...base, unattended: grant, cloud_agent: true })).not.toHaveProperty('unattended');
   });
 
+  it('drops plan mode and bypass from a cloud agent’s turn, and keeps them on a routed local one', () => {
+    const cloud = routedRequest({ ...base, plan_mode: true, bypass_approvals: true, cloud_agent: true });
+    expect(cloud.plan_mode).toBe(false);
+    expect(cloud).not.toHaveProperty('bypass_approvals');
+    const local = routedRequest({ ...base, plan_mode: false, bypass_approvals: true, addressed_to: [77, 88] });
+    expect(local.bypass_approvals).toBe(true);
+    expect(routedRequest({ ...base, plan_mode: true, addressed_to: [77, 88] }).plan_mode).toBe(true);
+  });
+
   it('keeps a one-agent message as it was', () => {
     expect(routedRequest({ ...base, unattended: grant, model })).toEqual({ ...base, unattended: grant, model });
   });
@@ -63,5 +72,24 @@ describe('threadAgentsOf', () => {
       { participantId: 88, applicationId: 6, name: 'Reviewer', versionId: 10, cloud: true },
     ]);
     expect(threadAgentsOf(undefined)).toEqual([]);
+  });
+});
+
+describe('executorFixes', () => {
+  const agent = (participantId: number, cloud: boolean): ThreadAgent => ({ participantId, applicationId: participantId, name: `A${participantId}`, versionId: 1, cloud });
+  const participants = [
+    { id: 77, entity_name: 'application', entity_settings: { version_id: 1, agent_type: 'openai' } },
+    { id: 88, entity_name: 'application', entity_settings: { version_id: 1, executor: 'cloud' } },
+  ];
+
+  it('rewrites a kept mapping whose executor the person changed, keeping its other settings', () => {
+    expect(executorFixes(participants, [agent(77, true), agent(88, false)])).toEqual([
+      { participantId: 77, settings: { version_id: 1, agent_type: 'openai', executor: 'cloud' } },
+      { participantId: 88, settings: { version_id: 1 } },
+    ]);
+  });
+
+  it('leaves a mapping that already says where the agent runs, and one the detail does not list', () => {
+    expect(executorFixes(participants, [agent(77, false), agent(88, true), agent(99, true)])).toEqual([]);
   });
 });

@@ -104,15 +104,18 @@ export function floorFields(prompt: string, agents: readonly ThreadAgent[]): Pic
 
 /**
  * A message routed to several agents is not a "Run to completion" chain (the host follows the floor instead, one agent
- * after another), and a cloud agent's turn takes neither the grant nor a model choice (the host refuses them,
- * `cloud_agent_text_only`): the composer's defaults are dropped, not sent to be refused.
+ * after another). A cloud agent's turn takes none of the composer's sticky modes: no grant, model choice, plan mode or
+ * bypass (the host would refuse them, `cloud_agent_text_only`), so they are dropped, not sent to be refused. What the
+ * person attached to this message (files, images, a command, skills) is sent as it is: the host refuses it with its
+ * reason rather than the message going without it.
  */
 export function routedRequest(request: TurnStartRequest): TurnStartRequest {
   const routed = (request.addressed_to?.length ?? 0) > 1;
   const cloud = request.cloud_agent === true;
   if (!routed && !cloud) return request;
-  const { unattended: _chain, model, ...rest } = request;
-  return cloud || model === undefined ? rest : { ...rest, model };
+  const { unattended: _chain, model, bypass_approvals: bypass, ...rest } = request;
+  if (cloud) return { ...rest, plan_mode: false };
+  return { ...rest, ...(model === undefined ? {} : { model }), ...(bypass === undefined ? {} : { bypass_approvals: bypass }) };
 }
 
 /** The thread's other agents, as the conversation adds them (the composer's agent is never its own companion). */

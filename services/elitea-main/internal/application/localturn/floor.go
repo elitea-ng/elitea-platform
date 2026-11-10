@@ -22,7 +22,8 @@ package localturn
 // desktop does not run it with the workspace. It relays the conversation
 // text to the cloud as a child turn of this execution (the local child turn
 // route admits the turn's own agent for a cloud executor) and commits the
-// answer, marked `executed_by: cloud`. Every other agent runs on the
+// answer, marked `agent_executor: cloud` (its `executed_by` stays
+// `desktop`: it is a local turn's answer). Every other agent runs on the
 // desktop with the workspace (`executor: local`, the default).
 //
 // The agent-to-agent hand-off (`hand_floor`) is not offered to a desktop
@@ -39,9 +40,9 @@ import (
 const (
 	ExecutorLocal = "local"
 	ExecutorCloud = "cloud"
-	// ExecutedByCloud is the `executed_by` meta value of a committed turn a
-	// cloud agent answered.
-	ExecutedByCloud = "cloud"
+	// AgentExecutorMetaKey is the answer meta key that says a cloud agent
+	// answered a committed local turn (value ExecutorCloud).
+	AgentExecutorMetaKey = "agent_executor"
 )
 
 var (

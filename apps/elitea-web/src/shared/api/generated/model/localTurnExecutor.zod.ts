@@ -45,7 +45,7 @@ import * as zod from "zod";
 export const LocalTurnExecutor = zod
   .enum(["local", "cloud"])
   .describe(
-    "Client contract 1.47 (ADR-0050 decision 7f). Where an agent of a desktop thread runs, from its participant mapping's `entity_settings.executor`. `local` (the default): on the desktop, with the workspace. `cloud`: in the cloud, as a remote participant; the desktop relays the turn with startLocalChildTurn naming the turn's own agent, sends only the conversation text and the person's attached files, never the workspace, and commits the answer, which Main marks `executed_by: cloud`. Remote toolkit calls in a `cloud` turn answer 403 `tool_not_in_agent`.",
+    "Client contract 1.47 (ADR-0050 decision 7f). Where an agent of a desktop thread runs, from its participant mapping's `entity_settings.executor`. `local` (the default): on the desktop, with the workspace. `cloud`: in the cloud, as a remote participant; the desktop relays the turn with startLocalChildTurn naming the turn's own agent, sends only the conversation text, never the workspace or its files, and commits the answer, which Main marks `agent_executor: cloud` (its `executed_by` stays `desktop`). Remote toolkit calls in a `cloud` turn answer 403 `tool_not_in_agent`.",
   );
 
 export type LocalTurnExecutor = zod.input<typeof LocalTurnExecutor>;

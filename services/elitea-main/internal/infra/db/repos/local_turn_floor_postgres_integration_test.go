@@ -5,7 +5,7 @@ package repos
 // routes a person's message by the conversation's floor, a later turn is
 // admitted only at its place in the routed order and while its message is
 // the newest, the later agent's answer replies to the person's question, and
-// a cloud agent's answer is marked executed_by cloud.
+// a cloud agent's answer is marked agent_executor cloud and stays executed_by desktop.
 
 import (
 	"context"
@@ -179,7 +179,7 @@ LIMIT 1`,
 		t.Fatalf("questions = %d addressed_to %v", questions, addressees)
 	}
 	rows, err := pool.Query(ctx, `
-SELECT answer.author_participant_id, answer.meta ->> 'executed_by', question.uuid::text
+SELECT answer.author_participant_id, answer.meta ->> 'executed_by', COALESCE(answer.meta ->> 'agent_executor', ''), question.uuid::text
 FROM p_1.chat_message_group AS answer
 JOIN p_1.chat_message_group AS question ON question.id = answer.reply_to_id
 WHERE answer.conversation_id = $1 AND answer.author_participant_id <> $2
@@ -190,18 +190,19 @@ ORDER BY answer.created_at, answer.id`, conversationID, ids["user"])
 	type answer struct {
 		author     int64
 		executedBy string
+		executor   string
 		question   string
 	}
 	var answers []answer
 	for rows.Next() {
 		var a answer
-		if err := rows.Scan(&a.author, &a.executedBy, &a.question); err != nil {
+		if err := rows.Scan(&a.author, &a.executedBy, &a.executor, &a.question); err != nil {
 			t.Fatal(err)
 		}
 		answers = append(answers, a)
 	}
 	rows.Close()
-	want := []answer{{coder, "desktop", first}, {reviewer, "cloud", first}}
+	want := []answer{{coder, "desktop", "", first}, {reviewer, "desktop", "cloud", first}}
 	if !slices.Equal(answers, want) {
 		t.Fatalf("answers = %+v, want %+v (first commit %s)", answers, want, firstCommit.ResponseMessageID)
 	}

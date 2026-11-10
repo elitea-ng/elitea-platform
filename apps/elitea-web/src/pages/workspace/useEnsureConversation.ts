@@ -13,11 +13,14 @@
  * with it, and on a later send to an existing conversation too (the add is
  * get-or-create): a cloud agent's mapping says `executor: cloud`. The answer
  * names each agent's participant id, which a message's `addressed_to` uses.
+ * The add keeps an existing mapping as it was, so a companion the person moved
+ * between local and cloud has its mapping's `executor` rewritten afterwards
+ * (`executorFixes`): Main reads where an agent runs from the mapping.
  */
 import { useCallback } from 'react';
 
 import { conversationApi } from '@/entities/conversation';
-import { useAddParticipantMutation } from '@/entities/participant';
+import { useAddParticipantMutation, useUpdateParticipantSettingsMutation } from '@/entities/participant';
 import type { SocialAuthorProfile } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { unwrapBody } from '@/shared/api/unwrap';
@@ -70,6 +73,24 @@ export function threadAgentsOf(participants: readonly DetailParticipant[] | unde
     if (participant.entity_name !== 'application' || ![participantId, applicationId, versionId].every((n) => Number.isSafeInteger(n) && n > 0)) return [];
     const named = [participant.meta?.['name'], participant.entity_meta?.name].find((name): name is string => typeof name === 'string' && name.trim() !== '');
     return [{ participantId, applicationId, name: named?.trim() ?? '', versionId, cloud: participant.entity_settings?.['executor'] === 'cloud' }];
+  });
+}
+
+/**
+ * The mappings whose `executor` differs from where the person now wants the agent to run (`agents`, as the add
+ * answered them), each with the whole `entity_settings` to write: the participant's own, `executor: cloud` set or
+ * removed. Only for agents the server already had: a new mapping is written as asked.
+ */
+export function executorFixes(
+  participants: readonly DetailParticipant[] | undefined,
+  agents: readonly ThreadAgent[],
+): { participantId: number; settings: Record<string, unknown> }[] {
+  return agents.flatMap((agent) => {
+    const participant = (participants ?? []).find((p) => Number(p.id) === agent.participantId);
+    if (participant === undefined) return [];
+    const { executor, ...rest } = participant.entity_settings ?? {};
+    if ((executor === 'cloud') === agent.cloud) return [];
+    return [{ participantId: agent.participantId, settings: agent.cloud ? { ...rest, executor: 'cloud' } : rest }];
   });
 }
 
@@ -137,6 +158,7 @@ export function useSignedInUserId(): string | number | undefined {
 export function useEnsureConversation(): (input: EnsureConversationInput) => Promise<EnsuredConversation> {
   const { mutateAsync: createConversation } = conversationApi.useCreate();
   const { mutateAsync: addParticipants } = useAddParticipantMutation();
+  const { mutateAsync: updateSettings } = useUpdateParticipantSettingsMutation();
   const userId = useSignedInUserId();
 
   return useCallback(
@@ -169,8 +191,15 @@ export function useEnsureConversation(): (input: EnsureConversationInput) => Pro
           ? [{ participantId, applicationId: agent.applicationId, name: agent.applicationName, versionId: agent.versionId, cloud: agent.cloud }]
           : [];
       });
+      if (input.conversationId !== '' && companions.length > 0) {
+        const companionAgents = agents.slice(1);
+        const fixes = executorFixes((await conversationApi.details({ projectId: input.projectId, id })).participants, companionAgents);
+        for (const fix of fixes) {
+          await updateSettings({ projectId: input.projectId, conversationId: id, participantId: String(fix.participantId), settings: fix.settings });
+        }
+      }
       return { id, agents };
     },
-    [addParticipants, createConversation, userId],
+    [addParticipants, createConversation, updateSettings, userId],
   );
 }

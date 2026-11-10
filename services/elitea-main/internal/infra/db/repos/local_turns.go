@@ -430,10 +430,12 @@ RETURNING id, created_at`, schema),
 	}
 
 	// A cloud agent's answer says so (ADR-0050 decision 7f): the desktop
-	// relayed it; it never ran with the workspace.
+	// relayed it; it never ran with the workspace. `executed_by` stays the
+	// desktop's: the answer is still a local turn's (no cloud regenerate or
+	// rewind of it), so the executor is a key of its own.
 	responseMeta := string(record.ResponseMeta)
 	if executor == localturn.ExecutorCloud {
-		responseMeta, err = withExecutedBy(record.ResponseMeta, localturn.ExecutedByCloud)
+		responseMeta, err = withAgentExecutor(record.ResponseMeta, localturn.ExecutorCloud)
 		if err != nil {
 			return localturn.CommittedTurn{}, localturn.ErrInvalid
 		}
@@ -501,13 +503,13 @@ RETURNING committed_at`, record.ExecutionID, record.Digest[:]).Scan(&turn.Commit
 	return turn, nil
 }
 
-// withExecutedBy answers meta with `executed_by` set to executedBy.
-func withExecutedBy(meta []byte, executedBy string) (string, error) {
+// withAgentExecutor answers meta with `agent_executor` set to executor.
+func withAgentExecutor(meta []byte, executor string) (string, error) {
 	decoded := map[string]any{}
 	if err := json.Unmarshal(meta, &decoded); err != nil {
 		return "", err
 	}
-	decoded["executed_by"] = executedBy
+	decoded[localturn.AgentExecutorMetaKey] = executor
 	encoded, err := json.Marshal(decoded)
 	return string(encoded), err
 }

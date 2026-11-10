@@ -36,6 +36,67 @@ fn each_reader_of_a_thread_has_its_own_key() {
     );
 }
 
+/// `info` of a thread with several agents sums every agent's session: the
+/// thread's own key holds none (ADR-0050 decision 7f).
+#[tokio::test]
+async fn info_of_a_thread_with_several_agents_sums_each_agents_session() {
+    let (_dir, state) = open();
+    let sessions = state.store();
+    let service = state.sessions();
+    let thread = identity(1, "https://a.example");
+    assert!(
+        sessions
+            .info(
+                &thread.deployment,
+                thread.user_id,
+                &thread.conversation_uuid
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    for (reader, execution) in [(77, "exec-coder"), (78, "exec-reviewer")] {
+        let me = SessionIdentity {
+            reader: Some(reader),
+            ..thread.clone()
+        };
+        let key = me.key();
+        sessions.open_session(&me, "fp").await.unwrap();
+        sessions
+            .seed(&key, Vec::new(), Some("0".into()), &[])
+            .await
+            .unwrap();
+        let scope = sessions.begin_turn(&key, execution).unwrap();
+        service
+            .append_event(&key, text_event(execution, "user", "user", "go"))
+            .await
+            .unwrap();
+        sessions
+            .finish_turn(
+                &key,
+                execution,
+                TurnOutcome::Committed {
+                    response_message_id: format!("r-{reader}"),
+                    cursor: Some("2".into()),
+                },
+            )
+            .await
+            .unwrap();
+        drop(scope);
+    }
+    let info = sessions
+        .info(
+            &thread.deployment,
+            thread.user_id,
+            &thread.conversation_uuid,
+        )
+        .await
+        .unwrap()
+        .expect("the agents' sessions");
+    assert_eq!((info.turns, info.seeded_from_server), (2, true));
+    assert!(info.bytes > 0);
+}
+
 fn text_event(invocation: &str, author: &str, role: &str, text: &str) -> Event {
     let mut event = Event::new(invocation);
     event.author = author.to_owned();
