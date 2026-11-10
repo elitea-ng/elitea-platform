@@ -167,8 +167,11 @@ SELECT EXISTS (
 // lockAgent serialises the writes of one agent's memory: the active limit
 // counts rows the other writers change.
 func lockAgent(ctx context.Context, tx pgx.Tx, projectID, applicationID int64) error {
-	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('elitea_agent_memory:' || $1::text || ':' || $2::text, 0))`,
-		projectID, applicationID)
+	// The key is built here: pgx cannot encode an int64 argument as the
+	// text a `$1::text` cast asks for, so a SQL-side concatenation failed
+	// every locked write on a real database.
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
+		fmt.Sprintf("elitea_agent_memory:%d:%d", projectID, applicationID))
 	return err
 }
 

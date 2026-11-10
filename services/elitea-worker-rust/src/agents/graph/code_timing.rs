@@ -9,8 +9,10 @@ pub(crate) const CODE_FAST_RECONCILE_INTERVAL: Duration = Duration::from_millis(
 /// Steady reconcile cadence for preparation, hydration and workspace observation.
 pub(crate) const CODE_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 /// Allowance added to the job timeout: Supervisor lease (60 s) plus one heartbeat (20 s)
-/// plus delivery slack. Pinned against the Supervisor constants by a test.
-pub(crate) const OBSERVATION_MARGIN: Duration = Duration::from_secs(90);
+/// plus delivery slack. Pinned against the Supervisor constants by a test. The
+/// same constant W3-1 deadline admission counts, so the two never drift.
+pub(crate) const OBSERVATION_MARGIN: Duration =
+    elitea_agent_runtime::graph::fanout::admission::CODE_OBSERVATION_MARGIN;
 
 /// Platform pump: first idle interval, and the interval after any progress.
 pub(crate) const PLATFORM_PUMP_MIN_INTERVAL: Duration = CODE_FAST_RECONCILE_INTERVAL;

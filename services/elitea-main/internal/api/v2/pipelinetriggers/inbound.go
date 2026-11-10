@@ -38,6 +38,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
@@ -369,6 +370,14 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		} else {
 			h.completeDelivery(r.Context(), schema, trigger.TokenID, deliveryKey, outcome)
 		}
+	}
+	if status, body, refused := agentworkforce.HTTPRefusal(err); refused {
+		// A retired agent (ADR-0050 decision 5g): the trigger was revoked at
+		// retirement; a run that still arrives is refused the same way.
+		code, _ := body["code"].(string)
+		record(status, projectID, trigger.CreatedBy, trigger.VersionID, code)
+		writeJSON(w, status, body)
+		return
 	}
 	if status, body, refused := safety.HTTPRefusal(err); refused {
 		// The kill switch (ADR-0041 decision 1): the run is not started and

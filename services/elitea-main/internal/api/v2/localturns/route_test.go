@@ -81,7 +81,7 @@ func TestStartPassesTheTokenPrincipalAndAnswersTheRecall(t *testing.T) {
 	}
 }
 
-// ADR-0050 decision 7f (contract 1.46): the start passes the address and
+// ADR-0050 decision 7f (contract 1.47): the start passes the address and
 // the later turn to the use case, and answers the routed order and where
 // the agent runs.
 func TestStartPassesTheFloorAndAnswersTheRoutedOrder(t *testing.T) {

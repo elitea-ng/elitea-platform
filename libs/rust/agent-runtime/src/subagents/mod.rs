@@ -78,6 +78,7 @@
 //! ended, was cancelled or handed off) stops every child it started.
 
 mod child;
+pub mod message_ref;
 pub mod profile;
 mod tools;
 

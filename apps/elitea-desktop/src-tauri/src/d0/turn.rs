@@ -231,7 +231,7 @@ pub struct TurnRequest {
     /// with `plan_mode`.
     pub unattended: Option<UnattendedTurn>,
     /// The agent participants the person addressed, in order (ADR-0050
-    /// decision 7f, contract 1.46): Main routes the message by the floor,
+    /// decision 7f, contract 1.47): Main routes the message by the floor,
     /// and the host runs the routed agents one at a time.
     pub addressed_to: Vec<i64>,
     /// A later agent's turn of a message Main routed: the host starts it
@@ -242,7 +242,7 @@ pub struct TurnRequest {
     pub cloud: bool,
 }
 
-/// `LocalTurnStartRequest.floor_turn` (contract 1.46).
+/// `LocalTurnStartRequest.floor_turn` (contract 1.47).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FloorTurn {
     /// The person's message (its first turn's `question_id`).
@@ -6686,6 +6686,7 @@ fn execution_request(
             chat_history_refs: Vec::new(),
             floor: None,
             tool_envelope: None,
+            current_message_id: None,
         },
     }
 }

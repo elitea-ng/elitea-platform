@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/faults"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/depfailure"
 )
 
@@ -209,6 +210,7 @@ func (s *publisherSet) supervise(ctx context.Context, runner namedRunner) error 
 		s.markRestarted(runner.name)
 		s.log().Warn(
 			fmt.Sprintf("Main restarts the %s runner after a dependency failure, in %s", runner.name, delay.Round(time.Millisecond)),
+			"code", faults.RunnerRestarted.String(),
 			"runner", runner.name,
 			"attempt", failures,
 			"delay", delay.String(),
@@ -252,6 +254,7 @@ func (s *publisherSet) markRestarted(name string) {
 func (s *publisherSet) reportFatal(name string, err error) {
 	s.log().Error(
 		fmt.Sprintf("The %s runner stopped and Main is exiting: %s", name, depfailure.Describe(err)),
+		"code", faults.RunnerStopped.String(),
 		"runner", name,
 	)
 }

@@ -237,6 +237,21 @@ func (plan *floorPlan) input(self int64) *runtimev1.AgentFloorV1 {
 	return floor
 }
 
+// heartbeatFloor is the floor of a heartbeat act (ADR-0050 decision 2):
+// nobody waits on the run, so only its unattended tools are bound, as on an
+// agent-to-agent turn. Any other turn keeps floor as it is.
+func heartbeatFloor(floor *runtimev1.AgentFloorV1, heartbeat bool) *runtimev1.AgentFloorV1 {
+	if !heartbeat {
+		return floor
+	}
+	if floor == nil {
+		floor = &runtimev1.AgentFloorV1{}
+	}
+	floor.Cause = turntaking.CauseHeartbeat
+	floor.UnattendedToolsOnly = true
+	return floor
+}
+
 // admission is what the turn's admission writes for the floor.
 func (plan *floorPlan) admission(request CurrentApplicationStartRequest) *FloorAdmission {
 	switch {
@@ -269,6 +284,18 @@ func applyFloorTurn(turn *CurrentApplicationTurn, plan *floorPlan, request Curre
 	case plan != nil && len(plan.targets) > 0:
 		turn.QuestionAddressedTo = append([]int64(nil), plan.targets...)
 	}
+}
+
+// currentMessageID is the chat message group of the question this turn
+// writes (#1831), for the worker to show the model its short id. An
+// addressed agent's turn reuses the person's question, which is already in
+// its history, and its own input is the platform's note: none.
+func currentMessageID(request CurrentApplicationStartRequest) *string {
+	if request.FloorTurn != nil && request.FloorTurn.ReplyToQuestionID != "" {
+		return nil
+	}
+	id := request.QuestionID
+	return &id
 }
 
 // floorModelInput is the user input the model sees: a peer's message

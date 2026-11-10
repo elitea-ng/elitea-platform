@@ -9,9 +9,9 @@
   - An agent participant whose mapping says `entity_settings.executor: "cloud"` is a **cloud agent**: the desktop
     relays the conversation's text to it through `startLocalChildTurn` on the turn's own agent version, never the
     workspace, and Main stamps its answer `executed_by: cloud`. Its turn's remote toolkit calls are refused (403).
-  - Client contract **1.46** (`x-elitea-client-contract`): `LocalTurnStart.addressed_to`, `floor_turn`;
+  - Client contract **1.47** (`x-elitea-client-contract`): `LocalTurnStart.addressed_to`, `floor_turn`;
     `LocalTurnStarted.floor`, `executor`.
-  - Shared migration **0234** (`0234_local_turn_floor.sql`) adds `floor_question_id`, `floor_position`,
+  - Shared migration **0238** (`0238_local_turn_floor.sql`) adds `floor_question_id`, `floor_position`,
     `floor_targets` and `executor` to `elitea_runtime.local_turn_executions`. No backfill: existing rows read as
     single-agent local turns.
 - **Who is affected.** Deployments whose people use the desktop app. A thread with one agent behaves as before.

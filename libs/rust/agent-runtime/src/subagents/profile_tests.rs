@@ -120,6 +120,33 @@ fn the_brief_digest_and_references_keep_no_text() {
     assert!(empty.brief_refs.is_null());
 }
 
+/// #1831: the record names the chat message, not the model's short id.
+#[test]
+fn the_record_names_each_quoted_message_by_its_chat_id() {
+    let brief = parse_brief(&json!({"context": {"excerpts": [
+        {"message_id": "m-1", "quote": "a"},
+        {"message_id": "m-2", "quote": "b"},
+    ]}}))
+    .unwrap();
+    let mut record = SpawnRecord::new(&Profile::default(), &brief);
+    let digest = record.brief_digest.clone();
+    record.resolve_messages(&CheckedBrief {
+        message_ids: vec![
+            ("m-1".into(), "00000000-0000-4000-8000-000000000002".into()),
+            ("m-2".into(), "00000000-0000-4000-8000-000000000001".into()),
+        ],
+        ..CheckedBrief::default()
+    });
+    assert_eq!(
+        record.brief_refs["message_ids"],
+        json!([
+            "00000000-0000-4000-8000-000000000001",
+            "00000000-0000-4000-8000-000000000002"
+        ])
+    );
+    assert_eq!(record.brief_digest, digest);
+}
+
 #[test]
 fn the_default_check_passes_facts_only() {
     let facts = parse_brief(&json!({"context": {"facts": ["f"]}})).unwrap();
@@ -148,6 +175,7 @@ fn the_rendered_brief_is_one_untrusted_envelope() {
     let checked = CheckedBrief {
         attachments: vec![("att-1".into(), "report.pdf".into())],
         memory_entries: vec![("7".into(), "likes tea".into())],
+        ..CheckedBrief::default()
     };
     let rendered = render(&brief, &checked).unwrap();
     assert_eq!(rendered.matches("</untrusted>").count(), 1, "{rendered}");
@@ -156,3 +184,21 @@ fn the_rendered_brief_is_one_untrusted_envelope() {
     assert!(rendered.contains("- Memory 7: likes tea"));
     assert!(rendered.contains("- Attachment att-1: report.pdf"));
 }
+
+/// Main recomputes the digest from the profile `propose_agent` reports
+/// (services/elitea-main internal/domain/agentproposal `SpecDigest`,
+/// `TestSpecDigestMatchesTheRuntime`); both sides pin the same vectors.
+#[test]
+fn a_profile_digest_matches_mains_vectors() {
+    let sample = parse_profile(&json!({"profile": {
+        "display_name": "Ada",
+        "soul": "Precise and brief.",
+        "tools": ["GitHub/Read_File", "search/*", "github/read_file"],
+    }}))
+    .unwrap();
+    assert_eq!(Profile::default().digest(), EMPTY_VECTOR);
+    assert_eq!(sample.digest(), SAMPLE_VECTOR);
+}
+
+const EMPTY_VECTOR: &str = "8e93047b83c690ec8ada61c3103afaece889147e8adf85467c1e173e51b72083";
+const SAMPLE_VECTOR: &str = "e2b787c2bbc4e4526a87f569a06e3ab0cf846cae3febc48157c4ecd4b2fc09dc";

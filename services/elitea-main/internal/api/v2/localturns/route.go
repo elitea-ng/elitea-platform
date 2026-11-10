@@ -109,7 +109,7 @@ type startBody struct {
 	// Unattended is the turn's grant (ADR-0045, client contract 1.30).
 	Unattended *unattendedBody `json:"unattended"`
 	// AddressedTo are the agents the person addressed, and FloorTurn a
-	// later turn of a routed message (ADR-0050 decision 7f, contract 1.46).
+	// later turn of a routed message (ADR-0050 decision 7f, contract 1.47).
 	AddressedTo []int64        `json:"addressed_to"`
 	FloorTurn   *floorTurnBody `json:"floor_turn"`
 }

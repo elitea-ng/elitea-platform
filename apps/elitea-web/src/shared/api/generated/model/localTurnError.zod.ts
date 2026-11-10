@@ -68,7 +68,7 @@ export const LocalTurnError = zod
       .describe("With `chain_limit_reached`, the limit the chain reached."),
   })
   .describe(
-    "A refused local turn call. `error` is a machine code: `invalid_local_turn`, `local_turn_requires_token`, `local_work_disabled`, `local_turn_not_found`, `local_turn_participant`, `local_turn_conflict`, `local_turn_already_committed`, `local_turn_expired`, `local_turn_unavailable`, `unsupported_media_type`, `request_too_large`, `local_turn_failed`, from client contract 1.30 `unattended_grant_refused`, `chain_limit_reached` and `chain_ended`, from client contract 1.31 `invalid_run_brief`, `chain_not_found`, `run_brief_unavailable` and `run_brief_failed`, and from client contract 1.46 `agent_target_required`, `addressee_not_in_conversation`, `floor_turn_refused` and `floor_turn_superseded`. NOTE(W2): internal/api/v2/localturns/route.go:241 (`writeUseCaseError`).",
+    "A refused local turn call. `error` is a machine code: `invalid_local_turn`, `local_turn_requires_token`, `local_work_disabled`, `local_turn_not_found`, `local_turn_participant`, `local_turn_conflict`, `local_turn_already_committed`, `local_turn_expired`, `local_turn_unavailable`, `unsupported_media_type`, `request_too_large`, `local_turn_failed`, from client contract 1.30 `unattended_grant_refused`, `chain_limit_reached` and `chain_ended`, from client contract 1.31 `invalid_run_brief`, `chain_not_found`, `run_brief_unavailable` and `run_brief_failed`, and from client contract 1.47 `agent_target_required`, `addressee_not_in_conversation`, `floor_turn_refused` and `floor_turn_superseded`. NOTE(W2): internal/api/v2/localturns/route.go:241 (`writeUseCaseError`).",
   );
 
 export type LocalTurnError = zod.input<typeof LocalTurnError>;

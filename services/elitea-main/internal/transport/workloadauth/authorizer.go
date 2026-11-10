@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/faults"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/workloadidentity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/depfailure"
 	"google.golang.org/grpc/credentials"
@@ -121,6 +122,7 @@ func (a *PeerAuthorizer) observe(err error) {
 		a.since = time.Now()
 		a.logger.Warn(
 			fmt.Sprintf("The %s server cannot read workload sessions; Workers are answered \"retry\" until the database is back", a.server),
+			"code", faults.WorkloadSessionStoreUnavailable.String(),
 			"server", a.server,
 			"cause", depfailure.Describe(err),
 		)

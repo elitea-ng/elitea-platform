@@ -43,6 +43,7 @@
 import * as zod from "zod";
 import { AgentContextSettings } from "./agentContextSettings.zod";
 import { AgentMemorySettings } from "./agentMemorySettings.zod";
+import { AgentProactivity } from "./agentProactivity.zod";
 import { AgentToolEnvelope } from "./agentToolEnvelope.zod";
 import { OutputContract } from "./outputContract.zod";
 import { VersionRunCaps } from "./versionRunCaps.zod";
@@ -112,11 +113,36 @@ export const VersionMeta = zod.object({
     .describe(
       "Whether the agent must cite its sources (ADR-0043 decision 5). With `required`, the worker numbers the tool results the model sees, asks the model to cite them as [n], and stores a grounding indicator on the answer (`meta.grounding` of the message). Null, absent or `off` is no citation rule. A save with another value is refused with 400. Pipelines and nested agents ignore it.\n",
     ),
+  proactivity: zod
+    .union([AgentProactivity, zod.null()])
+    .optional()
+    .describe(
+      "The agent's heartbeat (ADR-0050 decision 2): how often it wakes, its quiet hours, what it reads, where it acts and its daily limits. The heartbeat reads the block of the published release. A save with an invalid block is refused with 422 proactivity_invalid.\n",
+    ),
   tool_envelope: zod
     .union([AgentToolEnvelope, zod.null()])
     .optional()
     .describe(
       "The agent's tool envelope (ADR-0050 decision 3): per-tool call limits, the tools it may use unattended, and the tools its sub-agents may get. Main freezes it, with the platform's agents ceilings, into each run; nested agents follow the root agent's. A save with an invalid block is refused with 422 tool_envelope_invalid.\n",
+    ),
+  capabilities: zod
+    .object({
+      can_propose_agents: zod
+        .boolean()
+        .optional()
+        .describe(
+          "The agent may propose, with the propose_agent tool, that a temporary sub-agent it started become a saved agent (ADR-0050 decision 5a). The person it works for must also hold models.applications.applications.create.\n",
+        ),
+      can_review_agents: zod
+        .boolean()
+        .optional()
+        .describe(
+          "The agent is an HR agent (ADR-0050 decision 5l): it may propose, with the propose_dismissal tool, a ladder stage for another agent of the project. It never decides; a person holding agents.workforce.manage does. Guards refuse a proposal against itself, its hirer, a higher tier, another HR agent, a critical-tier agent or one under legal hold.\n",
+        ),
+    })
+    .nullish()
+    .describe(
+      "What the agent may do beyond its tools. Absent is none. A save whose block is not an object of booleans is refused with 422 capabilities_block_invalid.\n",
     ),
 });
 

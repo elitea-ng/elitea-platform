@@ -58,6 +58,14 @@ impl fmt::Display for ProtocolError {
 
 impl std::error::Error for ProtocolError {}
 
+/// FU-299: `&'static str` messages and an `InputLimitField` variant name, no
+/// request data, so the Display is safe in a cause chain.
+impl elitea_faults::SafeCause for ProtocolError {
+    fn safe_cause(&self) -> String {
+        format!("protocol: {self}")
+    }
+}
+
 impl ProtocolError {
     #[must_use]
     pub const fn in_input_field(self, field: InputLimitField) -> Self {

@@ -63,7 +63,7 @@ export const LocalTurnStartRequest = zod
       .int()
       .optional()
       .describe(
-        "The conversation's agent participant that answers. 0 or absent means the conversation's model participant. In a thread with two or more agents (client contract 1.46) it is the composer's target: Main routes the message by the floor and may answer another first (`LocalTurnStarted.floor`).",
+        "The conversation's agent participant that answers. 0 or absent means the conversation's model participant. In a thread with two or more agents (client contract 1.47) it is the composer's target: Main routes the message by the floor and may answer another first (`LocalTurnStarted.floor`).",
       ),
     unattended: LocalTurnUnattendedRequest.optional(),
     addressed_to: zod
@@ -71,7 +71,7 @@ export const LocalTurnStartRequest = zod
       .max(localTurnStartRequestAddressedToMax)
       .optional()
       .describe(
-        "Client contract 1.46 (ADR-0050 decision 7f). The agent participants the person addressed, in the order they were named; absent or empty is no address. Main routes the message by the conversation's floor: the addressed agents in order (the composer's target first when it is one of them), else the lead under policy `lead`, else `participant_id`. An addressee that is not an agent of the thread answers 422 `addressee_not_in_conversation`; several agents and no target 422 `agent_target_required`. Never with `floor_turn`.",
+        "Client contract 1.47 (ADR-0050 decision 7f). The agent participants the person addressed, in the order they were named; absent or empty is no address. Main routes the message by the conversation's floor: the addressed agents in order (the composer's target first when it is one of them), else the lead under policy `lead`, else `participant_id`. An addressee that is not an agent of the thread answers 422 `addressee_not_in_conversation`; several agents and no target 422 `agent_target_required`. Never with `floor_turn`.",
       ),
     floor_turn: LocalTurnFloorTurn.optional(),
   })

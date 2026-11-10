@@ -869,7 +869,7 @@ func (h *Handler) AvailableTools(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.discovery.AvailableTools(r.Context(), request)
 	if err != nil {
-		toolkitrun.WriteError(w, err)
+		toolkitrun.WriteRequestError(w, r, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -1012,7 +1012,7 @@ func (h *Handler) runToolkitTool(w http.ResponseWriter, r *http.Request, routeTo
 	}
 	outcome, err := h.toolRuns.RunTool(r.Context(), request)
 	if err != nil {
-		toolkitrun.WriteError(w, err)
+		toolkitrun.WriteRequestError(w, r, err)
 		return
 	}
 	toolkitrun.WriteOutcome(w, outcome)

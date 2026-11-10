@@ -282,6 +282,7 @@ const LEGACY_INFO_PARSERS: Record<NotificationEventType, LegacyInfoParser> = {
   moderation_rejected: parseNothing,
   moderation_approved: parseNothing,
   run_finished: parseNothing,
+  agent_heartbeat: parseNothing,
 };
 
 /**

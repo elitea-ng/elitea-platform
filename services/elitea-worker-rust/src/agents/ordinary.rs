@@ -315,7 +315,7 @@ impl OrdinaryNativeAgentAssembler {
             attachment_library,
             sandbox_authority,
             profile,
-            plan,
+            mut plan,
             toolsets: tool_snapshot,
             start,
             mcp_tokens,
@@ -419,6 +419,13 @@ impl OrdinaryNativeAgentAssembler {
         tracing::Span::current().record("stage", "toolsets");
         // What `recall` returns this turn, for a sub-agent brief (#1614).
         let recalled = Arc::new(super::agent_memory_tools::RecalledEntries::default());
+        // W3-1: Code runs admitted against the run's deadline.
+        let code_runtime = match self.sandbox.as_ref().zip(sandbox_authority) {
+            Some((factory, authority)) => {
+                Some(factory.bind(authority, plan.code_admission_deadline()?))
+            }
+            None => None,
+        };
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
                 &tool_snapshot,
@@ -430,10 +437,7 @@ impl OrdinaryNativeAgentAssembler {
                 model_scopes,
                 plan.thread_id().to_owned(),
                 plan.conversation_id().to_owned(),
-                self.sandbox
-                    .as_ref()
-                    .zip(sandbox_authority)
-                    .map(|(factory, authority)| factory.bind(authority)),
+                code_runtime,
                 attachment_library,
                 browser_host.as_ref(),
                 &recalled,
@@ -573,9 +577,10 @@ impl OrdinaryNativeAgentAssembler {
                     toolkit_kinds(&tool_snapshot),
                 );
                 // ADR-0050 decision 9d (#1614): a brief names only what this
-                // agent sees; each spawn goes to the execution's ledger.
+                // agent sees; each spawn goes to the execution's ledger. The
+                // messages it may quote carry their short ids (#1831).
                 let view = super::subagents::BriefView::new(
-                    plan.history_by_message(),
+                    plan.tag_message_refs(),
                     &current_attachments,
                     profile.agent_memory().map(|_| Arc::clone(&recalled)),
                 );
@@ -656,6 +661,10 @@ impl OrdinaryNativeAgentAssembler {
         browser_host: Option<&elitea_agent_runtime::toolkits::BrowserToolHost>,
         recalled: &Arc<super::agent_memory_tools::RecalledEntries>,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
+        // propose_agent binds beside the sub-agents (the same rule as their
+        // binding in the runner), when the version grants the capability.
+        let proposals_bound = profile.can_propose_agents()
+            && (profile.internal_tools().subagents_enabled() || context.workspace().is_some());
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
             .iter()
@@ -870,6 +879,8 @@ impl OrdinaryNativeAgentAssembler {
             "elitea_nested_applications".to_owned(),
             elitea_agent_runtime::subagents::TOOLSET_NAME.to_owned(),
             super::hand_floor_tool::TOOLSET_NAME.to_owned(),
+            super::propose_agent_tool::TOOLSET_NAME.to_owned(),
+            super::propose_dismissal_tool::TOOLSET_NAME.to_owned(),
         ]);
         let mut frozen = freeze_toolsets(toolsets, "elitea_ordinary_tool_binding")
             .await
@@ -920,6 +931,43 @@ impl OrdinaryNativeAgentAssembler {
         }) {
             frozen.extend(
                 freeze_toolsets(vec![turn_taking], "elitea_ordinary_tool_binding")
+                    .await
+                    .map_err(tool_binding_error)?,
+            );
+        }
+        // propose_agent (ADR-0050 decision 5a, #1615): only beside the
+        // sub-agents (the same toggle that binds them), only when the version
+        // grants the capability; it reads the spawns from the execution's
+        // ledger, the one the sub-agent host writes. Bound after the filter:
+        // proposing writes nothing but a proposal a person decides.
+        if let Some(proposals) = super::propose_agent_tool::toolset(
+            proposals_bound,
+            {
+                let binding = runtime_context.redemption_binding();
+                crate::protocol::ephemeral_agents::EphemeralAgentRegistry::global()
+                    .ledger(binding.execution_id, binding.generation)
+            },
+            toolkit_kinds.clone(),
+            Arc::clone(&self.platform),
+            Arc::clone(runtime_context),
+        ) {
+            frozen.extend(
+                freeze_toolsets(vec![proposals], "elitea_ordinary_tool_binding")
+                    .await
+                    .map_err(tool_binding_error)?,
+            );
+        }
+        // propose_dismissal (ADR-0050 decision 5l, #1616): an HR agent's
+        // one workforce tool, only when the version grants
+        // can_review_agents. Bound after the filter: it writes nothing but a
+        // proposal a person decides.
+        if let Some(workforce) = super::propose_dismissal_tool::toolset(
+            profile.can_review_agents(),
+            Arc::clone(&self.platform),
+            Arc::clone(runtime_context),
+        ) {
+            frozen.extend(
+                freeze_toolsets(vec![workforce], "elitea_ordinary_tool_binding")
                     .await
                     .map_err(tool_binding_error)?,
             );

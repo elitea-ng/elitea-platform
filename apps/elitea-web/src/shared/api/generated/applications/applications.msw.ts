@@ -53,16 +53,25 @@ import {
 import type {
   AgentAttestation,
   AgentAttestationList,
+  AgentAutomaticAction,
   AgentCategoriesResponse,
   AgentChangeApprovalOutcome,
   AgentChangeRequest,
   AgentChangeRequestList,
+  AgentHeartbeatList,
+  AgentHeartbeatSettings,
   AgentMediaGenerateResponse,
   AgentMediaObject,
   AgentMemoryEntry,
   AgentMemoryList,
+  AgentProposal,
+  AgentProposalList,
   AgentRegistryRecord,
   AgentSchemaResponse,
+  AgentWorkforceAgent,
+  AgentWorkforceImpact,
+  AgentWorkforcePolicy,
+  AgentWorkforceProposal,
   ApplicationCreatedResponse,
   ApplicationDetail,
   ApplicationDraft,
@@ -79,6 +88,7 @@ import type {
   AuthorDetail,
   ClearAgentMemory200,
   ConversationRunList,
+  CopyAgentMemory200,
   DefaultIcon,
   DocumentLoadersResponse,
   EvalDataset,
@@ -95,6 +105,10 @@ import type {
   IconMeta,
   IconUploadResponse,
   ImportWizardResponse,
+  ListAgentAutomaticActions200,
+  ListAgentScorecards200,
+  ListAgentWorkforceProposals200,
+  MarkAgentProposalCreated200,
   OkResponse,
   PermissionTrimmingRemoveResult,
   PermissionTrimmingReport,
@@ -105,6 +119,7 @@ import type {
   ProjectContext,
   ProjectInfo,
   ProjectInfoUpdateResponse,
+  ProjectProactivity,
   ProjectQuota,
   ProjectStatistics,
   ProjectWithGroups,
@@ -1477,6 +1492,1923 @@ export const getSetAgentMemoryOptOutResponseMock = (
   opted_out: faker.datatype.boolean(),
   ...overrideResponse,
 });
+
+export const getGetAgentHeartbeatResponseMock = (): AgentHeartbeatSettings => ({
+  application_id: 31,
+  configured: true,
+  enabled: true,
+  owner_user_id: 11,
+  mandate_id: "7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f",
+  home_conversation_uuid: "10000000-0000-4000-8000-000000000031",
+  release_id: 5,
+  next_wake_at: "2026-11-09T15:00:00Z",
+  last_wake_at: "2026-11-09T14:00:00Z",
+  paused_until: null,
+  last_skip_reason: "",
+  updated_at: "2026-11-09T14:00:00Z",
+  governance: {
+    platform_enabled: true,
+    project_enabled: true,
+    tier: "medium",
+    personal: false,
+    can_enable: true,
+    wakes_per_day: 24,
+    acts_per_day: 4,
+    spend_per_day_usd: 2,
+  },
+  release: {
+    release_id: 5,
+    version_id: 42,
+    mode: "heartbeat",
+    interval: "1h0m0s",
+    quiet_hours: "22:00-07:00 Europe/Berlin",
+    act_target: "home_thread",
+    goal_count: 1,
+  },
+});
+
+export const getSaveAgentHeartbeatResponseMock =
+  (): AgentHeartbeatSettings => ({
+    application_id: 31,
+    configured: true,
+    enabled: true,
+    owner_user_id: 11,
+    mandate_id: "7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f",
+    home_conversation_uuid: "10000000-0000-4000-8000-000000000031",
+    release_id: 5,
+    next_wake_at: "2026-11-09T15:00:00Z",
+    last_wake_at: "2026-11-09T14:00:00Z",
+    paused_until: null,
+    last_skip_reason: "",
+    updated_at: "2026-11-09T14:00:00Z",
+    governance: {
+      platform_enabled: true,
+      project_enabled: true,
+      tier: "medium",
+      personal: false,
+      can_enable: true,
+      wakes_per_day: 24,
+      acts_per_day: 4,
+      spend_per_day_usd: 2,
+    },
+    release: {
+      release_id: 5,
+      version_id: 42,
+      mode: "heartbeat",
+      interval: "1h0m0s",
+      quiet_hours: "22:00-07:00 Europe/Berlin",
+      act_target: "home_thread",
+      goal_count: 1,
+    },
+  });
+
+export const getListAgentHeartbeatsResponseMock = (): AgentHeartbeatList => ({
+  total: 1,
+  rows: [
+    {
+      id: 1,
+      wake_id: "3f2b8d4e-1a2c-4b5d-9e8f-7a6b5c4d3e2f",
+      woke_at: "2026-11-09T14:00:00Z",
+      outcome: "notify",
+      reason_code: "",
+      reason: "The nightly build failed.",
+      release_id: 5,
+      digest_sha256:
+        "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      triage_spend_usd: 0.0004,
+      execution_id: null,
+      conversation_uuid: "10000000-0000-4000-8000-000000000031",
+      paused_until: null,
+    },
+  ],
+});
+
+export const getGetProjectProactivityResponseMock = (): ProjectProactivity => ({
+  proactive_agents_enabled: true,
+});
+
+export const getSetProjectProactivityResponseMock = (): ProjectProactivity => ({
+  proactive_agents_enabled: true,
+});
+
+export const getListAgentProposalsResponseMock = (
+  overrideResponse: Partial<Extract<AgentProposalList, object>> = {},
+): AgentProposalList => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    project_id: faker.number.int(),
+    proposer_application_id: faker.number.int(),
+    proposer_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    proposed_for_user_id: faker.number.int(),
+    execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    conversation_uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    ephemeral_agent_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    spec_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    draft: {},
+    memory_seeds: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      kind: faker.helpers.arrayElement([
+        "fact",
+        "preference",
+        "episode",
+      ] as const),
+      content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    tool_categories: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      toolkit_type: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    status: faker.helpers.arrayElement([
+      "proposed",
+      "created",
+      "dismissed",
+    ] as const),
+    decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    decided_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    created_application_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    evidence: faker.helpers.arrayElement([
+      {
+        status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        steps: faker.number.int(),
+        input_tokens: faker.number.int(),
+        output_tokens: faker.number.int(),
+        error_code: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        started_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+        finished_at: faker.helpers.arrayElement([
+          faker.date.past().toISOString().slice(0, 19) + "Z",
+          null,
+        ]),
+      },
+      null,
+    ]),
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetAgentProposalResponseMock = (
+  overrideResponse: Partial<Extract<AgentProposal, object>> = {},
+): AgentProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  proposer_application_id: faker.number.int(),
+  proposer_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_for_user_id: faker.number.int(),
+  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  conversation_uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ephemeral_agent_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  spec_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  draft: {},
+  memory_seeds: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    kind: faker.helpers.arrayElement([
+      "fact",
+      "preference",
+      "episode",
+    ] as const),
+    content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  tool_categories: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    toolkit_type: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  status: faker.helpers.arrayElement([
+    "proposed",
+    "created",
+    "dismissed",
+  ] as const),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  created_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  evidence: faker.helpers.arrayElement([
+    {
+      status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      steps: faker.number.int(),
+      input_tokens: faker.number.int(),
+      output_tokens: faker.number.int(),
+      error_code: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      started_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      finished_at: faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+    },
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getDismissAgentProposalResponseMock = (
+  overrideResponse: Partial<Extract<AgentProposal, object>> = {},
+): AgentProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  proposer_application_id: faker.number.int(),
+  proposer_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_for_user_id: faker.number.int(),
+  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  conversation_uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ephemeral_agent_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  spec_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  draft: {},
+  memory_seeds: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    kind: faker.helpers.arrayElement([
+      "fact",
+      "preference",
+      "episode",
+    ] as const),
+    content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  tool_categories: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    toolkit_type: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  status: faker.helpers.arrayElement([
+    "proposed",
+    "created",
+    "dismissed",
+  ] as const),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  created_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  evidence: faker.helpers.arrayElement([
+    {
+      status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      steps: faker.number.int(),
+      input_tokens: faker.number.int(),
+      output_tokens: faker.number.int(),
+      error_code: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      started_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      finished_at: faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+    },
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getMarkAgentProposalCreatedResponseMock = (
+  overrideResponse: Partial<Extract<MarkAgentProposalCreated200, object>> = {},
+): MarkAgentProposalCreated200 => ({
+  proposal: {
+    id: faker.number.int(),
+    project_id: faker.number.int(),
+    proposer_application_id: faker.number.int(),
+    proposer_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    proposed_for_user_id: faker.number.int(),
+    execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    conversation_uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    ephemeral_agent_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    spec_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    draft: {},
+    memory_seeds: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      kind: faker.helpers.arrayElement([
+        "fact",
+        "preference",
+        "episode",
+      ] as const),
+      content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    tool_categories: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      toolkit_type: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    status: faker.helpers.arrayElement([
+      "proposed",
+      "created",
+      "dismissed",
+    ] as const),
+    decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    decided_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    created_application_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    evidence: faker.helpers.arrayElement([
+      {
+        status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        steps: faker.number.int(),
+        input_tokens: faker.number.int(),
+        output_tokens: faker.number.int(),
+        error_code: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        started_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+        finished_at: faker.helpers.arrayElement([
+          faker.date.past().toISOString().slice(0, 19) + "Z",
+          null,
+        ]),
+      },
+      null,
+    ]),
+  },
+  memory_seeded: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetAgentWorkforceResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforceAgent, object>> = {},
+): AgentWorkforceAgent => ({
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  risk_tier: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  business_owner_id: faker.number.int(),
+  technical_owner_id: faker.number.int(),
+  under_review: faker.datatype.boolean(),
+  under_review_since: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  lifecycle_state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  retired_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  retired_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  reinstate_until: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  purge_after: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  suspension_id: faker.number.int(),
+  suspension_source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  legal_hold: faker.datatype.boolean(),
+  is_hr_agent: faker.datatype.boolean(),
+  auto_hired_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  probation_until: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  probation_reviewed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  orphaned_since: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  scorecard: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        day: faker.date.past().toISOString().slice(0, 10),
+        runs_30d: faker.number.int(),
+        failed_30d: faker.number.int(),
+        cap_reached_30d: faker.number.int(),
+        failure_rate_30d: faker.number.float({ fractionDigits: 2 }),
+        breaker_trips_7d: faker.number.int(),
+        approval_rejections_30d: faker.number.int(),
+        guardrail_hits_30d: faker.number.int(),
+        spend_30d_usd: faker.number.float({ fractionDigits: 2 }),
+        project_median_spend_usd: faker.number.float({ fractionDigits: 2 }),
+        thumbs_up_30d: faker.number.int(),
+        thumbs_down_30d: faker.number.int(),
+        last_used_at: faker.helpers.arrayElement([
+          faker.date.past().toISOString().slice(0, 19) + "Z",
+          null,
+        ]),
+        unused_days: faker.helpers.arrayElement([faker.number.int(), null]),
+        certification_state: faker.string.alpha({
+          length: { min: 10, max: 20 },
+        }),
+        computed_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      },
+      null,
+    ]),
+    undefined,
+  ]),
+  can_manage: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  is_owner: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  ...overrideResponse,
+});
+
+export const getListAgentScorecardsResponseMock = (
+  overrideResponse: Partial<Extract<ListAgentScorecards200, object>> = {},
+): ListAgentScorecards200 => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    day: faker.date.past().toISOString().slice(0, 10),
+    runs_30d: faker.number.int(),
+    failed_30d: faker.number.int(),
+    cap_reached_30d: faker.number.int(),
+    failure_rate_30d: faker.number.float({ fractionDigits: 2 }),
+    breaker_trips_7d: faker.number.int(),
+    approval_rejections_30d: faker.number.int(),
+    guardrail_hits_30d: faker.number.int(),
+    spend_30d_usd: faker.number.float({ fractionDigits: 2 }),
+    project_median_spend_usd: faker.number.float({ fractionDigits: 2 }),
+    thumbs_up_30d: faker.number.int(),
+    thumbs_down_30d: faker.number.int(),
+    last_used_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    unused_days: faker.helpers.arrayElement([faker.number.int(), null]),
+    certification_state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    computed_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetAgentWorkforceImpactResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforceImpact, object>> = {},
+): AgentWorkforceImpact => ({
+  conversations: faker.number.int(),
+  conversations_led: faker.number.int(),
+  teams: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    lead: faker.datatype.boolean(),
+  })),
+  nested_by: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    application_id: faker.number.int(),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  schedules: faker.number.int(),
+  triggers: faker.number.int(),
+  published_versions: faker.number.int(),
+  suspension: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        id: faker.number.int(),
+        source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      },
+      null,
+    ]),
+    null,
+  ]),
+  legal_hold: faker.datatype.boolean(),
+  lifecycle_state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getReinstateAgentResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforceAgent, object>> = {},
+): AgentWorkforceAgent => ({
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  risk_tier: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  business_owner_id: faker.number.int(),
+  technical_owner_id: faker.number.int(),
+  under_review: faker.datatype.boolean(),
+  under_review_since: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  lifecycle_state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  retired_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  retired_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  reinstate_until: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  purge_after: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  suspension_id: faker.number.int(),
+  suspension_source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  legal_hold: faker.datatype.boolean(),
+  is_hr_agent: faker.datatype.boolean(),
+  auto_hired_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  probation_until: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  probation_reviewed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  orphaned_since: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  scorecard: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        day: faker.date.past().toISOString().slice(0, 10),
+        runs_30d: faker.number.int(),
+        failed_30d: faker.number.int(),
+        cap_reached_30d: faker.number.int(),
+        failure_rate_30d: faker.number.float({ fractionDigits: 2 }),
+        breaker_trips_7d: faker.number.int(),
+        approval_rejections_30d: faker.number.int(),
+        guardrail_hits_30d: faker.number.int(),
+        spend_30d_usd: faker.number.float({ fractionDigits: 2 }),
+        project_median_spend_usd: faker.number.float({ fractionDigits: 2 }),
+        thumbs_up_30d: faker.number.int(),
+        thumbs_down_30d: faker.number.int(),
+        last_used_at: faker.helpers.arrayElement([
+          faker.date.past().toISOString().slice(0, 19) + "Z",
+          null,
+        ]),
+        unused_days: faker.helpers.arrayElement([faker.number.int(), null]),
+        certification_state: faker.string.alpha({
+          length: { min: 10, max: 20 },
+        }),
+        computed_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      },
+      null,
+    ]),
+    undefined,
+  ]),
+  can_manage: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  is_owner: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  ...overrideResponse,
+});
+
+export const getListAgentWorkforceProposalsResponseMock = (
+  overrideResponse: Partial<
+    Extract<ListAgentWorkforceProposals200, object>
+  > = {},
+): ListAgentWorkforceProposals200 => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    project_id: faker.number.int(),
+    application_id: faker.number.int(),
+    application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    proposed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    proposer_application_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      null,
+    ]),
+    execution_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    narrowing: {
+      remove_toolkit_ids: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 50 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.number.int({ min: 1 })),
+        undefined,
+      ]),
+      memory_review: faker.helpers.arrayElement([
+        faker.datatype.boolean(),
+        undefined,
+      ]),
+      proactivity_off: faker.helpers.arrayElement([
+        faker.datatype.boolean(),
+        undefined,
+      ]),
+      remove_capabilities: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 2 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      remove_lead: faker.helpers.arrayElement([
+        faker.datatype.boolean(),
+        undefined,
+      ]),
+      toolkit_type_ceiling: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 50 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+    },
+    evidence: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([null]),
+      null,
+    ]),
+    evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    owner_comment: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    decided_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    decision_note: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    applied: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([null]),
+      null,
+    ]),
+    appeal_state: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    appeal_reason: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    appealed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    appealed_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    appeal_decided_by_user_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      null,
+    ]),
+    appeal_decided_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    appeal_note: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    policy_rule: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getProposeAgentWorkforceStageResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforceProposal, object>> = {},
+): AgentWorkforceProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  proposer_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  narrowing: {
+    remove_toolkit_ids: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.number.int({ min: 1 })),
+      undefined,
+    ]),
+    memory_review: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    proactivity_off: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    remove_capabilities: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 2 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+    remove_lead: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    toolkit_type_ceiling: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+  },
+  evidence: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  owner_comment: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decision_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  applied: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  appeal_state: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appeal_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appealed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  appealed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_decided_by_user_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  appeal_decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  policy_rule: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetAgentWorkforceProposalResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforceProposal, object>> = {},
+): AgentWorkforceProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  proposer_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  narrowing: {
+    remove_toolkit_ids: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.number.int({ min: 1 })),
+      undefined,
+    ]),
+    memory_review: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    proactivity_off: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    remove_capabilities: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 2 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+    remove_lead: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    toolkit_type_ceiling: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+  },
+  evidence: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  owner_comment: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decision_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  applied: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  appeal_state: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appeal_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appealed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  appealed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_decided_by_user_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  appeal_decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  policy_rule: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getApproveAgentWorkforceProposalResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforceProposal, object>> = {},
+): AgentWorkforceProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  proposer_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  narrowing: {
+    remove_toolkit_ids: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.number.int({ min: 1 })),
+      undefined,
+    ]),
+    memory_review: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    proactivity_off: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    remove_capabilities: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 2 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+    remove_lead: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    toolkit_type_ceiling: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+  },
+  evidence: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  owner_comment: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decision_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  applied: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  appeal_state: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appeal_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appealed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  appealed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_decided_by_user_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  appeal_decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  policy_rule: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getRejectAgentWorkforceProposalResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforceProposal, object>> = {},
+): AgentWorkforceProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  proposer_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  narrowing: {
+    remove_toolkit_ids: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.number.int({ min: 1 })),
+      undefined,
+    ]),
+    memory_review: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    proactivity_off: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    remove_capabilities: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 2 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+    remove_lead: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    toolkit_type_ceiling: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+  },
+  evidence: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  owner_comment: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decision_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  applied: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  appeal_state: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appeal_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appealed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  appealed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_decided_by_user_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  appeal_decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  policy_rule: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getAskOwnerAgentWorkforceProposalResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforceProposal, object>> = {},
+): AgentWorkforceProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  proposer_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  narrowing: {
+    remove_toolkit_ids: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.number.int({ min: 1 })),
+      undefined,
+    ]),
+    memory_review: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    proactivity_off: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    remove_capabilities: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 2 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+    remove_lead: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    toolkit_type_ceiling: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+  },
+  evidence: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  owner_comment: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decision_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  applied: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  appeal_state: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appeal_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appealed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  appealed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_decided_by_user_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  appeal_decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  policy_rule: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getCommentAgentWorkforceProposalResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforceProposal, object>> = {},
+): AgentWorkforceProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  proposer_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  narrowing: {
+    remove_toolkit_ids: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.number.int({ min: 1 })),
+      undefined,
+    ]),
+    memory_review: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    proactivity_off: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    remove_capabilities: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 2 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+    remove_lead: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    toolkit_type_ceiling: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+  },
+  evidence: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  owner_comment: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decision_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  applied: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  appeal_state: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appeal_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appealed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  appealed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_decided_by_user_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  appeal_decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  policy_rule: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getAppealAgentWorkforceProposalResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforceProposal, object>> = {},
+): AgentWorkforceProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  proposer_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  narrowing: {
+    remove_toolkit_ids: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.number.int({ min: 1 })),
+      undefined,
+    ]),
+    memory_review: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    proactivity_off: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    remove_capabilities: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 2 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+    remove_lead: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    toolkit_type_ceiling: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+  },
+  evidence: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  owner_comment: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decision_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  applied: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  appeal_state: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appeal_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appealed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  appealed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_decided_by_user_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  appeal_decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  policy_rule: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getDecideAgentWorkforceAppealResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforceProposal, object>> = {},
+): AgentWorkforceProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  source: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  proposer_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  narrowing: {
+    remove_toolkit_ids: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.number.int({ min: 1 })),
+      undefined,
+    ]),
+    memory_review: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    proactivity_off: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    remove_capabilities: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 2 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+    remove_lead: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+    toolkit_type_ceiling: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+  },
+  evidence: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  owner_comment: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  decision_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  applied: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([null]),
+    null,
+  ]),
+  appeal_state: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appeal_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  appealed_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  appealed_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_decided_by_user_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  appeal_decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  appeal_note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  policy_rule: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetAgentWorkforcePolicyResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforcePolicy, object>> = {},
+): AgentWorkforcePolicy => ({
+  project_id: faker.number.int(),
+  saved: faker.datatype.boolean(),
+  auto_hire_enabled: faker.datatype.boolean(),
+  min_successful_runs: faker.number.int(),
+  max_auto_hired: faker.number.int(),
+  auto_dismiss_enabled: faker.datatype.boolean(),
+  auto_dismiss_rules: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.helpers.fromRegExp("^[a-z][a-z0-9_]{0,39}$"),
+    conditions: Array.from(
+      { length: faker.number.int({ min: 1, max: 8 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      metric: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      op: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      value: faker.number.float({ min: 0, max: 1000000000, fractionDigits: 2 }),
+    })),
+    stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  grace_days: faker.number.int(),
+  updated_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  updated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  default_rules: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.helpers.fromRegExp("^[a-z][a-z0-9_]{0,39}$"),
+    conditions: Array.from(
+      { length: faker.number.int({ min: 1, max: 8 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      metric: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      op: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      value: faker.number.float({ min: 0, max: 1000000000, fractionDigits: 2 }),
+    })),
+    stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  open_auto_hired: faker.number.int(),
+  can_manage: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getSetAgentWorkforcePolicyResponseMock = (
+  overrideResponse: Partial<Extract<AgentWorkforcePolicy, object>> = {},
+): AgentWorkforcePolicy => ({
+  project_id: faker.number.int(),
+  saved: faker.datatype.boolean(),
+  auto_hire_enabled: faker.datatype.boolean(),
+  min_successful_runs: faker.number.int(),
+  max_auto_hired: faker.number.int(),
+  auto_dismiss_enabled: faker.datatype.boolean(),
+  auto_dismiss_rules: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.helpers.fromRegExp("^[a-z][a-z0-9_]{0,39}$"),
+    conditions: Array.from(
+      { length: faker.number.int({ min: 1, max: 8 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      metric: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      op: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      value: faker.number.float({ min: 0, max: 1000000000, fractionDigits: 2 }),
+    })),
+    stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  grace_days: faker.number.int(),
+  updated_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  updated_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  default_rules: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.helpers.fromRegExp("^[a-z][a-z0-9_]{0,39}$"),
+    conditions: Array.from(
+      { length: faker.number.int({ min: 1, max: 8 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      metric: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      op: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      value: faker.number.float({ min: 0, max: 1000000000, fractionDigits: 2 }),
+    })),
+    stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  open_auto_hired: faker.number.int(),
+  can_manage: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getListAgentAutomaticActionsResponseMock = (
+  overrideResponse: Partial<Extract<ListAgentAutomaticActions200, object>> = {},
+): ListAgentAutomaticActions200 => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    project_id: faker.number.int(),
+    application_id: faker.number.int(),
+    application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    rule: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    stage: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    proposal_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    due_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    evidence: {},
+    evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    note: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    decided_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    applied_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    can_undo: faker.datatype.boolean(),
+    can_object: faker.datatype.boolean(),
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getUndoAgentAutoHireResponseMock = (
+  overrideResponse: Partial<Extract<AgentAutomaticAction, object>> = {},
+): AgentAutomaticAction => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  rule: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  stage: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  proposal_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  due_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  evidence: {},
+  evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  applied_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  can_undo: faker.datatype.boolean(),
+  can_object: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getKeepAgentAutoHireResponseMock = (
+  overrideResponse: Partial<Extract<AgentAutomaticAction, object>> = {},
+): AgentAutomaticAction => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  rule: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  stage: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  proposal_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  due_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  evidence: {},
+  evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  applied_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  can_undo: faker.datatype.boolean(),
+  can_object: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getObjectAgentAutomaticActionResponseMock = (
+  overrideResponse: Partial<Extract<AgentAutomaticAction, object>> = {},
+): AgentAutomaticAction => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  application_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  rule: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  stage: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  proposal_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  due_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  evidence: {},
+  evidence_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  note: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  applied_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  can_undo: faker.datatype.boolean(),
+  can_object: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getCopyAgentMemoryResponseMock = (
+  overrideResponse: Partial<Extract<CopyAgentMemory200, object>> = {},
+): CopyAgentMemory200 => ({ copied: faker.number.int(), ...overrideResponse });
 
 export const getUploadAgentMediaResponseMock = (
   overrideResponse: Partial<Extract<AgentMediaObject, object>> = {},
@@ -3283,6 +5215,24 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             tool_envelope: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -3311,6 +5261,22 @@ export const getCreateApplicationResponseMock = (
                     ).map(() =>
                       faker.string.alpha({ length: { min: 10, max: 20 } }),
                     ),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            capabilities: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  can_propose_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                  can_review_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
                     undefined,
                   ]),
                 },
@@ -3870,6 +5836,24 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             tool_envelope: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -3898,6 +5882,22 @@ export const getCreateApplicationResponseMock = (
                     ).map(() =>
                       faker.string.alpha({ length: { min: 10, max: 20 } }),
                     ),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            capabilities: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  can_propose_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                  can_review_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
                     undefined,
                   ]),
                 },
@@ -4222,6 +6222,24 @@ export const getListPublicApplicationsResponseMock = (
           ]),
           undefined,
         ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         tool_envelope: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -4250,6 +6268,22 @@ export const getListPublicApplicationsResponseMock = (
                 ).map(() =>
                   faker.string.alpha({ length: { min: 10, max: 20 } }),
                 ),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        capabilities: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              can_propose_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+              can_review_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
                 undefined,
               ]),
             },
@@ -4493,6 +6527,24 @@ export const getGetApplicationResponseMock = (
             ]),
             undefined,
           ]),
+          proactivity: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                mode: "heartbeat",
+                interval: "1h",
+                quiet_hours: "22:00-07:00 Europe/Berlin",
+                watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                act_target: "home_thread",
+                limits: {
+                  wakes_per_day: 24,
+                  acts_per_day: 4,
+                  spend_per_day_usd: 2,
+                },
+              },
+              null,
+            ]),
+            undefined,
+          ]),
           tool_envelope: faker.helpers.arrayElement([
             faker.helpers.arrayElement([
               {
@@ -4521,6 +6573,22 @@ export const getGetApplicationResponseMock = (
                   ).map(() =>
                     faker.string.alpha({ length: { min: 10, max: 20 } }),
                   ),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
+            undefined,
+          ]),
+          capabilities: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                can_propose_agents: faker.helpers.arrayElement([
+                  faker.datatype.boolean(),
+                  undefined,
+                ]),
+                can_review_agents: faker.helpers.arrayElement([
+                  faker.datatype.boolean(),
                   undefined,
                 ]),
               },
@@ -4983,6 +7051,24 @@ export const getGetApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             tool_envelope: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -5011,6 +7097,22 @@ export const getGetApplicationResponseMock = (
                     ).map(() =>
                       faker.string.alpha({ length: { min: 10, max: 20 } }),
                     ),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            capabilities: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  can_propose_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                  can_review_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
                     undefined,
                   ]),
                 },
@@ -5579,6 +7681,24 @@ export const getEditApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             tool_envelope: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -5607,6 +7727,22 @@ export const getEditApplicationResponseMock = (
                     ).map(() =>
                       faker.string.alpha({ length: { min: 10, max: 20 } }),
                     ),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            capabilities: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  can_propose_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                  can_review_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
                     undefined,
                   ]),
                 },
@@ -6168,6 +8304,24 @@ export const getGetPublicApplicationResponseMock = (
             ]),
             undefined,
           ]),
+          proactivity: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                mode: "heartbeat",
+                interval: "1h",
+                quiet_hours: "22:00-07:00 Europe/Berlin",
+                watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                act_target: "home_thread",
+                limits: {
+                  wakes_per_day: 24,
+                  acts_per_day: 4,
+                  spend_per_day_usd: 2,
+                },
+              },
+              null,
+            ]),
+            undefined,
+          ]),
           tool_envelope: faker.helpers.arrayElement([
             faker.helpers.arrayElement([
               {
@@ -6196,6 +8350,22 @@ export const getGetPublicApplicationResponseMock = (
                   ).map(() =>
                     faker.string.alpha({ length: { min: 10, max: 20 } }),
                   ),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
+            undefined,
+          ]),
+          capabilities: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                can_propose_agents: faker.helpers.arrayElement([
+                  faker.datatype.boolean(),
+                  undefined,
+                ]),
+                can_review_agents: faker.helpers.arrayElement([
+                  faker.datatype.boolean(),
                   undefined,
                 ]),
               },
@@ -6974,6 +9144,24 @@ export const getGetApplicationVersionDetailResponseMock = (
           ]),
           undefined,
         ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         tool_envelope: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -7002,6 +9190,22 @@ export const getGetApplicationVersionDetailResponseMock = (
                 ).map(() =>
                   faker.string.alpha({ length: { min: 10, max: 20 } }),
                 ),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        capabilities: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              can_propose_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+              can_review_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
                 undefined,
               ]),
             },
@@ -7550,6 +9754,24 @@ export const getUpdateApplicationVersionResponseMock = (
           ]),
           undefined,
         ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         tool_envelope: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -7578,6 +9800,22 @@ export const getUpdateApplicationVersionResponseMock = (
                 ).map(() =>
                   faker.string.alpha({ length: { min: 10, max: 20 } }),
                 ),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        capabilities: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              can_propose_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+              can_review_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
                 undefined,
               ]),
             },
@@ -8129,6 +10367,24 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
               ]),
               undefined,
             ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             tool_envelope: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -8157,6 +10413,22 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
                     ).map(() =>
                       faker.string.alpha({ length: { min: 10, max: 20 } }),
                     ),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            capabilities: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  can_propose_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                  can_review_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
                     undefined,
                   ]),
                 },
@@ -8730,6 +11002,24 @@ export const getSaveApplicationNewVersionResponseMock = (
           ]),
           undefined,
         ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         tool_envelope: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -8758,6 +11048,22 @@ export const getSaveApplicationNewVersionResponseMock = (
                 ).map(() =>
                   faker.string.alpha({ length: { min: 10, max: 20 } }),
                 ),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        capabilities: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              can_propose_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+              can_review_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
                 undefined,
               ]),
             },
@@ -9512,6 +11818,27 @@ export const getImportWizardResponseMock = (
                       ]),
                       undefined,
                     ]),
+                    proactivity: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          mode: "heartbeat",
+                          interval: "1h",
+                          quiet_hours: "22:00-07:00 Europe/Berlin",
+                          watch: [
+                            { kind: "conversation" },
+                            { kind: "schedule_note" },
+                          ],
+                          act_target: "home_thread",
+                          limits: {
+                            wakes_per_day: 24,
+                            acts_per_day: 4,
+                            spend_per_day_usd: 2,
+                          },
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
                     tool_envelope: faker.helpers.arrayElement([
                       faker.helpers.arrayElement([
                         {
@@ -9548,6 +11875,22 @@ export const getImportWizardResponseMock = (
                                 length: { min: 10, max: 20 },
                               }),
                             ),
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
+                    capabilities: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          can_propose_agents: faker.helpers.arrayElement([
+                            faker.datatype.boolean(),
+                            undefined,
+                          ]),
+                          can_review_agents: faker.helpers.arrayElement([
+                            faker.datatype.boolean(),
                             undefined,
                           ]),
                         },
@@ -10261,6 +12604,27 @@ export const getImportWizardResponseMock = (
                       ]),
                       undefined,
                     ]),
+                    proactivity: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          mode: "heartbeat",
+                          interval: "1h",
+                          quiet_hours: "22:00-07:00 Europe/Berlin",
+                          watch: [
+                            { kind: "conversation" },
+                            { kind: "schedule_note" },
+                          ],
+                          act_target: "home_thread",
+                          limits: {
+                            wakes_per_day: 24,
+                            acts_per_day: 4,
+                            spend_per_day_usd: 2,
+                          },
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
                     tool_envelope: faker.helpers.arrayElement([
                       faker.helpers.arrayElement([
                         {
@@ -10297,6 +12661,22 @@ export const getImportWizardResponseMock = (
                                 length: { min: 10, max: 20 },
                               }),
                             ),
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
+                    capabilities: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          can_propose_agents: faker.helpers.arrayElement([
+                            faker.datatype.boolean(),
+                            undefined,
+                          ]),
+                          can_review_agents: faker.helpers.arrayElement([
+                            faker.datatype.boolean(),
                             undefined,
                           ]),
                         },
@@ -11121,6 +13501,27 @@ export const getForkAgentResponseMock = (
                   ]),
                   undefined,
                 ]),
+                proactivity: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    {
+                      mode: "heartbeat",
+                      interval: "1h",
+                      quiet_hours: "22:00-07:00 Europe/Berlin",
+                      watch: [
+                        { kind: "conversation" },
+                        { kind: "schedule_note" },
+                      ],
+                      act_target: "home_thread",
+                      limits: {
+                        wakes_per_day: 24,
+                        acts_per_day: 4,
+                        spend_per_day_usd: 2,
+                      },
+                    },
+                    null,
+                  ]),
+                  undefined,
+                ]),
                 tool_envelope: faker.helpers.arrayElement([
                   faker.helpers.arrayElement([
                     {
@@ -11149,6 +13550,22 @@ export const getForkAgentResponseMock = (
                         ).map(() =>
                           faker.string.alpha({ length: { min: 10, max: 20 } }),
                         ),
+                        undefined,
+                      ]),
+                    },
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                capabilities: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    {
+                      can_propose_agents: faker.helpers.arrayElement([
+                        faker.datatype.boolean(),
+                        undefined,
+                      ]),
+                      can_review_agents: faker.helpers.arrayElement([
+                        faker.datatype.boolean(),
                         undefined,
                       ]),
                     },
@@ -12485,6 +14902,763 @@ export const getSetAgentMemoryOptOutMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getSetAgentMemoryOptOutResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentHeartbeatMockHandler = (
+  overrideResponse?:
+    | AgentHeartbeatSettings
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentHeartbeatSettings> | AgentHeartbeatSettings),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_heartbeat/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentHeartbeatResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSaveAgentHeartbeatMockHandler = (
+  overrideResponse?:
+    | AgentHeartbeatSettings
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<AgentHeartbeatSettings> | AgentHeartbeatSettings),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/agent_heartbeat/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSaveAgentHeartbeatResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAgentHeartbeatsMockHandler = (
+  overrideResponse?:
+    | AgentHeartbeatList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentHeartbeatList> | AgentHeartbeatList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_heartbeats/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentHeartbeatsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetProjectProactivityMockHandler = (
+  overrideResponse?:
+    | ProjectProactivity
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ProjectProactivity> | ProjectProactivity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_heartbeat_project/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetProjectProactivityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetProjectProactivityMockHandler = (
+  overrideResponse?:
+    | ProjectProactivity
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<ProjectProactivity> | ProjectProactivity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/agent_heartbeat_project/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetProjectProactivityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAgentProposalsMockHandler = (
+  overrideResponse?:
+    | AgentProposalList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentProposalList> | AgentProposalList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_proposals/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentProposalsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentProposalMockHandler = (
+  overrideResponse?:
+    | AgentProposal
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentProposal> | AgentProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_proposals/prompt_lib/:projectId/:proposalId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentProposalResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDismissAgentProposalMockHandler = (
+  overrideResponse?:
+    | AgentProposal
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentProposal> | AgentProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_proposals/prompt_lib/:projectId/:proposalId/dismiss",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDismissAgentProposalResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getMarkAgentProposalCreatedMockHandler = (
+  overrideResponse?:
+    | MarkAgentProposalCreated200
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MarkAgentProposalCreated200> | MarkAgentProposalCreated200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_proposals/prompt_lib/:projectId/:proposalId/created",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getMarkAgentProposalCreatedResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentWorkforceMockHandler = (
+  overrideResponse?:
+    | AgentWorkforceAgent
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentWorkforceAgent> | AgentWorkforceAgent),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/agents/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentWorkforceResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAgentScorecardsMockHandler = (
+  overrideResponse?:
+    | ListAgentScorecards200
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ListAgentScorecards200> | ListAgentScorecards200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/agents/:applicationId/scorecards",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentScorecardsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentWorkforceImpactMockHandler = (
+  overrideResponse?:
+    | AgentWorkforceImpact
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentWorkforceImpact> | AgentWorkforceImpact),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/agents/:applicationId/impact",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentWorkforceImpactResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getReinstateAgentMockHandler = (
+  overrideResponse?:
+    | AgentWorkforceAgent
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentWorkforceAgent> | AgentWorkforceAgent),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/agents/:applicationId/reinstate",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getReinstateAgentResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAgentWorkforceProposalsMockHandler = (
+  overrideResponse?:
+    | ListAgentWorkforceProposals200
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        | Promise<ListAgentWorkforceProposals200>
+        | ListAgentWorkforceProposals200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/proposals",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentWorkforceProposalsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getProposeAgentWorkforceStageMockHandler = (
+  overrideResponse?:
+    | AgentWorkforceProposal
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentWorkforceProposal> | AgentWorkforceProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/proposals",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getProposeAgentWorkforceStageResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentWorkforceProposalMockHandler = (
+  overrideResponse?:
+    | AgentWorkforceProposal
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentWorkforceProposal> | AgentWorkforceProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/proposals/:proposalId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentWorkforceProposalResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getApproveAgentWorkforceProposalMockHandler = (
+  overrideResponse?:
+    | AgentWorkforceProposal
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentWorkforceProposal> | AgentWorkforceProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/proposals/:proposalId/approve",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getApproveAgentWorkforceProposalResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getRejectAgentWorkforceProposalMockHandler = (
+  overrideResponse?:
+    | AgentWorkforceProposal
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentWorkforceProposal> | AgentWorkforceProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/proposals/:proposalId/reject",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRejectAgentWorkforceProposalResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getAskOwnerAgentWorkforceProposalMockHandler = (
+  overrideResponse?:
+    | AgentWorkforceProposal
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentWorkforceProposal> | AgentWorkforceProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/proposals/:proposalId/ask_owner",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getAskOwnerAgentWorkforceProposalResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCommentAgentWorkforceProposalMockHandler = (
+  overrideResponse?:
+    | AgentWorkforceProposal
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentWorkforceProposal> | AgentWorkforceProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/proposals/:proposalId/comment",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCommentAgentWorkforceProposalResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getAppealAgentWorkforceProposalMockHandler = (
+  overrideResponse?:
+    | AgentWorkforceProposal
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentWorkforceProposal> | AgentWorkforceProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/proposals/:proposalId/appeal",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getAppealAgentWorkforceProposalResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDecideAgentWorkforceAppealMockHandler = (
+  overrideResponse?:
+    | AgentWorkforceProposal
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentWorkforceProposal> | AgentWorkforceProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/proposals/:proposalId/appeal/decide",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDecideAgentWorkforceAppealResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentWorkforcePolicyMockHandler = (
+  overrideResponse?:
+    | AgentWorkforcePolicy
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentWorkforcePolicy> | AgentWorkforcePolicy),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/policy",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentWorkforcePolicyResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetAgentWorkforcePolicyMockHandler = (
+  overrideResponse?:
+    | AgentWorkforcePolicy
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<AgentWorkforcePolicy> | AgentWorkforcePolicy),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/policy",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetAgentWorkforcePolicyResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAgentAutomaticActionsMockHandler = (
+  overrideResponse?:
+    | ListAgentAutomaticActions200
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        Promise<ListAgentAutomaticActions200> | ListAgentAutomaticActions200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/automatic_actions",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentAutomaticActionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUndoAgentAutoHireMockHandler = (
+  overrideResponse?:
+    | AgentAutomaticAction
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentAutomaticAction> | AgentAutomaticAction),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/automatic_actions/:actionId/undo",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUndoAgentAutoHireResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getKeepAgentAutoHireMockHandler = (
+  overrideResponse?:
+    | AgentAutomaticAction
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentAutomaticAction> | AgentAutomaticAction),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/automatic_actions/:actionId/keep",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getKeepAgentAutoHireResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getObjectAgentAutomaticActionMockHandler = (
+  overrideResponse?:
+    | AgentAutomaticAction
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentAutomaticAction> | AgentAutomaticAction),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_workforce/prompt_lib/:projectId/automatic_actions/:actionId/object",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getObjectAgentAutomaticActionResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCopyAgentMemoryMockHandler = (
+  overrideResponse?:
+    | CopyAgentMemory200
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CopyAgentMemory200> | CopyAgentMemory200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_copy_memory/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCopyAgentMemoryResponseMock(),
         { status: 200 },
       );
     },
@@ -14916,6 +18090,35 @@ export const getApplicationsMock = () => [
   getUpdateAgentMemoryEntryMockHandler(),
   getDeleteAgentMemoryEntryMockHandler(),
   getSetAgentMemoryOptOutMockHandler(),
+  getGetAgentHeartbeatMockHandler(),
+  getSaveAgentHeartbeatMockHandler(),
+  getListAgentHeartbeatsMockHandler(),
+  getGetProjectProactivityMockHandler(),
+  getSetProjectProactivityMockHandler(),
+  getListAgentProposalsMockHandler(),
+  getGetAgentProposalMockHandler(),
+  getDismissAgentProposalMockHandler(),
+  getMarkAgentProposalCreatedMockHandler(),
+  getGetAgentWorkforceMockHandler(),
+  getListAgentScorecardsMockHandler(),
+  getGetAgentWorkforceImpactMockHandler(),
+  getReinstateAgentMockHandler(),
+  getListAgentWorkforceProposalsMockHandler(),
+  getProposeAgentWorkforceStageMockHandler(),
+  getGetAgentWorkforceProposalMockHandler(),
+  getApproveAgentWorkforceProposalMockHandler(),
+  getRejectAgentWorkforceProposalMockHandler(),
+  getAskOwnerAgentWorkforceProposalMockHandler(),
+  getCommentAgentWorkforceProposalMockHandler(),
+  getAppealAgentWorkforceProposalMockHandler(),
+  getDecideAgentWorkforceAppealMockHandler(),
+  getGetAgentWorkforcePolicyMockHandler(),
+  getSetAgentWorkforcePolicyMockHandler(),
+  getListAgentAutomaticActionsMockHandler(),
+  getUndoAgentAutoHireMockHandler(),
+  getKeepAgentAutoHireMockHandler(),
+  getObjectAgentAutomaticActionMockHandler(),
+  getCopyAgentMemoryMockHandler(),
   getUploadAgentMediaMockHandler(),
   getGenerateAgentMediaMockHandler(),
   getGetAgentMediaMockHandler(),

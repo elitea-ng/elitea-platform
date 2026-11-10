@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/faults/grpcrecover"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 )
 
@@ -146,6 +148,10 @@ func newAuthorizedGRPCServer(tlsConfig *tls.Config, policy GRPCServerPolicy, ser
 		return nil, nil, err
 	}
 	options := append([]grpc.ServerOption{
+		// Outermost: a panic in any handler, authorization included, is one
+		// fault line and an Internal status without its value (FU-299).
+		grpc.ChainUnaryInterceptor(grpcrecover.UnaryServerInterceptor(slog.Default())),
+		grpc.ChainStreamInterceptor(grpcrecover.StreamServerInterceptor(slog.Default())),
 		grpc.Creds(credentials.NewTLS(tlsConfig.Clone())),
 		grpc.MaxRecvMsgSize(PlatformMaxMessageBytes),
 		grpc.MaxSendMsgSize(PlatformMaxSendMessageBytes),

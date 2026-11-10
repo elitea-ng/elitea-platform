@@ -54,7 +54,7 @@ export const LocalTurnFloorAgent = zod
     executor: LocalTurnExecutor,
   })
   .describe(
-    "Client contract 1.46. One agent participant of a desktop thread. NOTE(W2): internal/api/v2/localturns/route.go:130 (`floorStarted`).",
+    "Client contract 1.47. One agent participant of a desktop thread. NOTE(W2): internal/api/v2/localturns/route.go:130 (`floorStarted`).",
   );
 
 export type LocalTurnFloorAgent = zod.input<typeof LocalTurnFloorAgent>;

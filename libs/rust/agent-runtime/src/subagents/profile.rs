@@ -156,6 +156,41 @@ impl Brief {
 pub struct CheckedBrief {
     pub attachments: Vec<(String, String)>,
     pub memory_entries: Vec<(String, String)>,
+    /// The message each excerpt's id names, for the record: the model's
+    /// short id (`m-…`, #1831) and the chat message uuid it stands for.
+    /// Empty: the record keeps the ids as the brief gave them.
+    pub message_ids: Vec<(String, String)>,
+}
+
+impl SpawnRecord {
+    /// Name, in [`Brief::references`], each message by the id `checked`
+    /// resolved it to: the record keeps the chat message, not the model's
+    /// short id for it.
+    pub fn resolve_messages(&mut self, checked: &CheckedBrief) {
+        if checked.message_ids.is_empty() {
+            return;
+        }
+        let Some(ids) = self
+            .brief_refs
+            .get_mut("message_ids")
+            .and_then(Value::as_array_mut)
+        else {
+            return;
+        };
+        let resolved: BTreeSet<String> = ids
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|id| {
+                checked
+                    .message_ids
+                    .iter()
+                    .find(|(short, _)| short == id)
+                    .map_or(id, |(_, message)| message.as_str())
+                    .to_owned()
+            })
+            .collect();
+        *ids = resolved.into_iter().map(Value::String).collect();
+    }
 }
 
 /// The source name of the brief's untrusted envelope.
@@ -216,6 +251,11 @@ pub fn check_facts_only(brief: &Brief) -> Result<CheckedBrief, &'static str> {
 /// What one spawn's record keeps (`ephemeral_agents`, #1614), on the child's
 /// [`super::ChildIdentity`]: the profile's name and avatar, the two digests
 /// and the ids the brief named. Never the soul, a quote or a fact.
+///
+/// `profile` is the whole profile, for the host only: a host that lets the
+/// parent propose the child as a saved agent (`propose_agent`, ADR-0050
+/// decision 5a) reports it, soul and tools included, so Main can draft the
+/// agent and recompute [`Profile::digest`]. It is never part of the record.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SpawnRecord {
     pub display_name: Option<String>,
@@ -226,6 +266,8 @@ pub struct SpawnRecord {
     pub brief_digest: Option<String>,
     /// [`Brief::references`]; `Null` for an empty brief.
     pub brief_refs: Value,
+    /// The profile the spawn named.
+    pub profile: Profile,
 }
 
 impl SpawnRecord {
@@ -242,6 +284,7 @@ impl SpawnRecord {
             profile_digest: profile.digest(),
             brief_digest,
             brief_refs,
+            profile: profile.clone(),
         }
     }
 }

@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.46"
+  x-elitea-client-contract: "1.47"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3034,7 +3034,17 @@ components:
         role: { type: string }
         avatar_pack:
           type: string
-          description: Reserved for the avatar pack of a later release.
+          description: >-
+            Client contract 1.46 (ADR-0050 decision 6): on a read, the avatar pack of
+            the version the agent participant runs, an AgentAvatarPackV1
+            OBJECT, read live from the version on every participants read;
+            absent when the version has none (the client then shows
+            `entity_settings.icon_meta`). It stays declared as a string, the
+            "reserved" type contract 1.38 locked, because a type change is a
+            breaking change within the major. A client reads the value as
+            unknown JSON and validates it (`avatarPackOf` in
+            `@elitea/client-core/conversation`); a value that is not a valid
+            pack is ignored. A create request does not set it.
 
     # --- Client frame catalogue (client contract 1.1). The `data` of an
     # `execution.node_event` SSE event, per `data.type`; see
@@ -5138,7 +5148,7 @@ components:
           description: >-
             The conversation's agent participant that answers. 0 or absent
             means the conversation's model participant. In a thread with two
-            or more agents (client contract 1.46) it is the composer's target:
+            or more agents (client contract 1.47) it is the composer's target:
             Main routes the message by the floor and may answer another first
             (`LocalTurnStarted.floor`).
         unattended:
@@ -5149,7 +5159,7 @@ components:
           uniqueItems: true
           items: { type: integer, format: int64, minimum: 1 }
           description: >-
-            Client contract 1.46 (ADR-0050 decision 7f). The agent participants
+            Client contract 1.47 (ADR-0050 decision 7f). The agent participants
             the person addressed, in the order they were named; absent or
             empty is no address. Main routes the message by the conversation's
             floor: the addressed agents in order (the composer's target first
@@ -5162,7 +5172,7 @@ components:
     LocalTurnFloorTurn:
       type: object
       description: >-
-        Client contract 1.46 (ADR-0050 decision 7f). A later agent's turn of a
+        Client contract 1.47 (ADR-0050 decision 7f). A later agent's turn of a
         message Main routed: send it, with a new `question_id`, after the
         message's earlier turns are committed, one at a time in
         `LocalTurnStarted.floor.targets` order, with `participant_id` the
@@ -5188,10 +5198,10 @@ components:
     LocalTurnFloorStarted:
       type: object
       description: >-
-        Client contract 1.46 (ADR-0050 decision 7f). The message's routed
+        Client contract 1.47 (ADR-0050 decision 7f). The message's routed
         order in a thread with two or more agents; absent when the message was
         not routed (one agent, the model participant, or a server older than
-        1.46). NOTE(W2): internal/api/v2/localturns/route.go:130
+        1.47). NOTE(W2): internal/api/v2/localturns/route.go:130
         (`floorStarted`).
       required: [question_id, position, targets, agents]
       properties:
@@ -5215,7 +5225,7 @@ components:
     LocalTurnFloorAgent:
       type: object
       description: >-
-        Client contract 1.46. One agent participant of a desktop thread.
+        Client contract 1.47. One agent participant of a desktop thread.
         NOTE(W2): internal/api/v2/localturns/route.go:130 (`floorStarted`).
       required: [participant_id, name, executor]
       properties:
@@ -5229,7 +5239,7 @@ components:
       type: string
       enum: [local, cloud]
       description: >-
-        Client contract 1.46 (ADR-0050 decision 7f). Where an agent of a
+        Client contract 1.47 (ADR-0050 decision 7f). Where an agent of a
         desktop thread runs, from its participant mapping's
         `entity_settings.executor`. `local` (the default): on the desktop,
         with the workspace. `cloud`: in the cloud, as a remote participant;
@@ -5852,7 +5862,7 @@ components:
         1.30 `unattended_grant_refused`, `chain_limit_reached` and
         `chain_ended`, from client contract 1.31 `invalid_run_brief`,
         `chain_not_found`, `run_brief_unavailable` and `run_brief_failed`, and
-        from client contract 1.46 `agent_target_required`,
+        from client contract 1.47 `agent_target_required`,
         `addressee_not_in_conversation`, `floor_turn_refused` and
         `floor_turn_superseded`. NOTE(W2):
         internal/api/v2/localturns/route.go:241 (`writeUseCaseError`).
@@ -6700,6 +6710,14 @@ components:
             `chain_root_execution_id`, `execution_id` (the chain's last run),
             `origin` (`cloud` or `desktop`) and `continuations`
             (internal/infra/db/repos/run_finished.go). One row per chain end.
+            For `agent_heartbeat` (ADR-0050 decision 2) a proactive agent
+            wrote to its owner: `conversation_id` (the home thread UUID),
+            `message_id`, `project_id`, `application_id`, `agent_name`,
+            `outcome` (`notify`, `act_degraded` or `paused`), `reason_code`
+            `text` (the first 280 bytes of the message) and `message` (the
+            agent's name, the text and an empty `[...]()` link to the
+            conversation)
+            (internal/infra/db/repos/agent_heartbeats.go, PostToOwner).
           properties:
             sender:
               type: object
@@ -8914,6 +8932,229 @@ components:
         kind: { type: string, enum: [fact, preference, episode] }
         pinned: { type: boolean }
         status: { $ref: '#/components/schemas/AgentMemoryStatus' }
+    AgentProactivity:
+      type: object
+      additionalProperties: false
+      description: >
+        The heartbeat block of an agent version (ADR-0050 decision 2),
+        meta.proactivity. The heartbeat reads the block of the agent's
+        published release, never of a draft. Every field is optional; an
+        empty object is mode heartbeat with the defaults.
+      properties:
+        mode: { type: string, enum: ['off', heartbeat], description: 'off (the default when the block is absent) or heartbeat.' }
+        interval:
+          type: string
+          description: Whole minutes from 15m to 24h, as a Go duration ("1h", "30m"). Default 1h.
+        jitter:
+          description: A whole percentage of the interval from 0 to 50, as a number or "10%". Default 10.
+          oneOf:
+            - { type: integer, minimum: 0, maximum: 50 }
+            - { type: string, pattern: '^[0-9]{1,2}%?$' }
+        quiet_hours:
+          type: string
+          description: '"HH:MM-HH:MM Zone" with an IANA zone, for example "22:00-07:00 Europe/Berlin". No wake starts inside the window.'
+        watch:
+          type: array
+          maxItems: 16
+          description: >
+            What a wake reads. Default conversation and schedule_note.
+            toolkit_read names a read-only tool for the triage; v1 lists it
+            in the digest and does not call it.
+          items:
+            type: object
+            additionalProperties: false
+            required: [kind]
+            properties:
+              kind: { type: string, description: 'conversation, schedule_note or toolkit_read.' }
+              tool: { type: string, maxLength: 128 }
+        act_target:
+          type: string
+          enum: [home_thread, new_conversation]
+          description: Where an act runs. Default home_thread. workspace_thread is not available in v1 (422).
+        limits:
+          type: object
+          additionalProperties: false
+          description: >
+            The agent's daily envelope. The platform's maximums (section
+            proactivity) apply when they are lower; a personal project also
+            has its own act limit.
+          properties:
+            wakes_per_day: { type: integer, minimum: 1, maximum: 96, description: 'Default 24.' }
+            acts_per_day: { type: integer, minimum: 0, maximum: 96, description: 'Default 4.' }
+            spend_per_day_usd: { type: number, minimum: 0, maximum: 1000, description: 'The triage and the runs it starts. Default 2.0.' }
+      example:
+        mode: heartbeat
+        interval: 1h
+        quiet_hours: 22:00-07:00 Europe/Berlin
+        watch: [{ kind: conversation }, { kind: schedule_note }]
+        act_target: home_thread
+        limits: { wakes_per_day: 24, acts_per_day: 4, spend_per_day_usd: 2 }
+    AgentHeartbeatSave:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        mandate_id:
+          type: string
+          description: A delegated mandate of the caller (a UUID). An empty string removes the mandate; absent keeps it.
+      example: { enabled: true, mandate_id: 7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f }
+    AgentHeartbeatSettings:
+      type: object
+      description: >
+        NOTE(W2): internal/api/v2/agentheartbeat/handler.go:107 (Settings),
+        which embeds internal/infra/db/repos/agent_heartbeats.go:731
+        (HeartbeatSettings).
+      required: [application_id, enabled, owner_user_id, mandate_id, home_conversation_uuid, release_id,
+        next_wake_at, last_wake_at, paused_until, last_skip_reason, updated_at, configured, governance, release]
+      properties:
+        application_id: { type: integer, format: int64 }
+        configured: { type: boolean, description: 'false when nobody turned the heartbeat on yet.' }
+        enabled: { type: boolean }
+        owner_user_id: { type: integer, format: int64 }
+        mandate_id: { type: string, nullable: true }
+        home_conversation_uuid: { type: string, nullable: true, description: 'The agent''s home thread, created at its first message.' }
+        release_id: { type: integer, format: int64, nullable: true, description: 'The release the last wake read.' }
+        next_wake_at: { type: string, format: date-time }
+        last_wake_at: { type: string, format: date-time, nullable: true }
+        paused_until: { type: string, format: date-time, nullable: true, description: 'A daily limit paused the heartbeat until this time.' }
+        last_skip_reason:
+          type: string
+          description: Why the last due wake did not reach the triage (quiet_hours, suspended, previous_run_active, review_required, ...). Empty after a triaged wake.
+        updated_at: { type: string, format: date-time }
+        governance: { $ref: '#/components/schemas/AgentHeartbeatGovernance' }
+        release:
+          allOf: [{ $ref: '#/components/schemas/AgentHeartbeatRelease' }]
+          nullable: true
+          description: The published release's block. Null without a published release.
+      example:
+        application_id: 31
+        configured: true
+        enabled: true
+        owner_user_id: 11
+        mandate_id: 7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f
+        home_conversation_uuid: 10000000-0000-4000-8000-000000000031
+        release_id: 5
+        next_wake_at: '2026-11-09T15:00:00Z'
+        last_wake_at: '2026-11-09T14:00:00Z'
+        paused_until: null
+        last_skip_reason: ''
+        updated_at: '2026-11-09T14:00:00Z'
+        governance:
+          platform_enabled: true
+          project_enabled: true
+          tier: medium
+          personal: false
+          can_enable: true
+          wakes_per_day: 24
+          acts_per_day: 4
+          spend_per_day_usd: 2
+        release:
+          release_id: 5
+          version_id: 42
+          mode: heartbeat
+          interval: 1h0m0s
+          quiet_hours: 22:00-07:00 Europe/Berlin
+          act_target: home_thread
+          goal_count: 1
+    AgentHeartbeatGovernance:
+      type: object
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:117 (Governance).
+      required: [platform_enabled, project_enabled, tier, personal, can_enable, wakes_per_day, acts_per_day, spend_per_day_usd]
+      properties:
+        platform_enabled: { type: boolean }
+        project_enabled: { type: boolean }
+        tier: { $ref: '#/components/schemas/AgentRiskTier' }
+        personal: { type: boolean, description: 'The project is the caller''s personal project.' }
+        can_enable: { type: boolean }
+        reason:
+          type: string
+          enum: [proactivity_platform_off, proactivity_tier_too_low, proactivity_no_release, proactivity_not_reviewed,
+            proactivity_block_off]
+          description: Why can_enable is false. Absent when it is true.
+        wakes_per_day: { type: integer, description: 'The effective limit after the platform maximums.' }
+        acts_per_day: { type: integer }
+        spend_per_day_usd: { type: number }
+    AgentHeartbeatRelease:
+      type: object
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:130 (ReleaseView).
+      required: [release_id, version_id, mode, interval, act_target, goal_count]
+      properties:
+        release_id: { type: integer, format: int64 }
+        version_id: { type: integer, format: int64 }
+        mode: { type: string, enum: ['off', heartbeat] }
+        interval: { type: string }
+        quiet_hours: { type: string }
+        act_target: { type: string }
+        goal_count: { type: integer, description: 'How many soul proactive_goals the release has.' }
+    AgentHeartbeatRefusal:
+      type: object
+      required: [error, code]
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:261 (Put).
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          description: >
+            proactivity_platform_off, proactivity_tier_too_low,
+            proactivity_no_release, proactivity_not_reviewed, proactivity_block_off,
+            proactivity_mandate_refused, proactivity_mandate_not_owner or
+            proactivity_not_owner (403: the heartbeat is on and belongs to
+            another person, and the caller is not an owner of the agent).
+      example: { error: A proactive agent must be at least medium risk., code: proactivity_tier_too_low }
+    AgentHeartbeatEntry:
+      type: object
+      description: NOTE(W2) internal/infra/db/repos/agent_heartbeats.go:808 (HeartbeatEntry).
+      required: [id, wake_id, woke_at, outcome, reason_code, reason, release_id, digest_sha256, triage_spend_usd,
+        execution_id, conversation_uuid, paused_until]
+      properties:
+        id: { type: integer, format: int64 }
+        wake_id: { type: string }
+        woke_at: { type: string, format: date-time }
+        outcome:
+          type: string
+          description: >
+            no_op, notify, act, act_degraded, failed or paused. act_degraded is an act that became a notify (no mandate, the act
+            limit, a refused start); reason_code says why.
+        reason_code: { type: string }
+        reason: { type: string, description: 'The triage''s reason, or why the wake failed or paused.' }
+        release_id: { type: integer, format: int64, nullable: true }
+        digest_sha256: { type: string, nullable: true, description: 'The SHA-256 of the wake digest the triage read.' }
+        triage_spend_usd: { type: number }
+        execution_id: { type: string, nullable: true, description: 'The run an act started.' }
+        conversation_uuid: { type: string, nullable: true }
+        paused_until: { type: string, format: date-time, nullable: true }
+    AgentHeartbeatList:
+      type: object
+      required: [total, rows]
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:365 (History).
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentHeartbeatEntry' }
+      example:
+        total: 1
+        rows:
+          - id: 1
+            wake_id: 3f2b8d4e-1a2c-4b5d-9e8f-7a6b5c4d3e2f
+            woke_at: '2026-11-09T14:00:00Z'
+            outcome: notify
+            reason_code: ''
+            reason: The nightly build failed.
+            release_id: 5
+            digest_sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+            triage_spend_usd: 0.0004
+            execution_id: null
+            conversation_uuid: 10000000-0000-4000-8000-000000000031
+            paused_until: null
+    ProjectProactivity:
+      type: object
+      additionalProperties: false
+      required: [proactive_agents_enabled]
+      properties:
+        proactive_agents_enabled: { type: boolean }
+      example: { proactive_agents_enabled: true }
     AgentMemoryRefusal:
       type: object
       required: [error, code]
@@ -8922,6 +9163,412 @@ components:
         code: { type: string, enum: [not_found, memory_change_forbidden, memory_entry_invalid] }
       description: >
         NOTE(W2): internal/api/v2/agentmemory/handler.go, writeError.
+    AgentProposalSeed:
+      type: object
+      required: [kind, content]
+      properties:
+        kind: { type: string, enum: [fact, preference, episode] }
+        content: { type: string }
+    AgentProposalToolCategory:
+      type: object
+      required: [key, category]
+      properties:
+        key: { type: string, description: 'The tool reference, toolkit/tool or toolkit/* (a wildcard).' }
+        toolkit_type: { type: string }
+        category:
+          type: string
+          description: The tool's ADR-0041 category (read, write, external_send, money, destructive); an undeclared tool or a wildcard is write.
+    AgentProposalEvidence:
+      type: object
+      required: [status, steps, input_tokens, output_tokens, error_code, started_at, finished_at]
+      properties:
+        status: { type: string }
+        steps: { type: integer, format: int64 }
+        input_tokens: { type: integer, format: int64 }
+        output_tokens: { type: integer, format: int64 }
+        error_code: { type: string, nullable: true }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
+      description: >
+        The promoted sub-agent's spawn record (elitea_runtime.ephemeral_agents)
+        with the same profile digest: how it ended and what it spent.
+    AgentProposal:
+      type: object
+      required: [id, project_id, proposer_application_id, proposer_name, proposed_for_user_id, execution_id,
+        conversation_uuid, ephemeral_agent_id, spec_digest, rationale, draft, memory_seeds, tool_categories,
+        status, decided_by_user_id, decided_at, created_application_id, created_at, evidence]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        proposer_application_id: { type: integer, format: int64 }
+        proposer_name: { type: string }
+        proposed_for_user_id: { type: integer, format: int64 }
+        execution_id: { type: string }
+        conversation_uuid: { type: string, nullable: true }
+        ephemeral_agent_id: { type: string }
+        spec_digest: { type: string }
+        rationale: { type: string }
+        draft:
+          type: object
+          additionalProperties: true
+          description: >
+            The agent draft the review form opens with: name, description,
+            instructions, welcome_message, conversation_starters, risk_tier
+            (always low), soul, tools and avatar.
+          x-elitea-passthrough: >-
+            NOTE(W2): built by agentproposal.Draft
+            (internal/domain/agentproposal/agentproposal.go:293) and stored
+            as jsonb; the review form maps it onto the create body.
+        memory_seeds:
+          type: array
+          items: { $ref: '#/components/schemas/AgentProposalSeed' }
+        tool_categories:
+          type: array
+          items: { $ref: '#/components/schemas/AgentProposalToolCategory' }
+        status: { type: string, enum: [proposed, created, dismissed] }
+        decided_by_user_id: { type: integer, format: int64, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+        created_application_id: { type: integer, format: int64, nullable: true }
+        created_at: { type: string, format: date-time }
+        evidence:
+          allOf: [{ $ref: '#/components/schemas/AgentProposalEvidence' }]
+          nullable: true
+    AgentProposalList:
+      type: object
+      required: [rows, total]
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentProposal' }
+        total: { type: integer }
+    AgentProposalRefusal:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [not_found, proposal_decided, proposal_decision_forbidden, copy_forbidden, not_your_new_agent] }
+      description: >
+        NOTE(W2): internal/api/v2/agentproposals/handler.go, writeError.
+    AgentWorkforceNarrowing:
+      type: object
+      additionalProperties: false
+      description: >
+        The exact narrowing of a demotion. Every field only takes away.
+      properties:
+        remove_toolkit_ids:
+          type: array
+          maxItems: 50
+          items: { type: integer, format: int64, minimum: 1 }
+        memory_review: { type: boolean, description: Set the memory write mode to review. }
+        proactivity_off: { type: boolean, description: Turn the heartbeat off. }
+        remove_capabilities:
+          type: array
+          maxItems: 2
+          items: { type: string }
+          description: can_propose_agents and/or can_review_agents.
+        remove_lead: { type: boolean, description: Drop the agent as the lead of every conversation it leads. }
+        toolkit_type_ceiling:
+          type: array
+          maxItems: 50
+          items: { type: string }
+          description: Keep only toolkits of these types (an allowlist; empty is no ceiling).
+    AgentWorkforceDecisionBody:
+      type: object
+      additionalProperties: false
+      properties:
+        note: { type: string, maxLength: 4000 }
+        confirm_nested:
+          type: boolean
+          description: Confirm retiring an agent that other agents nest (they then fail with nested_agent_retired).
+    AgentWorkforceProposal:
+      type: object
+      required: [id, project_id, application_id, application_name, kind, stage, source, proposed_by_user_id,
+        proposer_application_id, execution_id, rationale, narrowing, evidence, evidence_digest, status,
+        owner_comment, decided_by_user_id, decided_at, decision_note, applied, appeal_state, appeal_reason,
+        appealed_by_user_id, appealed_at, appeal_decided_by_user_id, appeal_decided_at, appeal_note, created_at,
+        policy_rule]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        application_name: { type: string }
+        kind: { type: string, description: dismiss or demote. }
+        stage: { type: string, description: 'watch, demote, suspend, retire or delete.' }
+        source: { type: string, description: 'person, hr_agent or policy (the project''s automatic dismissal policy).' }
+        proposed_by_user_id: { type: integer, format: int64, nullable: true }
+        proposer_application_id: { type: integer, format: int64, nullable: true, description: The HR agent that proposed it. }
+        execution_id: { type: string, nullable: true }
+        rationale: { type: string }
+        narrowing: { $ref: '#/components/schemas/AgentWorkforceNarrowing' }
+        evidence:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: The latest scorecard when the proposal was made.
+          x-elitea-passthrough: >-
+            NOTE(W2): repos.WorkforceProposal.Evidence
+            (internal/infra/db/repos/agent_workforce.go:104) is the frozen
+            agentworkforce.Scorecard stored as jsonb.
+        evidence_digest: { type: string }
+        status: { type: string, description: 'proposed, asked_owner, approved or rejected.' }
+        owner_comment: { type: string, nullable: true }
+        decided_by_user_id: { type: integer, format: int64, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+        decision_note: { type: string, nullable: true }
+        applied:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: What applying the stage changed (the reinstate and appeal reversal read it).
+          x-elitea-passthrough: >-
+            NOTE(W2): repos.WorkforceProposal.Applied
+            (internal/infra/db/repos/agent_workforce.go:111), built per stage
+            in applyStage (internal/infra/db/repos/agent_workforce_ladder.go:93).
+        appeal_state: { type: string, nullable: true, description: 'open, granted or upheld.' }
+        appeal_reason: { type: string, nullable: true }
+        appealed_by_user_id: { type: integer, format: int64, nullable: true }
+        appealed_at: { type: string, format: date-time, nullable: true }
+        appeal_decided_by_user_id: { type: integer, format: int64, nullable: true }
+        appeal_decided_at: { type: string, format: date-time, nullable: true }
+        appeal_note: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        policy_rule:
+          type: string
+          nullable: true
+          description: The rule of a stage the workforce policy applied or noticed (source policy).
+    AgentScorecard:
+      type: object
+      required: [day, runs_30d, failed_30d, cap_reached_30d, failure_rate_30d, breaker_trips_7d,
+        approval_rejections_30d, guardrail_hits_30d, spend_30d_usd, project_median_spend_usd,
+        thumbs_up_30d, thumbs_down_30d, last_used_at, unused_days, certification_state, computed_at]
+      properties:
+        day: { type: string, format: date }
+        runs_30d: { type: integer }
+        failed_30d: { type: integer }
+        cap_reached_30d: { type: integer }
+        failure_rate_30d: { type: number }
+        breaker_trips_7d: { type: integer }
+        approval_rejections_30d: { type: integer }
+        guardrail_hits_30d: { type: integer }
+        spend_30d_usd: { type: number }
+        project_median_spend_usd: { type: number }
+        thumbs_up_30d: { type: integer }
+        thumbs_down_30d: { type: integer }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        unused_days: { type: integer, nullable: true }
+        certification_state: { type: string }
+        computed_at: { type: string, format: date-time }
+    AgentWorkforceAgent:
+      type: object
+      required: [project_id, application_id, application_name, risk_tier, business_owner_id, technical_owner_id,
+        under_review, under_review_since, lifecycle_state, retired_at, retired_by, reinstate_until, purge_after,
+        suspension_id, suspension_source, legal_hold, is_hr_agent, auto_hired_at, probation_until,
+        probation_reviewed_at, orphaned_since]
+      properties:
+        project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        application_name: { type: string }
+        risk_tier: { type: string }
+        business_owner_id: { type: integer, format: int64 }
+        technical_owner_id: { type: integer, format: int64 }
+        under_review: { type: boolean, description: The watch flag. }
+        under_review_since: { type: string, format: date-time, nullable: true }
+        lifecycle_state: { type: string, description: 'active, retired or deleted.' }
+        retired_at: { type: string, format: date-time, nullable: true }
+        retired_by: { type: integer, format: int64, nullable: true }
+        reinstate_until: { type: string, format: date-time, nullable: true }
+        purge_after: { type: string, format: date-time, nullable: true }
+        suspension_id: { type: integer, format: int64, description: 'The active suspension, 0 for none.' }
+        suspension_source: { type: string }
+        legal_hold: { type: boolean }
+        is_hr_agent: { type: boolean }
+        auto_hired_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: The workforce policy hired the agent (it is on probation until a manager keeps it).
+        probation_until:
+          type: string
+          format: date-time
+          nullable: true
+          description: Until when an agent manager can undo the automatic hire.
+        probation_reviewed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When an agent manager kept or undid the automatic hire.
+        orphaned_since:
+          type: string
+          format: date-time
+          nullable: true
+          description: The agent's owners left the project; it is offered for reassignment.
+        scorecard:
+          allOf: [{ $ref: '#/components/schemas/AgentScorecard' }]
+          nullable: true
+          description: The latest scorecard (only on getAgentWorkforce).
+        can_manage: { type: boolean, description: The caller holds agents.workforce.manage here (only on getAgentWorkforce). }
+        is_owner: { type: boolean, description: The caller owns the agent (only on getAgentWorkforce). }
+    AgentWorkforceImpact:
+      type: object
+      required: [conversations, conversations_led, teams, nested_by, schedules, triggers, published_versions,
+        suspension, legal_hold, lifecycle_state]
+      properties:
+        conversations: { type: integer }
+        conversations_led: { type: integer }
+        teams:
+          type: array
+          items:
+            type: object
+            required: [id, name, lead]
+            properties:
+              id: { type: integer, format: int64 }
+              name: { type: string }
+              lead: { type: boolean }
+        nested_by:
+          type: array
+          items: { $ref: '#/components/schemas/AgentWorkforceNesting' }
+        schedules: { type: integer }
+        triggers: { type: integer }
+        published_versions: { type: integer }
+        suspension:
+          type: object
+          nullable: true
+          required: [id, source]
+          properties:
+            id: { type: integer, format: int64 }
+            source: { type: string }
+        legal_hold: { type: boolean }
+        lifecycle_state: { type: string }
+    AgentWorkforceNesting:
+      type: object
+      required: [application_id, name]
+      properties:
+        application_id: { type: integer, format: int64 }
+        name: { type: string }
+    AgentWorkforceRefusal:
+      type: object
+      required: [error, code, message]
+      properties:
+        error: { type: string }
+        code: { type: string }
+        message: { type: string }
+        nested_by:
+          type: array
+          items: { $ref: '#/components/schemas/AgentWorkforceNesting' }
+          description: With workforce_confirm_nested, the agents that nest it.
+        purge_after: { type: string, format: date-time, nullable: true, description: With workforce_retention_pending. }
+        workforce_proposal_id: { type: integer, format: int64 }
+      description: >
+        NOTE(W2): internal/api/v2/agentworkforce/handler.go, writeError.
+        code is one of not_found, workforce_invalid, workforce_forbidden,
+        workforce_guard_refused, workforce_proposal_open,
+        workforce_state_conflict, workforce_confirm_nested,
+        workforce_legal_hold, workforce_retention_pending,
+        workforce_reinstate_closed, workforce_appeal_closed.
+    AgentWorkforceCondition:
+      type: object
+      additionalProperties: false
+      required: [metric, op, value]
+      properties:
+        metric:
+          type: string
+          description: >
+            runs_30d, failed_30d, cap_reached_30d, failure_rate_30d,
+            breaker_trips_7d, approval_rejections_30d, guardrail_hits_30d,
+            spend_ratio (spend against the project median), thumbs_down_30d,
+            unused_days, auto_hired (1 or 0) or probation_failed (1 or 0).
+        op: { type: string, description: '>=, >, <=, < or =' }
+        value: { type: number, minimum: 0, maximum: 1000000000 }
+    AgentWorkforceRule:
+      type: object
+      additionalProperties: false
+      required: [id, conditions, stage]
+      properties:
+        id: { type: string, pattern: '^[a-z][a-z0-9_]{0,39}$' }
+        conditions:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items: { $ref: '#/components/schemas/AgentWorkforceCondition' }
+        stage: { type: string, description: 'watch, suspend or retire. Demote and delete are never automatic.' }
+    AgentWorkforcePolicyInput:
+      type: object
+      additionalProperties: false
+      required: [auto_hire_enabled, min_successful_runs, max_auto_hired, auto_dismiss_enabled, auto_dismiss_rules, grace_days]
+      properties:
+        auto_hire_enabled: { type: boolean }
+        min_successful_runs: { type: integer, minimum: 1, maximum: 100 }
+        max_auto_hired: { type: integer, minimum: 1, maximum: 50 }
+        auto_dismiss_enabled: { type: boolean }
+        auto_dismiss_rules:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/AgentWorkforceRule' }
+        grace_days: { type: integer, minimum: 1, maximum: 90 }
+    AgentWorkforcePolicy:
+      type: object
+      required: [project_id, saved, auto_hire_enabled, min_successful_runs, max_auto_hired, auto_dismiss_enabled,
+        auto_dismiss_rules, grace_days, updated_by, updated_at, default_rules, open_auto_hired, can_manage]
+      properties:
+        project_id: { type: integer, format: int64 }
+        saved: { type: boolean, description: 'An agent manager saved a policy (false is the defaults, everything off).' }
+        auto_hire_enabled: { type: boolean }
+        min_successful_runs: { type: integer }
+        max_auto_hired: { type: integer }
+        auto_dismiss_enabled: { type: boolean }
+        auto_dismiss_rules:
+          type: array
+          items: { $ref: '#/components/schemas/AgentWorkforceRule' }
+        grace_days: { type: integer }
+        updated_by: { type: integer, format: int64, nullable: true }
+        updated_at: { type: string, format: date-time, nullable: true }
+        default_rules:
+          type: array
+          items: { $ref: '#/components/schemas/AgentWorkforceRule' }
+          description: The platform's starting rules.
+        open_auto_hired: { type: integer, description: Automatically hired agents nobody kept yet. }
+        can_manage: { type: boolean, description: The caller holds agents.workforce.manage here. }
+    AgentAutomaticAction:
+      type: object
+      required: [id, project_id, application_id, application_name, kind, rule, stage, proposal_id, status, due_at,
+        evidence, evidence_digest, note, decided_by_user_id, decided_at, applied_at, created_at, can_undo, can_object]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        application_name: { type: string }
+        kind: { type: string, description: 'auto_hire, auto_dismiss or orphan.' }
+        rule: { type: string }
+        stage: { type: string, nullable: true, description: 'watch, suspend or retire; null for a hire.' }
+        proposal_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The agent proposal of a hire, or the workforce proposal of a stage.
+        status:
+          type: string
+          description: 'pending, flagged, applied, held, objected, undone, kept, resolved or cancelled.'
+        due_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: The end of a retire notice's grace period, an orphan's watch date, or a hire's undo window.
+        evidence:
+          type: object
+          additionalProperties: true
+          description: What the policy read (the scorecard and the rule, or the hire's evidence).
+          x-elitea-passthrough: >-
+            NOTE(W2): repos.AutomaticAction.Evidence
+            (internal/infra/db/repos/agent_workforce_policy.go:181) is the
+            jsonb the pass stored, built per action kind in insertAction.
+        evidence_digest: { type: string }
+        note: { type: string, nullable: true }
+        decided_by_user_id: { type: integer, format: int64, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+        applied_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        can_undo: { type: boolean, description: An automatic hire still in its 14-day undo window. }
+        can_object: { type: boolean, description: A retire notice still in its grace period. }
     AgentRegistryRecord:
       type: object
       required: [project_id, application_id, application_name, business_owner_id, technical_owner_id,
@@ -9762,7 +10409,7 @@ components:
           description: The user who suspended. 0 is the system (the scheduled self-test or the circuit breaker).
         source:
           type: string
-          description: One of manual, breaker, certification, self_test.
+          description: One of manual, breaker, certification, self_test, dismissal.
         resume_requires:
           type: string
           description: One of any_admin, governance_role, two_person.
@@ -11840,6 +12487,15 @@ components:
             indicator on the answer (`meta.grounding` of the message). Null,
             absent or `off` is no citation rule. A save with another value is
             refused with 400. Pipelines and nested agents ignore it.
+        proactivity:
+          allOf: [{ $ref: '#/components/schemas/AgentProactivity' }]
+          nullable: true
+          description: >
+            The agent's heartbeat (ADR-0050 decision 2): how often it wakes,
+            its quiet hours, what it reads, where it acts and its daily
+            limits. The heartbeat reads the block of the published release.
+            A save with an invalid block is refused with 422
+            proactivity_invalid.
         tool_envelope:
           allOf: [{ $ref: '#/components/schemas/AgentToolEnvelope' }]
           nullable: true
@@ -11850,6 +12506,31 @@ components:
             ceilings, into each run; nested agents follow the root agent's.
             A save with an invalid block is refused with 422
             tool_envelope_invalid.
+        capabilities:
+          type: object
+          nullable: true
+          properties:
+            can_propose_agents:
+              type: boolean
+              description: >
+                The agent may propose, with the propose_agent tool, that a
+                temporary sub-agent it started become a saved agent
+                (ADR-0050 decision 5a). The person it works for must also
+                hold models.applications.applications.create.
+            can_review_agents:
+              type: boolean
+              description: >
+                The agent is an HR agent (ADR-0050 decision 5l): it may
+                propose, with the propose_dismissal tool, a ladder stage for
+                another agent of the project. It never decides; a person
+                holding agents.workforce.manage does. Guards refuse a
+                proposal against itself, its hirer, a higher tier, another
+                HR agent, a critical-tier agent or one under legal hold.
+          additionalProperties: { type: boolean }
+          description: >
+            What the agent may do beyond its tools. Absent is none. A save
+            whose block is not an object of booleans is refused with 422
+            capabilities_block_invalid.
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): DB jsonb column `application_versions.meta` round-trips
@@ -27527,7 +28208,7 @@ paths:
         conversation, or for another participant, answers 409; after the
         commit, 409 `local_turn_already_committed`.
 
-        SEVERAL AGENTS (client contract 1.46, ADR-0050 decision 7f). In a
+        SEVERAL AGENTS (client contract 1.47, ADR-0050 decision 7f). In a
         thread with two or more agent participants Main decides who answers,
         by the conversation's floor (`meta.floor`), as it does for a cloud
         message: send the person's addressees as `addressed_to` and the
@@ -27585,7 +28266,7 @@ paths:
             `local_turn_conflict` or `local_turn_already_committed`; from
             client contract 1.30, `chain_limit_reached` (with `limit`) or
             `chain_ended` on an unattended continuation; from client contract
-            1.46, `floor_turn_refused` or `floor_turn_superseded` on a
+            1.47, `floor_turn_refused` or `floor_turn_superseded` on a
             `floor_turn`.
           content:
             application/json:
@@ -27614,7 +28295,7 @@ paths:
             `participant_id` is not an agent or model participant of the
             conversation (`local_turn_participant`), or the unattended grant
             was refused (`unattended_grant_refused`, client contract 1.30);
-            from client contract 1.46, an addressee that is not an agent of the
+            from client contract 1.47, an addressee that is not an agent of the
             thread (`addressee_not_in_conversation`), or several agents and no
             address, lead or target (`agent_target_required`).
           content:
@@ -28817,6 +29498,1124 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
 
+  /elitea_core/agent_heartbeat/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentHeartbeat
+      summary: Read an agent's heartbeat settings
+      description: >
+        The heartbeat of a proactive agent (ADR-0050 decision 2): whether it
+        is on, its owner, its mandate, its clock, the block of the published
+        release, and whether the caller may turn it on (governance). An
+        agent nobody configured answers configured false. Requires
+        `models.applications.versions.get`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The heartbeat settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatSettings' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    put:
+      operationId: saveAgentHeartbeat
+      summary: Turn an agent's heartbeat on or off and attach its mandate
+      description: >
+        Turning the heartbeat on needs the platform switch on, an agent of at
+        least medium risk (or a personal project that approves its own
+        agents), and a published release with a proactivity block of mode
+        heartbeat. The caller becomes the owner: the person the agent
+        notifies and acts for. mandate_id attaches a delegated mandate of the
+        owner (an empty string removes it); without one the agent can notify
+        but not act. Requires `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentHeartbeatSave' }
+      responses:
+        '200':
+          description: The stored heartbeat settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatSettings' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '422':
+          description: The heartbeat cannot be turned on, or the mandate cannot be attached
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatRefusal' }
+
+  /elitea_core/agent_heartbeats/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: listAgentHeartbeats
+      summary: List an agent's heartbeat history
+      description: >
+        One row per wake that reached the triage, or that paused the
+        heartbeat at a daily limit, newest first. A skipped wake (quiet
+        hours, kill switch, a run still active) writes no row; the settings
+        show the last skip reason. Requires `models.applications.versions.get`.
+      tags: [applications]
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: The heartbeat rows
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatList' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_heartbeat_project/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getProjectProactivity
+      summary: Read the project's proactive agents switch
+      description: Requires `models.applications.versions.get`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The switch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectProactivity' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    put:
+      operationId: setProjectProactivity
+      summary: Turn every heartbeat of the project on or off
+      description: >
+        Off stops every heartbeat of the project at its next wake; the
+        settings of each agent stay. Requires
+        `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectProactivity' }
+      responses:
+        '200':
+          description: The stored switch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectProactivity' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listAgentProposals
+      summary: List agent proposals
+      description: >
+        The project's proposals to save a temporary sub-agent as an agent
+        (ADR-0050 decision 5a), newest first: open ones unless status names
+        another state. conversation_uuid narrows them to one chat. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      parameters:
+        - { name: status, in: query, required: false, schema: { type: string, enum: [proposed, created, dismissed, all] } }
+        - { name: conversation_uuid, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: The proposals
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalList' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}/{proposal_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentProposal
+      summary: Read one agent proposal
+      description: The draft, the suggested memory seeds, the tool categories and the evidence. Requires `models.applications.applications.list`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}/{proposal_id}/dismiss:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: dismissAgentProposal
+      summary: Dismiss an open agent proposal
+      description: >
+        The same sub-agent spec (its profile digest) cannot be proposed again
+        by the same agent in this project for 30 days. Requires
+        `models.applications.applications.list`, and
+        `models.applications.applications.create` or ownership of the
+        proposing agent.
+      tags: [applications]
+      responses:
+        '200':
+          description: The dismissed proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code proposal_decision_forbidden) Neither create nor ownership of the proposing agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '404':
+          description: (code not_found) No such proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '409':
+          description: (code proposal_decided) The proposal was already created or dismissed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}/{proposal_id}/created:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: markAgentProposalCreated
+      summary: Record the agent created from an open proposal
+      description: >
+        The review form first creates the agent through the ordinary create
+        route (a new agent starts at tier low); this links it to the proposal
+        and writes the memory seeds the person kept, by index, into the new
+        agent's own memory. Requires `models.applications.applications.create`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [application_id]
+              properties:
+                application_id: { type: integer, format: int64, minimum: 1 }
+                memory_seeds:
+                  type: array
+                  maxItems: 20
+                  items: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: The created proposal and how many seeds were written
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [proposal, memory_seeded]
+                properties:
+                  proposal: { $ref: '#/components/schemas/AgentProposal' }
+                  memory_seeded: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The caller lacks applications.create, or (code not_your_new_agent)
+            the agent is not one the caller just created from this proposal:
+            created before it, its first version another person's, or linked
+            to another proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '404':
+          description: (code not_found) No such proposal, or no such agent in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '409':
+          description: (code proposal_decided) The proposal was already created or dismissed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentWorkforce
+      summary: Read an agent's workforce state and latest scorecard
+      description: >
+        The agent's place on the dismissal ladder (ADR-0050 decision 5g):
+        whether it is under review (watch), suspended, retired (and until
+        when it can be reinstated) or deleted, its owners, legal hold, whether
+        it is an HR agent, its latest daily scorecard, and whether the caller
+        manages agents here or owns the agent. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The agent's workforce state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceAgent' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}/scorecards:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: listAgentScorecards
+      summary: List an agent's daily scorecards
+      description: >
+        The daily scorecards (ADR-0050 decision 5b), newest first: runs,
+        failures, budget-cap stops, breaker trips, approval rejections,
+        guardrail hits, spend against the project median, feedback, last
+        use and certification. Kept 400 days. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      parameters:
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 400 } }
+      responses:
+        '200':
+          description: The scorecards
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rows, total]
+                properties:
+                  rows:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentScorecard' }
+                  total: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}/impact:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentWorkforceImpact
+      summary: Preview what suspending or retiring an agent would touch
+      description: >
+        The impact preview a decision shows first: conversations it is in
+        and leads, saved teams, agents that nest it, schedules, triggers,
+        published versions, an active suspension, legal hold and the
+        current lifecycle state. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The impact
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceImpact' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}/reinstate:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: reinstateAgent
+      summary: Reinstate a retired agent
+      description: >
+        Within 30 days of retirement, restores the agent's published
+        versions and release head, its conversation memberships, saved team
+        seats, nesting and schedules, and lifts its dismissal suspension.
+        Requires `models.applications.applications.list` and
+        `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The reinstated agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceAgent' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listAgentWorkforceProposals
+      summary: List dismissal and demotion proposals
+      description: >
+        The project's workforce proposals, newest first: open ones (proposed
+        or asked_owner) unless status names proposed, asked_owner, approved,
+        rejected or all. application_id narrows them to one agent. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      parameters:
+        - { name: status, in: query, required: false, description: 'proposed, asked_owner, approved, rejected or all', schema: { type: string } }
+        - { name: application_id, in: query, required: false, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: The proposals
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rows, total]
+                properties:
+                  rows:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+                  total: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: proposeAgentWorkforceStage
+      summary: Propose a ladder stage for an agent
+      description: >
+        A person proposes watch, demote (with the exact narrowing), suspend,
+        retire or delete for an agent, with a rationale; the latest
+        scorecard is frozen as evidence. One open proposal per agent.
+        Requires `models.applications.applications.list`, and
+        `agents.workforce.manage` or ownership of the agent.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [application_id, stage, rationale]
+              properties:
+                application_id: { type: integer, format: int64, minimum: 1 }
+                stage: { type: string, description: 'watch, demote, suspend, retire or delete' }
+                rationale: { type: string, minLength: 1, maxLength: 4000 }
+                narrowing: { $ref: '#/components/schemas/AgentWorkforceNarrowing' }
+      responses:
+        '201':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentWorkforceProposal
+      summary: Read one workforce proposal
+      description: The proposal, its evidence, what applying it changed, the owner's comment and the appeal. Requires `models.applications.applications.list`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: approveAgentWorkforceProposal
+      summary: Approve a workforce proposal and apply its stage
+      description: >
+        Applies the stage. Retiring an agent that other agents nest needs confirm_nested. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: rejectAgentWorkforceProposal
+      summary: Reject a workforce proposal
+      description: >
+        Keeps the agent; a watch flag the proposal raised is cleared. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/ask_owner:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: askOwnerAgentWorkforceProposal
+      summary: Route a workforce proposal to the agent's owner
+      description: >
+        The owner is notified and may comment before a manager decides. Requires `models.applications.applications.list` and `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/comment:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: commentAgentWorkforceProposal
+      summary: Record the owner's comment on a workforce proposal
+      description: >
+        Only the agent's business or technical owner, while the proposal is open. Requires `models.applications.applications.list`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/appeal:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: appealAgentWorkforceProposal
+      summary: Appeal an approved workforce decision
+      description: >
+        The agent's owner may appeal an approved suspend, retire or demote once, within 30 days. Managers are notified. Requires `models.applications.applications.list`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/appeal/decide:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: decideAgentWorkforceAppeal
+      summary: Grant or uphold an appeal
+      description: >
+        A manager other than the one who decided, and not the owner, grants (the stage is reversed) or upholds the appeal. Requires `models.applications.applications.list` and `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [grant]
+              properties:
+                grant: { type: boolean }
+                note: { type: string, maxLength: 4000 }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/policy:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getAgentWorkforcePolicy
+      summary: Read the project's automatic hiring and dismissal policy
+      description: >
+        The project's workforce policy (ADR-0050 decisions 5c and 5k). Off
+        by default: a project that never saved one answers saved false with
+        both policies off and the platform's default numbers and rules.
+        Requires `models.applications.applications.list` and
+        `agents.workforce.manage` (403 workforce_forbidden otherwise).
+      tags: [applications]
+      responses:
+        '200':
+          description: The policy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforcePolicy' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    put:
+      operationId: setAgentWorkforcePolicy
+      summary: Set the project's automatic hiring and dismissal policy
+      description: >
+        Turns auto_hire and auto_dismiss on or off and sets their numbers and
+        rules. A rule maps scorecard conditions to watch, suspend or retire;
+        demote and delete are refused. Turning auto_dismiss off cancels its
+        open retire notices and orphan flags. Requires
+        `models.applications.applications.list` and `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforcePolicyInput' }
+      responses:
+        '200':
+          description: The saved policy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforcePolicy' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code workforce_forbidden) Only an agent manager sets the policy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_policy_invalid) A number, rule, metric or stage is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/automatic_actions:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listAgentAutomaticActions
+      summary: List the workforce policy's automatic actions
+      description: >
+        Every hire, stage, retire notice and orphan flag the workforce policy
+        made, newest first. status narrows them (open is pending, flagged
+        and held); application_id narrows them to one agent. Requires
+        `models.applications.applications.list` and `agents.workforce.manage`
+        (403 workforce_forbidden otherwise).
+      tags: [applications]
+      parameters:
+        - { name: status, in: query, required: false, description: 'open, pending, flagged, applied, held, objected, undone, kept, resolved or cancelled', schema: { type: string } }
+        - { name: application_id, in: query, required: false, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: The actions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rows, total]
+                properties:
+                  rows:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentAutomaticAction' }
+                  total: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/automatic_actions/{action_id}/undo:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: action_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: undoAgentAutoHire
+      summary: Undo an automatic hire
+      description: >
+        Within 14 days of an automatic hire, retires the agent through the dismissal ladder (it can be reinstated for 30 days) and ends its probation; the same spec is not hired automatically again for 30 days. confirm_nested confirms retiring an agent other agents nest. Requires `models.applications.applications.list` and `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The automatic action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAutomaticAction' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code workforce_forbidden) The caller may not do this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such automatic action in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_action_closed, workforce_confirm_nested, workforce_state_conflict) The action is no longer open, or the agent is nested by others
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/automatic_actions/{action_id}/keep:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: action_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: keepAgentAutoHire
+      summary: Keep an automatically hired agent
+      description: >
+        Ends the probation of an automatically hired agent: it stops counting against max_auto_hired. Requires `models.applications.applications.list` and `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The automatic action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAutomaticAction' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code workforce_forbidden) The caller may not do this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such automatic action in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_action_closed, workforce_confirm_nested, workforce_state_conflict) The action is no longer open, or the agent is nested by others
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/automatic_actions/{action_id}/object:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: action_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: objectAgentAutomaticAction
+      summary: Object to a retire notice
+      description: >
+        In a retire notice's grace period, the agent's owner or an agent manager objects: the notice is rejected, the agent stays, and the rule stays quiet for this agent for 30 days. Requires `models.applications.applications.list`, and ownership of the agent or `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The automatic action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAutomaticAction' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code workforce_forbidden) The caller may not do this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such automatic action in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_action_closed, workforce_confirm_nested, workforce_state_conflict) The action is no longer open, or the agent is nested by others
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+
+  /elitea_core/agent_copy_memory/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: copyAgentMemory
+      summary: Copy picked memory entries of a personal agent into its copy
+      description: >
+        Copy to project (ADR-0050 decision 1). After the fork route copied a
+        personal agent into this project as an agent of its own, this copies
+        the entries the person picked from the source agent's memory into the
+        copy's, as new rows written by the person. Entries about a person and
+        cursors are never copied. The source must be in the caller's personal
+        project, and the caller owns the source agent or holds
+        `models.applications.memory.list` there. Requires
+        `models.applications.applications.create` in this project.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source_project_id, source_application_id]
+              properties:
+                source_project_id: { type: integer, format: int64, minimum: 1 }
+                source_application_id: { type: integer, format: int64, minimum: 1 }
+                entry_ids:
+                  type: array
+                  maxItems: 200
+                  items: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: How many entries were copied
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [copied]
+                properties:
+                  copied: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            (code copy_forbidden) The source is not a personal agent of the
+            caller, or its memory is not readable; (code not_your_new_agent)
+            the path's agent is not the caller's own fork of the source
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '404':
+          description: (code not_found) No such agent in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
   /elitea_core/agent_media/prompt_lib/{project_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -28939,8 +30738,11 @@ paths:
       summary: Download one avatar pack media file
       description: >
         Immutable for a year. A `Range` request answers 206, as a <video>
-        element asks.
-      tags: [applications]
+        element asks. Client contract 1.46: a native client downloads the
+        pack media `persona.avatar_pack` names through this route. It is
+        root-mounted with no credential, so the X-Client-Version gate never
+        judges it (like getBrandingPackJSON) and it never answers 426.
+      tags: [applications, client]
       security: []
       responses:
         '200':

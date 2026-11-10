@@ -68,7 +68,7 @@ export const LocalTurnFloorStarted = zod
       .describe("The thread's agent participants, in participant order."),
   })
   .describe(
-    "Client contract 1.46 (ADR-0050 decision 7f). The message's routed order in a thread with two or more agents; absent when the message was not routed (one agent, the model participant, or a server older than 1.46). NOTE(W2): internal/api/v2/localturns/route.go:130 (`floorStarted`).",
+    "Client contract 1.47 (ADR-0050 decision 7f). The message's routed order in a thread with two or more agents; absent when the message was not routed (one agent, the model participant, or a server older than 1.47). NOTE(W2): internal/api/v2/localturns/route.go:130 (`floorStarted`).",
   );
 
 export type LocalTurnFloorStarted = zod.input<typeof LocalTurnFloorStarted>;

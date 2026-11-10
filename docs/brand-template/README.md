@@ -1,7 +1,9 @@
 # Brand repository template
 
-This folder becomes the repository `elitea-ng/elitea-brand-template` once the
-owner creates it. Until then, copy it into a new repository.
+This is the private template repository `elitea-ng/elitea-brand-template`
+(GitHub › Use this template; ask EPAM for access). Its source is
+`docs/brand-template/` in `elitea-ng/elitea-platform`: changes land there
+first and are copied here.
 
 A brand repository builds **released ELITEA code with its own brand folder, and
 no patches** (ADR-0052 decision 6). It holds four things:

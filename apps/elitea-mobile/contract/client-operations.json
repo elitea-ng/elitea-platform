@@ -18,6 +18,7 @@
     "markNotificationSeen",
     "getClientDiscovery",
     "getBrandingPackJSON",
+    "getAgentMedia",
     "exchangeNativeToken",
     "revokeNativeToken",
     "continueChatExecution",

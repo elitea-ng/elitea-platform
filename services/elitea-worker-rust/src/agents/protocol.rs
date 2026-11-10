@@ -292,6 +292,11 @@ mod agent_floor_tests {
         let human = agent_floor(&floor("human_message", Vec::new())).expect("ok");
         assert_eq!(human.cause, FloorCause::HumanMessage);
         assert_eq!(human.peers, Vec::new());
+        // ADR-0050 decision 2: a heartbeat act binds only unattended tools.
+        let heartbeat = agent_floor(&floor("heartbeat", Vec::new())).expect("ok");
+        assert_eq!(heartbeat.cause, FloorCause::Heartbeat);
+        assert!(heartbeat.unattended_tools_only);
+        assert!(agent_floor(&floor("cron", Vec::new())).is_err());
     }
 
     #[test]
@@ -540,6 +545,11 @@ pub fn request_from(
                 .as_ref()
                 .map(tool_envelope)
                 .transpose()?,
+            current_message_id: message
+                .current_message_id
+                .as_deref()
+                .map(current_message_id)
+                .transpose()?,
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
                     id: context.id,
@@ -639,6 +649,7 @@ fn agent_floor(
     let cause = match floor.cause.as_str() {
         "human_message" => FloorCause::HumanMessage,
         "agent_mention" => FloorCause::AgentMention,
+        "heartbeat" => FloorCause::Heartbeat,
         _ => {
             return Err(AgentProtocolError::InvalidInput(
                 "the agent floor cause is unknown",
@@ -703,6 +714,14 @@ fn tool_envelope(
             AgentProtocolError::InvalidInput("the agent tool envelope is malformed")
         }
     })
+}
+
+/// #1831: this turn's question, a uuid, in the form the history's
+/// references take (lowercase, hyphenated), so one message has one short id.
+fn current_message_id(id: &str) -> Result<String, AgentProtocolError> {
+    uuid::Uuid::try_parse(id)
+        .map(|id| id.hyphenated().to_string())
+        .map_err(|_| AgentProtocolError::InvalidInput("the agent current message id is not a uuid"))
 }
 
 /// ADR-0050 decision 9c: one reference per history entry, each a uuid, or

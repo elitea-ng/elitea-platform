@@ -240,15 +240,15 @@ pub struct LocalTurnStarted {
     #[serde(default)]
     pub computer_use: ComputerUseStarted,
     /// The participant that answers this turn, as Main routed it (contract
-    /// 1.46: the floor may answer another agent first).
+    /// 1.47: the floor may answer another agent first).
     #[serde(default)]
     pub participant_id: Option<i64>,
-    /// Where the answering agent runs (contract 1.46): `cloud` relays the
+    /// Where the answering agent runs (contract 1.47): `cloud` relays the
     /// turn to the cloud; absent or anything else is `local`.
     #[serde(default)]
     pub executor: Option<String>,
     /// The routed order of the person's message in a thread with several
-    /// agents (ADR-0050 decision 7f, contract 1.46); absent otherwise.
+    /// agents (ADR-0050 decision 7f, contract 1.47); absent otherwise.
     #[serde(default)]
     pub floor: Option<FloorStarted>,
 }

@@ -177,6 +177,15 @@ message AgentExecutionInputV1 {
   // read-only tools. Workers are upgraded before Main, because a worker from
   // an earlier release refuses this tag.
   AgentToolEnvelopeV1 tool_envelope = 74;
+  // #1831 (ADR-0050 decision 9d): the chat message group uuid of this
+  // turn's own question, which `user_input` holds, so the worker can show
+  // the model its short id and accept a `spawn_agent` excerpt of it. Set
+  // only on a turn that writes its question: a fresh turn or an
+  // agent-to-agent turn. ABSENT: a regeneration, a continuation, a resume,
+  // or an addressed agent's turn that reuses the person's question (the
+  // question is in its history). Workers are upgraded before Main, because
+  // a worker from an earlier release refuses this tag.
+  optional string current_message_id = 75;
 }
 
 // The per-agent tool envelope (ADR-0050 decision 3). A tool key is
@@ -214,7 +223,8 @@ message AgentToolLimitV1 {
 // What the turn-taking engine tells the reader about the floor
 // (ADR-0050 decisions 7c and 7d).
 message AgentFloorV1 {
-  // What started this turn: human_message or agent_mention.
+  // What started this turn: human_message, agent_mention or heartbeat (a
+  // proactive agent's act, ADR-0050 decision 2).
   string cause = 1;
   // The other agents of the conversation the reader may hand the floor to,
   // at most 16. Empty: no hand_floor tool.

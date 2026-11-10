@@ -14,9 +14,9 @@ use super::runtime_context::{
     AgentMemoryRememberRequest, AgentMemoryRemembered, ArtifactDeleteOutcome,
     ArtifactDeleteRequest, ArtifactListOutcome, ArtifactListRequest, ArtifactReadOutcome,
     ArtifactReadRequest, ArtifactWriteOutcome, ArtifactWriteRequest, ClaimScopedEliteaContext,
-    HandFloorRequest, ProjectContextWriteOutcome, ProjectContextWriteRequest,
-    RuntimeApplicationVersion, RuntimeAttachmentObject, RuntimeContextClient, RuntimeContextError,
-    SkillWriteOutcome, SkillWriteRequest,
+    HandFloorRequest, ProjectContextWriteOutcome, ProjectContextWriteRequest, ProposeAgentRequest,
+    ProposeDismissalRequest, RuntimeApplicationVersion, RuntimeAttachmentObject,
+    RuntimeContextClient, RuntimeContextError, SkillWriteOutcome, SkillWriteRequest,
 };
 
 /// Shared platform transport facade. Invocation authority is always supplied
@@ -170,6 +170,28 @@ impl PlatformClient {
         request: &HandFloorRequest,
     ) -> Result<serde_json::Value, RuntimeContextError> {
         self.runtime_context.hand_floor(authority, request).await
+    }
+
+    /// The `propose_agent` tool (ADR-0050 decision 5a, #1615), under the same
+    /// non-fatal error contract as `hand_floor`.
+    pub(crate) async fn propose_agent(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ProposeAgentRequest,
+    ) -> Result<serde_json::Value, RuntimeContextError> {
+        self.runtime_context.propose_agent(authority, request).await
+    }
+
+    /// The `propose_dismissal` tool (ADR-0050 decision 5l, #1616), under the
+    /// same non-fatal error contract as `propose_agent`.
+    pub(crate) async fn propose_dismissal(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ProposeDismissalRequest,
+    ) -> Result<serde_json::Value, RuntimeContextError> {
+        self.runtime_context
+            .propose_dismissal(authority, request)
+            .await
     }
 
     /// The `artifact` toolkit family's four operations (#906) — the artifact

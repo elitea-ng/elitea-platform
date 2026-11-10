@@ -19,6 +19,8 @@ on:
       - "rust-toolchain.toml"
       - "scripts/ci/assert-rust-toolchain.sh"
       - "libs/rust/**"
+      # The error registry elitea-faults' build.rs reads (FU-299).
+      - "libs/go/faults/registry/**"
       # The build.rs of the gRPC crates compile these contracts (#1359):
       # engine-sidecar elitea.engine.v1, model-rpc elitea.llm.v1, platform-rpc
       # the artifact and internal-tool services of elitea.runtime.v1.

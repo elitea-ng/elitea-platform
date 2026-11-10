@@ -7528,7 +7528,7 @@ export const getStartLocalTurnUrl = (
  * conversation, or for another participant, answers 409; after the
  * commit, 409 `local_turn_already_committed`.
  *
- * SEVERAL AGENTS (client contract 1.46, ADR-0050 decision 7f). In a
+ * SEVERAL AGENTS (client contract 1.47, ADR-0050 decision 7f). In a
  * thread with two or more agent participants Main decides who answers,
  * by the conversation's floor (`meta.floor`), as it does for a cloud
  * message: send the person's addressees as `addressed_to` and the

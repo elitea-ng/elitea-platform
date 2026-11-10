@@ -134,6 +134,20 @@ const (
 	// ResourceID is "<application id>:<entry id>" ("<application id>" for a
 	// clear). The entry text is never in the event.
 	TypeAgentMemoryChanged EventType = "ai.elitea.security.v1.agent.memory.changed"
+	// TypeAgentProposalChanged is a change of an agent proposal (ADR-0050
+	// decision 5a, #1615): action agent.proposal.proposed, .created,
+	// .dismissed, .seeded (the kept memory saved into the new agent), or
+	// agent.copied_to_project for a Copy to project.
+	// ResourceID is the proposal id ("<source project>:<application id>"
+	// for a copy). No draft text is in the event.
+	TypeAgentProposalChanged EventType = "ai.elitea.security.v1.agent.proposal.changed"
+	// TypeAgentWorkforceChanged is a change on the agent workforce (ADR-0050
+	// decisions 5g-5j, #1616): action agent.workforce.proposed, .approved,
+	// .rejected, .asked_owner, .owner_commented, .appealed, .appeal_granted,
+	// .appeal_upheld, .reinstated, .deleted. ResourceID is the proposal id
+	// (the agent id for a reinstatement or a deletion); the reasons carry
+	// the stage and the evidence digest.
+	TypeAgentWorkforceChanged EventType = "ai.elitea.security.v1.agent.workforce.changed"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -173,6 +187,8 @@ var ocsfClasses = map[EventType]int{
 	TypeConfigChanged:           OCSFClassEntityManagement,
 	TypeIdentityLinkChanged:     OCSFClassAccountChange,
 	TypeAgentMemoryChanged:      OCSFClassEntityManagement,
+	TypeAgentProposalChanged:    OCSFClassEntityManagement,
+	TypeAgentWorkforceChanged:   OCSFClassEntityManagement,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.

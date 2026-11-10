@@ -1,4 +1,4 @@
--- 0234_local_turn_floor.sql — several agents in a desktop thread (ADR-0050
+-- 0238_local_turn_floor.sql — several agents in a desktop thread (ADR-0050
 -- decision 7f, issue 1806).
 --
 -- A person's message in a desktop thread with two or more agents is routed

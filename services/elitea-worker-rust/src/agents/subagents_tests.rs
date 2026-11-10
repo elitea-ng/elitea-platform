@@ -9,14 +9,22 @@ use super::BriefView;
 use crate::agents::agent_memory_tools::RecalledEntries;
 use crate::agents::attachments::AttachmentReference;
 
+const MESSAGE_1: &str = "00000000-0000-4000-8000-000000000001";
+const MESSAGE_2: &str = "00000000-0000-4000-8000-000000000002";
+
 fn view(recalled: Option<Arc<RecalledEntries>>) -> BriefView {
     BriefView::new(
         vec![
             (
                 "m-1".to_owned(),
+                MESSAGE_1.to_owned(),
                 "We ship on Friday after the review.".to_owned(),
             ),
-            ("m-2".to_owned(), "Use the staging cluster.".to_owned()),
+            (
+                "m-2".to_owned(),
+                MESSAGE_2.to_owned(),
+                "Use the staging cluster.".to_owned(),
+            ),
         ],
         &[AttachmentReference::stored("bucket", "conv/report.pdf")],
         recalled,
@@ -37,7 +45,15 @@ fn excerpt(message_id: &str, quote: &str) -> Brief {
 #[test]
 fn a_forged_excerpt_is_refused() {
     let view = view(None);
-    assert!(view.check(&excerpt("m-1", "ship on Friday")).is_ok());
+    // #1831: the check answers the chat message the short id stands for.
+    assert_eq!(
+        view.check(&excerpt("m-1", "ship on Friday"))
+            .expect("visible")
+            .message_ids,
+        [("m-1".to_owned(), MESSAGE_1.to_owned())]
+    );
+    // #1831: each run of whitespace reads as one space, on both sides.
+    assert!(view.check(&excerpt("m-1", "ship  on\nFriday")).is_ok());
     for forged in [
         excerpt("m-1", "ship on Monday"),
         excerpt("m-3", "ship on Friday"),

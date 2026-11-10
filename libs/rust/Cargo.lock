@@ -2243,6 +2243,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-faults"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "elitea-graph-algos"
 version = "0.1.0"
 dependencies = [

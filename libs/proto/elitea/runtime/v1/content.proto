@@ -78,6 +78,22 @@ service RuntimeContentService {
   // participant ids and the message. Main starts their turns after this run
   // settles.
   rpc HandFloor(HandFloorRequestV1) returns (HandFloorResponseV1);
+  // Propose a temporary sub-agent as a saved agent (ADR-0050 decision 5a,
+  // #1615): the propose_agent tool. The project, the proposing agent, the
+  // person and the conversation come from the claim; the request carries
+  // only the sub-agent's profile, the rationale and suggested memory seeds.
+  // Main checks the agent's can_propose_agents capability and the person's
+  // create permission, and stores a proposal; nothing is saved as an agent.
+  rpc ProposeAgent(ProposeAgentRequestV1) returns (ProposeAgentResponseV1);
+  // Propose demoting or dismissing another agent (ADR-0050 decision 5j,
+  // #1616): the propose_dismissal tool of an HR agent. The project, the
+  // proposing agent and the person come from the claim; the request carries
+  // only the target agent, the ladder stage, the rationale and a demotion's
+  // narrowing. Main checks the can_review_agents capability and the guards
+  // (no self, no hirer, no other HR agent, no higher tier, never critical
+  // or under legal hold) and stores a proposal; nothing is applied until a
+  // person approves it.
+  rpc ProposeDismissal(ProposeDismissalRequestV1) returns (ProposeDismissalResponseV1);
   // The `artifact` toolkit family (#906).
   rpc ListArtifacts(ListArtifactsRequestV1) returns (ListArtifactsResponseV1);
   rpc ReadArtifact(ReadArtifactRequestV1) returns (ReadArtifactResponseV1);
@@ -306,6 +322,41 @@ message HandFloorRequestV1 {
 
 message HandFloorResponseV1 {
   // {"handed_to": [{"participant_id": int64, "name": string}, ...]}
+  bytes response_json = 1;
+  reserved 2 to 15;
+}
+
+message ProposeAgentRequestV1 {
+  RuntimeContentScopeV1 scope = 1;
+  // {"ephemeral_agent_id": string, "rationale": string, "profile":
+  // {"label", "display_name", "soul", "avatar": string, "tools":
+  // [{"key": string, "toolkit_type": string}]}, "memory_seeds":
+  // [{"kind": string, "content": string}]}
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+
+message ProposeAgentResponseV1 {
+  // {"schema_version": string, "status": string, "proposal_id": string,
+  // "message": string}
+  bytes response_json = 1;
+  reserved 2 to 15;
+}
+
+message ProposeDismissalRequestV1 {
+  RuntimeContentScopeV1 scope = 1;
+  // {"application_id": int64, "stage": "watch" | "demote" | "suspend" |
+  // "retire", "rationale": string, "narrowing": {"remove_toolkit_ids":
+  // [int64], "memory_review": bool, "proactivity_off": bool,
+  // "remove_capabilities": [string], "remove_lead": bool,
+  // "toolkit_type_ceiling": [string]}}
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+
+message ProposeDismissalResponseV1 {
+  // {"schema_version": string, "status": string, "proposal_id": string,
+  // "message": string}
   bytes response_json = 1;
   reserved 2 to 15;
 }
