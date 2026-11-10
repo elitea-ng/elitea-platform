@@ -147,7 +147,7 @@ impl CodeRuntimeFactory {
         for (target, slots) in &self.code_slots {
             tracing::info!(
                 event = "code_slots_configured",
-                target = target.as_str(),
+                supervisor_target = target.as_str(),
                 code_slots = slots.capacity(),
             );
         }
