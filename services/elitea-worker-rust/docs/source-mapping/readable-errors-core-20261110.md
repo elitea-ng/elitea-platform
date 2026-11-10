@@ -118,9 +118,11 @@ All the Go gates are tests in `libs/go/faults`. `scripts/go/workspace-run.sh` te
 | Old-style codes frozen | `TestLegacyCodesOnlyShrink`: 463 Rust `code()`/`as_str()` literals and Go `"reason"` literals. A new literal fails the test, and a line no source raises any more must be deleted. |
 | Rust registry | `elitea-faults/build.rs` (compile time) plus `registry_is_well_formed_and_codes_are_unique`, run by `ci-rust-shared.yml`. The Worker parity test runs in `ci-rust.yml`. |
 
-Known gap: the Rust workflows' path filters do not include `libs/go/faults/registry/**`. A registry-only change
-therefore runs the Go gates but not the Rust build. This PR changes Rust too, so both run here. The filter is a
-workflow change, which is the user's call.
+**Workflow change (approved by Roman, 2026-11-10).** `ci-rust.yml` and `ci-rust-shared.yml` now include
+`libs/go/faults/registry/**` in their path filters. A registry-only change therefore also runs the Rust build that reads
+the registry (`elitea-faults`' `build.rs` and the Worker parity test). They are the only Rust workflows whose build reads
+it: only the Worker and the `libs/rust` workspace depend on `elitea-faults`. `ci-web-e2e.yml` already filters on
+`libs/go/**`. No other workflow line changed.
 
 ## Tests
 
@@ -281,4 +283,3 @@ Chrome, signed in as `admin@centry.user`. All fixtures were created in the UI.
   - `RuntimeFailureKind` sourced from the registry;
   - rewriting the 53 runtime messages to one sentence each, which shrinks `multi-sentence-exemptions.txt`;
   - the per-site `recover()` calls (`scheduling/runner.go:469` drops its cause).
-- The Rust path filter for `libs/go/faults/registry/**` (workflow change, user's call).
