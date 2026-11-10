@@ -7341,6 +7341,16 @@ worker:
     # Entries use SandboxRuntimeConfig fields: language, target, audience,
     # image_digest, policy_revision, and timeout_seconds.
     # The target hostname must match the supervisor certificate SAN.
+    # Optional codeSlots (W3-1): how many Code attempts this worker runs at once
+    # on the entry's supervisor target, 1 to 1024, written as code_slots. Set it
+    # to that supervisor's `concurrency`; unset, the worker uses 4 (the shipped
+    # supervisor concurrency) and logs the value per target at startup
+    # (event code_slots_configured). The bound is per worker process: N worker
+    # replicas can hold up to N x codeSlots attempts on one supervisor, which
+    # then answers busy and the attempt backs off (FU-307 shares the budget).
+    # Entries on one supervisor (for example
+    # javascript and typescript on one deno-native supervisor) must agree, or
+    # the worker refuses to start.
     sandboxRuntimes: []
     # ADR-0034 decision 9, the cloud executor (Rust worker only): the sandbox
     # supervisor's `workspace` profile this worker starts workspace runs on,

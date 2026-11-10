@@ -15,6 +15,8 @@ use rustix::fs::{FileType, Mode, OFlags, fstat, openat};
 use rustix::process::geteuid;
 use serde::Deserialize;
 
+use elitea_agent_runtime::graph::fanout::admission::{DEFAULT_CODE_SLOTS, MAX_CODE_SLOTS};
+
 use crate::protocol::command::LIMITS_REVISION;
 
 pub const RUNTIME_DEPLOY_SCHEMA_VERSION: &str = "elitea.runtime-deploy.v1";
@@ -282,6 +284,71 @@ pub struct SandboxRuntimeConfig {
         Option<crate::sandbox::compiled_profile_config::RustCompiledSnapshotConfig>,
     #[serde(default)]
     pub preparation: Option<PythonPreparationConfig>,
+    /// W3-1: Code attempts this Worker runs at once on this profile's
+    /// Supervisor target, `1..=1024`. Absent: [`DEFAULT_CODE_SLOTS`] (the
+    /// shipped Supervisor `concurrency`). Profiles that share one target must
+    /// agree. Match it to the Supervisor's `concurrency`.
+    #[serde(default)]
+    pub code_slots: Option<u32>,
+}
+
+impl SandboxRuntimeConfig {
+    /// The Code slots this profile's target gets.
+    #[must_use]
+    pub fn effective_code_slots(&self) -> u32 {
+        self.code_slots.unwrap_or(DEFAULT_CODE_SLOTS)
+    }
+}
+
+/// The Code-slot key of a sandbox target: the Supervisor the client dials
+/// (`https://{target}`), with the host in lower case without a trailing dot
+/// and the port explicit (443 when absent). Two spellings of one Supervisor
+/// share one key, so they share one set of slots (W3-1, C4).
+pub(crate) fn code_slot_target(target: &str) -> Result<String, RuntimeConfigError> {
+    validate_grpc_target(target)?;
+    let uri = format!("https://{target}")
+        .parse::<Uri>()
+        .map_err(|_| invalid_config())?;
+    let host = uri.host().ok_or_else(invalid_config)?;
+    let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+    if host.is_empty() {
+        return Err(invalid_config());
+    }
+    Ok(format!("{host}:{}", uri.port_u16().unwrap_or(443)))
+}
+
+/// Every Code execution target with its slots: each profile's own target and
+/// its broker (`platform_client`) target, which inherits the profile's value.
+/// Preparation targets are not Code execution targets.
+pub(crate) fn code_slot_targets(
+    profiles: &[SandboxRuntimeConfig],
+) -> Result<std::collections::BTreeMap<String, u32>, RuntimeConfigError> {
+    let mut targets = std::collections::BTreeMap::new();
+    for profile in profiles {
+        let slots = profile.effective_code_slots();
+        if !(1..=MAX_CODE_SLOTS).contains(&slots) {
+            return Err(RuntimeConfigError::InvalidConfiguration(
+                "sandbox_runtimes code_slots must be from 1 to 1024",
+            ));
+        }
+        let execution = std::iter::once(profile.target.as_str()).chain(
+            profile
+                .platform_client
+                .iter()
+                .map(|platform| platform.target.as_str()),
+        );
+        for target in execution {
+            if targets
+                .insert(code_slot_target(target)?, slots)
+                .is_some_and(|prior| prior != slots)
+            {
+                return Err(RuntimeConfigError::InvalidConfiguration(
+                    "sandbox_runtimes that share one Supervisor target must set the same code_slots",
+                ));
+            }
+        }
+    }
+    Ok(targets)
 }
 
 /// Optional operator-selected Code broker route and bounded Main policy.
@@ -536,6 +603,8 @@ impl RuntimeDeployConfig {
                 })?;
             }
         }
+
+        code_slot_targets(&self.sandbox_runtimes)?;
 
         // Stop delivery stores audience only. It must select one transport target.
         let mut sandbox_targets = std::collections::BTreeMap::new();
@@ -1269,6 +1338,101 @@ mod tests {
             loaded.validate().is_err(),
             "duplicate language must not select an arbitrary backend"
         );
+    }
+
+    /// W3-1 (D2, C4): `code_slots` is optional (default 4), bounded to
+    /// 1..=1024, and profiles on one normalised Supervisor target agree.
+    #[test]
+    fn code_slots_are_bounded_defaulted_and_agree_per_normalised_target() {
+        let base = config(Path::new("/runtime"));
+        let profile = |language: &str, target: &str| {
+            json!({
+                "language": language,
+                "target": target,
+                "audience": format!("sandbox-{language}"),
+                "image_digest": format!("sha256:{}", "a".repeat(64)),
+                "policy_revision": "code-v1",
+                "timeout_seconds": 60
+            })
+        };
+        let load = |runtimes: serde_json::Value| {
+            let mut value = base.clone();
+            value["sandbox_runtimes"] = runtimes;
+            serde_json::from_value::<super::RuntimeDeployConfig>(value)
+                .map_err(|_| "unparsed")
+                .and_then(|loaded| loaded.validate().map_err(|_| "refused"))
+        };
+        let defaulted = load(json!([profile("python", "sandbox.internal:9446")])).unwrap();
+        assert_eq!(defaulted.sandbox_runtimes[0].code_slots, None);
+        assert_eq!(defaulted.sandbox_runtimes[0].effective_code_slots(), 4);
+        for (slots, accepted) in [(0, false), (1, true), (1024, true), (1025, false)] {
+            let mut entry = profile("python", "sandbox.internal:9446");
+            entry["code_slots"] = json!(slots);
+            assert_eq!(load(json!([entry])).is_ok(), accepted, "code_slots {slots}");
+        }
+        for bad in [json!(-1), json!("4"), json!(4.5)] {
+            let mut entry = profile("python", "sandbox.internal:9446");
+            entry["code_slots"] = bad.clone();
+            assert!(load(json!([entry])).is_err(), "code_slots {bad}");
+        }
+        // Unknown keys stay refused (a misspelt setting never silently defaults).
+        let mut misspelt = profile("python", "sandbox.internal:9446");
+        misspelt["code_slot"] = json!(2);
+        assert_eq!(load(json!([misspelt])).unwrap_err(), "unparsed");
+        // javascript and typescript share one Supervisor, spelt two ways.
+        let mut javascript = profile("javascript", "Sandbox.Internal.:9450");
+        let mut typescript = profile("typescript", "sandbox.internal:9450");
+        javascript["code_slots"] = json!(2);
+        typescript["code_slots"] = json!(2);
+        assert!(load(json!([javascript.clone(), typescript.clone()])).is_ok());
+        typescript["code_slots"] = json!(3);
+        assert_eq!(
+            load(json!([javascript.clone(), typescript.clone()])).unwrap_err(),
+            "refused"
+        );
+        // Absent is the default 4, which disagrees with an explicit 2.
+        typescript.as_object_mut().unwrap().remove("code_slots");
+        assert_eq!(
+            load(json!([javascript.clone(), typescript])).unwrap_err(),
+            "refused"
+        );
+        // Different Supervisors are independent.
+        let rust = profile("rust", "sandbox.internal:9447");
+        assert!(load(json!([javascript, rust])).is_ok());
+        let mut values = base;
+        let mut javascript = profile("javascript", "SANDBOX.internal:9450");
+        javascript["code_slots"] = json!(2);
+        let mut typescript = profile("typescript", "sandbox.internal.:9450");
+        typescript["code_slots"] = json!(5);
+        values["sandbox_runtimes"] = json!([javascript, typescript]);
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(values).unwrap();
+        assert_eq!(
+            loaded.validate().unwrap_err().to_string(),
+            "sandbox_runtimes that share one Supervisor target must set the same code_slots"
+        );
+    }
+
+    #[test]
+    fn code_slot_targets_are_normalised_like_the_client_dials_them() {
+        for (target, key) in [
+            ("sandbox.internal:9446", "sandbox.internal:9446"),
+            ("Sandbox.INTERNAL:9446", "sandbox.internal:9446"),
+            ("sandbox.internal.:9446", "sandbox.internal:9446"),
+            ("sandbox.internal", "sandbox.internal:443"),
+            ("sandbox.internal:443", "sandbox.internal:443"),
+            ("10.0.0.7:9450", "10.0.0.7:9450"),
+            ("[::1]:9450", "[::1]:9450"),
+        ] {
+            assert_eq!(super::code_slot_target(target).unwrap(), key, "{target}");
+        }
+        for invalid in [
+            "",
+            "https://sandbox.internal:9446",
+            "sandbox/internal",
+            ":9446",
+        ] {
+            assert!(super::code_slot_target(invalid).is_err(), "{invalid}");
+        }
     }
 
     #[test]

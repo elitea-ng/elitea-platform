@@ -6458,6 +6458,75 @@ async fn a_pending_terminal_main_refuses_is_replaced_by_internal_without_a_stop(
     assert_eq!(failure_code(&sent[1]), RuntimeErrorCodeV1::Internal as i32);
 }
 
+/// W3-1 (C3), mixed rollout: Main without a post-FU-299 kind's text refuses
+/// its terminal; the Worker replaces it once with the kind's baseline
+/// fallback at the same sequence, which that Main accepts, and the run
+/// settles once, typed.
+#[tokio::test]
+async fn a_refused_post_baseline_failure_is_replaced_once_by_its_fallback_and_settles() {
+    for (kind, fallback) in [
+        (
+            RuntimeFailureKind::CodeDeadlineInsufficient,
+            RuntimeFailureKind::PipelineCodeFailed,
+        ),
+        (
+            RuntimeFailureKind::FanoutDeadlineInsufficient,
+            RuntimeFailureKind::PipelineToolFailed,
+        ),
+    ] {
+        let (_temporary, output_root) = root();
+        seed_pending_terminal(&output_root, |_| superseded_failure_terminal(kind)).await;
+        let (events, sent) = output_recovery_delivery(
+            &output_root,
+            "claim_recover_ambiguous_invocation_noack",
+            vec![],
+            vec![ReplayResult::FrameRefused, ReplayResult::Acknowledged],
+        )
+        .await;
+        assert_settled_once(&events);
+        assert_eq!(sent.len(), 2, "{kind:?}: one replay, one replacement");
+        assert_eq!(restored_terminal_failure_kind(&sent[0]), Some(kind));
+        assert_eq!(restored_terminal_failure_kind(&sent[1]), Some(fallback));
+        assert_eq!(sent[1].sequence, sent[0].sequence);
+    }
+}
+
+/// W3-1 (C3): the substitution happens at most once. When Main refuses the
+/// fallback too, nothing is substituted again: the FU-290 path dead-letters
+/// the delivery after exactly two sends, and nothing settles.
+#[tokio::test]
+async fn a_refused_fallback_is_not_substituted_again() {
+    let (_temporary, output_root) = root();
+    seed_pending_terminal(&output_root, |_| {
+        superseded_failure_terminal(RuntimeFailureKind::CodeDeadlineInsufficient)
+    })
+    .await;
+    let (verdict, events, sent) = output_recovery_verdict(
+        &output_root,
+        "claim_recover_ambiguous_invocation_noack",
+        vec![],
+        vec![
+            ReplayResult::FrameRefused,
+            ReplayResult::FrameRefused,
+            ReplayResult::Acknowledged,
+        ],
+    )
+    .await;
+    assert_eq!(sent.len(), 2, "no third frame");
+    assert_eq!(
+        restored_terminal_failure_kind(&sent[1]),
+        Some(RuntimeFailureKind::PipelineCodeFailed)
+    );
+    assert_eq!(count(&events, "settlement") + count(&events, "retire"), 0);
+    assert!(matches!(
+        verdict,
+        crate::transport::command_bus::DeliveryVerdict::Poison {
+            reason: crate::transport::command_bus::PoisonReason::TerminalRefused,
+            ..
+        }
+    ));
+}
+
 /// A pending failure terminal Main accepts on replay settles with that very
 /// frame; no second terminal is persisted next to it.
 #[tokio::test]

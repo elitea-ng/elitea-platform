@@ -114,6 +114,14 @@ pub enum RuntimeFailureKind {
     CodePreparationFailed,
     CodePreparationCancelled,
     CodePreparationUnconfirmed,
+    /// W3-1: a fresh Code attempt refused before dispatch, because the run's
+    /// remaining time is shorter than the Code timeout plus the observation
+    /// margin. Nothing started; not retryable (the same deadline gives the
+    /// same answer).
+    CodeDeadlineInsufficient,
+    /// W3-1 registers it, W3-2 raises it: a fan-out of Code items whose
+    /// items cannot finish before the run's deadline, refused before freezing.
+    FanoutDeadlineInsufficient,
 
     DependencyUnavailable,
     DeadlineExceeded,
@@ -312,6 +320,20 @@ pub(crate) fn restored_terminal_failure_kind(
         return None;
     };
     canonical_runtime_failure(error)
+}
+
+/// The failure a terminal Main refused (`PROTOCOL_VIOLATION`) is replaced by
+/// once (FU-290): an unregistered text becomes `Internal`; a kind newer than
+/// that Main becomes the older kind it admits under the same wire code (W3-1,
+/// C3). `None`: the frame is already the safest canonical failure and the
+/// refusal is returned, never looped.
+pub(crate) fn refused_terminal_replacement(
+    frame: &ExecutionOutputFrameV1,
+) -> Option<RuntimeFailureKind> {
+    match restored_terminal_failure_kind(frame) {
+        None => Some(RuntimeFailureKind::Internal),
+        Some(kind) => kind.older_main_fallback(),
+    }
 }
 
 /// A restored failure terminal which differs from this build's canonical frames
@@ -827,6 +849,12 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         Some("pipeline.code_preparation_unconfirmed") => {
             RuntimeFailureKind::CodePreparationUnconfirmed
         }
+        Some(CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE) => {
+            RuntimeFailureKind::CodeDeadlineInsufficient
+        }
+        Some(FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE) => {
+            RuntimeFailureKind::FanoutDeadlineInsufficient
+        }
 
         Some("model.output_continuation_failed") => RuntimeFailureKind::OutputContinuationExhausted,
         Some(RECOVERY_REFUSED_UPSTREAM_CODE) => RuntimeFailureKind::RecoveryRefused,
@@ -894,7 +922,89 @@ impl RuntimeFailureKind {
     pub(crate) fn safe_message(self) -> &'static str {
         runtime_error_policy(self).1
     }
+
+    /// The kind table's fallback column (W3-1, C3). A kind added after the
+    /// FU-299 baseline names the baseline kind of the same wire code that a
+    /// Main without its text admits: a refused terminal of it is replaced once
+    /// by that kind (`refused_terminal_replacement`), so the run still ends
+    /// typed. Every baseline kind is `None`: every Main admits it.
+    ///
+    /// Exhaustive on purpose: a new kind does not compile until it is placed
+    /// here, and `post_baseline_kinds_fall_back_to_a_baseline_kind_of_the_same_wire_code`
+    /// refuses a new kind without a fallback, or with a post-baseline one.
+    pub(crate) const fn older_main_fallback(self) -> Option<Self> {
+        match self {
+            // ---- added after the FU-299 baseline: a baseline fallback each.
+            Self::CodeDeadlineInsufficient => Some(Self::PipelineCodeFailed),
+            Self::FanoutDeadlineInsufficient => Some(Self::PipelineToolFailed),
+            // ---- the FU-299 baseline. FanoutAgentCallsPipeline belongs here:
+            // Main has admitted its text since FU-291; W3-1 (D5) only added it
+            // to the Worker's table.
+            Self::UnsupportedCapability
+            | Self::IncompatibleVersion
+            | Self::InvalidInput
+            | Self::ResourceExhausted
+            | Self::ExecutionInputLimit
+            | Self::ExecutionInputFieldLimit(_)
+            | Self::OutputProjectionLimit
+            | Self::PipelineInputInvalid
+            | Self::PipelineChildInputTypeInvalid
+            | Self::PipelineNodeTypeNotAvailable
+            | Self::ApplicationCompositionInvalid
+            | Self::ApplicationCompositionTooLarge
+            | Self::PipelineInputLimit
+            | Self::PipelineToolUnavailable
+            | Self::PipelineToolFailed
+            | Self::FanoutMemberFailed
+            | Self::FanoutAgentCallsPipeline
+            | Self::PipelineResultInvalid
+            | Self::PipelineResultLimit
+            | Self::PipelineCodeFailed
+            | Self::CodePreparationFailed
+            | Self::CodePreparationCancelled
+            | Self::CodePreparationUnconfirmed
+            | Self::DependencyUnavailable
+            | Self::DeadlineExceeded
+            | Self::OutputContinuationExhausted
+            | Self::ModelTimeout
+            | Self::ModelRateLimited
+            | Self::ModelAccessDenied
+            | Self::ModelBudgetExhausted(_)
+            | Self::ModelRequestRejected
+            | Self::ModelResponseInvalid
+            | Self::ContextBudgetExceeded
+            | Self::ModelRequestTooLarge
+            | Self::ModelUnavailable
+            | Self::ModelProviderFailure
+            | Self::AuthorizationFailed
+            | Self::ToolkitRunAuthorizationFailed
+            | Self::Cancelled
+            | Self::ResultRefused
+            | Self::RecoveryRefused
+            | Self::RecoveryFrontierUnsupported
+            | Self::CapReached(_)
+            | Self::OutputContractViolation
+            | Self::Internal => None,
+        }
+    }
 }
+
+/// The upstream (operator) code of [`RuntimeFailureKind::CodeDeadlineInsufficient`]:
+/// the Code runtime raises it and its WARN fault line carries it.
+pub(crate) const CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE: &str =
+    elitea_faults::codes::PIPELINE_CODE_DEADLINE_INSUFFICIENT.as_str();
+
+/// The upstream (operator) code of [`RuntimeFailureKind::FanoutDeadlineInsufficient`]
+/// (`elitea_agent_runtime::graph::fanout::admission::FanoutDeadlineInsufficient::CODE`).
+pub(crate) const FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE: &str =
+    elitea_faults::codes::GRAPH_FANOUT_DEADLINE_INSUFFICIENT.as_str();
+
+/// Registered text of [`RuntimeFailureKind::CodeDeadlineInsufficient`]; Main holds the same text.
+pub(crate) const CODE_DEADLINE_INSUFFICIENT_MESSAGE: &str =
+    "The Code node could not start: too little time was left before the run's deadline.";
+
+/// Registered text of [`RuntimeFailureKind::FanoutDeadlineInsufficient`]; Main holds the same text.
+pub(crate) const FANOUT_DEADLINE_INSUFFICIENT_MESSAGE: &str = "The fan-out node could not start: too little time was left before the run's deadline for its items.";
 
 /// Registered text of [`RuntimeFailureKind::ApplicationCompositionInvalid`]. Data-free: Main's
 /// attach and pipeline save checks name the attachment; Main registers this exact text.
@@ -1065,6 +1175,16 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::CodePreparationUnconfirmed => (
             RuntimeErrorCodeV1::PipelineCodeFailed,
             "Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.",
+            false,
+        ),
+        RuntimeFailureKind::CodeDeadlineInsufficient => (
+            RuntimeErrorCodeV1::PipelineCodeFailed,
+            CODE_DEADLINE_INSUFFICIENT_MESSAGE,
+            false,
+        ),
+        RuntimeFailureKind::FanoutDeadlineInsufficient => (
+            RuntimeErrorCodeV1::PipelineToolFailed,
+            FANOUT_DEADLINE_INSUFFICIENT_MESSAGE,
             false,
         ),
         RuntimeFailureKind::PipelineCodeFailed => (
@@ -1245,12 +1365,15 @@ const REGISTERED_RUNTIME_FAILURES: &[RuntimeFailureKind] = &[
     RuntimeFailureKind::PipelineToolUnavailable,
     RuntimeFailureKind::PipelineToolFailed,
     RuntimeFailureKind::FanoutMemberFailed,
+    RuntimeFailureKind::FanoutAgentCallsPipeline,
+    RuntimeFailureKind::FanoutDeadlineInsufficient,
     RuntimeFailureKind::PipelineResultInvalid,
     RuntimeFailureKind::PipelineResultLimit,
     RuntimeFailureKind::PipelineCodeFailed,
     RuntimeFailureKind::CodePreparationFailed,
     RuntimeFailureKind::CodePreparationCancelled,
     RuntimeFailureKind::CodePreparationUnconfirmed,
+    RuntimeFailureKind::CodeDeadlineInsufficient,
     RuntimeFailureKind::DependencyUnavailable,
     RuntimeFailureKind::DeadlineExceeded,
     RuntimeFailureKind::AuthorizationFailed,
@@ -2250,6 +2373,254 @@ mod fault_registry_parity_tests {
         assert_eq!(
             registered, expected,
             "the registry's runtime.* entries differ"
+        );
+    }
+}
+
+/// W3-1: the deadline-admission failures and their version-skew fallback.
+#[cfg(test)]
+mod deadline_admission_failure_tests {
+    use super::*;
+
+    /// The kinds a Main of the FU-299 baseline (`1f799d714`) admits: that
+    /// commit's `REGISTERED_RUNTIME_FAILURES`, plus `FanoutAgentCallsPipeline`,
+    /// whose text Main has admitted since FU-291 (W3-1 D5 only added it to the
+    /// table). Pinned: never extend it for a new kind; give the new kind a
+    /// fallback in `older_main_fallback` instead.
+    const FU299_BASELINE_RUNTIME_FAILURES: &[RuntimeFailureKind] = &[
+        RuntimeFailureKind::UnsupportedCapability,
+        RuntimeFailureKind::IncompatibleVersion,
+        RuntimeFailureKind::InvalidInput,
+        RuntimeFailureKind::ResourceExhausted,
+        RuntimeFailureKind::ExecutionInputLimit,
+        RuntimeFailureKind::ExecutionInputFieldLimit(super::super::InputLimitField::UserMessage),
+        RuntimeFailureKind::ExecutionInputFieldLimit(super::super::InputLimitField::ChatHistory),
+        RuntimeFailureKind::ExecutionInputFieldLimit(super::super::InputLimitField::AgentSettings),
+        RuntimeFailureKind::ExecutionInputFieldLimit(
+            super::super::InputLimitField::ToolConfiguration,
+        ),
+        RuntimeFailureKind::OutputProjectionLimit,
+        RuntimeFailureKind::PipelineInputInvalid,
+        RuntimeFailureKind::PipelineChildInputTypeInvalid,
+        RuntimeFailureKind::PipelineNodeTypeNotAvailable,
+        RuntimeFailureKind::ApplicationCompositionInvalid,
+        RuntimeFailureKind::ApplicationCompositionTooLarge,
+        RuntimeFailureKind::PipelineInputLimit,
+        RuntimeFailureKind::PipelineToolUnavailable,
+        RuntimeFailureKind::PipelineToolFailed,
+        RuntimeFailureKind::FanoutMemberFailed,
+        RuntimeFailureKind::PipelineResultInvalid,
+        RuntimeFailureKind::PipelineResultLimit,
+        RuntimeFailureKind::PipelineCodeFailed,
+        RuntimeFailureKind::CodePreparationFailed,
+        RuntimeFailureKind::CodePreparationCancelled,
+        RuntimeFailureKind::CodePreparationUnconfirmed,
+        RuntimeFailureKind::DependencyUnavailable,
+        RuntimeFailureKind::DeadlineExceeded,
+        RuntimeFailureKind::AuthorizationFailed,
+        RuntimeFailureKind::ToolkitRunAuthorizationFailed,
+        RuntimeFailureKind::Cancelled,
+        RuntimeFailureKind::ResultRefused,
+        RuntimeFailureKind::RecoveryRefused,
+        RuntimeFailureKind::RecoveryFrontierUnsupported,
+        RuntimeFailureKind::CapReached(RunCap::MaxToolCalls),
+        RuntimeFailureKind::CapReached(RunCap::MaxModelTurns),
+        RuntimeFailureKind::CapReached(RunCap::MaxRecordsRead),
+        RuntimeFailureKind::CapReached(RunCap::MaxBrowserSeconds),
+        RuntimeFailureKind::CapReached(RunCap::BrowserMonthlyQuota),
+        RuntimeFailureKind::OutputContractViolation,
+        RuntimeFailureKind::OutputContinuationExhausted,
+        RuntimeFailureKind::ModelTimeout,
+        RuntimeFailureKind::ModelRateLimited,
+        RuntimeFailureKind::ModelAccessDenied,
+        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Unknown),
+        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Project),
+        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Member),
+        RuntimeFailureKind::ModelRequestRejected,
+        RuntimeFailureKind::ModelResponseInvalid,
+        RuntimeFailureKind::ContextBudgetExceeded,
+        RuntimeFailureKind::ModelRequestTooLarge,
+        RuntimeFailureKind::ModelUnavailable,
+        RuntimeFailureKind::ModelProviderFailure,
+        RuntimeFailureKind::Internal,
+        RuntimeFailureKind::FanoutAgentCallsPipeline,
+    ];
+
+    /// C3 as a rule of the kind table: every kind added after the baseline
+    /// falls back to a baseline kind of the same wire code (so an older Main
+    /// admits the replacement), never to another post-baseline kind, and no
+    /// baseline kind has a fallback.
+    #[test]
+    fn post_baseline_kinds_fall_back_to_a_baseline_kind_of_the_same_wire_code() {
+        for kind in FU299_BASELINE_RUNTIME_FAILURES {
+            assert!(
+                REGISTERED_RUNTIME_FAILURES.contains(kind),
+                "{kind:?} left the table; a baseline kind stays registered"
+            );
+        }
+        let mut post_baseline = 0;
+        for kind in REGISTERED_RUNTIME_FAILURES {
+            let fallback = kind.older_main_fallback();
+            if FU299_BASELINE_RUNTIME_FAILURES.contains(kind) {
+                assert_eq!(fallback, None, "{kind:?} is baseline: every Main admits it");
+                continue;
+            }
+            post_baseline += 1;
+            let fallback =
+                fallback.unwrap_or_else(|| panic!("{kind:?} is post-baseline and has no fallback"));
+            assert!(
+                FU299_BASELINE_RUNTIME_FAILURES.contains(&fallback),
+                "{kind:?} falls back to {fallback:?}, which is post-baseline"
+            );
+            assert_eq!(
+                runtime_error(fallback).code,
+                runtime_error(*kind).code,
+                "{kind:?}: the fallback keeps the wire code"
+            );
+            assert_eq!(
+                runtime_error(fallback).retryable,
+                runtime_error(*kind).retryable,
+                "{kind:?}: the fallback keeps retryability"
+            );
+            assert_eq!(
+                fallback.older_main_fallback(),
+                None,
+                "{kind:?}: one hop only"
+            );
+        }
+        assert_eq!(
+            post_baseline,
+            REGISTERED_RUNTIME_FAILURES.len() - FU299_BASELINE_RUNTIME_FAILURES.len(),
+            "every registered kind is baseline or post-baseline"
+        );
+    }
+
+    /// At most one substitution: the fallback frame is a baseline kind, so if
+    /// Main refuses it too there is no further replacement and the FU-290
+    /// path (dead-letter, never re-sent) applies.
+    #[test]
+    fn the_fallback_is_substituted_at_most_once() {
+        for kind in REGISTERED_RUNTIME_FAILURES {
+            let mut frame = terminal(*kind);
+            let mut substitutions = 0;
+            while let Some(replacement) = refused_terminal_replacement(&frame) {
+                substitutions += 1;
+                assert!(substitutions <= 1, "{kind:?} was substituted twice");
+                frame = terminal(replacement);
+            }
+            assert_eq!(
+                substitutions,
+                usize::from(kind.older_main_fallback().is_some()),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn deadline_refusals_keep_their_readable_registered_text() {
+        for (upstream, kind, wire, message) in [
+            (
+                CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE,
+                RuntimeFailureKind::CodeDeadlineInsufficient,
+                RuntimeErrorCodeV1::PipelineCodeFailed,
+                CODE_DEADLINE_INSUFFICIENT_MESSAGE,
+            ),
+            (
+                FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE,
+                RuntimeFailureKind::FanoutDeadlineInsufficient,
+                RuntimeErrorCodeV1::PipelineToolFailed,
+                FANOUT_DEADLINE_INSUFFICIENT_MESSAGE,
+            ),
+        ] {
+            assert_eq!(model_failure(Some(upstream)), kind);
+            let error = runtime_error(kind);
+            assert_eq!(error.code, wire as i32);
+            assert_eq!(error.safe_message, message);
+            assert!(!error.retryable, "{kind:?} is not retryable");
+            assert_eq!(canonical_runtime_failure(&error), Some(kind));
+            assert!(
+                !message.to_ascii_lowercase().contains("outage")
+                    && !message.contains("unavailable"),
+                "{kind:?} reads as an outage"
+            );
+        }
+        assert_eq!(
+            CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE,
+            "pipeline.code.deadline_insufficient"
+        );
+        assert_eq!(
+            FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE,
+            elitea_agent_runtime::graph::fanout::admission::FanoutDeadlineInsufficient::CODE
+        );
+    }
+
+    /// D5: the FU-291 refusal is now a registered canonical failure.
+    #[test]
+    fn fanout_agent_calls_pipeline_is_registered() {
+        let error = runtime_error(RuntimeFailureKind::FanoutAgentCallsPipeline);
+        assert_eq!(
+            canonical_runtime_failure(&error),
+            Some(RuntimeFailureKind::FanoutAgentCallsPipeline)
+        );
+        assert_eq!(error.safe_message, FANOUT_AGENT_CALLS_PIPELINE_MESSAGE);
+    }
+
+    fn terminal(kind: RuntimeFailureKind) -> ExecutionOutputFrameV1 {
+        ExecutionOutputFrameV1 {
+            terminal: true,
+            payload: Some(execution_output_frame_v1::Payload::RuntimeError(
+                runtime_error(kind),
+            )),
+            ..ExecutionOutputFrameV1::default()
+        }
+    }
+
+    /// C3: a Main without the W3-1 texts refuses their frame; the Worker
+    /// replaces it once with the older kind of the same wire code, which that
+    /// Main admits, so the run ends typed. A canonical older kind is never
+    /// replaced again (no loop); an unregistered text still becomes Internal.
+    #[test]
+    fn a_refused_new_kind_is_replaced_by_the_kind_an_older_main_admits() {
+        for (kind, older) in [
+            (
+                RuntimeFailureKind::CodeDeadlineInsufficient,
+                RuntimeFailureKind::PipelineCodeFailed,
+            ),
+            (
+                RuntimeFailureKind::FanoutDeadlineInsufficient,
+                RuntimeFailureKind::PipelineToolFailed,
+            ),
+        ] {
+            assert_eq!(refused_terminal_replacement(&terminal(kind)), Some(older));
+            assert_eq!(
+                runtime_error(older).code,
+                runtime_error(kind).code,
+                "the fallback keeps the wire code"
+            );
+            assert_eq!(refused_terminal_replacement(&terminal(older)), None);
+        }
+        for kind in REGISTERED_RUNTIME_FAILURES {
+            if !matches!(
+                kind,
+                RuntimeFailureKind::CodeDeadlineInsufficient
+                    | RuntimeFailureKind::FanoutDeadlineInsufficient
+            ) {
+                assert_eq!(
+                    refused_terminal_replacement(&terminal(*kind)),
+                    None,
+                    "{kind:?}"
+                );
+            }
+        }
+        let mut unregistered = terminal(RuntimeFailureKind::PipelineCodeFailed);
+        if let Some(execution_output_frame_v1::Payload::RuntimeError(error)) =
+            unregistered.payload.as_mut()
+        {
+            error.safe_message.push_str(" older build");
+        }
+        assert_eq!(
+            refused_terminal_replacement(&unregistered),
+            Some(RuntimeFailureKind::Internal)
         );
     }
 }

@@ -150,6 +150,7 @@ fn remote(content: Option<Arc<InputContentClient>>) -> RemoteCodeRuntime {
         journal: Arc::new(crate::sandbox::dispatch::DispatchJournal::new(pool)),
         compiled_profile: None,
         debug_sink: None,
+        execution_deadline: tokio::time::Instant::now() + Duration::from_secs(3600),
     }
 }
 fn fixture(reply: MainReply) -> (RemoteCodeRuntime, Arc<Mutex<Vec<serde_json::Value>>>) {

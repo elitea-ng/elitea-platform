@@ -85,6 +85,9 @@ pub(crate) struct CodeAttemptFailure {
     // Owning call detail; generic graph recovery still uses the whole dispatch.
     pub(crate) platform_call_effect: Option<[u8; 32]>,
     pub(crate) preparation: Option<CodePreparationFailure>,
+    /// W3-1: refused before dispatch by deadline admission. The class stays
+    /// a persisted, non-retryable one; this selects the registered terminal.
+    pub(crate) deadline_insufficient: bool,
 }
 
 impl CodeAttemptFailure {
@@ -98,6 +101,19 @@ impl CodeAttemptFailure {
             failure: NodeFailure { class, replay },
             platform_call_effect: None,
             preparation: None,
+            deadline_insufficient: false,
+        }
+    }
+    pub(crate) const fn with_deadline_insufficient(mut self) -> Self {
+        self.deadline_insufficient = true;
+        self
+    }
+    /// The registered upstream code the node reports for this failure.
+    fn terminal_code(self) -> Option<&'static str> {
+        if self.deadline_insufficient {
+            Some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
+        } else {
+            terminal_failure_code(self.failure.class, self.preparation)
         }
     }
     pub(crate) fn with_preparation_failure(mut self, failure: CodePreparationFailure) -> Self {
@@ -140,6 +156,9 @@ pub(in crate::agents) enum ToolCodeError {
     Uncertain,
     /// Main refused to authorize or accept the job, or the request was invalid.
     Refused,
+    /// Refused before dispatch: too little of the run's time was left for
+    /// the Code timeout plus the observation margin (W3-1). Nothing ran.
+    DeadlineInsufficient,
     /// The submission itself failed (transport, status).
     Submission,
     /// An error this layer does not type (preparation, journal, trace).
@@ -162,6 +181,17 @@ pub(in crate::agents) trait CodeSandboxRuntime: Send + Sync {
     /// must authorize each submission and reconcile pending jobs without minting
     /// a replacement identity. Failure/cancellation must return an error.
     async fn execute(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError>;
+
+    /// The graph Code node's path: a failure carries the registered upstream
+    /// code the runtime typed, when it typed one. The default types none.
+    async fn execute_node(
+        &self,
+        invocation: CodeInvocation<'_>,
+    ) -> Result<Vec<u8>, (GraphError, Option<&'static str>)> {
+        self.execute(invocation)
+            .await
+            .map_err(|error| (error, None))
+    }
 
     /// The raw invocation as a tool uses it: the failure arrives as a typed
     /// cause, not as error text. The default has no cause to report.
@@ -231,12 +261,17 @@ impl Node for CodeNode {
     }
 
     async fn execute(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
-        let result = self.execute_code(context).await;
+        let mut typed = None;
+        let result = self.execute_code(context, &mut typed).await;
         if let Err(error) = &result {
-            tracing::error!(node_id = self.definition.id(), error_code = "pipeline.code_failed", failure_reason = %error, "pipeline Code node failed");
+            let code = typed.unwrap_or("pipeline.code_failed");
+            // A deadline refusal already wrote its one WARN fault line.
+            if code != crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE {
+                tracing::error!(node_id = self.definition.id(), error_code = code, failure_reason = %error, "pipeline Code node failed");
+            }
             if let Some(events) = &self.events {
                 events
-                    .send_execution_failure("pipeline.code_failed")
+                    .send_execution_failure(code)
                     .await
                     .map_err(|_| code_error("The pipeline failure channel closed."))?;
             }
@@ -246,7 +281,11 @@ impl Node for CodeNode {
 }
 
 impl CodeNode {
-    async fn execute_code(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
+    async fn execute_code(
+        &self,
+        context: &NodeContext,
+        typed: &mut Option<&'static str>,
+    ) -> Result<NodeOutput, GraphError> {
         let activation = activation(&self.definition, context)?;
         let source = self
             .definition
@@ -271,7 +310,7 @@ impl CodeNode {
             .transpose()?;
         let receipt = self
             .runtime
-            .execute(CodeInvocation {
+            .execute_node(CodeInvocation {
                 activation,
                 language: self.definition.language(),
                 platform_client: self.definition.platform_client(),
@@ -293,7 +332,11 @@ impl CodeNode {
                     .workspace_selection(context)
                     .map_err(code_error)?,
             })
-            .await?;
+            .await
+            .map_err(|(error, code)| {
+                *typed = code;
+                error
+            })?;
         let updates = project_code_receipt(
             &receipt,
             &self.boundary,
@@ -400,7 +443,7 @@ impl NodeAttemptBody for CodeNode {
             .await
             .map_err(|failure| NodeAttemptReportedFailure {
                 failure: failure.failure,
-                terminal_code: terminal_failure_code(failure.failure.class, failure.preparation),
+                terminal_code: failure.terminal_code(),
             })?;
         let updates = project_code_receipt(
             &receipt,

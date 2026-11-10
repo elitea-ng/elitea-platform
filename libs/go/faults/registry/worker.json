@@ -80,6 +80,38 @@
       "audience": "operator",
       "retryable": "yes",
       "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "graph.fanout.deadline_insufficient",
+      "sentence": "A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline.",
+      "action": "Nothing on the platform; the user lowers the item count or raises the node's concurrency, or the run is given more time.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.code.deadline_insufficient",
+      "sentence": "A Code attempt was refused before it started because the run's remaining time is shorter than the Code timeout plus the observation margin.",
+      "action": "Nothing when the run was near its end; when cause is slot_wait, the Worker was full, so raise code_slots together with the Supervisor's concurrency.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.code.slot_waited",
+      "sentence": "A Code attempt waited more than a second for a slot because this Worker was already running as many Code attempts on that Supervisor as its code_slots allow.",
+      "action": "Nothing when it is rare; if it repeats, raise code_slots together with the Supervisor's concurrency.",
+      "audience": "operator",
+      "retryable": "n/a",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.code.supervisor_busy",
+      "sentence": "The sandbox Supervisor answered busy to a Code attempt, so the attempt keeps its slot and retries with backoff until the Supervisor has room.",
+      "action": "Nothing when it is rare; if it repeats, more Worker slots share the Supervisor than its concurrency allows, so lower code_slots or raise the concurrency.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
     }
   ]
 }

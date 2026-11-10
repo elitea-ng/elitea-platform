@@ -92,6 +92,16 @@
       "wire_code": "RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED"
     },
     {
+      "code": "runtime.code_deadline_insufficient",
+      "sentence": "The Code node could not start: too little time was left before the run's deadline.",
+      "action": "Run it again, or give the run more time if this keeps happening.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "CodeDeadlineInsufficient",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED"
+    },
+    {
       "code": "runtime.code_preparation_cancelled",
       "sentence": "Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.",
       "action": "Review the existing preparation attempt before a retry.",
@@ -200,6 +210,26 @@
       "owner": "elitea-worker-rust",
       "runtime_kind": "ExecutionInputLimit",
       "wire_code": "RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT"
+    },
+    {
+      "code": "runtime.fanout_agent_calls_pipeline",
+      "sentence": "A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools.",
+      "action": "Nothing on the platform; the user runs the saved pipeline directly as the Map worker or branch, or removes it from the Agent's tools.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "FanoutAgentCallsPipeline",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY"
+    },
+    {
+      "code": "runtime.fanout_deadline_insufficient",
+      "sentence": "The fan-out node could not start: too little time was left before the run's deadline for its items.",
+      "action": "Lower the number of items, raise the node's concurrency, or give the run more time.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "FanoutDeadlineInsufficient",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED"
     },
     {
       "code": "runtime.fanout_member_failed",

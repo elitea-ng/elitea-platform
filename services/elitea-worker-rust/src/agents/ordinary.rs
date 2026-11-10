@@ -419,6 +419,13 @@ impl OrdinaryNativeAgentAssembler {
         tracing::Span::current().record("stage", "toolsets");
         // What `recall` returns this turn, for a sub-agent brief (#1614).
         let recalled = Arc::new(super::agent_memory_tools::RecalledEntries::default());
+        // W3-1: Code runs admitted against the run's deadline.
+        let code_runtime = match self.sandbox.as_ref().zip(sandbox_authority) {
+            Some((factory, authority)) => {
+                Some(factory.bind(authority, plan.code_admission_deadline()?))
+            }
+            None => None,
+        };
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
                 &tool_snapshot,
@@ -430,10 +437,7 @@ impl OrdinaryNativeAgentAssembler {
                 model_scopes,
                 plan.thread_id().to_owned(),
                 plan.conversation_id().to_owned(),
-                self.sandbox
-                    .as_ref()
-                    .zip(sandbox_authority)
-                    .map(|(factory, authority)| factory.bind(authority)),
+                code_runtime,
                 attachment_library,
                 browser_host.as_ref(),
                 &recalled,

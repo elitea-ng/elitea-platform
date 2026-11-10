@@ -90,6 +90,7 @@ fn runtime(factory: CodeRuntimeFactory) -> RemoteCodeRuntime {
         journal: factory.journal,
         compiled_profile: factory.compiled_profile,
         debug_sink: None,
+        execution_deadline: tokio::time::Instant::now() + Duration::from_secs(3600),
     }
 }
 

@@ -56,12 +56,26 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 | `dependency.database_unavailable` | Main lost its database; requests that need it fail and Workers get retryable answers until it is back. | Check PostgreSQL and PgBouncer; Main resumes on its own when the database answers again. | operator | yes | elitea-main |
 | `dependency.nats_unavailable` | Main lost NATS; admitted runs wait in the outbox and claimed runs continue. | Check the NATS server; Main reconnects on its own. | operator | yes | elitea-main |
 
+### graph
+
+| Code | What happened | What to do | Who sees it | Retry | Raised by |
+|---|---|---|---|---|---|
+| `graph.fanout.deadline_insufficient` | A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline. | Nothing on the platform; the user lowers the item count or raises the node's concurrency, or the run is given more time. | operator | no | elitea-worker-rust |
+
 ### internal
 
 | Code | What happened | What to do | Who sees it | Retry | Raised by |
 |---|---|---|---|---|---|
 | `internal.panic` | A component crashed on an unexpected condition; the request or task it was handling failed. | Report the support reference to the platform team; the log line holds the bounded stack. | both | n/a | all |
 | `internal.unexpected` | An unexpected error stopped this request. | Try again; if it repeats, report the support reference to the platform team. | both | n/a | all |
+
+### pipeline
+
+| Code | What happened | What to do | Who sees it | Retry | Raised by |
+|---|---|---|---|---|---|
+| `pipeline.code.deadline_insufficient` | A Code attempt was refused before it started because the run's remaining time is shorter than the Code timeout plus the observation margin. | Nothing when the run was near its end; when cause is slot_wait, the Worker was full, so raise code_slots together with the Supervisor's concurrency. | operator | no | elitea-worker-rust |
+| `pipeline.code.slot_waited` | A Code attempt waited more than a second for a slot because this Worker was already running as many Code attempts on that Supervisor as its code_slots allow. | Nothing when it is rare; if it repeats, raise code_slots together with the Supervisor's concurrency. | operator | n/a | elitea-worker-rust |
+| `pipeline.code.supervisor_busy` | The sandbox Supervisor answered busy to a Code attempt, so the attempt keeps its slot and retries with backoff until the Supervisor has room. | Nothing when it is rare; if it repeats, more Worker slots share the Supervisor than its concurrency allows, so lower code_slots or raise the concurrency. | operator | yes | elitea-worker-rust |
 
 ### runner
 
@@ -84,6 +98,7 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 | `runtime.cap_reached.max_model_turns` | The run stopped because it reached the maximum number of model turns an administrator set. The task may be incomplete. Check what it completed before you continue. | Raise the run's model turn cap if the task needs more turns. | user | no | elitea-worker-rust |
 | `runtime.cap_reached.max_records_read` | The run stopped because it reached the maximum number of records read an administrator set. The task may be incomplete. Check what it completed before you continue. | Raise the run's records read cap if the task needs more records. | user | no | elitea-worker-rust |
 | `runtime.cap_reached.max_tool_calls` | The run stopped because it reached the maximum number of tool calls an administrator set. The task may be incomplete. Check what it completed before you continue. | Raise the run's tool call cap if the task needs more calls. | user | no | elitea-worker-rust |
+| `runtime.code_deadline_insufficient` | The Code node could not start: too little time was left before the run's deadline. | Run it again, or give the run more time if this keeps happening. | user | no | elitea-worker-rust |
 | `runtime.code_preparation_cancelled` | Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying. | Review the existing preparation attempt before a retry. | user | no | elitea-worker-rust |
 | `runtime.code_preparation_failed` | Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying. | Read the sandbox preparation lines for this support reference before a retry. | user | no | elitea-worker-rust |
 | `runtime.code_preparation_unconfirmed` | Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference. | Reconcile the existing preparation attempt in the sandbox supervisor before a retry. | user | no | elitea-worker-rust |
@@ -95,6 +110,8 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 | `runtime.execution_input_field_limit.tool_configuration` | The request cannot start because the attached tool configuration exceeds a platform input limit. Reduce the attached tools or ask an administrator to inspect their schemas using the support reference. | Inspect the attached toolkits' schemas for oversized content. | user | no | elitea-worker-rust |
 | `runtime.execution_input_field_limit.user_message` | The request cannot start because the user message exceeds a platform size limit. Shorten the message or attach the content as a file. This is not a model token limit. | Nothing on the platform; the user shortens the message or attaches it as a file. | user | no | elitea-worker-rust |
 | `runtime.execution_input_limit` | The request cannot start because its input exceeds a platform size limit. Reduce the message, instructions, or attached context. This is not a model token limit. Share the support reference if the cause is unclear. | Nothing on the platform; the user reduces the input. Check the Worker's lines if the cause is unclear. | user | no | elitea-worker-rust |
+| `runtime.fanout_agent_calls_pipeline` | A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools. | Nothing on the platform; the user runs the saved pipeline directly as the Map worker or branch, or removes it from the Agent's tools. | user | no | elitea-worker-rust |
+| `runtime.fanout_deadline_insufficient` | The fan-out node could not start: too little time was left before the run's deadline for its items. | Lower the number of items, raise the node's concurrency, or give the run more time. | user | no | elitea-worker-rust |
 | `runtime.fanout_member_failed` | The pipeline stopped because a Map item or Parallel branch failed (On Error is Stop, or every item failed). The other items finished first; later nodes did not run. Open Execution details to see the failed item. | Read the Worker's lines for this support reference to find the failed item or branch. | user | no | elitea-worker-rust |
 | `runtime.incompatible_version` | The requested contract version is not compatible. | Align the Main and Worker versions; the command's contract version is not one this Worker serves. | user | no | elitea-worker-rust |
 | `runtime.internal` | The runtime operation failed. | Read the Worker's lines for this support reference. | user | no | elitea-worker-rust |

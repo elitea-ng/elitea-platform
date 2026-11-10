@@ -89,6 +89,33 @@ impl RemoteCodeRuntime {
                 NodeFailureClass::AuthorizationDenied,
             )
         })?;
+        // W3-1: one slot for the whole attempt, taken before its first effect
+        // (the original visit, preparation, the dispatch journal, submission)
+        // and held through Busy/Pending backoff and observation. A fresh
+        // attempt is admitted against the run's deadline and refused typed
+        // before any effect; one that may already have started is reconciled,
+        // never refused (C2), so it only waits for a slot, bounded by the
+        // run's deadline.
+        let _slot = if prior_dispatch {
+            self.admit_started(profile).await.map_err(|_| {
+                classify(
+                    CodeAttemptPhase::Observation,
+                    NodeFailureClass::AttemptTimeout,
+                    invocation.activation,
+                    true,
+                )
+            })?
+        } else {
+            self.admit_fresh(profile, Some(declaration.node_id.as_str()))
+                .await
+                .map_err(|_| {
+                    before(
+                        CodeAttemptPhase::Admission,
+                        NodeFailureClass::InvalidConfiguration,
+                    )
+                    .with_deadline_insufficient()
+                })?
+        };
         let declaration = crate::sandbox::code_recovery::OriginalCodeDeclarationInput {
             node_id: &declaration.node_id,
             graph_thread: &declaration.graph_thread_id,
@@ -419,6 +446,7 @@ impl RemoteCodeRuntime {
                 };
                 let submission = async {
                     let mut dispatch_possible = prior_dispatch;
+                    let mut busy = super::SupervisorBusyNotice::default();
                     let mut backoff = code_timing::PendingBackoff::new();
                     loop {
                         let descriptor = selected
@@ -500,10 +528,13 @@ impl RemoteCodeRuntime {
                                 ));
                             }
                             Err(SandboxCallError::Submission { code:
-                                    tonic::Code::Unavailable
+                                    code @ (tonic::Code::Unavailable
                                     | tonic::Code::DeadlineExceeded
                                     | tonic::Code::Aborted
-                                    | tonic::Code::ResourceExhausted, .. }) => dispatch_possible = true,
+                                    | tonic::Code::ResourceExhausted), .. }) => {
+                                dispatch_possible = true;
+                                busy.note(code, self, profile);
+                            }
                             Err(SandboxCallError::Submission { code, .. })
                                 if submission_control_failure(code, invocation.activation)
                                     .is_some() =>
