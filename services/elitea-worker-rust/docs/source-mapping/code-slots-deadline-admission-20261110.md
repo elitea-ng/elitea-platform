@@ -91,8 +91,22 @@ unknown-effect visit for owner recovery).
   `runtimeFailurePolicyForError`). Before this change the Worker replaced only a non-canonical refused terminal, so a
   new canonical kind refused by an older Main would have been dead-lettered with the run unsettled until its deadline.
   `refused_terminal_replacement` (`protocol/output.rs:330`, used at `output_delivery.rs:2376`) now replaces a refused
-  new kind once with the older kind of the same wire code (`older_main_fallback`, `:930`), which that Main admits.
-  Main first stays the documented order.
+  new kind once with the older kind of the same wire code, which that Main admits. Main first stays the documented
+  order.
+- **The fallback is a rule of the kind table.** `RuntimeFailureKind::older_main_fallback` (`protocol/output.rs:935`)
+  is an exhaustive match, so a new kind does not compile until it is placed: a kind added after the FU-299 baseline
+  names a baseline kind of the same wire code, every baseline kind is `None`. The baseline is pinned in the test module
+  (`FU299_BASELINE_RUNTIME_FAILURES`, `:2416`: `1f799d714`'s registered kinds, 53, plus `FanoutAgentCallsPipeline`,
+  whose text Main has admitted since FU-291). `post_baseline_kinds_fall_back_to_a_baseline_kind_of_the_same_wire_code`
+  fails for a post-baseline kind without a fallback, with a post-baseline fallback, or with a different wire code or
+  retryability. The kind table, not the registry, holds it: the table is what the replacement reads, and the parity
+  test already ties each table kind to its registry entry.
+- **Observability (plan §2.1).** An uncontended acquire logs nothing. A slot wait over 1 s logs one INFO fault line
+  `pipeline.code.slot_waited` (`code_remote.rs:348`) with `slot_wait_ms`, `slots_capacity`, `supervisor_target` (the
+  normalised target; `target` is the operator stream's own key) and `execution_id`, on both drive paths and for
+  started attempts. A Supervisor Busy (`RESOURCE_EXHAUSTED`, `sandbox/service.rs:715`) logs one INFO fault line
+  `pipeline.code.supervisor_busy` per attempt, however many retries (`SupervisorBusyNotice`, `code_remote.rs:728`,
+  used at `code_remote.rs:582` and `code_attempt_remote.rs:536`); before this change Busy was not logged.
 
 ## Tests
 
@@ -103,10 +117,21 @@ unknown-effect visit for owner recovery).
 | Worker journaled path (`node_recovery_code_debug_caller_tests.rs`) | `journaled_path_admits_exactly_required_and_refuses_one_ms_less`, `a_started_attempt_recovered_with_too_little_time_is_reconciled_not_refused` (C2), `one_attempt_takes_one_slot_through_preparation` | pass |
 | Worker config | `code_slots_are_bounded_defaulted_and_agree_per_normalised_target` (0/1/1024/1025, -1/"4"/4.5, default, unknown key, disagreement incl. absent vs explicit, error text), `code_slot_targets_are_normalised_like_the_client_dials_them` | pass |
 | Worker protocol | `deadline_refusals_keep_their_readable_registered_text`, `fanout_agent_calls_pipeline_is_registered`, `a_refused_new_kind_is_replaced_by_the_kind_an_older_main_admits`, the FU-299 parity test (now incl. D5), `tests/agent_output_contract.rs` | pass |
-| Worker real PostgreSQL (`node_recovery_code_wiring_tests.rs`, ignored) | `real_pg_root_code_with_too_little_time_is_refused_without_a_dispatch_row`, `real_pg_busy_from_another_worker_backs_off_without_releasing_the_slot`, `real_pg_one_slot_runs_one_attempt_through_preparation_and_run` | written, **not run** (need a disposable PostgreSQL) |
+| Worker real PostgreSQL (`node_recovery_code_wiring_tests.rs`) | `real_pg_root_code_with_too_little_time_is_refused_without_a_dispatch_row`, `real_pg_busy_from_another_worker_backs_off_without_releasing_the_slot`, `real_pg_one_slot_runs_one_attempt_through_preparation_and_run`, `real_pg_supervisor_busy_is_one_info_line_per_attempt` | pass: the whole CI prefix `agents::graph::node_recovery_runtime::tests::code_owner_tests::` with `--ignored` gives 24 passed, 0 failed on a disposable PostgreSQL 17, including all four |
+| Fallback rule and substitution | `post_baseline_kinds_fall_back_to_a_baseline_kind_of_the_same_wire_code`, `the_fallback_is_substituted_at_most_once` (`protocol/output.rs`); `a_refused_post_baseline_failure_is_replaced_once_by_its_fallback_and_settles`, `a_refused_fallback_is_not_substituted_again` (`execution/output_delivery_tests.rs`, through the recovery processor) | pass |
+| Log lines | `slot_waits_and_supervisor_busy_are_one_info_line_each` (+ child): uncontended no line, 2 s wait one INFO line, Busy one line per attempt | pass |
 | Worker lib, whole suite | `cargo test --lib --all-features` | 3129 passed, 0 failed, 114 ignored |
 | Main | `TestDeadlineAdmissionFailuresShowTheirReadableText`, `TestDeadlineAdmissionTextsMatchTheFaultRegistry`, `TestOutputServerAcceptsDeadlineAdmissionFailureFrames`, `TestAnUnknownFailureIsRefusedOnceAndItsSameCodeFallbackEndsTheRunTyped` (C3) | package: 55 top-level tests pass |
 | FU-299 gates | `go test ./...` in `libs/go/faults` (well-formed, generated, guide, no orphans, legacy) | pass |
+| Helm render scripts (not CI-wired; chart dependencies built under a scratch `HELM_*` config) | `render-worker-sandbox.sh` (codeSlots: absent not written, 4 rendered as integer `code_slots`, 0/1025/2.5/"four" refused, 1024 rendered), `render-worker-node-recovery.sh` 16/16, `render-worker.sh` 13/13, `render-compiled-snapshots.py` OK; then every `render-*.sh` | 43 of 44 pass. **`render-helm3-parity.sh` was not run:** it needs a Helm 3 binary (`HELM3`). The host has only Helm v4.1.0, there is no Helm 3 image in the local Docker cache, and nothing was installed for this. Open item for anyone with Helm 3. |
+
+**How the real-PG tests run in CI.** They follow the file's pattern exactly: `#[ignore = "requires disposable
+PostgreSQL"]`, the harness reads `ELITEA_TEST_DATABASE_URL` through `crate::test_pg::database_url_var` and fails without
+it. `ci-rust.yml` step "Verify Code owner recovery and journals with PostgreSQL" (`:385`) sets the URL and runs
+`cargo test --locked --lib --all-features -- --ignored ... agents::graph::node_recovery_runtime::tests::code_owner_tests::`,
+which selects all four (`cargo test -- --list --ignored` lists them under that prefix), and the ignored-test guard
+(`check-worker-ignored-tests.mjs`) fails the job for an ignored test no step runs. Removing `#[ignore]` would make a
+plain `cargo test` without a database fail, so they stay ignored; no workflow change is needed.
 
 ## Performance
 
@@ -148,7 +173,7 @@ unknown-effect visit for owner recovery).
 | Worker × started attempt recovered near the deadline | R/C unchanged: reconciled, never refused | `admit_started`, `code_attempt_remote.rs:99` | `a_started_attempt_recovered_with_too_little_time_is_reconciled_not_refused` |
 | Worker × slot held across a Worker crash | R/I unchanged (FU-214, owner recovery) | slots are process memory | per-target test (a new factory starts with every slot free) |
 | Supervisor × Busy from other Workers | unchanged backoff, slot kept | `code_attempt_remote.rs` submit loop | `real_pg_busy_from_another_worker_backs_off_without_releasing_the_slot` (not run) |
-| Main older than Worker × new failure kind | typed failure (generic Code text), no hang, no loop | `output_delivery.rs:2376`, `protocol/output.rs:330` | `a_refused_new_kind_is_replaced_by_the_kind_an_older_main_admits`, Main `TestAnUnknownFailureIsRefusedOnce…` |
+| Main older than Worker (mixed rollout) × output delivery of a post-baseline failure | **I**: the refused terminal is replaced once, at the same sequence, by its baseline fallback; the older Main shows the generic Code or tool failure text; typed, not lost, never looped | `protocol/output.rs:330` (`refused_terminal_replacement`), `protocol/output.rs:935` (`older_main_fallback`), `execution/output_delivery.rs:2376` | `a_refused_post_baseline_failure_is_replaced_once_by_its_fallback_and_settles`, `a_refused_fallback_is_not_substituted_again`, `post_baseline_kinds_fall_back_to_a_baseline_kind_of_the_same_wire_code`, Main `TestAnUnknownFailureIsRefusedOnceAndItsSameCodeFallbackEndsTheRunTyped` |
 
 ## Real-browser evidence
 
@@ -161,10 +186,11 @@ No database fixture was created.
 
 ## Follow-ups
 
-- Browser acceptance (PLAN §5) and the real-PG tests on a disposable stack.
+- Browser acceptance (PLAN §5).
 - The restored-terminal path (`report_restored_terminal_failure`) knows only the class, so a refusal restored from the
   node journal after a Worker restart shows the generic Code failure text.
 - The raw path has no node id for the fault line (`node_id` is empty there).
+- Busy on the preparation Supervisor is not covered by `pipeline.code.supervisor_busy` (it keeps its own lookup retry).
 - N2: a Supervisor capacity advertised to the Worker (D2 (d)).
 - W3-2: call `admit_fanout_window` from the fan-out activation; a preparation bound if it proves needed (N3).
-- Helm render scripts were not run locally (chart dependencies need `helm dependency build`).
+- Open item: run `deploy/helm/tests/render-helm3-parity.sh` with a Helm 3 binary (`HELM3=<path>`). It was not run here (see Tests).

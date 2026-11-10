@@ -36,6 +36,10 @@ const (
 	InternalUnexpected Code = "internal.unexpected"
 	// A Code attempt was refused before it started because the run's remaining time is shorter than the Code timeout plus the observation margin.
 	PipelineCodeDeadlineInsufficient Code = "pipeline.code.deadline_insufficient"
+	// A Code attempt waited more than a second for a slot because this Worker was already running as many Code attempts on that Supervisor as its code_slots allow.
+	PipelineCodeSlotWaited Code = "pipeline.code.slot_waited"
+	// The sandbox Supervisor answered busy to a Code attempt, so the attempt keeps its slot and retries with backoff until the Supervisor has room.
+	PipelineCodeSupervisorBusy Code = "pipeline.code.supervisor_busy"
 	// A background runner failed its pass and will try again.
 	RunnerCycleFailed Code = "runner.cycle_failed"
 	// A background runner stopped on a dependency failure and is being restarted.

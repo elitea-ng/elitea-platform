@@ -63,6 +63,7 @@ fn raw_runtime(execution_deadline: tokio::time::Instant, slots: &CodeSlots) -> R
             preparation_client: None,
             compiled_profile: None,
             slots: slots.clone(),
+            slot_target: "sandbox.internal:9446".into(),
         }]
         .into(),
         journal: Arc::new(crate::sandbox::dispatch::DispatchJournal::new(
@@ -318,6 +319,108 @@ fn fault_line_child() {
             .execute_tool(invocation())
             .await;
         drop(held);
+    });
+    elitea_faults::logtest::child_ran();
+}
+
+const SLOT_NOTICE_CHILD_ENV: &str = "ELITEA_CODE_SLOT_NOTICE_CHILD";
+
+/// Plan §2.1 observability: an uncontended acquire writes no line; a wait
+/// over one second writes exactly one INFO line with the code, the wait, the
+/// capacity, the normalised target and the execution id; Supervisor Busy is
+/// one INFO line per attempt, however many retries. No user data.
+#[test]
+fn slot_waits_and_supervisor_busy_are_one_info_line_each() {
+    let output = elitea_faults::logtest::run_child(
+        "agents::graph::code_remote::slots_tests::slot_notice_child",
+        SLOT_NOTICE_CHILD_ENV,
+    );
+    let lines = output.operator_lines();
+    let waited = elitea_faults::codes::PIPELINE_CODE_SLOT_WAITED;
+    let waits: Vec<_> = lines
+        .iter()
+        .filter(|line| line["code"] == waited.as_str())
+        .collect();
+    assert_eq!(waits.len(), 1, "{}", output.stdout);
+    let wait = waits[0];
+    assert_eq!(wait["level"], "INFO");
+    assert_eq!(wait["msg"], waited.sentence());
+    assert_eq!(wait["event"], "code_slot_waited");
+    assert_eq!(wait["slot_wait_ms"], 2_000);
+    assert_eq!(wait["slots_capacity"], 1);
+    assert_eq!(wait["supervisor_target"], "sandbox.internal:9446");
+    assert!(
+        wait["execution_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
+    );
+    let busy = elitea_faults::codes::PIPELINE_CODE_SUPERVISOR_BUSY;
+    let busy_lines: Vec<_> = lines
+        .iter()
+        .filter(|line| line["code"] == busy.as_str())
+        .collect();
+    assert_eq!(busy_lines.len(), 2, "one per attempt: {}", output.stdout);
+    for line in busy_lines {
+        assert_eq!(line["level"], "INFO");
+        assert_eq!(line["event"], "code_supervisor_busy");
+        assert_eq!(line["slots_capacity"], 1);
+        assert_eq!(line["supervisor_target"], "sandbox.internal:9446");
+        assert!(
+            line["execution_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty())
+        );
+    }
+    for marker in ["secret_source_marker", "secret_input_marker"] {
+        assert!(
+            !output.stdout.contains(marker) && !output.stderr.contains(marker),
+            "Code source or input reached the log"
+        );
+    }
+}
+
+#[test]
+fn slot_notice_child() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+    if !elitea_faults::logtest::is_child(SLOT_NOTICE_CHILD_ENV) {
+        return;
+    }
+    tracing_subscriber::registry()
+        .with(
+            crate::diagnostics::log_layer(Some("info"), std::io::stdout).expect("operator stream"),
+        )
+        .init();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let slots = CodeSlots::new(1);
+        let far = tokio::time::Instant::now() + Duration::from_secs(3600);
+        // Uncontended: admitted at once, no line.
+        let _ = raw_runtime(far, &slots).execute_tool(invocation()).await;
+        // Contended: the slot frees after 2 s; one INFO line.
+        let held = slots.acquire_until(far).await.unwrap();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            drop(held);
+        });
+        let _ = raw_runtime(far, &slots).execute_tool(invocation()).await;
+        // Busy on two attempts, three retries each: one line per attempt.
+        let runtime = raw_runtime(far, &slots);
+        for _ in 0..2 {
+            let mut busy = SupervisorBusyNotice::default();
+            for code in [
+                tonic::Code::ResourceExhausted,
+                tonic::Code::Unavailable,
+                tonic::Code::ResourceExhausted,
+                tonic::Code::ResourceExhausted,
+            ] {
+                busy.note(code, &runtime, &runtime.profiles[0]);
+            }
+        }
     });
     elitea_faults::logtest::child_ran();
 }

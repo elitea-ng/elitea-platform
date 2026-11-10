@@ -97,18 +97,14 @@ impl RemoteCodeRuntime {
         // never refused (C2), so it only waits for a slot, bounded by the
         // run's deadline.
         let _slot = if prior_dispatch {
-            profile
-                .slots
-                .admit_started(self.execution_deadline)
-                .await
-                .map_err(|_| {
-                    classify(
-                        CodeAttemptPhase::Observation,
-                        NodeFailureClass::AttemptTimeout,
-                        invocation.activation,
-                        true,
-                    )
-                })?
+            self.admit_started(profile).await.map_err(|_| {
+                classify(
+                    CodeAttemptPhase::Observation,
+                    NodeFailureClass::AttemptTimeout,
+                    invocation.activation,
+                    true,
+                )
+            })?
         } else {
             self.admit_fresh(profile, Some(declaration.node_id.as_str()))
                 .await
@@ -450,6 +446,7 @@ impl RemoteCodeRuntime {
                 };
                 let submission = async {
                     let mut dispatch_possible = prior_dispatch;
+                    let mut busy = super::SupervisorBusyNotice::default();
                     let mut backoff = code_timing::PendingBackoff::new();
                     loop {
                         let descriptor = selected
@@ -531,10 +528,13 @@ impl RemoteCodeRuntime {
                                 ));
                             }
                             Err(SandboxCallError::Submission { code:
-                                    tonic::Code::Unavailable
+                                    code @ (tonic::Code::Unavailable
                                     | tonic::Code::DeadlineExceeded
                                     | tonic::Code::Aborted
-                                    | tonic::Code::ResourceExhausted, .. }) => dispatch_possible = true,
+                                    | tonic::Code::ResourceExhausted), .. }) => {
+                                dispatch_possible = true;
+                                busy.note(code, self, profile);
+                            }
                             Err(SandboxCallError::Submission { code, .. })
                                 if submission_control_failure(code, invocation.activation)
                                     .is_some() =>

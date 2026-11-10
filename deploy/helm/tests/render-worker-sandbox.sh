@@ -110,10 +110,6 @@ python3 - "$work/edge.yaml" <<'PY'
 import json,sys,yaml
 config=json.loads(yaml.safe_load(open(sys.argv[1]))['data']['runtime.json'])
 assert config['sandbox_runtimes'][1]['code_slots']==1024
-PY'
-import json,sys,yaml
-config=json.loads(yaml.safe_load(open(sys.argv[1]))['data']['runtime.json'])
-assert config['sandbox_runtimes'][1]['code_slots']==1024
 PY
 if helm template test deploy/helm/elitea "${args[@]}" --set main.runtime.codeOwnerRecovery.enabled=false \
   --set main.runtime.codeOwnerRecovery.mainWorkloadIdentity= --set 'main.runtime.codeOwnerRecovery.supervisors=null' \

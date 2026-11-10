@@ -22,6 +22,7 @@ fn profile(language: CodeLanguage) -> CodeRuntimeProfile {
         preparation_client: None,
         compiled_profile: None,
         slots: CodeSlots::new(4),
+        slot_target: "sandbox-test:443".into(),
     }
 }
 impl CodeRuntimeFactory {

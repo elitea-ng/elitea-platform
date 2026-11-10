@@ -43,6 +43,9 @@ pub(super) struct CodeRuntimeProfile {
     /// W3-1: the slots of this profile's Supervisor target, shared with every
     /// profile on the same normalised target.
     pub(super) slots: CodeSlots,
+    /// The normalised Supervisor target `slots` belongs to, for the lines an
+    /// operator reads.
+    pub(super) slot_target: Arc<str>,
 }
 
 pub(super) struct RemoteCodeRuntime {
@@ -77,11 +80,17 @@ pub(crate) struct CodeRuntimeFactory {
 /// refused a target that does not normalise and profiles on one target that
 /// disagree, so the first capacity is every profile's.
 fn slots_for(table: &mut BTreeMap<String, CodeSlots>, target: &str, capacity: u32) -> CodeSlots {
-    let key = crate::config::code_slot_target(target).unwrap_or_else(|_| target.to_owned());
     table
-        .entry(key)
+        .entry(slot_key(target).to_string())
         .or_insert_with(|| CodeSlots::new(capacity))
         .clone()
+}
+
+/// The normalised Supervisor target (`crate::config::code_slot_target`).
+fn slot_key(target: &str) -> Arc<str> {
+    crate::config::code_slot_target(target)
+        .unwrap_or_else(|_| target.to_owned())
+        .into()
 }
 impl CodeRuntimeFactory {
     pub(crate) fn new(
@@ -102,6 +111,7 @@ impl CodeRuntimeFactory {
                     &config.target,
                     config.effective_code_slots(),
                 ),
+                slot_target: slot_key(&config.target),
                 language: match config.language {
                     Language::Python => CodeLanguage::Python,
                     Language::JavaScript => CodeLanguage::JavaScript,
@@ -203,6 +213,7 @@ impl CodeRuntimeFactory {
                 &config.target,
                 config.effective_code_slots(),
             ),
+            slot_target: slot_key(&config.target),
             language,
             platform_client: Some(binding),
             image_digest: config.image_digest,
@@ -312,10 +323,42 @@ impl RemoteCodeRuntime {
             .admit_fresh(self.execution_deadline, required)
             .await;
         match &admitted {
-            Ok(slot) => note_slot_wait(slot, profile),
+            Ok(slot) => self.note_slot_wait(slot, profile),
             Err(refusal) => self.log_deadline_refusal(refusal, profile, node_id),
         }
         admitted
+    }
+
+    /// A slot for an attempt that may already have started (C2): no deadline
+    /// admission, bounded by the run's deadline.
+    pub(super) async fn admit_started(
+        &self,
+        profile: &CodeRuntimeProfile,
+    ) -> Result<CodeSlot, elitea_agent_runtime::graph::fanout::admission::SlotWaitExpired> {
+        let admitted = profile.slots.admit_started(self.execution_deadline).await;
+        if let Ok(slot) = &admitted {
+            self.note_slot_wait(slot, profile);
+        }
+        admitted
+    }
+
+    /// One INFO line when a slot wait passed [`SLOT_WAIT_NOTICE_AFTER`]: the
+    /// Worker was full, an operator signal. An uncontended acquire logs
+    /// nothing. Nothing user-supplied.
+    fn note_slot_wait(&self, slot: &CodeSlot, profile: &CodeRuntimeProfile) {
+        if slot.waited() <= SLOT_WAIT_NOTICE_AFTER {
+            return;
+        }
+        let (execution_id, _) = self.authority.trace_identity();
+        elitea_faults::fault!(
+            tracing::Level::INFO,
+            code = elitea_faults::codes::PIPELINE_CODE_SLOT_WAITED,
+            event = "code_slot_waited",
+            slot_wait_ms = u64::try_from(slot.waited().as_millis()).unwrap_or(u64::MAX),
+            slots_capacity = profile.slots.capacity(),
+            supervisor_target = &*profile.slot_target,
+            execution_id = execution_id
+        );
     }
 
     fn log_deadline_refusal(
@@ -474,6 +517,7 @@ impl RemoteCodeRuntime {
         // allowance does not change the supervisor's execution deadline.
         observe(trace.as_ref(), CodePhase::Execution, async {
         let deadline = observation_deadline(profile.timeout_seconds);
+        let mut busy = SupervisorBusyNotice::default();
         loop {
             let attempt = async {
                 if let Some(selected) = &selected {
@@ -532,6 +576,10 @@ impl RemoteCodeRuntime {
                     note(super::code_runtime::ToolCodeError::Uncertain);
                     return Err(uncertain());
                 }
+                Err(SandboxCallError::Submission {
+                    code: code @ tonic::Code::ResourceExhausted,
+                    ..
+                }) => busy.note(code, self, profile),
                 Ok(SandboxOutcome::Pending)
                 | Err(
                     SandboxCallError::Authorization(
@@ -540,8 +588,7 @@ impl RemoteCodeRuntime {
                     | SandboxCallError::Submission { code:
                             tonic::Code::Unavailable
                             | tonic::Code::DeadlineExceeded
-                            | tonic::Code::Aborted
-                            | tonic::Code::ResourceExhausted, .. },
+                            | tonic::Code::Aborted, .. },
                 ) => {}
                 Err(error) => {
                     note(match &error {
@@ -671,20 +718,39 @@ fn deadline_insufficient() -> GraphError {
     failed(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_MESSAGE)
 }
 
-/// One DEBUG line when a slot wait passed [`SLOT_WAIT_DEBUG_AFTER`]. No
-/// per-acquire INFO; nothing user-supplied.
-fn note_slot_wait(slot: &CodeSlot, profile: &CodeRuntimeProfile) {
-    if slot.waited() > SLOT_WAIT_DEBUG_AFTER {
-        tracing::debug!(
-            event = "code_slot_waited",
-            slot_wait_ms = u64::try_from(slot.waited().as_millis()).unwrap_or(u64::MAX),
-            slots = profile.slots.capacity(),
+/// A slot wait longer than this gets one INFO line.
+const SLOT_WAIT_NOTICE_AFTER: Duration = Duration::from_secs(1);
+
+/// Supervisor Busy (`RESOURCE_EXHAUSTED`) on a Code submission: one INFO
+/// line per attempt, however many retries follow, so "no Busy" is provable
+/// from the log. The attempt keeps its slot and its existing backoff.
+#[derive(Default)]
+pub(super) struct SupervisorBusyNotice {
+    logged: bool,
+}
+
+impl SupervisorBusyNotice {
+    pub(super) fn note(
+        &mut self,
+        code: tonic::Code,
+        runtime: &RemoteCodeRuntime,
+        profile: &CodeRuntimeProfile,
+    ) {
+        if code != tonic::Code::ResourceExhausted || self.logged {
+            return;
+        }
+        self.logged = true;
+        let (execution_id, _) = runtime.authority.trace_identity();
+        elitea_faults::fault!(
+            tracing::Level::INFO,
+            code = elitea_faults::codes::PIPELINE_CODE_SUPERVISOR_BUSY,
+            event = "code_supervisor_busy",
+            slots_capacity = profile.slots.capacity(),
+            supervisor_target = &*profile.slot_target,
+            execution_id = execution_id
         );
     }
 }
-
-/// A slot wait longer than this gets one DEBUG line.
-const SLOT_WAIT_DEBUG_AFTER: Duration = Duration::from_secs(1);
 
 fn uncertain() -> GraphError {
     failed(
@@ -790,6 +856,7 @@ pub(super) fn original_prepared_job_fixture(
         preparation_client: None,
         compiled_profile: None,
         slots: CodeSlots::new(1),
+        slot_target: "supervisor.fixture:443".into(),
     };
     prepare_job(invocation, &profile)
 }

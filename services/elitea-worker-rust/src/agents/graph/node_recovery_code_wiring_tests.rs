@@ -386,6 +386,8 @@ struct FakeSupervisor {
     /// Scripted terminal answers, one per submission; when empty, the runtime
     /// fails the way a thrown error does.
     answers: Arc<StdMutex<std::collections::VecDeque<pb::SubmitSandboxJobResponseV1>>>,
+    /// Submissions answered Busy (`RESOURCE_EXHAUSTED`) before any answer.
+    busy: Arc<StdMutex<usize>>,
     calls: Arc<StdMutex<SupervisorCalls>>,
     pool: sqlx::PgPool,
 }
@@ -405,6 +407,13 @@ impl SandboxSupervisorService for FakeSupervisor {
             let mut calls = self.calls.lock().unwrap();
             calls.submits += 1;
             calls.pending_at_submit.push(pending);
+        }
+        {
+            let mut busy = self.busy.lock().unwrap();
+            if *busy > 0 {
+                *busy -= 1;
+                return Err(Status::resource_exhausted("the supervisor is at capacity"));
+            }
         }
         tokio::time::sleep(self.fail_after).await;
         if let Some(answer) = self.answers.lock().unwrap().pop_front() {
@@ -550,6 +559,7 @@ struct Harness {
     main: Arc<StdMutex<MainCalls>>,
     supervisor: Arc<StdMutex<SupervisorCalls>>,
     answers: Arc<StdMutex<std::collections::VecDeque<pb::SubmitSandboxJobResponseV1>>>,
+    busy: Arc<StdMutex<usize>>,
 }
 
 async fn harness(script: MainScript, fail_after: Duration) -> Harness {
@@ -596,6 +606,7 @@ async fn harness_with(
     let supervisor = Arc::new(StdMutex::new(SupervisorCalls::default()));
     let effects = Arc::new(StdMutex::new(script.effects));
     let answers = Arc::new(StdMutex::new(std::collections::VecDeque::new()));
+    let busy = Arc::new(StdMutex::new(0));
     let content = Arc::new(
         crate::transport::InputContentClient::with_original_code_visit_fixture_rpc_deadline(
             FakeMain {
@@ -623,6 +634,7 @@ async fn harness_with(
             .add_service(SandboxSupervisorServiceServer::new(FakeSupervisor {
                 fail_after,
                 answers: answers.clone(),
+                busy: busy.clone(),
                 calls: supervisor.clone(),
                 pool: database.pool.clone(),
             }))
@@ -683,6 +695,7 @@ async fn harness_with(
         main,
         supervisor,
         answers,
+        busy,
     }
 }
 
@@ -1525,4 +1538,62 @@ async fn real_pg_one_slot_runs_one_attempt_through_preparation_and_run() {
         .unwrap();
     assert_eq!(output.updates["count"], serde_json::json!(41));
     assert_eq!(h.supervisor.lock().unwrap().submits, 1);
+}
+
+const BUSY_CHILD_ENV: &str = "ELITEA_CODE_SUPERVISOR_BUSY_CHILD";
+
+/// Supervisor Busy through the real submit loop: three Busy answers, then the
+/// result. The attempt keeps its backoff and completes; the log has exactly
+/// one INFO `code_supervisor_busy` line for it, and no slot-wait line (the
+/// slot was free).
+#[test]
+#[ignore = "requires disposable PostgreSQL"]
+fn real_pg_supervisor_busy_is_one_info_line_per_attempt() {
+    let output = elitea_faults::logtest::run_child(
+        "agents::graph::node_recovery_runtime::tests::code_owner_tests::wiring_tests::supervisor_busy_child",
+        BUSY_CHILD_ENV,
+    );
+    let lines = output.operator_lines();
+    let busy = elitea_faults::codes::PIPELINE_CODE_SUPERVISOR_BUSY;
+    let busy_lines: Vec<_> = lines
+        .iter()
+        .filter(|line| line["code"] == busy.as_str())
+        .collect();
+    assert_eq!(busy_lines.len(), 1, "{}", output.stdout);
+    assert_eq!(busy_lines[0]["level"], "INFO");
+    assert_eq!(busy_lines[0]["supervisor_target"], "sandbox.internal:9446");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line["code"] == elitea_faults::codes::PIPELINE_CODE_SLOT_WAITED.as_str()),
+        "an uncontended acquire logs nothing"
+    );
+}
+
+#[test]
+fn supervisor_busy_child() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+    if !elitea_faults::logtest::is_child(BUSY_CHILD_ENV) {
+        return;
+    }
+    tracing_subscriber::registry()
+        .with(
+            crate::diagnostics::log_layer(Some("info"), std::io::stdout).expect("operator stream"),
+        )
+        .init();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let h = harness(QUIET, Duration::ZERO).await;
+            *h.busy.lock().unwrap() = 3;
+            h.answers.lock().unwrap().push_back(completed());
+            let run = default_run(&h, PURE_YAML);
+            let output = run.node.execute(&run.context).await.unwrap();
+            assert_eq!(output.updates["count"], serde_json::json!(41));
+            assert_eq!(h.supervisor.lock().unwrap().submits, 4);
+        });
+    elitea_faults::logtest::child_ran();
 }
