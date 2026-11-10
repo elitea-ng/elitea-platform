@@ -166,7 +166,7 @@ func TestWorkforceDemoteNarrowsTheDraftAndDropsTheLead(t *testing.T) {
 VALUES (9917021, 'github', 'gh', '', '{}'::jsonb, 4, '{}'::jsonb, now() AT TIME ZONE 'UTC'), (9917022, 'jira', 'jira', '', '{}'::jsonb, 4, '{}'::jsonb, now() AT TIME ZONE 'UTC')
 ON CONFLICT (id) DO NOTHING`)
 	wfExec(t, pool, `INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type, selected_tools)
-VALUES (9917021, $1, $2, 'agent', '[]'::jsonb), (9917022, $1, $2, 'agent', '[]'::jsonb)`, app, draft)
+VALUES (9917021, $1, $2, 'application', '[]'::jsonb), (9917022, $1, $2, 'agent', '[]'::jsonb)`, app, draft)
 	conversation, _ := seedRoster(t, pool, app, true)
 
 	decided := approve(t, store, propose(t, store, app, agentworkforce.StageDemote, agentworkforce.Narrowing{
@@ -268,6 +268,24 @@ func TestWorkforceSuspendWritesADismissalSuspensionAndTheAppealResumesIt(t *test
 	if _, err := store.Appeal(ctx, wfProject, decided.ID, wfOwner, "again"); refusalCode(err) != agentworkforce.AppealClosedCode {
 		t.Fatalf("a second appeal: %v", err)
 	}
+
+	// A stale appeal undoes only its own stage: suspension A is appealed,
+	// an administrator resumes it, suspension B follows on a new proposal;
+	// granting A's appeal leaves B in force.
+	first := approve(t, store, propose(t, store, app, agentworkforce.StageSuspend, agentworkforce.Narrowing{}), false)
+	if _, err := store.Appeal(ctx, wfProject, first.ID, wfOwner, "unfair"); err != nil {
+		t.Fatal(err)
+	}
+	wfExec(t, pool, `UPDATE elitea_runtime.execution_suspensions SET resumed_at = clock_timestamp(), resumed_by = 1, resume_reason = 'admin'
+WHERE scope = 'agent' AND project_id = 1 AND scope_key = $1 AND resumed_at IS NULL`, strconv.FormatInt(app, 10))
+	approve(t, store, propose(t, store, app, agentworkforce.StageSuspend, agentworkforce.Narrowing{}), false)
+	second, _ := store.Agent(ctx, wfProject, app)
+	if _, err := store.DecideAppeal(ctx, AppealDecision{ProjectID: wfProject, ProposalID: first.ID, Actor: managerActor(wfManager2), Grant: true}); err != nil {
+		t.Fatal(err)
+	}
+	if agent, _ := store.Agent(ctx, wfProject, app); agent.SuspensionID == 0 || agent.SuspensionID != second.SuspensionID {
+		t.Fatalf("a stale appeal resumed the later suspension: %+v (was %d)", agent, second.SuspensionID)
+	}
 }
 
 func TestWorkforceRetireRefusesRunsAndReinstatementRestoresTheAgent(t *testing.T) {
@@ -279,6 +297,25 @@ func TestWorkforceRetireRefusesRunsAndReinstatementRestoresTheAgent(t *testing.T
 	const app, parent int64 = 991704, 991705
 	published, _ := seedWorkforceAgent(t, pool, app, "medium", `{}`)
 	_, parentDraft := seedWorkforceAgent(t, pool, parent, "medium", `{}`)
+	// The public project is 2 here, and the published version has a
+	// catalogue twin there: retirement removes it, reinstatement restores it.
+	t.Setenv("ELITEA_AI_PROJECT_ID", "2")
+	wfExec(t, pool, `INSERT INTO centry.project (id, create_success, suspended) VALUES (2, TRUE, FALSE) ON CONFLICT DO NOTHING`)
+	wfExec(t, pool, `CREATE SCHEMA IF NOT EXISTS p_2;
+CREATE TABLE p_2.applications (LIKE p_1.applications INCLUDING ALL);
+CREATE TABLE p_2.application_versions (LIKE p_1.application_versions INCLUDING ALL);
+ALTER TABLE p_2.applications ADD COLUMN IF NOT EXISTS shared_owner_id integer, ADD COLUMN IF NOT EXISTS shared_id integer;
+ALTER TABLE p_2.application_versions ADD COLUMN IF NOT EXISTS shared_owner_id integer, ADD COLUMN IF NOT EXISTS shared_id integer`)
+	wfExec(t, pool, `INSERT INTO p_2.applications (id, name, owner_id, shared_owner_id, shared_id) VALUES (77, 'Agent twin', 4, 1, $1)`, app)
+	wfExec(t, pool, `INSERT INTO p_2.application_versions (id, application_id, name, status, author_id, shared_owner_id, shared_id, instructions, uuid, llm_settings,
+    conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at)
+VALUES (78, 77, 'v1', 'published', 4, 1, $1, 'twin', gen_random_uuid(), '{}'::jsonb, '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC')`, published)
+	twins := func() (apps, versions int) {
+		t.Helper()
+		_ = pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM p_2.applications WHERE id = 77 AND shared_id = $1),
+       (SELECT count(*) FROM p_2.application_versions WHERE id = 78 AND shared_id = $2 AND instructions = 'twin')`, app, published).Scan(&apps, &versions)
+		return apps, versions
+	}
 	wfExec(t, pool, `INSERT INTO elitea_lifecycle.application_releases
     (tenant_project_id, application_id, application_version_id, name, definition_digest, definition, toolkit_pins, state)
 VALUES (1, $1, $2, 'v1', decode(repeat('ab', 32), 'hex'), '{}'::jsonb, '[]'::jsonb, 'published')`, app, published)
@@ -286,6 +323,8 @@ VALUES (1, $1, $2, 'v1', decode(repeat('ab', 32), 'hex'), '{}'::jsonb, '[]'::jso
 SELECT 1, $1, id, 'publish' FROM elitea_lifecycle.application_releases WHERE tenant_project_id = 1 AND application_id = $1`, app)
 	conversation, participant := seedRoster(t, pool, app, true)
 	wfExec(t, pool, `INSERT INTO p_1.pipeline_schedules (application_id, version_id, cron, active, author_id) VALUES ($1, $2, '0 * * * *', true, 4)`, app, published)
+	// A run of the agent in flight: retirement cancels it.
+	seedEgressExecution(t, pool, "exec-retire-inflight", wfProject, app)
 	// A proactive agent (#1618): retirement stops its heartbeat.
 	wfExec(t, pool, `INSERT INTO p_1.agent_heartbeat_settings (application_id, enabled, owner_user_id, next_wake_at, paused_until)
 VALUES ($1, true, 4, now() - interval '40 days', now() - interval '39 days')`, app)
@@ -332,6 +371,14 @@ VALUES (9917051, $1, $2, 'agent', '[]'::jsonb)`, parent, parentDraft)
 	if enabled, _ := heartbeatOn(); enabled {
 		t.Fatal("the heartbeat still runs after retirement")
 	}
+	if apps, versions := twins(); apps != 0 || versions != 0 {
+		t.Fatalf("the catalogue twin survived retirement: %d %d", apps, versions)
+	}
+	var desired string
+	_ = pool.QueryRow(ctx, `SELECT desired_state FROM elitea_runtime.execution_jobs WHERE execution_id = 'exec-retire-inflight'`).Scan(&desired)
+	if desired != "CANCELLED" {
+		t.Fatalf("the run in flight was not cancelled at retirement: %q", desired)
+	}
 
 	// Admission's read: the agent and its parent are refused.
 	retired, err := store.RetiredAgents(ctx, wfProject, []int64{app, parent})
@@ -367,6 +414,9 @@ VALUES (9917051, $1, $2, 'agent', '[]'::jsonb)`, parent, parentDraft)
 	}
 	if enabled, fresh := heartbeatOn(); !enabled || !fresh {
 		t.Fatalf("after reinstate: heartbeat enabled=%v rescheduled=%v", enabled, fresh)
+	}
+	if apps, versions := twins(); apps != 1 || versions != 1 {
+		t.Fatalf("after reinstate: catalogue twin %d %d", apps, versions)
 	}
 	retired, _ = store.RetiredAgents(ctx, wfProject, []int64{app})
 	if retired[app] {
@@ -454,6 +504,13 @@ VALUES (1, $1, 4, 'exec-hire', 'a_0000abcd', repeat('a', 64), 'hire', '{}'::json
 	if err != nil || notHR.IsHRAgent {
 		t.Fatalf("plain run = %+v %v", notHR, err)
 	}
+	// A draft that claims can_review_agents (the run's frozen meta says so)
+	// is not an HR agent until a published version carries it.
+	seedHRRun(t, pool, "exec-draft-hr-1616", plain, true)
+	draftHR, err := store.ResolveProposeDismissalRun(ctx, wfProject, "exec-draft-hr-1616", 1)
+	if err != nil || !draftHR.IsHRAgent {
+		t.Fatalf("draft-HR run = %+v %v", draftHR, err)
+	}
 	ask := func(r storage.ProposeDismissalRun, app int64, stage string) storage.DismissalOutcome {
 		t.Helper()
 		outcome, err := store.ProposeDismissal(ctx, r, storage.DismissalRequest{ApplicationID: app, Stage: stage, Rationale: "Fails half its runs."})
@@ -469,6 +526,7 @@ VALUES (1, $1, 4, 'exec-hire', 'a_0000abcd', repeat('a', 64), 'hire', '{}'::json
 		want  string
 	}{
 		"not an HR agent":  {notHR, target, "retire", agentworkforce.OutcomeNotAllowed},
+		"HR only in draft": {draftHR, target, "retire", agentworkforce.OutcomeNotAllowed},
 		"self":             {run, hr, "retire", agentworkforce.OutcomeGuardRefused},
 		"hirer":            {run, hirer, "retire", agentworkforce.OutcomeGuardRefused},
 		"another HR agent": {run, otherHR, "retire", agentworkforce.OutcomeGuardRefused},
@@ -505,6 +563,19 @@ VALUES (1, $1, 4, 'exec-hire', 'a_0000abcd', repeat('a', 64), 'hire', '{}'::json
 	agent, _ := store.Agent(ctx, wfProject, target)
 	if agent.SuspensionID != 0 {
 		t.Fatal("an HR agent's proposal suspended the agent")
+	}
+
+	// The guards hold at the decision too: a legal hold placed after the
+	// HR agent proposed stops the approval; nothing is applied.
+	wfExec(t, pool, `INSERT INTO elitea_runtime.legal_holds (scope, project_id, agent_id, reason, created_by) VALUES ('agent', 1, $1, 'later', 1)`, target)
+	if _, err := store.Approve(ctx, Decision{ProjectID: wfProject, ProposalID: proposed.ProposalID, Actor: managerActor(wfManager)}); refusalCode(err) != agentworkforce.StateConflictCode {
+		t.Fatalf("approving a stale HR proposal under legal hold: %v", err)
+	}
+	if agent, _ := store.Agent(ctx, wfProject, target); agent.SuspensionID != 0 {
+		t.Fatal("the stale HR proposal suspended a held agent")
+	}
+	if _, err := store.Reject(ctx, Decision{ProjectID: wfProject, ProposalID: proposed.ProposalID, Actor: managerActor(wfManager)}); err != nil {
+		t.Fatalf("rejecting it: %v", err)
 	}
 }
 

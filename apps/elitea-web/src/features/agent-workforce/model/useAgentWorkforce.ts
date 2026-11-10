@@ -36,7 +36,7 @@ import {
 } from '../api/agentWorkforceApi';
 
 /** The trend the panel shows: the last 30 daily scorecards. */
-export const SCORECARD_DAYS = 30;
+const SCORECARD_DAYS = 30;
 const PROPOSAL_PAGE_SIZE = 20;
 
 function enabledFor(projectId: string | undefined, applicationId: number | undefined): boolean {
@@ -56,11 +56,12 @@ export function useWorkforceAgent(projectId: string | undefined, applicationId: 
   });
 }
 
-export function useScorecards(projectId: string | undefined, applicationId: number | undefined) {
+/** The 30-day trend; only an agent manager or the owner may read it (ADR-0050 5h). */
+export function useScorecards(projectId: string | undefined, applicationId: number | undefined, allowed: boolean) {
   return useQuery<ListAgentScorecards200>({
     queryKey: [...agentKey(projectId ?? '', applicationId ?? 0), 'scorecards', SCORECARD_DAYS],
     queryFn: () => fetchScorecards(projectId ?? '', applicationId ?? 0, SCORECARD_DAYS),
-    enabled: enabledFor(projectId, applicationId),
+    enabled: allowed && enabledFor(projectId, applicationId),
     retry: false,
   });
 }
@@ -76,12 +77,12 @@ export function useImpact(projectId: string | undefined, applicationId: number |
   });
 }
 
-/** Every proposal for this agent, newest first. */
-export function useAgentProposals(projectId: string | undefined, applicationId: number | undefined) {
+/** Every proposal for this agent, newest first; an agent manager or the owner reads them. */
+export function useAgentProposals(projectId: string | undefined, applicationId: number | undefined, allowed: boolean) {
   return useQuery<ListAgentWorkforceProposals200>({
     queryKey: [...getListAgentWorkforceProposalsQueryKey(projectId ?? ''), 'agent', applicationId],
     queryFn: () => fetchProposals(projectId ?? '', { status: 'all', application_id: applicationId ?? 0, limit: PROPOSAL_PAGE_SIZE }),
-    enabled: enabledFor(projectId, applicationId),
+    enabled: allowed && enabledFor(projectId, applicationId),
     retry: false,
   });
 }

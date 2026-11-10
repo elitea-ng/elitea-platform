@@ -4806,10 +4806,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(createAgents).Post(v2agentproposals.CopyMemoryPath, proposals.CopyMemory)
 				}
 				// The agent workforce (ADR-0050 decisions 5b, 5g-5j, #1616).
-				// Every route takes applications.list; who may propose,
-				// decide, reinstate, comment or appeal is decided in the
-				// handler and the store (agents.workforce.manage, or the
-				// agent's owner).
+				// Every route takes applications.list; who may read the
+				// scorecards, the impact and the proposals, and who may
+				// propose, decide, reinstate, comment or appeal, is decided
+				// in the handler and the store (agents.workforce.manage, or
+				// the agent's owner). Anyone else reads the ladder state only.
 				{
 					var workforceStore *dbrepos.AgentWorkforce
 					if cfg.Pool != nil {

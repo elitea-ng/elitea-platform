@@ -124,6 +124,35 @@ func (h *Handler) actor(w http.ResponseWriter, r *http.Request, projectID int64)
 	return actor, true
 }
 
+// forbidden is the refusal of a read or a write the caller is not entitled
+// to: ADR-0050 5h lets agent managers and the owner (and HR agents, over
+// gRPC) read a scorecard, and the proposals carry rationales, owner
+// comments and appeal reasons of the same sensitivity.
+var forbidden = agentworkforce.Refuse(agentworkforce.ForbiddenCode,
+	"Only an agent manager or the agent's owner can read its scorecards and proposals.")
+
+// mayReadAgent: the caller is an agent manager or the agent's owner. It
+// answers false (and writes the refusal) otherwise.
+func (h *Handler) mayReadAgent(w http.ResponseWriter, r *http.Request, projectID, applicationID int64) bool {
+	actor, ok := h.actor(w, r, projectID)
+	if !ok {
+		return false
+	}
+	if actor.Manager {
+		return true
+	}
+	agent, err := h.store.Agent(r.Context(), projectID, applicationID)
+	if err != nil {
+		writeError(w, r, err)
+		return false
+	}
+	if !agent.IsOwner(actor.UserID) {
+		writeError(w, r, forbidden)
+		return false
+	}
+	return true
+}
+
 // AgentView is the workforce state of one agent with its latest scorecard.
 type AgentView struct {
 	repos.WorkforceAgent
@@ -153,6 +182,12 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := AgentView{WorkforceAgent: agent, CanManage: actor.Manager, IsOwner: agent.IsOwner(actor.UserID)}
+	if !view.CanManage && !view.IsOwner {
+		// The ladder state is visible to anyone who can list the agent (a
+		// retired agent is badged everywhere); the scorecard is not (5h).
+		writeJSON(w, http.StatusOK, view)
+		return
+	}
 	cards, err := h.store.Scorecards(r.Context(), projectID, applicationID, 1)
 	if err != nil {
 		writeError(w, r, err)
@@ -183,6 +218,9 @@ func (h *Handler) ListScorecards(w http.ResponseWriter, r *http.Request) {
 		}
 		days = value
 	}
+	if !h.mayReadAgent(w, r, projectID, applicationID) {
+		return
+	}
 	cards, err := h.store.Scorecards(r.Context(), projectID, applicationID, days)
 	if err != nil {
 		writeError(w, r, err)
@@ -198,6 +236,9 @@ func (h *Handler) GetImpact(w http.ResponseWriter, r *http.Request) {
 	}
 	projectID, applicationID, ok := agentPath(w, r)
 	if !ok {
+		return
+	}
+	if !h.mayReadAgent(w, r, projectID, applicationID) {
 		return
 	}
 	impact, err := h.store.Impact(r.Context(), projectID, applicationID)
@@ -242,6 +283,21 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		filter.ApplicationID = value
 	}
+	// The project-wide inbox is the agent manager's; the owner reads the
+	// proposals of their own agent (application_id).
+	actor, ok := h.actor(w, r, projectID)
+	if !ok {
+		return
+	}
+	if !actor.Manager {
+		if filter.ApplicationID == 0 {
+			writeError(w, r, forbidden)
+			return
+		}
+		if !h.mayReadAgent(w, r, projectID, filter.ApplicationID) {
+			return
+		}
+	}
 	rows, total, err := h.store.ListProposals(r.Context(), projectID, filter)
 	if err != nil {
 		writeError(w, r, err)
@@ -262,6 +318,9 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	proposal, err := h.store.GetProposal(r.Context(), projectID, proposalID)
 	if err != nil {
 		writeError(w, r, err)
+		return
+	}
+	if !h.mayReadAgent(w, r, projectID, proposal.ApplicationID) {
 		return
 	}
 	writeJSON(w, http.StatusOK, proposal)

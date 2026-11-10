@@ -125,3 +125,93 @@ func TestAppealDecisionAndListValidation(t *testing.T) {
 		t.Fatalf("bad project: %d", got.Code)
 	}
 }
+
+// readStore answers an agent owned by person ownerID and one proposal for it.
+type readStore struct {
+	fakeStore
+	ownerID int64
+	read    []string
+}
+
+func (f *readStore) Agent(_ context.Context, _, applicationID int64) (repos.WorkforceAgent, error) {
+	return repos.WorkforceAgent{ApplicationID: applicationID, BusinessOwnerID: f.ownerID, State: "active"}, nil
+}
+
+func (f *readStore) Scorecards(context.Context, int64, int64, int) ([]agentworkforce.Scorecard, error) {
+	f.read = append(f.read, "scorecards")
+	return []agentworkforce.Scorecard{{}}, nil
+}
+
+func (f *readStore) Impact(context.Context, int64, int64) (repos.WorkforceImpact, error) {
+	f.read = append(f.read, "impact")
+	return repos.WorkforceImpact{}, nil
+}
+
+func (f *readStore) GetProposal(_ context.Context, _, proposalID int64) (repos.WorkforceProposal, error) {
+	return repos.WorkforceProposal{ID: proposalID, ApplicationID: 9, Rationale: "secret"}, nil
+}
+
+func (f *readStore) ListProposals(context.Context, int64, repos.WorkforceFilter) ([]repos.WorkforceProposal, int, error) {
+	f.read = append(f.read, "list")
+	return []repos.WorkforceProposal{}, 0, nil
+}
+
+func serveRead(t *testing.T, store *readStore, manager bool, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	handler := NewHandler(store, func(_ *http.Request, _, permission string) (bool, error) {
+		return manager && permission == ManagePermission, nil
+	})
+	router := chi.NewRouter()
+	router.Get(AgentPath, handler.GetAgent)
+	router.Get(ScorecardsPath, handler.ListScorecards)
+	router.Get(ImpactPath, handler.GetImpact)
+	router.Get(ProposalsPath, handler.List)
+	router.Get(ProposalPath, handler.Get)
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request = request.WithContext(auth.ContextWithUser(request.Context(), auth.User{ID: "4", UserID: "4", AuthType: "user"}))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// ADR-0050 5h: scorecards, the impact preview and the proposals (with
+// their rationales, owner comments and appeal reasons) are read by agent
+// managers and the agent's owner, not by everyone who can list agents.
+func TestReadsNeedAManagerOrTheOwner(t *testing.T) {
+	reads := []string{
+		"/agent_workforce/prompt_lib/7/agents/9/scorecards",
+		"/agent_workforce/prompt_lib/7/agents/9/impact",
+		"/agent_workforce/prompt_lib/7/proposals/3",
+		"/agent_workforce/prompt_lib/7/proposals?application_id=9",
+		"/agent_workforce/prompt_lib/7/proposals",
+	}
+	for _, path := range reads {
+		stranger := &readStore{ownerID: 5}
+		if got := serveRead(t, stranger, false, path); got.Code != http.StatusForbidden || strings.Contains(got.Body.String(), "secret") {
+			t.Errorf("a non-owner read %s: %d %s", path, got.Code, got.Body)
+		}
+		if len(stranger.read) != 0 {
+			t.Errorf("%s reached the store for a non-owner: %v", path, stranger.read)
+		}
+		if got := serveRead(t, &readStore{ownerID: 5}, true, path); got.Code != http.StatusOK {
+			t.Errorf("a manager read %s: %d %s", path, got.Code, got.Body)
+		}
+	}
+	// The owner reads their own agent's, not the project-wide inbox.
+	for _, path := range reads[:4] {
+		if got := serveRead(t, &readStore{ownerID: 4}, false, path); got.Code != http.StatusOK {
+			t.Errorf("the owner read %s: %d %s", path, got.Code, got.Body)
+		}
+	}
+	if got := serveRead(t, &readStore{ownerID: 4}, false, reads[4]); got.Code != http.StatusForbidden {
+		t.Errorf("the owner read the project inbox: %d", got.Code)
+	}
+	// The ladder state stays visible; the scorecard does not.
+	stranger := &readStore{ownerID: 5}
+	got := serveRead(t, stranger, false, "/agent_workforce/prompt_lib/7/agents/9")
+	var view map[string]any
+	_ = json.Unmarshal(got.Body.Bytes(), &view)
+	if got.Code != http.StatusOK || view["scorecard"] != nil || len(stranger.read) != 0 {
+		t.Fatalf("a non-owner's agent view: %d %v %v", got.Code, view, stranger.read)
+	}
+}

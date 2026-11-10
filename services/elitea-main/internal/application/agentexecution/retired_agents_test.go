@@ -67,3 +67,25 @@ func TestAdmissionRefusesRetiredAndNestedRetiredAgents(t *testing.T) {
 		t.Fatalf("no retired agent refused: %v", err)
 	}
 }
+
+// A parked fan-out wake carries no application id; the frozen application
+// names the agent, and a retired one is refused (and the admitter ends the
+// wake typed instead of retrying it).
+func TestAdmissionRefusesTheFanoutWakeOfARetiredAgent(t *testing.T) {
+	t.Parallel()
+	request := SubmitRequest{
+		Identity:              executionapp.AdmissionIdentity{ResourceProjectID: "7"},
+		CapabilityID:          executiondomain.AgentApplicationCapability,
+		CurrentFanoutWakeTurn: &CurrentFanoutWakeTurn{},
+		Input:                 &runtimev1.AgentExecutionInputV1{Application: []byte(`{"id":30,"version_details":{"tools":[]}}`)},
+	}
+	var retired *agentworkforce.RetiredError
+	service := (&AdmissionService{}).WithRetiredAgents(retiredSet{30: true})
+	_, _, err := service.runToolkitSet(context.Background(), request)
+	if !errors.As(err, &retired) || retired.Nested || retired.ApplicationID != 30 {
+		t.Fatalf("fan-out wake of a retired agent: %v", err)
+	}
+	if !admissionRefusal(err) {
+		t.Fatal("the fan-out wake admitter would retry a retired agent instead of ending the wake")
+	}
+}

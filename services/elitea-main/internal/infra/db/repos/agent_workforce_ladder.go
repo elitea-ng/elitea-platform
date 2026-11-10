@@ -175,7 +175,7 @@ func detachToolkits(ctx context.Context, tx pgx.Tx, schema string, draftID int64
 	rows, err := tx.Query(ctx, fmt.Sprintf(`
 DELETE FROM %[1]s.entity_tool_mapping AS mapping
 USING %[1]s.elitea_tools AS tool
-WHERE tool.id = mapping.tool_id AND mapping.entity_version_id = $1 AND mapping.entity_type = 'agent'
+WHERE tool.id = mapping.tool_id AND mapping.entity_version_id = $1 AND mapping.entity_type IN ('agent', 'application')
   AND tool.type <> 'application'
   AND (mapping.tool_id = ANY($2::bigint[])
        OR (cardinality($3::text[]) > 0 AND NOT (lower(tool.type) = ANY($3::text[]))))
@@ -265,6 +265,24 @@ RETURNING id`, agent.ProjectID, strconv.FormatInt(agent.ApplicationID, 10), acto
 	return ids, rows.Err()
 }
 
+// resumeSuspensionByID resumes one active dismissal suspension of the
+// agent, the one a proposal made. Already resumed, or not a dismissal one:
+// nothing.
+func resumeSuspensionByID(ctx context.Context, tx pgx.Tx, agent WorkforceAgent, id, actorID int64, reason string) ([]int64, error) {
+	tag, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.execution_suspensions
+SET resumed_at = greatest(clock_timestamp(), created_at), resumed_by = $4, resume_reason = $5
+WHERE id = $3 AND scope = 'agent' AND project_id = $1 AND scope_key = $2 AND resumed_at IS NULL AND source = 'dismissal'`,
+		agent.ProjectID, strconv.FormatInt(agent.ApplicationID, 10), id, actorID, reason)
+	if err != nil {
+		return nil, fmt.Errorf("agent workforce: resume the dismissal suspension: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, nil
+	}
+	return []int64{id}, nil
+}
+
 /* ── retire ────────────────────────────────────────────────────────────── */
 
 // retireSnapshot is what retirement changed, so a reinstatement restores it.
@@ -279,6 +297,15 @@ type retireSnapshot struct {
 	Teams             []snapshotTeam    `json:"teams"`
 	// Heartbeat: retirement disabled the agent's heartbeat row (#1618).
 	Heartbeat bool `json:"heartbeat,omitempty"`
+	// PublicTwins: the catalogue entries retirement removed.
+	PublicTwins snapshotTwins `json:"public_twins,omitzero"`
+}
+
+// snapshotTwins are the public project's rows of a published agent's
+// catalogue entry, whole (to_jsonb), as the retirement deleted them.
+type snapshotTwins struct {
+	Applications []json.RawMessage `json:"applications,omitempty"`
+	Versions     []json.RawMessage `json:"versions,omitempty"`
 }
 
 type snapshotVersion struct {
@@ -360,9 +387,11 @@ WHERE tenant_project_id = $1 AND application_version_id = ANY($2::bigint[]) AND 
 		return nil, fmt.Errorf("agent workforce: read the releases: %w", err)
 	}
 	if len(versionIDs) > 0 {
-		if err := removePublicTwins(ctx, tx, agent.ProjectID, versionIDs); err != nil {
+		twins, err := removePublicTwins(ctx, tx, agent.ProjectID, versionIDs)
+		if err != nil {
 			return nil, err
 		}
+		snap.PublicTwins = twins
 		if err := withdrawVersions(ctx, pgxExecutor{queryer: tx}, agent.ProjectID, versionIDs, actorID); err != nil {
 			return nil, err
 		}
@@ -452,6 +481,19 @@ RETURNING mapping.conversation_id, mapping.participant_id, mapping.entity_settin
 	if snap.Heartbeat, err = stopHeartbeat(ctx, tx, schema, agent.ApplicationID); err != nil {
 		return nil, err
 	}
+	// Runs in flight end now, the way an agent suspension ends them (the
+	// durable desired-state cancel); admission refuses new ones once the
+	// registry says retired, below.
+	cancelled := int64(0)
+	if statement, args, ok := suspensionCancelSQL(safety.Target{
+		Scope: safety.ScopeAgent, ProjectID: agent.ProjectID, ApplicationID: agent.ApplicationID,
+	}); ok {
+		tag, err := tx.Exec(ctx, statement, args...)
+		if err != nil {
+			return nil, fmt.Errorf("agent workforce: cancel the runs in flight: %w", err)
+		}
+		cancelled = tag.RowsAffected()
+	}
 
 	encoded, err := json.Marshal(snap)
 	if err != nil {
@@ -471,7 +513,7 @@ WHERE tenant_project_id = $1 AND application_id = $2`,
 		"unpublished_versions": len(snap.PublishedVersions), "withdrawn_releases": len(snap.WithdrawnReleases),
 		"rosters_left": len(snap.Rosters), "leads_removed": len(snap.Leads), "teams_left": len(snap.Teams),
 		"schedules_off": len(snap.Schedules), "triggers_revoked": len(snap.Triggers),
-		"heartbeat_stopped": snap.Heartbeat, "reinstate_until": reinstateUntil,
+		"heartbeat_stopped": snap.Heartbeat, "cancelled_runs": cancelled, "reinstate_until": reinstateUntil, "retired_at": now,
 	}, nil
 }
 
@@ -490,35 +532,84 @@ func collect(ctx context.Context, tx pgx.Tx, statement string, args []any, scan 
 }
 
 // removePublicTwins deletes the catalogue twins of the versions in the
-// public project's schema (eliteacore's removeCatalogTwins).
-func removePublicTwins(ctx context.Context, tx pgx.Tx, projectID int64, versionIDs []int64) error {
+// public project's schema (eliteacore's removeCatalogTwins) and answers the
+// rows it deleted, so a reinstatement puts the catalogue entry back.
+func removePublicTwins(ctx context.Context, tx pgx.Tx, projectID int64, versionIDs []int64) (snapshotTwins, error) {
+	none := snapshotTwins{}
 	public := int64(publicproject.ID())
 	if projectID == public {
-		return nil
+		return none, nil
 	}
 	schema, err := tenantschema.QuoteInt(public)
 	if err != nil {
-		return nil
+		return none, nil
 	}
 	var hasTwins bool
 	if err := tx.QueryRow(ctx, `
 SELECT EXISTS (SELECT 1 FROM information_schema.columns
                WHERE table_schema = $1 AND table_name = 'application_versions' AND column_name = 'shared_owner_id')`,
 		"p_"+strconv.FormatInt(public, 10)).Scan(&hasTwins); err != nil {
-		return fmt.Errorf("agent workforce: probe the catalogue: %w", err)
+		return none, fmt.Errorf("agent workforce: probe the catalogue: %w", err)
 	}
 	if !hasTwins {
+		return none, nil
+	}
+	var twins snapshotTwins
+	if err := collect(ctx, tx, fmt.Sprintf(`
+DELETE FROM %s.application_versions AS v WHERE v.shared_owner_id = $1 AND v.shared_id = ANY($2::bigint[])
+RETURNING to_jsonb(v)::text`, schema), []any{projectID, versionIDs}, func(rows pgx.Rows) error {
+		var row string
+		if err := rows.Scan(&row); err != nil {
+			return err
+		}
+		twins.Versions = append(twins.Versions, json.RawMessage(row))
+		return nil
+	}); err != nil {
+		return none, fmt.Errorf("agent workforce: remove the catalogue twins: %w", err)
+	}
+	if err := collect(ctx, tx, fmt.Sprintf(`
+DELETE FROM %[1]s.applications AS a WHERE a.shared_owner_id = $1
+  AND NOT EXISTS (SELECT 1 FROM %[1]s.application_versions AS v WHERE v.application_id = a.id)
+RETURNING to_jsonb(a)::text`, schema), []any{projectID}, func(rows pgx.Rows) error {
+		var row string
+		if err := rows.Scan(&row); err != nil {
+			return err
+		}
+		twins.Applications = append(twins.Applications, json.RawMessage(row))
+		return nil
+	}); err != nil {
+		return none, fmt.Errorf("agent workforce: remove the catalogue twins: %w", err)
+	}
+	return twins, nil
+}
+
+// restorePublicTwins puts the catalogue twins a retirement removed back,
+// row for row (the twin carries no tool or skill attachments: see
+// eliteacore's catalog_mirror.go). A row whose id or (shared_owner_id,
+// shared_id) was taken since, by a republish, stays as it is now.
+func restorePublicTwins(ctx context.Context, tx pgx.Tx, twins snapshotTwins) error {
+	if len(twins.Applications) == 0 && len(twins.Versions) == 0 {
 		return nil
 	}
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`
-DELETE FROM %s.application_versions WHERE shared_owner_id = $1 AND shared_id = ANY($2::bigint[])`, schema),
-		projectID, versionIDs); err != nil {
-		return fmt.Errorf("agent workforce: remove the catalogue twins: %w", err)
+	schema, err := tenantschema.QuoteInt(int64(publicproject.ID()))
+	if err != nil {
+		return nil
 	}
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`
-DELETE FROM %[1]s.applications AS a WHERE a.shared_owner_id = $1
-  AND NOT EXISTS (SELECT 1 FROM %[1]s.application_versions AS v WHERE v.application_id = a.id)`, schema), projectID); err != nil {
-		return fmt.Errorf("agent workforce: remove the catalogue twins: %w", err)
+	for _, row := range twins.Applications {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+INSERT INTO %[1]s.applications SELECT * FROM jsonb_populate_record(NULL::%[1]s.applications, $1::jsonb) ON CONFLICT DO NOTHING`, schema),
+			string(row)); err != nil {
+			return fmt.Errorf("agent workforce: restore a catalogue twin: %w", err)
+		}
+	}
+	for _, row := range twins.Versions {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+INSERT INTO %[1]s.application_versions
+SELECT * FROM jsonb_populate_record(NULL::%[1]s.application_versions, $1::jsonb) AS v
+WHERE EXISTS (SELECT 1 FROM %[1]s.applications AS a WHERE a.id = v.application_id)
+ON CONFLICT DO NOTHING`, schema), string(row)); err != nil {
+			return fmt.Errorf("agent workforce: restore a catalogue twin: %w", err)
+		}
 	}
 	return nil
 }
@@ -622,6 +713,9 @@ UPDATE %s.application_versions SET status = $2 WHERE id = $1 AND application_id 
 			version.ID, version.Status, agent.ApplicationID); err != nil {
 			return nil, fmt.Errorf("agent workforce: republish: %w", err)
 		}
+	}
+	if err := restorePublicTwins(ctx, tx, snap.PublicTwins); err != nil {
+		return nil, err
 	}
 	// A release is immutable but its state: the withdrawn ones go back to
 	// published, and the head points where it pointed.
@@ -879,7 +973,7 @@ SELECT (SELECT count(*) FROM %[1]s.pipeline_schedules WHERE application_id = $1 
 	rows, err := q.Query(ctx, fmt.Sprintf(`
 SELECT DISTINCT parent.id, parent.name
 FROM %[1]s.elitea_tools AS tool
-JOIN %[1]s.entity_tool_mapping AS mapping ON mapping.tool_id = tool.id AND mapping.entity_type = 'agent'
+JOIN %[1]s.entity_tool_mapping AS mapping ON mapping.tool_id = tool.id AND mapping.entity_type IN ('agent', 'application')
 JOIN %[1]s.application_versions AS version ON version.id = mapping.entity_version_id
 JOIN %[1]s.applications AS parent ON parent.id = version.application_id
 WHERE tool.type = 'application' AND tool.settings ->> 'application_id' = $1 AND parent.id <> $2

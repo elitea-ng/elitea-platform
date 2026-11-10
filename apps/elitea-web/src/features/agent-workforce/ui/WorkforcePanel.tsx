@@ -154,7 +154,7 @@ function ScorecardSection({ card, trend }: { readonly card: AgentScorecard | nul
 }
 
 function ProposalsSection({ projectId, state, callerId }: { readonly projectId: string; readonly state: AgentWorkforceAgent; readonly callerId: number | undefined }): ReactNode {
-  const proposals = useAgentProposals(projectId, state.application_id);
+  const proposals = useAgentProposals(projectId, state.application_id, true);
   const rows = proposals.data?.rows ?? [];
   return (
     <Box>
@@ -170,9 +170,16 @@ function ProposalsSection({ projectId, state, callerId }: { readonly projectId: 
   );
 }
 
+// The scorecards and the proposals are an agent manager's and the owner's
+// (ADR-0050 5h); anyone else sees the agent's ladder state only.
+function mayReadWorkforce(state: { can_manage?: boolean | undefined; is_owner?: boolean | undefined } | undefined): boolean {
+  return state?.can_manage === true || state?.is_owner === true;
+}
+
 export function WorkforcePanel({ projectId, applicationId }: WorkforcePanelProps): ReactNode {
   const agent = useWorkforceAgent(projectId, applicationId);
-  const cards = useScorecards(projectId, applicationId);
+  const mayRead = mayReadWorkforce(agent.data);
+  const cards = useScorecards(projectId, applicationId, mayRead);
   const callerId = useCurrentUserId();
   const [proposing, setProposing] = useState(false);
 
@@ -196,8 +203,12 @@ export function WorkforcePanel({ projectId, applicationId }: WorkforcePanelProps
   return (
     <Box data-testid="agent-workforce-panel" sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       <StateHeader projectId={projectId} state={state} onPropose={() => setProposing(true)} />
-      <ScorecardSection card={state.scorecard} trend={cards.data?.rows ?? []} />
-      <ProposalsSection projectId={projectId} state={state} callerId={callerId} />
+      {mayRead && (
+        <>
+          <ScorecardSection card={state.scorecard} trend={cards.data?.rows ?? []} />
+          <ProposalsSection projectId={projectId} state={state} callerId={callerId} />
+        </>
+      )}
       <ProposeStageDialog open={proposing} projectId={projectId} applicationId={applicationId} onClose={() => setProposing(false)} />
     </Box>
   );

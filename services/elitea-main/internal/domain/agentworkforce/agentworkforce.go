@@ -9,8 +9,10 @@
 //
 //   - watch: the registry's under_review flag and a notice to the owner.
 //   - demote: the narrowing (Narrowing) is written onto the agent's draft
-//     version and an ADR-0040 release change request opens for it when the
-//     agent's tier asks approval; a lead role is dropped at once.
+//     version, which the owner publishes through the agent's release path
+//     (an ADR-0040 change request when its tier asks approval); the
+//     published release keeps its tools and capabilities until then. A lead
+//     role and the heartbeat are taken away at once.
 //   - suspend: an ADR-0041 agent suspension of source dismissal; runs are
 //     refused with execution_suspended and in-flight runs are cancelled.
 //   - retire: the new registry state retired. The agent is unpublished, taken
@@ -44,6 +46,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/proactivity"
 )
 
@@ -345,17 +348,23 @@ func NarrowMeta(meta map[string]any, n Narrowing) map[string]any {
 			out[CapabilitiesKey] = kept
 		}
 	}
-	if n.MemoryReview {
-		memory, _ := out["memory"].(map[string]any)
-		next := make(map[string]any, len(memory)+1)
-		for key, value := range memory {
-			next[key] = value
+	// Memory writes need review, but only where there is a memory to narrow:
+	// a version without a block has memory off (agentmemory.Parse), and a
+	// block {"write": "review"} would parse as the enabled default, switching
+	// memory ON. A block already off, or writing off or review, stays.
+	if memory, ok := out[agentmemory.MetaKey].(map[string]any); ok && n.MemoryReview {
+		settings, err := agentmemory.Parse(memory)
+		if err == nil && settings.Enabled && settings.Write != agentmemory.WriteOff && settings.Write != agentmemory.WriteReview {
+			next := make(map[string]any, len(memory)+1)
+			for key, value := range memory {
+				next[key] = value
+			}
+			next["write"] = string(agentmemory.WriteReview)
+			out[agentmemory.MetaKey] = next
 		}
-		next["write"] = "review"
-		out["memory"] = next
 	}
-	if n.ProactivityOff {
-		block, _ := out[proactivity.MetaKey].(map[string]any)
+	// No block is already off; a block keeps its settings and gets mode off.
+	if block, ok := out[proactivity.MetaKey].(map[string]any); ok && n.ProactivityOff {
 		next := make(map[string]any, len(block)+1)
 		for key, value := range block {
 			next[key] = value

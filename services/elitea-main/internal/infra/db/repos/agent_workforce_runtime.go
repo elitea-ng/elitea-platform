@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
@@ -86,8 +87,18 @@ func (s *AgentWorkforce) ProposeDismissal(ctx context.Context, run storage.Propo
 		if err != nil {
 			return err
 		}
+		// The run's frozen meta can be an unpublished draft the owner edited:
+		// can_review_agents counts only once it is on a published version,
+		// i.e. it went through the agent's release path (ADR-0050 5b: every
+		// capability is an ADR-0040 change at the agent's tier).
+		publishedHR := false
+		if run.IsHRAgent {
+			if publishedHR, err = publishedVersionIsHR(ctx, tx, run.ProjectID, run.ApplicationID); err != nil {
+				return err
+			}
+		}
 		guard := agentworkforce.CheckAgentProposal(agentworkforce.GuardSubject{
-			ProposerApplicationID: run.ApplicationID, ProposerTier: proposer.Tier, ProposerIsHR: run.IsHRAgent,
+			ProposerApplicationID: run.ApplicationID, ProposerTier: proposer.Tier, ProposerIsHR: run.IsHRAgent && publishedHR,
 			TargetApplicationID: target.ApplicationID, TargetTier: target.Tier, TargetIsHR: target.IsHRAgent,
 			TargetHiredProposer: hired, TargetLegalHold: target.LegalHold, TargetState: target.State,
 		}, input.Stage)
@@ -193,4 +204,23 @@ WHERE tenant_project_id = $1 AND application_id = ANY($2::bigint[]) AND lifecycl
 		out[id] = true
 	}
 	return out, rows.Err()
+}
+
+// publishedVersionIsHR reports whether a published version of the agent
+// sets capabilities.can_review_agents.
+func publishedVersionIsHR(ctx context.Context, q lifecycleQuerier, projectID, applicationID int64) (bool, error) {
+	schema, err := tenantschema.QuoteInt(projectID)
+	if err != nil {
+		return false, nil
+	}
+	var hr bool
+	err = q.QueryRow(ctx, fmt.Sprintf(`
+SELECT EXISTS (SELECT 1 FROM %s.application_versions
+               WHERE application_id = $1 AND status IN ('published', 'embedded')
+                 AND meta -> 'capabilities' -> 'can_review_agents' = 'true'::jsonb)`, schema),
+		applicationID).Scan(&hr)
+	if err != nil {
+		return false, fmt.Errorf("agent workforce: read the published capabilities: %w", err)
+	}
+	return hr, nil
 }
