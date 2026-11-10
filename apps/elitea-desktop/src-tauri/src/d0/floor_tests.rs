@@ -88,6 +88,11 @@ fn floor_platform(later: Later) -> impl Fn(&Req) -> Res {
             let question = body["question_id"].as_str().unwrap_or_default().to_owned();
             if body["participant_id"] == 77 {
                 first_question.lock().unwrap().clone_from(&question);
+                // Main routes by the address: the composer's pick alone is one target.
+                let targets = body
+                    .get("addressed_to")
+                    .cloned()
+                    .unwrap_or_else(|| json!([77, 88]));
                 return Res::json(
                     200,
                     &json!({
@@ -96,7 +101,7 @@ fn floor_platform(later: Later) -> impl Fn(&Req) -> Res {
                         "conversation_uuid": UUID, "participant_id": 77, "created": true,
                         "expires_at": "2026-10-10T00:00:00Z",
                         "memory_recall": {"text": ""}, "executor": "local",
-                        "floor": {"question_id": question, "position": 0, "targets": [77, 88], "agents": agents()}
+                        "floor": {"question_id": question, "position": 0, "targets": targets, "agents": agents()}
                     }),
                 );
             }
@@ -309,4 +314,38 @@ async fn a_cloud_agents_turn_refuses_workspace_inputs() {
         .unwrap_err();
     assert_eq!(refused.code, "cloud_agent_text_only");
     assert!(seen(&h.server, &format!("/local_turn/prompt_lib/1/{UUID}")).is_empty());
+}
+
+/// A message that names no agent, in a thread of several: the composer's
+/// pick is sent as the address (ADR-0050 decision 7c), so a lead
+/// conversation cannot route it past the agent the person chose. Only that
+/// agent answers.
+#[tokio::test]
+async fn the_composers_pick_is_the_address_when_the_message_names_no_one() {
+    let server = serve(floor_platform(Later::Started)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h
+        .host
+        .start(TurnRequest {
+            prompt: "Fix the flaky test".into(),
+            ..request(&h.workspace_id)
+        })
+        .await
+        .unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let starts = bodies(
+        &h.server,
+        &format!("/api/v2/elitea_core/local_turn/prompt_lib/1/{UUID}"),
+    );
+    assert_eq!(starts.len(), 1, "{starts:?}");
+    assert_eq!(starts[0]["participant_id"], 77);
+    assert_eq!(starts[0]["addressed_to"], json!([77]));
+    let done = settled_done(&h, &started.turn_id);
+    assert!(done.get("floor_next").is_none(), "{done}");
+    assert!(
+        h.emitter
+            .all()
+            .iter()
+            .all(|event| event.kind != "turn_continued" && event.kind != "error")
+    );
 }

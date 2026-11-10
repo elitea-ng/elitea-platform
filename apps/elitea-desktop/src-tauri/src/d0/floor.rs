@@ -30,6 +30,14 @@
 //! A cloud agent's turn takes no "@" files, skills, commands, images, model
 //! choice, plan mode or unattended grant (`check_request`).
 //!
+//! THE COMPOSER'S PICK IS AN ADDRESS. Main counts only `addressed_to` as
+//! addressing (ADR-0050 decision 7c): a bare participant is the sticky
+//! target, which a lead conversation routes past. So a message that names
+//! no agent, in a thread of several, is sent addressed to the agent the
+//! person picked in the composer, as the web's To: chip writes "@Name"
+//! ([`addressed`]). `floor_routed_elsewhere` then means Main truly routed
+//! the message to another agent first.
+//!
 //! The agent-to-agent hand-off (`hand_floor`) stays with the cloud for now.
 
 use serde_json::{Value, json};
@@ -105,6 +113,21 @@ pub fn check_request(request: &TurnRequest) -> Result<(), TurnError> {
         ));
     }
     Ok(())
+}
+
+/// The `addressed_to` a start sends: the person's addressees, else, for a
+/// message of a thread with several agents that names none, the agent the
+/// person picked in the composer (`answering`). Empty for a later agent's
+/// turn (it is the message's) and in a thread of one agent (as before).
+#[must_use]
+pub fn addressed(request: &TurnRequest, answering: &super::api::AnsweringParticipant) -> Vec<i64> {
+    if !request.addressed_to.is_empty() {
+        return request.addressed_to.clone();
+    }
+    if request.floor_turn.is_some() || answering.agents < 2 {
+        return Vec::new();
+    }
+    vec![answering.id]
 }
 
 /// The name a conversation participant goes by in a relayed transcript.

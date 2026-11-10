@@ -616,8 +616,9 @@ async fn start_turn(
     if let Some(unattended) = &request.unattended {
         body["unattended"] = unattended.wire();
     }
-    if !request.addressed_to.is_empty() {
-        body["addressed_to"] = json!(request.addressed_to);
+    let addressed = floor::addressed(request, answering);
+    if !addressed.is_empty() {
+        body["addressed_to"] = json!(addressed);
     }
     if let Some(turn) = &request.floor_turn {
         body["floor_turn"] = json!({ "question_id": turn.question_id, "position": turn.position });

@@ -823,7 +823,10 @@ and never logged.
 A thread may hold several agent participants. `addressed_to` is the agent
 participants a message names ("@Name"), in the text's order (at most 16,
 no repeats; client-core `addressedTo`); the UI starts the turn on the first
-of them. The host sends it to `startLocalTurn`, and Main routes the message
+of them. The host sends it to `startLocalTurn`; a message that names no
+agent, in a thread of several, is sent addressed to the composer's agent
+(`[participant_id]`: the pick is an address, ADR-0050 decision 7c, so a lead
+conversation does not route past it). Main routes the message
 by the conversation's floor and answers the order (`floor: {question_id,
 position, targets, agents: {participant_id, name, executor}[]}`) and the
 answering agent's `executor`. The host refuses a start Main routed to
