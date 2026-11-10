@@ -170,4 +170,102 @@ func TestOriginalCodeVisitRegistrationsOfOneRunAllCommitPostgres(t *testing.T) {
 	if got := countVisits(t, w, effectsForeign); got != registrationItems {
 		t.Fatalf("visits = %d, want %d", got, registrationItems)
 	}
+	waitNoAdvisoryLocks(t, w)
+}
+
+// advisoryLocks counts the advisory locks held in the test's own database.
+func advisoryLocks(t *testing.T, w *effectsWorld) int {
+	t.Helper()
+	var held int
+	if err := w.pool.QueryRow(t.Context(), `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database())`).Scan(&held); err != nil {
+		t.Fatal(err)
+	}
+	return held
+}
+
+// waitNoAdvisoryLocks allows a destroyed connection's backend a moment to
+// exit (its locks go with it), then requires none to remain.
+func waitNoAdvisoryLocks(t *testing.T, w *effectsWorld) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for advisoryLocks(t, w) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d advisory locks leaked", advisoryLocks(t, w))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func runSerializedStore(t *testing.T) (*effectsWorld, *postgresSharedStore) {
+	t.Helper()
+	w := newEffectsWorld(t)
+	store, err := newPostgresSharedStore(w.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w, store
+}
+
+var registrationTx = pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite}
+
+// requireLockFree proves the run's lock is free: a registration of the same
+// run finishes well before it could if it had to wait.
+func requireLockFree(t *testing.T, store *postgresSharedStore) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if err := store.WithinRunSerializedTx(ctx, effectsParent, 1, registrationTx, func(tx sqlExecutor) error {
+		_, err := tx.Exec(ctx, `SELECT 1`)
+		return err
+	}); err != nil {
+		t.Fatalf("the next registration of the run waited or failed: %v", err)
+	}
+}
+
+// An error or a panic inside the transaction releases the run's lock.
+func TestRunRegistrationLockIsReleasedAfterAnErrorOrPanicPostgres(t *testing.T) {
+	w, store := runSerializedStore(t)
+	failed := errors.New("registration refused")
+	if err := store.WithinRunSerializedTx(t.Context(), effectsParent, 1, registrationTx, func(sqlExecutor) error { return failed }); !errors.Is(err, failed) {
+		t.Fatalf("err = %v", err)
+	}
+	waitNoAdvisoryLocks(t, w)
+	requireLockFree(t, store)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the panic did not propagate")
+			}
+		}()
+		_ = store.WithinRunSerializedTx(t.Context(), effectsParent, 1, registrationTx, func(sqlExecutor) error { panic("registration panicked") })
+	}()
+	waitNoAdvisoryLocks(t, w)
+	requireLockFree(t, store)
+}
+
+// A ctx cancelled while the lock is held destroys the connection; the lock
+// does not outlive it.
+func TestRunRegistrationLockDoesNotLeakOnCancelPostgres(t *testing.T) {
+	w, store := runSerializedStore(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	entered := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- store.WithinRunSerializedTx(ctx, effectsParent, 1, registrationTx, func(sqlExecutor) error {
+			close(entered)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	<-entered
+	if held := advisoryLocks(t, w); held != 1 {
+		t.Fatalf("advisory locks while held = %d, want 1", held)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	waitNoAdvisoryLocks(t, w)
+	requireLockFree(t, store)
 }

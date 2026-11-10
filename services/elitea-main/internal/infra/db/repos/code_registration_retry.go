@@ -136,11 +136,24 @@ func (r conflictRecordingRows) Err() error             { return r.executor.note(
 func (r conflictRecordingRows) Next() bool             { return r.next.Next() }
 func (r conflictRecordingRows) Scan(dest ...any) error { return r.executor.note(r.next.Scan(dest...)) }
 
+// codeRegistrationLockClass is this feature's half of the two-int4 advisory
+// lock key space (`pg_advisory_lock(int4, int4)`): "CREG". The other
+// two-int4 users in Main are personalproject 0x454C5041 ("ELPA"), deepwiki
+// history 0x0DEE0417 and nativeauth 250025; the single-bigint form lives in a
+// separate key space (pg_locks objsubid 1, not 2).
+const codeRegistrationLockClass int32 = 0x43524547
+
+// codeRegistrationUnlockTimeout bounds the unlock round trip; past it the
+// connection is destroyed, which releases the lock server-side.
+const codeRegistrationUnlockTimeout = 5 * time.Second
+
 // WithinRunSerializedTx holds a session advisory lock for (execution,
-// generation) on one connection, then runs fn in a transaction on it and
-// releases the lock. The lock is taken before BEGIN, so the transaction's
-// snapshot is taken after it. A connection whose unlock did not succeed is
-// closed, never returned to the pool still holding the lock.
+// generation) on an explicitly acquired connection, runs fn in a transaction
+// on it, and releases the lock in a defer on every path (error, panic, ctx
+// cancel). The lock is taken before BEGIN, so the transaction's snapshot is
+// taken after it. Unless the unlock is confirmed, with the caller's ctx still
+// live, the connection is destroyed (hijacked from the pool and closed),
+// never returned to the pool possibly holding the lock.
 func (s *postgresSharedStore) WithinRunSerializedTx(ctx context.Context, execution string, generation uint64, opts pgx.TxOptions, fn func(sqlExecutor) error) (runErr error) {
 	if fn == nil {
 		return errors.New("transaction callback is required")
@@ -149,45 +162,52 @@ func (s *postgresSharedStore) WithinRunSerializedTx(ctx context.Context, executi
 	if err != nil {
 		return fmt.Errorf("acquire connection: %w", err)
 	}
-	locked, unlocked := false, false
+	reusable := false
 	defer func() {
-		if locked && !unlocked {
-			_ = conn.Conn().Close(context.WithoutCancel(ctx))
+		if reusable {
+			conn.Release()
+			return
 		}
-		conn.Release()
+		raw := conn.Hijack()
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codeRegistrationUnlockTimeout)
+		defer cancel()
+		_ = raw.Close(closeCtx)
 	}()
-	key := fmt.Sprintf("code_registration:%s:%d", execution, generation)
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended($1::text, 0))`, key); err != nil {
-		// A cancelled wait may still have taken the lock: never reuse it.
-		locked = true
+	key := fmt.Sprintf("%s:%d", execution, generation)
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1::int4, hashtext($2::text))`, codeRegistrationLockClass, key); err != nil {
+		// A cancelled wait may still have taken the lock: the deferred
+		// destroy releases it.
 		return fmt.Errorf("lock run registrations: %w", err)
 	}
-	locked = true
-	runErr = func() error {
-		tx, err := conn.BeginTx(ctx, opts)
-		if err != nil {
-			return fmt.Errorf("begin transaction: %w", err)
+	defer func() {
+		if ctx.Err() != nil {
+			return
 		}
-		defer func() {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
-		}()
-		// The conflict is recorded where it happens: a callback that maps a
-		// failed read to a refusal is still retried, never answered refused.
-		conflict := false
-		if err := fn(conflictRecordingExecutor{next: pgxExecutor{queryer: tx}, conflict: &conflict}); err != nil {
-			if conflict {
-				return fmt.Errorf("%w: %w", errStatementConflict, err)
-			}
-			return err
+		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codeRegistrationUnlockTimeout)
+		defer cancel()
+		var released bool
+		if err := conn.QueryRow(unlockCtx, `SELECT pg_advisory_unlock($1::int4, hashtext($2::text))`, codeRegistrationLockClass, key).Scan(&released); err == nil && released && conn.Conn().PgConn().TxStatus() == 'I' {
+			reusable = true
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("commit transaction: %w", err)
-		}
-		return nil
 	}()
-	var released bool
-	if err := conn.QueryRow(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock(hashtextextended($1::text, 0))`, key).Scan(&released); err == nil && released {
-		unlocked = true
+	tx, err := conn.BeginTx(ctx, opts)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
 	}
-	return runErr
+	defer func() {
+		_ = tx.Rollback(context.WithoutCancel(ctx))
+	}()
+	// The conflict is recorded where it happens: a callback that maps a
+	// failed read to a refusal is still retried, never answered refused.
+	conflict := false
+	if err := fn(conflictRecordingExecutor{next: pgxExecutor{queryer: tx}, conflict: &conflict}); err != nil {
+		if conflict {
+			return fmt.Errorf("%w: %w", errStatementConflict, err)
+		}
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
 }

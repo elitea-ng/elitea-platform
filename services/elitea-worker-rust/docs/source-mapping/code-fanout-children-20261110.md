@@ -270,6 +270,24 @@ clean; `go test ./...` passes, `authflow`/`authsession`/`migrate` only with `-pa
 (53200 "out of shared memory" when many tests apply all migrations at once; those packages are untouched). Web
 `vitest run pipelines`: 274 files, 2961 passed, 1 expected fail; `tsc`, oxlint and the i18n check clean.
 
+**B3 lock, as accepted with conditions** (`code_registration_retry.go`, `WithinRunSerializedTx`). An explicitly
+acquired pool connection takes `pg_advisory_lock(int4, int4)` with the dedicated class
+`codeRegistrationLockClass = 0x43524547` ("CREG") and `hashtext('<execution>:<generation>')`, before `BEGIN`. Defers
+run on every path (error, panic, ctx cancel): roll back, then unlock (bounded to 5 s, skipped when the caller's ctx is
+done), then release. The connection goes back to the pool only when the unlock returned `true` and the connection is
+idle; otherwise it is hijacked from the pool and closed, and the server drops the lock with the session. Real-PG
+tests (PG 18.4): `TestRunRegistrationLockIsReleasedAfterAnErrorOrPanicPostgres` (after an error and after a panic, no
+advisory lock is left and the next registration of the run completes within 2 s),
+`TestRunRegistrationLockDoesNotLeakOnCancelPostgres` (1 lock while held; ctx cancelled; 0 after, next registration
+within 2 s), and the 8-way test now ends with `pg_locks` advisory count 0 in its database.
+
+Advisory-lock users in the repo (`git grep pg_advisory / pg_try_advisory`), so the class cannot collide:
+
+| Form | Users and keys |
+|---|---|
+| two int4 (`objsubid` 2, shares the space with this lock) | Main personalproject `ensurer.go:551` class `0x454C5041` ("ELPA"); Main deepwiki history `deepwiki_history.go:100,192` class `0x0DEE0417`; Main nativeauth `store.go:915-917` class `250025`; deepwiki-engine `storage/build.rs`, `storage/delete.rs` `hashtext(<name>)` first key; inventory-engine `store/mod.rs:557`, `store/sources.rs:483` `hashtext('elitea_inventory.graph' / '.ingest')` (both engines use their own databases); test-only deepwiki-engine fixtures |
+| one bigint (`objsubid` 1, a separate space) | Main: `hashtextextended(...)` keys in oidc, agent_memory, agent_proposals, agent_steering (`'steering:'`), agent_workforce_policy, conversation_fork, conversations, index_registry, local_child_turns, vector_claim_tokens (`'elitea_memory_conversation:'`), web_push (`'web_push_user:'`), workspace_store, workspace_handoffs, execution_suspensions, pgvault, code_debug_artifacts (seed 701); `hashtext(...)` in cloud_executor_attestation/settings, connector_inventory, connector_requests; constants in secrets_header_value, supportassistant, compiled_snapshots, platform_preamble, migrate/lock.go, dbtest/template.go, auth_provisioning.sql; session locks in auditexport/relay.go and securityaudit/relay.go; subapp-host `spi/pgstore.go`; scheduler `pricesync`; Rust `pg-migrate`; Worker test `640064`; two database scripts |
+
 **Raw i18n key on the Map card** (`pipelines.graphExtensions.values.` beside "Owned worker" and "Worker output 1"):
 `ExtensionChoice` renders the empty choice as `t('pipelines.graphExtensions.values.' + '', '')`; i18next ignores the
 empty default and shows the key. Unchanged from `origin/main` (`ExtensionFields.tsx:27`), not introduced here; not
