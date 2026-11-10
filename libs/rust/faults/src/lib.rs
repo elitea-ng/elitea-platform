@@ -241,6 +241,36 @@ pub fn render_type_name<T: Error + 'static>(error: &(dyn Error + 'static)) -> Op
         .map(|_| std::any::type_name::<T>().to_owned())
 }
 
+thread_local! {
+    static IN_OPERATOR_STREAM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether this thread is inside [`OperatorJsonLayer`]'s own code (recording
+/// fields, holding span extensions or writing). A panic hook that sees `true`
+/// must not log through tracing: re-entering the layer could deadlock on the
+/// extensions it holds, or panic again and abort.
+#[must_use]
+pub fn in_operator_stream() -> bool {
+    IN_OPERATOR_STREAM.with(std::cell::Cell::get)
+}
+
+/// Marks this thread as inside the operator stream until dropped, unwinding
+/// included. Nested marks keep the outer one.
+pub(crate) struct OperatorStreamMark(bool);
+
+impl OperatorStreamMark {
+    pub(crate) fn enter() -> Self {
+        Self(IN_OPERATOR_STREAM.with(|flag| flag.replace(true)))
+    }
+}
+
+impl Drop for OperatorStreamMark {
+    fn drop(&mut self) {
+        let previous = self.0;
+        IN_OPERATOR_STREAM.with(|flag| flag.set(previous));
+    }
+}
+
 /// The cause chain of `error`, outermost first, `error` itself included.
 #[must_use]
 pub fn cause_chain(error: &(dyn Error + 'static), renderers: &[Renderer]) -> Vec<String> {
@@ -256,19 +286,51 @@ pub fn source_chain_json<E: Error + ?Sized>(error: &E, renderers: &[Renderer]) -
 }
 
 fn chain_from(mut next: Option<&(dyn Error + 'static)>, renderers: &[Renderer]) -> Vec<String> {
-    let mut chain = Vec::new();
+    let mut rendered = Vec::new();
     while let Some(error) = next {
-        if chain.len() == MAX_CAUSES {
+        if rendered.len() == MAX_CAUSES {
             break;
         }
-        let rendered = renderers
-            .iter()
-            .find_map(|render| render(error))
-            .unwrap_or_else(|| UNREGISTERED_CAUSE.to_owned());
-        chain.push(bounded(rendered));
+        rendered.push(
+            renderers
+                .iter()
+                .find_map(|render| render(error))
+                .unwrap_or_else(|| UNREGISTERED_CAUSE.to_owned()),
+        );
         next = error.source();
     }
+    let mut chain = Vec::with_capacity(rendered.len());
+    for (index, text) in rendered.iter().enumerate() {
+        let own = match rendered.get(index + 1) {
+            Some(inner) => without_inner(text, inner),
+            None => text.as_str(),
+        };
+        if !own.is_empty() {
+            chain.push(bounded(own.to_owned()));
+        }
+    }
     chain
+}
+
+/// A wrapper whose text repeats its inner error's keeps its own part only,
+/// as Go's chain does: when the text ends with the inner element (or with the
+/// inner element's text after its `label: `), that suffix and the separator
+/// before it are trimmed. Two elements that render the same are both kept:
+/// that is a type name or the unregistered placeholder twice, two errors and
+/// no repeated text.
+fn without_inner<'a>(text: &'a str, inner: &str) -> &'a str {
+    if text == inner {
+        return text;
+    }
+    let body = inner.split_once(": ").map_or(inner, |(_, body)| body);
+    let Some(own) = [inner, body]
+        .into_iter()
+        .filter(|suffix| !suffix.is_empty())
+        .find_map(|suffix| text.strip_suffix(suffix))
+    else {
+        return text;
+    };
+    own.trim_end().trim_end_matches(':').trim_end()
 }
 
 fn bounded(mut text: String) -> String {

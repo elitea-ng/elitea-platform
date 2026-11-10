@@ -93,6 +93,7 @@ where
     W: for<'writer> MakeWriter<'writer> + 'static,
 {
     fn on_new_span(&self, attributes: &Attributes<'_>, id: &Id, context: Context<'_, S>) {
+        let _mark = crate::OperatorStreamMark::enter();
         let Some(span) = context.span(id) else {
             return;
         };
@@ -102,16 +103,23 @@ where
     }
 
     fn on_record(&self, id: &Id, values: &Record<'_>, context: Context<'_, S>) {
+        let _mark = crate::OperatorStreamMark::enter();
         let Some(span) = context.span(id) else {
             return;
         };
+        // Format outside the extensions lock: a field's Debug may panic.
+        let mut recorded = Fields::default();
+        values.record(&mut recorded);
         let mut extensions = span.extensions_mut();
         if let Some(SpanFields(fields)) = extensions.get_mut::<SpanFields>() {
-            values.record(fields);
+            for (name, value) in recorded.0 {
+                fields.set(name, value);
+            }
         }
     }
 
     fn on_event(&self, event: &Event<'_>, context: Context<'_, S>) {
+        let _mark = crate::OperatorStreamMark::enter();
         let metadata = event.metadata();
         let mut fields = Fields::default();
         event.record(&mut fields);

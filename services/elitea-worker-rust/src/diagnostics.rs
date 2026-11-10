@@ -16,10 +16,13 @@
 //! close lines, and only those, to stderr at the same level. Any other value,
 //! or none, leaves it off.
 //!
-//! A panic logs one ERROR line with code `internal.panic`: the payload's type
+//! A panic always writes one redacted line to stderr (source file and line,
+//! never the payload), even at `ELITEA_RUST_LOG=off`. When ERROR is enabled it
+//! also logs one ERROR line with code `internal.panic`: the payload's type
 //! (never its text), the source file and line, the span fields, and a
 //! backtrace bounded to 8 KiB and limited to one per second (over the limit
-//! the line says `"backtrace":"rate-limited"`).
+//! the line says `"backtrace":"rate-limited"`). A panic raised inside the
+//! operator stream's own code gets the stderr line only.
 
 pub(crate) mod failure;
 #[cfg(test)]
@@ -52,6 +55,11 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
 static PANIC_HOOK: Once = Once::new();
+thread_local! {
+    /// Set while this thread runs the panic hook (a panic inside it must not
+    /// log through tracing again).
+    static PANIC_HOOK_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 const LOG_LEVEL_ENVIRONMENT: &str = "ELITEA_RUST_LOG";
 const SPAN_TIMING_ENVIRONMENT: &str = "ELITEA_RUST_SPAN_TIMING";
 const TRACE_LEVEL_ENVIRONMENT: &str = "ELITEA_RUST_TRACE";
@@ -428,11 +436,15 @@ impl Extractor for CommandTraceHeaders<'_> {
 /// replaces that hook instead of treating a redacted task error as sufficient.
 /// Repeated calls are harmless.
 ///
-/// Once the subscriber is installed the hook logs one operator-stream ERROR
-/// line (code `internal.panic`, module docs): the payload's TYPE, never its
-/// text; the source file name and line; the current span fields; a bounded,
-/// rate-limited backtrace. Before that (nothing to log to yet) it writes the
-/// redacted line to stderr instead.
+/// Every panic writes the redacted stderr line (source file name and line,
+/// no payload), whatever the log level, so a panic is never silent. When
+/// ERROR events are enabled it also logs one operator-stream line (code
+/// `internal.panic`, module docs): the payload's TYPE, never its text; the
+/// source; the current span fields; a bounded, rate-limited backtrace. That
+/// event is skipped when the panic was raised inside the operator stream's own
+/// code (`elitea_faults::in_operator_stream`) or inside this hook, because
+/// logging through the layer again could deadlock on the span extensions it
+/// holds or panic again and abort.
 ///
 /// In the unit-test binary the hook is process-wide: one test installing it
 /// would otherwise strip the message from every later panic, test assertions
@@ -447,11 +459,15 @@ pub fn install_redacted_panic_hook() {
             let source = information.location().and_then(|location| {
                 panic_source_label(location.file()).map(|source| (source, location.line()))
             });
+            let reentered = PANIC_HOOK_ACTIVE.with(|active| active.replace(true));
             report_panic(
                 panic_payload_type(information.payload()),
                 source,
-                tracing::dispatcher::has_been_set(),
+                !reentered && !elitea_faults::in_operator_stream(),
             );
+            if !reentered {
+                PANIC_HOOK_ACTIVE.with(|active| active.set(false));
+            }
             #[cfg(test)]
             previous(information);
         }));
@@ -469,8 +485,8 @@ fn panic_payload_type(payload: &(dyn std::any::Any + Send)) -> &'static str {
     }
 }
 
-fn report_panic(payload_type: &'static str, source: Option<(&str, u32)>, subscriber: bool) {
-    if !subscriber {
+fn report_panic(payload_type: &'static str, source: Option<(&str, u32)>, log_event: bool) {
+    {
         let mut stderr = io::stderr().lock();
         let _ignored = match source {
             Some((source, line)) => writeln!(
@@ -479,6 +495,8 @@ fn report_panic(payload_type: &'static str, source: Option<(&str, u32)>, subscri
             ),
             None => stderr.write_all(b"elitea worker task panicked; details redacted\n"),
         };
+    }
+    if !log_event || !tracing::enabled!(tracing::Level::ERROR) {
         return;
     }
     let source = source.map(|(source, line)| format!("{source}:{line}"));
@@ -829,6 +847,109 @@ mod tests {
         assert!(!backtrace.is_empty() && backtrace != "rate-limited");
         assert!(backtrace.len() <= 8192, "{} bytes", backtrace.len());
         assert_eq!(lines[1]["backtrace"], "rate-limited");
+        assert_eq!(redacted_lines(&output.stderr), 2, "{}", output.stderr);
+    }
+
+    /// The stderr lines the hook writes for panics raised in this file.
+    fn redacted_lines(stderr: &str) -> usize {
+        stderr
+            .lines()
+            .filter(|line| {
+                line.starts_with(
+                    "elitea worker task panicked; payload redacted; source=diagnostics.rs:",
+                )
+            })
+            .count()
+    }
+
+    const PANIC_OFF_CHILD_ENV: &str = "ELITEA_DIAGNOSTICS_PANIC_OFF_CHILD";
+    const PANIC_REENTRY_CHILD_ENV: &str = "ELITEA_DIAGNOSTICS_PANIC_REENTRY_CHILD";
+
+    /// With `ELITEA_RUST_LOG=off` a panic still writes the redacted stderr
+    /// line; the operator stream stays empty.
+    #[test]
+    fn a_panic_is_never_silent_with_logging_off() {
+        let output = logtest::run_child("diagnostics::tests::panic_off_child", PANIC_OFF_CHILD_ENV);
+        assert!(output.operator_lines().is_empty(), "{}", output.stdout);
+        assert_eq!(redacted_lines(&output.stderr), 1, "{}", output.stderr);
+    }
+
+    #[test]
+    fn panic_off_child() {
+        if !logtest::is_child(PANIC_OFF_CHILD_ENV) {
+            return;
+        }
+        tracing_subscriber::registry()
+            .with(log_layer(Some("off"), std::io::stdout).expect("operator stream"))
+            .init();
+        super::install_redacted_panic_hook();
+        assert!(std::panic::catch_unwind(|| panic!("PANIC-PAYLOAD-SECRET-CANARY")).is_err());
+        logtest::child_ran();
+    }
+
+    /// Debug that panics, as a field value can.
+    struct PanickingDebug;
+
+    impl std::fmt::Debug for PanickingDebug {
+        fn fmt(&self, _formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            panic!("PANIC-PAYLOAD-SECRET-CANARY from a field")
+        }
+    }
+
+    /// A panic raised inside the operator stream's own code (a span field
+    /// recorded later, an event field) writes the stderr line only and never
+    /// re-enters the layer: no deadlock (the child is bounded by
+    /// `logtest::CHILD_TIMEOUT`), no abort, and the next ordinary panic logs
+    /// its fault line again.
+    #[test]
+    fn a_panic_inside_the_operator_stream_writes_stderr_only_and_does_not_deadlock() {
+        let output = logtest::run_child(
+            "diagnostics::tests::panic_reentry_child",
+            PANIC_REENTRY_CHILD_ENV,
+        );
+        assert!(
+            !output.stdout.contains("PANIC-PAYLOAD-SECRET-CANARY"),
+            "{}",
+            output.stdout
+        );
+        let panics: Vec<_> = output
+            .operator_lines()
+            .into_iter()
+            .filter(|line| line["code"] == "internal.panic")
+            .collect();
+        assert_eq!(panics.len(), 1, "{}", output.stdout);
+        assert_eq!(panics[0]["payload_type"], "&str");
+        assert_eq!(panics[0]["support_ref"], "exec-reentry");
+        assert_eq!(redacted_lines(&output.stderr), 3, "{}", output.stderr);
+    }
+
+    #[test]
+    fn panic_reentry_child() {
+        if !logtest::is_child(PANIC_REENTRY_CHILD_ENV) {
+            return;
+        }
+        tracing_subscriber::registry()
+            .with(log_layer(Some("info"), std::io::stdout).expect("operator stream"))
+            .init();
+        super::install_redacted_panic_hook();
+        let span = tracing::info_span!(
+            "agent.delivery",
+            execution_id = "exec-reentry",
+            support_ref = "exec-reentry",
+            probe = tracing::field::Empty
+        );
+        let _entered = span.enter();
+        let record = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            span.record("probe", tracing::field::debug(PanickingDebug));
+        }));
+        assert!(record.is_err());
+        let event = std::panic::catch_unwind(|| {
+            tracing::warn!(probe = ?PanickingDebug, "an event whose field panics");
+        });
+        assert!(event.is_err());
+        assert!(!elitea_faults::in_operator_stream());
+        assert!(std::panic::catch_unwind(|| panic!("an ordinary panic afterwards")).is_err());
+        logtest::child_ran();
     }
 
     #[test]

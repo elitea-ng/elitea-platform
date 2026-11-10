@@ -131,10 +131,9 @@ fn read_entry(file: &str, index: usize, object: &Map<String, Value>) -> Result<E
         return Err(format!("{}: {code:?} breaks the code grammar", at("code")));
     }
     let sentence = text("sentence")?;
-    check_text(&sentence, true)
-        .map_err(|reason| format!("{} ({code}): {reason}", at("sentence")))?;
+    check_text(&sentence).map_err(|reason| format!("{} ({code}): {reason}", at("sentence")))?;
     let action = text("action")?;
-    check_text(&action, false).map_err(|reason| format!("{} ({code}): {reason}", at("action")))?;
+    check_text(&action).map_err(|reason| format!("{} ({code}): {reason}", at("action")))?;
     let audience = match text("audience")?.as_str() {
         "operator" => "Operator",
         "user" => "User",
@@ -158,7 +157,7 @@ fn read_entry(file: &str, index: usize, object: &Map<String, Value>) -> Result<E
         }
     };
     let owner = text("owner")?;
-    if owner.is_empty() {
+    if owner.trim().is_empty() {
         return Err(format!("{} ({code}): empty", at("owner")));
     }
     Ok(Entry {
@@ -190,52 +189,108 @@ fn valid_code(code: &str) -> bool {
     segments >= 2
 }
 
-/// The sentence and action bans (review condition C7): bounded, no
-/// placeholder or format verb, nothing that looks like an id, a path or a URL.
-fn check_text(text: &str, sentence: bool) -> Result<(), String> {
+/// The sentence and action rules, identical to Go's `TestRegistryIsWellFormed`
+/// (`libs/go/faults/gate_test.go`; review condition C7): non-empty, at most
+/// 256 bytes, ending with a period, and none of the banned patterns. Go's
+/// one-sentence rule (with `multi-sentence-exemptions.txt`) stays Go-only.
+fn check_text(text: &str) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("empty".into());
     }
     if text.len() > MAX_TEXT_BYTES {
         return Err(format!("{} bytes, over {MAX_TEXT_BYTES}", text.len()));
     }
-    if sentence && !text.ends_with('.') {
+    if !text.ends_with('.') {
         return Err("does not end with a period".into());
     }
-    if text.contains('{') || text.contains('}') || text.contains('%') {
-        return Err("holds a placeholder or format verb".into());
+    match banned(text) {
+        Some(reason) => Err(format!("holds {reason}")),
+        None => Ok(()),
     }
-    if text.contains("://") || text.contains("www.") {
-        return Err("holds a URL".into());
-    }
-    if text.contains('/') || text.contains('\\') {
-        return Err("holds a path".into());
-    }
-    for token in
-        text.split(|character: char| !(character.is_ascii_alphanumeric() || character == '-'))
-    {
-        if looks_like_id(token) {
-            return Err(format!("holds an id-like token {token:?}"));
-        }
-    }
-    Ok(())
 }
 
-/// A hex run of eight or more with a digit (uuid parts, digests) or five or
-/// more digits in a row (numeric ids).
-fn looks_like_id(token: &str) -> bool {
-    let hexlike = token.len() >= 8
-        && token
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
-        && token.bytes().any(|byte| byte.is_ascii_digit());
-    let mut run = 0;
-    let mut long_number = false;
-    for byte in token.bytes() {
-        run = if byte.is_ascii_digit() { run + 1 } else { 0 };
-        long_number |= run >= 5;
+/// Go's `bannedText`, pattern for pattern:
+/// `[{%]`, `[0-9a-f]{8}-[0-9a-f]{4}-`, `\b[0-9a-f]{12,}\b`, `://`,
+/// `(^|\s)(/|\./|~/)[A-Za-z0-9_.-]+/`, `\.(go|rs|json|yaml|yml|toml|sql|ts|tsx)\b`,
+/// any `/`, any `\`, `[0-9]{5,}` and `www.`. (`://` and the unix path are
+/// covered by "any `/`"; they are kept so the list reads like Go's.)
+fn banned(text: &str) -> Option<&'static str> {
+    let bytes = text.as_bytes();
+    if text.contains(['{', '%']) {
+        return Some("a placeholder or format verb");
     }
-    hexlike || long_number
+    if text.contains("://") || text.contains("www.") {
+        return Some("a URL");
+    }
+    if text.contains(['/', '\\']) {
+        return Some("a path");
+    }
+    if uuid_prefix(bytes) {
+        return Some("a uuid");
+    }
+    if hex_id(bytes) {
+        return Some("a hex id");
+    }
+    if digit_run(bytes) {
+        return Some("a number of five or more digits");
+    }
+    if source_file(bytes) {
+        return Some("a source file name");
+    }
+    None
+}
+
+fn lower_hex(byte: u8) -> bool {
+    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+}
+
+/// Go's `\w`: ASCII letters, digits and underscore.
+fn word(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// `[0-9a-f]{8}-[0-9a-f]{4}-`
+fn uuid_prefix(bytes: &[u8]) -> bool {
+    bytes.windows(14).any(|window| {
+        window[..8].iter().all(|byte| lower_hex(*byte))
+            && window[8] == b'-'
+            && window[9..13].iter().all(|byte| lower_hex(*byte))
+            && window[13] == b'-'
+    })
+}
+
+/// `\b[0-9a-f]{12,}\b`: a whole word of twelve or more lower hex digits.
+fn hex_id(bytes: &[u8]) -> bool {
+    bytes
+        .split(|byte| !word(*byte))
+        .any(|token| token.len() >= 12 && token.iter().all(|byte| lower_hex(*byte)))
+}
+
+/// `[0-9]{5,}`
+fn digit_run(bytes: &[u8]) -> bool {
+    let mut run = 0;
+    for byte in bytes {
+        run = if byte.is_ascii_digit() { run + 1 } else { 0 };
+        if run >= 5 {
+            return true;
+        }
+    }
+    false
+}
+
+/// `\.(go|rs|json|yaml|yml|toml|sql|ts|tsx)\b`
+fn source_file(bytes: &[u8]) -> bool {
+    const EXTENSIONS: [&[u8]; 9] = [
+        b"go", b"rs", b"json", b"yaml", b"yml", b"toml", b"sql", b"ts", b"tsx",
+    ];
+    bytes.iter().enumerate().any(|(dot, byte)| {
+        *byte == b'.'
+            && EXTENSIONS.iter().any(|extension| {
+                let end = dot + 1 + extension.len();
+                bytes.get(dot + 1..end) == Some(*extension)
+                    && bytes.get(end).is_none_or(|next| !word(*next))
+            })
+    })
 }
 
 fn constant_name(code: &str) -> String {

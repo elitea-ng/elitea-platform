@@ -231,3 +231,109 @@ fn operator_stream_child() {
     fault!(tracing::Level::WARN, &error, event = "test_fault");
     logtest::child_ran();
 }
+
+/// A wrapper that only repeats its inner error keeps its own label; nothing
+/// left means the element is dropped; equal or unrelated text is untouched.
+#[test]
+fn a_wrapper_repeating_its_inner_text_keeps_only_its_own_part() {
+    assert_eq!(
+        without_inner("output: frame refused", "output session: frame refused"),
+        "output"
+    );
+    assert_eq!(without_inner("spool: disk: full", "disk: full"), "spool");
+    assert_eq!(
+        without_inner("frame refused", "frame refused"),
+        "frame refused"
+    );
+    assert_eq!(without_inner(": frame refused", "frame refused"), "");
+    assert_eq!(
+        without_inner("spool: write failed", "io: NotFound"),
+        "spool: write failed"
+    );
+    assert_eq!(without_inner("abc", ""), "abc");
+
+    let error = Wrapper(Wrapper(Leaf));
+    let chain = cause_chain(
+        &error,
+        &[
+            render_safe::<Wrapper<Wrapper<Leaf>>>,
+            render_safe::<Wrapper<Leaf>>,
+            render_safe::<Leaf>,
+        ],
+    );
+    assert_eq!(chain, vec!["outer", "inner", "leaf: frame refused"]);
+    let repeat = Wrapper(Leaf);
+    let chain = cause_chain(&repeat, &[render_safe::<Leaf>]);
+    assert_eq!(chain, vec![UNREGISTERED_CAUSE, "leaf: frame refused"]);
+    // A label-less wrapper that is all repeat disappears from the chain.
+    let bare = Wrapper(Leaf);
+    let chain = cause_chain(&bare, &[render_bare_wrapper, render_safe::<Leaf>]);
+    assert_eq!(chain, vec!["leaf: frame refused"]);
+}
+
+#[test]
+fn the_operator_stream_mark_is_cleared_by_unwinding() {
+    assert!(!in_operator_stream());
+    let caught = std::panic::catch_unwind(|| {
+        let _mark = OperatorStreamMark::enter();
+        assert!(in_operator_stream());
+        let nested = OperatorStreamMark::enter();
+        drop(nested);
+        assert!(in_operator_stream());
+        panic!("unwind through the mark");
+    });
+    assert!(caught.is_err());
+    assert!(!in_operator_stream());
+}
+
+#[derive(Debug)]
+struct Leaf;
+
+impl fmt::Display for Leaf {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("frame refused")
+    }
+}
+
+impl Error for Leaf {}
+
+impl SafeCause for Leaf {
+    fn safe_cause(&self) -> String {
+        format!("leaf: {self}")
+    }
+}
+
+/// Displays as its inner error, like `OutputGrpcError::Protocol`.
+#[derive(Debug)]
+struct Wrapper<E>(E);
+
+impl<E: fmt::Display> fmt::Display for Wrapper<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl<E: Error + 'static> Error for Wrapper<E> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+impl SafeCause for Wrapper<Leaf> {
+    fn safe_cause(&self) -> String {
+        format!("inner: {self}")
+    }
+}
+
+impl SafeCause for Wrapper<Wrapper<Leaf>> {
+    fn safe_cause(&self) -> String {
+        format!("outer: {self}")
+    }
+}
+
+/// Renders a `Wrapper<Leaf>` as `: <inner text>`, nothing of its own.
+fn render_bare_wrapper(error: &(dyn Error + 'static)) -> Option<String> {
+    error
+        .downcast_ref::<Wrapper<Leaf>>()
+        .map(|wrapper| format!(": {wrapper}"))
+}

@@ -7826,7 +7826,7 @@ fn progress_rejection_is_one_readable_fault_line() {
     assert_eq!(
         line["cause"],
         json!([
-            "output: the scripted progress session is not authorized",
+            "output",
             "output session: the scripted progress session is not authorized"
         ])
     );

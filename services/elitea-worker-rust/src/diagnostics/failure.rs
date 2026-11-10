@@ -43,17 +43,38 @@ pub(crate) fn capture() -> Option<String> {
 }
 
 /// The panic hook's backtrace (FU-299): always on, under the same bounds as
-/// [`capture`] (one per second process-wide, [`MAX_BYTES`]) with an allowance
-/// of its own, so a panic storm cannot flood the operator stream and opt-in
-/// failure captures do not starve it.
+/// [`capture`] (at most one per second process-wide, [`MAX_BYTES`]) with an
+/// allowance of its own, so a panic storm cannot flood the operator stream
+/// and opt-in failure captures do not starve it. The second is counted in
+/// milliseconds from the END of the last capture: symbolising a cold
+/// backtrace can itself take longer than a second, and the next panic must
+/// not get a fresh allowance for that alone.
 pub(super) fn panic_backtrace() -> Option<String> {
-    let seconds = EPOCH.get_or_init(Instant::now).elapsed().as_secs();
-    if !admit(&NEXT_PANIC_BACKTRACE, seconds) {
+    let epoch = EPOCH.get_or_init(Instant::now);
+    let now = elapsed_millis(epoch);
+    if !admit_after(&NEXT_PANIC_BACKTRACE, now, PANIC_BACKTRACE_PERIOD_MILLIS) {
         return None;
     }
     let mut output = BoundedText(String::with_capacity(MAX_BYTES));
     let _ignored = write!(output, "{}", Backtrace::force_capture());
+    let done = elapsed_millis(epoch).saturating_add(PANIC_BACKTRACE_PERIOD_MILLIS);
+    NEXT_PANIC_BACKTRACE.fetch_max(done, Ordering::Relaxed);
     Some(output.0)
+}
+
+const PANIC_BACKTRACE_PERIOD_MILLIS: u64 = 1000;
+
+fn elapsed_millis(epoch: &Instant) -> u64 {
+    u64::try_from(epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Admits `now` when it reached the deadline and moves the deadline `period`
+/// past it.
+fn admit_after(next: &AtomicU64, now: u64, period: u64) -> bool {
+    next.try_update(Ordering::Relaxed, Ordering::Relaxed, |deadline| {
+        (now >= deadline).then(|| now.saturating_add(period))
+    })
+    .is_ok()
 }
 
 fn admit(next: &AtomicU64, seconds: u64) -> bool {
@@ -158,6 +179,18 @@ mod tests {
         assert!(!admit(&next, 0));
         assert!(admit(&next, 1));
         assert!(!admit(&next, 0));
+    }
+
+    #[test]
+    fn panic_backtrace_allowance_counts_from_the_end_of_the_last_capture() {
+        let next = AtomicU64::new(0);
+        assert!(admit_after(&next, 0, 1000));
+        assert!(!admit_after(&next, 999, 1000));
+        // A slow capture ending at 1500 ms moves the next allowance to 2500.
+        next.fetch_max(2500, Ordering::Relaxed);
+        assert!(!admit_after(&next, 1001, 1000));
+        assert!(!admit_after(&next, 2499, 1000));
+        assert!(admit_after(&next, 2500, 1000));
     }
 
     #[test]
