@@ -117,6 +117,9 @@ const (
 const (
 	SourcePerson  = "person"
 	SourceHRAgent = "hr_agent"
+	// SourcePolicy is a stage the project's automatic dismissal policy
+	// applied or noticed (ADR-0050 decision 5k, issue 1617).
+	SourcePolicy = "policy"
 )
 
 // Appeal states.
@@ -169,6 +172,8 @@ var statuses = map[string]int{
 	RetentionCode:       http.StatusConflict,
 	ReinstateClosedCode: http.StatusConflict,
 	AppealClosedCode:    http.StatusConflict,
+	PolicyInvalidCode:   http.StatusUnprocessableEntity,
+	ActionClosedCode:    http.StatusConflict,
 }
 
 // Refusal is a typed, caller-safe refusal.

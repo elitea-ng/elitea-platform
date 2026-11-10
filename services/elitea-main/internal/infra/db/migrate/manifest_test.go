@@ -1090,7 +1090,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// snapshot, elitea_lifecycle.agent_scorecards and
 	// agent_workforce_proposals, suspension source dismissal, and the
 	// agents.workforce.manage grant to the project admin.
-	require.EqualValues(t, 236, Head(shared))
+	//
+	// 237: shared/0237_agent_workforce_policies.sql, the automatic hiring and
+	// dismissal policies (ADR-0050 decisions 5c and 5k, issue 1617):
+	// elitea_lifecycle.agent_workforce_policies (off by default) and
+	// agent_automatic_actions, the registry's probation and orphan columns,
+	// and source policy on agent_workforce_proposals (watch, suspend or
+	// retire only). No data, no permission.
+	require.EqualValues(t, 237, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

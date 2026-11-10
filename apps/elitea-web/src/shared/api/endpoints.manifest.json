@@ -4111,6 +4111,78 @@
       "usedBy": [
         "features/agent-workforce"
       ]
+    },
+    {
+      "id": "agentWorkforce.policy",
+      "method": "GET",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/policy",
+      "operationId": "getAgentWorkforcePolicy",
+      "source": "generated",
+      "responseSchema": "AgentWorkforcePolicy",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.setPolicy",
+      "method": "PUT",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/policy",
+      "operationId": "setAgentWorkforcePolicy",
+      "source": "generated",
+      "responseSchema": "AgentWorkforcePolicy",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.automaticActions",
+      "method": "GET",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/automatic_actions",
+      "operationId": "listAgentAutomaticActions",
+      "source": "generated",
+      "responseSchema": "ListAgentAutomaticActions200",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.undoAutoHire",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/automatic_actions/{actionId}/undo",
+      "operationId": "undoAgentAutoHire",
+      "source": "generated",
+      "responseSchema": "AgentAutomaticAction",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.keepAutoHire",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/automatic_actions/{actionId}/keep",
+      "operationId": "keepAgentAutoHire",
+      "source": "generated",
+      "responseSchema": "AgentAutomaticAction",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.objectAction",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/automatic_actions/{actionId}/object",
+      "operationId": "objectAgentAutomaticAction",
+      "source": "generated",
+      "responseSchema": "AgentAutomaticAction",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
     }
   ]
 }

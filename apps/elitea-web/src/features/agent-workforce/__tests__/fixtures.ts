@@ -19,6 +19,10 @@ export function workforceAgent(overrides: Partial<AgentWorkforceAgent> = {}): Ag
     suspension_source: '',
     legal_hold: false,
     is_hr_agent: false,
+    auto_hired_at: null,
+    probation_until: null,
+    probation_reviewed_at: null,
+    orphaned_since: null,
     scorecard: null,
     can_manage: true,
     is_owner: false,
@@ -78,6 +82,7 @@ export function workforceProposal(overrides: Partial<AgentWorkforceProposal> = {
     appeal_decided_at: null,
     appeal_note: null,
     created_at: '2026-11-09T04:00:00Z',
+    policy_rule: null,
     ...overrides,
   };
 }
