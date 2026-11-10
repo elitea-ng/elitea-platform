@@ -96,7 +96,10 @@ pub(super) fn code_child_visit(
     node_id: &str,
     input: &adk_rust::graph::State,
 ) -> Result<String, GraphError> {
-    let bytes = serde_json::to_vec(input).map_err(|_| {
+    // Canonical bytes: `State` is a hash map, whose order is not stable
+    // across processes, and a restored item must derive the same visit.
+    let ordered = input.iter().collect::<std::collections::BTreeMap<_, _>>();
+    let bytes = serde_json::to_vec(&ordered).map_err(|_| {
         GraphError::SerializationError("a Code child input is not serializable".to_owned())
     })?;
     let mut hash = digest::Context::new(&digest::SHA256);
@@ -140,6 +143,30 @@ impl Node for CodeBranchNode {
 
     async fn execute(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
         let result = self.inner.execute(context).await;
+        // D1: an attempt that may have started and has no owner proof ends
+        // here, typed and never repeated (its journal keeps the stop). One
+        // WARN fault line names the item's support reference, the one its
+        // failed join entry carries; nothing user-supplied.
+        if matches!(&result, Err(GraphError::Other(code))
+            if code == super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE)
+        {
+            elitea_faults::fault!(
+                tracing::Level::WARN,
+                code = elitea_faults::codes::PIPELINE_NODE_RECOVERY_CHILD_EFFECT_UNKNOWN,
+                event = "code_child_effect_unknown",
+                node_id = self.inner.name(),
+                support_ref = elitea_agent_runtime::graph::fanout::plan::support_ref_for(
+                    &context.config.thread_id
+                )
+            );
+            return Err(GraphError::NodeExecutionFailed {
+                node: self.inner.name().to_owned(),
+                message: format!(
+                    "{}: {CHILD_EFFECT_UNKNOWN_MESSAGE}",
+                    super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE
+                ),
+            });
+        }
         if result.is_err()
             && self.failure.lock().ok().and_then(|slot| *slot)
                 == Some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
@@ -156,6 +183,9 @@ impl Node for CodeBranchNode {
         result
     }
 }
+
+/// The readable sentence of a Code item that ended `child_effect_unknown`.
+pub(super) const CHILD_EFFECT_UNKNOWN_MESSAGE: &str = "The Code item was interrupted after it may have started, and its effect could not be proven. It was not run again.";
 
 /// A shared empty failure slot for one Code child.
 pub(super) fn failure_slot() -> CodeFailureSlot {

@@ -42,6 +42,8 @@ const (
 	PipelineCodeSlotWaited Code = "pipeline.code.slot_waited"
 	// The sandbox Supervisor answered busy to a Code attempt, so the attempt keeps its slot and retries with backoff until the Supervisor has room.
 	PipelineCodeSupervisorBusy Code = "pipeline.code.supervisor_busy"
+	// A Code item of a Map or Parallel was interrupted after it may have started and no owner proof showed its effect, so it ended typed and was not run again.
+	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
 	// A background runner failed its pass and will try again.
 	RunnerCycleFailed Code = "runner.cycle_failed"
 	// A background runner stopped on a dependency failure and is being restarted.

@@ -21,6 +21,23 @@ struct FakeCode {
     refuse_fanout: bool,
     /// Item indices whose attempt is refused by its own deadline check.
     refuse_items: Vec<i64>,
+    /// Item indices (Map) whose attempt ends as the journal ends an attempt
+    /// that may have started without owner proof (D1).
+    effect_unknown_items: Vec<i64>,
+    /// The JavaScript branch (Parallel) ends that way too.
+    effect_unknown_javascript: bool,
+    /// Every attempt, whatever its outcome.
+    attempts: StdMutex<usize>,
+    /// Item indices whose sandbox job fails (an ordinary Code failure).
+    fail_items: Vec<i64>,
+}
+
+/// The item index a Map worker reads, whatever its index channel is named.
+fn item_index(input: &Value) -> Option<i64> {
+    input
+        .get("item_index")
+        .or_else(|| input.get("secret_index_marker"))
+        .and_then(Value::as_i64)
 }
 
 fn receipt(result: &Value) -> Vec<u8> {
@@ -61,6 +78,21 @@ impl CodeSandboxRuntime for FakeCode {
         invocation: CodeInvocation<'_>,
     ) -> Result<Vec<u8>, (GraphError, Option<&'static str>)> {
         let input: Value = serde_json::from_slice(&invocation.input_json).unwrap();
+        *self.attempts.lock().unwrap() += 1;
+        if item_index(&input).is_some_and(|index| self.fail_items.contains(&index)) {
+            return Err((GraphError::Other("sandbox job failed".into()), None));
+        }
+        if item_index(&input).is_some_and(|index| self.effect_unknown_items.contains(&index))
+            || (self.effect_unknown_javascript
+                && invocation.language == super::super::code::CodeLanguage::JavaScript)
+        {
+            return Err((
+                GraphError::Other(
+                    super::super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE.into(),
+                ),
+                None,
+            ));
+        }
         if input["item_index"]
             .as_i64()
             .is_some_and(|index| self.refuse_items.contains(&index))
@@ -74,6 +106,8 @@ impl CodeSandboxRuntime for FakeCode {
         }
         self.activations.lock().unwrap().push(invocation.activation);
         let result = match input.get("entity") {
+            // A large item answers with its length, so the result stays small.
+            Some(Value::String(entity)) if entity.len() > 64 => json!(entity.len().to_string()),
             Some(entity) => json!(format!("{}-{}", entity, input["item_index"])),
             None => json!(format!(
                 "{}:{:?}",
@@ -395,4 +429,268 @@ fn a_direct_router_child_is_refused_with_its_own_text() {
             Ok(_) => panic!("a direct Router child compiled"),
         }
     }
+}
+
+/// D1, On Error `continue`: a Code branch that may have started without
+/// owner proof fails typed with the registered code, its readable sentence and
+/// its support reference; the other branch finishes and lands.
+#[tokio::test]
+async fn an_unproven_code_branch_fails_typed_and_the_others_finish_under_continue() {
+    let yaml = PARALLEL_CODE.replace("wait: all,", "wait: all, on_error: continue,");
+    let definition = PipelineDefinition::from_yaml(&yaml).unwrap();
+    let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(BranchAuthority::default());
+    let checkpointer: Arc<dyn Checkpointer> = authority.clone();
+    let runtimes =
+        PipelineNodeRuntimes::default().with_parallel(ParallelCompilerBinding::for_tests(
+            authority,
+            tokio::time::Instant::now() + Duration::from_secs(30),
+            None,
+        ));
+    let code = Arc::new(FakeCode {
+        effect_unknown_javascript: true,
+        ..FakeCode::default()
+    });
+    let graph = definition
+        .compile_subgraph_with_runtime(checkpointer, &with_code(runtimes, &code))
+        .unwrap();
+    let state = graph
+        .invoke(
+            HashMap::from([("topic".to_owned(), json!("t"))]),
+            ExecutionConfig::new("root-d1-continue"),
+        )
+        .await
+        .expect("On Error continue lands both branches");
+    let joined = state["joined"].as_array().unwrap();
+    assert_eq!(joined.len(), 2);
+    assert_eq!(joined[0]["status"], "succeeded");
+    assert_eq!(joined[0]["outputs"]["detail"], "t:Python");
+    assert_eq!(joined[1]["status"], "failed");
+    assert_eq!(
+        joined[1]["error"]["code"],
+        crate::agents::graph::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE
+    );
+    assert_eq!(
+        joined[1]["error"]["message_safe"],
+        crate::agents::graph::fanout_code_child::CHILD_EFFECT_UNKNOWN_MESSAGE
+    );
+    assert_eq!(
+        joined[1]["error"]["support_ref"].as_str().map(str::len),
+        Some(32)
+    );
+    assert_eq!(*code.attempts.lock().unwrap(), 2);
+}
+
+/// D1, On Error `stop`: the run ends typed with the item's code and its
+/// key; the items that completed keep their results in their own durable
+/// child receipts (a recovery replays them, never re-runs them).
+#[tokio::test]
+async fn an_unproven_code_item_stops_the_map_typed_and_keeps_completed_items() {
+    let yaml = MAP_CODE.replace("max_concurrency: 4", "max_concurrency: 1");
+    let definition = PipelineDefinition::from_yaml(&yaml).unwrap();
+    let authority = Arc::new(MemoryAuthority::default());
+    let (checkpointer, runtimes) = bound(&authority);
+    let code = Arc::new(FakeCode {
+        effect_unknown_items: vec![2],
+        ..FakeCode::default()
+    });
+    let graph = definition
+        .compile_subgraph_with_runtime(checkpointer, &with_code(runtimes, &code))
+        .unwrap();
+    let error = graph
+        .invoke(
+            HashMap::from([("entities".to_owned(), json!(["a", "b", "c", "d"]))]),
+            ExecutionConfig::new("root-d1-stop"),
+        )
+        .await
+        .expect_err("On Error stop ends the Map");
+    let message = error.to_string();
+    assert!(
+        message.contains("item '2'")
+            && message
+                .contains(crate::agents::graph::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE),
+        "{message}"
+    );
+    // Items 0 and 1 ran before item 2 (concurrency 1) and completed.
+    assert_eq!(code.activations.lock().unwrap().len(), 2);
+    let stores = authority.children.stores.lock().await;
+    let mut kept = 0;
+    for (thread, store) in stores.iter() {
+        if let Some(latest) = store.load(thread).await.unwrap()
+            && latest
+                .state
+                .get("item_result")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        {
+            kept += 1;
+        }
+    }
+    assert_eq!(kept, 2, "both completed items keep their durable results");
+}
+
+/// D3: a Map item reaches Code only through the Code input byte bound
+/// (512 KiB of input JSON): an item whose input is exactly at the bound runs,
+/// one byte more fails that item typed before any Code attempt.
+#[tokio::test]
+async fn a_map_item_reaches_code_only_within_the_code_input_byte_bound() {
+    // `{"entity":"<s>","item_index":0}` is 28 bytes plus the string.
+    const LIMIT: usize = 512 * 1024;
+    for (extra, admitted) in [(0, true), (1, false)] {
+        let item = "x".repeat(LIMIT - 28 + extra);
+        let definition = PipelineDefinition::from_yaml(MAP_CODE).unwrap();
+        let authority = Arc::new(MemoryAuthority::default());
+        let (checkpointer, runtimes) = bound(&authority);
+        let code = Arc::new(FakeCode::default());
+        let graph = definition
+            .compile_subgraph_with_runtime(checkpointer, &with_code(runtimes, &code))
+            .unwrap();
+        let result = graph
+            .invoke(
+                HashMap::from([("entities".to_owned(), json!([item]))]),
+                ExecutionConfig::new("root-code-bytes"),
+            )
+            .await;
+        assert_eq!(result.is_ok(), admitted, "extra {extra}: {result:?}");
+        assert_eq!(
+            *code.attempts.lock().unwrap(),
+            usize::from(admitted),
+            "an item over the bound never reaches Code"
+        );
+    }
+}
+
+const LOG_CHILD_ENV: &str = "ELITEA_CODE_FANOUT_LOG_CHILD";
+
+/// D3 log capture: a 64-item Code Map whose item values carry marker strings
+/// (and whose index channel is named as one) logs neither, nor any item
+/// value or input key, through ordinary failures and a D1 stop. The D1 stop
+/// is one WARN fault line with its registered sentence and support reference.
+#[test]
+fn a_64_item_code_map_logs_no_item_values_or_index() {
+    let output = elitea_faults::logtest::run_child(
+        "agents::graph::map_fanout_tests::code_child_tests::code_map_log_child",
+        LOG_CHILD_ENV,
+    );
+    for marker in ["secret_item_marker", "secret_index_marker"] {
+        assert!(
+            !output.stdout.contains(marker) && !output.stderr.contains(marker),
+            "{marker} reached the log"
+        );
+    }
+    let lines = output.operator_lines();
+    let code = elitea_faults::codes::PIPELINE_NODE_RECOVERY_CHILD_EFFECT_UNKNOWN;
+    let unknown: Vec<_> = lines
+        .iter()
+        .filter(|line| line.get("code").is_some_and(|value| value == code.as_str()))
+        .collect();
+    assert_eq!(unknown.len(), 1, "{}", output.stdout);
+    let line = unknown[0];
+    assert_eq!(line["level"], "WARN");
+    assert_eq!(line["msg"], code.sentence());
+    assert_eq!(line["event"], "code_child_effect_unknown");
+    assert_eq!(line["node_id"], "shout");
+    assert!(
+        line["support_ref"]
+            .as_str()
+            .is_some_and(|value| value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+    );
+    assert!(
+        lines.iter().any(|line| line
+            .get("error_code")
+            .is_some_and(|value| value == "pipeline.code_failed")),
+        "the ordinary failures were logged: {}",
+        output.stdout
+    );
+}
+
+#[test]
+fn code_map_log_child() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+    if !elitea_faults::logtest::is_child(LOG_CHILD_ENV) {
+        return;
+    }
+    tracing_subscriber::registry()
+        .with(
+            crate::diagnostics::log_layer(Some("debug"), std::io::stdout).expect("operator stream"),
+        )
+        .init();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let yaml = MAP_CODE
+            .replace("index: item_index", "index: secret_index_marker")
+            .replace(
+                "input: [entity, item_index]",
+                "input: [entity, secret_index_marker]",
+            );
+        let definition = PipelineDefinition::from_yaml(&yaml).unwrap();
+        // 64 items that all run; then an ordinary failure; then a D1 stop.
+        for (items, fake) in [
+            (64, FakeCode::default()),
+            (
+                4,
+                FakeCode {
+                    fail_items: vec![0],
+                    ..FakeCode::default()
+                },
+            ),
+            (
+                4,
+                FakeCode {
+                    effect_unknown_items: vec![0],
+                    ..FakeCode::default()
+                },
+            ),
+        ] {
+            let authority = Arc::new(MemoryAuthority::default());
+            let (checkpointer, runtimes) = bound(&authority);
+            let code = Arc::new(fake);
+            let graph = definition
+                .compile_subgraph_with_runtime(checkpointer, &with_code(runtimes, &code))
+                .unwrap();
+            let values = (0..items)
+                .map(|index| {
+                    json!({
+                        "name": format!("secret_item_marker_{index}"),
+                        "nested": [format!("secret_item_marker_nested_{index}")],
+                    })
+                })
+                .collect::<Vec<_>>();
+            let result = graph
+                .invoke(
+                    HashMap::from([("entities".to_owned(), Value::Array(values))]),
+                    ExecutionConfig::new("root-code-logs"),
+                )
+                .await;
+            if items == 64 {
+                assert!(result.is_ok(), "{result:?}");
+                assert_eq!(*code.attempts.lock().unwrap(), 64, "every item ran");
+            }
+        }
+    });
+    elitea_faults::logtest::child_ran();
+}
+
+/// A Code child's visit is a pure function of its branch, node and frozen
+/// input, whatever order the input map iterates in: a restored item derives
+/// the same visit (and the same journal) in another process.
+#[test]
+fn a_code_child_visit_is_canonical_over_its_input_order() {
+    let forward = State::from([
+        ("a".to_owned(), json!(1)),
+        ("b".to_owned(), json!({"y": 2, "x": 1})),
+    ]);
+    let visits = (0..32)
+        .map(|_| {
+            let mut input = State::new();
+            for (key, value) in &forward {
+                input.insert(key.clone(), value.clone());
+            }
+            crate::agents::graph::fanout_code_child::code_child_visit("3", "code", &input).unwrap()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(visits.len(), 1);
 }

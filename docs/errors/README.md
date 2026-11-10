@@ -77,6 +77,7 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 | `pipeline.code.nested_slot` | A Code attempt that already held a Code slot asked for a second one, so it was refused at once instead of waiting for a slot it holds itself. | Report it with the support reference: a code path acquires a Code slot inside another Code attempt, which must not happen. | operator | no | elitea-worker-rust |
 | `pipeline.code.slot_waited` | A Code attempt waited more than a second for a slot because this Worker was already running as many Code attempts on that Supervisor as its code_slots allow. | Nothing when it is rare; if it repeats, raise code_slots together with the Supervisor's concurrency. | operator | n/a | elitea-worker-rust |
 | `pipeline.code.supervisor_busy` | The sandbox Supervisor answered busy to a Code attempt, so the attempt keeps its slot and retries with backoff until the Supervisor has room. | Nothing when it is rare; if it repeats, more Worker slots share the Supervisor than its concurrency allows, so lower code_slots or raise the concurrency. | operator | yes | elitea-worker-rust |
+| `pipeline.node_recovery.child_effect_unknown` | A Code item of a Map or Parallel was interrupted after it may have started and no owner proof showed its effect, so it ended typed and was not run again. | Find the item by its support_ref in the run's failed join entry and check the target system for its effect; the run's other items are unaffected. | operator | no | elitea-worker-rust |
 
 ### runner
 

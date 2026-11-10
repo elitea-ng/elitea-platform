@@ -98,6 +98,14 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "pipeline.node_recovery.child_effect_unknown",
+      "sentence": "A Code item of a Map or Parallel was interrupted after it may have started and no owner proof showed its effect, so it ended typed and was not run again.",
+      "action": "Find the item by its support_ref in the run's failed join entry and check the target system for its effect; the run's other items are unaffected.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "pipeline.code.nested_slot",
       "sentence": "A Code attempt that already held a Code slot asked for a second one, so it was refused at once instead of waiting for a slot it holds itself.",
       "action": "Report it with the support reference: a code path acquires a Code slot inside another Code attempt, which must not happen.",

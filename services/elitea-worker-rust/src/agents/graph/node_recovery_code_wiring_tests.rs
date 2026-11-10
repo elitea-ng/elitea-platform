@@ -1737,3 +1737,6 @@ async fn real_pg_a_possibly_started_attempt_is_never_refused_after_preparation()
         }
     );
 }
+
+#[path = "node_recovery_code_fanout_pg_tests.rs"]
+mod fanout_pg_tests;

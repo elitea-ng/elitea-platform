@@ -229,3 +229,30 @@ fn a_map_item_channel_is_read_as_any_json_and_never_written() {
         ));
     }
 }
+
+/// D3: a Map item read by Code is bounded like any Code input: nesting of
+/// exactly 128 values is admitted, 129 is refused; the field count bound
+/// holds for the item's object too.
+#[test]
+fn a_map_item_is_bounded_by_the_code_input_depth_and_field_limits() {
+    let boundary = CodeStateBoundary::new(&BTreeMap::from([(
+        "entity".into(),
+        super::code_state::MAP_ITEM_INPUT_KIND.to_owned(),
+    )]))
+    .unwrap();
+    let nested = |values: usize| {
+        let mut value = json!(0);
+        for _ in 1..values {
+            value = json!([value]);
+        }
+        value
+    };
+    for (values, admitted) in [(128, true), (129, false)] {
+        let state = State::from([("entity".into(), nested(values))]);
+        let result = boundary.input_json(&state, &["entity".into()]);
+        assert_eq!(result.is_ok(), admitted, "{values} nested values");
+        if !admitted {
+            assert_eq!(result.unwrap_err(), CodeStateError::SizeLimit);
+        }
+    }
+}

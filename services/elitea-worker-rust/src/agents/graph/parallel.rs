@@ -2420,6 +2420,12 @@ fn branch_failure(code: &str) -> ChildFailure {
                 "The branch's pipeline uses a tool that changes data directly, which a \
                  parallel branch cannot run yet. It did not run."
             }
+            crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE => {
+                "The Code item could not start: too little time was left before the run's deadline."
+            }
+            super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE => {
+                super::fanout_code_child::CHILD_EFFECT_UNKNOWN_MESSAGE
+            }
             _ => "The branch failed.",
         },
     )
@@ -2650,6 +2656,10 @@ fn graph_error_code(error: &GraphError) -> &'static str {
         if names(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE) {
             return crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE;
         }
+        // D1: a Code child that may have started and has no owner proof.
+        if names(super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE) {
+            return super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE;
+        }
     }
     match error {
         GraphError::InvalidGraph(_) => "graph.invalid",
@@ -2720,6 +2730,7 @@ fn valid_failure_code(code: &str) -> bool {
             | BRANCH_AGENT_PAUSE_CODE
             | BRANCH_TOOL_UNAVAILABLE_CODE
             | crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE
+            | super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE
     )
 }
 
