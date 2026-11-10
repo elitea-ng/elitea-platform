@@ -123,7 +123,7 @@ unknown-effect visit for owner recovery).
 | Worker lib, whole suite | `cargo test --lib --all-features` | 3129 passed, 0 failed, 114 ignored |
 | Main | `TestDeadlineAdmissionFailuresShowTheirReadableText`, `TestDeadlineAdmissionTextsMatchTheFaultRegistry`, `TestOutputServerAcceptsDeadlineAdmissionFailureFrames`, `TestAnUnknownFailureIsRefusedOnceAndItsSameCodeFallbackEndsTheRunTyped` (C3) | package: 55 top-level tests pass |
 | FU-299 gates | `go test ./...` in `libs/go/faults` (well-formed, generated, guide, no orphans, legacy) | pass |
-| Helm render scripts (not CI-wired; chart dependencies built under a scratch `HELM_*` config) | `render-worker-sandbox.sh` (codeSlots: absent not written, 4 rendered as integer `code_slots`, 0/1025/2.5/"four" refused, 1024 rendered), `render-worker-node-recovery.sh` 16/16, `render-worker.sh` 13/13, `render-compiled-snapshots.py` OK; then every `render-*.sh` | 43 of 44 pass. **`render-helm3-parity.sh` was not run:** it needs a Helm 3 binary (`HELM3`). The host has only Helm v4.1.0, there is no Helm 3 image in the local Docker cache, and nothing was installed for this. Open item for anyone with Helm 3. |
+| Helm render scripts (not CI-wired; chart dependencies built under a scratch `HELM_*` config) | `render-worker-sandbox.sh` (codeSlots: absent not written, 4 rendered as integer `code_slots`, 0/1025/2.5/"four" refused, 1024 rendered), `render-worker-node-recovery.sh` 16/16, `render-worker.sh` 13/13, `render-compiled-snapshots.py` OK; then every `render-*.sh` | **44 of 44 pass.** `render-helm3-parity.sh` ran with `HELM3` set to the official Helm v3.17.3 darwin-arm64 release (`get.helm.sh`, its published SHA-256 checked, unpacked in the session scratchpad, not installed on PATH) and `HELM4` set to Helm v4.1.0: "Helm v3.17.3+ge4da497 and v4.1.0+g4553a0a render the same chart". |
 
 **How the real-PG tests run in CI.** They follow the file's pattern exactly: `#[ignore = "requires disposable
 PostgreSQL"]`, the harness reads `ELITEA_TEST_DATABASE_URL` through `crate::test_pg::database_url_var` and fails without
@@ -193,4 +193,3 @@ No database fixture was created.
 - Busy on the preparation Supervisor is not covered by `pipeline.code.supervisor_busy` (it keeps its own lookup retry).
 - N2: a Supervisor capacity advertised to the Worker (D2 (d)).
 - W3-2: call `admit_fanout_window` from the fan-out activation; a preparation bound if it proves needed (N3).
-- Open item: run `deploy/helm/tests/render-helm3-parity.sh` with a Helm 3 binary (`HELM3=<path>`). It was not run here (see Tests).
