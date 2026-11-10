@@ -16,6 +16,14 @@ interface ParallelBranchesProps {
   readonly disabled: boolean;
   readonly change: (branches: readonly unknown[]) => void;
 }
+/** A Code branch reads its listed inputs, or every state variable when the
+ * list is empty or exactly [messages], as a Code node does anywhere (R10). */
+function codeInputs(input: unknown): string {
+  const keys = extensionStrings(input);
+  return keys.length === 0 || (keys.length === 1 && keys[0] === 'messages')
+    ? t('pipelines.parallel.codeAllInputs', 'all state variables')
+    : keys.join(', ');
+}
 function OwnedAgentSummary({ ownerId, ordinal, disabled }: { readonly ownerId: string; readonly ordinal: number; readonly disabled: boolean }): ReactNode {
   const context = useContext(FlowEditorContext);
   if (!context) return null;
@@ -33,7 +41,11 @@ function OwnedAgentSummary({ ownerId, ordinal, disabled }: { readonly ownerId: s
       : agent.type === 'code'
         ? t('pipelines.parallel.codeScope', 'Code node {{node}} runs as this branch. Edit its code and inputs on the Code card.', { node: agent.id })
         : t('pipelines.parallel.agentScope', 'Agent {{node}} uses participant {{tool}}. Edit its own input mapping on the Agent card.', { node: agent.id, tool: extensionText(agent['tool']) })}</Typography>
-    <Typography variant="bodySmall">{t('pipelines.parallel.agentOutputs', 'Declared outputs: {{outputs}}. Task mapping: {{mode}}.', { outputs, mode: extensionText(task['type']) })}</Typography>
+    <Typography variant="bodySmall">{agent.type === 'code'
+      ? t('pipelines.parallel.codeIO', 'Declared inputs: {{inputs}}. Declared outputs: {{outputs}}.', {
+        inputs: codeInputs(agent.input), outputs,
+      })
+      : t('pipelines.parallel.agentOutputs', 'Declared outputs: {{outputs}}. Task mapping: {{mode}}.', { outputs, mode: extensionText(task['type']) })}</Typography>
     {agent.transition !== undefined && agent.transition !== null && <Button disabled={disabled} onClick={removeTransition}>
       {t('pipelines.parallel.removeTransition', 'Remove transition from {{node}}', { node: agent.id })}
     </Button>}

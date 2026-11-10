@@ -27,6 +27,20 @@ describe('fixed Parallel settings and YAML roundtrip', () => {
     expect(owner()).not.toHaveProperty('on_error');
     expect(owner()).not.toHaveProperty('join');
   });
+  it('summarises a Code branch by its inputs and outputs, never an Agent task mapping (R10)', async () => {
+    const yaml = parallelYaml.replace(
+      "  - id: Agent_right\n    type: agent\n    tool: right_participant\n    input_mapping: {task: {type: fstring, value: 'Keep {prefix}.'}}\n    output: [note]\n",
+      "  - id: Agent_right\n    type: code\n    language: python\n    code: '1'\n    input: [prefix]\n    output: [note]\n",
+    );
+    expect(yaml).not.toBe(parallelYaml);
+    const screen = renderExtensionCard(EditableParallelSettings, yaml);
+    expect(await screen.findByText(/Code node Agent_right runs as this branch/u)).toBeVisible();
+    expect(screen.getByText('Declared inputs: prefix. Declared outputs: note.')).toBeVisible();
+    expect(screen.getAllByText(/Task mapping:/u)).toHaveLength(1);
+    cleanup();
+    const all = renderExtensionCard(EditableParallelSettings, yaml.replace('    input: [prefix]\n', '    input: []\n'));
+    expect(await all.findByText('Declared inputs: all state variables. Declared outputs: note.')).toBeVisible();
+  });
   it('round-trips On Error and Join as the exact YAML keys and offers merge only with stop', async () => {
     const screen = renderExtensionCard(EditableParallelSettings, parallelYaml);
     const user = userEvent.setup();

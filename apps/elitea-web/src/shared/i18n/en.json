@@ -6081,6 +6081,8 @@
   "features.agentWorkforce.unsaved": "Save the agent first to see its scorecard.",
   "pages.agents.editApplication.tabs.workforce": "Workforce",
   "pipelines.parallel.codeScope": "Code node {{node}} runs as this branch. Edit its code and inputs on the Code card.",
+  "pipelines.parallel.codeIO": "Declared inputs: {{inputs}}. Declared outputs: {{outputs}}.",
+  "pipelines.parallel.codeAllInputs": "all state variables",
   "features.agentWorkforce.automatic.due": "Until {{due}}",
   "features.agentWorkforce.automatic.empty": "The policy has not done anything yet.",
   "features.agentWorkforce.automatic.heading": "{{agent}}: {{kind}} — {{status}}",
