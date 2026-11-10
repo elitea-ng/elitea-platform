@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
@@ -78,21 +79,33 @@ func (service *CurrentApplicationStartService) resolveAgentMemory(
 }
 
 // recalledMemoryInput is the run input's recalled_memory (#1826): each
-// entry the instructions show, by id, with its stored content.
-func recalledMemoryInput(entries []agentmemory.RecalledEntry) []*runtimev1.RecalledMemoryEntryV1 {
-	if len(entries) == 0 {
+// entry the instructions show, by id, with its stored content. None when
+// the splice did not land the block in the frozen instructions (a version
+// whose instructions are not prose): a brief may name only what the model
+// was shown.
+func recalledMemoryInput(recall AgentMemoryRecall, application []byte) []*runtimev1.RecalledMemoryEntryV1 {
+	if len(recall.Entries) == 0 || !frozenInstructionsShow(application, recall.Text) {
 		return nil
 	}
-	out := make([]*runtimev1.RecalledMemoryEntryV1, 0, len(entries))
-	for _, entry := range entries {
-		if entry.ID <= 0 {
-			continue
-		}
-		out = append(out, &runtimev1.RecalledMemoryEntryV1{
+	out := make([]*runtimev1.RecalledMemoryEntryV1, len(recall.Entries))
+	for i, entry := range recall.Entries {
+		out[i] = &runtimev1.RecalledMemoryEntryV1{
 			EntryId: strconv.FormatInt(entry.ID, 10), Content: entry.Content,
-		})
+		}
 	}
 	return out
+}
+
+// frozenInstructionsShow reports whether the input's frozen
+// version_details.instructions holds block.
+func frozenInstructionsShow(application []byte, block string) bool {
+	var fields struct {
+		VersionDetails struct {
+			Instructions string `json:"instructions"`
+		} `json:"version_details"`
+	}
+	return block != "" && json.Unmarshal(application, &fields) == nil &&
+		strings.Contains(fields.VersionDetails.Instructions, block)
 }
 
 // versionMemorySettings reads meta.memory of a frozen version document.

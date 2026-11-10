@@ -96,9 +96,14 @@ const (
 // on the entry alone, so the same entry is the same bytes on every turn and
 // a provider prompt cache still matches. A `[memory` in an entry's text or
 // a person's name is written `&#91;memory` (Neutralize), so no text can show
-// another entry's mark. Which ids a brief may name is never read back from
+// another entry's mark, and a `</agent_memory>` in either is dropped, so
+// neither can close the block. Which ids a brief may name is never read back from
 // this text: Main sends them in the run input (RecalledEntries).
 func Render(entries []Candidate, names map[int64]string) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	entries = shown(entries)
 	if len(entries) == 0 {
 		return ""
 	}
@@ -123,7 +128,7 @@ func Render(entries []Candidate, names map[int64]string) string {
 				name = "a person in this conversation"
 			}
 			builder.WriteString(", about ")
-			builder.WriteString(Neutralize(name))
+			builder.WriteString(Neutralize(strings.ReplaceAll(name, blockClose, "")))
 		}
 		builder.WriteString("] ")
 		builder.WriteString(Neutralize(strings.ReplaceAll(entry.Content, blockClose, "")))
@@ -139,8 +144,10 @@ type RecalledEntry struct {
 	Content string
 }
 
-// RecalledEntries is the id and stored content of each entry, in order.
+// RecalledEntries is the id and stored content of each entry Render shows,
+// in order, at most MaxRecallEntries.
 func RecalledEntries(entries []Candidate) []RecalledEntry {
+	entries = shown(entries)
 	if len(entries) == 0 {
 		return nil
 	}
@@ -149,6 +156,29 @@ func RecalledEntries(entries []Candidate) []RecalledEntry {
 		out[i] = RecalledEntry{ID: entry.ID, Content: entry.Content}
 	}
 	return out
+}
+
+// shown is the entries Render shows and RecalledEntries carries, the same
+// set: each with a stored id (an entry without one has no mark a brief
+// could name), at most MaxRecallEntries.
+func shown(entries []Candidate) []Candidate {
+	kept := entries
+	for i, entry := range entries {
+		if entry.ID <= 0 {
+			kept = make([]Candidate, 0, len(entries))
+			kept = append(kept, entries[:i]...)
+			for _, rest := range entries[i:] {
+				if rest.ID > 0 {
+					kept = append(kept, rest)
+				}
+			}
+			break
+		}
+	}
+	if len(kept) > MaxRecallEntries {
+		kept = kept[:MaxRecallEntries]
+	}
+	return kept
 }
 
 // markWord opens an entry's mark, after `[`.

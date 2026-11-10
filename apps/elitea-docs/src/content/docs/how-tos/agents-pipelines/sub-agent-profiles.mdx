@@ -77,7 +77,7 @@ The agent names a note by that number in `memory_entries`, or by an `entry_id` t
 
 The id depends on the note only, so the notes have the same text on every turn and prompt caching still works. If a note's text or a person's name contains `[memory`, the agent sees `&#91;memory` there instead, so a note cannot fake the id of another note.
 
-A regenerated or continued answer is given no notes at the start of the turn. It can pass on only notes that `recall` returns.
+A regenerated or continued answer is given no notes at the start of the turn. It can pass on only notes that `recall` returns. An agent that wakes when its sub-agents finish keeps the notes its turn started with. A note the agent deletes with `forget` can no longer be passed on in the same turn.
 
 A refusal is a tool result that the model reads. No sub-agent starts. The sub-agent gets the checked brief before its task, marked as information and not instructions. The brief counts against the sub-agent's token budget.
 

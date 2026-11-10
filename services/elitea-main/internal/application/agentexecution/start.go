@@ -14,6 +14,7 @@ import (
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
@@ -468,6 +469,12 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		ctx, request.ProjectID, target.ApplicationID, request.ConversationUUID,
 		currentMemoryRecallUserInputText(request.UserInput), target.VersionDetails,
 	)
+	if agentMemory.Text != "" {
+		// #1826: the other injected blocks share the instructions with the
+		// agent's notes, so none of them may show a `[memory N, ...]` mark.
+		memoryRecall.Text = agentmemory.Neutralize(memoryRecall.Text)
+		projectContextText = agentmemory.Neutralize(projectContextText)
+	}
 	modelRequest := request
 	modelRequest.UserInput = floorModelInput(request)
 	input, view, err := currentApplicationInputWithView(
@@ -481,7 +488,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	input.Floor = heartbeatFloor(floor.input(request.TargetParticipantID), request.Heartbeat)
 	input.CurrentMessageId = currentMessageID(request)
 	// #1826: the entries the instructions show, so a brief can name them.
-	input.RecalledMemory = recalledMemoryInput(agentMemory.Entries)
+	input.RecalledMemory = recalledMemoryInput(agentMemory, input.GetApplication())
 	grant, chain, err := service.admitUnattended(ctx, unattendedTarget{
 		request: request.Unattended, continuation: request.UnattendedContinuation,
 		capabilityID: executiondomain.AgentApplicationCapability, input: input,

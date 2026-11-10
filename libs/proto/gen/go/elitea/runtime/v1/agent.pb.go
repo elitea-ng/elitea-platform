@@ -337,7 +337,9 @@ type AgentExecutionInputV1 struct {
 	// `context.memory_entries`; the worker then passes the content stored
 	// here, never the model's text. Main recalls an entry about a person only
 	// while that person is in the conversation. EMPTY: no agent memory
-	// recalled, a pipeline, a regeneration or a continuation. Workers are
+	// recalled, a pipeline, a regeneration or a continuation. An input
+	// derived from a frozen one (a fan-out wake) keeps it unchanged, since
+	// its frozen instructions still show the same entries. Workers are
 	// upgraded before Main, because a worker from an earlier release refuses
 	// this tag.
 	RecalledMemory []*RecalledMemoryEntryV1 `protobuf:"bytes,76,rep,name=recalled_memory,json=recalledMemory,proto3" json:"recalled_memory,omitempty"`

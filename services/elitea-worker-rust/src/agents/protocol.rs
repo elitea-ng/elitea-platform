@@ -761,9 +761,10 @@ fn current_message_id(id: &str) -> Result<String, AgentProtocolError> {
 }
 
 /// The most entries Main recalls into one turn (`agentmemory.MaxRecallEntries`).
-const MAX_RECALLED_MEMORY: usize = 50;
+#[allow(clippy::cast_possible_truncation)]
+const MAX_RECALLED_MEMORY: usize = super::agent_memory_tools::MAX_RECALL_ENTRIES as usize;
 /// The longest stored entry (`agentmemory.MaxContentBytes`).
-const MAX_RECALLED_MEMORY_BYTES: usize = 2048;
+const MAX_RECALLED_MEMORY_BYTES: usize = super::agent_memory_tools::MAX_CONTENT_BYTES;
 
 /// #1826: the entries Main recalled into the instructions. Each id is a
 /// positive decimal number of at most 19 digits, named once; each content
