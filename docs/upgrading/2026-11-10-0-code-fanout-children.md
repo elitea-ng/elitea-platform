@@ -7,8 +7,10 @@
     - A Router is still refused as a direct Map worker or branch, now with its own text: "a Router runs inside a child
       pipeline, not as a Parallel branch or Map worker". Saved pipelines that contain Code, as a worker or branch, are
       still refused (W3-2b).
-    - A Code item that may already have started and would need an operator ends with a readable failure for that item
-      and is never repeated. Operator recovery per item is not in this change.
+    - A Code item that may already have started, and whose effect no owner proof can settle, ends with a readable
+      failure for that item and is never repeated; the other items keep their results. The Worker logs one WARN line,
+      code `pipeline.node_recovery.child_effect_unknown`, with `node_id` and the item's `support_ref` (the same one its
+      failed entry in the Map or Parallel result shows). Operator recovery per item is not in this change.
   - **A fan-out of Code items is checked against the run's deadline before any item starts.** When the items cannot
     finish in the time left (`ceil(items / min(concurrency, code_slots)) × Code timeout + 90 s`), the node is refused
     before anything is frozen or started and the chat shows: "The fan-out node could not start: too little time was

@@ -2,7 +2,8 @@
 
 Plan and review: `handoffs/point5-wave1-20261008/w3-2/PLAN.md` and `REVIEW-PLAN.md`. W3-2a is §2.1 (the Code arms
 only), §2.2, §2.3, §2.4 and §2.5. Saved pipelines with Code, Router inside them and the `ContainsCode` deletion are
-W3-2b. §2.6 (per-thread operator recovery) is **not** in this PR; see "Deviations". Stacked on W3-1 (#1879).
+W3-2b. §2.6 (per-thread operator recovery) is **not** in this PR: it is FU-310 (exit work), see "Deviations" and the
+F row below. Stacked on W3-1 (#1879).
 
 Decisions applied: Q2 the sum of a child's Code timeouts (a direct Code child is its one timeout; the helper sums, for
 2b), Q3 the smallest `code_slots` among the child's targets, Q4 a second check after preparation, Q5 a task-local
@@ -85,6 +86,23 @@ ends typed and is never re-run blindly.
   the W3-1 refusal with `cause: preparation`, the hydrated job is released and the slot dropped. It is skipped when
   `prior_dispatch` is true (C2). Main's intent is already finalized at that point (hydration needs it); an intent with
   no submission is inert.
+- **D5, a recovered intent without a submission marker.** `prior_dispatch` is read from the dispatch journal's
+  submission marker, not from Main's intent. An attempt recovered after a crash between the intent and the marker has
+  no marker, counts as fresh, and may be refused by N3. That is correct: an intent without a submission is inert (the
+  Supervisor never received the job), so refusing it starts nothing and repeats nothing.
+- **D1, an item without owner proof.** A Code child whose attempt may have started and whose owner proof is missing
+  (the journal's operator decision inside a visit-scoped child) ends with `pipeline.node_recovery.child_effect_unknown`
+  (registered, `worker.json`). `CodeBranchNode` (`fanout_code_child.rs:150`) writes one WARN fault line with the code,
+  `node_id` and the item's `support_ref` (the one its failed join entry carries, `support_ref_for(child thread)`) and
+  fails the member with that code; `graph_error_code` keeps it (`parallel.rs:2660`) and the join entry carries its
+  readable sentence (`CHILD_EFFECT_UNKNOWN_MESSAGE`, `parallel.rs:2426`). The journal keeps the stop, so the item is
+  never run again; the other items keep their results (On Error `continue` lands them, `stop` ends the run typed with
+  the completed children's durable receipts kept). Where owner proof exists the item is reconciled from it (C), and an
+  ordinary Worker or Supervisor loss is R/I; see the real-PG proofs.
+- **Canonical visit.** `code_child_visit` hashes the input through a sorted map (`fanout_code_child.rs:101`). The first
+  version hashed the `State` hash map directly, whose order differs per process; the Worker-replacement real-PG test
+  found that a restored item derived another visit and the replacement refused the frozen occurrence
+  (`graph.parallel.stale_activation`). Fixed in `61580c376`; `a_code_child_visit_is_canonical_over_its_input_order`.
 - **N1.** `CodeNode` records its registered failure code into a slot (`with_failure_slot`, `code_runtime.rs:277`);
   `CodeBranchNode` (`fanout_code_child.rs:120`) names a Code deadline refusal by that code, and `graph_error_code`
   keeps it as the member's failure code (`parallel.rs:2650`, restored receipts accept it).
@@ -100,13 +118,19 @@ ends typed and is never re-run blindly.
 | `node_recovery_code_debug_caller_tests.rs` (real remote staging path) | `a_code_child_visit_names_its_fanout_owner_scope` (C1 Worker half), `a_code_child_scope_serves_only_its_own_visit`, `a_code_child_that_needs_an_operator_ends_typed_and_holds_no_slot` (C4) | pass |
 | `code_state_tests.rs` | `a_map_item_channel_is_read_as_any_json_and_never_written` | pass |
 | `fanout_families_parity_tests.rs` (N2) | `the_compiler_admits_exactly_the_contract_fanout_families` | pass |
-| Worker real PostgreSQL (`node_recovery_code_wiring_tests.rs`, CI prefix `agents::graph::node_recovery_runtime::tests::code_owner_tests::`) | `real_pg_two_sibling_attempts_on_one_slot_both_complete_never_nested` (R1/C3, slots 1, no failure event), `real_pg_preparation_past_the_window_is_refused_before_any_submission` (N3), `real_pg_a_possibly_started_attempt_is_never_refused_after_preparation` (C2) | the whole prefix with `--ignored`: 27 passed, 0 failed on a disposable PostgreSQL 17 |
-| Worker lib | `cargo test --offline --locked --lib --all-features` | 3163 passed, 0 failed, 117 ignored. With `ELITEA_TEST_DATABASE_URL` set as CI sets it: 3160 passed; the 3 `graph_receipts` proofs need the PostgreSQL 18 guard and were not runnable on the PostgreSQL 17 container (unrelated to this change) |
+| Worker real PostgreSQL (`node_recovery_code_wiring_tests.rs`, CI prefix `agents::graph::node_recovery_runtime::tests::code_owner_tests::`) | `real_pg_two_sibling_attempts_on_one_slot_both_complete_never_nested` (R1/C3, slots 1, no failure event), `real_pg_preparation_past_the_window_is_refused_before_any_submission` (N3), `real_pg_a_possibly_started_attempt_is_never_refused_after_preparation` (C2) | see the next row |
+| Worker real PostgreSQL, fan-out (`node_recovery_code_fanout_pg_tests.rs`, same prefix): a Map compiled by the production compiler over the production checkpoint family (`PostgresCheckpointer` + application family lending each branch its node journals), the production `RemoteCodeRuntime`, fake Main and Supervisor; a Worker replacement is a dropped run plus a later claim (fence) resuming the frozen occurrence | `real_pg_a_map_of_8_code_items_survives_worker_replacement` (plan test 1: killed with 4 items completed and 2 submitted; after the takeover 8 dispatch identities (the first 6 kept), 8 dispatch rows all resolved, 10 submissions = 4 completed once + 2 re-attached + 2 fresh, one landed answer per item: R), `real_pg_a_supervisor_losing_code_items_reruns_each_once` (plan test 2: two runtimes lost, each re-run once with a new identity, 6 submissions, 6 resolved rows, 4 answers: I), `real_pg_a_platform_client_code_item_killed_after_dispatch_is_reconciled_never_rerun` (plan test 5: killed after dispatch, then runtime lost; with the owner journal proving nothing unresolved it settles typed (C); without that proof it ends `child_effect_unknown` (F); claims 2 and 3 each, one identity, never re-run), `real_pg_per_child_code_overhead_is_within_its_budget` | the whole prefix with `--ignored`: **31 passed, 0 failed** on PostgreSQL 17 and three times on PostgreSQL 18 |
+| `graph_receipts` (PostgreSQL 18 guard) | `cargo test --lib --all-features graph_receipts` with `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18` on `postgres:18` (18.4) | 3 passed, 0 failed |
+| D1, D3 unit (`fanout_code_child_tests.rs`, `code_state_tests.rs`) | `an_unproven_code_branch_fails_typed_and_the_others_finish_under_continue` (code, readable sentence, 32-hex support_ref), `an_unproven_code_item_stops_the_map_typed_and_keeps_completed_items`, `a_map_item_reaches_code_only_within_the_code_input_byte_bound` (512 KiB exactly vs +1 byte: Code never called), `a_map_item_is_bounded_by_the_code_input_depth_and_field_limits` (128 vs 129 nested values), `a_64_item_code_map_logs_no_item_values_or_index` (markers in every item value and as the index channel's name; none in the log; the D1 stop is one WARN line with its sentence and support_ref), `a_code_child_visit_is_canonical_over_its_input_order` | pass |
+| Worker lib | `cargo test --offline --locked --lib --all-features` | **3170 passed, 0 failed, 121 ignored**; the same with `ELITEA_TEST_DATABASE_URL` and the PostgreSQL 18 guard set as CI sets them: 3170 passed, 0 failed |
 | Main `pipelinelimits` | `TestFanoutChildFamiliesMatchTheSharedContract` (N2), `TestCheckAdmitsACodeMapWorkerAndACodeParallelBranch`, `TestCheckRefusesADirectRouterChildWithItsOwnText` | pass |
 | Main `repos` (C1) | `TestFanoutCodeChildScopeResolvesItsOwnerAndFailsClosed`: admitted Map item, Parallel branch, last index; refused scope from another execution, index outside the frozen count, frozen count above `max_items`, empty family, Parallel ordinal outside its branches, branch at the wrong ordinal, foreign project, node id not owned by the scope, visit node differing from the scope, owned node not Code, forged family for a Map node, forged family kind, root thread as child thread, child thread of the other family, visit on another thread, unknown scope field. `TestAMapItemCodeWorkerInputPolicyAdmitsOnlyItsItemAndIndex` | pass |
-| Web | `graphExtensions.families.test.ts` (contract parity, Code admitted in both families, Router text in both) | 238 files in `src/features/pipelines`: 2656 passed, 1 expected fail |
+| Main `pipelinelimits` (D7) | `TestTheBranchRefusalSentenceNamesCodeAsTheWebEditorDoes` | pass |
+| Web | `graphExtensions.families.test.ts` (contract parity, Code admitted in both families, Router text in both); the copy naming Code in `graphParallelAdmission.helpers.test.ts:97`, `ParallelSettings.test.tsx`, `ParallelNode.test.tsx` | `src/features/pipelines` + i18n: 245 files, 2790 passed, 1 expected fail; `tsc --noEmit`, oxlint and the i18n check clean |
 
-Existing tests changed: `map_forms_test.go` `TestCheckRefusesAMapWorkerOfAnUnsupportedForm` drops `code` from its
+Existing tests changed: the label and sentence assertions in `graphParallelAdmission.helpers.test.ts:97`,
+`ParallelSettings.test.tsx` (4) and `ParallelNode.test.tsx` (1) now name Code (D7, by decision);
+`map_forms_test.go` `TestCheckRefusesAMapWorkerOfAnUnsupportedForm` drops `code` from its
 refused list; `graphMapAdmission.helpers.test.ts` "refuses unreviewed %s worker effects" drops `code`;
 `graphMapAdmission.v2.test.ts` pins the Map worker list with `code`. Fixture literals of `CompilerParallelBranches`
 gained the two new fields (`code: None, code_recovery: false`) in four test files.
@@ -116,9 +140,24 @@ gained the two new fields (`code: None, code_recovery: false`) in four test file
 - Activation admission is in memory, inside the existing `freeze` after its one `load`: no new round trip, O(children).
 - A Code child costs what a root Code node costs plus nothing per sibling: one visit-scoped journal per attempt (the
   `n1:` writer activation), its visit, preparation and submission. Slots bound the Supervisor load (W3-1).
-- Not measured here: the plan's +30 ms p99 per-child overhead budget and "64 Code items prepare in 2 transactions".
-  The 64-item batching is the adapter's existing `prepare_children` (2 transactions for any child count); a Code
-  child adds no row there. Measurement is a follow-up.
+- **Per-child overhead budget, measured** (`real_pg_per_child_code_overhead_is_within_its_budget`). Method: user code
+  excluded (the fake Supervisor answers at once); every run on a fresh thread and claim over real PostgreSQL with the
+  production compiler, checkpoint family, node journals and `RemoteCodeRuntime`. One sample runs a root chain of 1 and
+  of 9 Code nodes and a Map (concurrency 1) of 1 and of 9 Code items; the marginal cost of a root Code node is
+  `(root9 − root1)/8`, of a Code child `(map9 − map1)/8`, and their difference is the per-child overhead, so the Map's
+  one-time activation (freeze, join) is not charged to its children (it is reported separately). 20 samples after one
+  warm-up. Gate: p99(overhead) ≤ 30 ms (`CHILD_OVERHEAD_P99`).
+
+  | Run (MacBook, Docker PostgreSQL) | root Code p50 / p99 | Code child p50 / p99 | overhead p50 / p99 | Map activation p50 / p99 |
+  |---|---|---|---|---|
+  | PostgreSQL 17 | 17.0 / 31.7 ms | 18.5 / 36.9 ms | 1.6 / **8.6 ms** | 15.6 / 36.1 ms |
+  | PostgreSQL 18, run 1 | 17.8 / 41.1 ms | 20.4 / 29.4 ms | 1.7 / **5.7 ms** | 16.0 / 56.1 ms |
+  | PostgreSQL 18, run 2 | 17.5 / 32.9 ms | 19.8 / 31.5 ms | 1.7 / **9.8 ms** | 15.7 / 27.8 ms |
+  | PostgreSQL 18, run 3 | 17.9 / 124.8 ms | 18.5 / 52.6 ms | 0.0 / **3.7 ms** | 16.9 / 29.6 ms |
+
+  The samples ran with the other tests of the prefix in parallel, so the absolute p99s are noisy; the per-sample
+  difference cancels most of that noise. The 64-item preparation is the adapter's existing `prepare_children`
+  (2 transactions for any child count); a Code child adds no row there.
 
 ## Durability
 
@@ -127,6 +166,8 @@ gained the two new fields (`code: None, code_recovery: false`) in four test file
 - An activation is frozen once; admission runs only before that first freeze (`parallel_checkpoint.rs:139`), so a
   restart never refuses started children (`a_frozen_activation_is_never_re_admitted_on_resume`).
 - N3 runs before the durable submission marker and only for a fresh attempt (`real_pg_..._never_refused_after_preparation`).
+- A replacement Worker resumes the frozen occurrence: completed items replay, in-flight items re-attach to their own
+  dispatch identity, and every item lands once (`real_pg_a_map_of_8_code_items_survives_worker_replacement`).
 
 ## Resilience
 
@@ -154,13 +195,22 @@ gained the two new fields (`code: None, code_recovery: false`) in four test file
 
 | Component × phase | Class | Enforced by | Proven by |
 |---|---|---|---|
-| Worker × Code child running (fresh, lost runtime) | R / I (FU-214 retries) | per-child visit-scoped journal, `RecoverableNode` (`parallel_compiler.rs:1034`) | journal path tests (W3-1 wiring suite) on the same `RemoteCodeRuntime`; a fan-out-level process-replacement test is a follow-up |
-| Worker × Code child that may have started and needs an operator | F (typed `child_effect_unknown`, never repeated, no slot held) | `node_recovery_runtime.rs` visit rule | `a_code_child_that_needs_an_operator_ends_typed_and_holds_no_slot` |
+| Worker lost mid-Map, items completed or in flight (P10 in P13) | R (completed replay, in-flight re-attach to their own identity) | frozen occurrence + per-child receipts, per-child visit-scoped journal (`parallel_compiler.rs:1034`), canonical visit (`fanout_code_child.rs:101`) | `real_pg_a_map_of_8_code_items_survives_worker_replacement` |
+| Supervisor loses a Code item's runtime (P12/P13) | I (re-run once, new identity, FU-214) | the child's `RecoverableNode` with the default policy | `real_pg_a_supervisor_losing_code_items_reruns_each_once` |
+| Platform-client Code item killed after dispatch, owner proof present (P11 in P13) | C (reconciled from the owner's journal, settles typed, never re-run) | the attempt's owner query, same as root Code | `real_pg_a_platform_client_code_item_killed_after_dispatch_is_reconciled_never_rerun` (Effects::None) |
+| A Code item that may have started, owner proof missing | **F** (typed `child_effect_unknown`, readable sentence, support_ref, never repeated, partial results kept, no slot held) | `node_recovery_runtime.rs` visit rule, `CodeBranchNode` (`fanout_code_child.rs:150`) | `..._is_reconciled_never_rerun` (Effects::Possible), `an_unproven_code_branch_..._under_continue`, `an_unproven_code_item_stops_the_map_typed_and_keeps_completed_items`, `a_code_child_that_needs_an_operator_ends_typed_and_holds_no_slot` |
 | Worker × activation refused by deadline | F (typed, nothing started) | `admit` in `freeze` (`parallel_checkpoint.rs:139`) | `a_refused_activation_freezes_and_starts_nothing`, `a_refused_code_fanout_starts_no_item_and_ends_typed`, 64/65 and limit−1 ms |
-| Worker × refused after preparation (N3) | F (typed, never submitted) | `code_attempt_remote.rs:380` | `real_pg_preparation_past_the_window_is_refused_before_any_submission` |
-| Worker × restart after freeze | R (not re-admitted) | early return in `freeze` | `a_frozen_activation_is_never_re_admitted_on_resume` |
+| Worker × refused after preparation (N3) | F (typed, never submitted) | `code_attempt_remote.rs:378-380` | `real_pg_preparation_past_the_window_is_refused_before_any_submission` |
+| Worker × restart after freeze | R (not re-admitted) | early return in `freeze` | `a_frozen_activation_is_never_re_admitted_on_resume`, the Worker-replacement test |
 | Main × Code child visit authorization | fails closed | `code_source_definition.go:101` | `TestFanoutCodeChildScopeResolvesItsOwnerAndFailsClosed` |
-| Main × operator recovery of two children | **gap**: not reachable in 2a (children never suspend); §2.6 deferred | — | — |
+| Main × operator recovery of two children | not reachable in 2a: no child suspends; the item that would need an operator is the F row above | — | FU-310 (exit work) |
+
+**Why F is honest here.** F applies only where the attempt may have started and no owner proof decides its effect:
+inside a member there is no operator route yet (FU-310 adds the member-scoped pause, Main's per-thread visits and the
+UI). Without it the alternatives are a blind re-run (forbidden: the effect may have happened) or a silent wait. F
+stops that one item typed with a support reference, never repeats it, keeps the other items, and holds no Code slot.
+Wherever proof exists it is used: an ordinary Worker loss re-attaches (R), a lost runtime re-runs once (I), and a
+platform-client item with the owner's proof is reconciled (C).
 
 ## Conditions
 
@@ -183,21 +233,22 @@ gained the two new fields (`code: None, code_recovery: false`) in four test file
 
 ## Deviations from the plan
 
-1. **§2.6 is deferred.** The 0146 index swap and Main's multi-visit control are not in this PR. Per-child operator
+1. **§2.6 is deferred** to **FU-310 (exit work)**, registered before ETL acceptance. The 0146 index swap and Main's multi-visit control are not in this PR. Per-child operator
    recovery also needs the Worker to raise a member-scoped `pipeline_node_recovery` pause through the fan-out card
    path, Main to project and poll per activation, and the UI to show several cards; none exists. In 2a a Code child
    that would need an operator ends typed (`child_effect_unknown`, never repeated) as a saved child's journaled call
-   does (FU-248). Registered as a follow-up with the Worker pause path.
+   does (FU-248); the F row above records it and its justification.
 2. **C1 uses a stateless owner scope** resolved against the run's frozen root source, not the saved-child registry
    (`execution_saved_child_scopes`): that registry has no registration route and no Worker provider in production.
-3. **Explicit `recovery:` declarations on a fan-out Code child stay refused** (`node_recovery_definition.rs` unchanged);
-   the child uses the default policy, as a root Code node without a declaration does. A failure route stays root only.
+3. **Explicit `recovery:` declarations on a fan-out Code child stay refused** (`node_recovery_definition.rs` unchanged,
+   FU-311); the child uses the default policy, as a root Code node without a declaration does. A failure route stays
+   root only (FU-312).
 4. **N3 applies to the journaled path** (the production profile). The raw path (`execute`, Code tools) keeps W3-1's
    admission only.
-5. **Code children do not stream their trace phases** to the chat (no event sender inside the member, like FU-260 for
-   nested LLM nodes). The member's lifecycle frames are unchanged.
-6. **Web copy.** The generic Parallel refusal sentence and the picker label still read "Agent or LLM node": existing
-   tests pin both texts; Main keeps the same sentence for parity. The Router text and a Code branch summary are new.
+5. **Code children do not stream their trace phases** to the chat (FU-313; no event sender inside the member, like
+   FU-260 for nested LLM nodes). The member's lifecycle frames are unchanged.
+6. **Web copy (D7, done).** The generic Parallel refusal sentence, the branch picker label and the owner hint name Code;
+   Main's sentence is the same, pinned by `TestTheBranchRefusalSentenceNamesCodeAsTheWebEditorDoes`.
 
 ## Real-browser evidence
 
@@ -205,8 +256,10 @@ Pending (done by the orchestrating session): plan §5 cases 1, 3, 4, 5 and 6 on 
 
 ## Follow-ups
 
-- §2.6: per-thread pending visits (migration, Main control, Worker member pause, UI) with C5's typed refusal.
-- Fan-out-level real-PG process-replacement tests (plan §4 tests 1, 2 and 5) and the per-child overhead budget.
-- Code child trace phases in the member tier.
-- Explicit recovery policies on fan-out Code children.
-- The Web picker label and the generic refusal sentence naming Code (needs the pinned tests updated).
+- **FU-310 (exit work):** per-child operator recovery: the 0146 index swap to per-thread pending visits, Main control
+  (resume at zero, a typed refusal on the old index for C5), the Worker's member-scoped `pipeline_node_recovery` pause
+  and the UI for several cards. Until then the F row above applies.
+- **FU-311:** a `recovery:` block on a fan-out Code child.
+- **FU-312:** failure routes resolved inside a child.
+- **FU-313:** streaming Code trace phases from children.
+- The raw path (`execute`, Code tools) has no N3 re-check.
