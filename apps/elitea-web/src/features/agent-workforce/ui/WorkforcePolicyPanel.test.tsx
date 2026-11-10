@@ -3,6 +3,7 @@
  * only a manager edits it, a save sends the input shape, and each automatic
  * action offers exactly the decisions the server says are open.
  */
+import { QueryClient } from '@tanstack/react-query';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
@@ -13,7 +14,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 import { renderWithQueryAndTheme } from '@/test/renderWithQueryAndTheme';
 
-import { formOf, inputOf, withThreshold } from '../lib/policy';
+import { formOf, inputOf, typeThreshold, withThreshold } from '../lib/policy';
 import { WorkforcePolicyPanel } from './WorkforcePolicyPanel';
 
 const BASE = '/api/v2';
@@ -118,6 +119,31 @@ describe('WorkforcePolicyPanel', () => {
     });
   });
 
+  it('does not save a cleared threshold as 0', async () => {
+    const record = mock(policy());
+    renderWithQueryAndTheme(<WorkforcePolicyPanel projectId="7" />);
+    const unused = await screen.findByTestId('agent-workforce-rule-unused-0');
+    await userEvent.clear(unused);
+    expect((unused as HTMLInputElement).value).toBe('');
+    expect(screen.getByTestId('agent-workforce-policy-save')).toBeDisabled();
+    await userEvent.type(unused, '120');
+    await userEvent.click(screen.getByTestId('agent-workforce-policy-save'));
+    await waitFor(() => expect(record.saved).toHaveLength(1));
+    expect((record.saved[0] as { auto_dismiss_rules: typeof RULES }).auto_dismiss_rules[1]?.conditions[0]?.value).toBe(120);
+  });
+
+  it('keeps unsaved edits when the policy refetches', async () => {
+    mock(policy());
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    renderWithQueryAndTheme(<WorkforcePolicyPanel projectId="7" />, queryClient);
+    const grace = await screen.findByTestId('agent-workforce-policy-grace');
+    await userEvent.clear(grace);
+    await userEvent.type(grace, '21');
+    await queryClient.refetchQueries();
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    expect(screen.getByTestId('agent-workforce-policy-grace')).toHaveValue(21);
+  });
+
   it('still offers Keep, but not Undo, once the undo window closed', async () => {
     const record = mock(policy(), [action({ can_undo: false })]);
     renderWithQueryAndTheme(<WorkforcePolicyPanel projectId="7" />);
@@ -157,6 +183,8 @@ describe('policy form helpers', () => {
     expect(inputOf({ ...form, maxAutoHired: '51' })).toBeUndefined();
     expect(inputOf({ ...form, minSuccessfulRuns: '2.5' })).toBeUndefined();
     expect(inputOf({ ...form, rules: withThreshold(form.rules, 0, 0, -1) })).toBeUndefined();
+    expect(inputOf(typeThreshold(form, 1, 0, ''))).toBeUndefined();
+    expect(inputOf(typeThreshold(form, 1, 0, '120'))?.auto_dismiss_rules[1]?.conditions[0]?.value).toBe(120);
   });
 
   it('changes one threshold and leaves the rest', () => {

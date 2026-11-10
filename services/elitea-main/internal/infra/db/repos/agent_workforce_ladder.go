@@ -819,6 +819,15 @@ WHERE tenant_project_id = $1 AND application_id = $2`, agent.ProjectID, agent.Ap
 		return nil, fmt.Errorf("agent workforce: reinstate the registry row: %w", err)
 	}
 	if agent.AutoHiredAt != nil {
+		// The new probation supersedes the earlier hire's: close its row so
+		// only one auto_hire action per agent offers Undo and Keep.
+		if _, err := tx.Exec(ctx, `
+UPDATE elitea_lifecycle.agent_automatic_actions
+SET status = 'cancelled', note = 'Superseded by the probation the reinstatement restarted.', updated_at = clock_timestamp()
+WHERE project_id = $1 AND application_id = $2 AND kind = 'auto_hire' AND status = 'applied'`,
+			agent.ProjectID, agent.ApplicationID); err != nil {
+			return nil, fmt.Errorf("agent workforce: close the earlier hire: %w", err)
+		}
 		if _, err := s.insertAction(ctx, tx, agent.ProjectID, agent.ApplicationID, agentworkforce.ActionAutoHire,
 			agentworkforce.RuleAutoHire, "", 0, agentworkforce.ActionApplied, &probationUntil,
 			map[string]any{"reinstated": true, "probation_until": probationUntil}, true); err != nil {

@@ -136,23 +136,32 @@ ON CONFLICT (project_id) DO UPDATE SET
 	return s.Policy(ctx, projectID)
 }
 
-// cancelOpenActions cancels the project's pending and flagged actions and
-// closes their open policy notices (rejected, decided by nobody: the policy
-// that raised them is off).
+// cancelOpenActions cancels the project's open actions (pending, flagged and
+// held), closes their open policy notices (rejected, decided by nobody: the
+// policy that raised them is off) and clears the orphan flag of the agents
+// whose orphan action it cancels, so a later pass can flag them again.
 func (s *AgentWorkforce) cancelOpenActions(ctx context.Context, tx pgx.Tx, projectID int64, note string) error {
 	if _, err := tx.Exec(ctx, `
 UPDATE elitea_lifecycle.agent_workforce_proposals AS p
 SET status = 'rejected', decided_at = clock_timestamp(), decision_note = $2, updated_at = clock_timestamp()
 FROM elitea_lifecycle.agent_automatic_actions AS a
-WHERE a.project_id = $1 AND a.status IN ('pending', 'flagged') AND a.kind <> 'auto_hire'
+WHERE a.project_id = $1 AND a.status IN ('pending', 'flagged', 'held') AND a.kind <> 'auto_hire'
   AND p.project_id = a.project_id AND p.id = a.proposal_id AND p.source = 'policy'
   AND p.status IN ('proposed', 'asked_owner')`, projectID, note); err != nil {
 		return fmt.Errorf("agent workforce: close the policy notices: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
+UPDATE elitea_lifecycle.agent_registry AS r
+SET orphaned_since = NULL, updated_at = clock_timestamp()
+FROM elitea_lifecycle.agent_automatic_actions AS a
+WHERE a.project_id = $1 AND a.kind = 'orphan' AND a.status IN ('pending', 'flagged', 'held')
+  AND r.tenant_project_id = a.project_id AND r.application_id = a.application_id`, projectID); err != nil {
+		return fmt.Errorf("agent workforce: clear the orphan flags: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
 UPDATE elitea_lifecycle.agent_automatic_actions
 SET status = 'cancelled', note = $2, updated_at = clock_timestamp()
-WHERE project_id = $1 AND status IN ('pending', 'flagged')`, projectID, note); err != nil {
+WHERE project_id = $1 AND status IN ('pending', 'flagged', 'held')`, projectID, note); err != nil {
 		return fmt.Errorf("agent workforce: cancel the open automatic actions: %w", err)
 	}
 	return nil
@@ -233,7 +242,7 @@ func (s *AgentWorkforce) ListAutomaticActions(ctx context.Context, projectID int
 SELECT `+actionColumns+`, count(*) OVER ()
 FROM elitea_lifecycle.agent_automatic_actions AS a
 WHERE a.project_id = $1 AND ($2::bigint = 0 OR a.application_id = $2)
-  AND ($3 = '' OR ($3 = 'open' AND a.status IN ('pending', 'flagged')) OR a.status = $3)
+  AND ($3 = '' OR ($3 = 'open' AND a.status IN ('pending', 'flagged', 'held')) OR a.status = $3)
 ORDER BY a.created_at DESC, a.id DESC
 LIMIT $4 OFFSET $5`, projectID, filter.ApplicationID, filter.Status, limit, max(filter.Offset, 0))
 	if err != nil {
@@ -745,15 +754,26 @@ func (s *AgentWorkforce) rulePass(ctx context.Context, policy WorkforcePolicy, s
 		}
 		onProbation := agent.OnProbation()
 		facts := agentworkforce.FactsOf(*agent.card, unused, agent.AutoHiredAt != nil, onProbation && agentworkforce.ProbationFailed(*agent.card))
-		rule, ok := agentworkforce.FirstMatch(policy.Rules, facts)
-		if !ok || alreadyAt(agent.WorkforceAgent, rule.Stage) {
-			continue
+		// The strongest matching rule the pass may apply: one an objection
+		// suppressed gives way to the next, weaker one.
+		var (
+			rule  agentworkforce.Rule
+			found bool
+		)
+		for _, candidate := range agentworkforce.Matching(policy.Rules, facts) {
+			if alreadyAt(agent.WorkforceAgent, candidate.Stage) {
+				continue
+			}
+			suppressed, err := s.ruleSuppressed(ctx, policy.ProjectID, applicationID, candidate.ID, now)
+			if err != nil {
+				return err
+			}
+			if !suppressed {
+				rule, found = candidate, true
+				break
+			}
 		}
-		suppressed, err := s.ruleSuppressed(ctx, policy.ProjectID, applicationID, rule.ID, now)
-		if err != nil {
-			return err
-		}
-		if suppressed {
+		if !found {
 			continue
 		}
 		evidence := map[string]any{"scorecard": agent.card, "facts": facts, "rule": rule}
@@ -952,11 +972,12 @@ RETURNING `+actionColumns, projectID, applicationID, kind, rule, stageValue, nul
 // grace period is applied (or held when the agent became exempt or others
 // nest it); a notice a person decided in the inbox follows that decision;
 // an orphan whose owner is back is resolved, one flagged for 30 days moves
-// to watch.
+// to watch. A held action waits for a person: it only follows the inbox's
+// decision (or, for an orphan, an owner coming back).
 func (s *AgentWorkforce) reconcileActions(ctx context.Context, policy WorkforcePolicy, summary *PolicySummary) error {
 	rows, err := s.pool.Query(ctx, `
 SELECT id FROM elitea_lifecycle.agent_automatic_actions
-WHERE project_id = $1 AND status IN ('pending', 'flagged') ORDER BY id`, policy.ProjectID)
+WHERE project_id = $1 AND status IN ('pending', 'flagged', 'held') ORDER BY id`, policy.ProjectID)
 	if err != nil {
 		return fmt.Errorf("agent workforce: list the open actions: %w", err)
 	}
@@ -987,7 +1008,8 @@ func (s *AgentWorkforce) reconcileAction(ctx context.Context, policy WorkforcePo
 		if err != nil {
 			return err
 		}
-		if action.Status != agentworkforce.ActionPending && action.Status != agentworkforce.ActionFlagged {
+		if action.Status != agentworkforce.ActionPending && action.Status != agentworkforce.ActionFlagged &&
+			action.Status != agentworkforce.ActionHeld {
 			return nil
 		}
 		agent, err := readWorkforceAgent(ctx, tx, policy.ProjectID, action.ApplicationID, true)
@@ -1023,6 +1045,9 @@ UPDATE elitea_lifecycle.agent_automatic_actions SET status = 'applied', applied_
     note = 'Approved in the workforce inbox.', updated_at = clock_timestamp()
 WHERE project_id = $1 AND id = $2`, action.ProjectID, action.ID)
 			return err
+		}
+		if action.Status == agentworkforce.ActionHeld {
+			return nil // left to a person: the inbox decides
 		}
 		if action.DueAt == nil || now.Before(*action.DueAt) {
 			return nil
@@ -1087,6 +1112,11 @@ func (s *AgentWorkforce) orphanPass(ctx context.Context, policy WorkforcePolicy,
 	if err != nil || !present {
 		return err
 	}
+	// An agent whose owner is back and that has no open orphan action loses
+	// its flag, so it can be flagged again if its owners leave later.
+	if _, err := s.pool.Exec(ctx, unflagOrphansSQL, policy.ProjectID); err != nil {
+		return fmt.Errorf("agent workforce: clear the orphan flags: %w", err)
+	}
 	rows, err := s.pool.Query(ctx, orphansSQL, policy.ProjectID)
 	if err != nil {
 		return fmt.Errorf("agent workforce: find the orphaned agents: %w", err)
@@ -1147,8 +1177,21 @@ WHERE r.tenant_project_id = $1 AND r.lifecycle_state = 'active' AND r.orphaned_s
                     AND m.user_id IN (r.business_owner_id, r.technical_owner_id))
   AND NOT EXISTS (SELECT 1 FROM elitea_lifecycle.agent_automatic_actions AS a
                   WHERE a.project_id = r.tenant_project_id AND a.application_id = r.application_id
-                    AND a.kind = 'orphan' AND a.status IN ('flagged', 'pending'))
+                    AND a.kind = 'orphan' AND a.status IN ('flagged', 'pending', 'held'))
 ORDER BY r.application_id`
+
+// unflagOrphansSQL clears orphaned_since of the agents that have an owner in
+// the project again and no open orphan action.
+const unflagOrphansSQL = `
+UPDATE elitea_lifecycle.agent_registry AS r
+SET orphaned_since = NULL, updated_at = clock_timestamp()
+WHERE r.tenant_project_id = $1 AND r.orphaned_since IS NOT NULL
+  AND EXISTS (SELECT 1 FROM public.auth_core__project_user_role AS m
+              WHERE m.project_id = r.tenant_project_id
+                AND m.user_id IN (r.business_owner_id, r.technical_owner_id))
+  AND NOT EXISTS (SELECT 1 FROM elitea_lifecycle.agent_automatic_actions AS a
+                  WHERE a.project_id = r.tenant_project_id AND a.application_id = r.application_id
+                    AND a.kind = 'orphan' AND a.status IN ('flagged', 'pending', 'held'))`
 
 func (s *AgentWorkforce) ownerIsMember(ctx context.Context, tx pgx.Tx, agent WorkforceAgent) (bool, error) {
 	var member bool
@@ -1175,7 +1218,7 @@ WHERE tenant_project_id = $1 AND application_id = $2`, agent.ProjectID, agent.Ap
 		}
 		return s.closeAction(ctx, tx, action, agentworkforce.ActionResolved, 0, "The agent has an owner again.")
 	}
-	if action.DueAt == nil || now.Before(*action.DueAt) {
+	if action.Status == agentworkforce.ActionHeld || action.DueAt == nil || now.Before(*action.DueAt) {
 		return nil
 	}
 	if agentworkforce.ExemptFromAutomatic(agent.Tier, agent.LegalHold) {
@@ -1218,7 +1261,15 @@ WHERE project_id = $1 AND id = $2`, action.ProjectID, action.ID, proposal.ID); e
 
 // notifyPolicy tells the agent managers (the project admins), the agent's
 // owners and, for a hire, the person it was hired for. Best effort.
+//
+// The key and the event carry the status the action ended in, read after the
+// commit: a caller may hold the action as it was before its UPDATE (still
+// pending or flagged), which would reuse the notice's key and the insert's ON
+// CONFLICT would drop the later message.
 func (s *AgentWorkforce) notifyPolicy(ctx context.Context, action AutomaticAction, extra int64, message string) {
+	if current, err := s.readAction(ctx, s.pool, action.ProjectID, action.ID, false); err == nil {
+		action.Status = current.Status
+	}
 	recipients := map[int64]bool{}
 	if admins, err := projectAdminIDs(ctx, s.pool, action.ProjectID); err == nil {
 		for _, id := range admins {

@@ -10,7 +10,7 @@
  * buttons the action says are open and shows the server's refusal.
  */
 import type { ReactNode } from 'react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -25,7 +25,7 @@ import { t } from '@/shared/i18n';
 import { BaseSwitch } from '@/shared/ui/BaseSwitch';
 
 import type { AutomaticActionDecision } from '../api/agentWorkforceApi';
-import { actionKindLabel, actionStatusLabel, conditionText, formOf, inputOf, withThreshold, type PolicyForm } from '../lib/policy';
+import { actionKindLabel, actionStatusLabel, conditionText, formOf, inputOf, thresholdKey, typeThreshold, withRules, type PolicyForm } from '../lib/policy';
 import { stageLabel, workforceRefusal } from '../lib/workforce';
 import { useAutomaticActions, useWorkforcePolicy, useWorkforcePolicyActions } from '../model/useWorkforcePolicy';
 
@@ -84,11 +84,9 @@ function RulesEditor({
               size="small"
               type="number"
               label={conditionText(condition)}
-              value={condition.value}
+              value={form.thresholds[thresholdKey(ruleIndex, conditionIndex)] ?? String(condition.value)}
               disabled={disabled}
-              onChange={(event) =>
-                onChange({ ...form, rules: withThreshold(form.rules, ruleIndex, conditionIndex, Number(event.target.value)) })
-              }
+              onChange={(event) => onChange(typeThreshold(form, ruleIndex, conditionIndex, event.target.value))}
               slotProps={{ htmlInput: { 'data-testid': `agent-workforce-rule-${rule.id}-${conditionIndex}`, min: 0, step: 'any' } }}
               sx={{ maxWidth: '18rem' }}
             />
@@ -101,10 +99,21 @@ function RulesEditor({
 
 function PolicyEditor({ projectId, policy }: { readonly projectId: string; readonly policy: AgentWorkforcePolicy }): ReactNode {
   const { save } = useWorkforcePolicyActions(projectId);
+  // The form is seeded once per saved policy (updated_at), not on every
+  // refetch: a window-focus or action refetch must not wipe unsaved edits.
   const [form, setForm] = useState<PolicyForm>(() => formOf(policy));
+  const [seededFrom, setSeededFrom] = useState(policy.updated_at);
+  const [dirty, setDirty] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [saved, setSaved] = useState(false);
-  useEffect(() => setForm(formOf(policy)), [policy]);
+  if (policy.updated_at !== seededFrom && !dirty) {
+    setSeededFrom(policy.updated_at);
+    setForm(formOf(policy));
+  }
+  const edit = (next: PolicyForm): void => {
+    setDirty(true);
+    setForm(next);
+  };
   const disabled = !policy.can_manage || save.isPending;
   const input = inputOf(form);
 
@@ -113,11 +122,14 @@ function PolicyEditor({ projectId, policy }: { readonly projectId: string; reado
     setError(undefined);
     setSaved(false);
     save.mutate(input, {
-      onSuccess: () => setSaved(true),
+      onSuccess: () => {
+        setSaved(true);
+        setDirty(false);
+      },
       onError: (failure) => setError(workforceRefusal(failure, failed()).message),
     });
   };
-  const resetRules = (): void => setForm({ ...form, rules: policy.default_rules });
+  const resetRules = (): void => edit(withRules(form, policy.default_rules));
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }} data-testid="agent-workforce-policy">
@@ -132,7 +144,7 @@ function PolicyEditor({ projectId, policy }: { readonly projectId: string; reado
             <BaseSwitch
               checked={form.autoHireEnabled}
               disabled={disabled}
-              onChange={(event) => setForm({ ...form, autoHireEnabled: event.target.checked })}
+              onChange={(event) => edit({ ...form, autoHireEnabled: event.target.checked })}
               aria-label={t('features.agentWorkforce.policy.autoHire', 'Hire proposed agents automatically')}
               data-testid="agent-workforce-policy-auto-hire"
             />
@@ -151,14 +163,14 @@ function PolicyEditor({ projectId, policy }: { readonly projectId: string; reado
             value={form.minSuccessfulRuns}
             disabled={disabled}
             testId="agent-workforce-policy-min-runs"
-            onChange={(value) => setForm({ ...form, minSuccessfulRuns: value })}
+            onChange={(value) => edit({ ...form, minSuccessfulRuns: value })}
           />
           <NumberField
             label={t('features.agentWorkforce.policy.maxHired', 'Agents on probation at once (1–50)')}
             value={form.maxAutoHired}
             disabled={disabled}
             testId="agent-workforce-policy-max-hired"
-            onChange={(value) => setForm({ ...form, maxAutoHired: value })}
+            onChange={(value) => edit({ ...form, maxAutoHired: value })}
           />
         </Box>
         <Typography variant="bodySmall" color="text.secondary" data-testid="agent-workforce-policy-open-hired">
@@ -172,7 +184,7 @@ function PolicyEditor({ projectId, policy }: { readonly projectId: string; reado
             <BaseSwitch
               checked={form.autoDismissEnabled}
               disabled={disabled}
-              onChange={(event) => setForm({ ...form, autoDismissEnabled: event.target.checked })}
+              onChange={(event) => edit({ ...form, autoDismissEnabled: event.target.checked })}
               aria-label={t('features.agentWorkforce.policy.autoDismiss', 'Dismiss agents automatically by rule')}
               data-testid="agent-workforce-policy-auto-dismiss"
             />
@@ -190,9 +202,9 @@ function PolicyEditor({ projectId, policy }: { readonly projectId: string; reado
           value={form.graceDays}
           disabled={disabled}
           testId="agent-workforce-policy-grace"
-          onChange={(value) => setForm({ ...form, graceDays: value })}
+          onChange={(value) => edit({ ...form, graceDays: value })}
         />
-        <RulesEditor form={form} disabled={disabled} onChange={setForm} />
+        <RulesEditor form={form} disabled={disabled} onChange={edit} />
       </Box>
 
       {error !== undefined && (

@@ -64,34 +64,55 @@ func TestCheckPolicyBounds(t *testing.T) {
 	}
 }
 
+// firstMatch is the rule the pass tries first.
+func firstMatch(rules []Rule, facts Facts) (Rule, bool) {
+	matching := Matching(rules, facts)
+	if len(matching) == 0 {
+		return Rule{}, false
+	}
+	return matching[0], true
+}
+
+func TestMatchingOrdersStrongestFirstSoASuppressedRuleGivesWay(t *testing.T) {
+	card := Scorecard{BreakerTrips7d: 5, Runs30d: 25, Failed30d: 20, FailureRate30d: 0.8}
+	got := Matching(DefaultRules(), FactsOf(card, 120, false, false))
+	var stages []Stage
+	for _, rule := range got {
+		stages = append(stages, rule.Stage)
+	}
+	if len(stages) != 3 || stages[0] != StageRetire || stages[1] != StageSuspend || stages[2] != StageWatch {
+		t.Fatalf("order: %v", stages)
+	}
+}
+
 func TestRulesMatchAllConditionsAndTheStrongestStageWins(t *testing.T) {
 	rules := DefaultRules()
 	card := Scorecard{Runs30d: 25, Failed30d: 20, FailureRate30d: 0.8, BreakerTrips7d: 3}
 	facts := FactsOf(card, 0, false, false)
-	rule, ok := FirstMatch(rules, facts)
+	rule, ok := firstMatch(rules, facts)
 	if !ok || rule.ID != "breaker_trips" || rule.Stage != StageSuspend {
 		t.Fatalf("suspend beats watch: %+v %v", rule, ok)
 	}
 	facts = FactsOf(Scorecard{Runs30d: 10, Failed30d: 9, FailureRate30d: 0.9}, 0, false, false)
-	if _, ok := FirstMatch(rules, facts); ok {
+	if _, ok := firstMatch(rules, facts); ok {
 		t.Fatal("failure_rate needs 20 runs too")
 	}
 	facts = FactsOf(Scorecard{}, 90, false, false)
-	if rule, ok := FirstMatch(rules, facts); !ok || rule.Stage != StageRetire {
+	if rule, ok := firstMatch(rules, facts); !ok || rule.Stage != StageRetire {
 		t.Fatalf("unused 90 days: %+v %v", rule, ok)
 	}
 	failed := Scorecard{BreakerTrips7d: 1}
 	if !ProbationFailed(failed) || ProbationFailed(Scorecard{Runs30d: 2, Failed30d: 2, FailureRate30d: 1}) {
 		t.Fatal("probation failure reading")
 	}
-	if rule, ok := FirstMatch([]Rule{rules[3]}, FactsOf(failed, 0, true, true)); !ok || rule.ID != "probation_failed" {
+	if rule, ok := firstMatch([]Rule{rules[3]}, FactsOf(failed, 0, true, true)); !ok || rule.ID != "probation_failed" {
 		t.Fatalf("probation failed: %+v %v", rule, ok)
 	}
-	if _, ok := FirstMatch([]Rule{rules[3]}, FactsOf(failed, 0, false, true)); ok {
+	if _, ok := firstMatch([]Rule{rules[3]}, FactsOf(failed, 0, false, true)); ok {
 		t.Fatal("probation_failed needs auto_hired")
 	}
 	// A rule whose stage is not automatic never matches, even if stored.
-	if _, ok := FirstMatch([]Rule{{ID: "x", Conditions: []Condition{{MetricRuns30d, ">=", 0}}, Stage: StageDelete}}, facts); ok {
+	if _, ok := firstMatch([]Rule{{ID: "x", Conditions: []Condition{{MetricRuns30d, ">=", 0}}, Stage: StageDelete}}, facts); ok {
 		t.Fatal("a delete rule matched")
 	}
 }

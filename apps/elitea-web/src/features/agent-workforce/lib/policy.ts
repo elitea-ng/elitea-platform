@@ -28,6 +28,36 @@ export interface PolicyForm {
   readonly autoDismissEnabled: boolean;
   readonly graceDays: string;
   readonly rules: readonly AgentWorkforceRule[];
+  /**
+   * Each condition's threshold as typed, keyed `rule:condition` by index. A
+   * cleared field stays '' here and blocks the save, instead of becoming 0
+   * (a rule `unused_days >= 0` would match every agent).
+   */
+  readonly thresholds: Readonly<Record<string, string>>;
+}
+
+/** The key of one condition's typed threshold. */
+export function thresholdKey(ruleIndex: number, conditionIndex: number): string {
+  return `${ruleIndex}:${conditionIndex}`;
+}
+
+function thresholdsOf(rules: readonly AgentWorkforceRule[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  rules.forEach((rule, r) => rule.conditions.forEach((condition, c) => (out[thresholdKey(r, c)] = String(condition.value))));
+  return out;
+}
+
+/** The form with its rules replaced (the typed thresholds follow them). */
+export function withRules(form: PolicyForm, rules: readonly AgentWorkforceRule[]): PolicyForm {
+  return { ...form, rules, thresholds: thresholdsOf(rules) };
+}
+
+/** The form with one threshold typed: kept as typed, applied when a number. */
+export function typeThreshold(form: PolicyForm, ruleIndex: number, conditionIndex: number, typed: string): PolicyForm {
+  const thresholds = { ...form.thresholds, [thresholdKey(ruleIndex, conditionIndex)]: typed };
+  const value = Number(typed);
+  const rules = typed.trim() !== '' && Number.isFinite(value) ? withThreshold(form.rules, ruleIndex, conditionIndex, value) : form.rules;
+  return { ...form, rules, thresholds };
 }
 
 export function formOf(policy: AgentWorkforcePolicy): PolicyForm {
@@ -38,6 +68,7 @@ export function formOf(policy: AgentWorkforcePolicy): PolicyForm {
     autoDismissEnabled: policy.auto_dismiss_enabled,
     graceDays: String(policy.grace_days),
     rules: policy.auto_dismiss_rules,
+    thresholds: thresholdsOf(policy.auto_dismiss_rules),
   };
 }
 
@@ -52,6 +83,13 @@ export function inputOf(form: PolicyForm): AgentWorkforcePolicyInput | undefined
   const maxAutoHired = bounded(form.maxAutoHired, POLICY_BOUNDS.maxAutoHired);
   const graceDays = bounded(form.graceDays, POLICY_BOUNDS.graceDays);
   if (minSuccessfulRuns === undefined || maxAutoHired === undefined || graceDays === undefined) return undefined;
+  const typedOk = form.rules.every((rule, r) =>
+    rule.conditions.every((condition, c) => {
+      const typed = form.thresholds[thresholdKey(r, c)] ?? String(condition.value);
+      return typed.trim() !== '' && Number(typed) === condition.value;
+    }),
+  );
+  if (!typedOk) return undefined;
   if (form.rules.some((rule) => rule.conditions.some((condition) => !Number.isFinite(condition.value) || condition.value < 0))) return undefined;
   return {
     auto_hire_enabled: form.autoHireEnabled,

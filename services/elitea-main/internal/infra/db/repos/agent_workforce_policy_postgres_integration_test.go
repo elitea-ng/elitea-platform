@@ -476,6 +476,21 @@ func TestWorkforceAutoHiredProbationFailureRetiresAndReinstateRestartsProbation(
 		agent.ProbationUntil.Before(now.Add(agentworkforce.ProbationWindow-time.Minute)) {
 		t.Fatalf("reinstated without a fresh probation: %+v", agent)
 	}
+	// One live auto_hire row: the earlier hire's is superseded.
+	var live int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM elitea_lifecycle.agent_automatic_actions
+WHERE application_id = $1 AND kind = 'auto_hire' AND status = 'applied'`, hired).Scan(&live)
+	if live != 1 {
+		t.Fatalf("live auto_hire actions after reinstate = %d", live)
+	}
+	// The retire after the notice was told under its own key, not the
+	// notice's (which ON CONFLICT would have dropped).
+	var told int
+	_ = pool.QueryRow(ctx, `SELECT count(DISTINCT meta->>'event') FROM centry.notifications
+WHERE (meta->>'application_id')::bigint = $1 AND meta->>'kind' = 'auto_dismiss'`, hired).Scan(&told)
+	if told != 2 {
+		t.Fatalf("retire notice and retirement notifications: %d distinct events", told)
+	}
 }
 
 func TestWorkforceOrphanIsFlaggedThenWatchedNeverRetired(t *testing.T) {
@@ -525,5 +540,64 @@ SELECT 1, 5, id FROM public.auth_core__project_role WHERE project_id = 1 AND nam
 	}
 	if a, _ = store.Agent(ctx, wfProject, orphan); a.State != agentworkforce.StateActive {
 		t.Fatalf("an orphan was retired: %+v", a)
+	}
+
+	// A flagged orphan whose policy is turned off loses its flag, and is
+	// flagged again when the policy comes back.
+	const second int64 = 991772
+	seedWorkforceAgent(t, pool, second, "medium", `{}`)
+	if summary, err := store.WorkforcePolicyPass(ctx); err != nil || summary.Orphans != 1 {
+		t.Fatalf("flag the second: %+v %v", summary, err)
+	}
+	onPolicy(t, store, func(p *agentworkforce.Policy) { p.AutoDismissEnabled = false })
+	if a, _ = store.Agent(ctx, wfProject, second); a.OrphanedSince != nil {
+		t.Fatalf("turned off, still flagged: %+v", a)
+	}
+	onPolicy(t, store, func(p *agentworkforce.Policy) { p.AutoDismissEnabled = true; p.Rules = []agentworkforce.Rule{} })
+	if summary, err := store.WorkforcePolicyPass(ctx); err != nil || summary.Orphans != 1 {
+		t.Fatalf("flag again after turning back on: %+v %v", summary, err)
+	}
+}
+
+func TestWorkforceHeldNoticeFollowsTheInboxAndASuppressedRuleGivesWay(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedPolicyBase(t, pool)
+	now := time.Now().UTC()
+	store := workforceStore(t, pool, &now)
+	ctx := context.Background()
+	onPolicy(t, store, func(p *agentworkforce.Policy) { p.AutoDismissEnabled = true; p.GraceDays = 1 })
+	const agent int64 = 991780
+	seedWorkforceAgent(t, pool, agent, "medium", `{}`)
+	wfExec(t, pool, `INSERT INTO elitea_lifecycle.agent_scorecards (project_id, application_id, day, last_used_at) VALUES (1, $1, current_date, now() - interval '120 days')`, agent)
+	if summary, err := store.WorkforcePolicyPass(ctx); err != nil || summary.Noticed != 1 {
+		t.Fatalf("notice: %+v %v", summary, err)
+	}
+	notice := actionsOf(t, store, ActionFilter{ApplicationID: agent})[0]
+	// Held (as when other agents nest it): the pass leaves it to a person.
+	wfExec(t, pool, `UPDATE elitea_lifecycle.agent_automatic_actions SET status = 'held' WHERE id = $1`, notice.ID)
+	now = now.Add(48 * time.Hour)
+	wfExec(t, pool, `UPDATE elitea_lifecycle.agent_scorecards SET day = $1::date`, now)
+	if summary, err := store.WorkforcePolicyPass(ctx); err != nil || summary.Retired != 0 {
+		t.Fatalf("a held notice was applied by the pass: %+v %v", summary, err)
+	}
+	if open := actionsOf(t, store, ActionFilter{Status: "open"}); len(open) != 1 {
+		t.Fatalf("a held notice is open: %+v", open)
+	}
+	// A person rejects it in the inbox: the held action follows.
+	wfExec(t, pool, `UPDATE elitea_lifecycle.agent_workforce_proposals SET status = 'rejected', decided_by_user_id = 3, decided_at = now() WHERE id = $1`, *notice.ProposalID)
+	if _, err := store.WorkforcePolicyPass(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.GetAutomaticAction(ctx, wfProject, notice.ID); got.Status != agentworkforce.ActionObjected {
+		t.Fatalf("held notice after the inbox rejected it: %+v", got)
+	}
+	// The retire rule is now suppressed (objected); a weaker suspend rule
+	// that also matches still applies.
+	wfExec(t, pool, `UPDATE elitea_lifecycle.agent_scorecards SET breaker_trips_7d = 5`)
+	if summary, err := store.WorkforcePolicyPass(ctx); err != nil || summary.Applied != 1 {
+		t.Fatalf("suspend under a suppressed retire: %+v %v", summary, err)
+	}
+	if a, _ := store.Agent(ctx, wfProject, agent); a.SuspensionID == 0 || a.State != agentworkforce.StateActive {
+		t.Fatalf("suspended, not retired: %+v", a)
 	}
 }

@@ -284,23 +284,19 @@ func ProbationFailed(card Scorecard) bool {
 	return card.BreakerTrips7d > 0 || card.GuardrailHits30d >= 3 || (judged >= 3 && card.FailureRate30d > 0.5)
 }
 
-// FirstMatch answers the rule that decides an agent: among the matching
-// rules, the one with the strongest stage (retire over suspend over watch);
-// the first of equals. ok is false when none matches.
-func FirstMatch(rules []Rule, facts Facts) (Rule, bool) {
-	var (
-		best  Rule
-		found bool
-	)
+// Matching answers every automatic rule that matches, strongest stage first
+// and in policy order among equals. The pass takes the first one it may
+// apply, so a suppressed (objected) retire rule does not hide a suspend
+// rule that also matches.
+func Matching(rules []Rule, facts Facts) []Rule {
+	var out []Rule
 	for _, rule := range rules {
-		if !AutomaticStage(rule.Stage) || !rule.Matches(facts) {
-			continue
-		}
-		if !found || stageRank(rule.Stage) > stageRank(best.Stage) {
-			best, found = rule, true
+		if AutomaticStage(rule.Stage) && rule.Matches(facts) {
+			out = append(out, rule)
 		}
 	}
-	return best, found
+	slices.SortStableFunc(out, func(a, b Rule) int { return stageRank(b.Stage) - stageRank(a.Stage) })
+	return out
 }
 
 func stageRank(stage Stage) int { return slices.Index(Stages, stage) }
