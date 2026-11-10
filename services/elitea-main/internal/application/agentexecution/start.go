@@ -452,7 +452,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	// see projectcontext.go's header.
 	projectContextText := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
 	// #1607: the agent's own notes, after the person's memories.
-	agentMemoryText := service.resolveAgentMemoryText(
+	agentMemory := service.resolveAgentMemory(
 		ctx, request.ProjectID, target.ApplicationID, request.ConversationUUID,
 		currentMemoryRecallUserInputText(request.UserInput), target.VersionDetails,
 	)
@@ -460,7 +460,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	modelRequest.UserInput = floorModelInput(request)
 	input, err := currentApplicationInput(
 		modelRequest, target, toolkitGuardrails, attachments,
-		joinRecallText(memoryRecall.Text, agentMemoryText), projectContextText,
+		joinRecallText(memoryRecall.Text, agentMemory.Text), projectContextText,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
@@ -468,6 +468,8 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	input.ContextSettings = contextSettings
 	input.Floor = floor.input(request.TargetParticipantID)
 	input.CurrentMessageId = currentMessageID(request)
+	// #1826: the entries the instructions show, so a brief can name them.
+	input.RecalledMemory = recalledMemoryInput(agentMemory.Entries)
 	grant, chain, err := service.admitUnattended(ctx, unattendedTarget{
 		request: request.Unattended, continuation: request.UnattendedContinuation,
 		capabilityID: executiondomain.AgentApplicationCapability, input: input,

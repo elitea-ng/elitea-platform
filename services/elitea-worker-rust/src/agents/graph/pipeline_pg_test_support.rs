@@ -150,6 +150,7 @@ fn bound_resume_payload(session: &dyn Session) -> AgentExecutionPayload {
         floor: None,
         tool_envelope: None,
         current_message_id: None,
+        recalled_memory: Vec::new(),
     }
 }
 

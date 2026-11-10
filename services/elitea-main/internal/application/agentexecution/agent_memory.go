@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strconv"
 
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 )
 
@@ -13,7 +15,15 @@ import (
 // the turn's input under the version's recall budget, with entries about a
 // person kept to turns where that person is in the conversation.
 type AgentMemoryRecallResolver interface {
-	ResolveAgentMemoryRecall(ctx context.Context, request AgentMemoryRecallRequest) (string, error)
+	ResolveAgentMemoryRecall(ctx context.Context, request AgentMemoryRecallRequest) (AgentMemoryRecall, error)
+}
+
+// AgentMemoryRecall is what a turn recalled: the prompt block and, in the
+// same order, each entry's id and stored content (#1826), which the run
+// input carries so a spawn_agent brief can name an entry recalled here.
+type AgentMemoryRecall struct {
+	Text    string
+	Entries []agentmemory.RecalledEntry
 }
 
 // AgentMemoryRecallRequest is one turn's recall question.
@@ -32,36 +42,57 @@ func (service *CurrentApplicationStartService) WithAgentMemory(memory AgentMemor
 	return service
 }
 
-// resolveAgentMemoryText is the agent memory block of a turn, or "". Like
+// resolveAgentMemory is the agent memory a turn recalls, or none. Like
 // personal memory it fails open: a store hiccup costs the turn its recalled
 // notes, never the turn. A pipeline gets none (appendCurrentApplicationMemories
 // skips a graph). A version whose block cannot be read recalls nothing.
-func (service *CurrentApplicationStartService) resolveAgentMemoryText(
+func (service *CurrentApplicationStartService) resolveAgentMemory(
 	ctx context.Context,
 	projectID, applicationID int64,
 	conversationUUID, userInput string,
 	versionDetails json.RawMessage,
-) string {
-	if service.agentMemory == nil || applicationID <= 0 {
-		return ""
+) AgentMemoryRecall {
+	if service.agentMemory == nil || applicationID <= 0 || currentApplicationInstructionsAreAGraph(versionDetails) {
+		return AgentMemoryRecall{}
 	}
 	settings, err := versionMemorySettings(versionDetails)
 	if err != nil {
 		slog.WarnContext(ctx, "agent memory: the version's memory block is not readable; nothing is recalled", "error", err)
-		return ""
+		return AgentMemoryRecall{}
 	}
 	if !settings.Enabled {
-		return ""
+		return AgentMemoryRecall{}
 	}
-	text, err := service.agentMemory.ResolveAgentMemoryRecall(ctx, AgentMemoryRecallRequest{
+	recall, err := service.agentMemory.ResolveAgentMemoryRecall(ctx, AgentMemoryRecallRequest{
 		ProjectID: projectID, ApplicationID: applicationID, ConversationUUID: conversationUUID,
 		UserInput: userInput, Settings: settings,
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "agent memory: recall failed; the turn runs without the agent's notes", "error", err)
-		return ""
+		return AgentMemoryRecall{}
 	}
-	return text
+	if recall.Text == "" {
+		return AgentMemoryRecall{}
+	}
+	return recall
+}
+
+// recalledMemoryInput is the run input's recalled_memory (#1826): each
+// entry the instructions show, by id, with its stored content.
+func recalledMemoryInput(entries []agentmemory.RecalledEntry) []*runtimev1.RecalledMemoryEntryV1 {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]*runtimev1.RecalledMemoryEntryV1, 0, len(entries))
+	for _, entry := range entries {
+		if entry.ID <= 0 {
+			continue
+		}
+		out = append(out, &runtimev1.RecalledMemoryEntryV1{
+			EntryId: strconv.FormatInt(entry.ID, 10), Content: entry.Content,
+		})
+	}
+	return out
 }
 
 // versionMemorySettings reads meta.memory of a frozen version document.

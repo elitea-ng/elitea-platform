@@ -311,5 +311,6 @@ fn resume_payload(authorize: bool, resource: &str) -> AgentExecutionPayload {
         floor: None,
         tool_envelope: None,
         current_message_id: None,
+        recalled_memory: Vec::new(),
     }
 }

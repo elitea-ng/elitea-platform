@@ -133,6 +133,20 @@ pub struct AgentExecutionPayload {
     /// its own (a regeneration of an addressed turn, a continuation), or an
     /// input from before field 75.
     pub current_message_id: Option<String>,
+    /// The agent memory entries Main recalled into the instructions (#1826),
+    /// in the order shown, each by id with its stored content: a
+    /// `spawn_agent` brief may name these in `memory_entries`. Empty: none
+    /// recalled, or an input from before field 76.
+    pub recalled_memory: Vec<RecalledMemoryEntry>,
+}
+
+/// One agent memory entry Main recalled into a turn (#1826).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecalledMemoryEntry {
+    /// The entry id, a positive decimal number.
+    pub entry_id: String,
+    /// The entry's text as stored.
+    pub content: String,
 }
 
 /// The turn-taking floor this invocation holds (ADR-0050 decision 11).

@@ -417,8 +417,11 @@ impl OrdinaryNativeAgentAssembler {
             _ => None,
         };
         tracing::Span::current().record("stage", "toolsets");
-        // What `recall` returns this turn, for a sub-agent brief (#1614).
-        let recalled = Arc::new(super::agent_memory_tools::RecalledEntries::default());
+        // What this turn recalled, for a sub-agent brief: the entries Main
+        // put in the instructions (#1826) and what `recall` returns (#1614).
+        let recalled = Arc::new(super::agent_memory_tools::RecalledEntries::seeded(
+            profile.recalled_memory(),
+        ));
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
                 &tool_snapshot,

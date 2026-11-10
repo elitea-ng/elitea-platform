@@ -118,16 +118,33 @@ impl AgentMemoryBinding {
 /// The most entries one turn's recorder keeps.
 const MAX_RECALLED_ENTRIES: usize = 256;
 
-/// The entries `recall` returned in this turn, by id, with their content
-/// (#1614): a `spawn_agent` brief may name only these, so a creator passes
-/// on only what it recalled itself. One per turn, shared between the
-/// `recall` tool and the sub-agent host.
+/// The entries recalled in this turn, by id, with their content (#1614):
+/// what `recall` returned, and what Main recalled into the instructions
+/// (#1826, [`Self::seeded`]). A `spawn_agent` brief may name only these, so
+/// a creator passes on only what it was shown. One per turn, shared between
+/// the `recall` tool and the sub-agent host.
 #[derive(Default)]
 pub(crate) struct RecalledEntries {
     entries: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 impl RecalledEntries {
+    /// A recorder that starts with the entries Main recalled into the
+    /// instructions (`AgentExecutionInputV1.recalled_memory`, #1826). The
+    /// content is Main's stored text, never the model's.
+    #[must_use]
+    pub(crate) fn seeded(entries: &[crate::agents::request::RecalledMemoryEntry]) -> Self {
+        Self {
+            entries: std::sync::Mutex::new(
+                entries
+                    .iter()
+                    .take(MAX_RECALLED_ENTRIES)
+                    .map(|entry| (entry.entry_id.clone(), entry.content.clone()))
+                    .collect(),
+            ),
+        }
+    }
+
     fn record(&self, entries: &[crate::transport::runtime_context::AgentMemoryRecalledEntry]) {
         if let Ok(mut recalled) = self.entries.lock() {
             for entry in entries {
