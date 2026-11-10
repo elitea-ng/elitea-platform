@@ -530,6 +530,9 @@ pub fn continuation(
             kind: Some(kind),
             ..turn.next(root)
         }),
+        addressed_to: Vec::new(),
+        floor_turn: None,
+        cloud: false,
     }
 }
 

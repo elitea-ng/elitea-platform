@@ -11,7 +11,29 @@ fn identity(user: i64, deployment: &str) -> SessionIdentity {
         user_id: user,
         project_id: 1,
         conversation_uuid: "99999999-2222-4333-8444-555555555555".to_owned(),
+        reader: None,
     }
+}
+
+/// Each agent of a thread with several agents has a session of its own,
+/// never the thread's one session (ADR-0050 decision 7f).
+#[test]
+fn each_reader_of_a_thread_has_its_own_key() {
+    let thread = identity(1, "https://a.example");
+    let coder = SessionIdentity {
+        reader: Some(77),
+        ..thread.clone()
+    };
+    let reviewer = SessionIdentity {
+        reader: Some(78),
+        ..thread.clone()
+    };
+    assert_ne!(coder.key(), thread.key());
+    assert_ne!(coder.key(), reviewer.key());
+    assert_eq!(
+        coder.key(),
+        reader_session_key("https://a.example/", 1, &thread.conversation_uuid, 77)
+    );
 }
 
 fn text_event(invocation: &str, author: &str, role: &str, text: &str) -> Event {

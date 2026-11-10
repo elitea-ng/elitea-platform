@@ -239,6 +239,85 @@ pub struct LocalTurnStarted {
     /// older platform, which never uploads screenshots.
     #[serde(default)]
     pub computer_use: ComputerUseStarted,
+    /// The participant that answers this turn, as Main routed it (contract
+    /// 1.46: the floor may answer another agent first).
+    #[serde(default)]
+    pub participant_id: Option<i64>,
+    /// Where the answering agent runs (contract 1.46): `cloud` relays the
+    /// turn to the cloud; absent or anything else is `local`.
+    #[serde(default)]
+    pub executor: Option<String>,
+    /// The routed order of the person's message in a thread with several
+    /// agents (ADR-0050 decision 7f, contract 1.46); absent otherwise.
+    #[serde(default)]
+    pub floor: Option<FloorStarted>,
+}
+
+impl LocalTurnStarted {
+    /// The agent answers in the cloud, not with the workspace.
+    #[must_use]
+    pub fn runs_in_cloud(&self) -> bool {
+        self.executor.as_deref() == Some(EXECUTOR_CLOUD)
+    }
+}
+
+/// `LocalTurnStarted.executor` of a cloud agent.
+pub const EXECUTOR_CLOUD: &str = "cloud";
+
+/// `LocalTurnStarted.floor` (ADR-0050 decision 7f).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct FloorStarted {
+    /// The person's message; each later turn names it.
+    pub question_id: String,
+    /// This turn's index in `targets`.
+    #[serde(default)]
+    pub position: usize,
+    /// The agents that answer the message, in order.
+    #[serde(default)]
+    pub targets: Vec<i64>,
+    /// The thread's agents.
+    #[serde(default)]
+    pub agents: Vec<FloorAgent>,
+}
+
+impl FloorStarted {
+    /// The next agent of the routed order, after this turn's, and its
+    /// position; `None` when this turn's is the last.
+    #[must_use]
+    pub fn next(&self) -> Option<(usize, i64)> {
+        let position = self.position.checked_add(1)?;
+        self.targets.get(position).map(|id| (position, *id))
+    }
+
+    /// The display name of the agent `participant_id`, else empty.
+    #[must_use]
+    pub fn name_of(&self, participant_id: i64) -> &str {
+        self.agents
+            .iter()
+            .find(|agent| agent.participant_id == participant_id)
+            .map_or("", |agent| agent.name.as_str())
+    }
+}
+
+/// One agent of a desktop thread.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct FloorAgent {
+    pub participant_id: i64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub executor: String,
+}
+
+/// An agent participant of a conversation, by participant id: what a later
+/// turn of a routed message runs (ADR-0050 decision 7f).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FloorTarget {
+    pub participant_id: i64,
+    pub application_id: i64,
+    pub version_id: i64,
+    /// It runs in the cloud (`entity_settings.executor: cloud`).
+    pub cloud: bool,
 }
 
 /// `LocalTurnStarted.computer_use` (ADR-0047 decision 9).
@@ -494,7 +573,73 @@ impl PlatformApi {
             conversation_uuid,
             numeric_id: number_of(detail.get("id")),
             message_count: number_of(detail.get("message_count")),
+            agents: agent_count(&detail),
+            cloud: executor_of(&detail, id) == Some(EXECUTOR_CLOUD),
+            answer_only: false,
         })
+    }
+
+    /// The conversation's newest `limit` message groups, oldest first, and
+    /// its participants: the text a cloud agent of a desktop thread is
+    /// relayed (ADR-0050 decision 7f). No tool steps are read.
+    ///
+    /// # Errors
+    ///
+    /// The conversation cannot be read.
+    pub async fn conversation_text(
+        &self,
+        project_id: i64,
+        conversation_uuid: &str,
+        limit: u32,
+    ) -> Result<(Vec<Value>, Vec<Value>), ApiError> {
+        let detail: Value = self
+            .send(
+                Method::GET,
+                &format!(
+                    "/api/v2/elitea_core/conversation/prompt_lib/{project_id}/{}?messages_limit={limit}",
+                    path_segment(conversation_uuid)?
+                ),
+                None,
+                &[],
+            )
+            .await?
+            .into_ok()?;
+        let mut groups: Vec<Value> = detail
+            .get("message_groups")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        groups.sort_by_key(|group| group.get("id").and_then(Value::as_i64).unwrap_or(i64::MAX));
+        Ok((groups, participants_of(&detail).to_vec()))
+    }
+
+    /// The agent participant `participant_id` of the conversation, with the
+    /// agent and version it answers on (ADR-0050 decision 7f): a later turn
+    /// of a routed message runs it.
+    ///
+    /// # Errors
+    ///
+    /// The conversation cannot be read, or holds no agent participant
+    /// `participant_id` pinned to a version (`agent_not_in_conversation`).
+    pub async fn floor_target(
+        &self,
+        project_id: i64,
+        conversation_id: &str,
+        participant_id: i64,
+    ) -> Result<FloorTarget, ApiError> {
+        let detail: Value = self
+            .send(
+                Method::GET,
+                &format!(
+                    "/api/v2/elitea_core/conversation/prompt_lib/{project_id}/{}",
+                    path_segment(conversation_id)?
+                ),
+                None,
+                &[],
+            )
+            .await?
+            .into_ok()?;
+        floor_target_in(&detail, participant_id)
     }
 
     /// The conversation's newest `limit` message groups, oldest first
@@ -987,6 +1132,73 @@ pub struct AnsweringParticipant {
     /// what a desktop session compares its cursor with. A number, or a
     /// numeric string, as `id` above.
     pub message_count: Option<i64>,
+    /// How many agent (`application`) participants the conversation holds:
+    /// with two or more, each agent keeps a session of its own and reads
+    /// the thread as its own reader (ADR-0050 decision 7f).
+    pub agents: usize,
+    /// The participant's mapping says it runs in the cloud
+    /// (`entity_settings.executor: cloud`, ADR-0050 decision 7f).
+    pub cloud: bool,
+    /// The turn's commit adds only an answer (a later agent of a routed
+    /// message), not a question and an answer: what the session's cursor
+    /// moves by.
+    pub answer_only: bool,
+}
+
+fn executor_of(detail: &Value, participant_id: i64) -> Option<&str> {
+    participants_of(detail)
+        .iter()
+        .find(|participant| participant.get("id").and_then(Value::as_i64) == Some(participant_id))
+        .and_then(|participant| participant.get("entity_settings"))
+        .and_then(|settings| settings.get("executor"))
+        .and_then(Value::as_str)
+}
+
+fn participants_of(detail: &Value) -> &[Value] {
+    detail
+        .get("participants")
+        .and_then(Value::as_array)
+        .map_or(&[][..], Vec::as_slice)
+}
+
+fn agent_count(detail: &Value) -> usize {
+    participants_of(detail)
+        .iter()
+        .filter(|participant| {
+            participant.get("entity_name").and_then(Value::as_str) == Some("application")
+        })
+        .count()
+}
+
+fn floor_target_in(detail: &Value, participant_id: i64) -> Result<FloorTarget, ApiError> {
+    participants_of(detail)
+        .iter()
+        .filter(|participant| {
+            participant.get("entity_name").and_then(Value::as_str) == Some("application")
+        })
+        .find(|participant| participant.get("id").and_then(Value::as_i64) == Some(participant_id))
+        .and_then(|participant| {
+            let application_id = participant
+                .get("entity_meta")
+                .and_then(|meta| meta.get("id"))
+                .and_then(Value::as_i64)?;
+            let version_id = participant
+                .get("entity_settings")
+                .and_then(|settings| settings.get("version_id"))
+                .and_then(Value::as_i64)?;
+            Some(FloorTarget {
+                participant_id,
+                application_id,
+                version_id,
+                cloud: executor_of(detail, participant_id) == Some(EXECUTOR_CLOUD),
+            })
+        })
+        .ok_or_else(|| {
+            ApiError::local(
+                "agent_not_in_conversation",
+                "the next agent of this message is not an agent of the conversation pinned to a version",
+            )
+        })
 }
 
 fn conversation_uuid(detail: &Value) -> Result<String, ApiError> {
@@ -1027,10 +1239,7 @@ fn author_id(author: &Value) -> Result<i64, ApiError> {
 }
 
 fn participant_for(detail: &Value, application_id: i64, version_id: i64) -> Result<i64, ApiError> {
-    let participants = detail
-        .get("participants")
-        .and_then(Value::as_array)
-        .map_or(&[][..], Vec::as_slice);
+    let participants = participants_of(detail);
     let mut unpinned = None;
     let mut other_versions: Vec<i64> = Vec::new();
     for participant in participants {
