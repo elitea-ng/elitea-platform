@@ -1,0 +1,28 @@
+[package]
+name = "elitea-faults"
+description = "Readable fault lines (FU-299): registered codes generated from libs/go/faults/registry, the Fault trait, cause chains made safe by type, the fault! macro and the operator JSON-lines stream."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[features]
+# The shared log-capture helper for tests (`logtest`): a child-process capture
+# of the operator stream. Never enabled by a production build.
+logtest = []
+
+[dependencies]
+# Default features only, like llm-wire and agent-runtime: a feature turned on
+# here would unify into the worker's serde_json and could change its digests.
+serde_json = "1.0.154"
+tracing = "0.1.44"
+tracing-core = "0.1.36"
+# `fmt` for `MakeWriter` only; the layer formats its own lines.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "registry", "std"] }
+
+[build-dependencies]
+serde_json = "1.0.154"
+
+[lints]
+workspace = true
