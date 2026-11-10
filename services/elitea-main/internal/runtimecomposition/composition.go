@@ -891,6 +891,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct nested application version reader: %w", nestedErr)
 		}
 		agentAdmissions.WithNestedMemoryToolkits(admissionNestedVersions)
+		// A retired agent, or one nesting a retired agent, is refused
+		// (ADR-0050 decision 5g, #1616).
+		admissionWorkforce, workforceErr := repos.ComposeAgentWorkforce(dependencies.AdmissionPool, nil)
+		if workforceErr != nil {
+			return nil, fmt.Errorf("construct agent workforce reader: %w", workforceErr)
+		}
+		agentAdmissions.WithRetiredAgents(admissionWorkforce)
 		// Governed runs freeze each toolkit's exact credential reference
 		// (#1119); nil with credential governance off.
 		governedCredentials, governedErr := governedAgentCredentials(dependencies.CredentialProfile, dependencies.AdmissionPool)
@@ -2581,6 +2588,19 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct propose agent tool: %w", proposeErr)
 		}
 		contentServer = contentServer.WithRuntimeProposeAgent(proposeAgent)
+	}
+	// propose_dismissal (#1616): the same claim and pool; the guards run in
+	// the workforce store. Absent where hand_floor is.
+	if agentFloors != nil {
+		workforce, workforceErr := repos.ComposeAgentWorkforce(dependencies.AdmissionPool, nil)
+		if workforceErr != nil {
+			return nil, fmt.Errorf("construct agent workforce store: %w", workforceErr)
+		}
+		proposeDismissal, dismissalErr := storage.NewRuntimeProposeDismissalService(contentRepository, workforce)
+		if dismissalErr != nil {
+			return nil, fmt.Errorf("construct propose dismissal tool: %w", dismissalErr)
+		}
+		contentServer = contentServer.WithRuntimeProposeDismissal(proposeDismissal)
 	}
 	// The `artifact` toolkit family's four routes (#906), registered the same
 	// way and nil for the same reasons: no agent dispatch, or no Go object

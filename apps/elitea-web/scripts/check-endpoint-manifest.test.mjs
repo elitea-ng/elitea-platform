@@ -919,7 +919,12 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // saveAgentHeartbeat, listAgentHeartbeats, getProjectProactivity and
 // setProjectProactivity, the heartbeat of a proactive agent. The agent
 // editor's Heartbeat panel calls the first three.
-const GENERATED_OPERATION_COUNT = 498;
+// 498 -> 511 (issue 1616, ADR-0050 decisions 5b and 5g-5m): getAgentWorkforce,
+// listAgentScorecards, getAgentWorkforceImpact, reinstateAgent,
+// listAgentWorkforceProposals, proposeAgentWorkforceStage,
+// getAgentWorkforceProposal, approve/reject/askOwner/comment/appeal
+// AgentWorkforceProposal and decideAgentWorkforceAppeal, the agent workforce.
+const GENERATED_OPERATION_COUNT = 511;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1205,8 +1210,14 @@ const GENERATED_OPERATION_COUNT = 498;
  * 337 -> 340 (issue 1618, ADR-0050 decision 2): agentHeartbeat.get, save
  * and history, the agent editor's Heartbeat tab
  * (features/agent-heartbeat). Generated.
+ *
+ * 340 -> 352 (issue 1616, ADR-0050 decisions 5b and 5g-5m): agentWorkforce
+ * .agent, scorecards, impact, reinstate, list, propose, approve, reject,
+ * askOwner, comment, appeal and decideAppeal, the agent editor's Workforce
+ * tab (features/agent-workforce). Generated. The single-proposal read
+ * (getAgentWorkforceProposal) is generated but not called.
  */
-const MANIFEST_ENTRY_COUNT = 340;
+const MANIFEST_ENTRY_COUNT = 352;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

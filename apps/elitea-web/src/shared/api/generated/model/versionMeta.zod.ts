@@ -133,6 +133,12 @@ export const VersionMeta = zod.object({
         .describe(
           "The agent may propose, with the propose_agent tool, that a temporary sub-agent it started become a saved agent (ADR-0050 decision 5a). The person it works for must also hold models.applications.applications.create.\n",
         ),
+      can_review_agents: zod
+        .boolean()
+        .optional()
+        .describe(
+          "The agent is an HR agent (ADR-0050 decision 5l): it may propose, with the propose_dismissal tool, a ladder stage for another agent of the project. It never decides; a person holding agents.workforce.manage does. Guards refuse a proposal against itself, its hirer, a higher tier, another HR agent, a critical-tier agent or one under legal hold.\n",
+        ),
     })
     .nullish()
     .describe(

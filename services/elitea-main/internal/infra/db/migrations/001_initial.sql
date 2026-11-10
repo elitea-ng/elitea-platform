@@ -1423,6 +1423,15 @@ CROSS JOIN (VALUES
 WHERE role.mode = 'default' AND role.name IN ('admin', 'editor')
 ON CONFLICT (role_id, permission) DO NOTHING;
 
+-- Issue 1616, the agent workforce (ADR-0050 decision 5b): the project admin
+-- is the agent manager. Existing databases get the grant from
+-- migrations/shared/0236_agent_workforce.sql.
+INSERT INTO auth_core__role_permission (role_id, permission)
+SELECT role.id, 'agents.workforce.manage'
+FROM auth_core__role AS role
+WHERE role.mode = 'default' AND role.name = 'admin'
+ON CONFLICT (role_id, permission) DO NOTHING;
+
 -- Default dev user
 INSERT INTO auth_core__user (id, email, name)
 VALUES (1, 'dev@elitea.ai', 'Dev User')

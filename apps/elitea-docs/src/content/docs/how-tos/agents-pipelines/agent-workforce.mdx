@@ -1,0 +1,68 @@
+---
+title: "Agent workforce: scorecards, the dismissal ladder and appeals"
+description: "Read an agent's daily scorecard, propose and decide watch, demote, suspend, retire or delete, let a reviewer agent propose them, appeal a decision and reinstate a retired agent."
+---
+
+Every agent of a project gets a daily **scorecard**. When an agent does badly, a person (or a reviewer agent) can propose a step on the **dismissal ladder**, and a person who manages agents decides it. The agent's owner can comment and appeal, and a retired agent can be reinstated for 30 days.
+
+Open an agent and select the **Workforce** tab.
+
+## The scorecard
+
+Once a day the platform computes, for each agent, over the last 30 days:
+
+- runs, failed runs and the failure rate, and runs stopped by a budget cap;
+- circuit-breaker trips (last 7 days), approval rejections and guardrail hits;
+- spend, next to the median spend of the project's agents;
+- thumbs up and down on its answers;
+- when it was last used, and its certification state.
+
+The tab shows the latest scorecard and the failure-rate trend. Scorecards are kept for 400 days. The daily job pauses during a maintenance window.
+
+## The ladder
+
+| Stage | What it does |
+|-------|--------------|
+| **Watch** | Flags the agent as under review. Nothing else changes. |
+| **Demote** | Takes away exactly what the proposal names: toolkits, the heartbeat, the capabilities `can_propose_agents` and `can_review_agents`, or its lead role in conversations; or sets its memory writes to need review. The heartbeat and the lead role go at once; the rest is written to the agent's draft and reaches its published version the next time you publish it. |
+| **Suspend** | Suspends the agent with the agent kill switch, so its runs are refused. Any admin can lift it. |
+| **Retire** | Unpublishes the agent and removes it from conversations and saved teams, drops it as a lead, turns its schedules and its heartbeat off and revokes its triggers. Other agents keep it as a sub-agent; their runs fail with `nested_agent_retired` until someone fixes them. Its history stays. |
+| **Delete** | Only after a retirement and its 30-day window, and never under legal hold: removes the agent's memory, schedules, triggers and versions. |
+
+Before you approve a suspension, retirement or deletion, the dialog shows what it touches: conversations, saved teams, agents that nest it, schedules, triggers and published versions. Retiring an agent other agents nest needs a confirmation.
+
+A critical-tier agent and an agent under legal hold cannot be proposed for any stage.
+
+## Propose a stage
+
+Select **Propose a stage**, pick the stage and give the rationale. A demotion lists exactly what it takes away. The latest scorecard is saved with the proposal as evidence. Only one proposal per agent can be open.
+
+You can propose if you manage agents in the project (permission `agents.workforce.manage`) or own the agent.
+
+## Decide a proposal
+
+A person with `agents.workforce.manage` (or the agent's owner) can **Approve** or **Reject**. A manager can first **Ask the owner**: the owner is notified and can **Comment** before anyone decides.
+
+The `agents.workforce.manage` permission is granted to the project **admin** role on upgrade. Grant it to other roles under **Settings → Roles**.
+
+## Reviewer (HR) agents
+
+An agent whose version sets the capability `can_review_agents` is a reviewer agent. It gets a `propose_dismissal` tool and can propose watch, demote, suspend or retire for another agent of the project, with its evidence. It never decides. It cannot propose a stage for itself, for the agent that hired it, for an agent of a higher risk tier or for another reviewer agent. A refused attempt is audited.
+
+```json
+{
+  "capabilities": { "can_review_agents": true }
+}
+```
+
+## Appeal
+
+The owner of an agent can **Appeal** an approved demotion, suspension or retirement once, within 30 days. Managers are notified. A manager who did not make the decision, and who does not own the agent, **grants** the appeal (the stage is reversed) or **upholds** it.
+
+## Reinstate a retired agent
+
+For 30 days after retirement, a manager can select **Reinstate**. The agent's published versions and release head, its conversation memberships, its lead roles, its saved team seats, its schedules, its triggers and its heartbeat come back, and its suspension is lifted. After the window it can only be deleted.
+
+## Audit
+
+Each step writes one `ai.elitea.security.v1.agent.workforce.changed` event, with action `agent.workforce.proposed`, `.approved`, `.rejected`, `.asked_owner`, `.owner_commented`, `.appealed`, `.appeal_granted`, `.appeal_upheld`, `.reinstated` or `.guard_refused`. See [Audit trail](/admin/audit-trail/).

@@ -1083,7 +1083,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// proactive agent (ADR-0050 decision 2, issue 1618):
 	// elitea_runtime.agent_heartbeats, the daily envelope's ledger. No data,
 	// no permission.
-	require.EqualValues(t, 235, Head(shared))
+	//
+	// 236: shared/0236_agent_workforce.sql, the agent workforce (ADR-0050
+	// decisions 5b, 5g-5j and 5l, issue 1616): the registry's under_review
+	// and lifecycle_state (active, retired, deleted) with the retire
+	// snapshot, elitea_lifecycle.agent_scorecards and
+	// agent_workforce_proposals, suspension source dismissal, and the
+	// agents.workforce.manage grant to the project admin.
+	require.EqualValues(t, 236, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
