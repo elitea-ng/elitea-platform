@@ -500,3 +500,155 @@ async fn real_pg_a_worker_killed_mid_registration_is_resumed_by_the_replacement(
         assert_eq!(dispatch_rows(&h).await, (8, 0), "{shape}");
     }
 }
+
+fn parallel_yaml(branches: usize, concurrency: usize) -> String {
+    let declared = (0..branches)
+        .map(|index| format!("{{id: b{index}, node: code_{index}}}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let nodes = (0..branches)
+        .map(|index| {
+            format!("  - {{id: code_{index}, type: code, language: python, code: 'return 41', input: [topic], output: [count]}}\n")
+        })
+        .collect::<String>();
+    format!(
+        "entry_point: gather\nstate:\n  topic: {{type: str, value: slots}}\n  count: {{type: int, value: 0}}\n  joined: {{type: list, value: []}}\nnodes:\n  - {{id: gather, type: parallel, branches: [{declared}], max_concurrency: {concurrency}, wait: all, output: [joined], transition: END}}\n{nodes}"
+    )
+}
+
+fn assert_branches_landed(state: &adk_rust::graph::State, count: usize) {
+    let joined = state["joined"].as_array().unwrap();
+    assert_eq!(joined.len(), count, "{joined:?}");
+    for entry in joined {
+        assert_eq!(entry["status"], "succeeded", "{entry}");
+        assert_eq!(entry["outputs"]["count"], 41);
+    }
+}
+
+/// M1, Worker kill x Parallel Code branch: a Parallel of 4 Code branches
+/// (concurrency 2); the Worker dies with two branches submitted. The
+/// replacement resumes the frozen occurrence: the in-flight branches
+/// re-attach to their own identities (R), the others run fresh, and every
+/// branch lands once.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_a_parallel_of_code_branches_survives_worker_replacement() {
+    let h = harness_with(
+        QUIET,
+        Duration::from_millis(400),
+        Some(2),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await;
+    install(&h).await;
+    h.answers
+        .lock()
+        .unwrap()
+        .extend((0..16).map(|_| completed()));
+    let definition = PipelineDefinition::from_yaml(&parallel_yaml(4, 2)).unwrap();
+    let graph = compiled(&h, 1, "parallel-root", &definition).await;
+    let killed = run_until(&graph, HashMap::new(), "parallel-root", || {
+        h.supervisor.lock().unwrap().submits >= 2
+    })
+    .await;
+    assert!(killed.is_none(), "the first Worker died mid-Parallel");
+    drop(graph);
+    let before = identities(&h);
+    assert_eq!(before.len(), 2, "two branches reached their intent");
+    let graph = compiled(&h, 2, "parallel-root", &definition).await;
+    let state = graph
+        .invoke(HashMap::new(), ExecutionConfig::new("parallel-root"))
+        .await
+        .expect("the replacement Worker completes the Parallel");
+    assert_branches_landed(&state, 4);
+    let after = identities(&h);
+    assert_eq!(after.len(), 4, "one dispatch identity per branch");
+    assert_eq!(
+        &after[..2],
+        &before[..],
+        "the in-flight identities were kept"
+    );
+    assert_eq!(dispatch_rows(&h).await, (4, 0));
+}
+
+/// M1, Supervisor kill x Code child, the job survives: the Supervisor
+/// answers busy while it restarts, then answers the same job. Every child
+/// re-attaches to its own identity (R): no new identity, nothing re-run, for
+/// a Map and for a Parallel.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_a_restarted_supervisor_reattaches_map_and_parallel_code_children() {
+    for (shape, yaml, input, count) in [
+        ("map", map_yaml(2, false), items(4), 4),
+        ("parallel", parallel_yaml(4, 2), HashMap::new(), 4),
+    ] {
+        let h = harness_with(
+            QUIET,
+            Duration::ZERO,
+            Some(2),
+            tokio::time::Instant::now() + Duration::from_secs(3600),
+        )
+        .await;
+        install(&h).await;
+        h.answers
+            .lock()
+            .unwrap()
+            .extend((0..8).map(|_| completed()));
+        *h.busy.lock().unwrap() = 3;
+        let definition = PipelineDefinition::from_yaml(&yaml).unwrap();
+        let graph = compiled(&h, 1, "fanout-root", &definition).await;
+        let state = graph
+            .invoke(input, ExecutionConfig::new("fanout-root"))
+            .await
+            .unwrap_or_else(|error| panic!("{shape}: the children re-attach: {error}"));
+        if shape == "map" {
+            assert_all_landed(&state, count);
+        } else {
+            assert_branches_landed(&state, count);
+        }
+        assert_eq!(identities(&h).len(), count, "{shape}: no child re-ran");
+        assert_eq!(
+            dispatch_rows(&h).await,
+            (i64::try_from(count).unwrap(), 0),
+            "{shape}"
+        );
+        assert_eq!(*h.busy.lock().unwrap(), 0, "{shape}: the restart was met");
+    }
+}
+
+/// M1, Supervisor kill x Parallel Code branch, runtime lost: each lost
+/// branch is re-run once with a new identity (I, FU-214) and lands once.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_a_supervisor_losing_parallel_code_branches_reruns_each_once() {
+    let h = harness_with(
+        QUIET,
+        Duration::ZERO,
+        Some(2),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await;
+    install(&h).await;
+    h.answers.lock().unwrap().extend(
+        [
+            terminal("sandbox.runtime_lost"),
+            terminal("sandbox.runtime_lost"),
+        ]
+        .into_iter()
+        .chain((0..8).map(|_| completed())),
+    );
+    let definition = PipelineDefinition::from_yaml(&parallel_yaml(4, 2)).unwrap();
+    let graph = compiled(&h, 1, "parallel-root", &definition).await;
+    let state = graph
+        .invoke(HashMap::new(), ExecutionConfig::new("parallel-root"))
+        .await
+        .expect("the lost branches re-run once");
+    assert_branches_landed(&state, 4);
+    assert_eq!(h.supervisor.lock().unwrap().submits, 6);
+    assert_eq!(
+        identities(&h).len(),
+        6,
+        "two lost branches, one new identity each"
+    );
+    assert_eq!(dispatch_rows(&h).await, (6, 0));
+}

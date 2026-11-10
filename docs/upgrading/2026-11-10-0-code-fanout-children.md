@@ -37,6 +37,10 @@
 - **Who is affected.** Pipeline authors (Code is now offered as a Map worker and a Parallel branch); operators who
   roll out Main and the Workers separately.
 - **What to do.**
+  - Deploy order (C5): Main before the Workers. An older Main refuses a newer Worker's fan-out Code child visit
+    fail-closed and typed (`pipeline.code_authorization_failed` for that item), before any intent or dispatch: no
+    effect, no data risk. A newer Main with an older Worker changes nothing: the older Worker never produces a fan-out
+    Code child. There is no migration in this change; the per-thread pending operator index is FU-310.
   - Roll out Main first, then the Workers. A Main without this change refuses to save or start a pipeline with a
     Code worker or branch (`PIPELINE_MAP_FORM_UNSUPPORTED`, `PIPELINE_PARALLEL_BRANCH_UNSUPPORTED`), and refuses the
     Code visit of such an item (its owner scope is new), so the item fails readably and nothing hangs. No migration is

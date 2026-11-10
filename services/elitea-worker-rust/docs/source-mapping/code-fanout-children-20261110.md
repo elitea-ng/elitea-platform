@@ -195,8 +195,10 @@ gained the two new fields (`code: None, code_recovery: false`) in four test file
 
 | Component × phase | Class | Enforced by | Proven by |
 |---|---|---|---|
-| Worker lost mid-Map, items completed or in flight (P10 in P13) | R (completed replay, in-flight re-attach to their own identity) | frozen occurrence + per-child receipts, per-child visit-scoped journal (`parallel_compiler.rs:1034`), canonical visit (`fanout_code_child.rs:101`) | `real_pg_a_map_of_8_code_items_survives_worker_replacement` |
-| Supervisor loses a Code item's runtime (P12/P13) | I (re-run once, new identity, FU-214) | the child's `RecoverableNode` with the default policy | `real_pg_a_supervisor_losing_code_items_reruns_each_once` |
+| Worker kill × Code child of a **Map**, items completed or in flight (P10 in P13) | R (completed replay, in-flight re-attach to their own identity) | frozen occurrence + per-child receipts, per-child visit-scoped journal (`parallel_compiler.rs`, `compile_code_branch`), canonical visit (`fanout_code_child.rs`) | real-PG: `real_pg_a_map_of_8_code_items_survives_worker_replacement`, `real_pg_a_worker_killed_mid_registration_is_resumed_by_the_replacement`; Main half: `TestATakeoverReRegistersEveryMapItemOnTheProductionPathPostgres`. **Real browser** (case 4, "Real-browser evidence"): Worker kills W1, W2, W3, each a Map of 8 items, 8 visits / 8 activations / 8 intents, 0 WARN/ERROR, 0 advisory and 0 waiting locks, ordered answers persisting after a main-chat reload (W3) |
+| Worker kill × Code branch of a **Parallel** | R (same mechanism) | as above; a Code branch is a path-free child (`for_child`, R3) | real-PG: `real_pg_a_parallel_of_code_branches_survives_worker_replacement` (4 branches, killed with 2 submitted: identities kept, 4 land once). The browser kills were **Map only**; Parallel recovery is proven by the real-PG test (the browser proves a Parallel of Code branches runs, case 3) |
+| Supervisor kill × Code child of a **Map** | **R** (re-attach when the job survives) / **I** (re-run once with a new identity when the runtime is lost, FU-214) | the child's `RecoverableNode` (default policy) and the dispatch journal's re-attach | R: **real browser** case 4, Supervisor kills S1, S2, S3, each a Map of 8 items: the jobs re-attached, intents stayed at 8 (no re-run), 8 / 8 / 8, 0 WARN/ERROR, 0 locks, answers persisting after reload; real-PG `real_pg_a_restarted_supervisor_reattaches_map_and_parallel_code_children` (map). I: real-PG `real_pg_a_supervisor_losing_code_items_reruns_each_once` |
+| Supervisor kill × Code branch of a **Parallel** | R / I (as above) | as above | real-PG only (the browser kills were Map only): R `real_pg_a_restarted_supervisor_reattaches_map_and_parallel_code_children` (parallel), I `real_pg_a_supervisor_losing_parallel_code_branches_reruns_each_once` |
 | Platform-client Code item killed after dispatch, owner proof present (P11 in P13) | C (reconciled from the owner's journal, settles typed, never re-run) | the attempt's owner query, same as root Code | `real_pg_a_platform_client_code_item_killed_after_dispatch_is_reconciled_never_rerun` (Effects::None) |
 | A Code item that may have started, owner proof missing | **F** (typed `child_effect_unknown`, readable sentence, support_ref, never repeated, partial results kept, no slot held) | `node_recovery_runtime.rs` visit rule, `CodeBranchNode` (`fanout_code_child.rs:150`) | `..._is_reconciled_never_rerun` (Effects::Possible), `an_unproven_code_branch_..._under_continue`, `an_unproven_code_item_stops_the_map_typed_and_keeps_completed_items`, `a_code_child_that_needs_an_operator_ends_typed_and_holds_no_slot` |
 | Worker × activation refused by deadline | F (typed, nothing started) | `admit` in `freeze` (`parallel_checkpoint.rs:139`) | `a_refused_activation_freezes_and_starts_nothing`, `a_refused_code_fanout_starts_no_item_and_ends_typed`, 64/65 and limit−1 ms |
@@ -225,6 +227,13 @@ platform-client item with the owner's proof is reconciled (C).
 - **C5** — met by construction: the Worker produces no pending operator visit for a fan-out child (C4 test: an error,
   never the `pipeline_node_recovery` interrupt), so the 0146 single-pending index is never challenged by 2a. The index
   swap moves with §2.6.
+- **C5, deploy order.** Main deploys before the Worker. An older Main given a newer Worker's fan-out Code child: its
+  save check refuses a Code Map worker or Parallel branch (`PIPELINE_MAP_FORM_UNSUPPORTED`,
+  `PIPELINE_PARALLEL_BRANCH_UNSUPPORTED`), and a visit carrying the new fan-out owner scope does not decode as its
+  saved-child reference, so it is refused fail-closed (`Aborted` → the item ends `pipeline.code_authorization_failed`),
+  typed, before any intent or dispatch: no effect, no data risk. A newer Main with an older Worker: the older Worker
+  refuses a Code fan-out child at compile time, so no fan-out Code child visit is produced and nothing changes. No
+  migration in 2a; the 0146 per-thread pending index is FU-310.
 - **N1** — `a_per_attempt_refusal_names_the_failed_item`. The per-attempt check still guards an underestimated Code
   time (a Router loop in 2b, or preparation): a late attempt is refused typed, it never overruns.
 - **N2** — `libs/proto/contracts/pipeline-fanout-child-families-v1.json`, asserted by the Worker, Main and Web.
