@@ -1179,11 +1179,11 @@ const fanoutAgentCallsPipelineSafeMessage = "A Map item or Parallel branch runs 
 // left cannot hold the Code timeout plus the observation margin. Nothing ran;
 // not retryable. The Worker's registered text (protocol/output.rs
 // CODE_DEADLINE_INSUFFICIENT_MESSAGE, registry runtime.code_deadline_insufficient).
-const codeDeadlineInsufficientSafeMessage = "The Code node could not start because too little time was left before the run's deadline."
+const codeDeadlineInsufficientSafeMessage = "The Code node could not start: too little time was left before the run's deadline."
 
 // W3-1 registers it, W3-2 raises it: a fan-out of Code items that cannot
 // finish before the run's deadline (registry runtime.fanout_deadline_insufficient).
-const fanoutDeadlineInsufficientSafeMessage = "The fan-out node could not start because its items cannot finish before the run's deadline."
+const fanoutDeadlineInsufficientSafeMessage = "The fan-out node could not start: too little time was left before the run's deadline for its items."
 
 // The budget scope that refused a model call (#6732). The gateway names the
 // scope in its 402 refusal (error.code insufficient_quota for the project

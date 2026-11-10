@@ -16,7 +16,7 @@
       value that is not a whole number from 1 to 1024.
   - **Code nodes are admitted against the run's deadline.** A Code attempt that has not started yet runs only when
     the run has at least the Code timeout (`timeout_seconds`) plus 90 seconds left. Otherwise it stops before anything
-    is sent, and the chat shows: "The Code node could not start because too little time was left before the run's
+    is sent, and the chat shows: "The Code node could not start: too little time was left before the run's
     deadline." An attempt that may already have started (recovery after a restart) is never refused this way; it is
     reconciled as before.
     - With the default 24-hour run deadline and the shipped 60 s and 180 s Code timeouts, only the last 150 s or 270 s
@@ -24,8 +24,8 @@
     - The Worker logs the refusal as one WARN line, code `pipeline.code.deadline_insufficient`, with `node_id`,
       `required_ms`, `remaining_ms`, `slots` and `support_ref` (the execution id). When the wait for a slot used up the
       time, the line also has `cause: slot_wait` and `slot_wait_ms`: the Worker was full, not the run late.
-  - **One more registered failure text,** for W3-2: "The fan-out node could not start because its items cannot finish
-    before the run's deadline." Nothing raises it yet.
+  - **One more registered failure text,** for W3-2: "The fan-out node could not start: too little time was left
+    before the run's deadline for its items." Nothing raises it yet.
 - **Who is affected.**
   - Deployments whose Supervisor `concurrency` is not 4: the Worker now limits itself to 4 per target unless
     `code_slots` says otherwise.

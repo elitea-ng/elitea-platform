@@ -214,13 +214,13 @@ fn all_registered_runtime_failures_use_only_canonical_safe_policy() {
         (
             RuntimeFailureKind::CodeDeadlineInsufficient,
             RuntimeErrorCodeV1::PipelineCodeFailed,
-            "The Code node could not start because too little time was left before the run's deadline.",
+            "The Code node could not start: too little time was left before the run's deadline.",
             false,
         ),
         (
             RuntimeFailureKind::FanoutDeadlineInsufficient,
             RuntimeErrorCodeV1::PipelineToolFailed,
-            "The fan-out node could not start because its items cannot finish before the run's deadline.",
+            "The fan-out node could not start: too little time was left before the run's deadline for its items.",
             false,
         ),
         (
@@ -245,17 +245,11 @@ fn all_registered_runtime_failures_use_only_canonical_safe_policy() {
         assert_eq!(error.code, expected_code as i32);
         assert_eq!(error.safe_message, expected_message);
         assert_eq!(error.retryable, expected_retryable);
-        // No upstream cause rides in the frame: the only "cause" bytes are the
-        // registered sentence's own ("because").
-        let causes = |bytes: &[u8]| {
-            bytes
+        assert!(
+            frame
+                .encode_to_vec()
                 .windows(5)
-                .filter(|window| *window == b"cause")
-                .count()
-        };
-        assert_eq!(
-            causes(&frame.encode_to_vec()),
-            causes(expected_message.as_bytes())
+                .all(|window| window != b"cause")
         );
         assert_eq!(
             frame.settlement_proposal.unwrap().requested_outcome,

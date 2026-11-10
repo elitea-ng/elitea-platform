@@ -64,7 +64,7 @@ const (
 	RuntimeCapReachedMaxRecordsRead Code = "runtime.cap_reached.max_records_read"
 	// The run stopped because it reached the maximum number of tool calls an administrator set. The task may be incomplete. Check what it completed before you continue.
 	RuntimeCapReachedMaxToolCalls Code = "runtime.cap_reached.max_tool_calls"
-	// The Code node could not start because too little time was left before the run's deadline.
+	// The Code node could not start: too little time was left before the run's deadline.
 	RuntimeCodeDeadlineInsufficient Code = "runtime.code_deadline_insufficient"
 	// Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.
 	RuntimeCodePreparationCancelled Code = "runtime.code_preparation_cancelled"
@@ -90,7 +90,7 @@ const (
 	RuntimeExecutionInputLimit Code = "runtime.execution_input_limit"
 	// A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools.
 	RuntimeFanoutAgentCallsPipeline Code = "runtime.fanout_agent_calls_pipeline"
-	// The fan-out node could not start because its items cannot finish before the run's deadline.
+	// The fan-out node could not start: too little time was left before the run's deadline for its items.
 	RuntimeFanoutDeadlineInsufficient Code = "runtime.fanout_deadline_insufficient"
 	// The pipeline stopped because a Map item or Parallel branch failed (On Error is Stop, or every item failed). The other items finished first; later nodes did not run. Open Execution details to see the failed item.
 	RuntimeFanoutMemberFailed Code = "runtime.fanout_member_failed"

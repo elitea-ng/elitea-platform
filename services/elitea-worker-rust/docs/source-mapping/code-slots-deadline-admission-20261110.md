@@ -120,7 +120,7 @@ unknown-effect visit for owner recovery).
 | Worker real PostgreSQL (`node_recovery_code_wiring_tests.rs`) | `real_pg_root_code_with_too_little_time_is_refused_without_a_dispatch_row`, `real_pg_busy_from_another_worker_backs_off_without_releasing_the_slot`, `real_pg_one_slot_runs_one_attempt_through_preparation_and_run`, `real_pg_supervisor_busy_is_one_info_line_per_attempt` | pass: the whole CI prefix `agents::graph::node_recovery_runtime::tests::code_owner_tests::` with `--ignored` gives 24 passed, 0 failed on a disposable PostgreSQL 17, including all four |
 | Fallback rule and substitution | `post_baseline_kinds_fall_back_to_a_baseline_kind_of_the_same_wire_code`, `the_fallback_is_substituted_at_most_once` (`protocol/output.rs`); `a_refused_post_baseline_failure_is_replaced_once_by_its_fallback_and_settles`, `a_refused_fallback_is_not_substituted_again` (`execution/output_delivery_tests.rs`, through the recovery processor) | pass |
 | Log lines | `slot_waits_and_supervisor_busy_are_one_info_line_each` (+ child): uncontended no line, 2 s wait one INFO line, Busy one line per attempt | pass |
-| Worker lib, whole suite | `cargo test --lib --all-features` | 3129 passed, 0 failed, 114 ignored; after merging `main` (FU-299 as #1874): 3142 passed, 0 failed, 114 ignored; clippy `-D warnings` clean |
+| Worker lib, whole suite | `cargo test --lib --all-features` | 3129 passed, 0 failed, 114 ignored; after merging `main` (FU-299 as #1874) and the review fixes: 3143 passed, 0 failed, 114 ignored; clippy `-D warnings` clean |
 | Main | `TestDeadlineAdmissionFailuresShowTheirReadableText`, `TestDeadlineAdmissionTextsMatchTheFaultRegistry`, `TestOutputServerAcceptsDeadlineAdmissionFailureFrames`, `TestAnUnknownFailureIsRefusedOnceAndItsSameCodeFallbackEndsTheRunTyped` (C3) | package: 55 top-level tests pass |
 | FU-299 gates | `go test ./...` in `libs/go/faults` (well-formed, generated, guide, no orphans, legacy) | pass |
 | Helm render scripts (not CI-wired; chart dependencies built under a scratch `HELM_*` config) | `render-worker-sandbox.sh` (codeSlots: absent not written, 4 rendered as integer `code_slots`, 0/1025/2.5/"four" refused, 1024 rendered), `render-worker-node-recovery.sh` 16/16, `render-worker.sh` 13/13, `render-compiled-snapshots.py` OK; then every `render-*.sh` | **44 of 44 pass.** `render-helm3-parity.sh` ran with `HELM3` set to the official Helm v3.17.3 darwin-arm64 release (`get.helm.sh`, its published SHA-256 checked, unpacked in the session scratchpad, not installed on PATH) and `HELM4` set to Helm v4.1.0: "Helm v3.17.3+ge4da497 and v4.1.0+g4553a0a render the same chart". |
@@ -238,6 +238,11 @@ No database fixture was created. The browser fixture (pipeline 170) was created 
       lines carry `execution_id` as the orchestrator specified; the value is the same.
     - `required_window(1, 1, …)` on a single attempt: one formula for the attempt and the fan-out.
     - `FanoutDeadlineInsufficient` has no caller yet: W3-2 wires it (D3).
+- **The two user texts and the existing frame guard.** The first wording ("… could not start because …") put the bytes
+  `cause` into the frame and loosened the existing assertion in `all_registered_runtime_failures_use_only_canonical_safe_policy`.
+  As the orchestrator decided, both texts now use a colon ("The Code node could not start: too little time was left
+  before the run's deadline."), and that assertion is exactly as on `main`. The test only gains the two new rows and a
+  clippy allow.
 - **security-review**: no finding. Surfaces checked against `rules/security.md`:
   - Main admits the new texts only exactly, under their wire code.
   - The fallback frame is built by the Worker, never copied from the refused frame, and is validated by Main again.

@@ -93,7 +93,7 @@
     },
     {
       "code": "runtime.code_deadline_insufficient",
-      "sentence": "The Code node could not start because too little time was left before the run's deadline.",
+      "sentence": "The Code node could not start: too little time was left before the run's deadline.",
       "action": "Run it again, or give the run more time if this keeps happening.",
       "audience": "user",
       "retryable": "no",
@@ -223,7 +223,7 @@
     },
     {
       "code": "runtime.fanout_deadline_insufficient",
-      "sentence": "The fan-out node could not start because its items cannot finish before the run's deadline.",
+      "sentence": "The fan-out node could not start: too little time was left before the run's deadline for its items.",
       "action": "Lower the number of items, raise the node's concurrency, or give the run more time.",
       "audience": "user",
       "retryable": "no",
