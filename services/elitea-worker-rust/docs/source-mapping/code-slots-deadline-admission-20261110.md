@@ -62,7 +62,7 @@ unknown-effect visit for owner recovery).
 - Main: `internal/transport/runtimegrpc/output/server.go` and `deadline_admission_failure_test.go`.
 - Deploy: Helm `values.yaml`, `templates/worker/configmap-runtime.yaml`, `tests/render-worker-sandbox.sh`;
   `deploy/runtime/code-platform-startup.example.json` and `.md`.
-- `docs/upgrading/2026-11-10-0-code-slots-deadline-admission.md` (the issue number in the name is a placeholder).
+- `docs/upgrading/2026-11-10-1879-code-slots-deadline-admission.md` (PR #1879).
 
 ## Design as built
 
