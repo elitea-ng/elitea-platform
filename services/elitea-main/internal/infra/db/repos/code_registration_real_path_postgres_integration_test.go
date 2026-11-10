@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -44,14 +45,20 @@ const (
 // realPathWorld is one running execution whose Map "each" owns the Code
 // worker "shout" (fanoutInstructions), claimed by one Worker.
 type realPathWorld struct {
-	w       *effectsWorld
-	repo    *CodeIntentRepository
-	claim   storage.ContentClaim
-	root    string
-	yamlSHA string
+	w            *effectsWorld
+	repo         *CodeIntentRepository
+	claim        storage.ContentClaim
+	root         string
+	yamlSHA      string
+	instructions string
 }
 
 func newRealPathWorld(t *testing.T, execution, claimID string, fence byte) *realPathWorld {
+	t.Helper()
+	return newRealPathWorldWith(t, execution, claimID, fence, fanoutInstructions)
+}
+
+func newRealPathWorldWith(t *testing.T, execution, claimID string, fence byte, fanoutInstructions string) *realPathWorld {
 	t.Helper()
 	w := newEffectsWorld(t)
 	project := w.project()
@@ -109,14 +116,15 @@ VALUES ($1, 1, 'command-'||$1, ($2::int)::text, $2::int, $2::int, $3, 'user:'||$
 	// client (the visit and intent never call it).
 	repo := &CodeIntentRepository{shared: shared, permissions: checkRecoveryPermission, signer: signer, sources: sources}
 	return &realPathWorld{w: w, repo: repo, claim: claim,
-		root:    httpapp.RootGraphThread(fmt.Sprint(project), project, project, "map-thread"),
-		yamlSHA: code.Digest([]byte(fanoutInstructions))}
+		root:         httpapp.RootGraphThread(fmt.Sprint(project), project, project, "map-thread"),
+		yamlSHA:      code.Digest([]byte(fanoutInstructions)),
+		instructions: fanoutInstructions}
 }
 
 // visit is the visit request the Worker sends for Map item `item` of `count`.
 func (r *realPathWorld) visit(t *testing.T, item, count int) (code.VisitRequest, []byte) {
 	t.Helper()
-	policy, err := storage.OriginalSavedCodePolicy(fanoutInstructions, r.yamlSHA, "shout")
+	policy, err := storage.OriginalSavedCodePolicy(r.instructions, r.yamlSHA, "shout")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +148,7 @@ func (r *realPathWorld) register(ctx context.Context, t *testing.T, item, count 
 	if err != nil {
 		return fmt.Errorf("visit: %w", err)
 	}
-	policy, _ := storage.OriginalSavedCodePolicy(fanoutInstructions, r.yamlSHA, "shout")
+	policy, _ := storage.OriginalSavedCodePolicy(r.instructions, r.yamlSHA, "shout")
 	declaration, _ := storage.MatchOriginalSavedCodeConfiguration(policy, realPathWorkerCfg)
 	metadata, err := storage.MatchCodePrepared(declaration, []byte(realPathWorkerCfg), prepared)
 	if err != nil {
@@ -346,7 +354,7 @@ func TestATransientDatabaseFailureIsRetryableNeverARefusalPostgres(t *testing.T)
 	}
 	// The intent: its visit cannot be read in time.
 	_, prepared := r.visit(t, 0, 2)
-	policy, _ := storage.OriginalSavedCodePolicy(fanoutInstructions, r.yamlSHA, "shout")
+	policy, _ := storage.OriginalSavedCodePolicy(r.instructions, r.yamlSHA, "shout")
 	declaration, _ := storage.MatchOriginalSavedCodeConfiguration(policy, realPathWorkerCfg)
 	metadata, err := storage.MatchCodePrepared(declaration, []byte(realPathWorkerCfg), prepared)
 	if err != nil {
@@ -366,4 +374,59 @@ func TestATransientDatabaseFailureIsRetryableNeverARefusalPostgres(t *testing.T)
 		t.Fatalf("the intent did not continue once the database was back: %v", err)
 	}
 	waitNoAdvisoryLocks(t, r.w)
+}
+
+// R8: per-visit registration latency of a 64-item Map on the production
+// path (visit then intent, one item at a time, so it measures the work under
+// the run's row lock rather than the wait). Logged for the source mapping.
+func TestPerVisitRegistrationLatencyOfA64ItemMapPostgres(t *testing.T) {
+	const items = 64
+	instructions := strings.Replace(fanoutInstructions, "max_items: 8", "max_items: 64", 1)
+	r := newRealPathWorldWith(t, effectsParent, effectsClaim2, 3, instructions)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	visits, intents := make([]time.Duration, 0, items), make([]time.Duration, 0, items)
+	intentParses := 0
+	for item := range items {
+		request, prepared := r.visit(t, item, items)
+		started := time.Now()
+		visit, err := r.repo.RegisterOriginalCodeVisit(ctx, r.claim, request)
+		if err != nil {
+			t.Fatalf("item %d: %v", item, err)
+		}
+		visits = append(visits, time.Since(started))
+		policy, _ := storage.OriginalSavedCodePolicy(r.instructions, r.yamlSHA, "shout")
+		declaration, _ := storage.MatchOriginalSavedCodeConfiguration(policy, realPathWorkerCfg)
+		metadata, err := storage.MatchCodePrepared(declaration, []byte(realPathWorkerCfg), prepared)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intent := code.IntentRequest{Schema: "elitea.sandbox.original-code-intent-request.v1", OriginalVisit: visit.OriginalVisit, DispatchActivation: fmt.Sprintf("%064x", 0xd000+item),
+			RequestDigest: metadata.Fingerprint, SupervisorAudience: realPathAudience, PreparedBase64URL: base64.RawURLEncoding.EncodeToString(prepared)}
+		parses := storage.SavedCodeParsesForTests()
+		started = time.Now()
+		if _, err := r.repo.RegisterOriginalCodeIntent(ctx, r.claim, intent); err != nil {
+			t.Fatalf("item %d intent: %v", item, err)
+		}
+		intents = append(intents, time.Since(started))
+		intentParses = int(storage.SavedCodeParsesForTests() - parses)
+	}
+	quantile := func(samples []time.Duration, q float64) time.Duration {
+		sorted := append([]time.Duration(nil), samples...)
+		slices.Sort(sorted)
+		return sorted[int(q*float64(len(sorted)-1))]
+	}
+	t.Logf("R8-REGISTRATION-LATENCY items=%d visit_p50=%v visit_p99=%v intent_p50=%v intent_p99=%v yaml_parses_per_visit=%d yaml_parses_per_intent=%d",
+		items, quantile(visits, 0.5), quantile(visits, 0.99), quantile(intents, 0.5), quantile(intents, 0.99), parsesPerVisit(t, r), intentParses)
+}
+
+// parsesPerVisit counts the YAML parses one more visit registration makes.
+func parsesPerVisit(t *testing.T, r *realPathWorld) int {
+	t.Helper()
+	request, _ := r.visit(t, 0, 64)
+	before := storage.SavedCodeParsesForTests()
+	if _, err := r.repo.RegisterOriginalCodeVisit(t.Context(), r.claim, request); err != nil {
+		t.Fatal(err)
+	}
+	return int(storage.SavedCodeParsesForTests() - before)
 }

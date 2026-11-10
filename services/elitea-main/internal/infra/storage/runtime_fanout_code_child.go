@@ -27,10 +27,15 @@ const maxFanoutChildren = 64
 //
 // In both, ownedNodeID is a Code node. Anything else is ErrContentUnauthorized.
 func FanoutCodeChildOwner(instructions, kind, nodeID, ownedNodeID string, ordinal, itemCount uint32) error {
+	return ParseSavedCodeDocument(instructions).FanoutCodeChildOwner(kind, nodeID, ownedNodeID, ordinal, itemCount)
+}
+
+// FanoutCodeChildOwner is the package function on the parsed document.
+func (d *SavedCodeDocument) FanoutCodeChildOwner(kind, nodeID, ownedNodeID string, ordinal, itemCount uint32) error {
 	if itemCount == 0 || itemCount > maxFanoutChildren || ordinal >= itemCount || !codeDebugNodeID(nodeID) || !codeDebugNodeID(ownedNodeID) || nodeID == ownedNodeID {
 		return ErrContentUnauthorized
 	}
-	nodes, err := savedCodeNodes(instructions)
+	nodes, err := d.Nodes()
 	if err != nil {
 		return ErrContentUnauthorized
 	}

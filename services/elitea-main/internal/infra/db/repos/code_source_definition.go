@@ -42,7 +42,7 @@ func (reader *CodeDefinitionSourceAdapter) readOriginalCodeSource(ctx context.Co
 			return scope.SourceDefinition{}, err
 		}
 		// Root membership excludes Map/Parallel-owned nodes via the one pure parser.
-		if _, err = storage.OriginalRootSavedCodePolicy(source.Instructions, source.Reference.YAMLSHA256, node); err != nil {
+		if _, err = storage.SavedCodeDocumentFor(ctx, source.Instructions).RootSavedCodePolicy(source.Reference.YAMLSHA256, node); err != nil {
 			return scope.SourceDefinition{}, err
 		}
 		return source, nil
@@ -111,7 +111,7 @@ func (reader *CodeDefinitionSourceAdapter) readFanoutCodeChildSource(ctx context
 	if err != nil {
 		return scope.SourceDefinition{}, err
 	}
-	if err := storage.FanoutCodeChildOwner(source.Instructions, child.Kind, child.NodeID, child.OwnedNodeID, child.Ordinal, child.ItemCount); err != nil {
+	if err := storage.SavedCodeDocumentFor(ctx, source.Instructions).FanoutCodeChildOwner(child.Kind, child.NodeID, child.OwnedNodeID, child.Ordinal, child.ItemCount); err != nil {
 		return scope.SourceDefinition{}, err
 	}
 	return source, nil

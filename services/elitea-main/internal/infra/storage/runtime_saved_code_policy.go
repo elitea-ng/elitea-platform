@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"reflect"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 )
@@ -44,10 +45,17 @@ func SavedCodePolicies(instructions string) (map[string][]byte, error) {
 }
 
 // Parse one bounded document through the same declaration normalization owner.
+// savedCodeParses counts savedCodeRoot's YAML parses (R8 measurement).
+var savedCodeParses atomic.Int64
+
+// SavedCodeParsesForTests is the number of saved-code YAML parses so far.
+func SavedCodeParsesForTests() int64 { return savedCodeParses.Load() }
+
 func savedCodeRoot(instructions string) (*yaml.Node, error) {
 	if len(instructions) == 0 || len(instructions) > 1024*1024 {
 		return nil, ErrContentRejected
 	}
+	savedCodeParses.Add(1)
 	var document yaml.Node
 	decoder := yaml.NewDecoder(bytes.NewBufferString(instructions))
 	if decoder.Decode(&document) != nil || len(document.Content) != 1 {
@@ -67,10 +75,10 @@ func savedCodeRoot(instructions string) (*yaml.Node, error) {
 	return root, nil
 }
 func savedCodeNodes(instructions string) (*yaml.Node, error) {
-	root, err := savedCodeRoot(instructions)
-	if err != nil {
-		return nil, err
-	}
+	return ParseSavedCodeDocument(instructions).Nodes()
+}
+
+func savedCodeNodesOf(root *yaml.Node) (*yaml.Node, error) {
 	fields, err := savedCodeShallowFields(root)
 	if err != nil {
 		return nil, ErrContentRejected
@@ -432,10 +440,15 @@ func ReadSavedCodeDeclaration(policy []byte, validatedConfigurationDigest [32]by
 
 // Use only instructions returned by immutable root input or registered saved-child lookup.
 func OriginalSavedCodePolicy(instructions, yamlSHA256, nodeID string) ([]byte, error) {
-	if !debugHex(yamlSHA256) || !codeDebugNodeID(nodeID) || CodeDebugSHA256([]byte(instructions)) != yamlSHA256 {
+	return ParseSavedCodeDocument(instructions).SavedCodePolicy(yamlSHA256, nodeID)
+}
+
+// SavedCodePolicy is OriginalSavedCodePolicy on the parsed document.
+func (d *SavedCodeDocument) SavedCodePolicy(yamlSHA256, nodeID string) ([]byte, error) {
+	if !debugHex(yamlSHA256) || !codeDebugNodeID(nodeID) || d.sha != yamlSHA256 {
 		return nil, ErrContentUnauthorized
 	}
-	nodes, err := savedCodeNodes(instructions)
+	nodes, err := d.Nodes()
 	if err != nil {
 		return nil, ErrContentUnauthorized
 	}
@@ -480,11 +493,16 @@ func OriginalSavedCodePolicy(instructions, yamlSHA256, nodeID string) ([]byte, e
 // Registered child lookup uses OriginalSavedCodePolicy after exact AllowsNode checks.
 // This establishes declaration membership, not an active graph frontier or a grant.
 func OriginalRootSavedCodePolicy(instructions, yamlSHA256, nodeID string) ([]byte, error) {
-	policy, err := OriginalSavedCodePolicy(instructions, yamlSHA256, nodeID)
+	return ParseSavedCodeDocument(instructions).RootSavedCodePolicy(yamlSHA256, nodeID)
+}
+
+// RootSavedCodePolicy is OriginalRootSavedCodePolicy on the parsed document.
+func (d *SavedCodeDocument) RootSavedCodePolicy(yamlSHA256, nodeID string) ([]byte, error) {
+	policy, err := d.SavedCodePolicy(yamlSHA256, nodeID)
 	if err != nil {
 		return nil, err
 	}
-	nodes, err := savedCodeNodes(instructions)
+	nodes, err := d.Nodes()
 	if err != nil {
 		return nil, ErrContentUnauthorized
 	}

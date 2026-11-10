@@ -222,9 +222,9 @@ func (r *CodeIntentRepository) originalPolicy(ctx context.Context, tx sqlExecuto
 	}
 	var policy []byte
 	if bytes.Equal(bytes.TrimSpace(v.Scope), []byte("null")) {
-		policy, err = storage.OriginalRootSavedCodePolicy(instructions, v.YAML, v.Node)
+		policy, err = storage.SavedCodeDocumentFor(ctx, instructions).RootSavedCodePolicy(v.YAML, v.Node)
 	} else {
-		policy, err = storage.OriginalSavedCodePolicy(instructions, v.YAML, v.Node)
+		policy, err = storage.SavedCodeDocumentFor(ctx, instructions).SavedCodePolicy(v.YAML, v.Node)
 	}
 	if err != nil {
 		return nil, err
@@ -250,6 +250,8 @@ func (r *CodeIntentRepository) RegisterOriginalCodeVisit(ctx context.Context, cl
 		return code.VisitResponse{}, code.ErrRejected
 	}
 	var out code.VisitResponse
+	// R8: the frozen source is parsed once for the whole registration.
+	ctx = storage.WithSavedCodeDocuments(ctx)
 	err = withinCodeRegistrationTx(ctx, r.shared, func(tx sqlExecutor) error {
 		a, err := r.lockAccess(ctx, tx, claim, "RUNNING")
 		if err != nil {
@@ -265,9 +267,9 @@ func (r *CodeIntentRepository) RegisterOriginalCodeVisit(ctx context.Context, cl
 		v.OwningSource = source.Reference
 		var policy []byte
 		if bytes.Equal(bytes.TrimSpace(v.Scope), []byte("null")) {
-			policy, err = storage.OriginalRootSavedCodePolicy(source.Instructions, v.YAML, v.Node)
+			policy, err = storage.SavedCodeDocumentFor(ctx, source.Instructions).RootSavedCodePolicy(v.YAML, v.Node)
 		} else {
-			policy, err = storage.OriginalSavedCodePolicy(source.Instructions, v.YAML, v.Node)
+			policy, err = storage.SavedCodeDocumentFor(ctx, source.Instructions).SavedCodePolicy(v.YAML, v.Node)
 		}
 		if err != nil {
 			return staged("policy", err)
@@ -281,7 +283,7 @@ func (r *CodeIntentRepository) RegisterOriginalCodeVisit(ctx context.Context, cl
 		if err != nil {
 			return staged("prepared", err)
 		}
-		inputPolicy, err := originalVisitInputPolicy(source.Instructions, v)
+		inputPolicy, err := originalVisitInputPolicy(ctx, source.Instructions, v)
 		if err != nil {
 			return staged("input_policy", err)
 		}
@@ -328,11 +330,12 @@ func (r *CodeIntentRepository) RegisterOriginalCodeVisit(ctx context.Context, cl
 // originalVisitInputPolicy is the saved input policy of the visit's Code node.
 // A Map item's Code worker also reads its item and index; the scope was
 // resolved against the run's root source in this same transaction.
-func originalVisitInputPolicy(instructions string, v originalCodeVisitRecord) (storage.SavedCodeInputPolicy, error) {
+func originalVisitInputPolicy(ctx context.Context, instructions string, v originalCodeVisitRecord) (storage.SavedCodeInputPolicy, error) {
+	doc := storage.SavedCodeDocumentFor(ctx, instructions)
 	if child, ok := decodeFanoutCodeChildScope(v.Scope); ok && child.Kind == "map_item" {
-		return storage.OriginalMapItemCodeInputPolicy(instructions, v.YAML, v.Node, child.NodeID)
+		return doc.MapItemCodeInputPolicy(v.YAML, v.Node, child.NodeID)
 	}
-	return storage.OriginalSavedCodeInputPolicy(instructions, v.YAML, v.Node)
+	return doc.SavedCodeInputPolicy(v.YAML, v.Node)
 }
 func (r *CodeIntentRepository) readVisit(ctx context.Context, tx sqlExecutor, claim storage.ContentClaim, a codeAccess, ref code.OriginalVisitRef, purpose string) (originalCodeVisitRecord, storage.SavedCodeDeclaration, error) {
 	if !originalCodePurpose(purpose) || ref.Validate() != nil {
@@ -443,6 +446,7 @@ func (r *CodeIntentRepository) RegisterOriginalCodeIntent(ctx context.Context, c
 		return code.SignedGrant{}, code.ErrRejected
 	}
 	var claims code.IntentClaims
+	ctx = storage.WithSavedCodeDocuments(ctx)
 	err = withinCodeRegistrationTx(ctx, r.shared, func(tx sqlExecutor) error {
 		a, err := r.lockAccess(ctx, tx, claim, "RUNNING")
 		if err != nil {
