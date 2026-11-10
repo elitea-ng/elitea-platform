@@ -2376,31 +2376,6 @@ mod fault_registry_parity_tests {
             "the registry's runtime.* entries differ"
         );
     }
-
-    /// Writes the registry rows of [`REGISTERED_RUNTIME_FAILURES`] as JSON to
-    /// the file `ELITEA_RUNTIME_REGISTRY_DUMP` names (without `action`, which
-    /// is written by hand). A generator, not a gate.
-    #[test]
-    #[ignore = "generator for libs/go/faults/registry/runtime.json; run by hand"]
-    fn dump_runtime_failure_registry_rows() {
-        let Ok(path) = std::env::var("ELITEA_RUNTIME_REGISTRY_DUMP") else {
-            return;
-        };
-        let rows: Vec<serde_json::Value> = REGISTERED_RUNTIME_FAILURES
-            .iter()
-            .map(|kind| {
-                let (wire, message, retryable) = runtime_error_policy(*kind);
-                serde_json::json!({
-                    "code": registry_code(*kind),
-                    "sentence": message,
-                    "retryable": if retryable { "yes" } else { "no" },
-                    "runtime_kind": format!("{kind:?}"),
-                    "wire_code": wire.as_str_name(),
-                })
-            })
-            .collect();
-        std::fs::write(path, serde_json::to_vec_pretty(&rows).expect("rows")).expect("dump");
-    }
 }
 
 /// W3-1: the deadline-admission failures and their version-skew fallback.

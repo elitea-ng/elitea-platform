@@ -17,6 +17,8 @@ on:
       # and the patched adk crates in libs/rust/vendor; they inherit package
       # fields and lints from the libs/rust workspace.
       - "libs/rust/**"
+      # The error registry elitea-faults' build.rs reads (FU-299).
+      - "libs/go/faults/registry/**"
       # The workspace-run Docker proofs create the egress network with it.
       - "deploy/docker/workspace-egress.sh"
       # ...and run the real egress proxy for the proxy-mode proof.
