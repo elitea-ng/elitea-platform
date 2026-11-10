@@ -1165,8 +1165,11 @@ impl OrdinaryNativeAgentPlan {
                 .filter(|_| self.chat_history_refs.len() == self.chat_history.len()),
             fresh: self.writes_question,
             tagging: self.tags_messages,
-            tagged: self.tags_messages
-                && (self.current_message_id.is_some() || !self.writes_question),
+            // Only a regeneration asks a quotable question again without its
+            // id. An addressed agent's turn has no id either, but its user
+            // content is Main's note, not a message; the person's question is
+            // in its tagged history.
+            tagged: self.tags_messages && !(self.writes_question && self.regenerate),
         }
     }
 
@@ -4781,9 +4784,19 @@ async fn record_history_binding(
     if marker.get("tagged").and_then(Value::as_bool) != Some(true) {
         return Ok(());
     }
+    // The session stays bound to the view it was seeded under: a turn that
+    // does not re-seed (a continuation, a resume) never records its own
+    // view, or a narrowed mode would read as already applied.
+    let recorded = HistoryBinding {
+        view: marker
+            .get("view")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        ..binding.clone()
+    };
     let covered = covered_messages(&marker);
     let covered = covered.iter().map(String::as_str).collect::<Vec<_>>();
-    append_reconciliation_marker(sessions, identity, &covered, binding).await
+    append_reconciliation_marker(sessions, identity, &covered, &recorded).await
 }
 
 /// A content-less event that sets [`HISTORY_RECONCILED_KEY`]; the model
@@ -4875,7 +4888,13 @@ async fn reconcile_history(
     }
     if marker.is_none() {
         let covered = covered.iter().map(String::as_str).collect::<Vec<_>>();
-        append_reconciliation_marker(sessions, identity, &covered, binding).await?;
+        // #1672: only a fresh turn, which re-seeds a session of another
+        // view, may bind one. A continuation that first reaches a session
+        // from before the view leaves it unbound, so the next fresh turn
+        // still re-seeds it.
+        let unbound = HistoryBinding::default();
+        let recorded = if binding.fresh { binding } else { &unbound };
+        append_reconciliation_marker(sessions, identity, &covered, recorded).await?;
     }
     Ok(())
 }
@@ -5693,5 +5712,115 @@ mod message_ref_tests {
         ] {
             assert_eq!(short_message_ref(form), canonical, "{form}");
         }
+    }
+}
+
+#[cfg(test)]
+mod history_binding_tests {
+    use super::{
+        APP_NAME, HISTORY_RECONCILED_KEY, HistoryBinding, append_reconciliation_marker,
+        needs_reseed, reconcile_history, record_history_binding,
+    };
+    use adk_rust::Content;
+    use adk_rust::session::{
+        CreateRequest, GetRequest, InMemorySessionService, Session, SessionService,
+    };
+    use std::collections::HashMap;
+
+    fn binding(view: &str, fresh: bool, tagging: bool, tagged: bool) -> HistoryBinding {
+        HistoryBinding {
+            view: Some(view.to_owned()),
+            fresh,
+            tagging,
+            tagged,
+        }
+    }
+
+    async fn restored(sessions: &InMemorySessionService) -> Box<dyn Session> {
+        sessions
+            .get(GetRequest {
+                app_name: APP_NAME.to_owned(),
+                user_id: "u".to_owned(),
+                session_id: "s".to_owned(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .expect("session")
+    }
+
+    async fn created(sessions: &InMemorySessionService) -> Box<dyn Session> {
+        sessions
+            .create(CreateRequest {
+                app_name: APP_NAME.to_owned(),
+                user_id: "u".to_owned(),
+                session_id: Some("s".to_owned()),
+                state: HashMap::new(),
+            })
+            .await
+            .expect("created")
+    }
+
+    /// #1672 review: a turn that does not re-seed (an output continuation
+    /// with untagged content) keeps the view the session was seeded under,
+    /// so a narrowed mode still re-seeds on the next fresh turn.
+    #[tokio::test]
+    async fn a_continuation_never_records_its_own_view() {
+        let sessions = InMemorySessionService::new();
+        let identity = created(&sessions).await.try_identity().expect("identity");
+        append_reconciliation_marker(
+            &sessions,
+            &identity,
+            &[],
+            &binding("full", true, true, true),
+        )
+        .await
+        .expect("seeded under full");
+        let continuation = binding("none", false, false, false);
+        let session = restored(&sessions).await;
+        assert!(!needs_reseed(session.as_ref(), &continuation));
+        record_history_binding(&sessions, &identity, session.as_ref(), &continuation)
+            .await
+            .expect("recorded");
+        let session = restored(&sessions).await;
+        let marker = session.state().get(HISTORY_RECONCILED_KEY).expect("marker");
+        assert_eq!(marker["view"], "full");
+        assert_eq!(marker["tagged"], false);
+        assert!(needs_reseed(
+            session.as_ref(),
+            &binding("none", true, false, false)
+        ));
+    }
+
+    /// #1672 review: a continuation that first reaches a session from before
+    /// the view leaves it unbound, so the next fresh turn re-seeds it once.
+    #[tokio::test]
+    async fn a_continuation_leaves_an_old_session_unbound() {
+        let sessions = InMemorySessionService::new();
+        let session = created(&sessions).await;
+        let identity = session.try_identity().expect("identity");
+        let history = [Content::new("user").with_text("kickoff")];
+        let refs = [super::super::request::ChatHistoryRef {
+            message_id: "00000000-0000-4000-8000-000000000301".to_owned(),
+            readers_own: false,
+        }];
+        reconcile_history(
+            &sessions,
+            &identity,
+            session.as_ref(),
+            &history,
+            &refs,
+            [0; 32],
+            &binding("full", false, false, false),
+        )
+        .await
+        .expect("reconciled");
+        let session = restored(&sessions).await;
+        let marker = session.state().get(HISTORY_RECONCILED_KEY).expect("marker");
+        assert!(marker.get("view").is_none(), "{marker}");
+        assert!(needs_reseed(
+            session.as_ref(),
+            &binding("full", true, false, true)
+        ));
     }
 }

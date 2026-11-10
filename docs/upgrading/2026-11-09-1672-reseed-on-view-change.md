@@ -8,7 +8,8 @@
   hold side talk from before #1609.
 
   When the sub-agent tools are bound, a session holding messages without their `[message m-…]` ids is seeded again
-  too (#1865). Resumes and continuations never trigger a new seed.
+  too (#1865). Resumes and continuations never trigger a new seed; one that reaches a session first leaves the seed
+  to the next fresh turn.
 - **Who is affected.** Every agent conversation that has a durable worker session, the first time each agent
   answers after the upgrade. After that, an agent is affected only when its mode changes, or when sub-agents are
   turned on for it. Each new seed costs one turn without the provider prompt cache (a full prompt, billed at the
