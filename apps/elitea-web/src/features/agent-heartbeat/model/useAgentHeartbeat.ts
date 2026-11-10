@@ -10,7 +10,7 @@ import type { AgentHeartbeatList, AgentHeartbeatSave, AgentHeartbeatSettings } f
 
 import { fetchAgentHeartbeat, fetchAgentHeartbeats, storeAgentHeartbeat } from '../api/agentHeartbeatApi';
 
-export const HEARTBEAT_HISTORY_LIMIT = 50;
+const HEARTBEAT_HISTORY_LIMIT = 50;
 
 export function useAgentHeartbeat(projectId: string, applicationId: number) {
   return useQuery<AgentHeartbeatSettings>({
