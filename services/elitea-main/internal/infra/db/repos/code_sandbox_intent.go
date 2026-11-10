@@ -296,7 +296,8 @@ func (r *CodeIntentRepository) RegisterOriginalCodeVisit(ctx context.Context, cl
 		var otherVisits int64
 		err = tx.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.original_code_visits WHERE execution_id=$1 AND generation=$2 AND visit_id<>$3`, claim.ExecutionID, int64(claim.Generation), ref.VisitID).Scan(&otherVisits)
 		if err != nil {
-			return staged("visit_count", errors.Join(code.ErrRejected, err))
+			// R2: a failed read is a dependency failure, retryable.
+			return staged("visit_count", err)
 		}
 		if otherVisits >= 4096 {
 			return staged("visit_cap", code.ErrRejected)
@@ -307,8 +308,13 @@ func (r *CodeIntentRepository) RegisterOriginalCodeVisit(ctx context.Context, cl
 		}
 		var saved, digest []byte
 		err = tx.QueryRow(ctx, `SELECT record_json,visit_digest FROM elitea_runtime.original_code_visits WHERE execution_id=$1 AND generation=$2 AND visit_id=$3 FOR UPDATE`, claim.ExecutionID, int64(claim.Generation), ref.VisitID).Scan(&saved, &digest)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The row this insert met belongs to another visit of the same
+			// activation and attempt: a refusal, fail closed.
+			return staged("visit_read", code.ErrRejected)
+		}
 		if err != nil {
-			return staged("visit_read", errors.Join(code.ErrRejected, err))
+			return staged("visit_read", err)
 		}
 		if !bytes.Equal(saved, raw) || !bytes.Equal(digest, []byte(ref.DigestSHA256)) {
 			return staged("visit_mismatch", code.ErrRejected)
@@ -334,6 +340,11 @@ func (r *CodeIntentRepository) readVisit(ctx context.Context, tx sqlExecutor, cl
 	}
 	var raw, digest []byte
 	err := tx.QueryRow(ctx, `SELECT record_json,visit_digest FROM elitea_runtime.original_code_visits WHERE execution_id=$1 AND generation=$2 AND visit_id=$3 FOR UPDATE`, claim.ExecutionID, int64(claim.Generation), ref.VisitID).Scan(&raw, &digest)
+	// R2: an unknown visit is a refusal; a failed read is a dependency
+	// failure the caller answers retryable.
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return originalCodeVisitRecord{}, storage.SavedCodeDeclaration{}, err
+	}
 	if err != nil || code.Digest(raw) != ref.DigestSHA256 || !bytes.Equal(digest, []byte(ref.DigestSHA256)) {
 		return originalCodeVisitRecord{}, storage.SavedCodeDeclaration{}, code.ErrRejected
 	}
@@ -439,7 +450,7 @@ func (r *CodeIntentRepository) RegisterOriginalCodeIntent(ctx context.Context, c
 		}
 		v, declaration, err := r.readVisit(ctx, tx, claim, a, request.OriginalVisit, "code_recovery")
 		if err != nil {
-			return staged("visit", errors.Join(code.ErrRejected, err))
+			return staged("visit", err)
 		}
 		if err = matchOriginalCodeDispatch(declaration, v.Activation, v.Attempt, request.DispatchActivation); err != nil {
 			return staged("dispatch", err)
@@ -477,8 +488,11 @@ func (r *CodeIntentRepository) RegisterOriginalCodeIntent(ctx context.Context, c
 		}
 
 		digest, selector, err := r.compiledDigest(ctx, a, v, request, prepared, metadata.Fingerprint)
-		if err != nil || digest != request.RequestDigest {
-			return staged("request_digest", errors.Join(code.ErrRejected, err))
+		if err != nil {
+			return staged("request_digest", err)
+		}
+		if digest != request.RequestDigest {
+			return staged("request_digest", code.ErrRejected)
 		}
 		binding := code.Binding{Schema: "elitea.sandbox.whole-code-binding.v1", Purpose: "whole_code_execute", ExecutionID: v.ExecutionID, OriginalGeneration: v.Generation, ActivationID: v.Activation, NodeID: v.Node, GraphThread: v.Thread, Step: v.Step, Attempt: v.Attempt, DispatchActivation: request.DispatchActivation, JobKey: code.JobKey(v.ExecutionID, request.DispatchActivation), RequestDigest: request.RequestDigest, SupervisorAudience: request.SupervisorAudience, NodeDigest: v.NodeDigest, Language: metadata.Language, PreparedSHA256: metadata.PreparedSHA256, SourceSHA256: metadata.SourceSHA256, InputSHA256: metadata.InputSHA256}
 		if binding.Validate() != nil {
@@ -491,8 +505,11 @@ func (r *CodeIntentRepository) RegisterOriginalCodeIntent(ctx context.Context, c
 		}
 		var saved, savedSelector []byte
 		err = tx.QueryRow(ctx, `SELECT binding_json,compiled_selector_json FROM elitea_runtime.original_code_intents WHERE execution_id=$1 AND generation=$2 AND visit_id=$3 FOR UPDATE`, v.ExecutionID, int64(v.Generation), request.OriginalVisit.VisitID).Scan(&saved, &savedSelector)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return staged("intent_read", code.ErrRejected)
+		}
 		if err != nil {
-			return staged("intent_read", errors.Join(code.ErrRejected, err))
+			return staged("intent_read", err)
 		}
 		if !bytes.Equal(saved, wire) || !bytes.Equal(selector, savedSelector) {
 			return staged("intent_mismatch", code.ErrRejected)

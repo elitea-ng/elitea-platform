@@ -301,3 +301,69 @@ func TestATakeoverReRegistersEveryMapItemOnTheProductionPathPostgres(t *testing.
 	}
 	waitNoAdvisoryLocks(t, r.w)
 }
+
+// R2: a transient database failure inside a registration (here the visit
+// table is held by another session until the call's deadline, as a
+// failover or a statement timeout would fail it) is never answered as a
+// refusal: the error is not code.ErrRejected or ErrContentUnauthorized, so
+// Main answers it retryable (code.registration_failed). Once the database is
+// back the same registration succeeds.
+func TestATransientDatabaseFailureIsRetryableNeverARefusalPostgres(t *testing.T) {
+	r := newRealPathWorld(t, effectsParent, effectsClaim2, 3)
+	refused := func(err error) bool {
+		return errors.Is(err, code.ErrRejected) || errors.Is(err, storage.ErrContentUnauthorized)
+	}
+	block := func() func() {
+		conn, err := r.w.pool.Acquire(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx, err := conn.Begin(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(t.Context(), `LOCK TABLE elitea_runtime.original_code_visits IN ACCESS EXCLUSIVE MODE`); err != nil {
+			t.Fatal(err)
+		}
+		return func() {
+			_ = tx.Rollback(context.Background())
+			conn.Release()
+		}
+	}
+	// The visit: its per-run visit count cannot be read in time.
+	request, _ := r.visit(t, 0, 2)
+	release := block()
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	_, err := r.repo.RegisterOriginalCodeVisit(ctx, r.claim, request)
+	cancel()
+	release()
+	if err == nil || refused(err) {
+		t.Fatalf("a transient failure of the visit was %v, want a retryable error", err)
+	}
+	visit, err := r.repo.RegisterOriginalCodeVisit(t.Context(), r.claim, request)
+	if err != nil {
+		t.Fatalf("the visit did not continue once the database was back: %v", err)
+	}
+	// The intent: its visit cannot be read in time.
+	_, prepared := r.visit(t, 0, 2)
+	policy, _ := storage.OriginalSavedCodePolicy(fanoutInstructions, r.yamlSHA, "shout")
+	declaration, _ := storage.MatchOriginalSavedCodeConfiguration(policy, realPathWorkerCfg)
+	metadata, err := storage.MatchCodePrepared(declaration, []byte(realPathWorkerCfg), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := code.IntentRequest{Schema: "elitea.sandbox.original-code-intent-request.v1", OriginalVisit: visit.OriginalVisit, DispatchActivation: fmt.Sprintf("%064x", 0xd000),
+		RequestDigest: metadata.Fingerprint, SupervisorAudience: realPathAudience, PreparedBase64URL: base64.RawURLEncoding.EncodeToString(prepared)}
+	release = block()
+	ctx, cancel = context.WithTimeout(t.Context(), 500*time.Millisecond)
+	_, err = r.repo.RegisterOriginalCodeIntent(ctx, r.claim, intent)
+	cancel()
+	release()
+	if err == nil || refused(err) {
+		t.Fatalf("a transient failure of the intent was %v, want a retryable error", err)
+	}
+	if _, err := r.repo.RegisterOriginalCodeIntent(t.Context(), r.claim, intent); err != nil {
+		t.Fatalf("the intent did not continue once the database was back: %v", err)
+	}
+	waitNoAdvisoryLocks(t, r.w)
+}
