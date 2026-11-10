@@ -97,13 +97,18 @@ impl RemoteCodeRuntime {
         // never refused (C2), so it only waits for a slot, bounded by the
         // run's deadline.
         let _slot = if prior_dispatch {
-            self.admit_started(profile).await.map_err(|_| {
-                classify(
-                    CodeAttemptPhase::Observation,
-                    NodeFailureClass::AttemptTimeout,
-                    invocation.activation,
-                    true,
-                )
+            self.admit_started(profile).await.map_err(|refusal| {
+                // R6: a nested acquire is an internal fault (as on the fresh
+                // path), not a timeout; the attempt keeps its possible effect.
+                let (phase, class) = match refusal {
+                    elitea_agent_runtime::graph::fanout::admission::StartedSlotRefusal::NestedSlot => {
+                        (CodeAttemptPhase::Admission, NodeFailureClass::InvalidConfiguration)
+                    }
+                    elitea_agent_runtime::graph::fanout::admission::StartedSlotRefusal::Expired(_) => {
+                        (CodeAttemptPhase::Observation, NodeFailureClass::AttemptTimeout)
+                    }
+                };
+                classify(phase, class, invocation.activation, true)
             })?
         } else {
             self.admit_fresh(profile, Some(declaration.node_id.as_str()))

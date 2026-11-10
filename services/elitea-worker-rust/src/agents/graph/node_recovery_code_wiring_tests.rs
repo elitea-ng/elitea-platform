@@ -1776,5 +1776,40 @@ async fn real_pg_a_possibly_started_attempt_is_never_refused_after_preparation()
     );
 }
 
+/// R6: an attempt that may already have started, asked for a slot inside an
+/// attempt that already holds one (R1), fails with the nested-slot internal
+/// failure (as the fresh path does), never as an attempt timeout; it keeps
+/// its possible effect, so it is never re-run.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_a_started_attempt_refused_as_nested_is_not_a_timeout() {
+    use elitea_agent_runtime::graph::fanout::admission::{CodeSlots, code_attempt_scope};
+    let h = harness(QUIET, Duration::from_millis(100)).await;
+    claim_one_submitted(&h).await;
+    *h.effects.lock().unwrap() = Effects::Possible;
+    let mut run = run(&h, PLATFORM_YAML, true).await;
+    run.node.clock = Arc::new(Clock(AtomicU64::new(200)));
+    let outer = CodeSlots::new(1);
+    code_attempt_scope(async {
+        let _held = outer
+            .admit_fresh(
+                tokio::time::Instant::now() + Duration::from_secs(600),
+                Duration::ZERO,
+            )
+            .await
+            .expect("the outer attempt holds a slot");
+        let _ = run.node.execute(&run.context).await;
+    })
+    .await;
+    let failure = run.failure().await;
+    assert_eq!(failure.class, NodeFailureClass::InvalidConfiguration);
+    assert_eq!(
+        failure.replay,
+        ReplaySafety::UnknownExternalEffect {
+            effect_id: run.dispatch_activation
+        }
+    );
+}
+
 #[path = "node_recovery_code_fanout_pg_tests.rs"]
 mod fanout_pg_tests;
