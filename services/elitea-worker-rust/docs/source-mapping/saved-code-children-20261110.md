@@ -21,6 +21,9 @@ New on the replatform: the same saved pipeline as a Map worker or a Parallel bra
 the ETL `silver_partition` shape: a Map over partitions whose worker is `validate (Code) → route_quality (Router) →
 normalize (Code)`.
 
+With node recovery off (the Helm default until PLAN-REMAINING 0.7), a saved pipeline's Code is compiled but fails
+readably when reached (review C1). The rest of the saved subgraph runs as before W3-2b.
+
 Not ported, on purpose: the current platform's "lost, run again from scratch" failure behaviour. A Code attempt of a
 saved child that may have started and has no owner proof ends typed and is never repeated.
 
@@ -414,6 +417,14 @@ is the orchestrator's Q2 decision (a conservative sum); the per-attempt check gu
   | Secrets | no | |
   | Supply chain | no | No dependency change. |
 
+- **Member thread binding (review C3, orchestrator decision: option 3).** For a saved child's Code in a fan-out member,
+  Main checks the form (`m1:`/`p1:`) of the member's parent thread, but not its binding to the scope's fan-out node
+  and ordinal; Main cannot recompute the Worker's derivation. The boundary is the claim. The application stays bound to
+  the root declaration at the claimed family and ordinal, plus the root edge.
+  - **Worst case:** a misbehaving claim holder writing to the wrong member thread in its own run. Nothing crosses the
+    claim, so no other run, project or application is reachable.
+  - This is FU-315, widened to cover fan-out child and member saved-child thread binding (2a + 2b). It becomes a
+    blocker if PLAN-REMAINING 0.6 or FU-310 ever reads the journal across member threads.
 - **No new routes**, so the §3a authorization matrix does not apply. The visit, intent and Supervisor routes keep
   their checks; this change only adds a resolver behind them.
 
