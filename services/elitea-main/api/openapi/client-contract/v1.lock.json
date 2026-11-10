@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.46",
+  "client_contract": "1.47",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -19317,6 +19317,33 @@
               "user_input"
             ],
             "properties": {
+              "addressed_to": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
+                },
+                "max_items": 16
+              },
+              "floor_turn": {
+                "type": "object",
+                "required": [
+                  "position",
+                  "question_id"
+                ],
+                "properties": {
+                  "position": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 15
+                  },
+                  "question_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
               "participant_id": {
                 "type": "integer",
                 "format": "int64"
@@ -19432,9 +19459,69 @@
                 "execution_id": {
                   "type": "string"
                 },
+                "executor": {
+                  "type": "string",
+                  "enum": [
+                    "cloud",
+                    "local"
+                  ]
+                },
                 "expires_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "floor": {
+                  "type": "object",
+                  "required": [
+                    "agents",
+                    "position",
+                    "question_id",
+                    "targets"
+                  ],
+                  "properties": {
+                    "agents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "executor",
+                          "name",
+                          "participant_id"
+                        ],
+                        "properties": {
+                          "executor": {
+                            "type": "string",
+                            "enum": [
+                              "cloud",
+                              "local"
+                            ]
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "participant_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          }
+                        }
+                      }
+                    },
+                    "position": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "question_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "targets": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "format": "int64"
+                      }
+                    }
+                  }
                 },
                 "memory_recall": {
                   "type": "object",

@@ -148,6 +148,14 @@ type StartRequest struct {
 	AuditRoute string
 	// Unattended is the turn's grant (ADR-0045); nil for an attended turn.
 	Unattended *unattended.Request
+	// AddressedTo are the agent participants the person addressed (ADR-0050
+	// decision 7c, issue 1806); empty is no address. Main routes the message
+	// by the conversation's floor (floor.go).
+	AddressedTo []int64
+	// FloorTurn names a later turn of a routed message: the turn at
+	// Position of the message whose first turn's question is QuestionID.
+	// Nil for a person's message.
+	FloorTurn *FloorTurnRef
 }
 
 // MemoryRecall is the turn's recalled memory, the same value a cloud turn's
@@ -167,9 +175,15 @@ type StartOutcome struct {
 	ParticipantID     int64
 	ExpiresAt         time.Time
 	Created           bool
-	Recall            MemoryRecall
+	// Executor is where the answering agent runs: ExecutorLocal or
+	// ExecutorCloud (floor.go).
+	Executor string
+	Recall   MemoryRecall
 	// Unattended is the turn's chain; nil for an attended turn.
 	Unattended *UnattendedStarted
+	// Floor is the message's routed order in a conversation with several
+	// agents; nil otherwise.
+	Floor *FloorStarted
 }
 
 // StartRecord is what the store writes for a start.
@@ -187,6 +201,11 @@ type StartRecord struct {
 	TTL               time.Duration
 	// Grant is the admitted grant; nil for an attended turn.
 	Grant *StartGrant
+	// FloorTargets is the routed order of a person's message (the first is
+	// ParticipantID); empty when the floor does not apply.
+	FloorTargets []int64
+	// FloorTurn is set on a later turn of a routed message.
+	FloorTurn *FloorTurnRef
 }
 
 // StartedTurn is the stored execution after a start (new or replayed).
@@ -198,6 +217,14 @@ type StartedTurn struct {
 	Created           bool
 	// Chain is the turn's chain link; nil for an attended turn.
 	Chain *unattended.Chain
+	// FloorQuestionID and FloorTargets are the routed message the turn
+	// belongs to (its own question id for the first turn); empty when the
+	// floor does not apply.
+	FloorQuestionID string
+	FloorTargets    []int64
+	// Executor is where the answering participant runs: ExecutorLocal or
+	// ExecutorCloud (its mapping's entity_settings.executor).
+	Executor string
 }
 
 // HITLExchange is one approval or question the desktop resolved during the
@@ -322,6 +349,8 @@ type Service struct {
 	logger   *slog.Logger
 	// unattended reads the grant settings (WithUnattended).
 	unattended UnattendedSettingsReader
+	// floor reads the conversation's floor (WithFloor); nil: no routing.
+	floor FloorReader
 }
 
 // NewService builds the use case. Every dependency is required: a start
@@ -387,6 +416,10 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 		s.logger.ErrorContext(ctx, "local turn: memory recall failed", "err", err)
 		return StartOutcome{}, ErrUnavailable
 	}
+	plan, err := s.planFloor(ctx, request)
+	if err != nil {
+		return StartOutcome{}, err
+	}
 	id, err := s.newID()
 	if err != nil || !ValidExecutionID(id) {
 		return StartOutcome{}, fmt.Errorf("local turn: mint execution id: %w", errors.Join(err, ErrUnavailable))
@@ -396,8 +429,8 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 		TokenID: request.TokenID, NativeClientID: request.NativeClientID,
 		ConversationUUID: request.ConversationUUID, QuestionID: request.QuestionID,
 		ResponseMessageID: ResponseMessageID(request.QuestionID),
-		ParticipantID:     request.ParticipantID, MemoriesUsed: recall.Count, TTL: DeadlineTTL,
-		Grant: grant,
+		ParticipantID:     plan.participant, MemoriesUsed: recall.Count, TTL: DeadlineTTL,
+		Grant: grant, FloorTargets: plan.targets, FloorTurn: request.FloorTurn,
 	})
 	if err != nil {
 		return StartOutcome{}, err
@@ -414,7 +447,8 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 		ExecutionID: turn.ExecutionID, QuestionID: request.QuestionID,
 		ResponseMessageID: turn.ResponseMessageID, ConversationUUID: request.ConversationUUID,
 		ParticipantID: turn.ParticipantID, ExpiresAt: turn.ExpiresAt, Created: turn.Created,
-		Recall: MemoryRecall{Text: recall.Text, Count: recall.Count, IDs: ids},
+		Executor: executorOrLocal(turn.Executor),
+		Recall:   MemoryRecall{Text: recall.Text, Count: recall.Count, IDs: ids},
 	}
 	if chain := turn.Chain; chain != nil {
 		outcome.Unattended = &UnattendedStarted{
@@ -422,6 +456,7 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 			ContinuationIndex: chain.ContinuationIndex, Limits: chain.Limits,
 		}
 	}
+	outcome.Floor = plan.started(turn)
 	return outcome, nil
 }
 
@@ -543,7 +578,8 @@ func validStart(request StartRequest) bool {
 		request.ActorUserID > 0 && request.ActorUserID <= 2147483647 &&
 		request.TokenID != "" && request.ParticipantID >= 0 && request.ParticipantID <= 2147483647 &&
 		ValidUUID(request.ConversationUUID) && ValidUUID(request.QuestionID) &&
-		validText(request.UserInput, MaxUserMessageBytes, false)
+		validText(request.UserInput, MaxUserMessageBytes, false) &&
+		validAddressedTo(request.AddressedTo) && validFloorTurn(request)
 }
 
 func validCommit(request CommitRequest) bool {

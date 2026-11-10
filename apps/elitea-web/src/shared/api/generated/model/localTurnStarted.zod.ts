@@ -42,6 +42,8 @@
  */
 import * as zod from "zod";
 import { LocalTurnComputerUse } from "./localTurnComputerUse.zod";
+import { LocalTurnExecutor } from "./localTurnExecutor.zod";
+import { LocalTurnFloorStarted } from "./localTurnFloorStarted.zod";
 import { LocalTurnMemoryRecall } from "./localTurnMemoryRecall.zod";
 import { LocalTurnUnattendedStarted } from "./localTurnUnattendedStarted.zod";
 
@@ -73,6 +75,8 @@ export const LocalTurnStarted = zod
     memory_recall: LocalTurnMemoryRecall,
     unattended: LocalTurnUnattendedStarted.optional(),
     computer_use: LocalTurnComputerUse.optional(),
+    executor: LocalTurnExecutor.optional(),
+    floor: LocalTurnFloorStarted.optional(),
   })
   .describe(
     "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:158 (`start`).",

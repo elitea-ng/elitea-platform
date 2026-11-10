@@ -77,10 +77,35 @@ function ChainEnded({ ended, onContinue }: { ended: ChainEndedPayload; onContinu
 }
 
 /** The stop notices of a turn. Continue shows once: on the tool-call stop, else on a chain that waits. A goal check comes before the chain's end. */
+/** The message's next agent did not answer (ADR-0050 decision 7f): a newer message took the floor, or its start failed. */
+function FloorStopped({ stopped }: { stopped: TurnView['floorStopped'] }): React.JSX.Element | null {
+  if (stopped === undefined) return null;
+  const superseded = stopped.code === 'floor_turn_superseded';
+  return (
+    <Alert severity={superseded ? 'info' : 'warning'} data-testid="turn-floor-stopped" data-code={stopped.code}>
+      {superseded
+        ? t('workspace.floor.superseded', 'A newer message took the floor: the other agents this message addressed do not answer it.')
+        : t('workspace.floor.stopped', 'The next agent this message addressed did not answer: {{message}}', { message: stopped.message })}
+    </Alert>
+  );
+}
+
+/** Above a turn of a message addressed to several agents: which agent answers, and that a cloud agent works without the workspace. */
+export function AnsweringAgent({ agent }: { agent: TurnView['agent'] }): React.JSX.Element | null {
+  if (agent === undefined) return null;
+  const where = agent.executor === 'cloud' ? t('workspace.floor.cloud', 'in the cloud, conversation text only') : t('workspace.floor.local', 'on this computer');
+  return (
+    <Typography variant="bodySmall" component="div" data-testid="turn-agent" data-executor={agent.executor} sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
+      {t('workspace.floor.agent', '{{name}} · {{where}}', { name: agent.name, where })}
+    </Typography>
+  );
+}
+
 export function StopNotices({ view, onContinue }: { view: TurnView; onContinue: OnContinue }): React.JSX.Element {
   const toolCallStop = view.note === 'tool_call_limit_reached' && view.continuedTo === undefined;
   return (
     <>
+      <FloorStopped stopped={view.floorStopped} />
       {toolCallStop && <ToolCallLimit onContinue={onContinue} />}
       <GoalCheckNotice check={view.goalCheck} />
       {view.chainEnded !== undefined && <ChainEnded ended={view.chainEnded} onContinue={toolCallStop ? undefined : onContinue} />}

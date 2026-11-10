@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.46"
+  x-elitea-client-contract: "1.47"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -5147,9 +5147,107 @@ components:
           format: int64
           description: >-
             The conversation's agent participant that answers. 0 or absent
-            means the conversation's model participant.
+            means the conversation's model participant. In a thread with two
+            or more agents (client contract 1.47) it is the composer's target:
+            Main routes the message by the floor and may answer another first
+            (`LocalTurnStarted.floor`).
         unattended:
           $ref: '#/components/schemas/LocalTurnUnattendedRequest'
+        addressed_to:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items: { type: integer, format: int64, minimum: 1 }
+          description: >-
+            Client contract 1.47 (ADR-0050 decision 7f). The agent participants
+            the person addressed, in the order they were named; absent or
+            empty is no address. Main routes the message by the conversation's
+            floor: the addressed agents in order (the composer's target first
+            when it is one of them), else the lead under policy `lead`, else
+            `participant_id`. An addressee that is not an agent of the thread
+            answers 422 `addressee_not_in_conversation`; several agents and no
+            target 422 `agent_target_required`. Never with `floor_turn`.
+        floor_turn:
+          $ref: '#/components/schemas/LocalTurnFloorTurn'
+    LocalTurnFloorTurn:
+      type: object
+      description: >-
+        Client contract 1.47 (ADR-0050 decision 7f). A later agent's turn of a
+        message Main routed: send it, with a new `question_id`, after the
+        message's earlier turns are committed, one at a time in
+        `LocalTurnStarted.floor.targets` order, with `participant_id` the
+        target at `position`. The turn answers the person's own question; its
+        commit writes no question of its own, so `user_message` is not
+        stored. Main refuses a turn that is not the target at that position of
+        a routed message of this caller whose first turn is committed (409
+        `floor_turn_refused`), and one whose message is no longer the
+        thread's newest (409 `floor_turn_superseded`): drop the message's
+        remaining agents. Never with `addressed_to` or `unattended`.
+        NOTE(W2): internal/api/v2/localturns/route.go:117 (`floorTurnBody`).
+      required: [question_id, position]
+      properties:
+        question_id:
+          type: string
+          format: uuid
+          description: The message's first turn's `question_id` (`floor.question_id`).
+        position:
+          type: integer
+          minimum: 1
+          maximum: 15
+          description: The target's index in `floor.targets`.
+    LocalTurnFloorStarted:
+      type: object
+      description: >-
+        Client contract 1.47 (ADR-0050 decision 7f). The message's routed
+        order in a thread with two or more agents; absent when the message was
+        not routed (one agent, the model participant, or a server older than
+        1.47). NOTE(W2): internal/api/v2/localturns/route.go:130
+        (`floorStarted`).
+      required: [question_id, position, targets, agents]
+      properties:
+        question_id:
+          type: string
+          format: uuid
+          description: The person's message; send it as `floor_turn.question_id` on each later turn.
+        position:
+          type: integer
+          minimum: 0
+          description: This turn's index in `targets`; 0 for the message's first turn.
+        targets:
+          type: array
+          items: { type: integer, format: int64 }
+          description: The agent participants that answer the message, in order; the first answers this turn.
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/LocalTurnFloorAgent'
+          description: The thread's agent participants, in participant order.
+    LocalTurnFloorAgent:
+      type: object
+      description: >-
+        Client contract 1.47. One agent participant of a desktop thread.
+        NOTE(W2): internal/api/v2/localturns/route.go:130 (`floorStarted`).
+      required: [participant_id, name, executor]
+      properties:
+        participant_id: { type: integer, format: int64 }
+        name:
+          type: string
+          description: The persona's display name, else the participant's name; may be empty.
+        executor:
+          $ref: '#/components/schemas/LocalTurnExecutor'
+    LocalTurnExecutor:
+      type: string
+      enum: [local, cloud]
+      description: >-
+        Client contract 1.47 (ADR-0050 decision 7f). Where an agent of a
+        desktop thread runs, from its participant mapping's
+        `entity_settings.executor`. `local` (the default): on the desktop,
+        with the workspace. `cloud`: in the cloud, as a remote participant;
+        the desktop relays the turn with startLocalChildTurn naming the
+        turn's own agent, sends only the conversation text, never the
+        workspace or its files, and commits the answer, which Main marks
+        `agent_executor: cloud` (its `executed_by` stays `desktop`). Remote
+        toolkit calls in a `cloud` turn answer 403 `tool_not_in_agent`.
     LocalTurnUnattendedRequest:
       type: object
       description: >-
@@ -5439,6 +5537,10 @@ components:
           $ref: '#/components/schemas/LocalTurnUnattendedStarted'
         computer_use:
           $ref: '#/components/schemas/LocalTurnComputerUse'
+        executor:
+          $ref: '#/components/schemas/LocalTurnExecutor'
+        floor:
+          $ref: '#/components/schemas/LocalTurnFloorStarted'
     LocalTurnComputerUse:
       type: object
       description: >-
@@ -5758,8 +5860,11 @@ components:
         `local_turn_unavailable`, `unsupported_media_type`,
         `request_too_large`, `local_turn_failed`, from client contract
         1.30 `unattended_grant_refused`, `chain_limit_reached` and
-        `chain_ended`, and from client contract 1.31 `invalid_run_brief`,
-        `chain_not_found`, `run_brief_unavailable` and `run_brief_failed`. NOTE(W2):
+        `chain_ended`, from client contract 1.31 `invalid_run_brief`,
+        `chain_not_found`, `run_brief_unavailable` and `run_brief_failed`, and
+        from client contract 1.47 `agent_target_required`,
+        `addressee_not_in_conversation`, `floor_turn_refused` and
+        `floor_turn_superseded`. NOTE(W2):
         internal/api/v2/localturns/route.go:241 (`writeUseCaseError`).
       required: [error]
       properties:
@@ -28102,6 +28207,17 @@ paths:
         `created: false` and a fresh recall. The same `question_id` in another
         conversation, or for another participant, answers 409; after the
         commit, 409 `local_turn_already_committed`.
+
+        SEVERAL AGENTS (client contract 1.47, ADR-0050 decision 7f). In a
+        thread with two or more agent participants Main decides who answers,
+        by the conversation's floor (`meta.floor`), as it does for a cloud
+        message: send the person's addressees as `addressed_to` and the
+        composer's target as `participant_id`. The answer's `floor` names the
+        routed order; the first target answers this turn. Run the others
+        one at a time, each after the previous turn's commit, with
+        `floor_turn`. `executor` says where the answering agent runs: a
+        `cloud` agent gets only the conversation text and attached files,
+        never the workspace.
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
@@ -28149,7 +28265,9 @@ paths:
           description: >-
             `local_turn_conflict` or `local_turn_already_committed`; from
             client contract 1.30, `chain_limit_reached` (with `limit`) or
-            `chain_ended` on an unattended continuation.
+            `chain_ended` on an unattended continuation; from client contract
+            1.47, `floor_turn_refused` or `floor_turn_superseded` on a
+            `floor_turn`.
           content:
             application/json:
               schema:
@@ -28176,7 +28294,10 @@ paths:
           description: >-
             `participant_id` is not an agent or model participant of the
             conversation (`local_turn_participant`), or the unattended grant
-            was refused (`unattended_grant_refused`, client contract 1.30).
+            was refused (`unattended_grant_refused`, client contract 1.30);
+            from client contract 1.47, an addressee that is not an agent of the
+            thread (`addressee_not_in_conversation`), or several agents and no
+            address, lead or target (`agent_target_required`).
           content:
             application/json:
               schema:

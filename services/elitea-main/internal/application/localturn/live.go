@@ -24,6 +24,9 @@ type StoredBinding struct {
 	Credential Credential
 	Committed  bool
 	Expired    bool
+	// Executor is where the turn's agent runs: ExecutorLocal, or
+	// ExecutorCloud for a cloud agent of a desktop thread (floor.go).
+	Executor string
 }
 
 // LiveTurn is a turn that may still act: started by the caller in the
@@ -33,6 +36,9 @@ type LiveTurn struct {
 	ExecutionID   string
 	ApplicationID int64
 	VersionID     int64
+	// Cloud: the turn's agent is a cloud agent of the thread; the desktop
+	// relays it as a child turn of itself (ADR-0050 decision 7f).
+	Cloud bool
 	// Web and HostIntel are the policy's local_work.web and
 	// local_work.host_intel, read with the turn so the remote toolkit call
 	// refuses those toolkits under the same policy read.
@@ -92,6 +98,7 @@ func (l *LiveTurns) Live(ctx context.Context, projectID, actorUserID int64, cred
 	}
 	return LiveTurn{
 		ExecutionID: executionID, ApplicationID: binding.ApplicationID, VersionID: binding.VersionID,
-		Web: policy.LocalWork.Web, HostIntel: policy.LocalWork.HostIntel,
+		Cloud: binding.Executor == ExecutorCloud,
+		Web:   policy.LocalWork.Web, HostIntel: policy.LocalWork.HostIntel,
 	}, nil
 }
