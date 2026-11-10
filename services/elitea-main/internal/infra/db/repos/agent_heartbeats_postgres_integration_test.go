@@ -546,3 +546,81 @@ func TestAgentHeartbeat_HistoryAndSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("proactive = %v %v", proactive, err)
 	}
 }
+
+// Two passes (two replicas) see the same due agent: only the first claim
+// takes it, so the agent is triaged once.
+func TestAgentHeartbeat_ClaimLetsOnePassWake(t *testing.T) {
+	h := newHeartbeatHarness(t, map[string]any{"mode": "heartbeat", "interval": "1h"}, true)
+	agents, err := h.store.DueAgents(t.Context(), 1, h.now, 10)
+	if err != nil || len(agents) != 1 {
+		t.Fatalf("due = %+v, %v", agents, err)
+	}
+	first, err := h.store.Claim(t.Context(), agents[0], h.now, h.now.Add(5*time.Minute))
+	if err != nil || !first {
+		t.Fatalf("first claim = %v, %v", first, err)
+	}
+	second, err := h.store.Claim(t.Context(), agents[0], h.now, h.now.Add(5*time.Minute))
+	if err != nil || second {
+		t.Fatalf("second claim = %v, %v", second, err)
+	}
+	// A pass now finds nothing due: the claim moved the wake.
+	if result := h.scan(); result.Due != 0 || len(h.completer.requests) != 0 {
+		t.Fatalf("pass = %+v, triage calls %d", result, len(h.completer.requests))
+	}
+}
+
+// An act parked on an approval is still running: the next wake skips
+// instead of piling another act onto the home thread.
+func TestAgentHeartbeat_AParkedActSkipsTheWake(t *testing.T) {
+	h := newHeartbeatHarness(t, map[string]any{"mode": "heartbeat", "interval": "1h"}, true)
+	h.exec(`
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, meta, created_at)
+VALUES (gen_random_uuid(), 'home', 11, 'agent_heartbeat', '{"heartbeat_application_id":"31"}'::jsonb, now() AT TIME ZONE 'UTC');
+INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta, is_streaming, created_at)
+SELECT gen_random_uuid(), 21, id, '{"hitl_interrupt":{"id":"x"}}'::jsonb, FALSE, now() AT TIME ZONE 'UTC'
+FROM p_1.chat_conversations WHERE name = 'home'`)
+	active, err := h.store.RunActive(t.Context(), heartbeat.Agent{ProjectID: 1, ApplicationID: 31})
+	if err != nil || !active {
+		t.Fatalf("a parked act = %v, %v", active, err)
+	}
+	h.scan()
+	if len(h.completer.requests) != 0 || len(h.rows()) != 0 {
+		t.Fatalf("the wake ran on top of a parked act: %d triage calls", len(h.completer.requests))
+	}
+}
+
+// Another person's private conversation with the agent never reaches the
+// owner's digest; a shared one does.
+func TestAgentHeartbeat_TheDigestSkipsOthersPrivateChats(t *testing.T) {
+	h := newHeartbeatHarness(t, map[string]any{"mode": "heartbeat", "interval": "1h"}, true)
+	h.exec(`
+INSERT INTO p_1.chat_conversations (id, uuid, name, author_id, is_private, source, meta, created_at) VALUES
+    (90, gen_random_uuid(), 'private of 12', 12, TRUE, 'elitea', '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (91, gen_random_uuid(), 'shared by 12', 12, FALSE, 'elitea', '{}'::jsonb, now() AT TIME ZONE 'UTC');
+INSERT INTO p_1.chat_participants (id, uuid, entity_name, entity_meta) VALUES
+    (95, gen_random_uuid(), 'user', '{"id":12}'::jsonb);
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at) VALUES
+    (90, 95, '{}'::jsonb, now() AT TIME ZONE 'UTC'), (90, 21, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (91, 95, '{}'::jsonb, now() AT TIME ZONE 'UTC'), (91, 21, '{}'::jsonb, now() AT TIME ZONE 'UTC');`)
+	for conversation, text := range map[int]string{90: "my salary is secret", 91: "the release is blocked"} {
+		h.exec(`
+WITH message AS (
+    INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta, is_streaming, created_at)
+    VALUES (gen_random_uuid(), 95, $1, '{}'::jsonb, FALSE, now() AT TIME ZONE 'UTC' - interval '4 minutes')
+    RETURNING id
+), item AS (
+    INSERT INTO p_1.chat_message_items (uuid, item_type, order_index, meta, message_group_id, created_at)
+    SELECT gen_random_uuid(), 'text_message', 0, '{}'::jsonb, id, now() AT TIME ZONE 'UTC' FROM message
+    RETURNING id
+)
+INSERT INTO p_1.chat_messages_text (id, content) SELECT id, $2 FROM item`, conversation, text)
+	}
+	h.scan()
+	digest := h.completer.requests[0].User
+	if strings.Contains(digest, "salary") {
+		t.Fatalf("another person's private chat reached the digest: %s", digest)
+	}
+	if !strings.Contains(digest, "release is blocked") || !strings.Contains(digest, "nightly build") {
+		t.Fatalf("the digest lost a visible conversation: %s", digest)
+	}
+}

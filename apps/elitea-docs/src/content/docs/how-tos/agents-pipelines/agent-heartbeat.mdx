@@ -62,11 +62,15 @@ Save refuses a block that is not valid (`proactivity_invalid`).
 
 The Heartbeat tab tells you when you cannot turn it on, and why.
 
+When the heartbeat is on, it belongs to its owner. Another member can turn it off, but can turn it on again as their own only if they are an owner of the agent in the registry (`proactivity_not_owner`).
+
+The triage reads the new messages of the agent's conversations that the owner can see: shared conversations and the owner's own. Another person's private chat with the agent is never in it.
+
 ## Limits and switches
 
 Each agent has a daily envelope. A day starts at midnight in the zone of `quiet_hours` (UTC without it).
 
-- **Wakes per day** and **spend per day** (the triage and the runs it starts). When the agent reaches one, the heartbeat **pauses until the next day** and tells you once.
+- **Wakes per day** and **spend per day** (the triage and the runs it starts). When the agent reaches one, the heartbeat **pauses until the next day** and tells you once. A run that the agent starts may spend at most what is left of the day's spend.
 - **Runs per day.** Past it, an `act` becomes a message.
 - A personal project has a lower run limit, 2 a day by default.
 
@@ -75,7 +79,8 @@ Administrators set the platform maximums under **Configuration › Proactive age
 - **Allow Proactive Agents** (platform), and the project switch, stop every heartbeat at the next wake.
 - The **kill switch** (execution suspensions) stops a suspended agent's wakes, and an `act` that a suspension reached during the triage.
 - **Maintenance mode** stops every wake.
-- When a run that the agent started is still active, the next wake is skipped.
+- When a run that the agent started is still active, or waits for your approval, the next wake is skipped.
+- Every run of an `act`, its automatic continuations included, uses only the tools the agent may use unattended.
 
 ## Heartbeat history
 

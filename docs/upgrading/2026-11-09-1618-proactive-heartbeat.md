@@ -20,7 +20,8 @@ every minute on its platform scheduler.
   - A run that an agent starts needs credential governance and a delegated
     mandate of the agent's owner. Without them, the agent can only notify.
   - The triage uses the project's low-tier default model, and the gateway
-    meters it under the execution id `heartbeat:<wake id>`.
+    meters it under the execution id `heartbeat:<wake id>`. A run that an
+    agent starts may spend at most what is left of its daily spend limit.
 - **Notifications:** the new event type `agent_heartbeat`. Clients older than
   this release show it as a plain notification.
 - **Out of scope:** desktop agents have no heartbeat. Event wakes and

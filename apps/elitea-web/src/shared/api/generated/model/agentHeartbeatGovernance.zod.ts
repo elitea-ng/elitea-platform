@@ -57,6 +57,7 @@ export const AgentHeartbeatGovernance = zod
         "proactivity_platform_off",
         "proactivity_tier_too_low",
         "proactivity_no_release",
+        "proactivity_not_reviewed",
         "proactivity_block_off",
       ])
       .optional()

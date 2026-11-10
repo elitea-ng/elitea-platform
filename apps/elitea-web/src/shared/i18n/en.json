@@ -5892,6 +5892,7 @@
   "features.agentHeartbeat.quiet": "quiet {{window}}",
   "features.agentHeartbeat.reason.blockOff": "The published release has no proactivity block with mode heartbeat. Add one to the agent meta and publish.",
   "features.agentHeartbeat.reason.noRelease": "The agent has no published release.",
+  "features.agentHeartbeat.reason.notReviewed": "The published release has not passed a reviewed change request. Publish a reviewed release first.",
   "features.agentHeartbeat.reason.platformOff": "Proactive agents are turned off on this platform.",
   "features.agentHeartbeat.reason.tierTooLow": "A proactive agent must be at least medium risk, with a reviewed release.",
   "features.agentHeartbeat.saveError": "The heartbeat could not be saved.",

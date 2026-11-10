@@ -8954,7 +8954,8 @@ components:
         can_enable: { type: boolean }
         reason:
           type: string
-          enum: [proactivity_platform_off, proactivity_tier_too_low, proactivity_no_release, proactivity_block_off]
+          enum: [proactivity_platform_off, proactivity_tier_too_low, proactivity_no_release, proactivity_not_reviewed,
+            proactivity_block_off]
           description: Why can_enable is false. Absent when it is true.
         wakes_per_day: { type: integer, description: 'The effective limit after the platform maximums.' }
         acts_per_day: { type: integer }
@@ -8981,8 +8982,10 @@ components:
           type: string
           description: >
             proactivity_platform_off, proactivity_tier_too_low,
-            proactivity_no_release, proactivity_block_off,
-            proactivity_mandate_refused or proactivity_mandate_not_owner.
+            proactivity_no_release, proactivity_not_reviewed, proactivity_block_off,
+            proactivity_mandate_refused, proactivity_mandate_not_owner or
+            proactivity_not_owner (403: the heartbeat is on and belongs to
+            another person, and the caller is not an owner of the agent).
       example: { error: A proactive agent must be at least medium risk., code: proactivity_tier_too_low }
     AgentHeartbeatEntry:
       type: object

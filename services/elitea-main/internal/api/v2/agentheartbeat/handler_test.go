@@ -23,10 +23,15 @@ type fakeStore struct {
 	governance repos.HeartbeatGovernance
 	release    *heartbeat.Release
 	saved      []repos.HeartbeatSettingsUpdate
+	// stored is a row saved by somebody else before the test.
+	stored *repos.HeartbeatSettings
 }
 
 func (f *fakeStore) GetHeartbeatSettings(context.Context, int64, int64) (repos.HeartbeatSettings, error) {
 	if len(f.saved) == 0 {
+		if f.stored != nil {
+			return *f.stored, nil
+		}
 		return repos.HeartbeatSettings{}, repos.ErrHeartbeatNotFound
 	}
 	last := f.saved[len(f.saved)-1]
@@ -73,7 +78,8 @@ func put(t *testing.T, h *Handler, body string) *httptest.ResponseRecorder {
 }
 
 func heartbeatRelease() *heartbeat.Release {
-	return &heartbeat.Release{ReleaseID: 5, VersionID: 42, Meta: map[string]any{"proactivity": map[string]any{"mode": "heartbeat"}}}
+	return &heartbeat.Release{ReleaseID: 5, VersionID: 42, Reviewed: true,
+		Meta: map[string]any{"proactivity": map[string]any{"mode": "heartbeat"}}}
 }
 
 func TestPutRefusesALowTierTeamAgent(t *testing.T) {
@@ -111,7 +117,7 @@ func TestPutRefusesWithoutAHeartbeatRelease(t *testing.T) {
 	if recorder := put(t, NewHandler(store, nil), `{"enabled":true}`); !strings.Contains(recorder.Body.String(), CodeNoRelease) {
 		t.Fatalf("answer = %s", recorder.Body.String())
 	}
-	store.release = &heartbeat.Release{ReleaseID: 5, VersionID: 42, Meta: map[string]any{}}
+	store.release = &heartbeat.Release{ReleaseID: 5, VersionID: 42, Reviewed: true, Meta: map[string]any{}}
 	if recorder := put(t, NewHandler(store, nil), `{"enabled":true}`); !strings.Contains(recorder.Body.String(), CodeBlockOff) {
 		t.Fatalf("answer = %s", recorder.Body.String())
 	}
@@ -138,5 +144,61 @@ func TestPutChecksTheMandate(t *testing.T) {
 	}
 	if recorder := put(t, NewHandler(store, nil), `{"enabled":true,"mandate_id":"`+mine+`"}`); !strings.Contains(recorder.Body.String(), CodeMandateRefused) {
 		t.Fatalf("governance off = %s", recorder.Body.String())
+	}
+}
+
+// The save applies the scan's review rule: a team project's release that
+// did not pass a reviewed change request cannot turn the heartbeat on,
+// which would otherwise read as on and never wake.
+func TestPutRefusesAnUnreviewedTeamRelease(t *testing.T) {
+	release := heartbeatRelease()
+	release.Reviewed = false
+	store := &fakeStore{platform: platformconfig.DefaultProactivitySettings(),
+		governance: repos.HeartbeatGovernance{Tier: agentlifecycle.TierMedium}, release: release}
+	recorder := put(t, NewHandler(store, nil), `{"enabled":true}`)
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), CodeNotReviewed) {
+		t.Fatalf("answer = %d %s", recorder.Code, recorder.Body.String())
+	}
+	// A personal project self-approves: no review needed.
+	store.governance.Personal = true
+	if recorder := put(t, NewHandler(store, nil), `{"enabled":true}`); recorder.Code != http.StatusOK {
+		t.Fatalf("personal = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// Another person cannot take over a heartbeat that is on (and its private
+// home thread) unless they own the agent; anyone may turn it off.
+func TestPutKeepsAnEnabledHeartbeatWithItsOwner(t *testing.T) {
+	store := &fakeStore{platform: platformconfig.DefaultProactivitySettings(),
+		governance: repos.HeartbeatGovernance{Tier: agentlifecycle.TierMedium}, release: heartbeatRelease(),
+		stored: &repos.HeartbeatSettings{ApplicationID: 31, Enabled: true, OwnerUserID: 99}}
+	recorder := put(t, NewHandler(store, nil), `{"enabled":true}`)
+	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), CodeNotOwner) {
+		t.Fatalf("takeover = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if len(store.saved) != 0 {
+		t.Fatal("a refused takeover was stored")
+	}
+	if recorder := put(t, NewHandler(store, nil), `{"enabled":false}`); recorder.Code != http.StatusOK ||
+		len(store.saved) != 1 || store.saved[0].OwnerUserID != 99 {
+		t.Fatalf("disable = %d, saved %+v", recorder.Code, store.saved)
+	}
+	store.saved = nil
+	store.governance.Owner = true
+	if recorder := put(t, NewHandler(store, nil), `{"enabled":true}`); recorder.Code != http.StatusOK ||
+		len(store.saved) != 1 || store.saved[0].OwnerUserID != 11 {
+		t.Fatalf("an agent owner's takeover = %d, saved %+v", recorder.Code, store.saved)
+	}
+}
+
+// A mandate binds the released version: with no release it is refused,
+// not checked against version 0.
+func TestPutRefusesAMandateWithoutARelease(t *testing.T) {
+	store := &fakeStore{platform: platformconfig.DefaultProactivitySettings(),
+		governance: repos.HeartbeatGovernance{Tier: agentlifecycle.TierMedium}}
+	mandates := runmandatetest.New()
+	recorder := put(t, NewHandler(store, mandates.Service()), `{"enabled":false,"mandate_id":"6b0f9e4c-2a1d-4c3b-9e8f-7a6b5c4d3e2f"}`)
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), CodeNoRelease) {
+		t.Fatalf("answer = %d %s", recorder.Code, recorder.Body.String())
 	}
 }

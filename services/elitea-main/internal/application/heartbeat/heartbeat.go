@@ -104,6 +104,10 @@ const (
 	ReasonTriageUnreadable  = "triage_unreadable"
 	ReasonNotifyFailed      = "notify_failed"
 	ReasonSuspendedMidCycle = "suspended_during_wake"
+	// ReasonActFailed: the act failed after the triage (a store or
+	// permission read). The row is still written, so the wake and its
+	// triage spend count toward the day.
+	ReasonActFailed = "act_failed"
 )
 
 // The bounds of one pass.
@@ -118,6 +122,10 @@ const (
 	// retryAfter is the next wake after a gate stopped a wake whose block is
 	// not known (no release, the block off).
 	retryAfter = time.Hour
+	// claimWindow is how long a claimed wake stays out of other passes. A
+	// wake that fails before it moves the clock is retried after it. It is
+	// longer than a pass (ScanJobTimeout).
+	claimWindow = 5 * time.Minute
 )
 
 // ErrPassIncomplete is a pass that left due agents for the next one.
@@ -224,6 +232,11 @@ type Store interface {
 	// DueAgents lists the enabled agents whose next wake is at or before
 	// now, oldest first, at most limit.
 	DueAgents(ctx context.Context, projectID int64, now time.Time, limit int) ([]Agent, error)
+	// Claim takes the agent's wake for this pass: it moves the next wake
+	// past the claim window when the agent is still due, so a pass on
+	// another replica does not wake it at the same time. False: another
+	// pass has it, or it is no longer due.
+	Claim(ctx context.Context, agent Agent, now, until time.Time) (bool, error)
 	// CurrentRelease answers the agent's release; found is false without
 	// one.
 	CurrentRelease(ctx context.Context, agent Agent) (release Release, found bool, err error)
@@ -368,10 +381,20 @@ func (s *Service) Scan(ctx context.Context) (PassResult, error) {
 				break
 			}
 			result.Due++
+			claimed, err := s.cfg.Store.Claim(ctx, agent, now, now.Add(claimWindow))
+			if err != nil {
+				s.cfg.Logger.Error("heartbeat: claim", "project_id", agent.ProjectID,
+					"application_id", agent.ApplicationID, "err", err)
+				continue
+			}
+			if !claimed {
+				result.Skipped++
+				continue
+			}
 			woke, err := s.wake(ctx, agent, settings, projectOn, now)
 			if err != nil {
 				// One agent's failure is not the pass's: logged, and the
-				// row stays due, because nothing moved its clock.
+				// agent is due again when its claim runs out.
 				s.cfg.Logger.Error("heartbeat: wake", "project_id", agent.ProjectID,
 					"application_id", agent.ApplicationID, "err", err)
 				continue
@@ -483,9 +506,17 @@ func (s *Service) wake(
 		return true, store.RecordWake(ctx, wake)
 	case proactivity.DecisionNotify:
 		return true, s.notify(ctx, agent, release, wake, triage.Message, OutcomeNotify, "")
-	default:
-		return true, s.act(ctx, agent, release, block, wake, triage, day, limits)
 	}
+	if err := s.act(ctx, agent, release, block, wake, triage, day, limits); err != nil {
+		// The triage is paid for: a failure after it still writes the row,
+		// so the wake and its spend count toward the day's limits and the
+		// agent is not triaged again every minute.
+		s.cfg.Logger.Error("heartbeat: act", "project_id", agent.ProjectID,
+			"application_id", agent.ApplicationID, "err", err)
+		wake.Outcome, wake.ReasonCode, wake.Reason, wake.CursorAt = OutcomeFailed, ReasonActFailed, clip(err.Error()), nil
+		return true, store.RecordWake(ctx, wake)
+	}
+	return true, nil
 }
 
 // Approved is the governance rule of a wake: at least medium risk and a
@@ -601,6 +632,16 @@ func (s *Service) act(
 	if s.cfg.Start == nil {
 		return degrade(ReasonStartRefused, "this deployment cannot start agent runs.")
 	}
+	// The chain may spend at most what is left of the day: the daily limit
+	// bounds the act's runs, not only the next wake.
+	var spendCap *float64
+	if limits.SpendPerDayUSD >= 0 {
+		left := limits.SpendPerDayUSD - day.SpendUSD
+		if left < minActSpendUSD {
+			return degrade(ReasonSpendLimit, "what is left of my daily spend limit is too little for a run.")
+		}
+		spendCap = &left
+	}
 	authority, code, why := s.mandate(ctx, agent, release)
 	if code != "" {
 		return degrade(code, why)
@@ -631,8 +672,11 @@ func (s *Service) act(
 		TriggerOrigin: executiondomain.TriggerOriginSchedule, ReleaseID: release.ReleaseID,
 		// An ADR-0045 chain that only continues: no sensitive_tools grant,
 		// ever (decision 1), and the goal check judges the run.
-		Unattended: &unattended.Request{ContinueStepLimit: true, ContinueOutputLimit: true, GoalCheck: true},
-		Heartbeat:  true,
+		Unattended: &unattended.Request{
+			ContinueStepLimit: true, ContinueOutputLimit: true, GoalCheck: true,
+			Chain: unattended.ChainRequest{SpendCapUSD: spendCap},
+		},
+		Heartbeat: true,
 	})
 	if err != nil {
 		if target.Created {
@@ -679,6 +723,10 @@ func (s *Service) mandate(ctx context.Context, agent Agent, release Release) (se
 	return securitycontext.RunAuthority{}, ReasonMandateUnusable,
 		"my mandate is not usable (" + strings.ToLower(runmandate.Code(err)) + "). Renew or replace it."
 }
+
+// minActSpendUSD is the least daily spend left that starts an act: the
+// chain's spend is stored to 4 decimals, and 0 there is no limit.
+const minActSpendUSD = 0.0001
 
 // OriginAgentHeartbeat is the mandate origin of a heartbeat act.
 const OriginAgentHeartbeat runmandate.Origin = "agent_heartbeat"

@@ -61,8 +61,12 @@ const (
 	CodeTierTooLow      = "proactivity_tier_too_low"
 	CodeNoRelease       = "proactivity_no_release"
 	CodeBlockOff        = "proactivity_block_off"
+	CodeNotReviewed     = "proactivity_not_reviewed"
 	CodeMandateRefused  = "proactivity_mandate_refused"
 	CodeMandateNotOwner = "proactivity_mandate_not_owner"
+	// CodeNotOwner: the heartbeat is on and belongs to somebody else, and
+	// the caller is not an owner of the agent in the registry.
+	CodeNotOwner = "proactivity_not_owner"
 )
 
 // Store is *repos.AgentHeartbeats.
@@ -111,6 +115,8 @@ type Settings struct {
 	Configured bool         `json:"configured"`
 	Governance Governance   `json:"governance"`
 	Release    *ReleaseView `json:"release"`
+	// owner: the caller owns the agent in the registry (not answered).
+	owner bool
 }
 
 // Governance is whether the caller may turn the heartbeat on, and why not.
@@ -209,6 +215,7 @@ func (h *Handler) view(ctx context.Context, req request) (Settings, heartbeat.Re
 	if err != nil {
 		return Settings{}, heartbeat.Release{}, false, err
 	}
+	answer.owner = governance.Owner
 	answer.Governance = Governance{
 		PlatformEnabled: platform.Enabled, ProjectEnabled: projectOn,
 		Tier: string(governance.Tier), Personal: governance.Personal,
@@ -231,21 +238,27 @@ func (h *Handler) view(ctx context.Context, req request) (Settings, heartbeat.Re
 	limits := block.Effective(platform.Ceilings, governance.Personal)
 	answer.Governance.WakesPerDay, answer.Governance.ActsPerDay, answer.Governance.SpendPerDayUSD =
 		limits.WakesPerDay, limits.ActsPerDay, limits.SpendPerDayUSD
-	answer.Governance.Reason = refusal(platform, governance, found, block)
+	answer.Governance.Reason = refusal(platform, governance, found, release.Reviewed, block)
 	answer.Governance.CanEnable = answer.Governance.Reason == ""
 	return answer, release, found, nil
 }
 
 // refusal is the code that stops a caller turning the heartbeat on.
-func refusal(platform platformconfig.ProactivitySettings, governance repos.HeartbeatGovernance, found bool, block proactivity.Block) string {
+func refusal(
+	platform platformconfig.ProactivitySettings, governance repos.HeartbeatGovernance, found, reviewed bool, block proactivity.Block,
+) string {
+	selfApproved := governance.Personal && platform.PersonalSelfApprove
 	switch {
 	case !platform.Enabled:
 		return CodePlatformOff
-	case !(governance.Personal && platform.PersonalSelfApprove) &&
-		(!governance.Tier.Valid() || governance.Tier == agentlifecycle.TierLow):
+	case !selfApproved && (!governance.Tier.Valid() || governance.Tier == agentlifecycle.TierLow):
 		return CodeTierTooLow
 	case !found:
 		return CodeNoRelease
+	case !selfApproved && !reviewed:
+		// The scan's rule (heartbeat.Approved): a team project's release
+		// must have passed a change request with an approval.
+		return CodeNotReviewed
 	case !block.Enabled():
 		return CodeBlockOff
 	}
@@ -300,6 +313,17 @@ func (h *Handler) Put(w http.ResponseWriter, r *http.Request) {
 	if !update.Enabled && current.Configured {
 		update.OwnerUserID = current.OwnerUserID
 	}
+	// A heartbeat that is on belongs to its owner: another person takes it
+	// over (its home thread included) only as an owner of the agent in the
+	// registry, and only by turning it on. Anyone with the permission may
+	// still turn it off.
+	if update.Enabled && current.Configured && current.Enabled && current.OwnerUserID != req.userID && !current.owner {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "The heartbeat belongs to another person. Only an owner of the agent can take it over.",
+			"code":  CodeNotOwner,
+		})
+		return
+	}
 	if update.MandateID != nil {
 		if h.mandates == nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
@@ -312,9 +336,15 @@ func (h *Handler) Put(w http.ResponseWriter, r *http.Request) {
 			Origin: heartbeat.OriginAgentHeartbeat, TenantProjectID: req.projectID,
 			ResourceID: strconv.FormatInt(req.applicationID, 10),
 		}
-		if found {
-			target.ApplicationVersionID = release.VersionID
+		if !found {
+			// The mandate binds the released version: with no release
+			// there is nothing to check its binding against.
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+				"error": refusalSentence(CodeNoRelease), "code": CodeNoRelease,
+			})
+			return
 		}
+		target.ApplicationVersionID = release.VersionID
 		attached, err := h.mandates.CheckAttach(r.Context(), *update.MandateID, target)
 		if err != nil {
 			code := runmandate.Code(err)
@@ -357,6 +387,8 @@ func refusalSentence(code string) string {
 		return "The agent has no published release. Publish a release with a proactivity block first."
 	case CodeBlockOff:
 		return "The published release has no proactivity block with mode heartbeat."
+	case CodeNotReviewed:
+		return "The published release has not passed a reviewed change request. Publish a reviewed release first."
 	}
 	return "The heartbeat cannot be turned on."
 }

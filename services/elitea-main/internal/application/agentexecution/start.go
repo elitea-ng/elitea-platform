@@ -485,6 +485,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		triggerOrigin: request.TriggerOrigin, cloudWorkspace: target.CloudWorkspace,
 		start: &unattended.CloudStart{
 			Contract: CloudStartContractApplication, ParticipantID: request.TargetParticipantID,
+			Heartbeat: request.Heartbeat,
 		},
 	})
 	if err != nil {

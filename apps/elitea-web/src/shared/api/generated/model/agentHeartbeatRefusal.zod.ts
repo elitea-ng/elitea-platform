@@ -48,7 +48,7 @@ export const AgentHeartbeatRefusal = zod
     code: zod
       .string()
       .describe(
-        "proactivity_platform_off, proactivity_tier_too_low, proactivity_no_release, proactivity_block_off, proactivity_mandate_refused or proactivity_mandate_not_owner.\n",
+        "proactivity_platform_off, proactivity_tier_too_low, proactivity_no_release, proactivity_not_reviewed, proactivity_block_off, proactivity_mandate_refused, proactivity_mandate_not_owner or proactivity_not_owner (403: the heartbeat is on and belongs to another person, and the caller is not an owner of the agent).\n",
       ),
   })
   .describe("NOTE(W2) internal/api/v2/agentheartbeat/handler.go:261 (Put).");

@@ -161,6 +161,24 @@ LIMIT $2`, schema), now, limit)
 	return agents, rows.Err()
 }
 
+// Claim moves a still-due agent's next wake to until, in one statement, so
+// two passes cannot both take it: the second finds next_wake_at in the
+// future and claims nothing.
+func (s *AgentHeartbeats) Claim(ctx context.Context, agent heartbeat.Agent, now, until time.Time) (bool, error) {
+	schema, err := tenantschema.QuoteInt(agent.ProjectID)
+	if err != nil {
+		return false, err
+	}
+	tag, err := s.pool.Exec(ctx, fmt.Sprintf(`
+UPDATE %s.agent_heartbeat_settings
+SET next_wake_at = $3, updated_at = clock_timestamp()
+WHERE application_id = $1 AND enabled AND next_wake_at <= $2`, schema), agent.ApplicationID, now, until)
+	if err != nil {
+		return false, fmt.Errorf("agent heartbeat: claim the wake: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // CurrentRelease reads the agent's published release: its version's meta
 // and soul goals, the agent name, the registry tier, whether an approved
 // change request published it, and whether the project is the owner's
@@ -238,8 +256,9 @@ WHERE application_id = $1`, schema), agent.ApplicationID, next, skipReason)
 }
 
 // RunActive reports a message that an act of this agent started and that
-// still streams. A message older than a day no longer counts, so one
-// wedged run cannot stop the heartbeat for good.
+// still streams or waits (parked on an approval, an authorization or an
+// output limit, chat_group_meta_paused). A message older than a day no
+// longer counts, so one wedged run cannot stop the heartbeat for good.
 func (s *AgentHeartbeats) RunActive(ctx context.Context, agent heartbeat.Agent) (bool, error) {
 	schema, err := tenantschema.QuoteInt(agent.ProjectID)
 	if err != nil {
@@ -253,7 +272,7 @@ SELECT EXISTS (
       JOIN %[1]s.chat_conversations AS conversation ON conversation.id = response.conversation_id
      WHERE conversation.source = $1
        AND conversation.meta ->> 'heartbeat_application_id' = $2
-       AND response.is_streaming
+       AND (response.is_streaming OR %[1]s.chat_group_meta_paused(response.meta))
        AND response.created_at > (now() AT TIME ZONE 'UTC') - interval '1 day'
 )`, schema), HeartbeatConversationSource, strconv.FormatInt(agent.ApplicationID, 10)).Scan(&active)
 	if err != nil {
@@ -352,11 +371,23 @@ LIMIT $2`, schema), agent.ApplicationID, heartbeat.MaxMemoryEntries+heartbeat.Ma
 	}
 	messageRows, err := s.pool.Query(ctx, fmt.Sprintf(`
 WITH agent_conversations AS (
+    -- The digest goes to the owner: only the agent's conversations that
+    -- the owner takes part in, or that are not private. Another person's
+    -- private chat with the agent never reaches it.
     SELECT DISTINCT mapping.conversation_id
     FROM %[1]s.chat_participant_mapping AS mapping
     JOIN %[1]s.chat_participants AS participant ON participant.id = mapping.participant_id
+    JOIN %[1]s.chat_conversations AS conversation ON conversation.id = mapping.conversation_id
     WHERE participant.entity_name = 'application'
       AND participant.entity_meta ->> 'id' = $1::text
+      AND (NOT conversation.is_private
+           OR conversation.author_id = $4
+           OR EXISTS (SELECT 1
+                      FROM %[1]s.chat_participant_mapping AS owner_mapping
+                      JOIN %[1]s.chat_participants AS owner ON owner.id = owner_mapping.participant_id
+                      WHERE owner_mapping.conversation_id = mapping.conversation_id
+                        AND owner.entity_name = 'user'
+                        AND owner.entity_meta ->> 'id' = $4::text))
 ), recent AS (
     SELECT conversation.name, author.entity_name, author.entity_meta, author.meta::jsonb AS author_meta,
            message.created_at, message.id,
@@ -369,16 +400,27 @@ WITH agent_conversations AS (
     JOIN %[1]s.chat_conversations AS conversation ON conversation.id = message.conversation_id
     JOIN %[1]s.chat_participants AS author ON author.id = message.author_participant_id
     WHERE message.created_at > $2::timestamptz AT TIME ZONE 'UTC'
-      AND NOT message.is_streaming
       AND message.visibility = 'all'
       AND COALESCE(message.cause, '') <> 'heartbeat'
-    ORDER BY message.created_at DESC, message.id DESC
+      -- The oldest unread first: the cursor moves to the newest message
+      -- read, so the ones past the limit are read by the next wake. A
+      -- message still streaming stops the read there, so it is read
+      -- whole once it ends.
+      AND NOT EXISTS (SELECT 1
+                      FROM %[1]s.chat_message_group AS open
+                      JOIN agent_conversations AS open_mine ON open_mine.conversation_id = open.conversation_id
+                      WHERE open.is_streaming
+                        AND open.created_at > $2::timestamptz AT TIME ZONE 'UTC'
+                        AND open.created_at <= message.created_at
+                        AND open.visibility = 'all'
+                        AND COALESCE(open.cause, '') <> 'heartbeat')
+    ORDER BY message.created_at, message.id
     LIMIT $3
 )
 SELECT name, entity_name, COALESCE(author_meta ->> 'name', entity_meta ->> 'id', entity_name),
        created_at, COALESCE(content, '')
 FROM recent ORDER BY created_at, id`, schema),
-		strconv.FormatInt(agent.ApplicationID, 10), since, heartbeat.MaxMessages)
+		strconv.FormatInt(agent.ApplicationID, 10), since, heartbeat.MaxMessages, agent.OwnerUserID)
 	if err != nil {
 		return heartbeat.Material{}, fmt.Errorf("agent heartbeat: read the messages: %w", err)
 	}
@@ -392,6 +434,8 @@ FROM recent ORDER BY created_at, id`, schema),
 			return heartbeat.Material{}, err
 		}
 		at = time.Date(at.Year(), at.Month(), at.Day(), at.Hour(), at.Minute(), at.Second(), at.Nanosecond(), time.UTC)
+		newest := at
+		material.NewestAt = &newest
 		if strings.TrimSpace(content) == "" {
 			continue
 		}
@@ -401,8 +445,6 @@ FROM recent ORDER BY created_at, id`, schema),
 		material.Messages = append(material.Messages, proactivity.DigestMessage{
 			Conversation: conversation, Author: author, At: at, Text: content,
 		})
-		newest := at
-		material.NewestAt = &newest
 	}
 	return material, messageRows.Err()
 }

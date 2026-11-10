@@ -54,6 +54,11 @@ const REASON_TEXT: Readonly<Record<string, () => string>> = {
   proactivity_tier_too_low: () =>
     t('features.agentHeartbeat.reason.tierTooLow', 'A proactive agent must be at least medium risk, with a reviewed release.'),
   proactivity_no_release: () => t('features.agentHeartbeat.reason.noRelease', 'The agent has no published release.'),
+  proactivity_not_reviewed: () =>
+    t(
+      'features.agentHeartbeat.reason.notReviewed',
+      'The published release has not passed a reviewed change request. Publish a reviewed release first.',
+    ),
   proactivity_block_off: () =>
     t(
       'features.agentHeartbeat.reason.blockOff',

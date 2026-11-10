@@ -118,8 +118,10 @@ func ownerCanRun(permissions auth.PermissionResolver) heartbeat.RunPermission {
 		resolution, err := permissions.ResolvePermissions(ctx, auth.User{ID: id, UserID: id},
 			v2pipelinetriggers.RunPermissionMode, strconv.FormatInt(projectID, 10))
 		if err != nil {
-			// Fail closed: no decision is not "allowed".
-			return false, nil
+			// No decision is not "allowed", and it is not "refused" either:
+			// the act fails and the owner is not told they lost a
+			// permission they still have.
+			return false, fmt.Errorf("heartbeat: resolve the owner's run permission: %w", err)
 		}
 		for _, permission := range resolution.Permissions {
 			if permission == v2pipelinetriggers.RunPermission {
