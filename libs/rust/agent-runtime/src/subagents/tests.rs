@@ -286,6 +286,7 @@ impl SubAgentHost for TestHost {
                 .iter()
                 .map(|id| (id.clone(), format!("note {id}")))
                 .collect(),
+            ..CheckedBrief::default()
         })
     }
 

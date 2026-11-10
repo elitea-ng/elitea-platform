@@ -271,6 +271,18 @@ func applyFloorTurn(turn *CurrentApplicationTurn, plan *floorPlan, request Curre
 	}
 }
 
+// currentMessageID is the chat message group of the question this turn
+// writes (#1831), for the worker to show the model its short id. An
+// addressed agent's turn reuses the person's question, which is already in
+// its history, and its own input is the platform's note: none.
+func currentMessageID(request CurrentApplicationStartRequest) *string {
+	if request.FloorTurn != nil && request.FloorTurn.ReplyToQuestionID != "" {
+		return nil
+	}
+	id := request.QuestionID
+	return &id
+}
+
 // floorModelInput is the user input the model sees: a peer's message
 // fenced as untrusted data on an agent-to-agent turn, else the request's.
 func floorModelInput(request CurrentApplicationStartRequest) string {

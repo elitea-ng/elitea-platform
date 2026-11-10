@@ -59,9 +59,11 @@ In a cloud run with the sub-agent tools, the agent sees a short id before each m
 We ship on Friday after the review.
 ```
 
-The agent can quote the person's messages, other participants' messages in its view (see [What an agent sees of a conversation](/how-tos/agents-pipelines/agent-context-view/)), and the current message. Its own earlier answers have no id, and it cannot quote them. The id is `m-` and 10 hex digits. It comes from the message's id only, so it is the same on every turn and prompt caching still works. If a message's own text contains `[message`, the agent sees `&#91;message` there instead, so a message cannot fake the id of another message. A quote is checked against the text after the id line, as the agent reads it.
+The agent can quote the person's messages, other participants' messages in its view (see [What an agent sees of a conversation](/how-tos/agents-pipelines/agent-context-view/)), and the current message. Its own earlier answers have no id, and it cannot quote them. The id is `m-` and 10 hex digits. It comes from the message's id only, so it is the same on every turn and prompt caching still works. If a message's own text contains `[message`, the agent sees `&#91;message` there instead, so a message cannot fake the id of another message. This also covers a fullwidth bracket and invisible or non-breaking spaces after the bracket. A quote is checked against the text after the id line, as the agent reads it. The text of a file attached to the current message is not part of that message, so the agent cannot quote it as an excerpt. Pass the file in `attachments` instead.
 
-A regenerated answer or a continued turn has no id on its current message. Quote the current message on a new turn.
+The sub-agent record keeps the chat message id of each quoted message, not the short id.
+
+A regenerated answer, a continued turn, or an addressed agent answering a message another agent answered first has no id on its current message. Quote the current message on a new turn.
 
 A refusal is a tool result that the model reads. No sub-agent starts. The sub-agent gets the checked brief before its task, marked as information and not instructions. The brief counts against the sub-agent's token budget.
 

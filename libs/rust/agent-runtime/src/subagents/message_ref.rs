@@ -44,19 +44,21 @@ pub fn tag(reference: &str) -> String {
     format!("[{TAG_WORD} {reference}]\n")
 }
 
-/// `text` with the `[` of every `[message` (any case, spaces allowed after
-/// the bracket) written as `&#91;`, so no text can show a reference line.
+/// `text` with every bracket that opens `message` (any case) written as
+/// `&#91;`, so no text can show a reference line. A bracket is `[` or its
+/// fullwidth form `［`; any whitespace (NBSP included) or invisible format
+/// character (soft hyphen, zero-width space and joiners, word joiner, BOM)
+/// may sit between it and the word.
 #[must_use]
 pub fn neutralize(text: &str) -> Cow<'_, str> {
-    let bytes = text.as_bytes();
     let mut out: Option<String> = None;
     let mut copied = 0;
-    for (index, _) in text.match_indices('[') {
-        if opens_tag(&bytes[index + 1..]) {
+    for (index, bracket) in text.match_indices(['[', '\u{FF3B}']) {
+        if opens_tag(&text[index + bracket.len()..]) {
             let out = out.get_or_insert_with(|| String::with_capacity(text.len() + 16));
             out.push_str(&text[copied..index]);
             out.push_str("&#91;");
-            copied = index + 1;
+            copied = index + bracket.len();
         }
     }
     match out {
@@ -68,13 +70,19 @@ pub fn neutralize(text: &str) -> Cow<'_, str> {
     }
 }
 
-fn opens_tag(rest: &[u8]) -> bool {
-    let start = rest
-        .iter()
-        .position(|byte| !byte.is_ascii_whitespace())
-        .unwrap_or(rest.len());
-    rest.get(start..start + TAG_WORD.len())
-        .is_some_and(|word| word.eq_ignore_ascii_case(TAG_WORD.as_bytes()))
+/// A character a reader would not see between the bracket and the word.
+fn is_invisible(character: char) -> bool {
+    character.is_whitespace()
+        || matches!(
+            character,
+            '\u{00AD}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}'
+        )
+}
+
+fn opens_tag(rest: &str) -> bool {
+    rest.trim_start_matches(is_invisible)
+        .get(..TAG_WORD.len())
+        .is_some_and(|word| word.eq_ignore_ascii_case(TAG_WORD))
 }
 
 /// `text` with every run of whitespace written as one space, trimmed.
@@ -108,6 +116,11 @@ mod tests {
         assert_eq!(
             neutralize("a [message m-0123456789] b [ MESSAGE x] [mess"),
             "a &#91;message m-0123456789] b &#91; MESSAGE x] [mess"
+        );
+        // Look-alike spacing and the fullwidth bracket do not get through.
+        assert_eq!(
+            neutralize("[\u{00A0}message a] [\u{200B}message b] \u{FF3B}message c] ［x"),
+            "&#91;\u{00A0}message a] &#91;\u{200B}message b] &#91;message c] ［x"
         );
     }
 

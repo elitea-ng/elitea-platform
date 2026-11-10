@@ -128,6 +128,11 @@ pub struct AgentExecutionPayload {
     /// from before the envelope; no per-tool limit, and unattended turns and
     /// sub-agents get read-only tools.
     pub tool_envelope: Option<crate::tool_envelope::ToolEnvelope>,
+    /// The chat message group uuid of this turn's own question (#1831),
+    /// lowercase and hyphenated. `None`: a turn that writes no question of
+    /// its own (a regeneration of an addressed turn, a continuation), or an
+    /// input from before field 75.
+    pub current_message_id: Option<String>,
 }
 
 /// The turn-taking floor this invocation holds (ADR-0050 decision 11).

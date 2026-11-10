@@ -6332,7 +6332,7 @@ mod internal_tools_graph {
                 Arc::new(InMemorySessionService::new()),
             );
         let mut request = with_toggles(AgentExecutionKind::Adhoc, &["subagents"]);
-        request.payload.execution_generation = Some(QUESTION.to_owned());
+        request.payload.current_message_id = Some(QUESTION.to_owned());
         request.payload.user_input =
             super::super::request::UserInput::Text("Use the staging\ncluster.".to_owned());
         request.payload.chat_history = vec![

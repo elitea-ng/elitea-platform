@@ -413,7 +413,7 @@ impl SubAgentTool {
             Ok(steps) => steps,
             Err(refusal) => return refusal,
         };
-        let identity = match self.identity(ctx, label, SpawnRecord::new(&profile, &brief)) {
+        let mut identity = match self.identity(ctx, label, SpawnRecord::new(&profile, &brief)) {
             Ok(identity) => identity,
             Err(refusal) => return refusal,
         };
@@ -423,10 +423,13 @@ impl SubAgentTool {
             task
         } else {
             match self.registry.host.check_brief(&identity, &brief) {
-                Ok(checked) => match profile::render(&brief, &checked) {
-                    Some(rendered) => format!("{rendered}\n\n{task}"),
-                    None => task,
-                },
+                Ok(checked) => {
+                    identity.record.resolve_messages(&checked);
+                    match profile::render(&brief, &checked) {
+                        Some(rendered) => format!("{rendered}\n\n{task}"),
+                        None => task,
+                    }
+                }
                 Err(code) => return brief_refused(code),
             }
         };
