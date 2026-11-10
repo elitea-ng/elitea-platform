@@ -167,11 +167,11 @@ func TestCycleReporterIsQuietOnlyWhileTheOutageIsReported(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	outages := NewTransitions()
 	dbDown := errors.New("FATAL: server login has been failing (SQLSTATE 08P01)")
-	reporter := NewCycleReporter("runtime outbox publisher", logger, outages, func(err error) string {
+	reporter := NewCycleReporter("runtime outbox publisher", logger, outages, func(err error) []string {
 		if err == dbDown {
-			return "db"
+			return []string{"db"}
 		}
-		return ""
+		return nil
 	})
 	outages.Observe("db", true)
 	for range 50 {
@@ -190,7 +190,7 @@ func TestCycleReporterLogsARepeatingFailureOnceAMinuteWithItsCount(t *testing.T)
 	logs := &lineLog{}
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	timeout := fmt.Errorf("claim pending effects: %w", errors.New("context deadline exceeded"))
-	reporter := NewCycleReporter("index metadata terminal reconciler", logger, NewTransitions(), func(error) string { return "db" })
+	reporter := NewCycleReporter("index metadata terminal reconciler", logger, NewTransitions(), func(error) []string { return []string{"db"} })
 	clock := time.Unix(1_800_000_000, 0)
 	reporter.now = func() time.Time { return clock }
 	for range 4 { // four minutes of a failure every 10 s
@@ -200,9 +200,16 @@ func TestCycleReporterLogsARepeatingFailureOnceAMinuteWithItsCount(t *testing.T)
 		}
 	}
 	entries := logs.lines(t)
-	if countLevel(entries, "DEBUG") != 0 {
-		t.Fatal("a failure with no reported outage was demoted to DEBUG")
+	if countLevel(entries, "DEBUG") != 20 {
+		t.Fatalf("DEBUG lines = %d, want the 20 failures between the ERRORs", countLevel(entries, "DEBUG"))
 	}
+	errorsOnly := []map[string]any{}
+	for _, e := range entries {
+		if e["level"] == "ERROR" {
+			errorsOnly = append(errorsOnly, e)
+		}
+	}
+	entries = errorsOnly
 	if countLevel(entries, "ERROR") != 4 {
 		t.Fatalf("ERROR lines = %d, want 4 (once a minute)", countLevel(entries, "ERROR"))
 	}
@@ -226,7 +233,7 @@ func TestTheFirstFailureOfAnOutageAsksTheOwnerToConfirmIt(t *testing.T) {
 		confirmations++
 		outages.Observe(name, databaseDown)
 	})
-	reporter := NewCycleReporter("agent outbox publisher", logger, outages, func(error) string { return "db" })
+	reporter := NewCycleReporter("agent outbox publisher", logger, outages, func(error) []string { return []string{"db"} })
 	reporter.Report(errors.New("connection refused"))
 	if confirmations != 1 || countLevel(logs.lines(t), "ERROR") != 0 || countLevel(logs.lines(t), "DEBUG") != 1 {
 		t.Fatalf("confirmations=%d lines=%v; want the outage confirmed and the failure at DEBUG", confirmations, logs.lines(t))
@@ -239,5 +246,35 @@ func TestTheFirstFailureOfAnOutageAsksTheOwnerToConfirmIt(t *testing.T) {
 	reporter.Report(errors.New("context deadline exceeded"))
 	if countLevel(logs.lines(t), "ERROR") != 1 {
 		t.Fatalf("a failure on a healthy database was not an ERROR: %v", logs.lines(t))
+	}
+}
+
+// A permanent fault is never hidden behind a stream of timeouts: each class
+// has its own once-a-minute window.
+func TestAPermanentFaultIsNotHiddenBehindTimeouts(t *testing.T) {
+	logs := &lineLog{}
+	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	timeout := errors.New("context deadline exceeded")
+	permanent := errors.New("relation does not exist (SQLSTATE 42P01)")
+	reporter := NewCycleReporter("index registry terminal effects", logger, NewTransitions(), func(err error) []string {
+		if err == timeout {
+			return []string{"db", "nats"}
+		}
+		return nil
+	})
+	reporter.Report(timeout)
+	reporter.Report(timeout)
+	reporter.Report(permanent)
+	errorLines := 0
+	for _, e := range logs.lines(t) {
+		if e["level"] == "ERROR" {
+			errorLines++
+			if e["class"] == "other" && !strings.Contains(fmt.Sprint(e["err"]), "42P01") {
+				t.Fatalf("the permanent fault's line lost its cause: %v", e)
+			}
+		}
+	}
+	if errorLines != 2 {
+		t.Fatalf("ERROR lines = %d, want 2 (one timeout, one permanent fault)", errorLines)
 	}
 }

@@ -54,7 +54,7 @@ Panics and unexpected errors also carry a bounded stack (Go ` + "`stack`" + `, R
 
 - **support_ref.** Inside a run it is the ` + "`execution_id`" + `; outside a run it is a reference Main generates for the
   request and returns in the ` + "`X-Elitea-Support-Ref`" + ` header and in every JSON error body. Search the logs for it.
-  A client-supplied ` + "`X-Request-Id`" + ` is never used as the support reference; it is logged as ` + "`client_request_id`" + `.
+  A client-supplied ` + "`X-Request-Id`" + ` or ` + "`X-Elitea-Support-Ref`" + ` is never used as the support reference.
 - **Outages are one line each way.** When Main loses a dependency it logs one WARN (for example
   ` + "`dependency.database_unavailable`" + `) and, when the dependency is back, one INFO with the outage length. While
   that outage is reported, a background runner's failures caused by the same dependency are logged at **DEBUG**,

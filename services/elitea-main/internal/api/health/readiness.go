@@ -115,6 +115,7 @@ type Monitor struct {
 	lastStarted time.Time            // start of the newest evaluation applied
 	outages     *faults.Transitions  // shared with the runners' cycle reporters
 	lastConfirm time.Time            // the last check a runner's failure asked for
+	confirming  chan struct{}        // closed when the running confirmation ends
 }
 
 // WithOutages shares the monitor's outage state with outages, which the
@@ -131,17 +132,31 @@ func (m *Monitor) WithOutages(outages *faults.Transitions) *Monitor {
 const confirmEvery = time.Second
 
 // confirm evaluates the checks now, at most once a second, so a runner's
-// first failure in an outage finds the outage reported (FU-299 C3).
+// first failure in an outage finds the outage reported (FU-299 C3). It is
+// single-flight: every runner that fails while an evaluation is running waits
+// for that evaluation (bounded by the 2 s readiness budget) instead of
+// reading the state before it is recorded.
 func (m *Monitor) confirm(string) {
 	m.mu.Lock()
+	if inflight := m.confirming; inflight != nil {
+		m.mu.Unlock()
+		<-inflight
+		return
+	}
 	now := m.now()
 	if now.Sub(m.lastConfirm) < confirmEvery {
 		m.mu.Unlock()
 		return
 	}
 	m.lastConfirm = now
+	done := make(chan struct{})
+	m.confirming = done
 	m.mu.Unlock()
 	m.Observe(Evaluate(context.Background(), m.checks))
+	m.mu.Lock()
+	m.confirming = nil
+	close(done)
+	m.mu.Unlock()
 }
 
 // NewMonitor returns a Monitor over checks. interval must be positive.

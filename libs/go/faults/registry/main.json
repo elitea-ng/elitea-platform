@@ -19,7 +19,7 @@
     },
     {
       "code": "toolkit.settings_unresolved",
-      "sentence": "The toolkit's settings could not be resolved, so its tool list was not loaded.",
+      "sentence": "The toolkit's settings could not be resolved, so the request could not run.",
       "action": "Check the toolkit's credentials and configuration, then reload the page.",
       "audience": "both",
       "retryable": "yes",

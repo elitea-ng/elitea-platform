@@ -27,6 +27,9 @@ var (
 		regexp.MustCompile(`://`),                                       // URL
 		regexp.MustCompile(`(^|\s)(/|\./|~/)[A-Za-z0-9_.-]+/`),          // unix path
 		regexp.MustCompile(`\.(go|rs|json|yaml|yml|toml|sql|ts|tsx)\b`), // source file
+		regexp.MustCompile(`[/\\]`),                                     // any path separator
+		regexp.MustCompile(`[0-9]{5,}`),                                 // a long number (an id)
+		regexp.MustCompile(`www\.`),                                     // a host
 	}
 	audiences  = map[string]bool{"operator": true, "user": true, "both": true}
 	retryables = map[string]bool{"yes": true, "no": true, "n/a": true}

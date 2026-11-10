@@ -25,9 +25,10 @@ func TestAFailedToolListIsLoggedOnceWithTheSupportReferenceItReturns(t *testing.
 		wantStatus int
 		wantCode   string
 		wantStack  bool
+		wantLevel  string
 	}{
-		"settings not resolved": {fmt.Errorf("resolve toolkit 104: %w", toolkitcalltoolapp.ErrToolkitSettingsResolutionUnavailable), http.StatusServiceUnavailable, "toolkit.settings_unresolved", false},
-		"anything else":         {errors.New("dial tcp 10.0.0.5:5432: connection refused"), http.StatusInternalServerError, "internal.unexpected", true},
+		"settings not resolved": {fmt.Errorf("resolve toolkit 104: %w", toolkitcalltoolapp.ErrToolkitSettingsResolutionUnavailable), http.StatusServiceUnavailable, "toolkit.settings_unresolved", false, "WARN"},
+		"anything else":         {errors.New("dial tcp 10.0.0.5:5432: connection refused"), http.StatusInternalServerError, "internal.unexpected", true, "ERROR"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -68,7 +69,7 @@ func TestAFailedToolListIsLoggedOnceWithTheSupportReferenceItReturns(t *testing.
 					continue
 				}
 				matching++
-				if line["code"] != tc.wantCode || line["msg"] != body["error"] || line["level"] != "ERROR" {
+				if line["code"] != tc.wantCode || line["msg"] != body["error"] || line["level"] != tc.wantLevel {
 					t.Fatalf("log line = %v", line)
 				}
 				if _, hasStack := line["stack"]; hasStack != tc.wantStack {

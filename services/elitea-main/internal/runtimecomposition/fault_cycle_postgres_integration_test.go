@@ -6,9 +6,11 @@ package runtimecomposition
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -140,10 +142,46 @@ func TestAQueryThatKeepsTimingOutOnAHealthyDatabaseIsNeverHidden(t *testing.T) {
 	if f.outages.IsLost("db") || countLines(t, f.records, "WARN", faults.DependencyDatabaseUnavailable.Sentence()) != 0 {
 		t.Fatal("a healthy database was reported lost")
 	}
-	if n := countLines(t, f.records, "DEBUG", faults.RunnerCycleFailed.Sentence()); n != 0 {
-		t.Fatalf("a timing-out query was demoted to DEBUG %d times", n)
+	for _, entry := range f.records.entries(t) {
+		if entry["level"] == "DEBUG" && entry["dependency"] != nil {
+			t.Fatalf("a timing-out query on a healthy database was demoted as an outage: %v", entry)
+		}
 	}
 	if n := countLines(t, f.records, "ERROR", faults.RunnerCycleFailed.Sentence()); n != 1 {
 		t.Fatalf("ERROR lines = %d, want 1 (the rest of the minute is counted, not logged)", n)
+	}
+}
+
+// Twelve runners failing together at the start of an outage all wait for the
+// one confirming evaluation, so none of them logs an ERROR (FU-299 C3).
+func TestManyRunnersFailingAtOnceStillLogNoPerCycleErrors(t *testing.T) {
+	f := newCycleFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go f.monitor.Run(ctx)
+	time.Sleep(200 * time.Millisecond)
+
+	f.proxy.Cut()
+	var wg sync.WaitGroup
+	for runner := range 12 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 3 {
+				if _, err := f.pool.Exec(ctx, "SELECT 1"); err != nil {
+					f.reporters.report(fmt.Sprintf("runner %d", runner), err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	f.proxy.Restore()
+	cancel()
+
+	if n := countLines(t, f.records, "ERROR", faults.RunnerCycleFailed.Sentence()); n != 0 {
+		t.Fatalf("per-cycle ERROR lines from runners failing together = %d, want 0", n)
+	}
+	if n := countLines(t, f.records, "WARN", faults.DependencyDatabaseUnavailable.Sentence()); n != 1 {
+		t.Fatalf("loss lines = %d, want exactly 1", n)
 	}
 }

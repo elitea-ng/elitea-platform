@@ -36,7 +36,7 @@ func KeepOKFalse() Option {
 	}
 }
 
-// Write logs err once (ERROR for 5xx, WARN otherwise) and answers status
+// Write logs err once (ERROR for 5xx other than 503, WARN otherwise) and answers status
 // with the code's sentence, the code and the support reference. r may be
 // nil, for a caller with no request; the answer then has no support
 // reference.
@@ -45,8 +45,10 @@ func Write(w http.ResponseWriter, r *http.Request, logger *slog.Logger, status i
 	if r != nil {
 		ctx = r.Context()
 	}
+	// A 503 is a dependency that heals on its own: WARN. Any other 5xx is an
+	// ERROR.
 	level := slog.LevelWarn
-	if status >= 500 {
+	if status >= 500 && status != http.StatusServiceUnavailable {
 		level = slog.LevelError
 	}
 	ref := faults.SupportRef(ctx)

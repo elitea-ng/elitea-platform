@@ -35,7 +35,7 @@ func (c *cycleReporters) report(runner string, err error) {
 	c.mu.Lock()
 	reporter, ok := c.reporters[runner]
 	if !ok {
-		reporter = faults.NewCycleReporter(runner, c.logger, c.outages, depfailure.Dependency)
+		reporter = faults.NewCycleReporter(runner, c.logger, c.outages, depfailure.Dependencies)
 		c.reporters[runner] = reporter
 	}
 	c.mu.Unlock()
