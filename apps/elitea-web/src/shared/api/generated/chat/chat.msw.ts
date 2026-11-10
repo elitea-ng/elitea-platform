@@ -72,6 +72,7 @@ import type {
   LocalTurnStarted,
   MemoryEntry,
   MemoryEntryList,
+  MessageContextView,
   MessageFeedbackSummary,
   MessageTraceListing,
   MessageTraceStepDetail,
@@ -2792,6 +2793,58 @@ export const getDeleteMessageFeedbackResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetMessageContextViewResponseMock = (
+  overrideResponse: Partial<Extract<MessageContextView, object>> = {},
+): MessageContextView => ({
+  message_id: faker.string.uuid(),
+  reader_participant_id: faker.number.int(),
+  reader_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  history: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  include_side_talk: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  participant_history: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  window_tokens: faker.number.int(),
+  digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  recorded_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  entries: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    message_id: faker.string.uuid(),
+    reason: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    author_name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    author_kind: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    created_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+  })),
+  compaction: faker.helpers.arrayElement([
+    {
+      phase: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      estimated_input_tokens: faker.number.int(),
+      usable_input_tokens: faker.number.int(),
+      compaction_trigger_tokens: faker.number.int(),
+    },
+    null,
+  ]),
+  ...overrideResponse,
+});
+
 export const getGetSupportAssistantConfigMockHandler = (
   overrideResponse?:
     | SupportAssistantConfig
@@ -4848,6 +4901,32 @@ export const getDeleteMessageFeedbackMockHandler = (
     options,
   );
 };
+
+export const getGetMessageContextViewMockHandler = (
+  overrideResponse?:
+    | MessageContextView
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MessageContextView> | MessageContextView),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/message_context_view/prompt_lib/:projectId/:messageId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetMessageContextViewResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getChatMock = () => [
   getGetSupportAssistantConfigMockHandler(),
   getListSupportConversationsMockHandler(),
@@ -4928,4 +5007,5 @@ export const getChatMock = () => [
   getGetMessageFeedbackMockHandler(),
   getSetMessageFeedbackMockHandler(),
   getDeleteMessageFeedbackMockHandler(),
+  getGetMessageContextViewMockHandler(),
 ];

@@ -4,7 +4,7 @@ import type { Participant } from '@/entities/participant';
 import { useAddParticipantMutation, useDeleteParticipantMutation } from '@/entities/participant';
 import { useFetchParticipantDetails } from '@/features/chat-participants';
 
-import type { CreatedConversation, ParticipantSelectionRuntime } from './useAddEntityParticipant.helpers';
+import type { CreatedConversation, ParticipantSelectionRuntime, ShareHistoryFrom } from './useAddEntityParticipant.helpers';
 import {
   applyParticipantSelection,
   canBecomeActive,
@@ -24,9 +24,17 @@ interface ParticipantMenuState {
   readonly pending?: boolean;
 }
 
+/** The "Share history from" question an agent added to a conversation with messages waits on (issue 1669). */
+export interface ShareHistoryQuestion {
+  readonly open: boolean;
+  readonly onChoose: (from: ShareHistoryFrom) => void;
+  readonly onCancel: () => void;
+}
+
 interface EntityParticipantActions {
   readonly onSelectParticipant: (selection: unknown) => void;
   readonly getParticipantMenuState: (selection: unknown) => ParticipantMenuState;
+  readonly shareHistory: ShareHistoryQuestion;
 }
 
 /** Applies the current UI selection rules to one conversation — creating it first when the chat is still new. */
@@ -38,6 +46,8 @@ export function useAddEntityParticipant(params: {
   /** Persists the conversation a brand-new chat does not have yet — see the helpers module's `applyParticipantSelection`. */
   readonly createConversation?: (() => Promise<CreatedConversation | undefined>) | undefined;
   readonly onConversationCreated?: ((conversation: CreatedConversation) => void) | undefined;
+  /** The conversation already has messages: a newly added agent asks "Share history from" first. */
+  readonly hasMessages?: boolean | undefined;
 }): EntityParticipantActions {
   const participants = params.participants ?? EMPTY_PARTICIPANTS;
   const { mutateAsync: addParticipant } = useAddParticipantMutation();
@@ -45,8 +55,9 @@ export function useAddEntityParticipant(params: {
   const { fetchOriginalDetails } = useFetchParticipantDetails();
   const pendingRef = useRef<Set<string>>(new Set());
   const [pendingKeys, setPendingKeys] = useState<ReadonlySet<string>>(new Set());
+  const [awaitingShare, setAwaitingShare] = useState<{ readonly selection: unknown } | null>(null);
 
-  const runtimeRef = useStableRef<ParticipantSelectionRuntime & { readonly participants: readonly Participant[] }>({
+  const runtimeRef = useStableRef<ParticipantSelectionRuntime & { readonly participants: readonly Participant[]; readonly hasMessages: boolean }>({
     projectId: params.projectId,
     conversationId: params.conversationId,
     participants,
@@ -56,6 +67,7 @@ export function useAddEntityParticipant(params: {
     fetchDetails: fetchOriginalDetails,
     createConversation: params.createConversation,
     onConversationCreated: params.onConversationCreated,
+    hasMessages: params.hasMessages === true,
   });
 
   useEffect(() => {
@@ -68,6 +80,27 @@ export function useAddEntityParticipant(params: {
     pendingRef.current.delete(key);
     setPendingKeys(new Set(pendingRef.current));
   }, []);
+
+  const startSelection = useCallback((selection: unknown, shareFrom: ShareHistoryFrom) => {
+    const runtime = runtimeRef.current;
+    const key = selectionKey(selection);
+    if (runtime.projectId === undefined || !key || pendingRef.current.has(key)) return;
+    const existing = findSelectedConversationParticipant(selection, runtime.participants);
+    pendingRef.current.add(key);
+    setPendingKeys(new Set(pendingRef.current));
+    // Cleared on EVERY settlement, not just a rejection: `applyParticipantSelection`
+    // resolves without adding anything on several paths (the selection carried no
+    // participant input, no conversation could be created), and the only other
+    // release is the `participants` effect above — which cannot fire when nothing
+    // was attached. A resolved no-op therefore used to leave the row disabled for
+    // the whole session. The key is still held for the entire flight, which is
+    // what the double-click guard needs.
+    void applyParticipantSelection(selection, existing, runtime, shareFrom)
+      .catch((error: unknown) => {
+        console.error('[ChatBox] could not update the selected participant:', error);
+      })
+      .finally(() => { clearPending(key); });
+  }, [clearPending, runtimeRef]);
 
   const onSelectParticipant = useCallback((selection: unknown) => {
     const runtime = runtimeRef.current;
@@ -86,21 +119,20 @@ export function useAddEntityParticipant(params: {
       return;
     }
 
-    pendingRef.current.add(key);
-    setPendingKeys(new Set(pendingRef.current));
-    // Cleared on EVERY settlement, not just a rejection: `applyParticipantSelection`
-    // resolves without adding anything on several paths (the selection carried no
-    // participant input, no conversation could be created), and the only other
-    // release is the `participants` effect above — which cannot fire when nothing
-    // was attached. A resolved no-op therefore used to leave the row disabled for
-    // the whole session. The key is still held for the entire flight, which is
-    // what the double-click guard needs.
-    void applyParticipantSelection(selection, existing, runtime)
-      .catch((error: unknown) => {
-        console.error('[ChatBox] could not update the selected participant:', error);
-      })
-      .finally(() => { clearPending(key); });
-  }, [clearPending, runtimeRef]);
+    // An agent joining a conversation that already has messages asks first
+    // whether it reads them (issue 1669); a toolkit, or a detach, does not.
+    if (!existing && runtime.hasMessages && !isToolkitSelection(selection)) {
+      setAwaitingShare({ selection });
+      return;
+    }
+    startSelection(selection, 'start');
+  }, [runtimeRef, startSelection]);
+
+  const onChooseShare = useCallback((from: ShareHistoryFrom) => {
+    if (awaitingShare !== null) startSelection(awaitingShare.selection, from);
+    setAwaitingShare(null);
+  }, [awaitingShare, startSelection]);
+  const onCancelShare = useCallback(() => setAwaitingShare(null), []);
 
   const getParticipantMenuState = useCallback((selection: unknown): ParticipantMenuState => {
     const key = selectionKey(selection);
@@ -110,5 +142,9 @@ export function useAddEntityParticipant(params: {
     };
   }, [participants, pendingKeys]);
 
-  return { onSelectParticipant, getParticipantMenuState };
+  return {
+    onSelectParticipant,
+    getParticipantMenuState,
+    shareHistory: { open: awaitingShare !== null, onChoose: onChooseShare, onCancel: onCancelShare },
+  };
 }

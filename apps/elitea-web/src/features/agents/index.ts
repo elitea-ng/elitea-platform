@@ -212,7 +212,9 @@ export { ApplicationEditorNotes } from './ui/ApplicationEditorNotes';
  * restricts crossing INTO a different slice).
  */
 export { applicationWriteHooks } from './model/applicationWriteHooks';
-export { applicationServerErrorMessage } from './lib/errorMessage';
+export { applicationServerErrorMessage, contextBlockRefusal } from './lib/errorMessage';
+export { contextBlockForSave, readContextBlock } from './lib/contextBlock';
+export type { ContextBlock } from './lib/contextBlock';
 export { applicationValidationHooks } from './model/applicationValidationHooks';
 export { useApplicationChatSwitchVersion } from './model/useApplicationChatSwitchVersion';
 export { useCreateConfiguration } from './model/useCreateConfiguration';

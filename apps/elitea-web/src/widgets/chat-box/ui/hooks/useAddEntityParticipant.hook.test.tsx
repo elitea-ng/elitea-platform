@@ -140,3 +140,54 @@ describe('useAddEntityParticipant on a chat with no conversation', () => {
     expect(addedBodies).toHaveLength(0);
   });
 });
+
+describe('useAddEntityParticipant: share history from (issue 1669)', () => {
+  it('asks before adding an agent to a conversation with messages, and "now" sends since_joined', async () => {
+    const { result } = renderHook(() => useAddEntityParticipant({
+      projectId: 2,
+      conversationId: 77,
+      participants: NO_PARTICIPANTS,
+      hasMessages: true,
+    }), { wrapper: createWrapper() });
+
+    act(() => { result.current.onSelectParticipant(AGENT_LIST_ROW); });
+    expect(result.current.shareHistory.open).toBe(true);
+    expect(addedBodies).toHaveLength(0);
+
+    act(() => { result.current.shareHistory.onChoose('now'); });
+    expect(result.current.shareHistory.open).toBe(false);
+    await waitFor(() => { expect(addedBodies).toHaveLength(1); });
+    const [posted] = addedBodies as { entity_settings: Record<string, unknown> }[][];
+    expect(posted?.[0]?.entity_settings['context_history']).toBe('since_joined');
+  });
+
+  it('adds nothing when the question is dismissed', async () => {
+    const { result } = renderHook(() => useAddEntityParticipant({
+      projectId: 2,
+      conversationId: 77,
+      participants: NO_PARTICIPANTS,
+      hasMessages: true,
+    }), { wrapper: createWrapper() });
+
+    act(() => { result.current.onSelectParticipant(AGENT_LIST_ROW); });
+    act(() => { result.current.shareHistory.onCancel(); });
+    await Promise.resolve();
+    expect(result.current.shareHistory.open).toBe(false);
+    expect(addedBodies).toHaveLength(0);
+  });
+
+  it('does not ask on an empty conversation', async () => {
+    const { result } = renderHook(() => useAddEntityParticipant({
+      projectId: 2,
+      conversationId: 77,
+      participants: NO_PARTICIPANTS,
+      hasMessages: false,
+    }), { wrapper: createWrapper() });
+
+    act(() => { result.current.onSelectParticipant(AGENT_LIST_ROW); });
+    expect(result.current.shareHistory.open).toBe(false);
+    await waitFor(() => { expect(addedBodies).toHaveLength(1); });
+    const [posted] = addedBodies as { entity_settings: Record<string, unknown> }[][];
+    expect(posted?.[0]?.entity_settings).not.toHaveProperty('context_history');
+  });
+});

@@ -51,7 +51,8 @@ import { ChatBoxSteeringNotice, ChatBoxSteeringOffer, chatBoxQueueKey, useChatBo
 import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
-import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice'; import { ChatBoxFloorTarget } from './ChatBoxFloorTarget';
+import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
+import { ChatBoxShareHistoryDialog } from './ChatBoxShareHistoryDialog'; import { ChatBoxFloorTarget } from './ChatBoxFloorTarget';
 import { useChatBoxUnattended } from './hooks/useChatBoxUnattended';
 import { useChatBoxChainFollow } from './hooks/useChatBoxChainFollow';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
@@ -180,7 +181,7 @@ const ChatBoxInner = memo(function ChatBox({
   });
   useChatBoxInterruptLedger({ projectId, conversationUuid, messages, setChatHistory: data.setChatHistory, reattach: reattachStreamedExecution }); // per-interrupt cards across tabs; a fan-out wake attaches
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
-  const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), onConversationCreated });
+  const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), onConversationCreated, hasMessages: messages.length > 0 });
   // `isStreamingNow` is derived from the PERSISTED message groups, which carry no
   // in-flight flag while an SSE turn runs — without the transport's own flag the
   // composer never offers Stop for the turn Stop exists to cancel (#328).
@@ -385,7 +386,7 @@ const ChatBoxInner = memo(function ChatBox({
         />
         </>}
       </Box>
-      <ChatBoxWithdrawnNotice withdrawn={state.isActiveParticipantWithdrawn} /><ChatBoxDeleteModal alert={deleteAlert} />{llmSettingsDialog.dialog}{voiceFeedback.alert}
+      <ChatBoxWithdrawnNotice withdrawn={state.isActiveParticipantWithdrawn} /><ChatBoxDeleteModal alert={deleteAlert} /><ChatBoxShareHistoryDialog question={entityParticipantActions.shareHistory} />{llmSettingsDialog.dialog}{voiceFeedback.alert}
     </Box>
   );
 });

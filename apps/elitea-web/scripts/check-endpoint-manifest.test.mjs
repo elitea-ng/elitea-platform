@@ -915,7 +915,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 488 -> 493 (issue 1615, ADR-0050 decisions 5a and 1): listAgentProposals,
 // getAgentProposal, dismissAgentProposal, markAgentProposalCreated and
 // copyAgentMemory, the agent proposals inbox and Copy to project.
-const GENERATED_OPERATION_COUNT = 493;
+// 493 -> 494 (issue 1669, ADR-0050 decision 9): getMessageContextView, the
+// "What the agent saw" inspector on an agent answer (see MANIFEST_ENTRY_COUNT).
+const GENERATED_OPERATION_COUNT = 494;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1197,8 +1199,12 @@ const GENERATED_OPERATION_COUNT = 493;
  * 332 -> 337 (issue 1615, ADR-0050 decisions 5a and 1): agentProposals.list,
  * get, dismiss, markCreated and copyMemory, the proposals inbox, the chat's
  * proposal card and Copy to project (features/agent-proposals). Generated.
+ *
+ * 337 -> 338 (issue 1669, ADR-0050 decision 9): chat.getMessageContextView,
+ * the "What the agent saw" inspector in an agent answer's ⋯ menu
+ * (features/chat-messages/api/contextViewApi.ts). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 337;
+const MANIFEST_ENTRY_COUNT = 338;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {
