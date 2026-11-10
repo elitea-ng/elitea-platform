@@ -202,6 +202,61 @@ jobs:
           fi
           npm run test:storybook
 
+  desktop-journeys:
+    name: Desktop journeys (harness)
+    runs-on: ubuntu-latest
+    # The desktop shell's Playwright journeys (e2e/desktop, #1806: a thread
+    # with a local and a cloud agent) against its DEV HARNESS: `vite --mode
+    # desktop` serves the desktop entry and `/?harness` mounts the shell with
+    # the in-memory host fakes and canned API answers. No compose stack and no
+    # Tauri host, so it is a fast gate here rather than in ci-web-e2e.yml.
+    # The same pinned Playwright image as `storybook` (Chromium and its system
+    # libraries pre-installed; scripts/check-playwright-image-tag.mjs keeps
+    # the tag honest). The host's own side is D0's Rust tests (ci-desktop.yml).
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
+      options: --ipc=host
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          # The npm cache is .github/actions/npm-cache below.
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+      - name: Install (locked)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+      - name: Desktop journeys
+        shell: bash
+        run: |
+          set -euo pipefail
+          specs=$(find e2e/desktop -name '*.spec.ts' | grep -c '' || true)
+          echo "${specs} desktop journey file(s) under e2e/desktop"
+          if [ "${specs}" -eq 0 ]; then
+            echo "::error::no *.spec.ts under apps/elitea-web/e2e/desktop, so this job would run nothing. Do not let the job pass."
+            exit 1
+          fi
+          npx playwright test -c playwright.desktop.config.ts
+      - name: Upload the report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-journeys-report
+          path: |
+            apps/elitea-web/playwright-report-desktop/
+            apps/elitea-web/test-results-desktop/
+          retention-days: 7
+
   unit-tests:
     name: Unit tests (sharded + coverage)
     runs-on: ubuntu-latest

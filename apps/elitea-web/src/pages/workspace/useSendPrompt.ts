@@ -1,8 +1,16 @@
 /**
  * "Send": make sure the conversation exists, then start the turn on the host.
+ *
+ * In a thread of several agents (ADR-0050 decision 7f) the message's "@Name"
+ * mentions are its `addressed_to` (client-core `addressedTo`). Main answers
+ * the first addressed agent first, so the turn starts on it (a cloud agent's
+ * with `cloud_agent`); the host starts the others in order itself.
  */
 import { useRef, useState } from 'react';
 
+import { addressedTo } from '@elitea/client-core/conversation';
+
+import { conversationApi } from '@/entities/conversation';
 import { isDesktopGrantsOff, markGrantsTurnedOff } from '@/features/unattended';
 import { describeWorkspaceError, type WorkspaceTurn } from '@/features/workspace';
 import type { TurnModelChoice } from '@/shared/desktop/turnModel';
@@ -10,7 +18,7 @@ import type { AttachedImage, TurnCommand, TurnImagePick, TurnModeChoice, TurnSta
 
 import type { AgentSelection } from './useAgentSelection';
 import { modeFields } from './turnModeFields';
-import { useEnsureConversation } from './useEnsureConversation';
+import { threadAgentsOf, useEnsureConversation, type CompanionAgent, type ThreadAgent } from './useEnsureConversation';
 
 /** The images a message carries: the tokens the host holds them by, and what the transcript shows of them. */
 export interface SentImages {
@@ -82,6 +90,52 @@ function shownOf(images: SentImages | undefined): SentImages['shown'] {
   return images === undefined ? [] : images.shown;
 }
 
+/**
+ * Who a message is for, in a thread of several agents: `addressed_to`, and the agent that answers first (the first one
+ * addressed), on its own application and version. One agent, or none addressed: the composer's agent, as before.
+ */
+export function floorFields(prompt: string, agents: readonly ThreadAgent[]): Pick<TurnStartRequest, 'addressed_to' | 'cloud_agent' | 'application_id' | 'version_id'> | Record<string, never> {
+  if (agents.length < 2) return {};
+  const addressed = addressedTo(prompt, agents);
+  const first = agents.find((agent) => agent.participantId === addressed[0]);
+  if (first === undefined) return {};
+  return { addressed_to: addressed, application_id: first.applicationId, version_id: first.versionId, ...(first.cloud ? { cloud_agent: true } : {}) };
+}
+
+/**
+ * A message routed to several agents is not a "Run to completion" chain (the host follows the floor instead, one agent
+ * after another), and a cloud agent's turn takes neither the grant nor a model choice (the host refuses them,
+ * `cloud_agent_text_only`): the composer's defaults are dropped, not sent to be refused.
+ */
+export function routedRequest(request: TurnStartRequest): TurnStartRequest {
+  const routed = (request.addressed_to?.length ?? 0) > 1;
+  const cloud = request.cloud_agent === true;
+  if (!routed && !cloud) return request;
+  const { unattended: _chain, model, ...rest } = request;
+  return cloud || model === undefined ? rest : { ...rest, model };
+}
+
+/** The thread's other agents, as the conversation adds them (the composer's agent is never its own companion). */
+function companionsOf(selection: AgentSelection, agentId: string): CompanionAgent[] {
+  return (selection.companions ?? [])
+    .filter((c) => c.agentId !== agentId)
+    .map((c) => ({ applicationId: Number(c.agentId), applicationName: c.name, versionId: c.versionId, agentType: c.agentType, cloud: c.cloud }));
+}
+
+/**
+ * The thread's agents a message may address: those the send just added, else, for a message that mentions someone in
+ * a thread reopened later, the conversation's own agent participants.
+ */
+async function addressableAgents(projectId: number, conversationId: string, prompt: string, added: ThreadAgent[]): Promise<ThreadAgent[]> {
+  if (added.length > 0 || !/[@#]/.test(prompt)) return added;
+  try {
+    return threadAgentsOf((await conversationApi.details({ projectId, id: conversationId })).participants);
+  } catch {
+    // The participants could not be read: the composer's agent answers, as in a thread of one.
+    return [];
+  }
+}
+
 /** The start request's `command`, only when the message runs one. */
 function commandField(command: TurnCommand | undefined): { command?: TurnCommand } {
   return command === undefined ? {} : { command };
@@ -115,7 +169,7 @@ export function useSendPrompt(
     const startsNew = selection.conversationId === '';
     const reuse = reusable(pending.current, startsNew, key);
     try {
-      const conversationId = await ensureConversation({
+      const ensured = await ensureConversation({
         projectId,
         conversationId: reuse === null ? selection.conversationId : reuse.id,
         completeSetup: reuse === null ? false : !reuse.ready,
@@ -128,9 +182,12 @@ export function useSendPrompt(
         versionId: version.id,
         agentType: version.agentType,
         folderName: workspace.name,
+        companions: companionsOf(selection, agent.id),
       });
+      const conversationId = ensured.id;
+      const agents = await addressableAgents(projectId, conversationId, prompt, ensured.agents);
       if (startsNew) pending.current = { key, id: conversationId, ready: true };
-      const request: TurnStartRequest = {
+      const request: TurnStartRequest = routedRequest({
         workspace_id: workspace.id,
         project_id: projectId,
         conversation_id: conversationId,
@@ -144,7 +201,8 @@ export function useSendPrompt(
         ...modelField(model),
         ...commandField(command),
         ...imagesField(images),
-      };
+        ...floorFields(prompt, agents),
+      });
       const started = await turn.start(request, (refusal) => withoutRefusedGrant(request, refusal));
       // A refused start (its reason is the turn's startError) keeps the
       // prompt and the person's conversation choice as they were.
