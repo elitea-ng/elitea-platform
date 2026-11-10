@@ -29,7 +29,12 @@ function ProposalSummary({ proposal }: { readonly proposal: AgentWorkforcePropos
   const by =
     proposal.source === 'hr_agent'
       ? t('features.agentWorkforce.proposal.byAgent', 'Proposed by a reviewer agent: {{rationale}}', { rationale: proposal.rationale })
-      : t('features.agentWorkforce.proposal.byPerson', 'Proposed: {{rationale}}', { rationale: proposal.rationale });
+      : proposal.source === 'policy'
+        ? t('features.agentWorkforce.proposal.byPolicy', 'Raised by the workforce policy (rule {{rule}}): {{rationale}}', {
+            rule: proposal.policy_rule ?? '',
+            rationale: proposal.rationale,
+          })
+        : t('features.agentWorkforce.proposal.byPerson', 'Proposed: {{rationale}}', { rationale: proposal.rationale });
   return (
     <>
       <Typography variant="labelMedium">
