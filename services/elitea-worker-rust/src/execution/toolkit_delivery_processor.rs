@@ -2464,6 +2464,8 @@ pub(super) async fn process_toolkit_verified<R, RC, T, K, I>(
         parent: None,
         "toolkit.delivery",
         execution_id = %command.execution_id,
+        // FU-299: what a user quotes to support is the execution id.
+        support_ref = %command.execution_id,
         generation = command.generation,
         command_id = %command.command_id,
         tenant_id = %command.tenant_id,

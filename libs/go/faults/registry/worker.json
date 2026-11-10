@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "code": "agent_delivery.retained_no_ack",
+      "sentence": "The Worker left this run's command unacknowledged, so the command bus delivers it again after a delay and the run continues from its last checkpoint.",
+      "action": "Nothing while it settles; if the same run repeats this line, read result_code and the lines before it.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "agent_output.invalid_configuration",
+      "sentence": "The Worker's output delivery settings are invalid, so this run's output could not be prepared.",
+      "action": "Check the Worker's output and spool settings, then restart the Worker.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "agent_output.invalid_durable_state",
+      "sentence": "This run's saved output failed the Worker's validation, so it was not sent.",
+      "action": "Report the support reference to the platform team; the run's saved output is kept for inspection.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "agent_output.resource_exhausted",
+      "sentence": "The Worker's output spool is full, so this run's output could not be saved.",
+      "action": "Check the spool volume's free space and the Worker's spool limits.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "agent_output.spool_unavailable",
+      "sentence": "The Worker could not read or write its output spool, so this run's output waits and is tried again.",
+      "action": "Check the spool volume; the Worker retries within the run's lease.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "agent_output.unavailable",
+      "sentence": "Main's output service did not answer, so this run's output waits and is sent again.",
+      "action": "Check Main's runtime listener; the Worker retries within the run's lease.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "agent_progress.invalid_configuration",
+      "sentence": "The Worker's progress publication settings are invalid, so this run's progress updates are not sent.",
+      "action": "Check the Worker's output session limit, then restart the Worker.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "agent_progress.invalid_state",
+      "sentence": "A progress update did not match this run's state, so it was not sent.",
+      "action": "Report the support reference to the platform team.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "agent_progress.output_rejected",
+      "sentence": "Main refused this run's progress update, so the turn will be recovered from its last checkpoint.",
+      "action": "Read the cause; if Main keeps refusing updates for new runs, check the Worker and Main versions.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "agent_progress.output_unavailable",
+      "sentence": "Main's output service did not answer a progress update, so the update is kept and sent again.",
+      "action": "Check Main's runtime listener; the Worker reconnects on its own.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    }
+  ]
+}

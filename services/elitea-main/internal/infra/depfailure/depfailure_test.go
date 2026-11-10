@@ -141,3 +141,22 @@ func TestDescribeKeepsTheCauseAndDropsConnectionDetails(t *testing.T) {
 		})
 	}
 }
+
+func TestDependenciesNameTheOutagesAFailureMayBelongTo(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want string
+	}{
+		"database answer":  {pgError("57P03", "the database system is in recovery mode"), "db"},
+		"broken pool conn": {fmt.Errorf("query: %w", pgconn.ErrConnClosed), "db"},
+		"own timeout":      {fmt.Errorf("publish: %w", context.DeadlineExceeded), "db,nats"},
+		"NATS request":     {fmt.Errorf("publish: %w", nats.ErrTimeout), "nats"},
+		"permanent fault":  {pgError("42P01", "relation does not exist"), ""},
+		"programming bug":  {errors.New("nil map"), ""},
+	}
+	for name, tc := range cases {
+		if got := strings.Join(Dependencies(tc.err), ","); got != tc.want {
+			t.Errorf("%s: Dependencies = %q, want %q", name, got, tc.want)
+		}
+	}
+}

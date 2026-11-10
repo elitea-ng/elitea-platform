@@ -1745,11 +1745,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"*"},
-		ExposedHeaders:   []string{"Content-Length"},
+		ExposedHeaders:   []string{"Content-Length", "X-Elitea-Support-Ref"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
 	r.Use(apimw.RequestID)
+	// The support reference a person quotes (FU-299): generated here, never
+	// taken from the client's X-Request-Id.
+	r.Use(apimw.SupportRef)
 	// Response headers that stop a browser reading an API body as a document.
 	// Mounted here, in front of every route, because the per-handler copies
 	// covered only the routes somebody remembered (see the middleware doc).

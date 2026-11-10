@@ -7,6 +7,7 @@ use (
 	./libs/go/authlib
 	./libs/go/egresslib
 	./libs/go/eventslib
+	./libs/go/faults
 	./libs/go/natsconn
 	./libs/go/observability
 	./libs/go/routines

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/elitea-ng/elitea-platform/libs/go/faults"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"log/slog"
 	"os"
@@ -200,6 +201,11 @@ type Dependencies struct {
 	IndexVectorDeleter indexingapp.IndexVectorDeleter
 	PermissionResolver auth.PermissionResolver
 	Logger             *slog.Logger
+	// Outages is the readiness monitor's per-dependency outage tracker. A
+	// runner's failure that belongs to a dependency it reports lost is logged
+	// at DEBUG; nil means no outage is ever reported, so failures stay ERROR
+	// (FU-299 C3).
+	Outages *faults.Transitions
 
 	// ObjectStore backs the artifact retention sweeper (S14). A nil store
 	// leaves current index scheduling enabled but omits that separate
@@ -284,6 +290,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err := dependencies.Workspace.validate(); err != nil {
 		return nil, err
 	}
+	reporters := newCycleReporters(dependencies)
 	toolkitRoute, err := configuredToolkitRoute(config, dependencies.WorkerToolkitCapability)
 	if err != nil {
 		return nil, err
@@ -595,7 +602,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			dependencies.AdmissionPool,
 			indexVectors,
 			func(err error) {
-				dependencies.Logger.Error("index registry maintenance failed", "err", err)
+				reporters.report("index registry maintenance", err)
 			},
 		)
 		if err != nil {
@@ -621,7 +628,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			dependencies.TerminalEffectsPool,
 			terminalRegistry,
 			func(err error) {
-				dependencies.Logger.Error("index registry terminal item requeued", "err", err)
+				reporters.report("index registry terminal effects", err)
 			},
 		)
 		if err != nil {
@@ -631,7 +638,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			dependencies.TerminalEffectsPool,
 			terminalRegistry,
 			func(err error) {
-				dependencies.Logger.Error("index registry manual Stop cleanup item requeued", "err", err)
+				reporters.report("index registry manual Stop cleanup", err)
 			},
 		)
 		if err != nil {
@@ -653,7 +660,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		BatchSize:         64,
 		MaxConcurrent:     8,
 		ReportFailure: func(err error) {
-			dependencies.Logger.Error("runtime outbox publisher cycle failed", "err", err)
+			reporters.report("validation outbox publisher", err)
 		},
 	})
 	if err != nil {
@@ -698,7 +705,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			BatchSize:         64,
 			MaxConcurrent:     8,
 			ReportFailure: func(err error) {
-				dependencies.Logger.Error("index ingest outbox publisher cycle failed", "err", err)
+				reporters.report("index ingest outbox publisher", err)
 			},
 		})
 		if err != nil {
@@ -1163,7 +1170,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				BatchSize:         64,
 				MaxConcurrent:     8,
 				ReportFailure: func(err error) {
-					dependencies.Logger.Error("agent execution outbox publisher cycle failed", "err", err)
+					reporters.report("agent outbox publisher", err)
 				},
 			},
 		)
@@ -1255,7 +1262,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				BatchSize:         64,
 				MaxConcurrent:     8,
 				ReportFailure: func(err error) {
-					dependencies.Logger.Error("direct toolkit outbox publisher cycle failed", "err", err)
+					reporters.report("toolkit execute outbox publisher", err)
 				},
 			},
 		)
@@ -1280,11 +1287,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			agentJobs,
 			agentAdmissionReservationReaperPollInterval,
 			func(err error) {
-				dependencies.Logger.Error(
-					"agent admission reservation reaper cycle failed",
-					"err",
-					err,
-				)
+				reporters.report("agent admission reservation reaper", err)
 			},
 		)
 		if reaperErr != nil {
@@ -1360,11 +1363,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			nodeEvents,
 			executionReplayRetentionPollInterval,
 			func(err error) {
-				dependencies.Logger.Error(
-					"execution replay retention cycle failed",
-					"err",
-					err,
-				)
+				reporters.report("execution replay retention janitor", err)
 			},
 		)
 		if retentionErr != nil {
@@ -1392,11 +1391,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				500*time.Millisecond,
 				2*indexMetaTerminalEffect.concurrency,
 				func(err error) {
-					dependencies.Logger.Error(
-						"current index metadata terminal reconciliation failed",
-						"err",
-						err,
-					)
+					reporters.report("index metadata terminal reconciler", err)
 				},
 			)
 			if reconcileErr != nil {
@@ -1418,11 +1413,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 					500*time.Millisecond,
 					4,
 					func(err error) {
-						dependencies.Logger.Error(
-							"current index manual Stop cleanup reconciliation failed",
-							"err",
-							err,
-						)
+						reporters.report("index manual Stop cleanup reconciler", err)
 					},
 				)
 			if reconcileErr != nil {
@@ -2145,11 +2136,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			indexRegistry,
 			dependencies.ExecutionSuspensions,
 			func(err error) {
-				dependencies.Logger.Error(
-					"current index metadata initialization requeued",
-					"err",
-					err,
-				)
+				reporters.report("index metadata initializer", err)
 			},
 		)
 		if err != nil {
