@@ -1,0 +1,58 @@
+# The runtime failure messages imported byte-identically from the Worker (FU-299), which
+# may hold more than one sentence: the Worker's parity test
+# (every_registered_runtime_failure_is_in_the_fault_registry_byte_identically) pins them, and
+# Main keeps a copy. Every other sentence is one sentence (TestRegistryIsWellFormed).
+# This list only shrinks: rewrite a message to one sentence, then delete its line.
+runtime.application_composition_invalid
+runtime.application_composition_too_large
+runtime.authorization_failed
+runtime.cancelled
+runtime.cap_reached.browser_monthly_quota
+runtime.cap_reached.max_browser_seconds
+runtime.cap_reached.max_model_turns
+runtime.cap_reached.max_records_read
+runtime.cap_reached.max_tool_calls
+runtime.code_preparation_cancelled
+runtime.code_preparation_failed
+runtime.code_preparation_unconfirmed
+runtime.context_budget_exceeded
+runtime.deadline_exceeded
+runtime.dependency_unavailable
+runtime.execution_input_field_limit.agent_settings
+runtime.execution_input_field_limit.chat_history
+runtime.execution_input_field_limit.tool_configuration
+runtime.execution_input_field_limit.user_message
+runtime.execution_input_limit
+runtime.fanout_member_failed
+runtime.incompatible_version
+runtime.internal
+runtime.invalid_input
+runtime.model_access_denied
+runtime.model_budget_exhausted.member
+runtime.model_budget_exhausted.project
+runtime.model_budget_exhausted.unknown
+runtime.model_provider_failure
+runtime.model_rate_limited
+runtime.model_request_rejected
+runtime.model_request_too_large
+runtime.model_response_invalid
+runtime.model_timeout
+runtime.model_unavailable
+runtime.output_continuation_exhausted
+runtime.output_contract_violation
+runtime.output_projection_limit
+runtime.pipeline_child_input_type_invalid
+runtime.pipeline_code_failed
+runtime.pipeline_input_invalid
+runtime.pipeline_input_limit
+runtime.pipeline_node_type_not_available
+runtime.pipeline_result_invalid
+runtime.pipeline_result_limit
+runtime.pipeline_tool_failed
+runtime.pipeline_tool_unavailable
+runtime.recovery_frontier_unsupported
+runtime.recovery_refused
+runtime.resource_exhausted
+runtime.result_refused
+runtime.toolkit_run_authorization_failed
+runtime.unsupported_capability

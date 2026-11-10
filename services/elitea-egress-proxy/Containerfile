@@ -12,6 +12,8 @@ FROM golang:1.26-trixie AS builder
 WORKDIR /src
 COPY libs/go/egresslib ./libs/go/egresslib
 COPY libs/proto/gen/go ./libs/proto/gen/go
+# The shared error registry and fault convention (FU-299).
+COPY libs/go/faults ./libs/go/faults
 COPY services/elitea-egress-proxy/go.mod services/elitea-egress-proxy/go.sum ./services/elitea-egress-proxy/
 WORKDIR /src/services/elitea-egress-proxy
 COPY services/elitea-egress-proxy/ ./

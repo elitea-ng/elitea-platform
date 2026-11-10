@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/faults/logx"
 	"github.com/elitea-ng/elitea-platform/libs/go/observability"
 	"github.com/elitea-ng/elitea-platform/libs/go/routines"
 	"github.com/elitea-ng/elitea-platform/services/elitea-scheduler/internal/auditretention"
@@ -30,7 +31,9 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// The shared handler (FU-299): the same JSON lines and level as before,
+	// plus the cause chain, typed-fault fields and support_ref.
+	logger := slog.New(logx.Wrap(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}), nil))
 	slog.SetDefault(logger)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

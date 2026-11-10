@@ -2312,6 +2312,61 @@ export interface components {
         /** @enum {string} */
         AgentMemoryStatus: "pending" | "active" | "archived";
         /**
+         * @description The heartbeat block of an agent version (ADR-0050 decision 2), meta.proactivity. The heartbeat reads the block of the agent's published release, never of a draft. Every field is optional; an empty object is mode heartbeat with the defaults.
+         * @example {
+         *       "mode": "heartbeat",
+         *       "interval": "1h",
+         *       "quiet_hours": "22:00-07:00 Europe/Berlin",
+         *       "watch": [
+         *         {
+         *           "kind": "conversation"
+         *         },
+         *         {
+         *           "kind": "schedule_note"
+         *         }
+         *       ],
+         *       "act_target": "home_thread",
+         *       "limits": {
+         *         "wakes_per_day": 24,
+         *         "acts_per_day": 4,
+         *         "spend_per_day_usd": 2
+         *       }
+         *     }
+         */
+        AgentProactivity: {
+            /**
+             * @description Where an act runs. Default home_thread. workspace_thread is not available in v1 (422).
+             * @enum {string}
+             */
+            act_target?: "home_thread" | "new_conversation";
+            /** @description Whole minutes from 15m to 24h, as a Go duration ("1h", "30m"). Default 1h. */
+            interval?: string;
+            /** @description A whole percentage of the interval from 0 to 50, as a number or "10%". Default 10. */
+            jitter?: number | string;
+            /** @description The agent's daily envelope. The platform's maximums (section proactivity) apply when they are lower; a personal project also has its own act limit. */
+            limits?: {
+                /** @description Default 4. */
+                acts_per_day?: number;
+                /** @description The triage and the runs it starts. Default 2.0. */
+                spend_per_day_usd?: number;
+                /** @description Default 24. */
+                wakes_per_day?: number;
+            };
+            /**
+             * @description off (the default when the block is absent) or heartbeat.
+             * @enum {string}
+             */
+            mode?: "off" | "heartbeat";
+            /** @description "HH:MM-HH:MM Zone" with an IANA zone, for example "22:00-07:00 Europe/Berlin". No wake starts inside the window. */
+            quiet_hours?: string;
+            /** @description What a wake reads. Default conversation and schedule_note. toolkit_read names a read-only tool for the triage; v1 lists it in the digest and does not call it. */
+            watch?: {
+                /** @description conversation, schedule_note or toolkit_read. */
+                kind: string;
+                tool?: string;
+            }[];
+        };
+        /**
          * @description ADR-0050 decision 1a: an agent version's soul document, the JSON form of a `SOUL.md` file (YAML front matter holding every key but `body`, then `body` as the markdown after the closing `---`). It shapes how the agent speaks and behaves and GRANTS NOTHING: no key names a tool, a toolkit, a credential, a secret, a permission or a scope, and Main refuses an unknown key outright (400 `soul_capability_key` for a capability-shaped one, `soul_invalid` for any other), so a soul can never be read as a grant. At most 16384 bytes of text: the UTF-8 bytes of every string value (keys not counted) are summed, which reads the same in every client and in SOUL.md (400 `soul_too_large`). Prompt order: platform system text, organization guardrails, the soul, the instructions, recalled memory. `proactive_goals` is not put into the prompt; the heartbeat reads it. Self-contained (no $ref, no `nullable`) so it is valid JSON Schema as written.
          * @example {
          *       "schema": "elitea.soul/v1",
@@ -4095,7 +4150,7 @@ export interface components {
             event_type: string;
             id: number;
             is_seen: boolean;
-            /** @description Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds. For `run_finished` (client contract 1.32, ADR-0045 decision 5) the server writes ids and the outcome only, never content: `outcome` (`completed`, `failed`, `waiting` or `limit_reached`), `limit` (`continuations`, `spend` or `deadline`, only for `limit_reached`), `project_id`, `conversation_uuid`, `thread_id` (a desktop chain, when known), `chain_root_execution_id`, `execution_id` (the chain's last run), `origin` (`cloud` or `desktop`) and `continuations` (internal/infra/db/repos/run_finished.go). One row per chain end. */
+            /** @description Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds. For `run_finished` (client contract 1.32, ADR-0045 decision 5) the server writes ids and the outcome only, never content: `outcome` (`completed`, `failed`, `waiting` or `limit_reached`), `limit` (`continuations`, `spend` or `deadline`, only for `limit_reached`), `project_id`, `conversation_uuid`, `thread_id` (a desktop chain, when known), `chain_root_execution_id`, `execution_id` (the chain's last run), `origin` (`cloud` or `desktop`) and `continuations` (internal/infra/db/repos/run_finished.go). One row per chain end. For `agent_heartbeat` (ADR-0050 decision 2) a proactive agent wrote to its owner: `conversation_id` (the home thread UUID), `message_id`, `project_id`, `application_id`, `agent_name`, `outcome` (`notify`, `act_degraded` or `paused`), `reason_code` `text` (the first 280 bytes of the message) and `message` (the agent's name, the text and an empty `[...]()` link to the conversation) (internal/infra/db/repos/agent_heartbeats.go, PostToOwner). */
             meta: {
                 /** @description `chat_user_mentioned`: who mentioned the recipient. `name` is empty when it could not be resolved. */
                 sender?: {
@@ -4670,6 +4725,8 @@ export interface components {
             capabilities?: ({
                 /** @description The agent may propose, with the propose_agent tool, that a temporary sub-agent it started become a saved agent (ADR-0050 decision 5a). The person it works for must also hold models.applications.applications.create. */
                 can_propose_agents?: boolean;
+                /** @description The agent is an HR agent (ADR-0050 decision 5l): it may propose, with the propose_dismissal tool, a ladder stage for another agent of the project. It never decides; a person holding agents.workforce.manage does. Guards refuse a proposal against itself, its hirer, a higher tier, another HR agent, a critical-tier agent or one under legal hold. */
+                can_review_agents?: boolean;
             } & {
                 [key: string]: boolean;
             }) | null;
@@ -4695,6 +4752,8 @@ export interface components {
             parent_author_id?: string;
             parent_entity_id?: string;
             parent_project_id?: string;
+            /** @description The agent's heartbeat (ADR-0050 decision 2): how often it wakes, its quiet hours, what it reads, where it acts and its daily limits. The heartbeat reads the block of the published release. A save with an invalid block is refused with 422 proactivity_invalid. */
+            proactivity?: components["schemas"]["AgentProactivity"] | null;
             /** @description The author's run caps of this agent (ADR-0041 decision 3). Each key LOWERS the platform's cap for the agent's risk tier (Configuration › Run caps); the lower value applies. A save that sets a value above the tier's cap is refused with 422 RUN_CAP_ABOVE_TIER. Omit a key, or set it to null, to keep the tier's cap. `step_limit` still bounds each agent loop: with `max_model_turns` the lower of the two stops first. */
             run_caps?: components["schemas"]["VersionRunCaps"] | null;
             source_version_id?: string;

@@ -15,8 +15,8 @@ use super::runtime_context::{
     ArtifactDeleteRequest, ArtifactListOutcome, ArtifactListRequest, ArtifactReadOutcome,
     ArtifactReadRequest, ArtifactWriteOutcome, ArtifactWriteRequest, ClaimScopedEliteaContext,
     HandFloorRequest, ProjectContextWriteOutcome, ProjectContextWriteRequest, ProposeAgentRequest,
-    RuntimeApplicationVersion, RuntimeAttachmentObject, RuntimeContextClient, RuntimeContextError,
-    SkillWriteOutcome, SkillWriteRequest,
+    ProposeDismissalRequest, RuntimeApplicationVersion, RuntimeAttachmentObject,
+    RuntimeContextClient, RuntimeContextError, SkillWriteOutcome, SkillWriteRequest,
 };
 
 /// Shared platform transport facade. Invocation authority is always supplied
@@ -180,6 +180,18 @@ impl PlatformClient {
         request: &ProposeAgentRequest,
     ) -> Result<serde_json::Value, RuntimeContextError> {
         self.runtime_context.propose_agent(authority, request).await
+    }
+
+    /// The `propose_dismissal` tool (ADR-0050 decision 5l, #1616), under the
+    /// same non-fatal error contract as `propose_agent`.
+    pub(crate) async fn propose_dismissal(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ProposeDismissalRequest,
+    ) -> Result<serde_json::Value, RuntimeContextError> {
+        self.runtime_context
+            .propose_dismissal(authority, request)
+            .await
     }
 
     /// The `artifact` toolkit family's four operations (#906) — the artifact

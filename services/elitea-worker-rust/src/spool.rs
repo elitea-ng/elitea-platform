@@ -83,6 +83,14 @@ impl std::error::Error for SpoolError {
     }
 }
 
+/// FU-299: the Display is the `&'static str` message only; the `io::Error`
+/// source is rendered by kind by the cause chain, never by text.
+impl elitea_faults::SafeCause for SpoolError {
+    fn safe_cause(&self) -> String {
+        format!("spool: {self}")
+    }
+}
+
 /// Owner-held 256-bit root key used only to derive execution-specific keys.
 pub struct SpoolMasterKey([u8; 32]);
 

@@ -1078,7 +1078,26 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// a temporary sub-agent to a saved agent (ADR-0050 decision 5a, issue
 	// 1615): elitea_lifecycle.agent_proposals, written by the propose_agent
 	// tool, decided in the registry inbox. No data, no permission.
-	require.EqualValues(t, 234, Head(shared))
+	//
+	// 235: shared/0235_agent_heartbeats.sql, one row per heartbeat wake of a
+	// proactive agent (ADR-0050 decision 2, issue 1618):
+	// elitea_runtime.agent_heartbeats, the daily envelope's ledger. No data,
+	// no permission.
+	//
+	// 236: shared/0236_agent_workforce.sql, the agent workforce (ADR-0050
+	// decisions 5b, 5g-5j and 5l, issue 1616): the registry's under_review
+	// and lifecycle_state (active, retired, deleted) with the retire
+	// snapshot, elitea_lifecycle.agent_scorecards and
+	// agent_workforce_proposals, suspension source dismissal, and the
+	// agents.workforce.manage grant to the project admin.
+	//
+	// 237: shared/0237_agent_workforce_policies.sql, the automatic hiring and
+	// dismissal policies (ADR-0050 decisions 5c and 5k, issue 1617):
+	// elitea_lifecycle.agent_workforce_policies (off by default) and
+	// agent_automatic_actions, the registry's probation and orphan columns,
+	// and source policy on agent_workforce_proposals (watch, suspend or
+	// retire only). No data, no permission.
+	require.EqualValues(t, 237, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1345,7 +1364,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 165: tenant/0165_application_version_avatar_pack.sql, the nullable
 	// application_versions.avatar_pack jsonb column (ADR-0050 decision 6,
 	// issue 1619). No data, no permission.
-	require.EqualValues(t, 165, Head(tenant))
+	//
+	// 166: tenant/0166_agent_heartbeat_settings.sql, the heartbeat state of
+	// each proactive agent and the project switch proactive_agents_enabled
+	// (ADR-0050 decision 2, issue 1618). No data, no permission.
+	require.EqualValues(t, 166, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

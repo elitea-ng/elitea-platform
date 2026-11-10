@@ -65,6 +65,7 @@ libs/rust/code-parsers/Cargo.toml member of the libs/rust workspace: the /libs/r
 libs/rust/engine-core/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/engine-sidecar/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/egress-guard/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/faults/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/graph-algos/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/inventory-core/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/llm-wire/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member

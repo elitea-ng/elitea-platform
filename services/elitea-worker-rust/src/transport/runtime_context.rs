@@ -43,7 +43,7 @@ use crate::protocol::elitea::runtime::v1::{
 };
 use crate::protocol::elitea::runtime::v1::{
     ForgetAgentMemoryRequestV1, HandFloorRequestV1, ProposeAgentRequestV1,
-    RecallAgentMemoryRequestV1, RememberAgentMemoryRequestV1,
+    ProposeDismissalRequestV1, RecallAgentMemoryRequestV1, RememberAgentMemoryRequestV1,
 };
 use crate::workspace_run::context::{
     RUNTIME_CONTEXT_FIELD as WORKSPACE_FIELD, WorkspaceRuntimeContext,
@@ -88,6 +88,8 @@ const AGENT_MEMORY_FORGET_SCHEMA: &str = "elitea.runtime.agent-memory-forget.v1"
 /// The turn-taking hand-off's schema (ADR-0050 decision 11, #1611).
 const HAND_FLOOR_SCHEMA: &str = "elitea.runtime.hand-floor.v1";
 const PROPOSE_AGENT_SCHEMA: &str = "elitea.runtime.propose-agent.v1";
+/// The HR agent's propose-dismissal answer (ADR-0050 decision 5l, #1616).
+const PROPOSE_DISMISSAL_SCHEMA: &str = "elitea.runtime.propose-dismissal.v1";
 /// Main's own request ceiling for the three (`maxRuntimeAgentMemoryRequestBytes`).
 const MAX_AGENT_MEMORY_REQUEST_BYTES: usize = 8 * 1_024;
 /// Main's own request ceiling for `propose_agent`
@@ -1086,6 +1088,47 @@ impl RuntimeContextClient {
             .map_err(|_| RuntimeContextError::Timeout("the agent proposal timed out"))?
     }
 
+    /// Propose a workforce stage for another agent of the project (ADR-0050
+    /// decision 5l, #1616). Main reads the project, the proposing HR agent
+    /// and the person from the claimed execution, checks the capability and
+    /// the guards, and stores a proposal a person decides.
+    pub(crate) async fn propose_dismissal(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ProposeDismissalRequest,
+    ) -> Result<Value, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let request = scoped(
+            &binding,
+            ProposeDismissalRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_agent_memory_body(request)?,
+            },
+            PROPOSE_DISMISSAL_AUTHORITY_MALFORMED,
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .propose_dismissal(request)
+                .await
+                .map_err(|status| {
+                    context_status(
+                        status,
+                        Some(RuntimeContextError::Rejected(
+                            "the workforce proposal was refused",
+                        )),
+                    )
+                })?
+                .into_inner()
+                .response_json;
+            propose_dismissal_response(&bounded_document(body, self.config.max_response_bytes)?)
+        };
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the workforce proposal timed out"))?
+    }
+
     /// One artifact response document, within the artifact family's own
     /// envelope ceiling.
     fn artifact_document(&self, body: Vec<u8>) -> Result<Zeroizing<Vec<u8>>, RuntimeContextError> {
@@ -1982,6 +2025,62 @@ fn propose_agent_response(body: &[u8]) -> Result<Value, RuntimeContextError> {
     {
         return Err(RuntimeContextError::InvalidResponse(
             "the agent proposal response has an unexpected schema",
+        ));
+    }
+    Ok(decoded)
+}
+
+/// The exact narrowing of a demotion (`agentworkforce.Narrowing` in Main).
+/// Every field only takes away; empty fields are left out.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct DismissalNarrowing {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) remove_toolkit_ids: Vec<i64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) memory_review: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) proactivity_off: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) remove_capabilities: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) remove_lead: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) toolkit_type_ceiling: Vec<String>,
+}
+
+impl DismissalNarrowing {
+    /// Whether the narrowing takes nothing away.
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// The `propose_dismissal` tool's request (`storage.DismissalRequest` in
+/// Main).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct ProposeDismissalRequest {
+    pub(crate) application_id: i64,
+    pub(crate) stage: String,
+    pub(crate) rationale: String,
+    #[serde(skip_serializing_if = "DismissalNarrowing::is_empty")]
+    pub(crate) narrowing: DismissalNarrowing,
+}
+
+const PROPOSE_DISMISSAL_AUTHORITY_MALFORMED: &str =
+    "the workforce proposal request authority is malformed";
+
+/// Main's propose-dismissal answer: a JSON object of the expected schema
+/// with a status.
+fn propose_dismissal_response(body: &[u8]) -> Result<Value, RuntimeContextError> {
+    let decoded: Value = serde_json::from_slice(body).map_err(|_| {
+        RuntimeContextError::InvalidResponse("the workforce proposal response is malformed")
+    })?;
+    if decoded.get("schema_version").and_then(Value::as_str) != Some(PROPOSE_DISMISSAL_SCHEMA)
+        || decoded.get("status").and_then(Value::as_str).is_none()
+    {
+        return Err(RuntimeContextError::InvalidResponse(
+            "the workforce proposal response has an unexpected schema",
         ));
     }
     Ok(decoded)

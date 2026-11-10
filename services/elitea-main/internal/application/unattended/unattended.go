@@ -169,6 +169,10 @@ type ChainRequest struct {
 	MaxContinuations *int64
 	MaxSpendUSD      *float64
 	DeadlineSeconds  *int64
+	// SpendCapUSD is a cap Main sets, never the wire (a heartbeat act's
+	// daily spend left, ADR-0050 decision 2): the chain spends at most this,
+	// whatever the other limits say, and it is never refused. Nil is no cap.
+	SpendCapUSD *float64
 }
 
 // Request is the grant a caller sends.
@@ -264,6 +268,10 @@ type CloudStart struct {
 	ParticipantID int64  `json:"participant_id"`
 	// LLMSettings is the ad hoc chat's llm_settings; empty for an agent.
 	LLMSettings []byte `json:"llm_settings,omitempty"`
+	// Heartbeat: a proactive agent's heartbeat started the chain (ADR-0050
+	// decision 2). Every run of the chain binds only its unattended tools,
+	// not only the first.
+	Heartbeat bool `json:"heartbeat,omitempty"`
 }
 
 // Chain is one stored chain link and its chain.
@@ -482,6 +490,10 @@ func ResolveLimits(settings platformconfig.UnattendedSettings, chain ChainReques
 			return Limits{}, Refused("chain.max_spend", "", RefusedOverMaximum)
 		}
 		limits.MaxSpendUSD = value
+	}
+	if spendCap := chain.SpendCapUSD; spendCap != nil && !math.IsNaN(*spendCap) && roundSpend(*spendCap) > 0 &&
+		(limits.MaxSpendUSD == 0 || limits.MaxSpendUSD > *spendCap) {
+		limits.MaxSpendUSD = *spendCap
 	}
 	limits.MaxSpendUSD = roundSpend(limits.MaxSpendUSD)
 	if chain.DeadlineSeconds != nil {

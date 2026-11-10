@@ -1,8 +1,11 @@
 /**
- * The agent editor's tab strip: Configuration, Persona, Avatar, Evaluation, Memory, then History.
+ * The agent editor's tab strip: Configuration, Persona, Avatar, Evaluation, Memory, Heartbeat, then History.
  *
  * AVATAR (ADR-0050 decision 6, issue 1619) is the version's avatar pack with
  * a preview of every state; like Persona it edits unsaved version state.
+ *
+ * HEARTBEAT (ADR-0050 decision 2, issue 1618) turns the agent's heartbeat on
+ * or off and shows its history — `features/agent-heartbeat`'s `HeartbeatPanel`.
  *
  * MEMORY (ADR-0050 decision 1b, issue 1608) is what the agent remembers in
  * this project — `features/agent-memory`'s `MemoryPanel`; the server decides
@@ -50,7 +53,9 @@ import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { EvaluationPanel } from '@/features/agent-evaluation';
+import { HeartbeatPanel } from '@/features/agent-heartbeat';
 import { MemoryPanel } from '@/features/agent-memory';
+import { WorkforcePanel } from '@/features/agent-workforce';
 import { RunHistoryPanel } from '@/entities/run-history';
 import { t } from '@/shared/i18n';
 import { BaseTab } from '@/shared/ui/BaseTab';
@@ -62,6 +67,8 @@ const EDITOR_TABS = {
   avatar: 'avatar',
   evaluation: 'evaluation',
   memory: 'memory',
+  heartbeat: 'heartbeat',
+  workforce: 'workforce',
   history: 'history',
 } as const;
 type EditorTab = (typeof EDITOR_TABS)[keyof typeof EDITOR_TABS];
@@ -141,6 +148,16 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
           data-testid="edit-application-tab-memory"
         />
         <BaseTab
+          value={EDITOR_TABS.heartbeat}
+          label={t('pages.agents.editApplication.tabs.heartbeat', 'Heartbeat')}
+          data-testid="edit-application-tab-heartbeat"
+        />
+        <BaseTab
+          value={EDITOR_TABS.workforce}
+          label={t('pages.agents.editApplication.tabs.workforce', 'Workforce')}
+          data-testid="edit-application-tab-workforce"
+        />
+        <BaseTab
           value={EDITOR_TABS.history}
           label={t('pages.agents.editApplication.tabs.history', 'History')}
           data-testid="edit-application-tab-history"
@@ -171,6 +188,12 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
       </Box>
       <Box hidden={tab !== EDITOR_TABS.memory}>
         {tab === EDITOR_TABS.memory && <MemoryPanel projectId={projectId} applicationId={applicationId} />}
+      </Box>
+      <Box hidden={tab !== EDITOR_TABS.heartbeat}>
+        {tab === EDITOR_TABS.heartbeat && <HeartbeatPanel projectId={projectId} applicationId={applicationId} />}
+      </Box>
+      <Box hidden={tab !== EDITOR_TABS.workforce}>
+        {tab === EDITOR_TABS.workforce && <WorkforcePanel projectId={projectId} applicationId={applicationId} />}
       </Box>
       <Box hidden={tab !== EDITOR_TABS.history} sx={historyPanelSx}>
         {tab === EDITOR_TABS.history && (

@@ -5,6 +5,18 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Automatic hiring and dismissal of agents
+
+A project can now hire and dismiss agents automatically, under **Settings → Agent workforce**, which only agent managers (`agents.workforce.manage`) see. Both are off until a manager turns them on. Automatic hiring creates an agent only from a low-tier, read-only proposal whose spec ran successfully enough times, unpublished and with no tools bound, on probation until a manager keeps it; for 14 days a manager can undo the hire. Automatic dismissal applies the project's rules to each agent's scorecard: watch and suspend apply at once, and retire waits for a grace period during which the owner can object. The policy never demotes or deletes and leaves critical-tier agents and agents under legal hold alone. Agents whose owners left the project are flagged for a new owner and moved to watch after 30 days. See [Automatic hiring and dismissal](/how-tos/agents-pipelines/agent-workforce/#automatic-hiring-and-dismissal).
+
+## Proactive agents
+
+An agent can now have a **heartbeat**: the platform wakes it on a timer, a small model reads its goals and the new messages, and the agent does nothing, sends you a message in its home thread with a notification, or starts a run under your mandate that waits for you at every approval. Add a `proactivity` block to the agent, publish it, and turn the heartbeat on in the agent editor's new **Heartbeat** tab, which also shows each wake. The agent must be at least medium risk with a reviewed release, except in your personal project. Daily limits on wakes, runs and spend, quiet hours, the kill switch and **Configuration › Proactive agents** keep it in bounds. Cloud agents only. See [Proactive agents](/how-tos/agents-pipelines/agent-heartbeat/).
+
+## Agent scorecards and the dismissal ladder
+
+Every agent now has a daily scorecard on a new **Workforce** tab: runs and failure rate, budget-cap stops, breaker trips, approval rejections, guardrail hits, spend against the project median, feedback and last use. A person, or a reviewer agent with the `can_review_agents` capability, can propose **Watch**, **Demote** (taking away exactly what it names), **Suspend**, **Retire** or **Delete**; a person with the new `agents.workforce.manage` permission or the agent's owner decides, after an impact preview. A retired agent leaves conversations, saved teams, nesting and schedules and can be **reinstated** for 30 days. The owner can appeal once to a different manager. Critical-tier agents and agents under legal hold are exempt. **Upgrade every worker before Main.** See [Agent workforce](/how-tos/agents-pipelines/agent-workforce/).
+
 ## Agents can propose new agents
 
 An agent with the `can_propose_agents` capability can now propose that a sub-agent that worked well is kept as an agent of its own. The proposal appears under the answer in the chat and in a **Proposals** inbox on the Agents page. **Review** opens the agent form filled in from the sub-agent, with its soul, its tools and their categories, and memory entries to start with; nothing is saved until you select **Create agent**, and the new agent starts at the Low risk tier. An agent has at most 3 open proposals, and a dismissed one is not proposed again for 30 days. **Save locally as AGENTS.md / SOUL.md** downloads the proposal instead. A personal agent also has **Copy to project**: an independent copy in a team project, with the memory you pick. **Upgrade every worker before Main.** See [Agent proposals and Copy to project](/how-tos/agents-pipelines/agent-proposals/).

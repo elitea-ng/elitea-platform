@@ -7,6 +7,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
 )
 
 // writeSafetyRefusal answers a start the kill switch refused (ADR-0041
@@ -26,6 +27,13 @@ func writeSafetyRefusal(writer http.ResponseWriter, err error) bool {
 	}
 	if status, body, refused := agentrelease.HTTPRefusal(err); refused {
 		// A release run whose pins no longer match (ADR-0040 decision 2).
+		code, _ := body["code"].(string)
+		message, _ := body["message"].(string)
+		desktopwire.WriteError(writer, status, code, message)
+		return true
+	}
+	if status, body, refused := agentworkforce.HTTPRefusal(err); refused {
+		// A retired agent, or one that nests a retired agent (ADR-0050 5g).
 		code, _ := body["code"].(string)
 		message, _ := body["message"].(string)
 		desktopwire.WriteError(writer, status, code, message)

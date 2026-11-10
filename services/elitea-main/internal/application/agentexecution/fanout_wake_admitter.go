@@ -7,6 +7,7 @@ import (
 	"time"
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -204,7 +205,13 @@ func governedRefusal(err error) bool {
 // composition): it will refuse the same frozen request every time.
 func admissionRefusal(err error) bool {
 	var refused *apierr.APIError
-	return errors.As(err, &refused) && refused.Status >= 400 && refused.Status < 500
+	if errors.As(err, &refused) && refused.Status >= 400 && refused.Status < 500 {
+		return true
+	}
+	// A retired agent or sub-agent (ADR-0050 5g) refuses the same frozen
+	// request until someone reinstates it or removes the nesting.
+	var retired *agentworkforce.RetiredError
+	return errors.As(err, &retired)
 }
 
 // deferWake keeps a transiently refused wake QUEUED for the next pass after

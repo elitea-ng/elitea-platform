@@ -1001,6 +1001,7 @@ fn resume_payload(input: &str) -> AgentExecutionPayload {
         chat_history_refs: Vec::new(),
         floor: None,
         tool_envelope: None,
+        current_message_id: None,
     }
 }
 

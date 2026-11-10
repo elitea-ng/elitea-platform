@@ -494,6 +494,27 @@ impl AgentProgressPublishError {
     }
 }
 
+/// FU-299: the registered code of each `code()` string, one to one
+/// (`progress_fault_codes_match_the_legacy_code_strings`).
+impl elitea_faults::Fault for AgentProgressPublishError {
+    fn fault_code(&self) -> elitea_faults::Code {
+        use elitea_faults::codes;
+        match self {
+            Self::InvalidConfiguration(_) => codes::AGENT_PROGRESS_INVALID_CONFIGURATION,
+            Self::InvalidState(_) | Self::InvalidFrame(_) => codes::AGENT_PROGRESS_INVALID_STATE,
+            Self::Preflight(error) => error.fault_code(),
+            Self::Output(error) if reconnectable_output(error) => {
+                codes::AGENT_PROGRESS_OUTPUT_UNAVAILABLE
+            }
+            Self::Output(_) => codes::AGENT_PROGRESS_OUTPUT_REJECTED,
+        }
+    }
+
+    fn fault_retryable(&self) -> Option<bool> {
+        Some(self.retryable())
+    }
+}
+
 impl fmt::Display for AgentProgressPublishError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1053,10 +1074,15 @@ impl<C: AgentProgressConnector> FreshAgentProgressPublisher<C> {
                 );
             }
             Err(error) => {
-                tracing::warn!(
+                // FU-299 fault line: the registry sentence as msg, plus code,
+                // action, retryable and the safe cause chain; event and
+                // error_code stay for the queries that read them.
+                elitea_faults::fault!(
+                    tracing::Level::WARN,
+                    error,
+                    renderers = crate::diagnostics::SAFE_CAUSES,
                     event = "agent_progress_publication_failed",
-                    error_code = error.code(),
-                    retryable = error.retryable(),
+                    error_code = error.code()
                 );
             }
         }
@@ -3282,6 +3308,36 @@ impl AgentOutputPreflightError {
                 ) | OutputGrpcError::Unavailable(_),
             ) | Self::Unavailable(_)
         )
+    }
+}
+
+/// FU-299: the registered code of each `code()` string, one to one.
+impl elitea_faults::Fault for AgentOutputPreflightError {
+    fn fault_code(&self) -> elitea_faults::Code {
+        use elitea_faults::codes;
+        match self {
+            Self::InvalidConfiguration(_)
+            | Self::Output(OutputGrpcError::InvalidConfiguration(_)) => {
+                codes::AGENT_OUTPUT_INVALID_CONFIGURATION
+            }
+            Self::InvalidDurableState(_)
+            | Self::Output(
+                OutputGrpcError::Protocol(_) | OutputGrpcError::Spool(SpoolError::InvalidInput(_)),
+            ) => codes::AGENT_OUTPUT_INVALID_DURABLE_STATE,
+            Self::Output(OutputGrpcError::Spool(SpoolError::ResourceExhausted(_))) => {
+                codes::AGENT_OUTPUT_RESOURCE_EXHAUSTED
+            }
+            Self::Output(OutputGrpcError::Spool(
+                SpoolError::OwnershipUnavailable(_) | SpoolError::Unavailable { .. },
+            )) => codes::AGENT_OUTPUT_SPOOL_UNAVAILABLE,
+            Self::Output(OutputGrpcError::Unavailable(_)) | Self::Unavailable(_) => {
+                codes::AGENT_OUTPUT_UNAVAILABLE
+            }
+        }
+    }
+
+    fn fault_retryable(&self) -> Option<bool> {
+        Some(self.retryable())
     }
 }
 
