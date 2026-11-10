@@ -1670,16 +1670,40 @@ async fn real_pg_preparation_past_the_window_is_refused_before_any_submission() 
         + elitea_agent_runtime::graph::fanout::admission::CODE_OBSERVATION_MARGIN;
     let h = harness_with(
         MainScript {
-            intent_delay: Some(Duration::from_millis(800)),
+            intent_delay: Some(Duration::from_millis(1500)),
             ..QUIET
         },
         Duration::ZERO,
         Some(1),
-        tokio::time::Instant::now() + required + Duration::from_millis(300),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
     )
     .await;
     h.answers.lock().unwrap().push_back(completed());
-    let run = default_run(&h, PURE_YAML);
+    let mut run = default_run(&h, PURE_YAML);
+    // The run's deadline is bound just before the attempt, so a loaded
+    // machine cannot spend the 600 ms margin before admission.
+    let tight = h.factory.bind(
+        h.authority.clone(),
+        tokio::time::Instant::now() + required + Duration::from_millis(600),
+    );
+    let pipeline =
+        crate::agents::graph::compiler::PipelineDefinition::from_yaml(PURE_YAML).unwrap();
+    let definition = pipeline.original_code_definition_fixture("code").unwrap();
+    let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
+    run.receiver = receiver;
+    run.node = RecoverableNode::new(
+        Arc::new(
+            CodeNode::new(definition, types(), tight)
+                .unwrap()
+                .with_events(Some(sender)),
+        ),
+        run.activation.node_digest,
+        NodeRecoveryPolicy::default(),
+        run.factory.clone(),
+        None,
+    )
+    .with_legacy_first_attempt();
+    run.node.clock = Arc::new(Clock(AtomicU64::new(200)));
     let error = run.node.execute(&run.context).await.err().unwrap();
     assert!(error.to_string().contains("pipeline.node_recovery.failed"));
     assert_eq!(
