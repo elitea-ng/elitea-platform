@@ -9,7 +9,10 @@ import {
 import type { ApplicationVersionDetail, OutputContract } from '@/shared/api/generated/model';
 import { areOutputContractsEqual, readOutputContract } from '@/shared/ui/OutputContractField';
 
+import type { AvatarPack } from '@elitea/client-core/conversation';
+
 import { areSoulDraftsEqual, soulDraftProblems, soulToDraft, type AgentSoulDraft } from './agentSoulDraft';
+import { areAvatarPacksEqual, avatarPackDraftOf } from './avatarPackDraft';
 
 /**
  * The version-level fields `CreateAgentForm` renders on the agent EDIT page
@@ -90,6 +93,11 @@ export interface EditApplicationVersionFields {
    * only by the save body, which sends it only when it was edited.
    */
   readonly soul: AgentSoulDraft;
+  /**
+   * ADR-0050 decision 6 — the Avatar tab's draft of the version's avatar
+   * pack; `null` for none. Sent only when edited, like the soul.
+   */
+  readonly avatarPack: AvatarPack | null;
 }
 
 export interface EditApplicationVersionFieldsState {
@@ -105,6 +113,8 @@ export interface EditApplicationVersionFieldsState {
   readonly setTags: (tags: readonly Tag[]) => void;
   /** Replaces the Persona tab's soul draft (ADR-0050). */
   readonly setSoul: (soul: AgentSoulDraft) => void;
+  /** Replaces the Avatar tab's pack draft (ADR-0050 decision 6). */
+  readonly setAvatarPack: (pack: AvatarPack | null) => void;
   /** False while the soul draft holds something Main would refuse, so Save waits (ADR-0050). */
   readonly isSoulValid: boolean;
   /** Feeds the page's `useUnsavedChangesNavBlocker` — RHF's own `isDirty` cannot see these fields (#133's create-page half made the same point). */
@@ -148,13 +158,13 @@ function fromVersion(version: ApplicationVersionDetail | undefined): EditApplica
     notes: typeof metaRecord['notes'] === 'string' ? metaRecord['notes'] : '',
     outputContract: readOutputContract(metaRecord['output_contract']),
     citations: citationsOf(metaRecord['citations']),
-    soul: soulDraftOf(version),
+    ...personaDraftsOf(version),
   };
 }
 
-/** The Persona tab's draft of the version's soul (ADR-0050). */
-function soulDraftOf(version: ApplicationVersionDetail | undefined): AgentSoulDraft {
-  return soulToDraft(version?.soul);
+/** The Persona tab's soul and the Avatar tab's pack (ADR-0050 decisions 1a and 6). */
+function personaDraftsOf(version: ApplicationVersionDetail | undefined): Pick<EditApplicationVersionFields, 'soul' | 'avatarPack'> {
+  return { soul: soulToDraft(version?.soul), avatarPack: avatarPackDraftOf(version?.avatar_pack) };
 }
 
 /** `meta.citations` as the field holds it: `'required'` or off (`null`). */
@@ -167,7 +177,8 @@ function areContentControlsEqual(a: EditApplicationVersionFields, b: EditApplica
   return (
     areOutputContractsEqual(a.outputContract, b.outputContract) &&
     (a.citations ?? null) === (b.citations ?? null) &&
-    areSoulDraftsEqual(a.soul, b.soul)
+    areSoulDraftsEqual(a.soul, b.soul) &&
+    areAvatarPacksEqual(a.avatarPack, b.avatarPack)
   );
 }
 
@@ -314,10 +325,14 @@ export function useEditApplicationVersionFields(
     setFields((previous) => ({ ...previous, soul }));
   }, []);
 
+  const setAvatarPack = useCallback((avatarPack: AvatarPack | null) => {
+    setFields((previous) => ({ ...previous, avatarPack }));
+  }, []);
+
   const markSaved = useCallback(() => setBaseline(fields), [fields]);
 
   const isDirty = useMemo(() => !areEqual(fields, baseline), [fields, baseline]);
   const isSoulValid = useMemo(() => soulDraftProblems(fields.soul).size === 0, [fields.soul]);
 
-  return { fields, applyFieldChange, setTags, setSoul, isSoulValid, isDirty, markSaved };
+  return { fields, applyFieldChange, setTags, setSoul, setAvatarPack, isSoulValid, isDirty, markSaved };
 }

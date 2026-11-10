@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentproposal"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextview"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/proactivity"
@@ -44,6 +45,9 @@ func checkOutputContracts(w http.ResponseWriter, body map[string]any, agentType 
 		return false
 	}
 	if !checkProactivity(w, body) {
+		return false
+	}
+	if !checkCapabilities(w, body) {
 		return false
 	}
 	var err error
@@ -158,6 +162,23 @@ func checkToolEnvelope(w http.ResponseWriter, body map[string]any) bool {
 	if err := toolenvelope.Check(meta); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
 			"error": err.Error(), "code": toolenvelope.Code,
+		})
+		return false
+	}
+	return true
+}
+
+// checkCapabilities refuses a meta.capabilities that is not an object of
+// booleans (ADR-0050 decision 5a, #1615: can_propose_agents) with a typed
+// 422. It answers false when it wrote the refusal.
+func checkCapabilities(w http.ResponseWriter, body map[string]any) bool {
+	meta, _ := body["meta"].(map[string]any)
+	if meta == nil {
+		return true
+	}
+	if err := agentproposal.CheckCapabilities(meta); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+			"error": err.Error(), "code": "capabilities_block_invalid",
 		})
 		return false
 	}

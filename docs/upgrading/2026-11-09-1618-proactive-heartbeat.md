@@ -4,8 +4,8 @@ Agents can wake on a timer and do nothing, notify their owner, or start a run
 under the owner's mandate. Main runs a new job, `agent.heartbeat.scan.v1`,
 every minute on its platform scheduler.
 
-- **Migrations:** shared `0240_agent_heartbeats` (the table
-  `elitea_runtime.agent_heartbeats`) and tenant `0240_agent_heartbeat_settings`
+- **Migrations:** shared `0235_agent_heartbeats` (the table
+  `elitea_runtime.agent_heartbeats`) and tenant `0166_agent_heartbeat_settings`
   (the tables `agent_heartbeat_settings` and `project_proactivity_settings`).
   Both are additive. No backfill.
 - **Who is affected:** nobody until an owner turns on an agent's heartbeat. No

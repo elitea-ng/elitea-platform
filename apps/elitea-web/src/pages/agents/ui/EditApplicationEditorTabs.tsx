@@ -1,5 +1,8 @@
 /**
- * The agent editor's tab strip: Configuration, Persona, Evaluation, Memory, Heartbeat, then History.
+ * The agent editor's tab strip: Configuration, Persona, Avatar, Evaluation, Memory, Heartbeat, then History.
+ *
+ * AVATAR (ADR-0050 decision 6, issue 1619) is the version's avatar pack with
+ * a preview of every state; like Persona it edits unsaved version state.
  *
  * HEARTBEAT (ADR-0050 decision 2, issue 1618) turns the agent's heartbeat on
  * or off and shows its history — `features/agent-heartbeat`'s `HeartbeatPanel`.
@@ -60,6 +63,7 @@ import { BaseTabs } from '@/shared/ui/BaseTabs';
 const EDITOR_TABS = {
   configuration: 'configuration',
   persona: 'persona',
+  avatar: 'avatar',
   evaluation: 'evaluation',
   memory: 'memory',
   heartbeat: 'heartbeat',
@@ -92,12 +96,14 @@ export interface EditApplicationEditorTabsProps {
    * the page's Save button writes.
    */
   readonly personaPanel?: ReactNode;
+  /** ADR-0050 decision 6 — the Avatar tab's panel (the version's avatar pack), passed in for the same reason. */
+  readonly avatarPanel?: ReactNode;
   /** #955 — this agent's own versions, so the History tab can name which one produced each run. */
   readonly versions?: readonly { readonly id: string | number; readonly name: string }[] | undefined;
 }
 
 export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps): ReactNode {
-  const { projectId, applicationId, applicationVersionId, configurationPanel, personaPanel, versions } = props;
+  const { projectId, applicationId, applicationVersionId, configurationPanel, personaPanel, avatarPanel, versions } = props;
   const [tab, setTab] = useState<EditorTab>(EDITOR_TABS.configuration);
 
   const handleChange = (_event: SyntheticEvent, value: EditorTab): void => setTab(value);
@@ -120,6 +126,13 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
             value={EDITOR_TABS.persona}
             label={t('pages.agents.editApplication.tabs.persona', 'Persona')}
             data-testid="edit-application-tab-persona"
+          />
+        )}
+        {avatarPanel !== undefined && (
+          <BaseTab
+            value={EDITOR_TABS.avatar}
+            label={t('pages.agents.editApplication.tabs.avatar', 'Avatar')}
+            data-testid="edit-application-tab-avatar"
           />
         )}
         <BaseTab
@@ -156,6 +169,7 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
       <Box hidden={tab !== EDITOR_TABS.configuration}>{configurationPanel}</Box>
       {/* Mounted while hidden for the same reason: it holds unsaved edits. */}
       {personaPanel !== undefined && <Box hidden={tab !== EDITOR_TABS.persona}>{personaPanel}</Box>}
+      {avatarPanel !== undefined && <Box hidden={tab !== EDITOR_TABS.avatar}>{avatarPanel}</Box>}
       <Box hidden={tab !== EDITOR_TABS.evaluation}>
         {tab === EDITOR_TABS.evaluation && (
           <EvaluationPanel

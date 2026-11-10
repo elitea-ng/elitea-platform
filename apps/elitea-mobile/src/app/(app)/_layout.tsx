@@ -63,6 +63,7 @@ export default function AppLayout() {
       <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
       <Stack.Screen name="archived" options={{ title: 'Archived chats' }} />
       <Stack.Screen name="memory" options={{ title: 'Memory' }} />
+      <Stack.Screen name="agent-memory/[id]" options={{ title: 'Agent memory' }} />
       <Stack.Screen name="devices" options={{ title: 'Signed-in devices' }} />
       <Stack.Screen name="about" options={{ title: 'About' }} />
       {/* An agent from Discover opens as a sheet over the catalogue (docs/screens.md §6), at full

@@ -1,4 +1,4 @@
--- 0240_agent_heartbeats.sql — one row per heartbeat wake of a proactive agent
+-- 0235_agent_heartbeats.sql — one row per heartbeat wake of a proactive agent
 -- (ADR-0050 decision 2, issue 1618).
 --
 --   elitea_runtime.agent_heartbeats

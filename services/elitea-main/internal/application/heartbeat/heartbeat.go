@@ -68,7 +68,7 @@ import (
 // triage call: heartbeat:<wake_id>.
 const AttributionPrefix = "heartbeat:"
 
-// The heartbeat outcomes (shared 0240).
+// The heartbeat outcomes (shared 0235).
 const (
 	OutcomeNoOp        = "no_op"
 	OutcomeNotify      = "notify"

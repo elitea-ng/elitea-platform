@@ -78,6 +78,9 @@ var projectRouteAllowlist = map[string]string{
 	// Sub-resources a browser requests with no credential.
 	"GET /icons/{projectID}/{filename}":   "project icon image fetched by a browser <img>, which carries no credential; public by design (S20b). Display artwork only",
 	"GET /avatars/{projectID}/{filename}": "avatar image fetched by a browser <img>, which carries no credential; public by design, same as /icons",
+	// ADR-0050 decision 6: an agent's avatar pack media, fetched by <img> and <video>.
+	"GET /api/v2/agent_media/{projectID}/{file}":  "agent avatar media fetched by a browser <img>/<video>, which carries no credential; public by design, same as /icons. Content-addressed display artwork that passed the avatar validator",
+	"HEAD /api/v2/agent_media/{projectID}/{file}": "the HEAD of the agent avatar media route above",
 
 	// Inbound pipeline triggers, authenticated by the secret in the request.
 	"POST /api/v2/pipeline_trigger/{projectID}/{tokenID}":            "inbound trigger mounted above the session auth group; its credential is the per-pipeline secret, checked by the handler against the named project",

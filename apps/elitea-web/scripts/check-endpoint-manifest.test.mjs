@@ -903,11 +903,23 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // deleteAgentMemoryEntry and setAgentMemoryOptOut, an agent's Memory routes.
 // The Memory tab is a later story (issue 1608), so they are not in the
 // manifest yet.
-// 478 -> 483 (issue 1618, ADR-0050 decision 2): getAgentHeartbeat,
+// 478 -> 485 (issue 1620, ADR-0050 decision 8): listAgentTeams,
+// createAgentTeam, getAgentTeam, updateAgentTeam, deleteAgentTeam,
+// createAgentTeamFromConversation and startAgentTeamConversation, saved
+// teams. All seven are in the manifest (features/agent-teams).
+// 485 -> 488 (issue 1619, ADR-0050 decision 6): uploadAgentMedia,
+// generateAgentMedia and getAgentMedia, an agent's avatar pack media. The
+// agent editor's Avatar tab calls the first two (see MANIFEST_ENTRY_COUNT);
+// getAgentMedia is an <img>/<video> source, never a fetch, so it is not in
+// the manifest.
+// 488 -> 493 (issue 1615, ADR-0050 decisions 5a and 1): listAgentProposals,
+// getAgentProposal, dismissAgentProposal, markAgentProposalCreated and
+// copyAgentMemory, the agent proposals inbox and Copy to project.
+// 493 -> 498 (issue 1618, ADR-0050 decision 2): getAgentHeartbeat,
 // saveAgentHeartbeat, listAgentHeartbeats, getProjectProactivity and
 // setProjectProactivity, the heartbeat of a proactive agent. The agent
 // editor's Heartbeat panel calls the first three.
-const GENERATED_OPERATION_COUNT = 483;
+const GENERATED_OPERATION_COUNT = 498;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1177,11 +1189,24 @@ const GENERATED_OPERATION_COUNT = 483;
  * update, delete, clear and optOut, the agent editor's Memory tab and the
  * chat's "remembered" chip (features/agent-memory). Generated.
  *
- * 323 -> 326 (issue 1618, ADR-0050 decision 2): agentHeartbeat.get, save
+ * 323 -> 330 (issue 1620, ADR-0050 decision 8): agentTeams.list, create,
+ * get, update, delete, fromConversation and start, the Agents page's Teams
+ * tab and the participants panel's "Save as team" (features/agent-teams).
+ * Generated.
+ *
+ * 330 -> 332 (issue 1619, ADR-0050 decision 6):
+ * applications.uploadAgentMedia and applications.generateAgentMedia, the
+ * agent editor's Avatar tab (pages/agents/lib/agentMediaApi.ts). Generated.
+ *
+ * 332 -> 337 (issue 1615, ADR-0050 decisions 5a and 1): agentProposals.list,
+ * get, dismiss, markCreated and copyMemory, the proposals inbox, the chat's
+ * proposal card and Copy to project (features/agent-proposals). Generated.
+ *
+ * 337 -> 340 (issue 1618, ADR-0050 decision 2): agentHeartbeat.get, save
  * and history, the agent editor's Heartbeat tab
  * (features/agent-heartbeat). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 326;
+const MANIFEST_ENTRY_COUNT = 340;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

@@ -105,8 +105,9 @@ so A is the expected answer at launch.
 Tracking: **no** (no data is linked with third-party data for advertising or
 shared with data brokers; no App Tracking Transparency prompt).
 
-If OTA updates are never enabled (no EAS project linked), drop the Device ID
-row; the privacy manifest already leaves it out of unlinked builds.
+If OTA updates are off, drop the Device ID row; the privacy manifest already
+leaves it out of such builds. brand/elitea ships with updates off
+(`updates.mode: "off"`), so ELITEA's first submission drops it.
 
 ## Google Play: Data safety (answer A)
 

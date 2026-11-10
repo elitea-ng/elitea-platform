@@ -532,10 +532,10 @@ func cloneInternalVersion(
 	err := tx.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO %s.application_versions
 			(application_id, name, status, author_id, llm_settings, instructions,
-			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul,
+			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul, avatar_pack,
 			 shared_owner_id, shared_id, created_at)
 		SELECT application_id, $2, 'draft', $3, llm_settings, instructions,
-		       conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul,
+		       conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul, avatar_pack,
 		       NULL, NULL, now() AT TIME ZONE 'UTC'
 		FROM %s.application_versions
 		WHERE application_id = $1 AND id = $4

@@ -43,7 +43,7 @@ func (s *Server) AuthorizeRustCompiledSnapshot(ctx context.Context, r *runtimev1
 	}
 	peer, err := s.authorizer.AuthorizeWorkload(ctx, r.Fence.GetWorkloadSessionId(), r.Fence.GetProducerId())
 	if err != nil || !sandboxIdentity(peer) {
-		return nil, status.Error(codes.Unauthenticated, "The workload session is not accepted.")
+		return nil, workloadRefusalStatus(err)
 	}
 	fence, err := fenceDomain(r.Identity, r.Fence, peer)
 	if err != nil {

@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.43"
+  x-elitea-client-contract: "1.45"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -6889,6 +6889,119 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
+    AgentTeamMember:
+      type: object
+      description: >
+        One agent of a saved team (issue 1620). NOTE(W2):
+        internal/api/v2/agentteams/handler.go:89 (`MemberJSON`).
+      required: [application_id, project_id, version_id, name]
+      properties:
+        application_id: { type: integer, format: int64, minimum: 1 }
+        project_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The project that owns the agent (the team's own, or the public catalogue).
+        version_id: { type: integer, format: int64, minimum: 1 }
+        name:
+          type: string
+          maxLength: 256
+          description: The agent's name when the team was saved.
+
+    AgentTeam:
+      type: object
+      description: >
+        A saved team: a project's roster of agents with its floor policy and
+        lead (ADR-0050 decision 8, issue 1620). `lead_position` is the
+        1-based position of the lead member, null under `addressed`.
+        NOTE(W2): internal/api/v2/agentteams/handler.go:97 (`TeamJSON`).
+      required: [id, project_id, name, description, floor_policy, lead_position, members, created_by, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+        floor_policy:
+          type: string
+          description: "`addressed` or `lead`, as the conversation floor (meta.floor)."
+        lead_position:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 16
+        members:
+          type: array
+          maxItems: 16
+          items: { $ref: '#/components/schemas/AgentTeamMember' }
+        created_by: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AgentTeamList:
+      type: object
+      required: [rows, total]
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentTeam' }
+        total: { type: integer }
+
+    AgentTeamWrite:
+      type: object
+      description: >
+        The body of createAgentTeam and updateAgentTeam (a full-record
+        replace). Unknown fields are refused (400). NOTE(W2):
+        internal/api/v2/agentteams/handler.go:126 (`teamBody`).
+      required: [name, members]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+        floor_policy:
+          type: string
+          description: "`addressed` (the default) or `lead`."
+        lead_position:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 16
+          description: The lead member's 1-based position; required with `lead`, refused with `addressed`.
+        members:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items: { $ref: '#/components/schemas/AgentTeamMember' }
+
+    AgentTeamFromConversation:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+
+    AgentTeamStart:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: The conversation's name; the team's name when blank.
+        is_private: { type: boolean }
+
+    AgentTeamRefusal:
+      type: object
+      description: >
+        A team route's refusal. `code` is `not_found`, `team_name_taken`,
+        `team_invalid` or `team_member_unavailable`; `position` comes with
+        `team_member_unavailable`. NOTE(W2):
+        internal/api/v2/agentteams/handler.go:411 (`writeError`).
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string }
+        position: { type: integer, minimum: 1 }
+
     MemoryEntryList:
       type: object
       required: [items, total]
@@ -8932,6 +9045,92 @@ components:
         code: { type: string, enum: [not_found, memory_change_forbidden, memory_entry_invalid] }
       description: >
         NOTE(W2): internal/api/v2/agentmemory/handler.go, writeError.
+    AgentProposalSeed:
+      type: object
+      required: [kind, content]
+      properties:
+        kind: { type: string, enum: [fact, preference, episode] }
+        content: { type: string }
+    AgentProposalToolCategory:
+      type: object
+      required: [key, category]
+      properties:
+        key: { type: string, description: 'The tool reference, toolkit/tool or toolkit/* (a wildcard).' }
+        toolkit_type: { type: string }
+        category:
+          type: string
+          description: The tool's ADR-0041 category (read, write, external_send, money, destructive); an undeclared tool or a wildcard is write.
+    AgentProposalEvidence:
+      type: object
+      required: [status, steps, input_tokens, output_tokens, error_code, started_at, finished_at]
+      properties:
+        status: { type: string }
+        steps: { type: integer, format: int64 }
+        input_tokens: { type: integer, format: int64 }
+        output_tokens: { type: integer, format: int64 }
+        error_code: { type: string, nullable: true }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
+      description: >
+        The promoted sub-agent's spawn record (elitea_runtime.ephemeral_agents)
+        with the same profile digest: how it ended and what it spent.
+    AgentProposal:
+      type: object
+      required: [id, project_id, proposer_application_id, proposer_name, proposed_for_user_id, execution_id,
+        conversation_uuid, ephemeral_agent_id, spec_digest, rationale, draft, memory_seeds, tool_categories,
+        status, decided_by_user_id, decided_at, created_application_id, created_at, evidence]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        proposer_application_id: { type: integer, format: int64 }
+        proposer_name: { type: string }
+        proposed_for_user_id: { type: integer, format: int64 }
+        execution_id: { type: string }
+        conversation_uuid: { type: string, nullable: true }
+        ephemeral_agent_id: { type: string }
+        spec_digest: { type: string }
+        rationale: { type: string }
+        draft:
+          type: object
+          additionalProperties: true
+          description: >
+            The agent draft the review form opens with: name, description,
+            instructions, welcome_message, conversation_starters, risk_tier
+            (always low), soul, tools and avatar.
+          x-elitea-passthrough: >-
+            NOTE(W2): built by agentproposal.Draft
+            (internal/domain/agentproposal/agentproposal.go:293) and stored
+            as jsonb; the review form maps it onto the create body.
+        memory_seeds:
+          type: array
+          items: { $ref: '#/components/schemas/AgentProposalSeed' }
+        tool_categories:
+          type: array
+          items: { $ref: '#/components/schemas/AgentProposalToolCategory' }
+        status: { type: string, enum: [proposed, created, dismissed] }
+        decided_by_user_id: { type: integer, format: int64, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+        created_application_id: { type: integer, format: int64, nullable: true }
+        created_at: { type: string, format: date-time }
+        evidence:
+          allOf: [{ $ref: '#/components/schemas/AgentProposalEvidence' }]
+          nullable: true
+    AgentProposalList:
+      type: object
+      required: [rows, total]
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentProposal' }
+        total: { type: integer }
+    AgentProposalRefusal:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [not_found, proposal_decided, proposal_decision_forbidden, copy_forbidden, not_your_new_agent] }
+      description: >
+        NOTE(W2): internal/api/v2/agentproposals/handler.go, writeError.
     AgentRegistryRecord:
       type: object
       required: [project_id, application_id, application_name, business_owner_id, technical_owner_id,
@@ -10972,6 +11171,130 @@ components:
         llm_settings:
           $ref: '#/components/schemas/DraftLlmSettings'
 
+    AgentAvatarPackV1:
+      type: object
+      additionalProperties: false
+      required: [schema, slots]
+      description: >
+        ADR-0050 decision 6: an agent version's avatar pack. Each slot names
+        one uploaded media file for one state; only `still` is required, and
+        a client animates a state with no slot from the still with the
+        default motion pack. Lottie and Rive are not accepted.
+      properties:
+        schema:
+          type: string
+          description: The document version. Always `elitea.avatar_pack/v1`.
+        slots:
+          type: object
+          additionalProperties: false
+          required: [still]
+          properties:
+            still: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            idle: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            thinking: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            speaking: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            working: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            waiting: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            success: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            error: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            waking: { $ref: '#/components/schemas/AgentAvatarSlot' }
+    AgentAvatarSlot:
+      type: object
+      additionalProperties: false
+      required: [url]
+      description: >
+        One avatar pack slot. `still` takes PNG, JPEG, WebP or SVG; the
+        other slots take a still, an animated WebP, or a muted MP4 (H.264)
+        or WebM (VP9 or AV1). Every animation is at most 4 s, 512 px and
+        2 MiB, and an animated WebP loops forever.
+      properties:
+        url:
+          type: string
+          maxLength: 160
+          description: >
+            `/api/v2/agent_media/{project_id}/{sha256}.{ext}`, the url the
+            upload or the generation answered.
+        media_type:
+          type: string
+          description: >
+            Derived from the url's extension on every write (image/png,
+            image/jpeg, image/webp, image/svg+xml, video/mp4, video/webm); a
+            value the client sends is ignored.
+        poster_url:
+          type: string
+          maxLength: 160
+          description: >
+            The still a video shows before it plays and under reduced motion.
+            Required for MP4 and WebM; dropped for any other file.
+        generated_by:
+          type: string
+          maxLength: 256
+          description: The model that generated the file, when it was generated.
+    AgentMediaObject:
+      type: object
+      required: [url, media_type, format, width, height, duration_ms, bytes]
+      description: >
+        NOTE(W2): internal/api/v2/agentmediaapi/handler.go, MediaObject. One
+        stored, validated media file.
+      properties:
+        url: { type: string }
+        media_type: { type: string }
+        format:
+          type: string
+          description: png, jpeg, webp, webp_animated, svg, mp4 or webm, read from the bytes.
+        width: { type: integer, description: "0 for an SVG." }
+        height: { type: integer, description: "0 for an SVG." }
+        duration_ms: { type: integer, description: "One loop's length; 0 for a still." }
+        bytes: { type: integer }
+        generated_by: { type: string }
+    AgentMediaRefusal:
+      type: object
+      required: [error, code]
+      description: >
+        NOTE(W2): internal/api/v2/agentmediaapi/handler.go, writeRefusal.
+        `avatar_media_invalid` is a file the validator refused (the reason
+        names the rule); the other codes name a missing dependency or a bad
+        request.
+      properties:
+        error: { type: string }
+        code: { type: string }
+    AgentMediaGenerateRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, model]
+      description: >
+        ADR-0050 decision 6, "Generation". `kind` `still` turns the soul's
+        display name, role and voice into a prompt for
+        `/llm/v1/images/generations` and answers `count` candidates. `kind`
+        `loop` asks `/llm/v1/images/edits` for `frames` poses of `still_url`
+        in `state` and assembles them into an animated WebP. There is no
+        video kind.
+      properties:
+        kind: { type: string, description: "still or loop." }
+        model:
+          type: string
+          maxLength: 256
+          description: An image_generation_model of the project's catalogue.
+        display_name: { type: string, maxLength: 1000 }
+        role: { type: string, maxLength: 1000 }
+        voice:
+          type: array
+          maxItems: 16
+          items: { type: string, maxLength: 1000 }
+        prompt: { type: string, maxLength: 1000, description: "An optional extra direction." }
+        count: { type: integer, minimum: 1, maximum: 4, description: "Still candidates; default 4." }
+        state:
+          type: string
+          description: The slot a loop is for, one of idle, thinking, speaking, working, waiting, success, error, waking.
+        still_url: { type: string, maxLength: 160, description: "A PNG, JPEG or WebP still of this project." }
+        frames: { type: integer, minimum: 4, maximum: 8, description: "Loop frames; default 6." }
+    AgentMediaGenerateResponse:
+      type: object
+      required: [media]
+      properties:
+        media:
+          type: array
+          items: { $ref: '#/components/schemas/AgentMediaObject' }
     AgentSoulV1:
       type: object
       additionalProperties: false
@@ -11745,6 +12068,22 @@ components:
             ceilings, into each run; nested agents follow the root agent's.
             A save with an invalid block is refused with 422
             tool_envelope_invalid.
+        capabilities:
+          type: object
+          nullable: true
+          properties:
+            can_propose_agents:
+              type: boolean
+              description: >
+                The agent may propose, with the propose_agent tool, that a
+                temporary sub-agent it started become a saved agent
+                (ADR-0050 decision 5a). The person it works for must also
+                hold models.applications.applications.create.
+          additionalProperties: { type: boolean }
+          description: >
+            What the agent may do beyond its tools. Absent is none. A save
+            whose block is not an object of booleans is refused with 422
+            capabilities_block_invalid.
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): DB jsonb column `application_versions.meta` round-trips
@@ -12052,6 +12391,13 @@ components:
           description: >
             ADR-0050 decision 1a: the version's soul document, or null when it
             has none. Served by the version-detail read and both write echoes.
+        avatar_pack:
+          allOf: [{ $ref: '#/components/schemas/AgentAvatarPackV1' }]
+          nullable: true
+          description: >
+            ADR-0050 decision 6: the version's avatar pack, or null when it
+            has none (the client then reads `meta.icon_meta`). Served by the
+            version-detail read and both write echoes.
         notes:
           type: string
           description: >
@@ -12310,6 +12656,17 @@ components:
             `soul_capability_key` names a key that would read as a grant
             (tools, credentials, permissions and the like), `soul_too_large`
             a document over 16384 bytes of text, `soul_invalid` anything else.
+        avatar_pack:
+          allOf: [{ $ref: '#/components/schemas/AgentAvatarPackV1' }]
+          nullable: true
+          description: >
+            ADR-0050 decision 6. Omit the key to leave the stored pack alone;
+            null clears it; an object replaces it whole and also writes its
+            still into `meta.icon_meta`, so a client that reads only the old
+            field shows it. Every url must be media uploaded to this project
+            (`/api/v2/agent_media/{this project}/...`). A pack that breaks a
+            rule is REFUSED with a 400 `avatar_pack_invalid` before anything
+            is written.
         llm_settings: { $ref: '#/components/schemas/LlmSettings' }
         conversation_starters: { $ref: '#/components/schemas/ConversationStarters' }
         variables:
@@ -18015,6 +18372,15 @@ components:
             Client contract 1.5 (ADR-0029 decision 6). The token policy's
             `local_work.allowed`: a desktop app may offer local work. The rest
             of the `local_work` group travels only with a token. Default false.
+        support_contact:
+          type: string
+          maxLength: 200
+          description: >-
+            Client contract 1.45 (ADR-0052 decision 7). The IT support line
+            the apps show in About and Settings, one line of text (an email
+            address, a phone number or an https address among it is a link);
+            empty means none. A device's managed `support_contact` wins over
+            it. A server before 1.45 sends none.
     NativeOAuthError:
       type: object
       description: >-
@@ -18157,6 +18523,14 @@ components:
             False means counts only. Default false.
         local_work:
           $ref: '#/components/schemas/LocalWorkPolicy'
+        support_contact:
+          type: string
+          maxLength: 200
+          description: >-
+            Client contract 1.45 (ADR-0052 decision 7). The IT support line
+            the apps show in About and Settings; empty means none. The same
+            value as the discovery document's `client_policy.support_contact`.
+            A device's managed `support_contact` wins over it.
     LocalWorkPolicy:
       type: object
       description: >-
@@ -28463,8 +28837,9 @@ paths:
         only for that person and the agent's managers (an owner or a holder
         of `models.applications.memory.update`). Requires
         `models.applications.memory.list`.
-      tags: [applications]
+      tags: [applications, client]
       parameters:
+        - $ref: "#/components/parameters/XClientVersion"
         - { name: kind, in: query, required: false, schema: { $ref: '#/components/schemas/AgentMemoryKind' } }
         - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/AgentMemoryStatus' } }
         - { name: subject_user_id, in: query, required: false, schema: { type: integer, format: int64, minimum: 1 } }
@@ -28487,6 +28862,8 @@ paths:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
         - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '200':
           description: The entries the caller may see
           content:
@@ -28594,8 +28971,14 @@ paths:
         A manager with ownership or `models.applications.memory.delete`
         deletes any entry; anyone deletes an entry about themself. Requires
         `models.applications.memory.list`.
-      tags: [applications]
+      tags: [applications, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
         '204': { description: Deleted }
         '401': { $ref: '#/components/responses/401' }
         '403':
@@ -28623,7 +29006,9 @@ paths:
         opted_out true deletes what the agent holds about the caller and
         stops it writing more; false lets it remember again. Requires
         `models.applications.memory.list`.
-      tags: [applications]
+      tags: [applications, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       requestBody:
         required: true
         content:
@@ -28635,6 +29020,8 @@ paths:
               properties:
                 opted_out: { type: boolean }
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '200':
           description: The stored choice
           content:
@@ -28774,6 +29161,365 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listAgentProposals
+      summary: List agent proposals
+      description: >
+        The project's proposals to save a temporary sub-agent as an agent
+        (ADR-0050 decision 5a), newest first: open ones unless status names
+        another state. conversation_uuid narrows them to one chat. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      parameters:
+        - { name: status, in: query, required: false, schema: { type: string, enum: [proposed, created, dismissed, all] } }
+        - { name: conversation_uuid, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: The proposals
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalList' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}/{proposal_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentProposal
+      summary: Read one agent proposal
+      description: The draft, the suggested memory seeds, the tool categories and the evidence. Requires `models.applications.applications.list`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}/{proposal_id}/dismiss:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: dismissAgentProposal
+      summary: Dismiss an open agent proposal
+      description: >
+        The same sub-agent spec (its profile digest) cannot be proposed again
+        by the same agent in this project for 30 days. Requires
+        `models.applications.applications.list`, and
+        `models.applications.applications.create` or ownership of the
+        proposing agent.
+      tags: [applications]
+      responses:
+        '200':
+          description: The dismissed proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code proposal_decision_forbidden) Neither create nor ownership of the proposing agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '404':
+          description: (code not_found) No such proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '409':
+          description: (code proposal_decided) The proposal was already created or dismissed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}/{proposal_id}/created:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: markAgentProposalCreated
+      summary: Record the agent created from an open proposal
+      description: >
+        The review form first creates the agent through the ordinary create
+        route (a new agent starts at tier low); this links it to the proposal
+        and writes the memory seeds the person kept, by index, into the new
+        agent's own memory. Requires `models.applications.applications.create`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [application_id]
+              properties:
+                application_id: { type: integer, format: int64, minimum: 1 }
+                memory_seeds:
+                  type: array
+                  maxItems: 20
+                  items: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: The created proposal and how many seeds were written
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [proposal, memory_seeded]
+                properties:
+                  proposal: { $ref: '#/components/schemas/AgentProposal' }
+                  memory_seeded: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The caller lacks applications.create, or (code not_your_new_agent)
+            the agent is not one the caller just created from this proposal:
+            created before it, its first version another person's, or linked
+            to another proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '404':
+          description: (code not_found) No such proposal, or no such agent in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '409':
+          description: (code proposal_decided) The proposal was already created or dismissed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_copy_memory/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: copyAgentMemory
+      summary: Copy picked memory entries of a personal agent into its copy
+      description: >
+        Copy to project (ADR-0050 decision 1). After the fork route copied a
+        personal agent into this project as an agent of its own, this copies
+        the entries the person picked from the source agent's memory into the
+        copy's, as new rows written by the person. Entries about a person and
+        cursors are never copied. The source must be in the caller's personal
+        project, and the caller owns the source agent or holds
+        `models.applications.memory.list` there. Requires
+        `models.applications.applications.create` in this project.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source_project_id, source_application_id]
+              properties:
+                source_project_id: { type: integer, format: int64, minimum: 1 }
+                source_application_id: { type: integer, format: int64, minimum: 1 }
+                entry_ids:
+                  type: array
+                  maxItems: 200
+                  items: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: How many entries were copied
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [copied]
+                properties:
+                  copied: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            (code copy_forbidden) The source is not a personal agent of the
+            caller, or its memory is not readable; (code not_your_new_agent)
+            the path's agent is not the caller's own fork of the source
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '404':
+          description: (code not_found) No such agent in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_media/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: uploadAgentMedia
+      summary: Upload one avatar pack media file
+      description: >
+        ADR-0050 decision 6. Stores one file in the project's `agent-media`
+        bucket under its SHA-256 and answers its url. The type is read from
+        the bytes, never from the file name or the part's Content-Type. A
+        still is PNG, JPEG, WebP or SVG (an SVG with a script, an event
+        handler, an external reference or a DOCTYPE is refused); an
+        animation is an animated WebP that loops forever, or a muted MP4
+        (H.264) or WebM (VP9 or AV1); every file is at most 2 MiB and 512 px,
+        and an animation at most 4 s. A refused file answers 400
+        `avatar_media_invalid` and is not stored. Requires
+        `models.applications.upload_icon.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: The stored file
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaObject' }
+        '400':
+          description: (code avatar_media_invalid) The validator refused the file
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '413':
+          description: (code avatar_media_invalid) The request is larger than the 2 MiB file cap
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '503':
+          description: (code storage_unavailable) No object store is configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+
+  /elitea_core/agent_media_generate/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: generateAgentMedia
+      summary: Generate avatar still candidates or one state loop
+      description: >
+        ADR-0050 decision 6, "Generation". Calls the LLM gateway under the
+        caller's identity, so the project budget pays and the request log
+        records it. Every result passes the upload validator and is stored as
+        a draft in `agent-media`; nothing joins a pack until the version is
+        saved with it. A gateway refusal passes through as 400, 402, 403 or
+        429 (code generation_refused); any other provider failure is 502.
+        Requires `models.applications.upload_icon.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentMediaGenerateRequest' }
+      responses:
+        '201':
+          description: The stored drafts
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaGenerateResponse' }
+        '400':
+          description: (code invalid_request or generation_refused) The request is not valid, or the image model refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '402':
+          description: (code generation_refused) The project budget refused the call
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '403': { $ref: '#/components/responses/403' }
+        '429':
+          description: (code generation_refused) The gateway rate limit refused the call
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '502':
+          description: (code generation_failed or avatar_media_invalid) The provider failed, or its image failed validation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '503':
+          description: (code gateway_unavailable or storage_unavailable) The gateway or the object store is not configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+
+  /agent_media/{project_id}/{file}:
+    # Served OUTSIDE the auth group like /icons: an <img> or <video> request
+    # carries no credential. The path is a content address and the route
+    # admits no other shape; every response carries nosniff, a sandboxing CSP
+    # and an attachment disposition (internal/api/v2/agentmediaapi/handler.go).
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: file
+        in: path
+        required: true
+        description: "<sha256 hex>.<ext>, ext one of png, jpg, webp, svg, mp4, webm"
+        schema: { type: string }
+    get:
+      operationId: getAgentMedia
+      summary: Download one avatar pack media file
+      description: >
+        Immutable for a year. A `Range` request answers 206, as a <video>
+        element asks.
+      tags: [applications]
+      security: []
+      responses:
+        '200':
+          description: The file bytes
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            image/svg+xml: { schema: { type: string, format: binary } }
+            video/mp4: { schema: { type: string, format: binary } }
+            video/webm: { schema: { type: string, format: binary } }
+        '206':
+          description: The requested byte range
+          content:
+            video/mp4: { schema: { type: string, format: binary } }
+            video/webm: { schema: { type: string, format: binary } }
+        '404': { $ref: '#/components/responses/404' }
 
   /elitea_core/permission_trimming/prompt_lib/{project_id}:
     parameters:
@@ -34118,6 +34864,318 @@ paths:
           description: Deleted (or already absent).
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_teams/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listAgentTeams
+      summary: List the project's saved teams of agents
+      description: |
+        internal/api/v2/agentteams/handler.go's List (ADR-0050 decision 8,
+        issue 1620). A saved team is a project's roster of agents with its
+        floor policy and lead. Gated on `models.teams.list`. Most recently
+        updated first; `query` filters by a case-insensitive substring of the
+        name.
+      tags: [chat]
+      parameters:
+        - name: query
+          in: query
+          required: false
+          schema: { type: string, maxLength: 128 }
+          description: Case-insensitive substring of the team name.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: One page of the project's teams.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamList'
+        '400':
+          description: limit, offset or query is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+    post:
+      operationId: createAgentTeam
+      summary: Save a team of agents
+      description: |
+        internal/api/v2/agentteams/handler.go's Create (issue 1620). Gated on
+        `models.teams.create`. A team grants nothing: starting a conversation
+        from it adds its agents through the ordinary participant path, under
+        the caller's own access.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamWrite'
+            example:
+              name: Release crew
+              description: Writes the release notes and checks CI.
+              floor_policy: lead
+              lead_position: 1
+              members:
+                - { application_id: 31, project_id: 1, version_id: 41, name: Mira }
+                - { application_id: 32, project_id: 1, version_id: 42, name: CI Doctor }
+      responses:
+        '201':
+          description: The saved team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '400':
+          description: The body is not valid JSON for this route (an unknown field, a wrong type).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: The project already has a team with this name (`team_name_taken`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '422':
+          description: The team breaks a rule (`team_invalid`); the message says which.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_team/prompt_lib/{project_id}/{team_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: team_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentTeam
+      summary: Read one saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Get (issue 1620). Gated on
+        `models.teams.list`. A team of another project answers 404.
+      tags: [chat]
+      responses:
+        '200':
+          description: The team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+    put:
+      operationId: updateAgentTeam
+      summary: Replace a saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Update (issue 1620). Gated on
+        `models.teams.update`. A full-record replace: the roster sent is the
+        roster kept.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamWrite'
+      responses:
+        '200':
+          description: The updated team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '400':
+          description: The body is not valid JSON for this route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '409':
+          description: Another team of the project has this name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '422':
+          description: The team breaks a rule (`team_invalid`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: deleteAgentTeam
+      summary: Delete a saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Delete (issue 1620). Gated on
+        `models.teams.delete`. Conversations started from the team are not
+        touched.
+      tags: [chat]
+      responses:
+        '204':
+          description: Deleted.
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_team_from_conversation/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The conversation's numeric id or uuid.
+    post:
+      operationId: createAgentTeamFromConversation
+      summary: Save a conversation's agents as a team
+      description: |
+        internal/api/v2/agentteams/handler.go's CreateFromConversation
+        (issue 1620). Gated on `models.teams.create` and the conversation
+        read permission; the caller must be able to read the conversation.
+        The team's members are the conversation's agent participants in the
+        order they joined, with the version each one runs; its floor policy
+        and lead are the conversation's floor (`meta.floor`).
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamFromConversation'
+            example: { name: Release crew }
+      responses:
+        '201':
+          description: The saved team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '400':
+          description: The body is not valid JSON for this route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such conversation visible to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The project already has a team with this name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '422':
+          description: The conversation has no agents, or the name breaks a rule (`team_invalid`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_team_conversation/prompt_lib/{project_id}/{team_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: team_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: startAgentTeamConversation
+      summary: Start a conversation with a saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Start (issue 1620). Gated on
+        `models.teams.list` and `models.chat.conversations.create`. Creates
+        the conversation through the same path as `createConversation`, so
+        every agent is added with the participant checks a hand-made add
+        applies: a team adds no capability. An agent of the team's project
+        that no longer exists is refused as `team_member_unavailable` with
+        its position; an agent of another project the caller cannot use is
+        refused by the participant path. With floor policy `lead` the new
+        conversation's `meta.floor` names the lead's new participant.
+      tags: [chat]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamStart'
+            example: { name: Release 1.62 }
+      responses:
+        '201':
+          description: The created conversation, as `createConversation` answers it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedConversation'
+        '400':
+          description: The body is not valid JSON for this route, or the participant path refused a participant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project, or an agent the caller cannot use.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: An agent of the team no longer exists (`team_member_unavailable`, with `position`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
         '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/message_feedback/prompt_lib/{project_id}/{message_id}:

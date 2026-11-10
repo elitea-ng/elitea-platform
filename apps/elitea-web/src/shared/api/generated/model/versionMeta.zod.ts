@@ -125,6 +125,19 @@ export const VersionMeta = zod.object({
     .describe(
       "The agent's tool envelope (ADR-0050 decision 3): per-tool call limits, the tools it may use unattended, and the tools its sub-agents may get. Main freezes it, with the platform's agents ceilings, into each run; nested agents follow the root agent's. A save with an invalid block is refused with 422 tool_envelope_invalid.\n",
     ),
+  capabilities: zod
+    .object({
+      can_propose_agents: zod
+        .boolean()
+        .optional()
+        .describe(
+          "The agent may propose, with the propose_agent tool, that a temporary sub-agent it started become a saved agent (ADR-0050 decision 5a). The person it works for must also hold models.applications.applications.create.\n",
+        ),
+    })
+    .nullish()
+    .describe(
+      "What the agent may do beyond its tools. Absent is none. A save whose block is not an object of booleans is refused with 422 capabilities_block_invalid.\n",
+    ),
 });
 
 export type VersionMeta = zod.input<typeof VersionMeta>;

@@ -1,4 +1,4 @@
--- 0240_agent_heartbeat_settings.sql — the heartbeat of each proactive agent
+-- 0166_agent_heartbeat_settings.sql — the heartbeat of each proactive agent
 -- in this project, and the project switch (ADR-0050 decision 2, issue 1618).
 --
 -- agent_heartbeat_settings

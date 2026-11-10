@@ -12,6 +12,7 @@ import { DeleteApplicationButton, ExportApplicationButton, applicationServerErro
 import { StopAgentButton } from '@/features/kill-switch';
 
 import { ChatWithAgentButton } from './ChatWithAgentButton';
+import { PersonalAgentCopyButton } from './PersonalAgentCopyButton';
 import { useForkTargetProjects } from '../lib/useForkTargetProjects';
 import type { ApplicationDetail, ApplicationVersionDetail } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
@@ -67,6 +68,7 @@ export function EditApplicationActions({
   const navigate = useNavigate();
   const forkTargets = useForkTargetProjects(projectId);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [notice, setNotice] = useState<string | undefined>(undefined);
 
   const handleDeleted = useCallback(() => {
     // The agent no longer exists, so the edits still in the form are moot —
@@ -103,6 +105,15 @@ export function EditApplicationActions({
           {error}
         </Typography>
       )}
+      {notice !== undefined && (
+        <Typography
+          component="output"
+          variant="bodySmall"
+          data-testid="agent-copy-notice"
+        >
+          {notice}
+        </Typography>
+      )}
       <ChatWithAgentButton
         projectId={projectId}
         applicationId={applicationId}
@@ -116,6 +127,8 @@ export function EditApplicationActions({
         currentVersionId={currentVersionId}
         onError={handleExportError}
       />
+      {/* ADR-0050 decision 1: a personal agent's independent copy in a team project. */}
+      <PersonalAgentCopyButton projectId={projectId} applicationId={applicationId} name={name} projects={forkTargets} onNotice={setNotice} />
       {/* ADR-0041 decision 1: the project admin's kill switch for this agent. */}
       <StopAgentButton projectId={projectId} applicationId={applicationId} onError={setError} />
       <DeleteApplicationButton

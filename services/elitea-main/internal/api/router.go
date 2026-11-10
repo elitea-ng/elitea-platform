@@ -31,8 +31,11 @@ import (
 	v2agentheartbeat "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentheartbeat"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2agentlifecycle "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentlifecycle"
+	v2agentmedia "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentmediaapi"
 	v2agentmemory "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentmemory"
+	v2agentproposals "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentproposals"
 	v2agentreleases "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentreleases"
+	v2agentteams "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentteams"
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2apps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
 	v2applicationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
@@ -111,6 +114,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/runtoken"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
+	agentteamsdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentteams"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	entitlementsdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/entitlements"
@@ -122,6 +126,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/vectorclient"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -767,6 +772,11 @@ type RouterConfig struct {
 	// lesson of #126 — a capability gated on a dependency the composition root
 	// never assigns is a 404 nobody can tell from a typo.
 	PredictCompleter v2predict.Completer
+	// ImageGateway generates avatar stills and loops (ADR-0050 decision 6,
+	// issue 1619) through /llm/v1/images/generations and /images/edits. The
+	// routes are registered unconditionally; nil answers 503 naming
+	// LLM_GATEWAY_URL, for the reason PredictCompleter states.
+	ImageGateway llmproxy.Gateway
 	// AgentIdentityAdmin serves the agent identity binding and mandate admin
 	// API (ADR-0039, issue 1112). The composition root sets it only with
 	// the credential governance flag on; nil mounts none of
@@ -1792,6 +1802,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// reason as the two routes above: a browser <img src="..."> carries no
 	// Authorization header.
 	r.Get("/icons/{projectID}/{filename}", v2core.DownloadIcon(cfg.ObjectStore))
+	// Agent avatar pack media (ADR-0050 decision 6): public for the same
+	// reason as /icons. Content-addressed under the project's agent-media
+	// bucket; every object passed agentmedia.Inspect before it was stored.
+	// Under /api/ so every edge already forwards it, like brand assets.
+	r.Get(v2agentmedia.DownloadPath, v2agentmedia.Download(cfg.ObjectStore))
+	r.Head(v2agentmedia.DownloadPath, v2agentmedia.Download(cfg.ObjectStore))
 	// Social avatar: serves what CurrentSocialAvatar's upload handler writes,
 	// public/unauthenticated for the same reason as /icons above.
 	r.Get(v2social.CurrentAvatarDownloadPath, v2social.DownloadAvatar(cfg.ObjectStore))
@@ -4427,6 +4443,25 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/context_strategy/prompt_lib/{projectID}/{conversationID}", convHandler.GetContextStrategy)
 					r.With(requireConversationEdit).
 						Put("/context_strategy/prompt_lib/{projectID}/{conversationID}", convHandler.UpdateContextStrategy)
+
+					// Saved teams (ADR-0050 decision 8, #1620; shared 0233).
+					// A team adds no capability: saving one from a
+					// conversation also takes the conversation read (and the
+					// handler applies its detail rule), and starting one also
+					// takes the conversation create, whose participant path
+					// checks the caller may use every agent.
+					teams := v2agentteams.NewHandler(dbrepos.NewAgentTeams(cfg.Pool),
+						newTeamConversations(cfg.ConvsRepo, convHandler))
+					readTeams := projectPermission(agentteamsdomain.ListPermission)
+					r.With(readTeams).Get(v2agentteams.TeamsPath, teams.List)
+					r.With(projectPermission(agentteamsdomain.CreatePermission)).Post(v2agentteams.TeamsPath, teams.Create)
+					r.With(readTeams).Get(v2agentteams.TeamPath, teams.Get)
+					r.With(projectPermission(agentteamsdomain.UpdatePermission)).Put(v2agentteams.TeamPath, teams.Update)
+					r.With(projectPermission(agentteamsdomain.DeletePermission)).Delete(v2agentteams.TeamPath, teams.Delete)
+					r.With(projectPermission(agentteamsdomain.CreatePermission), requireConversationRead).
+						Post(v2agentteams.FromConversationPath, teams.CreateFromConversation)
+					r.With(readTeams, projectPermission("models.chat.conversations.create")).
+						Post(v2agentteams.StartPath, teams.Start)
 				}
 
 				// Share a conversation by link — the OWNER-FACING half. The
@@ -4732,6 +4767,43 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(readBeats).Get(v2agentheartbeat.ProjectPath, beats.GetProject)
 					r.With(writeBeats).Put(v2agentheartbeat.ProjectPath, beats.PutProject)
 				}
+				// Agent proposals and Copy to project (ADR-0050 decisions 5a
+				// and 1, #1615). Reading takes applications.list; Create
+				// records and memory copies take applications.create in the
+				// path's project; Dismiss takes create or ownership of the
+				// proposing agent (decided in the handler).
+				{
+					var proposalStore *dbrepos.AgentProposals
+					var ownerStore *dbrepos.AgentMemory
+					var personal *apimw.DBPersonalProjectResolver
+					if cfg.Pool != nil {
+						proposalStore, _ = dbrepos.ComposeAgentProposals(cfg.Pool)
+						ownerStore, _ = dbrepos.ComposeAgentMemory(cfg.Pool)
+						personal = apimw.NewDBPersonalProjectResolver(cfg.Pool)
+						if personalProjects != nil {
+							personal = personal.WithPersonalProjectEnsurer(personalProjects)
+						}
+					}
+					var owners v2agentproposals.Owners
+					if ownerStore != nil {
+						owners = ownerStore
+					}
+					var personalProjects v2agentproposals.PersonalProjects
+					if personal != nil {
+						personalProjects = personal
+					}
+					proposals := v2agentproposals.NewHandler(proposalStore, owners,
+						func(r *http.Request, projectID, permission string) (bool, error) {
+							return apimw.HoldsPermissionIn(coreResolver, platformauth.PermissionModeDefault, permission)(r, projectID)
+						}, personalProjects)
+					readProposals := projectPermission(v2agentproposals.ListPermission)
+					createAgents := projectPermission(v2agentproposals.CreatePermission)
+					r.With(readProposals).Get(v2agentproposals.ProposalsPath, proposals.List)
+					r.With(readProposals).Get(v2agentproposals.ProposalPath, proposals.Get)
+					r.With(readProposals).Post(v2agentproposals.DismissPath, proposals.Dismiss)
+					r.With(createAgents).Post(v2agentproposals.CreatedPath, proposals.MarkCreated)
+					r.With(createAgents).Post(v2agentproposals.CopyMemoryPath, proposals.CopyMemory)
+				}
 				// Run step records (ADR-0042 decisions 1 and 2): every read,
 				// the content's included, takes runs.evidence.read; a content
 				// read is recorded in audit_events before it is answered.
@@ -4943,6 +5015,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Put("/upload_icon/prompt_lib/{projectID}/{versionId}", coreHandler.UpdateIcon)
 				r.With(projectPermission("models.applications.upload_icon.delete")).
 					Delete("/upload_icon/prompt_lib/{projectID}/{name}", coreHandler.DeleteIcon)
+
+				// Avatar pack media (ADR-0050 decision 6, issue 1619): upload and
+				// generation take the icon upload permission, because a pack's
+				// still is the agent's icon.
+				{
+					media := v2agentmedia.NewHandler(cfg.ObjectStore, cfg.ImageGateway)
+					requireMedia := projectPermission(v2agentmedia.Permission)
+					r.With(requireMedia).Post(v2agentmedia.UploadPath, media.Upload)
+					r.With(requireMedia).Post(v2agentmedia.GeneratePath, media.Generate)
+				}
 
 				// Skill icons. upload_skill_icon.py declares the same four verbs
 				// as upload_icon.py under its own permission family

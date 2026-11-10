@@ -177,6 +177,10 @@ func TestFloorAgentMentionTurnFencesThePeerMessage(t *testing.T) {
 	if floor.GetCause() != turntaking.CauseAgentMention || !floor.GetUnattendedToolsOnly() {
 		t.Fatalf("floor input = %+v", floor)
 	}
+	// #1831: the peer's question is this turn's own, written under its id.
+	if got := submitted.Input.GetCurrentMessageId(); got != request.QuestionID {
+		t.Fatalf("current message id = %q, want %q", got, request.QuestionID)
+	}
 }
 
 func TestFloorAddressedQueuedTurnReusesThePersonsQuestion(t *testing.T) {
@@ -193,6 +197,11 @@ func TestFloorAddressedQueuedTurnReusesThePersonsQuestion(t *testing.T) {
 	turn := admissions.requests[0].CurrentTurn
 	if turn.ReplyToQuestionID != person || turn.QuestionAuthorParticipantID != 0 {
 		t.Fatalf("turn = %+v", turn)
+	}
+	// #1831: the turn writes no question; its input is the platform's note,
+	// which names no chat message.
+	if input := admissions.requests[0].Input; input.CurrentMessageId != nil {
+		t.Fatalf("current message id = %q", input.GetCurrentMessageId())
 	}
 }
 

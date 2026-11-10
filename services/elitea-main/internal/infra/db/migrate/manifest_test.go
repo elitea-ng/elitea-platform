@@ -1068,11 +1068,22 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// elitea_runtime.ephemeral_agents, written by ReportEphemeralAgents. No
 	// data, no permission.
 	//
-	// 240: shared/0240_agent_heartbeats.sql, one row per heartbeat wake of a
+	// 233: shared/0233_agent_teams.sql, saved teams (ADR-0050 decision 8,
+	// issue 1620): elitea_chat.agent_teams and agent_team_members, and the
+	// permissions models.teams.{list,create,update,delete}: list to the
+	// default-mode admin, editor and viewer, the other three to admin and
+	// editor, and the same on saved project matrices.
+	//
+	// 234: shared/0234_agent_proposals.sql, an agent's proposals to promote
+	// a temporary sub-agent to a saved agent (ADR-0050 decision 5a, issue
+	// 1615): elitea_lifecycle.agent_proposals, written by the propose_agent
+	// tool, decided in the registry inbox. No data, no permission.
+	//
+	// 235: shared/0235_agent_heartbeats.sql, one row per heartbeat wake of a
 	// proactive agent (ADR-0050 decision 2, issue 1618):
 	// elitea_runtime.agent_heartbeats, the daily envelope's ledger. No data,
-	// no permission. 0233 to 0239 are claimed by open branches.
-	require.EqualValues(t, 240, Head(shared))
+	// no permission.
+	require.EqualValues(t, 235, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1330,10 +1341,20 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// agent_memory_subject_optouts (ADR-0050 decision 1b, issue 1607). No
 	// data, no permission.
 	//
-	// 240: tenant/0240_agent_heartbeat_settings.sql, the heartbeat state of
+	// 164: tenant/0164_legacy_built_tenant_shape.sql, the columns and tables a
+	// schema the legacy runtime built lacks and Main reads: elitea_tools
+	// owner_id (backfilled with the schema's project), env_vars and uuid,
+	// index_meta and social_likes, each as create_tenant_schema declares it.
+	// No permission.
+	//
+	// 165: tenant/0165_application_version_avatar_pack.sql, the nullable
+	// application_versions.avatar_pack jsonb column (ADR-0050 decision 6,
+	// issue 1619). No data, no permission.
+	//
+	// 166: tenant/0166_agent_heartbeat_settings.sql, the heartbeat state of
 	// each proactive agent and the project switch proactive_agents_enabled
 	// (ADR-0050 decision 2, issue 1618). No data, no permission.
-	require.EqualValues(t, 240, Head(tenant))
+	require.EqualValues(t, 166, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

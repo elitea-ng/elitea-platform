@@ -16,7 +16,7 @@ import { useDesign } from '@/design/DesignProvider';
 import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { floorOf } from '@elitea/client-core/conversation';
 import { useModalAnimation } from '@/features/a11y/motion';
-import { participantName, participantUserId } from '@/features/chat/messageModel';
+import { participantAgentId, participantName, participantUserId } from '@/features/chat/messageModel';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
 import { Avatar, Button, hitTarget, Icon, ListRow, ListSection, maxScale, ramp, Text } from '@/ui';
 
@@ -58,6 +58,11 @@ export interface ParticipantsSheetProps {
    * "Lead" badge and each agent row offers "Make lead" / "Clear lead" (an updateConversation).
    */
   conversationMeta?: unknown;
+  /**
+   * Opens what an agent participant remembers (client contract 1.44, ADR-0050 1b). When given,
+   * each agent row offers "What it remembers"; the caller closes the sheet and navigates.
+   */
+  onAgentMemory?: (agentId: number, name: string) => void;
 }
 
 /** Agents and pipelines: the participants a lead can be. */
@@ -92,6 +97,7 @@ function SheetBody({
   onChanged,
   onAgentAdded,
   conversationMeta,
+  onAgentMemory,
 }: ParticipantsSheetProps) {
   const { colors, radius } = useDesign();
   const insets = useSafeAreaInsets();
@@ -184,6 +190,8 @@ function SheetBody({
               const isLead = leadsShown && p.id === leadId;
               const leadable = leadsShown && canLead(p) && (agentCount > 1 || isLead);
               const kind = KIND_LABEL[p.entity_name] ?? p.entity_name;
+              const agentId = onAgentMemory ? participantAgentId(p) : null;
+              const remembers = agentId !== null && onAgentMemory ? () => onAgentMemory(agentId, name) : undefined;
               return (
                 <ListRow
                   key={p.id}
@@ -191,8 +199,18 @@ function SheetBody({
                   subtitle={isLead ? `${kind} · ${TURN_TAKING_COPY.lead}` : kind}
                   leading={<Avatar name={name} kind={p.entity_name === 'user' ? 'person' : 'agent'} size={36} decorative />}
                   trailing={
-                    leadable || isRemovable(p, selfUserId) ? (
+                    leadable || isRemovable(p, selfUserId) || remembers ? (
                       <View style={styles.trailing}>
+                        {remembers ? (
+                          <Button
+                            title="What it remembers"
+                            variant="plain"
+                            size="small"
+                            accessibilityLabel={`What ${name} remembers`}
+                            disabled={offline}
+                            onPress={remembers}
+                          />
+                        ) : null}
                         {leadable ? (
                           <Button
                             title={isLead ? TURN_TAKING_COPY.clearLead : TURN_TAKING_COPY.makeLead}

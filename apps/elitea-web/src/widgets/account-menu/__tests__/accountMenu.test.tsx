@@ -166,6 +166,53 @@ describe('AccountMenu', () => {
     expect(open).toHaveBeenCalledWith('/admin/app/', '_blank', 'noopener');
   });
 
+  describe('IT support line (ADR-0052 W6.2)', () => {
+    function host(state: Record<string, unknown>) {
+      globals['__TAURI_INTERNALS__'] = {
+        invoke: (command: string) =>
+          command === 'host_state'
+            ? Promise.resolve({ configured: true, origin: 'https://elitea.example', displayName: 'Acme', signedIn: true, clientVersion: '1.0.0', clientId: 'x', policy: null, ...state })
+            : Promise.reject(new Error(command)),
+      };
+    }
+    afterEach(() => {
+      delete globals['__TAURI_INTERNALS__'];
+    });
+
+    it('shows the managed line over the workspace one, and opens an https line in the browser', async () => {
+      host({ managedSupportContact: 'Managed desk https://help.example.com/it', policy: { support_contact: 'Workspace desk' } });
+      const open = vi.spyOn(window, 'open').mockReturnValue(null);
+      const user = userEvent.setup();
+      mount('desktop');
+      await user.click(screen.getByTestId('shell-account'));
+      const row = await screen.findByTestId('shell-account-it-support');
+      expect(row).toHaveTextContent('IT support');
+      expect(within(row).getByTitle('Managed desk https://help.example.com/it')).toHaveTextContent('Managed desk https://help.examp…');
+      await user.click(row);
+      expect(open).toHaveBeenCalledWith('https://help.example.com/it', '_blank', 'noopener');
+    });
+
+    it('a workspace email line goes to Troubleshoot, where it can be copied', async () => {
+      host({ policy: { support_contact: 'IT desk, help@example.com' } });
+      const open = vi.spyOn(window, 'open').mockReturnValue(null);
+      const user = userEvent.setup();
+      const { go } = mount('desktop');
+      await user.click(screen.getByTestId('shell-account'));
+      await user.click(await screen.findByTestId('shell-account-it-support'));
+      expect(go).toHaveBeenCalledWith('/settings/troubleshoot');
+      expect(open).not.toHaveBeenCalled();
+    });
+
+    it('no line, no row; and never on the web', async () => {
+      host({});
+      const user = userEvent.setup();
+      mount('desktop');
+      await user.click(screen.getByTestId('shell-account'));
+      await screen.findByRole('menu', { name: 'Account menu' });
+      expect(screen.queryByTestId('shell-account-it-support')).toBeNull();
+    });
+  });
+
   it('collapsed (web rail): the avatar alone opens the same menu, with no bug button', async () => {
     const user = userEvent.setup();
     mount('web', true);

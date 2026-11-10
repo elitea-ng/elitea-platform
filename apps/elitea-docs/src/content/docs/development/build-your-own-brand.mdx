@@ -1,0 +1,129 @@
+---
+title: "Build your own brand"
+description: "For partners who ship ELITEA under their own name: a brand repository builds released ELITEA code with one brand folder and no patches. The setup, the permanent ids, the NOTICE obligations, the signing secrets, release upgrades, and how to ask for a manifest field."
+---
+
+A partner ships ELITEA under its own name from a **brand repository**: a small repository that holds one brand folder and builds a released ELITEA tag with it. It carries **no patches** to ELITEA's code (ADR-0052 decision 6). Everything a brand may change is a field of its manifest. See [Brands](/development/brands) for the manifest itself.
+
+The template is `docs/brand-template/` in this repository. It will become the repository `elitea-ng/elitea-brand-template`.
+
+| Path | What it is |
+| --- | --- |
+| `brand/acme/` | The brand: `brand.json` and `assets/`. Rename `acme` to your brand id. |
+| `upstream.json` | The ELITEA release this brand builds: `repository`, `tag`, `channel`. |
+| `NOTICE` | Your notice, followed by the ELITEA release's `NOTICE`. |
+| `.github/workflows/build.yml` | Builds iOS, Android, macOS and Windows from that release. |
+| `.github/workflows/release-watch.yml` | Opens a pull request when ELITEA publishes a newer release. |
+| `scripts/` | The pin's checks, the bump logic, and the release check, with their tests. |
+
+## Set it up
+
+1. Create a repository from the template, or copy `docs/brand-template/` into a new one.
+2. Rename `brand/acme` to your brand id, and set `BRAND_DIR` in `build.yml` to `brand/<id>`. The folder name must equal the manifest's `id`.
+3. Fill in `brand.json`: the names, the ids, the URLs, the hue, and your EAS project (`eas.projectId`, `eas.owner`). See the field table in [Brands](/development/brands#brandjson).
+4. Add `assets/`. To start from placeholders, check out the pinned release next to the brand (`git clone --depth 1 --branch <tag> https://github.com/elitea-ng/elitea-platform elitea`) and run `node elitea/scripts/brand/placeholder-assets.mjs brand/<id> --fg '#rrggbb' --bg '#rrggbb'`.
+5. Check it: `node elitea/scripts/brand-check.mjs brand/<id>`. Fix each line it reports.
+6. Replace `NOTICE` (see [NOTICE](#notice)).
+7. Open a pull request. `build.yml` checks out the pinned release, checks that it can build brand repositories, runs brand-check, and builds every platform **unsigned**. A pull request never signs and keeps no artifacts.
+8. Add the [signing secrets](#signing-secrets), then run **Build the brand** by hand (Actions › Build the brand › Run workflow). Choose the platforms. Set **keep_artifacts** to keep the desktop packages and the mobile bundles for 7 days.
+
+`upstream.json` must name a release tag, never a branch. The first release that can build brand repositories is v7.6.0; `scripts/check-release.mjs` refuses an older one.
+
+## Permanent ids
+
+Three manifest fields can never change after a brand uploads its first build. Choose them before step 7:
+
+| Field | Why it is permanent |
+| --- | --- |
+| `mobile.bundleId` | The App Store and Google Play key the app on it. A new id is a new app, with no reviews and no installs. |
+| `mobile.appGroup` | The widget extension shares data with the app through it. |
+| `desktop.identifier` | It names the folder that holds every desktop user's config, data, logs and credentials. |
+
+Use reverse-DNS ids under a domain you own. brand-check refuses ELITEA's own values (`ai.elitea.app`, `group.ai.elitea.app`, `ai.elitea.desktop`) for any other brand, and marks each permanent field in its report. A brand that must change one ships a new app.
+
+## NOTICE
+
+ELITEA is licensed under the Apache License 2.0. Section 4(d) says that a redistribution of a work that has a `NOTICE` file must carry the attribution notices of that file. Your apps are such a redistribution.
+
+- Keep the ELITEA release's `NOTICE` text, unchanged, in your repository's `NOTICE`, after your own notice. The template's `NOTICE` has a placeholder for it.
+- When the [release watch](#upgrade-to-a-new-release) moves you to a new release, compare that release's `NOTICE` with yours and copy any change.
+- Distribute the attribution with the apps. Section 4(d) accepts the `NOTICE` text inside a `NOTICE` file you distribute, in the documentation you ship with the apps, or in a screen the apps show. The release does not put it into the app bundles for you: choose one, for example a licences page your apps' help link opens. The brand changes the product name, not the licences.
+- Your own notice may add your copyright and your terms for your changes. It must not modify the Apache License.
+
+## No patches: ask for a manifest field
+
+A brand repository builds the release as it is. If your brand needs to differ in a way the manifest has no field for, do not patch the checkout in `build.yml`. A patch breaks at the next release, and the release's tests never ran against it.
+
+Open an issue in `elitea-ng/elitea-platform` that asks for a manifest field. Say what must differ, on which platforms, and why. A new field follows [Add a field](/development/brands#add-a-field). It ships in a release, and the upgrade notes of that release say when an existing brand must set it.
+
+## Signing secrets
+
+`build.yml` passes each secret to the release's packaging actions by a **fixed name**. Set them as repository secrets (or environment secrets) of your brand repository. A platform with none of its secrets set builds unsigned. A half-set group fails the build and names the missing secrets.
+
+### macOS (Developer ID, notarised)
+
+| Secret | What it is |
+| --- | --- |
+| `APPLE_CERTIFICATE` | The Developer ID Application and Developer ID Installer certificates, as one base64 `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | The `.p12` password |
+| `APPLE_SIGNING_IDENTITY` | The Developer ID Application identity, `Developer ID Application: <Name> (<TEAM>)` |
+| `APPLE_INSTALLER_SIGNING_IDENTITY` | The Developer ID Installer identity, for the `.pkg` |
+| `APPLE_API_KEY` | The App Store Connect API key id, for notarisation |
+| `APPLE_API_ISSUER` | The API key's issuer id |
+| `APPLE_API_PRIVATE_KEY` | The API key's `.p8` file, base64 (`base64 -i AuthKey_<id>.p8`) |
+
+### Windows
+
+Set `WINDOWS_PUBLISHER` and **one** of the two signers. `WINDOWS_PUBLISHER` is the certificate's subject (`CN=…, O=…`); the MSIX `Publisher` must equal it, or the package does not install.
+
+| Signer | Secrets |
+| --- | --- |
+| Azure Trusted Signing | `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE` |
+| A code-signing certificate | `WINDOWS_CERTIFICATE` (a base64 `.pfx`), `WINDOWS_CERTIFICATE_PASSWORD` |
+
+The Windows job runs only when the repository variable `DESKTOP_WINDOWS_PACKAGE` is `true`.
+
+### Mobile (EAS)
+
+| Secret | What it is |
+| --- | --- |
+| `EXPO_TOKEN` | A robot token of your Expo organization. With it, a run by hand starts `eas build --profile production` on your EAS project. |
+
+EAS holds the iOS and Android signing credentials and the store keys (App Store Connect, Google Play). Set them up in your EAS project, as in the mobile release guide (`apps/elitea-mobile/docs/release.md` in the release). Firebase files, if your brand has push, live in the brand folder's `firebase/`.
+
+EAS uploads the release checkout and evaluates `app.config.ts` again on its servers, with only your EAS project's environment variables. `build.yml` copies your brand into that checkout as `brand/<id>` for the upload, and selects it by id. Create `ELITEA_BRAND` with your brand id as a plain-text variable in all three environments of your EAS project:
+
+```bash
+eas env:create --name ELITEA_BRAND --value <id> --visibility plaintext --environment production
+```
+
+and the same for `preview` and `development`. A build whose brand is not linked to the EAS project it runs for fails at once.
+
+### The release watch
+
+| Secret | What it is |
+| --- | --- |
+| `RELEASE_WATCH_TOKEN` | Optional. A fine-grained token with contents and pull requests: write on the brand repository. A pull request opened with the default token starts no workflow, so without it, close and reopen the bump pull request to run its checks. |
+
+## Upgrade to a new release
+
+`release-watch.yml` runs once a day. When a release newer than `upstream.json`'s tag appears on the pinned channel, it opens one pull request, **Build ELITEA &lt;tag&gt;**, that moves the pin. A second release before you merge updates the same pull request. The `stable` channel follows `vX.Y.Z` releases only; `prerelease` also follows nightlies.
+
+That pull request's checks build every platform from the new release with your brand, unsigned. A release your brand cannot build shows up there as a red check.
+
+Before you merge it:
+
+1. Read the release notes, and the release's upgrade notes (`docs/upgrading/`), for a new manifest field your brand must set.
+2. Compare the release's `NOTICE` with yours.
+3. Merge, then run **Build the brand** by hand to ship.
+
+## Store paperwork
+
+The App Store and Google Play ask for a listing, privacy labels, a privacy policy, a support page, export-compliance answers and review notes. Take them from the release you pin, in your `elitea/` checkout, not from `main`: ELITEA's answers are in `elitea/apps/elitea-mobile/docs/store/`, and yours start from `elitea/apps/elitea-mobile/docs/store/template/`. Names in braces are your `brand.json` values; bracketed values are yours to decide.
+
+- The privacy labels, the Data safety form and the export-compliance answer are the same for every brand, because every brand builds the same code. Use ELITEA's, with your product name.
+- Reviewers need a demo workspace you operate, with your native client enabled, and a reviewer account with no MFA. The review notes say that device management and Local Push stay dormant without an MDM or a workspace policy.
+
+## Let your apps sign in
+
+Each brand's apps are their own native client of a deployment: the brand's bundle id and its redirect. A deployment that serves your apps registers your client next to ELITEA's. See [Allow a brand's apps on your deployment](/admin/brand-apps).

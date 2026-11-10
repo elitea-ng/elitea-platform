@@ -81,6 +81,10 @@ export const getGetClientDiscoveryResponseMock = (
     allow_notification_actions: faker.datatype.boolean(),
     allow_system_surfaces: faker.datatype.boolean(),
     local_work_allowed: faker.datatype.boolean(),
+    support_contact: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 200 } }),
+      undefined,
+    ]),
   },
   min_client_version: {
     [faker.string.alphanumeric(5)]: faker.string.alpha({

@@ -4,8 +4,8 @@ package repos
 // Postgres half of internal/application/heartbeat, and the settings and
 // history reads of the heartbeat routes.
 //
-// Tables: tenant 0240 (agent_heartbeat_settings,
-// project_proactivity_settings) and shared 0240
+// Tables: tenant 0166 (agent_heartbeat_settings,
+// project_proactivity_settings) and shared 0235
 // (elitea_runtime.agent_heartbeats). Every tenant statement names its
 // schema through tenantschema, never through the catalogue string.
 

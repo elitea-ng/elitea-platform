@@ -47,7 +47,8 @@ func (s *Server) RemoveIndex(ctx context.Context, request *runtimev1.RemoveIndex
 	}
 	workloadIdentity, err := s.authorizer.AuthorizeWorkload(ctx, request.GetFence().GetWorkloadSessionId(), request.GetFence().GetProducerId())
 	if err != nil || workloadIdentity == "" {
-		return removeIndexRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, "The workload session is not accepted.", false), nil
+		refusalCode, refusalMessage, refusalRetryable := workloadRefusal(err)
+		return removeIndexRejection(refusalCode, refusalMessage, refusalRetryable), nil
 	}
 	fence, err := fenceDomain(request.GetIdentity(), request.GetFence(), workloadIdentity)
 	if err != nil {

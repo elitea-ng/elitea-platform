@@ -3,18 +3,20 @@ package runtimecomposition
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	indexingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexing"
 	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/depfailure"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func newCurrentToolkitDiscoveryRuntime(pool *pgxpool.Pool, toolkits indexingapp.CurrentToolkitReader, settings indexingapp.CurrentToolkitSettingsValidator, catalogue *CurrentToolkitCatalogueSnapshot, capability *WorkerToolkitCapability, producer *commandbus.ToolkitAvailableToolsProducer, policy repos.ToolkitAvailableToolsDispatchPolicy, artifacts *repos.ToolkitDiscoveryArtifactRepository) (*currentToolkitDiscoveryRuntime, error) {
+func newCurrentToolkitDiscoveryRuntime(pool *pgxpool.Pool, toolkits indexingapp.CurrentToolkitReader, settings indexingapp.CurrentToolkitSettingsValidator, catalogue *CurrentToolkitCatalogueSnapshot, capability *WorkerToolkitCapability, producer *commandbus.ToolkitAvailableToolsProducer, policy repos.ToolkitAvailableToolsDispatchPolicy, artifacts *repos.ToolkitDiscoveryArtifactRepository, logger *slog.Logger) (*currentToolkitDiscoveryRuntime, error) {
 	if toolkits == nil || settings == nil || artifacts == nil {
 		return nil, fmt.Errorf("toolkit discovery requires shared toolkit input services")
 	}
@@ -50,35 +52,82 @@ func newCurrentToolkitDiscoveryRuntime(pool *pgxpool.Pool, toolkits indexingapp.
 	if err != nil {
 		return nil, err
 	}
-	return &currentToolkitDiscoveryRuntime{service: service, jobs: jobs, artifacts: artifacts}, nil
+	return &currentToolkitDiscoveryRuntime{service: service, jobs: jobs, artifacts: artifacts, logger: logger}, nil
 }
+
+// toolkitDiscoveryRetirement and toolkitDiscoveryArtifactSweep are the two
+// housekeeping passes the runner repeats.
+type toolkitDiscoveryRetirement interface {
+	ReclaimExpiredToolkitAvailableToolsRuns(ctx context.Context, limit int) (int, error)
+}
+
+type toolkitDiscoveryArtifactSweep interface {
+	SweepOrphanToolkitDiscoveryArtifacts(ctx context.Context, limit int) (int, error)
+}
+
+// toolkitDiscoveryPassInterval is the pause between two clean passes.
+const toolkitDiscoveryPassInterval = 10 * time.Second
 
 type currentToolkitDiscoveryRuntime struct {
 	service   *discovery.Service
-	jobs      *repos.ToolkitAvailableToolsJobsRepository
-	artifacts *repos.ToolkitDiscoveryArtifactRepository
+	jobs      toolkitDiscoveryRetirement
+	artifacts toolkitDiscoveryArtifactSweep
+	logger    *slog.Logger
+
+	// Seams for tests; production uses the real timer and jitter.
+	wait   func(context.Context, time.Duration) error
+	jitter func(time.Duration) time.Duration
 }
 
+// Run repeats the retirement and artifact sweep passes until ctx ends. A pass
+// that fails on a dependency failure that heals on its own is logged and
+// retried after a bounded backoff (1 s doubling to 30 s, reset by a clean
+// pass): a database outage never stops the runner, so it never stops Main
+// (FU-275). Any other failure is returned, so the runner set names it and
+// ends Main instead of retrying a permanent fault for ever.
 func (r *currentToolkitDiscoveryRuntime) Run(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+	failures := 0
 	for {
-		if _, err := r.jobs.ReclaimExpiredToolkitAvailableToolsRuns(ctx, 32); err != nil {
+		delay := toolkitDiscoveryPassInterval
+		if err := r.pass(ctx); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return fmt.Errorf("retire expired toolkit discovery: %w", err)
-		}
-		if _, err := r.artifacts.SweepOrphanToolkitDiscoveryArtifacts(ctx, 32); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+			if !depfailure.Transient(err, ctx) {
+				return err
 			}
-			return fmt.Errorf("sweep toolkit discovery artifacts: %w", err)
+			failures++
+			delay = runnerRestartDelay(failures, r.jitterSource())
+			r.log().Error(
+				fmt.Sprintf("The toolkit discovery housekeeping pass failed; retrying in %s", delay.Round(time.Millisecond)),
+				"attempt", failures,
+				"cause", depfailure.Describe(err),
+			)
+		} else {
+			failures = 0
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+		if err := r.waitFor(ctx, delay); err != nil {
+			return err
 		}
 	}
 }
+
+func (r *currentToolkitDiscoveryRuntime) pass(ctx context.Context) error {
+	if _, err := r.jobs.ReclaimExpiredToolkitAvailableToolsRuns(ctx, 32); err != nil {
+		return fmt.Errorf("retire expired toolkit discovery: %w", err)
+	}
+	if _, err := r.artifacts.SweepOrphanToolkitDiscoveryArtifacts(ctx, 32); err != nil {
+		return fmt.Errorf("sweep toolkit discovery artifacts: %w", err)
+	}
+	return nil
+}
+
+func (r *currentToolkitDiscoveryRuntime) waitFor(ctx context.Context, delay time.Duration) error {
+	return waitOrSeam(ctx, delay, r.wait)
+}
+
+func (r *currentToolkitDiscoveryRuntime) jitterSource() func(time.Duration) time.Duration {
+	return jitterOrRandom(r.jitter)
+}
+
+func (r *currentToolkitDiscoveryRuntime) log() *slog.Logger { return loggerOrDiscard(r.logger) }

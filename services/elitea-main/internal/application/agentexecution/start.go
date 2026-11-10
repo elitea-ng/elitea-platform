@@ -475,6 +475,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	}
 	input.ContextSettings = contextSettings
 	input.Floor = heartbeatFloor(floor.input(request.TargetParticipantID), request.Heartbeat)
+	input.CurrentMessageId = currentMessageID(request)
 	grant, chain, err := service.admitUnattended(ctx, unattendedTarget{
 		request: request.Unattended, continuation: request.UnattendedContinuation,
 		capabilityID: executiondomain.AgentApplicationCapability, input: input,
