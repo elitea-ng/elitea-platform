@@ -57,8 +57,9 @@ ends typed and is never re-run blindly.
   Supervisor read's) own transaction (`code_source_definition.go:50`, `:101`): the parent thread must be this run's
   root thread, the visit must run on the scope's child thread in the family's `m1:`/`p1:` form, its node must be the
   owned node, and the run's frozen root source must declare that fan-out node owning that Code node at that ordinal
-  inside the frozen family (`FanoutCodeChildOwner`, `runtime_fanout_code_child.go:29`: Map worker with
-  `1 ≤ item_count ≤ max_items`, `ordinal < item_count`; Parallel branch at `ordinal` with `item_count` = branch count;
+  (`FanoutCodeChildOwner`, `runtime_fanout_code_child.go:29`: a Map worker with an `item_count` bounded by the Map's
+  `max_items` and by 64 (`1 ≤ item_count ≤ min(max_items, 64)`, `ordinal < item_count`; Main cannot pin the Map's
+  runtime item count, which the Worker freezes); a Parallel branch at `ordinal` with `item_count` = branch count;
   the owned node is `code`; anything else, including a forged family, fails closed). A Map worker's input policy also
   admits its item and index (`OriginalMapItemCodeInputPolicy`, `runtime_saved_code_input_policy.go:35`, chosen by
   `originalVisitInputPolicy`, `code_sandbox_intent.go:318`).
@@ -124,7 +125,7 @@ ends typed and is never re-run blindly.
 | D1, D3 unit (`fanout_code_child_tests.rs`, `code_state_tests.rs`) | `an_unproven_code_branch_fails_typed_and_the_others_finish_under_continue` (code, readable sentence, 32-hex support_ref), `an_unproven_code_item_stops_the_map_typed_and_keeps_completed_items`, `a_map_item_reaches_code_only_within_the_code_input_byte_bound` (512 KiB exactly vs +1 byte: Code never called), `a_map_item_is_bounded_by_the_code_input_depth_and_field_limits` (128 vs 129 nested values), `a_64_item_code_map_logs_no_item_values_or_index` (markers in every item value and as the index channel's name; none in the log; the D1 stop is one WARN line with its sentence and support_ref), `a_code_child_visit_is_canonical_over_its_input_order` | pass |
 | Worker lib | `cargo test --offline --locked --lib --all-features` | **3170 passed, 0 failed, 121 ignored**; the same with `ELITEA_TEST_DATABASE_URL` and the PostgreSQL 18 guard set as CI sets them: 3170 passed, 0 failed |
 | Main `pipelinelimits` | `TestFanoutChildFamiliesMatchTheSharedContract` (N2), `TestCheckAdmitsACodeMapWorkerAndACodeParallelBranch`, `TestCheckRefusesADirectRouterChildWithItsOwnText` | pass |
-| Main `repos` (C1) | `TestFanoutCodeChildScopeResolvesItsOwnerAndFailsClosed`: admitted Map item, Parallel branch, last index; refused scope from another execution, index outside the frozen count, frozen count above `max_items`, empty family, Parallel ordinal outside its branches, branch at the wrong ordinal, foreign project, node id not owned by the scope, visit node differing from the scope, owned node not Code, forged family for a Map node, forged family kind, root thread as child thread, child thread of the other family, visit on another thread, unknown scope field. `TestAMapItemCodeWorkerInputPolicyAdmitsOnlyItsItemAndIndex` | pass |
+| Main `repos` (C1) | `TestFanoutCodeChildScopeResolvesItsOwnerAndFailsClosed`: admitted Map item, Parallel branch, last index; refused scope from another execution, index outside the item count, item count above `max_items`, empty family, Parallel ordinal outside its branches, branch at the wrong ordinal, foreign project, node id not owned by the scope, visit node differing from the scope, owned node not Code, forged family for a Map node, forged family kind, root thread as child thread, child thread of the other family, visit on another thread, unknown scope field. `TestAMapItemCodeWorkerInputPolicyAdmitsOnlyItsItemAndIndex` | pass |
 | Main `pipelinelimits` (D7) | `TestTheBranchRefusalSentenceNamesCodeAsTheWebEditorDoes` | pass |
 | Web | `graphExtensions.families.test.ts` (contract parity, Code admitted in both families, Router text in both); the copy naming Code in `graphParallelAdmission.helpers.test.ts:97`, `ParallelSettings.test.tsx`, `ParallelNode.test.tsx` | `src/features/pipelines` + i18n: 245 files, 2790 passed, 1 expected fail; `tsc --noEmit`, oxlint and the i18n check clean |
 
@@ -480,4 +481,7 @@ its fix.
 - **FU-311:** a `recovery:` block on a fan-out Code child.
 - **FU-312:** failure routes resolved inside a child.
 - **FU-313:** streaming Code trace phases from children.
+- **FU-315 (hardening):** Main verifies only the `m1:`/`p1:` form of a fan-out Code child's thread
+  (`FanoutCodeChildThread`, `runtime_fanout_code_child.go`), not its derivation from (root, node, ordinal). It is
+  hardening only: only the claim-holding Worker names the thread, and nothing in Main authorizes by child thread.
 - The raw path (`execute`, Code tools) has no N3 re-check.
