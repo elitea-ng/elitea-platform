@@ -784,6 +784,29 @@ struct CodeChild {
     types: BTreeMap<String, String>,
 }
 
+impl CodeChild {
+    /// The channels the child reads (R1). An empty `input`, or exactly
+    /// `[messages]`, means every business root, as for a root Code node
+    /// (`CodeStateBoundary::input_json`): every typed channel but `messages`,
+    /// a Map worker's item and index included. Otherwise its declared keys.
+    fn read_keys(&self) -> Vec<String> {
+        if self.reads_all() {
+            self.types
+                .keys()
+                .filter(|key| key.as_str() != "messages")
+                .cloned()
+                .collect()
+        } else {
+            self.node.input_keys().to_vec()
+        }
+    }
+
+    fn reads_all(&self) -> bool {
+        let selected = self.node.input_keys();
+        selected.is_empty() || selected == ["messages"]
+    }
+}
+
 impl OwnedBranch {
     fn id(&self) -> &str {
         match self {
@@ -1077,7 +1100,7 @@ impl CompilerParallelBranches {
             PIPELINE_NODE_EVENT_SCOPE_STATE_KEY.to_owned(),
             crate::agents::graph::application::APPLICATION_VISIT_STATE_KEY.to_owned(),
         ]);
-        channels.extend(definition.input_keys().iter().cloned());
+        channels.extend(child.read_keys());
         channels.extend(definition.output_keys().iter().cloned());
         let mut schema = StateSchema::new();
         for key in channels {
@@ -1253,18 +1276,19 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             // journal visit (W3-2): its thread is not the run root.
             OwnedBranch::Code(child) => {
                 let node = &child.node;
-                let mut input = node
-                    .input_keys()
-                    .iter()
-                    .map(|key| {
-                        parent
-                            .get(key)
-                            .map(|value| (key.clone(), value.clone()))
-                            .ok_or_else(|| {
-                                GraphError::InvalidGraph(
-                                    "a Code child input is missing from its parent".to_owned(),
-                                )
-                            })
+                // R1: all-input semantics take what is present, as at the
+                // root ("missing approved values are allowed"); declared
+                // inputs must all be there.
+                let reads_all = child.reads_all();
+                let mut input = child
+                    .read_keys()
+                    .into_iter()
+                    .filter_map(|key| match parent.get(&key) {
+                        Some(value) => Some(Ok((key, value.clone()))),
+                        None if reads_all => None,
+                        None => Some(Err(GraphError::InvalidGraph(
+                            "a Code child input is missing from its parent".to_owned(),
+                        ))),
                     })
                     .collect::<Result<State, _>>()?;
                 let visit = super::super::fanout_code_child::code_child_visit(

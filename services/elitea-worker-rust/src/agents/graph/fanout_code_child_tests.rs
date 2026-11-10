@@ -284,6 +284,79 @@ async fn a_parallel_runs_its_code_branches() {
     assert_eq!(*code.admissions.lock().unwrap(), [(vec![1, 1], 2)]);
 }
 
+/// R1: a Code child whose `input` is empty or exactly `[messages]` reads every
+/// business root it is given, as a root Code node does: a Map worker gets its
+/// item and index, a Parallel branch the parent's roots; never `{}`.
+#[tokio::test]
+async fn a_code_child_with_all_inputs_reads_its_item_or_roots() {
+    // A Map worker reading `[messages]` is refused at parse time already
+    // (it reads only its item, index and broadcast channels).
+    let refused = MAP_CODE.replace("input: [entity, item_index]", "input: [messages]");
+    assert!(PipelineDefinition::from_yaml(&refused).is_err());
+    for selection in ["[]", "[messages]"] {
+        let yaml = MAP_CODE.replace(
+            "input: [entity, item_index]",
+            &format!(
+                "input: {}",
+                if selection == "[]" {
+                    "[]"
+                } else {
+                    "[entity, item_index]"
+                }
+            ),
+        );
+        let definition = PipelineDefinition::from_yaml(&yaml).expect("the Map is admitted");
+        let authority = Arc::new(MemoryAuthority::default());
+        let (checkpointer, runtimes) = bound(&authority);
+        let code = Arc::new(FakeCode::default());
+        let graph = definition
+            .compile_subgraph_with_runtime(checkpointer, &with_code(runtimes, &code))
+            .expect("the Map compiles");
+        let state = graph
+            .invoke(
+                HashMap::from([("entities".to_owned(), json!(["a", 3]))]),
+                ExecutionConfig::new(&format!("root-all-map-{}", selection.len())),
+            )
+            .await
+            .expect("the Map runs");
+        assert_eq!(
+            state["mapped"],
+            json!([
+                {"index": 0, "outputs": {"item_result": "\"a\"-0"}},
+                {"index": 1, "outputs": {"item_result": "3-1"}},
+            ]),
+            "Map input {selection}"
+        );
+
+        let yaml = PARALLEL_CODE.replace("input: [topic]", &format!("input: {selection}"));
+        let definition = PipelineDefinition::from_yaml(&yaml).expect("the Parallel is admitted");
+        let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(BranchAuthority::default());
+        let checkpointer: Arc<dyn Checkpointer> = authority.clone();
+        let runtimes =
+            PipelineNodeRuntimes::default().with_parallel(ParallelCompilerBinding::for_tests(
+                authority,
+                tokio::time::Instant::now() + Duration::from_secs(30),
+                None,
+            ));
+        let code = Arc::new(FakeCode::default());
+        let graph = definition
+            .compile_subgraph_with_runtime(checkpointer, &with_code(runtimes, &code))
+            .expect("the Parallel compiles");
+        let state = graph
+            .invoke(
+                HashMap::from([("topic".to_owned(), json!("t"))]),
+                ExecutionConfig::new(&format!("root-all-parallel-{}", selection.len())),
+            )
+            .await
+            .expect("the Parallel runs");
+        let joined = serde_json::to_string(&state["joined"]).unwrap();
+        assert!(
+            joined.contains("t:Python") && joined.contains("t:JavaScript"),
+            "Parallel input {selection}: {joined}"
+        );
+    }
+}
+
 /// W3-2 D3: an activation whose Code items cannot fit the run's deadline is
 /// refused whole, before freezing: no item starts, no child thread is
 /// activated, and the run ends with the registered fan-out failure.
