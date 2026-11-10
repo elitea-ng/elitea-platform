@@ -61,6 +61,27 @@ describe('WorkforcePanel', () => {
     expect(await screen.findByTestId('agent-workforce-proposal-7')).toHaveTextContent('workforce policy (rule unused)');
   });
 
+  it('shows a viewer the state only: no scorecard, no proposals, no reads of them', async () => {
+    const reads: string[] = [];
+    mock(workforceAgent({ can_manage: false, is_owner: false, scorecard: null }));
+    server.use(
+      http.get(`${ROOT}/agents/:applicationId/scorecards`, () => {
+        reads.push('scorecards');
+        return HttpResponse.json({ code: 'workforce_forbidden' }, { status: 403 });
+      }),
+      http.get(`${ROOT}/proposals`, () => {
+        reads.push('proposals');
+        return HttpResponse.json({ code: 'workforce_forbidden' }, { status: 403 });
+      }),
+    );
+    renderWithQueryAndTheme(<WorkforcePanel projectId="1" applicationId={41} />);
+    expect(await screen.findByTestId('agent-workforce-state')).toHaveTextContent('Active');
+    expect(screen.queryByTestId('agent-workforce-scorecard')).toBeNull();
+    expect(screen.queryByTestId('agent-workforce-no-scorecard')).toBeNull();
+    expect(screen.queryByTestId('agent-workforce-propose')).toBeNull();
+    expect(reads).toEqual([]);
+  });
+
   it('approving a retirement previews the impact and confirms the nesting', async () => {
     let body: unknown;
     mock();

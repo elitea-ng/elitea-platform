@@ -590,6 +590,14 @@ func (s *AgentWorkforce) Approve(ctx context.Context, decision Decision) (Workfo
 		if err := stageAllowedFor(agent, stage); err != nil {
 			return err
 		}
+		// 5j holds at the decision, not only at the proposal: a target
+		// raised to critical or put under legal hold since an HR agent
+		// proposed it is no longer dismissed on that agent's proposal. A
+		// person proposes afresh if it should go ahead.
+		if proposal.Source == agentworkforce.SourceHRAgent && agentworkforce.ExemptFromAutomatic(agent.Tier, agent.LegalHold) {
+			return agentworkforce.Refuse(agentworkforce.StateConflictCode,
+				"Since this reviewer agent proposed it, the agent became critical tier or came under legal hold: it is never dismissed on an agent's proposal. Reject this one; a person can propose it.")
+		}
 		applied, suspensions, err := s.applyStage(ctx, tx, agent, stage, proposal, decision)
 		if err != nil {
 			return err
@@ -853,14 +861,44 @@ func (s *AgentWorkforce) reverseStage(ctx context.Context, tx pgx.Tx, agent Work
 	case agentworkforce.StageWatch:
 		return nil, clearWatch(ctx, tx, agent)
 	case agentworkforce.StageSuspend:
-		return resumeDismissalSuspension(ctx, tx, agent, actorID, "Appeal granted.")
+		// Only the suspension this proposal made: a later dismissal
+		// suspension (another proposal, never appealed) stays.
+		id, ok := appliedInt(proposal.Applied, "suspension_id")
+		if !ok {
+			return nil, nil
+		}
+		return resumeSuspensionByID(ctx, tx, agent, id, actorID, "Appeal granted.")
 	case agentworkforce.StageRetire:
-		if agent.State != agentworkforce.StateRetired {
+		// Only the retirement this proposal made: after a reinstatement and
+		// a second retirement (another proposal), the agent's retirement is
+		// not this one, and granting this appeal does not undo it.
+		if agent.State != agentworkforce.StateRetired || agent.RetiredAt == nil || !sameRetirement(proposal.Applied, *agent.RetiredAt) {
 			return nil, nil
 		}
 		return s.reinstate(ctx, tx, agent, actorID, "appeal")
 	}
 	return nil, nil
+}
+
+// appliedInt reads a positive integer the applied record holds (JSON
+// numbers decode as float64).
+func appliedInt(applied map[string]any, key string) (int64, bool) {
+	value, ok := applied[key].(float64)
+	if !ok || value <= 0 || value != float64(int64(value)) {
+		return 0, false
+	}
+	return int64(value), true
+}
+
+// sameRetirement reports whether the registry's retired_at is the
+// retirement the applied record names.
+func sameRetirement(applied map[string]any, retiredAt time.Time) bool {
+	raw, ok := applied["retired_at"].(string)
+	if !ok {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	return err == nil && at.Truncate(time.Millisecond).Equal(retiredAt.UTC().Truncate(time.Millisecond))
 }
 
 func (s *AgentWorkforce) inTx(ctx context.Context, fn func(pgx.Tx) error) error {

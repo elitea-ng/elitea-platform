@@ -596,6 +596,12 @@ func (s *AdmissionService) checkRetired(ctx context.Context, request SubmitReque
 		return nil
 	}
 	own := requestApplicationID(request)
+	if own == 0 && request.CurrentFanoutWakeTurn != nil && request.CapabilityID == executiondomain.AgentApplicationCapability {
+		// A fan-out wake carries no application id of its own; the parked
+		// run's frozen application names the agent it resumes, and a
+		// retired agent's parked wake is refused like any start of it.
+		own = frozenApplicationID(request.Input)
+	}
 	ids := append([]int64{}, children...)
 	if own > 0 {
 		ids = append(ids, own)
@@ -786,6 +792,25 @@ func finishToolkitTypes(types []string) []string {
 }
 
 // frozenToolkitsRaw is the frozen `tools` list frozenToolkitSet reads.
+// frozenApplicationID is the frozen application's id, 0 when the input has
+// none or it is not readable.
+func frozenApplicationID(input *runtimev1.AgentExecutionInputV1) int64 {
+	if input == nil || len(input.GetApplication()) == 0 {
+		return 0
+	}
+	var application struct {
+		ID json.Number `json:"id"`
+	}
+	if json.Unmarshal(input.GetApplication(), &application) != nil {
+		return 0
+	}
+	id, err := application.ID.Int64()
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
+}
+
 func frozenToolkitsRaw(capabilityID string, input *runtimev1.AgentExecutionInputV1) (json.RawMessage, error) {
 	if input == nil {
 		return nil, nil

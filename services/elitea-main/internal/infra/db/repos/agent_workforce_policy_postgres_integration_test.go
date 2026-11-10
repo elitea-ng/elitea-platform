@@ -387,6 +387,18 @@ WHERE source <> 'policy' OR stage NOT IN ('watch', 'suspend', 'retire') OR decid
 	if unusedHeartbeat() {
 		t.Fatal("the automatically retired agent's heartbeat still runs")
 	}
+	// Through the ladder's retire: the same record a person's approval
+	// writes (runs cancelled, heartbeat stopped, reinstate window).
+	var applied map[string]any
+	if err := pool.QueryRow(ctx, `SELECT applied FROM elitea_lifecycle.agent_workforce_proposals
+WHERE application_id = $1 AND stage = 'retire' AND source = 'policy' AND status = 'approved'`, unused).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"cancelled_runs", "heartbeat_stopped", "reinstate_until", "retired_at"} {
+		if _, ok := applied[key]; !ok {
+			t.Fatalf("the automatic retire skipped the ladder (%s missing): %v", key, applied)
+		}
+	}
 	a, _ = store.Agent(ctx, wfProject, objected)
 	if a.State != agentworkforce.StateActive {
 		t.Fatalf("the objected agent was retired: %+v", a)
