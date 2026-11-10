@@ -75,6 +75,7 @@ use super::context::{self, ContextHost, TurnContext};
 use super::definition::{self, Admitted, ModelChoice};
 use super::environment;
 use super::events::{EventEmitter, Phase, Timed, TurnEvents, UsageLane};
+use super::floor::{self, FloorNext};
 use super::framing;
 use super::idle::{AgentKey, IdleBasis, IdleCompactor, IdleSession, ThreadKey};
 use super::memory::PlatformMemoryStore;
@@ -229,6 +230,25 @@ pub struct TurnRequest {
     /// The grant does not imply bypass mode (only `bypass` does); never
     /// with `plan_mode`.
     pub unattended: Option<UnattendedTurn>,
+    /// The agent participants the person addressed, in order (ADR-0050
+    /// decision 7f, contract 1.47): Main routes the message by the floor,
+    /// and the host runs the routed agents one at a time.
+    pub addressed_to: Vec<i64>,
+    /// A later agent's turn of a message Main routed: the host starts it
+    /// itself after the previous agent's commit.
+    pub floor_turn: Option<FloorTurn>,
+    /// The agent runs in the cloud (its participant's `executor: cloud`):
+    /// the host relays the conversation text to it, never the workspace.
+    pub cloud: bool,
+}
+
+/// `LocalTurnStartRequest.floor_turn` (contract 1.47).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FloorTurn {
+    /// The person's message (its first turn's `question_id`).
+    pub question_id: String,
+    /// The agent's index in the routed order, from 1.
+    pub position: usize,
 }
 
 impl TurnRequest {
@@ -596,6 +616,13 @@ async fn start_turn(
     if let Some(unattended) = &request.unattended {
         body["unattended"] = unattended.wire();
     }
+    let addressed = floor::addressed(request, answering);
+    if !addressed.is_empty() {
+        body["addressed_to"] = json!(addressed);
+    }
+    if let Some(turn) = &request.floor_turn {
+        body["floor_turn"] = json!({ "question_id": turn.question_id, "position": turn.position });
+    }
     Ok(api
         .start_turn(request.project_id, &answering.conversation_uuid, &body)
         .await?)
@@ -628,6 +655,36 @@ async fn project_skills(
         skills::from_project(request.project_id, id, &skill)
     }))
     .await
+}
+
+/// The turn runs what Main started (ADR-0050 decision 7f): the participant
+/// the host resolved, where Main says it runs. Main may route a person's
+/// message to another agent first; the UI then sends the message to that
+/// agent (the floor's first target) as the composer's target.
+fn check_routed(
+    request: &TurnRequest,
+    answering: &AnsweringParticipant,
+    started: &LocalTurnStarted,
+) -> Result<(), TurnError> {
+    let routed = started
+        .floor
+        .as_ref()
+        .and_then(|floor| floor.targets.get(floor.position).copied());
+    if let Some(routed) = routed
+        && routed != answering.id
+    {
+        return Err(TurnError::new(
+            "floor_routed_elsewhere",
+            "This message goes to another agent of the thread first. Send it to that agent, or address the agents you want.",
+        ));
+    }
+    if started.runs_in_cloud() != request.cloud {
+        return Err(TurnError::new(
+            "agent_executor_changed",
+            "Where this agent runs changed. Send the message again.",
+        ));
+    }
+    Ok(())
 }
 
 /// The platform refused a start for its conversation or participant
@@ -2262,6 +2319,10 @@ impl AgentHost {
         request: &TurnRequest,
         resolved: &ResolvedVersion,
     ) -> Result<(Admitted, Vec<InvokedSkill>), TurnError> {
+        // A cloud agent of the thread never runs here (ADR-0050 decision 7f).
+        if request.cloud {
+            return Ok((definition::admit_cloud(resolved), Vec::new()));
+        }
         let admitted = definition::admit(resolved, &local_tool_names())
             .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?
             .with_workspace_step_limit(self.workspace_step_limit(&request.workspace_id));
@@ -2396,7 +2457,11 @@ impl AgentHost {
             api,
             request.project_id,
             policy,
-            answering,
+            &AnsweringParticipant {
+                // A later agent's commit adds only its answer.
+                answer_only: request.floor_turn.is_some(),
+                ..answering.clone()
+            },
             question_id,
         )
         .await
@@ -2459,6 +2524,9 @@ impl AgentHost {
             command: None,
             images: Vec::new(),
             unattended: None,
+            addressed_to: Vec::new(),
+            floor_turn: None,
+            cloud: false,
         };
         let need_version = self.caches.version(&version_key).is_none();
         let need_participant = participant_key
@@ -2539,6 +2607,7 @@ impl AgentHost {
                 "A turn cannot run in plan mode and unattended.",
             ));
         }
+        floor::check_request(request)?;
         skills::check(&request.skills, &request.project_skills)?;
         if let Some(pick) = &request.command {
             slash_commands::check(pick)?;
@@ -2863,6 +2932,11 @@ impl AgentHost {
             }
         };
         events.timed(Timed::Starting, starting.elapsed());
+        // Main routed the message (ADR-0050 decision 7f): the turn runs the
+        // agent Main named, where Main says it runs. A start that answers
+        // another agent than the one the host resolved, or another
+        // executor, is refused here; its execution expires.
+        check_routed(request, &answering, &started)?;
         memory.retag(&started.execution_id);
         let (admitted, models) = self
             .thread_model(request, &api, events, admitted, &memory, models)
@@ -3008,28 +3082,49 @@ impl AgentHost {
             ));
         }
 
+        if let Some(fields) = floor::status(&started) {
+            events.unattended(&fields);
+        }
+
         let sink = Arc::new(TurnSink::with_events(events.clone()));
         let turn_context = TurnContext::default();
-        let run = self.run_agent(
-            &request,
-            &events,
-            &workspace,
-            &admitted,
-            &project,
-            &invoked,
-            command.as_ref(),
-            &started,
-            &recorder,
-            &sink,
-            &api,
-            &memory,
-            &folder,
-            &turn_context,
-            &mentioned,
-            models.as_deref(),
-            &images,
-            &entry.steering,
-        );
+        // A cloud agent of the thread (ADR-0050 decision 7f) runs in the
+        // cloud, relayed the conversation's text: never the workspace.
+        let run = async {
+            if started.runs_in_cloud() {
+                self.run_cloud_agent(
+                    &request,
+                    &events,
+                    &workspace,
+                    &started,
+                    &api,
+                    &conversation_uuid,
+                )
+                .await
+            } else {
+                self.run_agent(
+                    &request,
+                    &events,
+                    &workspace,
+                    &admitted,
+                    &project,
+                    &invoked,
+                    command.as_ref(),
+                    &started,
+                    &recorder,
+                    &sink,
+                    &api,
+                    &memory,
+                    &folder,
+                    &turn_context,
+                    &mentioned,
+                    models.as_deref(),
+                    &images,
+                    &entry.steering,
+                )
+                .await
+            }
+        };
         let outcome = tokio::select! {
             result = run => Some(result),
             _ = guard.ended() => None,
@@ -3244,6 +3339,8 @@ impl AgentHost {
         // Encoded in the commit's job: a goal check may change the chain's
         // outcome after `done`.
         let commit_body = CommitBody {
+            // A later agent's turn answers the person's own message: Main
+            // stores no question for it (the text is the floor note).
             user_message: user_message(&request.prompt, &images),
             steering_messages: entry.steering.commit_messages(),
             assistant_message: assistant,
@@ -3328,10 +3425,26 @@ impl AgentHost {
         // starts; it sends `chain_ended` when the next turn did not start in
         // time. A slow commit does not stop the chain.
         // A goal check may continue the chain: the UI stays busy for it too.
-        let continuing = matches!(chain_step, Some(ChainStep::Continue)) || goal_step.is_some();
+        // The message's next agent (ADR-0050 decision 7f): started once this
+        // commit lands; the UI stays busy for it as for a chain.
+        let floor_next = if failure.is_none() && !handed_off {
+            floor::next(&request, &started, &conversation_uuid)
+        } else {
+            None
+        };
+        let continuing = matches!(chain_step, Some(ChainStep::Continue))
+            || goal_step.is_some()
+            || floor_next.is_some();
         let mut done = done;
         if continuing {
             done["continuing"] = json!(true);
+        }
+        if let Some(next) = &floor_next {
+            done["floor_next"] = json!({
+                "participant_id": next.participant_id,
+                "agent_name": next.name,
+                "position": next.position,
+            });
         }
         if handed_off {
             done["handed_off"] = json!(true);
@@ -3485,6 +3598,23 @@ impl AgentHost {
                     }
                     _ => {}
                 }
+                // The message's next agent, one at a time, after this
+                // commit (ADR-0050 decision 7f).
+                if let Some(next) = floor_next {
+                    if landed {
+                        tokio::spawn(host.clone().continue_floor(
+                            next,
+                            events.clone(),
+                            awake.again(),
+                        ));
+                    } else {
+                        floor::stopped(
+                            &events,
+                            "commit_failed",
+                            "This answer could not be saved, so the other agents of the message do not answer.",
+                        );
+                    }
+                }
             })
             .catch_unwind()
             .await;
@@ -3619,6 +3749,177 @@ impl AgentHost {
             }
         }
         .boxed()
+    }
+
+    /// Start `next`, the next agent of a message Main routed (ADR-0050
+    /// decision 7f), after the turn whose events are `previous` committed.
+    /// Started, `previous` says `turn_continued` (kind `floor`); refused,
+    /// `floor_stopped` with the refusal's code (`floor_turn_superseded`
+    /// when a newer message took the floor). A boxed future: the next
+    /// agent's turn may start the one after it.
+    fn continue_floor(
+        self: Arc<Self>,
+        next: FloorNext,
+        previous: Arc<TurnEvents>,
+        awake: AwakeGuard,
+    ) -> futures::future::BoxFuture<'static, ()> {
+        async move {
+            let _awake = awake;
+            let started = match self.floor_request(&next).await {
+                Ok(request) => self.start(request).await,
+                Err(error) => Err(error),
+            };
+            match started {
+                Ok(started) => previous.send(
+                    "turn_continued",
+                    json!({
+                        "next_turn_id": started.turn_id,
+                        "execution_id": started.execution_id,
+                        "continuation_index": next.position,
+                        "kind": floor::CONTINUED_KIND,
+                        "participant_id": next.participant_id,
+                        "agent_name": next.name,
+                        "executor": if next.cloud { "cloud" } else { "local" },
+                    }),
+                ),
+                Err(error) => {
+                    log::info!(
+                        "the next agent of a message did not start: {}",
+                        log_reason(&error.code, error.status)
+                    );
+                    floor::stopped(&previous, &error.code, &error.message);
+                }
+            }
+        }
+        .boxed()
+    }
+
+    /// The turn request of the message's next agent: its agent and version
+    /// read from the conversation (the participant Main named).
+    async fn floor_request(&self, next: &FloorNext) -> Result<TurnRequest, TurnError> {
+        let pinned = PinnedCredentials::current(self.deps.credentials.clone())?;
+        let api = self.api.with_credentials(Arc::new(pinned));
+        let target = api
+            .floor_target(
+                next.project_id,
+                &next.conversation_uuid,
+                next.participant_id,
+            )
+            .await?;
+        Ok(TurnRequest {
+            workspace_id: next.workspace_id.clone(),
+            project_id: next.project_id,
+            conversation_id: next.conversation_id.clone(),
+            application_id: target.application_id,
+            version_id: target.version_id,
+            prompt: floor::FLOOR_NOTE.to_owned(),
+            // The message's plan mode carries to a later local agent: it
+            // must not get the workspace's write tools the person withheld.
+            plan_mode: next.plan_mode && !target.cloud,
+            bypass: next.bypass && !target.cloud && !next.plan_mode,
+            mentions: Vec::new(),
+            skills: Vec::new(),
+            compact: false,
+            model: None,
+            project_skills: Vec::new(),
+            command: None,
+            images: Vec::new(),
+            unattended: None,
+            addressed_to: Vec::new(),
+            floor_turn: Some(FloorTurn {
+                question_id: next.question_id.clone(),
+                position: next.position,
+            }),
+            cloud: target.cloud,
+        })
+    }
+
+    /// A CLOUD agent's turn of a desktop thread (ADR-0050 decision 7f): the
+    /// conversation's text (never the workspace, its files or its tools)
+    /// relayed to the agent's own version in the cloud, as a child turn of
+    /// this execution; its answer is the turn's.
+    async fn run_cloud_agent(
+        &self,
+        request: &TurnRequest,
+        events: &Arc<TurnEvents>,
+        workspace: &Arc<WorkspaceSession>,
+        started: &LocalTurnStarted,
+        api: &Arc<PlatformApi>,
+        conversation_uuid: &str,
+    ) -> Result<AgentAnswer, TurnError> {
+        let (groups, participants) = api
+            .conversation_text(
+                request.project_id,
+                conversation_uuid,
+                floor::CLOUD_CONTEXT_GROUPS,
+            )
+            .await?;
+        // The person's own message is the transcript's last on a later
+        // agent's turn; on the first it is not stored yet.
+        let input = floor::cloud_input(&groups, &participants, &request.prompt);
+        let remote = Arc::new(RemoteContext {
+            api: api.clone(),
+            project_id: request.project_id,
+            execution_id: started.execution_id.clone(),
+            application_id: request.application_id,
+            version_id: request.version_id,
+            // A pause of the cloud agent for a person's decision is asked
+            // through the turn's approval channel, as a nested agent's is.
+            prompt: workspace.prompt.clone(),
+            retry: self.deps.retry,
+            authorization_wait: MCP_AUTHORIZATION_WAIT,
+            rules: None,
+            nonce: super::framing::nonce(),
+        });
+        let context = ChildAgentContext::new(
+            remote,
+            events.clone(),
+            PollPolicy::for_retry(self.deps.retry),
+        );
+        let name = started
+            .floor
+            .as_ref()
+            .zip(started.participant_id)
+            .map(|(floor, id)| floor.name_of(id).to_owned())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Cloud agent".to_owned());
+        let spec = definition::ChildAgentSpec {
+            exposed_name: "cloud_agent".to_owned(),
+            application_id: request.application_id,
+            version_id: request.version_id,
+            name,
+            description: String::new(),
+        };
+        match super::child_agent::relay(&context, &spec, &started.execution_id, &input).await {
+            Ok(text) => {
+                events.text_delta(&text);
+                Ok(AgentAnswer {
+                    text,
+                    ..AgentAnswer::default()
+                })
+            }
+            Err(result) => {
+                let text = |key: &str| {
+                    result
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned()
+                };
+                Err(TurnError::new(
+                    &match text("code") {
+                        code if code.is_empty() => "cloud_agent_failed".to_owned(),
+                        code => code,
+                    },
+                    match text("message") {
+                        message if message.is_empty() => {
+                            "The cloud agent did not answer.".to_owned()
+                        }
+                        message => format!("The cloud agent did not answer: {message}"),
+                    },
+                ))
+            }
+        }
     }
 
     /// How a commit after `done` is retried.

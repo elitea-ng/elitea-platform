@@ -100,7 +100,15 @@ impl SessionPlan {
         turn_tag: &str,
     ) -> Result<Self, SessionError> {
         let cursor_now = answering.message_count.map(|count| count.to_string());
-        let cursor_after = answering.message_count.map(|count| (count + 2).to_string());
+        // The groups the turn's commit adds: a question and an answer, or
+        // only the answer of a later agent of a routed message.
+        let added_groups = if answering.answer_only { 1 } else { 2 };
+        let cursor_after = answering
+            .message_count
+            .map(|count| (count + added_groups).to_string());
+        // The seed boundary of a take-back is the thread's, whichever agent
+        // reads it.
+        let mut thread_key = None;
         let durable = match (store, owner) {
             (Some(store), Some(owner)) => {
                 let identity = SessionIdentity {
@@ -108,8 +116,18 @@ impl SessionPlan {
                     user_id: owner.user_id,
                     project_id,
                     conversation_uuid: answering.conversation_uuid.clone(),
+                    // With several agents, each reads the thread as itself
+                    // (ADR-0050 decision 7f).
+                    reader: (answering.agents >= 2).then_some(answering.id),
                 };
                 let key = identity.key();
+                thread_key = Some(
+                    SessionIdentity {
+                        reader: None,
+                        ..identity.clone()
+                    }
+                    .key(),
+                );
                 match store
                     .store()
                     .open_session(&identity, &policy_fingerprint(&policy.path_deny))
@@ -166,7 +184,7 @@ impl SessionPlan {
                 .map_err(SessionError::Api)?;
             // The cloud turns a partial take-back did not take back stay on
             // the server; the agent never sees them (#1187).
-            if let Some((state_store, key, _)) = &durable {
+            if let (Some((state_store, _, _)), Some(key)) = (&durable, &thread_key) {
                 let skips = match state_store.store().seed_skips(key).await {
                     Ok(skips) => skips,
                     Err(error) => {

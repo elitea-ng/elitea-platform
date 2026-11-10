@@ -3,6 +3,7 @@ import { memo, useCallback, useMemo } from 'react';
 import { useLocation } from '@tanstack/react-router';
 
 import DevicesOutlinedIcon from '@mui/icons-material/DevicesOutlined';
+import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 
 import Box from '@mui/material/Box';
 import Divider from '@mui/material/Divider';
@@ -104,6 +105,9 @@ const ICON_COMPONENTS: Record<string, React.ComponentType> = {
   memory: MemoryIcon,
   notifications: BellIcon,
   devices: DevicesOutlinedIcon,
+  // Issue 1617: the agent workforce (hiring and dismissal), not the generic
+  // gear Webhooks above it falls back to; no other row uses it.
+  'agent-workforce': GroupsOutlinedIcon,
   logout: LogoutIcon,
 };
 

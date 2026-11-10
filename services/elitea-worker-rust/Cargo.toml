@@ -36,6 +36,10 @@ elitea-browser-tools = { path = "../../libs/rust/browser-tools", optional = true
 # It enables no serde_json feature: the worker's own `arbitrary_precision`
 # without `preserve_order` (its canonical hashes) stays what Cargo unifies.
 elitea-llm-wire = { path = "../../libs/rust/llm-wire" }
+# FU-299: registered fault codes (generated from libs/go/faults/registry, so
+# the image copies that directory too), safe cause chains, the fault! macro and
+# the operator JSON-lines stream. serde_json with default features only.
+elitea-faults = { path = "../../libs/rust/faults" }
 # The model calls themselves: elitea.llm.v1.ModelService on elitea-main's
 # platform listener, over the facade's mTLS channel (#1359 U2).
 elitea-model-rpc = { path = "../../libs/rust/model-rpc" }
@@ -154,6 +158,8 @@ harness = false
 required-features = ["graph-shaping-bench"]
 
 [dev-dependencies]
+# The shared child-process log capture (FU-299).
+elitea-faults = { path = "../../libs/rust/faults", features = ["logtest"] }
 elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support", "toolkit-sql", "toolkit-office", "toolkit-data-analysis"] }
 # The in-process fake of elitea-vector the index handler's tests run against.
 elitea-vector-index = { path = "../../libs/rust/vector-index", features = ["test-server"] }

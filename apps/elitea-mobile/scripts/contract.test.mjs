@@ -274,3 +274,18 @@ describe('client contract 1.45', () => {
     }
   });
 });
+
+describe('client contract 1.46', () => {
+  it('keeps the avatar pack media route, tagged client with no credential, and documents persona.avatar_pack', () => {
+    const { doc } = buildContract();
+    const media = doc.paths['/agent_media/{project_id}/{file}'];
+    assert.equal(media.get.operationId, 'getAgentMedia');
+    assert.ok(media.get.tags.includes('client'));
+    assert.deepEqual(media.get.security, []);
+    for (const type of ['image/png', 'image/jpeg', 'image/webp']) assert.ok(media.get.responses['200'].content[type], type);
+    // The 1.38 lock keeps the property a string; the description says it carries the pack object.
+    const persona = doc.components.schemas.ConversationParticipantPersona.properties.avatar_pack;
+    assert.equal(persona.type, 'string');
+    assert.match(persona.description, /Client contract 1\.46/);
+  });
+});

@@ -56,6 +56,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/faults/logx"
 	"github.com/elitea-ng/elitea-platform/libs/go/natsconn"
 	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/apps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-subapp-host/internal/cancelbus"
@@ -64,7 +65,9 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// The shared handler (FU-299): the same JSON lines and level as before,
+	// plus the cause chain, typed-fault fields and support_ref.
+	logger := slog.New(logx.Wrap(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}), nil))
 	slog.SetDefault(logger)
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		// The container probe. The image is distroless — no shell, no curl —

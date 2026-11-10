@@ -22,6 +22,7 @@ import (
 	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextview"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/go-chi/chi/v5"
@@ -421,6 +422,27 @@ func TestEditorLifecyclePostgres(t *testing.T) {
 		}
 		if after := editorLifecycleSnapshot(t, pool); after != before {
 			t.Fatal("history/reload read changed durable effects")
+		}
+	})
+	// Issue 1669: the turn's view is written by the admission transaction,
+	// in the tenant schema it binds, and reads back for the answer.
+	t.Run("admission_records_the_turn_context_view", func(t *testing.T) {
+		f := newEditorLifecycleFixture(t, pool)
+		c := f.create(t, f.first.ID)
+		request := f.submitRequest(t, c)
+		digest := strings.Repeat("b", 64)
+		request.CurrentTurn.ContextView = &agentapp.ContextViewRecord{
+			ReaderParticipantID: request.CurrentTurn.TargetParticipantID,
+			Settings:            contextview.Settings{History: contextview.HistoryAddressedOnly, SideTalk: contextview.SideTalkNone},
+			WindowTokens:        32000, Digest: digest,
+		}
+		if _, err := editorLifecycleAdmissions(t, pool).Submit(t.Context(), request); err != nil {
+			t.Fatal(err)
+		}
+		view, err := NewContextViews(pool).MessageContextView(t.Context(), "1", request.CurrentTurn.ResponseMessageID)
+		if err != nil || view.History != "addressed_only" || view.IncludeSideTalk != "none" ||
+			view.WindowTokens != 32000 || view.Digest != digest || len(view.Entries) != 0 {
+			t.Fatalf("view=%+v err=%v", view, err)
 		}
 	})
 	t.Run("code_recovery_pause_retains_original_identity_and_no_events", func(t *testing.T) {

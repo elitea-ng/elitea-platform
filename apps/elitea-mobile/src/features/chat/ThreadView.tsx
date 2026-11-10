@@ -24,7 +24,8 @@ import { readRevision, useMarkConversationRead } from '@/features/chat/useMarkCo
 import { useAutoConversationName } from '@/features/chat/useAutoConversationName';
 import { speaksContract } from '@/api/discovery';
 import { AnswerActions } from '@/features/chat/actions/AnswerActions';
-import { AssistantAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
+import { PackAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
+import { AVATAR_PACK_CONTRACT, participantAvatarPack } from '@/features/chat/avatarPackMedia';
 import { ChatEmptyState, MODEL_CHAT_SUGGESTIONS } from '@/features/chat/ChatEmptyState';
 import { ThreadLayout, Toast, useToast } from '@/features/chat/ThreadLayout';
 import { LiveReply, PersistedMessage, QueuedMessage, SideTalkRow, SystemLine } from '@/features/chat/ThreadRows';
@@ -91,7 +92,7 @@ import { canReadAloud, readAloud, stopReading, useReading } from '@/features/spe
 import { exportErrorText } from '@/api/queries/exportConversation';
 import { shareTranscript } from '@/features/chat/export/shareTranscript';
 import { answerHiddenByRegeneration, newQuestionId, type LiveTurn, type StopOptions } from '@/features/chat/turnController';
-import { AgentMotion, useAvatarClock } from '@/features/chat/AgentMotion';
+import { useAvatarClock } from '@/features/chat/AgentMotion';
 import {
   MESSAGE_CLASS,
   activeAnimatedParticipant,
@@ -175,6 +176,8 @@ export function ThreadView({
   const contract127 = speaksContract(workspace?.discovery, 1, 27);
   // Client contract 1.44: what an agent participant remembers (ADR-0050 1b).
   const agentMemoryAvailable = useAgentMemoryAvailable();
+  // Client contract 1.46: participants carry `persona.avatar_pack` (ADR-0050 decision 6).
+  const avatarPacksAvailable = speaksContract(workspace?.discovery, AVATAR_PACK_CONTRACT.major, AVATAR_PACK_CONTRACT.minor);
   const { policy } = usePolicy();
   const [actionsFor, setActionsFor] = useState<{ message: ChatMessage; dislike: boolean } | null>(null);
   // On-device speech: dictation into the composer, and reading an answer aloud.
@@ -719,10 +722,19 @@ export function ThreadView({
     const primary = participantId === null || participantId === primaryParticipant;
     const label = name ?? (target.ok ? target.name : null) ?? 'Assistant';
     const motion = avatarMotion({ participantId: participantId ?? undefined, newest }, avatarStates, avatarNow, { reducedMotion: design.reduceMotion });
+    // Client contract 1.46 (issue 1835): the answering participant's avatar pack, read live.
+    // The media url names its own project; the cache is the open project's, so a switch drops it.
+    const answerId = participantId ?? primaryParticipant;
+    const answering = avatarPacksAvailable ? (detail?.participants ?? []).find((p) => Number(p.id) === answerId) : undefined;
     return (
-      <AgentMotion motion={motion} size={design.size.avatar.sm}>
-        <AssistantAvatar name={label} imageUri={primary ? agentIcon : null} mark={primary} />
-      </AgentMotion>
+      <PackAvatar
+        projectId={projectId}
+        pack={participantAvatarPack(answering)}
+        motion={motion}
+        name={label}
+        imageUri={primary ? agentIcon : null}
+        mark={primary}
+      />
     );
   };
   const [draft, setDraft] = useState<{ text: string; key: number } | null>(null);

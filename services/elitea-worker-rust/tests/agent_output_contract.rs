@@ -144,6 +144,10 @@ fn both_supported_agent_pause_results_settle_as_success() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "One table row per registered failure keeps the canonical policy visible."
+)]
 fn all_registered_runtime_failures_use_only_canonical_safe_policy() {
     let verified = verified_command();
     for (kind, expected_code, expected_message, expected_retryable) in [
@@ -205,6 +209,18 @@ fn all_registered_runtime_failures_use_only_canonical_safe_policy() {
             RuntimeFailureKind::Cancelled,
             RuntimeErrorCodeV1::Cancelled,
             "Execution was cancelled.",
+            false,
+        ),
+        (
+            RuntimeFailureKind::CodeDeadlineInsufficient,
+            RuntimeErrorCodeV1::PipelineCodeFailed,
+            "The Code node could not start: too little time was left before the run's deadline.",
+            false,
+        ),
+        (
+            RuntimeFailureKind::FanoutDeadlineInsufficient,
+            RuntimeErrorCodeV1::PipelineToolFailed,
+            "The fan-out node could not start: too little time was left before the run's deadline for its items.",
             false,
         ),
         (

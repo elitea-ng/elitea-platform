@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/faults"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/health"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/depfailure"
 )
@@ -44,14 +45,16 @@ func mainReadinessChecks(pools []*pgxpool.Pool, natsStatuses []func() nats.Statu
 		Name:      "db",
 		Critical:  true,
 		Probe:     func(ctx context.Context) (string, string) { return probePools(ctx, pools) },
-		Lost:      "Main lost its database; requests that need it fail and Workers get retryable answers until it is back",
+		Lost:      faults.DependencyDatabaseUnavailable.Sentence(),
+		Code:      faults.DependencyDatabaseUnavailable,
 		Recovered: "Main reached its database again",
 	}}
 	if len(natsStatuses) != 0 {
 		checks = append(checks, health.Check{
 			Name:      "nats",
 			Probe:     func(context.Context) (string, string) { return probeNATS(natsStatuses) },
-			Lost:      "Main lost NATS; admitted runs wait in the outbox and claimed runs continue",
+			Lost:      faults.DependencyNatsUnavailable.Sentence(),
+			Code:      faults.DependencyNatsUnavailable,
 			Recovered: "Main reached NATS again",
 		})
 	}

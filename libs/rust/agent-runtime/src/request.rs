@@ -165,6 +165,9 @@ pub struct AgentFloor {
 pub enum FloorCause {
     HumanMessage,
     AgentMention,
+    /// A run that a proactive agent's heartbeat started (ADR-0050 decision
+    /// 2). Nobody waits on it, so Main also sets `unattended_tools_only`.
+    Heartbeat,
 }
 
 /// One agent the floor can be handed to.

@@ -102,6 +102,10 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// The agent memory entries Main recalled into the instructions
     /// (#1826). Only a root application agent with `meta.memory` has them.
     recalled_memory: Vec<super::request::RecalledMemoryEntry>,
+    /// The version's `meta.capabilities.can_review_agents` (ADR-0050
+    /// decision 5l, #1616): an HR agent, bound `propose_dismissal`. Only a
+    /// root application agent has it; Main checks it again on every call.
+    can_review_agents: bool,
 }
 
 /// Admitted independently from the task model before credential redemption.
@@ -310,6 +314,7 @@ impl OrdinaryNoToolProfile {
             tool_envelope: None,
             can_propose_agents: false,
             recalled_memory: Vec::new(),
+            can_review_agents: false,
         })
     }
 
@@ -369,6 +374,10 @@ impl OrdinaryNoToolProfile {
             tool_envelope: request.payload.tool_envelope.clone(),
             can_propose_agents: application_can_propose_agents(request),
             recalled_memory: application_recalled_memory(request),
+            can_review_agents: application_capability(
+                request,
+                super::propose_dismissal_tool::CAPABILITY_KEY,
+            ),
         })
     }
 
@@ -485,6 +494,7 @@ impl OrdinaryNoToolProfile {
             tool_envelope: None,
             can_propose_agents: false,
             recalled_memory: Vec::new(),
+            can_review_agents: false,
         })
     }
 
@@ -552,6 +562,13 @@ impl OrdinaryNoToolProfile {
     #[must_use]
     pub(crate) fn recalled_memory(&self) -> &[super::request::RecalledMemoryEntry] {
         &self.recalled_memory
+    }
+
+    /// Whether the version makes the agent an HR agent
+    /// (`meta.capabilities.can_review_agents`).
+    #[must_use]
+    pub(crate) const fn can_review_agents(&self) -> bool {
+        self.can_review_agents
     }
 
     /// The agent memory tools the version binds (`meta.memory`).
@@ -1032,6 +1049,12 @@ fn application_recalled_memory(
 /// `meta.capabilities.can_propose_agents` of a root application agent:
 /// anything but a literal `true` is false.
 fn application_can_propose_agents(request: &AgentExecutionRequest) -> bool {
+    application_capability(request, super::propose_agent_tool::CAPABILITY_KEY)
+}
+
+/// `meta.capabilities.<key>` of a root application agent: anything but a
+/// literal `true` is false.
+fn application_capability(request: &AgentExecutionRequest, key: &str) -> bool {
     if request.kind != AgentExecutionKind::Application {
         return false;
     }
@@ -1041,7 +1064,7 @@ fn application_can_propose_agents(request: &AgentExecutionRequest) -> bool {
         .get("version_details")
         .and_then(|version| version.get("meta"))
         .and_then(|meta| meta.get(super::propose_agent_tool::CAPABILITIES_KEY))
-        .and_then(|capabilities| capabilities.get(super::propose_agent_tool::CAPABILITY_KEY))
+        .and_then(|capabilities| capabilities.get(key))
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }

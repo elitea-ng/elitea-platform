@@ -25,6 +25,7 @@ require (
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/elitea-ng/elitea-platform/libs/go/faults v0.0.0-00010101000000-000000000000
 	github.com/elitea-ng/elitea-platform/libs/go/routines v0.0.0-00010101000000-000000000000
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
@@ -57,3 +58,5 @@ require (
 )
 
 replace github.com/elitea-ng/elitea-platform/libs/go/routines => ../../libs/go/routines
+
+replace github.com/elitea-ng/elitea-platform/libs/go/faults => ../../libs/go/faults

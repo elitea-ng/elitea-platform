@@ -7,10 +7,16 @@
  * The agent and version last used in a workspace are remembered per
  * workspace and project (`el.desktop.workspace.<id>.agent`) and picked
  * again when the session opens; otherwise the first agent is.
+ *
+ * Several agents in one thread (ADR-0050 decision 7f): besides the composer's
+ * agent, the person may add more of the project's agents to the thread
+ * (`companions`), each running on this computer with the workspace or in the
+ * cloud with the conversation's text only. They join the conversation on the
+ * next send; a message names the ones it is for with "@Name".
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { useGetApplication, useListApplications } from '@/shared/api/generated/applications/applications';
+import { getApplication, useGetApplication, useListApplications } from '@/shared/api/generated/applications/applications';
 import { useListConversations } from '@/shared/api/generated/chat/chat';
 import type { Application, ApplicationDetail } from '@/shared/api/generated/model';
 import { unwrapBody, unwrapList } from '@/shared/api/unwrap';
@@ -60,6 +66,16 @@ interface VersionChoice {
   agentType: string;
 }
 
+/** Another agent of the thread (ADR-0050 decision 7f), on the version it was added with. */
+interface ThreadCompanion {
+  agentId: string;
+  name: string;
+  versionId: number;
+  agentType: string;
+  /** Runs in the cloud with the conversation's text only (participant `executor: cloud`), never the workspace. */
+  cloud: boolean;
+}
+
 export interface AgentSelection {
   agents: readonly Application[];
   versions: readonly VersionChoice[];
@@ -76,6 +92,20 @@ export interface AgentSelection {
   selectAgent(id: string): void;
   selectVersion(id: string): void;
   selectConversation(id: string): void;
+  /** The thread's other agents, added by the person; absent = none. */
+  companions?: readonly ThreadCompanion[];
+  /** Add `id` to the thread, on its first version; `cloud`: it runs in the cloud. Absent = not offered. */
+  addCompanion?: (id: string, cloud: boolean) => void;
+  removeCompanion?: (id: string) => void;
+}
+
+const NO_COMPANIONS: readonly ThreadCompanion[] = [];
+
+/** The first version of an agent, read when the person adds it to a thread. */
+async function firstVersion(projectId: string, agentId: string): Promise<VersionChoice | undefined> {
+  const detail = unwrapBody(await getApplication(projectId, Number(agentId))) as ApplicationDetail | undefined;
+  const version = detail?.versions[0];
+  return version === undefined ? undefined : { id: Number(version.id), name: version.name, agentType: version.agent_type };
 }
 
 /** The pick runs only in the cloud: a pipeline (listed as one, or its version is one). */
@@ -93,6 +123,7 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
   const [agentId, setAgentId] = useState('');
   const [versionId, setVersionId] = useState('');
   const [conversationId, setConversationId] = useState('');
+  const [companions, setCompanions] = useState<readonly ThreadCompanion[]>(NO_COMPANIONS);
 
   const agentsQuery = useListApplications(project, { agents_type: 'classic', limit: 100 }, { query: { enabled } });
   const pipelinesQuery = useListApplications(project, { agents_type: 'pipeline', limit: 100 }, { query: { enabled } });
@@ -144,6 +175,20 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
     writeLastUsed(workspaceId, { projectId, agentId, versionId });
   }, [workspaceId, projectId, agentId, versionId, versions]);
 
+  const addCompanion = useCallback(
+    (id: string, cloud: boolean) => {
+      const agent = agents.find((a) => a.id === id);
+      if (agent === undefined || project === '') return;
+      void firstVersion(project, id).then((version) => {
+        if (version === undefined) return;
+        const companion: ThreadCompanion = { agentId: id, name: agent.name, versionId: version.id, agentType: version.agentType, cloud };
+        setCompanions((current) => [...current.filter((c) => c.agentId !== id), companion]);
+      });
+    },
+    [agents, project],
+  );
+  const removeCompanion = useCallback((id: string) => setCompanions((current) => current.filter((c) => c.agentId !== id)), []);
+
   return {
     agents,
     versions,
@@ -162,11 +207,19 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
       setAgentId(id);
       setVersionId('');
       setConversationId('');
+      setCompanions((current) => current.filter((c) => c.agentId !== id));
     },
     selectVersion: (id) => {
       setVersionId(id);
       setConversationId('');
     },
-    selectConversation: setConversationId,
+    // Another thread has its own agents: the companions stay only for the thread a first send just created.
+    selectConversation: (id) => {
+      if (id === '' || (conversationId !== '' && id !== conversationId)) setCompanions(NO_COMPANIONS);
+      setConversationId(id);
+    },
+    companions,
+    addCompanion,
+    removeCompanion,
   };
 }

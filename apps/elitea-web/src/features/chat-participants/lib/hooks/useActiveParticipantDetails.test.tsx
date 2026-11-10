@@ -1,0 +1,73 @@
+/**
+ * The latest target's details win. A chat with nothing picked resolves its
+ * target twice (one agent, then the agent its history last addressed), so two
+ * reads are in flight at once; the earlier one answering LAST used to stick,
+ * and the attachments gate then read the wrong agent's version (the
+ * ChatBox.stickyTarget flake on a loaded coverage shard, PR 1890).
+ */
+import { useState, type ReactElement } from 'react';
+
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from '@tanstack/react-router';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { delay, http, HttpResponse } from 'msw';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+
+import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { server } from '@/test/setup';
+
+import { useActiveParticipantDetails } from './useActiveParticipantDetails';
+
+const AGENT_A = { entity_name: 'application', entity_meta: { id: 143, project_id: '2' }, entity_settings: { version_id: '164' } };
+const AGENT_B = { entity_name: 'application', entity_meta: { id: 144, project_id: '2' }, entity_settings: { version_id: '165' } };
+
+function application(id: number, versionId: string) {
+  return { id, name: `Agent ${String(id)}`, versions: [{ id: versionId, name: 'base' }], version_details: { id: versionId, meta: {} } };
+}
+
+let switchToB: () => void = () => {};
+
+function Probe(): ReactElement {
+  const [participant, setParticipant] = useState<Record<string, unknown>>(AGENT_A);
+  switchToB = () => setParticipant(AGENT_B);
+  const { activeParticipantDetails, isLoadingDetails } = useActiveParticipantDetails({ activeParticipant: participant });
+  const id = activeParticipantDetails['id'];
+  return <output data-testid="details" data-loading={String(isLoadingDetails)}>{typeof id === 'number' ? String(id) : ''}</output>;
+}
+
+function renderProbe(): void {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const router = createRouter({
+    routeTree: createRootRoute({ component: () => <QueryClientProvider client={queryClient}><Probe /></QueryClientProvider> }),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+    context: { auth: { getSelectedProjectId: () => '2' } },
+  });
+  render(<RouterProvider router={router} />);
+}
+
+beforeEach(() => configureGeneratedClient({ baseUrl: '/api/v2' }));
+afterEach(() => resetGeneratedClient());
+
+it('keeps the latest target\'s details when the earlier read answers last', async () => {
+  let aAnswered = false;
+  server.use(
+    http.get('*/elitea_core/application/prompt_lib/2/:id', async ({ params }) => {
+      // A, asked first, answers well after B.
+      if (params['id'] === '143') {
+        await delay(150);
+        aAnswered = true;
+      }
+      return HttpResponse.json(params['id'] === '143' ? application(143, '164') : application(144, '165'));
+    }),
+  );
+  renderProbe();
+  await screen.findByTestId('details');
+  act(() => { switchToB(); });
+
+  await waitFor(() => expect(screen.getByTestId('details')).toHaveTextContent('144'));
+  await waitFor(() => expect(aAnswered).toBe(true));
+  // Past A's answer and its state update: it must not overwrite B's.
+  await new Promise((resolve) => { setTimeout(resolve, 50); });
+  expect(screen.getByTestId('details')).toHaveTextContent('144');
+  expect(screen.getByTestId('details')).toHaveAttribute('data-loading', 'false');
+});

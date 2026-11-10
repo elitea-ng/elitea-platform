@@ -161,21 +161,56 @@ type Facts struct {
 	AnsweredByReader bool
 }
 
+// Reason says why a message is not in a reader's view (issue 1669, the
+// "What the agent saw" inspector). The empty Reason is "in the view".
+type Reason string
+
+const (
+	// ReasonSideTalkOfOthers: side talk between two other agents, which is
+	// never in a reader's view.
+	ReasonSideTalkOfOthers Reason = "side_talk_of_others"
+	// ReasonSideTalkOff: side talk the reader is a party to, with
+	// include_side_talk none.
+	ReasonSideTalkOff Reason = "side_talk_off"
+	// ReasonHistoryNone: the mode is none (the current message only).
+	ReasonHistoryNone Reason = "history_none"
+	// ReasonBeforeJoined: written before the reader joined (since_joined).
+	ReasonBeforeJoined Reason = "before_joined"
+	// ReasonNotAddressed: neither to, from nor answered by the reader
+	// (addressed_only).
+	ReasonNotAddressed Reason = "not_addressed"
+)
+
 // Eligible reports whether the reader sees a message with these facts.
 func (s Settings) Eligible(f Facts) bool {
+	return s.Exclusion(f) == ""
+}
+
+// Exclusion is why the reader does not see a message with these facts, or ""
+// when it does. It is the one rule; Eligible reads it.
+func (s Settings) Exclusion(f Facts) Reason {
 	party := f.OwnAgent || f.Addressed
-	if f.Side && (!party || s.SideTalk == SideTalkNone) {
-		return false
+	if f.Side && !party {
+		return ReasonSideTalkOfOthers
+	}
+	if f.Side && s.SideTalk == SideTalkNone {
+		return ReasonSideTalkOff
 	}
 	switch s.History {
 	case HistoryNone:
-		return false
+		return ReasonHistoryNone
 	case HistorySinceJoined:
-		return f.AfterJoined || f.OwnAgent
+		if f.AfterJoined || f.OwnAgent {
+			return ""
+		}
+		return ReasonBeforeJoined
 	case HistoryAddressedOnly:
-		return party || f.ReadersOwn || f.AnsweredByReader
+		if party || f.ReadersOwn || f.AnsweredByReader {
+			return ""
+		}
+		return ReasonNotAddressed
 	default:
-		return true
+		return ""
 	}
 }
 
