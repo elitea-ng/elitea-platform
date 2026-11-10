@@ -327,8 +327,8 @@ takeover failed because of B6 (items 2, 4, 5 refused) and the leaked lock (item 
 fits the same mechanism without the leak: at takeover the 4 re-admitted items re-register together and only the
 claim-lock holder commits each round, so an item can exhaust its Main retries (`DependencyUnavailable`), or meet the
 conflict in a read Main maps to a refusal. The Worker-side real takeover still runs against a fake Main
-(`real_pg_a_map_of_8_code_items_survives_worker_replacement`); real-browser confirmation of R/I is pending the next
-pass.
+(`real_pg_a_map_of_8_code_items_survives_worker_replacement`); real-browser confirmation of R/I: 3 Worker kills and 3 Supervisor kills
+all resumed (see Real-browser evidence).
 
 Advisory-lock users in the repo (`git grep pg_advisory / pg_try_advisory`), kept for reference (the registration no longer takes any advisory lock):
 
@@ -365,11 +365,75 @@ same fakes, so they share that limit.
 Most likely contributor, now fixed: at takeover the four in-flight items re-register at once; B3 made Main answer them
 `Unavailable` or, when the conflict hit the claim-lock read, as a refusal. Instrumentation added so the next browser
 pass names the cause: `failure_class` on "pipeline Code node stopped", the `graph.fanout.child_failed` line (member
-code and safe cause), and `main_code` on every Main retry. Real-browser confirmation of B5 is open.
+code and safe cause), and `main_code` on every Main retry. Real-browser confirmation of B5: done on `w32a-d71a4f2dd` (see Real-browser evidence).
 
 ## Real-browser evidence
 
-Pending (done by the orchestrating session): plan §5 cases 1, 3, 4, 5 and 6 on a disposable production-profile stack.
+### Final pass: stack `w32c`, images `w32a-d71a4f2dd`
+
+**Stack.**
+- Disposable stack `w32c` (`w32c.localhost:48900`), real-model dump `product-real-models-main-ce2756fad`.
+- `stack.sh verify-profile`: 50 passed, 0 failed, at the start and again after the case 6 config change.
+- Browser: Chrome. Every case that needs a reload ran in a **main-chat conversation** with the pipeline as
+  participant. The designer's test chat is ephemeral by design.
+- Auto-continuation ("Continue until the goal is met") was off, and messages were neutral (`start`).
+
+**Images.**
+
+| Image | Tag / identity | Branch check (§3b: `docker create` + `docker cp`) |
+|---|---|---|
+| Main | `elitea-main:w32a-d71a4f2dd` | `code.registration_refused` present |
+| Worker | `elitea-worker-rust:w32a-d71a4f2dd` | `code.registration_failed` (registry) present; earlier builds of this branch also checked for `graph.fanout.child_failed`, `pipeline.code.main_retrying`, `pipeline.node_recovery.child_effect_unknown`, `pipeline.code.nested_slot` |
+| Web | `elitea-web:w32a-4e6664cf2` (no `apps/` change after it) | the Map worker hint text "an LLM node, a Code node" present |
+
+**Fixtures**, built in the UI:
+- pipeline 170, a Map over 8 partition descriptors with a Python Code worker (`time.sleep(4)`, returns
+  `partition=rows*2`), concurrency 4;
+- pipeline 171, a Parallel with a JavaScript branch and a Rust branch;
+- pipeline 172, a Map of 2 Python Code items, concurrency 2.
+
+**Case 4, Worker and Supervisor kill.** Each run was killed about 6 s in, while 4 items were in flight, then
+restarted with `docker kill` + `docker start`. The evidence was collected per execution from the Worker and Main logs
+and the Main database.
+
+| Run | Execution | Killed | After the kill | WARN/ERROR | Visits / activations / intents | Locks left |
+|---|---|---|---|---|---|---|
+| W1 | `076e2891…cf87` | Worker | all 8 completed, run SUCCEEDED 1 m 38 s | 0 | 8 / 8 / 8 | 0 advisory, 0 waiting |
+| W2 | `08150e2f…c7e5` | Worker | all 8 completed | 0 | 8 / 8 / 8 | 0 / 0 |
+| W3 (chat 889) | `fe2da3c3…43f5` | Worker | all 8 completed; ordered answer `p1=22`…`p8=36` persists after reload | 0 | 8 / 8 / 8 | 0 / 0 |
+| S1 (chat 890) | `a181992a…b323` | Supervisor | all 8 completed | 0 | 8 / 8 / 8 | 0 / 0 |
+| S2 (chat 890) | `5532c9c8…8e89` | Supervisor | all 8 completed | 0 | 8 / 8 / 8 | 0 / 0 |
+| S3 (chat 890) | `fedb60d5…09cf9` | Supervisor | all 8 completed; all three answers persist after reload, in order | 0 | 8 / 8 / 8 | 0 / 0 |
+
+- After a Worker kill, the takeover resumed the frozen activation: in-flight items re-attached through their
+  journals and visits (R), completed items were not re-run, and there were no duplicate visits or intents.
+- After a Supervisor kill, the jobs re-attached (R). No runtime-lost re-run was needed in these runs: the intents
+  stayed at 8.
+
+**Case 1, a Map of Code items.** Covered by W3 and S1–S3 in the main chat: 8 ordered results that persist after a
+reload.
+
+**Case 3, a Parallel of Code branches (chat 891).** Branch `left` (JavaScript) gave `js:slots` and branch `right`
+(Rust) gave `rust:slots`, both `succeeded`. The answer persists after a reload. This is B1 fixed.
+
+**Case 6, one slot, two items (chat 892).**
+- `"code_slots": 1` was set on the Python entry of `stacks/w32c/material/worker-runtime.json` and the Worker
+  restarted. Startup logged `elitea-sandbox-deno:9446 code_slots 1`; the other targets stayed at 4.
+- Execution `f55886c3…6465`: both items succeeded (`p1=22`, `p2=24`), and the answer persists after a reload.
+- Worker log: exactly one `pipeline.code.slot_waited` (`slot_wait_ms` 10573, `slots_capacity` 1,
+  `supervisor_target` `elitea-sandbox-deno:9446`), 0 `pipeline.code.nested_slot`, 0 `pipeline.code.supervisor_busy`,
+  0 WARN, 0 ERROR.
+
+**Case 5, a deadline too short.** Proven with real PostgreSQL only, as in W3-1: the stack has no setting that
+shortens the 24 h run deadline.
+
+**Cancellation, observed in passing.** A run cancelled from the chat while its Map items were registering:
+- the items' registrations were refused fail-closed, and Main wrote one `code.registration_refused` line with
+  stage `claim` ("cancellation won");
+- afterwards, 0 advisory locks, 0 waiting locks and 0 idle-in-transaction sessions.
+
+**Earlier passes (`w32a-44c792f4f`, `w32a-4e6664cf2`).** They found B1–B6; the section above records each defect and
+its fix.
 
 ## Follow-ups
 
