@@ -103,7 +103,28 @@ workflow change, which is the user's call.
 
 ## Tests
 
-To be completed with counts.
+Counts were taken on the branch head after both review rounds. Labels name the boundary each test crosses.
+
+| Suite | Boundary | Result |
+|---|---|---|
+| Go, every package of `libs/go/faults`, Main, scheduler, subapp-host and egress-proxy (`go test -json ./...`, with `ELITEA_TEST_DATABASE_URL` on a disposable PostgreSQL 17) | unit + service-integration (real PostgreSQL) | **21,835 passed, 129 skipped, 16 failed.** All 16 failures are in `authsession`/`authflow`, which this branch does not touch: `out of shared memory (SQLSTATE 53200)` while applying shared migrations in parallel on the untuned local container. CI's PostgreSQL is the reference. |
+| `libs/go/faults` gates | unit | pass: registry well-formed, generated files current, no hand-made codes, no orphans, legacy codes only shrinking |
+| C3 real-PG (`runtimecomposition/fault_cycle_postgres_integration_test.go`) | service-integration | pass, 3 runs: a database cut gives one loss line and 0 ERROR; a timing-out query on a healthy database gives 1 ERROR a minute with no dependency-demoted DEBUG; 12 runners failing at once give 0 ERROR |
+| C1 forged identity (`middleware/supportref_test.go`) | unit (HTTP) | pass |
+| FU-300 fault line (`toolkitrun/fault_line_test.go`) | unit (HTTP) | pass: one line, `support_ref` equals the body's; 503 at WARN; 500 at ERROR with a stack |
+| `elitea-faults` (`cargo test --locked --all-targets --all-features`) | unit | 10/10 |
+| Worker lib (`cargo test --locked --lib --all-features`) | unit + component | 3116 passed, 0 failed, 111 ignored |
+| Worker / `elitea-faults` clippy (`--all-targets --all-features -D warnings`) | static | clean |
+
+**New Worker tests:**
+- the panic hook: one redacted line with logging off; re-entry from a panicking `Debug` writes stderr only and does not
+  deadlock; the backtrace allowance;
+- `progress_rejection_is_one_readable_fault_line`;
+- the registry parity test (53 runtime texts, byte-identical in both directions).
+
+**Edits to existing tests: one, approved.** The child setup in `runtime_log_safety_tests.rs` now also installs the span
+timing layer, because the test reads span close fields and those are no longer on the operator stream.
+`output_delivery_tests.rs` only gains imports and new tests. No existing assertion was changed or removed.
 
 ## Performance
 
