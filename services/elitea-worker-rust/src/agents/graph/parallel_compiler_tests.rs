@@ -245,6 +245,8 @@ fn factory() -> (CompilerParallelBranches, ParallelNodeDefinition) {
             state_types: pipeline.state,
             resolver: Some(Arc::new(UnavailableResolver)),
             llm: None,
+            code: None,
+            code_recovery: false,
             events: None,
             root_session: None,
         },

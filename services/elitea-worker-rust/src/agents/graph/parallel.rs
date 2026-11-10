@@ -384,6 +384,18 @@ pub(crate) trait ParallelCheckpointAuthority:
 pub(crate) trait ParallelBranchGraphFactory: Send + Sync {
     fn validate_branch(&self, branch: &ParallelBranchDefinition) -> Result<(), GraphError>;
 
+    /// W3-2 (D3): admit a first activation of `branches` against the run's
+    /// deadline, before it freezes. Only Code children are counted. Default:
+    /// nothing to admit.
+    fn admit_activation(
+        &self,
+        _branches: &[ParallelBranchDefinition],
+        _concurrency: u32,
+        _node_id: &str,
+    ) -> Result<(), GraphError> {
+        Ok(())
+    }
+
     fn owned_definition_digest(
         &self,
         branch: &ParallelBranchDefinition,
@@ -498,6 +510,8 @@ pub(crate) struct PreparedParallelBranch {
     thread_id: String,
     admitted_threads: BTreeSet<String>,
     node_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// The frozen occurrence's child count (W3-2).
+    family_size: usize,
     /// What the branch's own checkpoint already proves; `None` must run.
     replay: Option<ParallelBranchOutcome>,
 }
@@ -513,6 +527,7 @@ impl PreparedParallelBranch {
             thread_id: self.thread_id.clone(),
             admitted_threads: self.admitted_threads.clone(),
             node_recovery: self.node_recovery.clone(),
+            family_size: self.family_size,
             replay: None,
         }
     }
@@ -677,9 +692,16 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
         }
         let inputs = self.project_inputs(activation, source, &branches, &context.state)?;
         let (origin, threads) = self.mint_lineage(activation, &branches, &inputs)?;
+        // W3-2 D3: the Code items must fit the run's deadline before anything
+        // is frozen; a restored occurrence is never re-admitted.
+        let node_id = activation.node_id.clone();
+        let concurrency = source.max_concurrency();
         let occurrence = self
             .parent
-            .freeze(activation, context, inputs, origin, threads)
+            .freeze(activation, context, inputs, origin, threads, || {
+                self.graphs
+                    .admit_activation(&branches, concurrency, &node_id)
+            })
             .await?;
         self.restore_branches(
             activation,
@@ -962,6 +984,7 @@ impl AdkParallelBranchRuntime {
                 thread_id: child.thread_id,
                 admitted_threads: child.admitted_threads,
                 node_recovery: child.node_recovery,
+                family_size: inputs.len(),
                 replay,
             });
         }
@@ -990,6 +1013,7 @@ impl AdkParallelBranchRuntime {
                     .cloned(),
             )
             .with_node_recovery(branch.node_recovery.clone())
+            .with_family_size(branch.family_size)
             .with_static_after_checkpoints(
                 branch
                     .input
@@ -1988,10 +2012,7 @@ impl DurableParallelNode {
             ));
         }
         let mut activation = ParallelActivation::from_context(&self.source, context)?;
-        let prepared = self
-            .runtime
-            .prepare_source(&mut activation, &self.source, context)
-            .await?;
+        let prepared = self.prepare_reporting(&mut activation, context).await?;
         self.check_running(context)?;
         let stop = Arc::new(FanoutStop::default());
         let cancel_signal = Arc::new(AtomicBool::new(false));
@@ -2074,6 +2095,31 @@ impl DurableParallelNode {
                 ),
             )),
         }
+    }
+
+    /// Prepare (and on a first activation freeze) the children. A refusal
+    /// of W3-2 D3 ends the run with the registered fan-out deadline failure;
+    /// its one WARN fault line is already written.
+    async fn prepare_reporting(
+        &self,
+        activation: &mut ParallelActivation,
+        context: &NodeContext,
+    ) -> Result<Vec<PreparedParallelBranch>, GraphError> {
+        let prepared = self
+            .runtime
+            .prepare_source(activation, &self.source, context)
+            .await;
+        if let Err(error) = &prepared
+            && is_fanout_deadline_refusal(error)
+            && let Some(events) = &self.node_events
+        {
+            let _ = events
+                .send_execution_failure(
+                    crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE,
+                )
+                .await;
+        }
+        prepared
     }
 
     fn frames(
@@ -2599,6 +2645,11 @@ fn graph_error_code(error: &GraphError) -> &'static str {
         if names(super::direct_tool::EFFECT_WRITER_UNAVAILABLE_CODE) {
             return BRANCH_TOOL_UNAVAILABLE_CODE;
         }
+        // N1 (W3-2): a Code child refused by its own per-attempt deadline
+        // check after the activation was admitted names that refusal.
+        if names(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE) {
+            return crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE;
+        }
     }
     match error {
         GraphError::InvalidGraph(_) => "graph.invalid",
@@ -2668,7 +2719,22 @@ fn valid_failure_code(code: &str) -> bool {
             | BRANCH_CREDENTIAL_UNAVAILABLE_CODE
             | BRANCH_AGENT_PAUSE_CODE
             | BRANCH_TOOL_UNAVAILABLE_CODE
+            | crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE
     )
+}
+
+/// The activation refusal of W3-2 D3: the registered code and sentence.
+pub(super) fn fanout_deadline_refusal() -> GraphError {
+    parallel_error(
+        crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE,
+        crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_MESSAGE,
+    )
+}
+
+fn is_fanout_deadline_refusal(error: &GraphError) -> bool {
+    matches!(error, GraphError::NodeExecutionFailed { message, .. }
+        if message.strip_prefix(crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
+            .is_some_and(|rest| rest.starts_with(": ")))
 }
 
 pub(super) fn parallel_error(code: &str, message: &str) -> GraphError {

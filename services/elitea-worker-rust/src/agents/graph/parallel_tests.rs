@@ -3001,3 +3001,176 @@ async fn a_parallel_stopped_by_a_failed_branch_ends_the_run_with_readable_chat_t
     drop(node);
     assert_fanout_stop_reaches_the_chat_readably(&codes.await.expect("codes"));
 }
+
+// ---- W3-2 D3: activation deadline admission before freeze ----
+
+/// The pausing graphs with a scripted activation admission: it counts its
+/// calls and refuses while `refuse` is set.
+struct ScriptedAdmission {
+    inner: PausingBranchGraphs,
+    calls: Arc<AtomicUsize>,
+    refuse: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl ParallelBranchGraphFactory for ScriptedAdmission {
+    fn validate_branch(&self, branch: &ParallelBranchDefinition) -> Result<(), GraphError> {
+        self.inner.validate_branch(branch)
+    }
+
+    fn admit_activation(
+        &self,
+        branches: &[ParallelBranchDefinition],
+        _concurrency: u32,
+        _node_id: &str,
+    ) -> Result<(), GraphError> {
+        assert_eq!(branches.len(), 2);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err(super::parallel::fanout_deadline_refusal());
+        }
+        Ok(())
+    }
+
+    fn owned_definition_digest(
+        &self,
+        branch: &ParallelBranchDefinition,
+    ) -> Result<[u8; 32], GraphError> {
+        self.inner.owned_definition_digest(branch)
+    }
+
+    fn compile_branch(
+        &self,
+        branch: &ParallelBranchDefinition,
+        execution: ParallelBranchExecution,
+    ) -> Result<CompiledGraph, GraphError> {
+        self.inner.compile_branch(branch, execution)
+    }
+
+    fn project_input(
+        &self,
+        branch: &ParallelBranchDefinition,
+        parent: &State,
+    ) -> Result<State, GraphError> {
+        self.inner.project_input(branch, parent)
+    }
+
+    fn project_result(
+        &self,
+        branch: &ParallelBranchDefinition,
+        child: &State,
+    ) -> Result<ParallelBranchTerminal, GraphError> {
+        self.inner.project_result(branch, child)
+    }
+
+    fn pause_cards(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+    ) -> Result<Vec<ParallelPauseCard>, GraphError> {
+        self.inner.pause_cards(branch, pause)
+    }
+
+    async fn resume_input(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+        decisions: &[ParallelDecision],
+    ) -> Result<State, GraphError> {
+        self.inner.resume_input(branch, pause, decisions).await
+    }
+}
+
+fn scripted_admission_runtime(
+    checkpoints: &Arc<MemoryChildCheckpoints>,
+    runs: &Arc<HashMap<String, AtomicUsize>>,
+    calls: &Arc<AtomicUsize>,
+    refuse: &Arc<std::sync::atomic::AtomicBool>,
+) -> Arc<AdkParallelBranchRuntime> {
+    let factory: Arc<dyn ParallelChildCheckpointerFactory> = checkpoints.clone();
+    let parent: Arc<dyn ParallelCheckpointAppender> = checkpoints.parent.clone();
+    Arc::new(AdkParallelBranchRuntime::new(
+        factory,
+        Arc::new(ScriptedAdmission {
+            inner: PausingBranchGraphs {
+                runs: Arc::clone(runs),
+                complete: BTreeSet::from(["done".to_owned()]),
+                cards: BTreeMap::new(),
+            },
+            calls: Arc::clone(calls),
+            refuse: Arc::clone(refuse),
+        }),
+        Arc::new(ParallelOccurrenceCheckpointer::new(parent)),
+    ))
+}
+
+/// W3-2 D3: a refused activation is refused whole and typed before it
+/// freezes. No occurrence row, no child thread activated, no child ran.
+#[tokio::test]
+async fn a_refused_activation_freezes_and_starts_nothing() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = run_counts(&["done", "pause"]);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let refuse = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let definition = definition(&[("done", "done"), ("pause", "pause")], 2);
+    let node = DurableParallelNode::new(
+        definition,
+        scripted_admission_runtime(&checkpoints, &runs, &calls, &refuse),
+    );
+    let error = node
+        .execute(&input_context("root-refused", 4))
+        .await
+        .err()
+        .expect("the activation is refused");
+    assert!(
+        error
+            .to_string()
+            .contains(crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE),
+        "{error}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!((runs_of(&runs, "done"), runs_of(&runs, "pause")), (0, 0));
+    assert!(checkpoints.issued_threads.lock().await.is_empty());
+    assert!(
+        checkpoints
+            .parent
+            .list("root-refused")
+            .await
+            .unwrap()
+            .is_empty(),
+        "nothing was frozen"
+    );
+}
+
+/// W3-2 D3 (C2): an occurrence frozen before is restored, never re-admitted:
+/// its children may already have started. Admission refuses on the resume,
+/// yet the parked activation completes; admission ran once.
+#[tokio::test]
+async fn a_frozen_activation_is_never_re_admitted_on_resume() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = run_counts(&["done", "pause"]);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let refuse = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let definition = definition(&[("done", "done"), ("pause", "pause")], 2);
+    let ledger = TestLedger::new();
+    let context = input_context("root-readmit", 4);
+    let node = ledger_node(
+        definition.clone(),
+        scripted_admission_runtime(&checkpoints, &runs, &calls, &refuse),
+        &ledger,
+        1,
+    );
+    let cards = parked(&node.execute(&context).await.unwrap());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    refuse.store(true, Ordering::SeqCst);
+    ledger.decide(&key_of(&cards, "card-pause"), "approve", None);
+    let resumed = ledger_node(
+        definition,
+        scripted_admission_runtime(&checkpoints, &runs, &calls, &refuse),
+        &ledger,
+        1,
+    );
+    let output = resumed.execute(&context).await.unwrap();
+    assert_eq!(output.updates["gathered"][1]["outputs"]["output"], "pause");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "never re-admitted");
+}

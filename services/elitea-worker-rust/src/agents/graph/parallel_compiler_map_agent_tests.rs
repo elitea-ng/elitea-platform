@@ -252,6 +252,8 @@ impl MapFixture {
             state_types: pipeline.state.clone(),
             resolver,
             llm,
+            code: None,
+            code_recovery: false,
             events: None,
             root_session: None,
         });

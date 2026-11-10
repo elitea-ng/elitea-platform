@@ -45,6 +45,9 @@ struct MainScript {
     refuse_visit: bool,
     /// The first platform step takes this long (a step in flight).
     first_step_delay: Option<Duration>,
+    /// The intent answer takes this long: time spent inside the slot after
+    /// admission and before the first submission (W3-2, N3).
+    intent_delay: Option<Duration>,
     effects: Effects,
 }
 #[derive(Default)]
@@ -170,6 +173,9 @@ impl FakeMain {
             );
         }
         if path == "intents" {
+            if let Some(delay) = self.script.intent_delay {
+                tokio::time::sleep(delay).await;
+            }
             let pending: Option<bool> = sqlx::query_scalar(
                 "SELECT submission_pending FROM elitea_runtime.sandbox_dispatches LIMIT 1",
             )
@@ -770,6 +776,7 @@ impl Run {
 const QUIET: MainScript = MainScript {
     refuse_visit: false,
     first_step_delay: None,
+    intent_delay: None,
     effects: Effects::None,
 };
 const REFUSED_VISIT: MainScript = MainScript {
@@ -1596,4 +1603,137 @@ fn supervisor_busy_child() {
             assert_eq!(h.supervisor.lock().unwrap().submits, 4);
         });
     elitea_faults::logtest::child_ran();
+}
+
+// ------------------------------- W3-2: Code children, R1 and N3 (real PG)
+
+/// One journaled root-path Code visit on its own thread and input, as one
+/// fan-out child runs it: its own journal and its own dispatch identity.
+fn sibling_run(h: &Harness, thread: &str, value: i64) -> DefaultRun {
+    let mut run = default_run(h, PURE_YAML);
+    run.context = NodeContext::new(
+        State::from([
+            ("value".into(), serde_json::json!(value)),
+            ("input".into(), serde_json::json!("original user input")),
+            ("count".into(), serde_json::json!(-1)),
+        ]),
+        ExecutionConfig::new(thread),
+        2,
+    );
+    let digest = run.activation.node_digest;
+    run.activation = NodeAttemptActivation::from_context("code", digest, &run.context).unwrap();
+    run
+}
+
+/// R1 / C3: `code_slots = 1` and two sibling Code attempts polled by one
+/// task, as two fan-out children are. The second waits for the first one's
+/// slot; both complete, none is refused as a nested acquire.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_two_sibling_attempts_on_one_slot_both_complete_never_nested() {
+    let h = harness_with(
+        QUIET,
+        Duration::from_millis(200),
+        Some(1),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await;
+    h.answers.lock().unwrap().extend([completed(), completed()]);
+    let slots = h
+        .factory
+        .code_slots_for_tests("sandbox.internal:9446")
+        .expect("the target's slots");
+    let first = sibling_run(&h, "child-a", 1);
+    let second = sibling_run(&h, "child-b", 2);
+    let (one, two) = tokio::time::timeout(Duration::from_secs(120), async {
+        tokio::join!(
+            first.node.execute(&first.context),
+            second.node.execute(&second.context)
+        )
+    })
+    .await
+    .expect("one slot never deadlocks two siblings");
+    assert_eq!(one.unwrap().updates["count"], serde_json::json!(41));
+    assert_eq!(two.unwrap().updates["count"], serde_json::json!(41));
+    assert_eq!(h.supervisor.lock().unwrap().submits, 2);
+    assert!(first.events().await.is_empty() && second.events().await.is_empty());
+    assert_eq!(slots.available(), 1);
+}
+
+/// N3: the window was there at admission, but the time spent inside the slot
+/// before the first submission used it up. The fresh attempt is refused with
+/// the same typed refusal before any submission, and its slot is free.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_preparation_past_the_window_is_refused_before_any_submission() {
+    let required = Duration::from_secs(30)
+        + elitea_agent_runtime::graph::fanout::admission::CODE_OBSERVATION_MARGIN;
+    let h = harness_with(
+        MainScript {
+            intent_delay: Some(Duration::from_millis(800)),
+            ..QUIET
+        },
+        Duration::ZERO,
+        Some(1),
+        tokio::time::Instant::now() + required + Duration::from_millis(300),
+    )
+    .await;
+    h.answers.lock().unwrap().push_back(completed());
+    let run = default_run(&h, PURE_YAML);
+    let error = run.node.execute(&run.context).await.err().unwrap();
+    assert!(error.to_string().contains("pipeline.node_recovery.failed"));
+    assert_eq!(
+        run.events().await,
+        [crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE]
+    );
+    assert_eq!(h.main.lock().unwrap().visit_attempts, [1], "admitted first");
+    assert_eq!(h.supervisor.lock().unwrap().submits, 0, "nothing submitted");
+    let failure = run.ledger().await.effective_failure().unwrap();
+    assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
+    let slots = h
+        .factory
+        .code_slots_for_tests("sandbox.internal:9446")
+        .expect("the target's slots");
+    assert_eq!(slots.available(), 1, "the refused attempt holds no slot");
+}
+
+/// C2 for N3: an attempt that may already have started (claim 1 submitted,
+/// then died) is reconciled, never refused after preparation, even with far
+/// less than `timeout + margin` left on claim 2's run.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_a_possibly_started_attempt_is_never_refused_after_preparation() {
+    let h = harness(QUIET, Duration::from_millis(100)).await;
+    claim_one_submitted(&h).await;
+    *h.effects.lock().unwrap() = Effects::Possible;
+    let mut run = run(&h, PLATFORM_YAML, true).await;
+    // Claim 2's run has 5 s left: a fresh attempt would be refused.
+    let short = h.factory.bind(
+        h.authority.clone(),
+        tokio::time::Instant::now() + Duration::from_secs(5),
+    );
+    let pipeline =
+        crate::agents::graph::compiler::PipelineDefinition::from_yaml(PLATFORM_YAML).unwrap();
+    let definition = pipeline.original_code_definition_fixture("code").unwrap();
+    let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
+    let body = Arc::new(
+        CodeNode::new(definition, types(), short)
+            .unwrap()
+            .with_events(Some(sender)),
+    );
+    run.receiver = receiver;
+    run.node = RecoverableNode::new(body, run.node_digest, policy(), run.factory.clone(), None);
+    run.node.clock = Arc::new(Clock(AtomicU64::new(200)));
+    let output = run.node.execute(&run.context).await.unwrap();
+    assert!(
+        output.interrupt.is_some(),
+        "the possibly started attempt goes to reconciliation"
+    );
+    assert_eq!(run.events().await, [] as [String; 0], "never refused");
+    assert_eq!(
+        run.failure().await.replay,
+        ReplaySafety::UnknownExternalEffect {
+            effect_id: run.dispatch_activation
+        }
+    );
 }

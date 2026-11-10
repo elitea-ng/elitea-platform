@@ -16,10 +16,18 @@
 //!   deadline, one rule for a root Code node (`items = 1`) and a fan-out of
 //!   Code children.
 //!
+//! - [`code_attempt_scope`]: R1 (W3-2). One Code attempt never waits for a
+//!   second slot while it holds one: an acquire inside an attempt that
+//!   already holds a slot is refused at once, typed
+//!   ([`NESTED_CODE_SLOT_CODE`]). The marker is task-local: it covers only the
+//!   future it wraps and does not follow `tokio::spawn`.
+//!
 //! Waiting is cancellation-safe: dropping a pending acquire leaves nothing
 //! held.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -247,6 +255,79 @@ pub enum CodeRefusalCause {
     Clock,
     /// The window was there on arrival; waiting for a slot used it up.
     SlotWait,
+    /// The window was there at admission; preparation and hydration used it
+    /// up (W3-2, N3). Nothing was submitted.
+    Preparation,
+    /// The attempt already holds a Code slot (R1): a second acquire would
+    /// wait on itself. Refused at once; nothing more is held.
+    NestedSlot,
+}
+
+/// The operator code of a nested Code slot acquire (R1).
+pub const NESTED_CODE_SLOT_CODE: &str = "pipeline.code.nested_slot";
+
+/// An attempt that may already have started could not get a slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StartedSlotRefusal {
+    /// The run's deadline passed first; nothing is held.
+    Expired(SlotWaitExpired),
+    /// The attempt already holds a Code slot (R1); nothing more is held.
+    NestedSlot,
+}
+
+tokio::task_local! {
+    /// Set to `true` once the wrapped Code attempt holds its slot (R1).
+    static CODE_SLOT_HELD: Cell<bool>;
+}
+
+/// Run one Code attempt under the R1 marker. Inside it, a second
+/// [`CodeSlots`] admission after the first succeeded is refused at once
+/// (`NestedSlot`) instead of waiting for a slot this attempt itself holds.
+///
+/// Wrap the Code attempt future only, never a fan-out child or activation
+/// future: siblings polled by one task then never see each other's slot.
+/// A nested attempt in the same task keeps the outer marker. A future moved
+/// to another task (`tokio::spawn`) does not carry it.
+pub async fn code_attempt_scope<F: Future>(attempt: F) -> F::Output {
+    if CODE_SLOT_HELD.try_with(|_| ()).is_ok() {
+        return attempt.await;
+    }
+    CODE_SLOT_HELD.scope(Cell::new(false), attempt).await
+}
+
+fn code_slot_held() -> bool {
+    CODE_SLOT_HELD.try_with(Cell::get).unwrap_or(false)
+}
+
+fn mark_code_slot_held() {
+    // Outside a scope there is no attempt to mark.
+    let _ = CODE_SLOT_HELD.try_with(|held| held.set(true));
+}
+
+/// N3 (W3-2): re-admit a fresh attempt after its preparation and hydration,
+/// before its first submission: at least `required` must still be left.
+/// Exactly equal is admitted.
+///
+/// # Errors
+///
+/// [`CodeDeadlineRefusal`] with cause `Preparation`; the caller releases its
+/// slot and submits nothing.
+pub fn recheck_after_preparation(
+    execution_deadline: Instant,
+    required: Duration,
+    now: Instant,
+) -> Result<(), CodeDeadlineRefusal> {
+    let remaining = execution_deadline.saturating_duration_since(now);
+    if remaining >= required {
+        Ok(())
+    } else {
+        Err(CodeDeadlineRefusal {
+            required,
+            remaining,
+            slot_wait: Duration::ZERO,
+            cause: CodeRefusalCause::Preparation,
+        })
+    }
 }
 
 /// A fresh Code attempt refused before dispatch: nothing is held, nothing
@@ -324,6 +405,9 @@ impl CodeSlots {
             slot_wait,
             cause,
         };
+        if code_slot_held() {
+            return Err(refuse(CodeRefusalCause::NestedSlot, Duration::ZERO));
+        }
         let Some(bound) = execution_deadline.checked_sub(required) else {
             return Err(refuse(CodeRefusalCause::Clock, Duration::ZERO));
         };
@@ -339,6 +423,7 @@ impl CodeSlots {
             drop(slot);
             return Err(refuse(CodeRefusalCause::SlotWait, waited));
         }
+        mark_code_slot_held();
         Ok(slot)
     }
 
@@ -348,12 +433,22 @@ impl CodeSlots {
     ///
     /// # Errors
     ///
-    /// [`SlotWaitExpired`] when the run's deadline passes first.
+    /// [`StartedSlotRefusal::Expired`] when the run's deadline passes first;
+    /// [`StartedSlotRefusal::NestedSlot`] at once inside an attempt that
+    /// already holds a slot (R1).
     pub async fn admit_started(
         &self,
         execution_deadline: Instant,
-    ) -> Result<CodeSlot, SlotWaitExpired> {
-        self.acquire_until(execution_deadline).await
+    ) -> Result<CodeSlot, StartedSlotRefusal> {
+        if code_slot_held() {
+            return Err(StartedSlotRefusal::NestedSlot);
+        }
+        let slot = self
+            .acquire_until(execution_deadline)
+            .await
+            .map_err(StartedSlotRefusal::Expired)?;
+        mark_code_slot_held();
+        Ok(slot)
     }
 }
 
@@ -526,10 +621,109 @@ mod tests {
         // Far less than timeout + margin: a started attempt is still served.
         let slot = slots.admit_started(deadline).await.unwrap();
         assert_eq!(slots.available(), 0);
-        let expired = slots.admit_started(deadline).await.unwrap_err();
+        let StartedSlotRefusal::Expired(expired) = slots.admit_started(deadline).await.unwrap_err()
+        else {
+            panic!("outside an attempt scope a full target only waits");
+        };
         assert_eq!(expired.waited, Duration::from_secs(1));
         drop(slot);
         assert_eq!(slots.available(), 1);
+    }
+
+    /// R1: inside one attempt that holds its slot, a second admission is
+    /// refused at once (paused clock: no time passes), for a fresh and for a
+    /// started attempt, and nothing more is held.
+    #[tokio::test(start_paused = true)]
+    async fn a_nested_acquire_inside_a_held_attempt_is_refused_at_once() {
+        let slots = CodeSlots::new(2);
+        let deadline = Instant::now() + MINUTE * 10;
+        let required = required_window(1, 1, 2, MINUTE);
+        code_attempt_scope(async {
+            let held = slots.admit_fresh(deadline, required).await.unwrap();
+            let before = Instant::now();
+            let nested = slots.admit_fresh(deadline, required).await.unwrap_err();
+            assert_eq!(nested.cause, CodeRefusalCause::NestedSlot);
+            assert_eq!(
+                slots.admit_started(deadline).await.unwrap_err(),
+                StartedSlotRefusal::NestedSlot
+            );
+            // A nested attempt in the same task keeps the outer marker.
+            let inner = code_attempt_scope(slots.admit_fresh(deadline, required))
+                .await
+                .unwrap_err();
+            assert_eq!(inner.cause, CodeRefusalCause::NestedSlot);
+            assert_eq!(Instant::now(), before, "the refusal never waited");
+            assert_eq!(slots.available(), 1, "the refusals hold nothing");
+            drop(held);
+        })
+        .await;
+        assert_eq!(slots.available(), 2);
+        // Outside any attempt there is no marker: an acquire only waits.
+        drop(slots.admit_fresh(deadline, required).await.unwrap());
+    }
+
+    /// C3: two sibling attempts polled by one task, one slot. The marker is
+    /// per wrapped attempt future, so the second waits for the first slot and
+    /// is never refused as nested.
+    #[tokio::test(start_paused = true)]
+    async fn sibling_attempts_in_one_task_wait_for_each_other_never_nested() {
+        let slots = CodeSlots::new(1);
+        let deadline = Instant::now() + MINUTE * 10;
+        let required = required_window(1, 1, 1, MINUTE);
+        let attempt = || {
+            code_attempt_scope(async {
+                let slot = slots.admit_fresh(deadline, required).await?;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                drop(slot);
+                Ok::<_, CodeDeadlineRefusal>(())
+            })
+        };
+        let (first, second) = tokio::join!(attempt(), attempt());
+        assert_eq!(first, Ok(()));
+        assert_eq!(second, Ok(()));
+        assert_eq!(slots.available(), 1);
+    }
+
+    /// The marker's documented limit: a future moved to another task does not
+    /// carry it, so a spawned acquire waits instead of being refused. The
+    /// structural test in the Worker (no activation path calls `admit_*`) is
+    /// the backstop.
+    #[tokio::test(start_paused = true)]
+    async fn the_marker_does_not_follow_a_spawned_task() {
+        let slots = CodeSlots::new(1);
+        let deadline = Instant::now() + MINUTE * 10;
+        let required = required_window(1, 1, 1, MINUTE);
+        code_attempt_scope(async {
+            let held = slots.admit_fresh(deadline, required).await.unwrap();
+            let spawned = slots.clone();
+            let waiting =
+                tokio::spawn(async move { spawned.admit_fresh(deadline, required).await });
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            assert!(!waiting.is_finished(), "the spawned acquire waits");
+            drop(held);
+            let slot = waiting.await.unwrap().unwrap();
+            drop(slot);
+        })
+        .await;
+    }
+
+    /// N3: exactly `required` left after preparation is admitted; one
+    /// millisecond less is refused with cause `Preparation`.
+    #[tokio::test(start_paused = true)]
+    async fn the_post_preparation_check_admits_exactly_required_and_refuses_one_ms_less() {
+        let required = required_window(1, 1, 1, MINUTE);
+        let now = Instant::now();
+        assert!(recheck_after_preparation(now + required, required, now).is_ok());
+        let refused =
+            recheck_after_preparation(now + required - Duration::from_millis(1), required, now)
+                .unwrap_err();
+        assert_eq!(refused.cause, CodeRefusalCause::Preparation);
+        assert_eq!(refused.required, required);
+        assert_eq!(
+            refused.remaining,
+            required.saturating_sub(Duration::from_millis(1))
+        );
+        assert_eq!(refused.slot_wait, Duration::ZERO);
     }
 
     #[test]

@@ -84,6 +84,7 @@ pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
     Gate, journaled_node, node_activation, pause_data, recovery_card, state as direct_tool_state,
     with_decision,
 };
+mod fanout_code_child;
 mod fanout_source;
 #[cfg(test)]
 pub(crate) use fanout_source::{FanoutSource, MapSource};

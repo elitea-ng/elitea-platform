@@ -191,3 +191,41 @@ fn deeply_nested_checkpoint_input_fails_before_recursive_serialization() {
         Err(CodeStateError::SizeLimit)
     );
 }
+
+/// W3-2: a Map Code worker reads its item, whatever JSON it is, and can never
+/// write it back.
+#[test]
+fn a_map_item_channel_is_read_as_any_json_and_never_written() {
+    let boundary = CodeStateBoundary::new(&BTreeMap::from([
+        (
+            "entity".into(),
+            super::code_state::MAP_ITEM_INPUT_KIND.to_owned(),
+        ),
+        ("item_index".into(), "int".into()),
+        ("item_result".into(), "str".into()),
+    ]))
+    .expect("an item channel is admitted for Code input");
+    for item in [json!("a"), json!({"k": [1, 2]}), json!(3), json!(null)] {
+        let state = State::from([
+            ("entity".into(), item.clone()),
+            ("item_index".into(), json!(0)),
+        ]);
+        let bytes = boundary
+            .input_json(&state, &["entity".into(), "item_index".into()])
+            .expect("any item JSON is input");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            json!({"entity": item, "item_index": 0})
+        );
+    }
+    for structured in [false, true] {
+        assert!(matches!(
+            boundary.validate_updates(
+                br#"{"entity":"overwritten"}"#,
+                &["entity".into()],
+                structured
+            ),
+            Err(CodeStateError::InvalidValue)
+        ));
+    }
+}

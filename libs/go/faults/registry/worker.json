@@ -98,6 +98,14 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "pipeline.code.nested_slot",
+      "sentence": "A Code attempt that already held a Code slot asked for a second one, so it was refused at once instead of waiting for a slot it holds itself.",
+      "action": "Report it with the support reference: a code path acquires a Code slot inside another Code attempt, which must not happen.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "pipeline.code.slot_waited",
       "sentence": "A Code attempt waited more than a second for a slot because this Worker was already running as many Code attempts on that Supervisor as its code_slots allow.",
       "action": "Nothing when it is rare; if it repeats, raise code_slots together with the Supervisor's concurrency.",

@@ -36,7 +36,7 @@ struct VisitRequest<'a> {
     owning_yaml_sha256: String,
     exact_configuration_json_base64url: String,
     pre_workspace_prepared_job_json_base64url: String,
-    saved_child_scope: Option<&'a crate::agents::pipeline::saved_child_http::SavedChildScopeRef>,
+    saved_child_scope: Option<&'a crate::agents::pipeline::saved_child_http::CodeVisitScope>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -98,7 +98,7 @@ impl InputContentClient {
         declaration: &crate::sandbox::code_recovery::OriginalCodeDeclarationInput<'_>,
         authority: &crate::agents::graph::node_recovery_runtime::NodeAttemptAuthority,
         pre_job: &PreparedJob,
-        saved_child_scope: Option<&crate::agents::pipeline::saved_child_http::SavedChildScopeRef>,
+        saved_child_scope: Option<&crate::agents::pipeline::saved_child_http::CodeVisitScope>,
     ) -> Result<OriginalCodeVisitRef, InputContentError> {
         let pre = pre_job.to_transport().map_err(|_| invalid())?;
         let request = original_visit_request(declaration, authority, &pre, saved_child_scope)?;
@@ -254,7 +254,7 @@ fn original_visit_request<'a>(
     declaration: &'a crate::sandbox::code_recovery::OriginalCodeDeclarationInput<'a>,
     authority: &crate::agents::graph::node_recovery_runtime::NodeAttemptAuthority,
     prepared: &[u8],
-    saved_child_scope: Option<&'a crate::agents::pipeline::saved_child_http::SavedChildScopeRef>,
+    saved_child_scope: Option<&'a crate::agents::pipeline::saved_child_http::CodeVisitScope>,
 ) -> Result<VisitRequest<'a>, InputContentError> {
     let step = usize::try_from(declaration.step).map_err(|_| invalid())?;
     let mut hash = ring::digest::Context::new(&ring::digest::SHA256);

@@ -10,6 +10,8 @@ use crate::agents::graph::application::{
     APPLICATION_MESSAGES_STATE_KEY, APPLICATION_RESULT_STATE_KEY, APPLICATION_TASK_STATE_KEY,
     ApplicationNode, ApplicationNodeDefinition, PipelineApplicationResolver,
 };
+use crate::agents::graph::code::CodeNodeDefinition;
+use crate::agents::graph::code_runtime::{CodeNode, CodeSandboxRuntime, FanoutCodeAdmission};
 use crate::agents::graph::direct_tool::DIRECT_TOOL_RESUME_STATE_KEY;
 use crate::agents::graph::fanout_control::FanoutCancellation;
 use crate::agents::graph::fanout_source::{FanoutSource, MapSource};
@@ -380,6 +382,10 @@ impl PipelineDefinition {
                         PipelineNodeDefinition::Llm(node) if node.id() == branch.node() => {
                             Some((branch.id().to_owned(), OwnedBranch::Llm(node.clone())))
                         }
+                        PipelineNodeDefinition::Code(node) if node.id() == branch.node() => Some((
+                            branch.id().to_owned(),
+                            OwnedBranch::Code(Box::new(self.code_child(node, None))),
+                        )),
                         _ => None,
                     })
                     .ok_or(PipelineConfigurationError::Invalid(
@@ -409,6 +415,7 @@ impl PipelineDefinition {
                 "the fixed Parallel LLM branch runtime is not bound to this compiler",
             ));
         }
+        require_code_runtime(owned.values(), runtimes)?;
         // The member tier shows the participant an Agent branch selects, and
         // the node id of an LLM branch (contract §3.3).
         let member_names = definition
@@ -418,6 +425,7 @@ impl PipelineDefinition {
                 Some(OwnedBranch::Agent(node)) => node.selection().alias().to_owned(),
                 Some(OwnedBranch::Llm(node)) => node.id().to_owned(),
                 Some(OwnedBranch::StateModifier(node)) => node.id().to_owned(),
+                Some(OwnedBranch::Code(child)) => child.node.id().to_owned(),
                 None => branch.node().to_owned(),
             })
             .collect();
@@ -426,6 +434,8 @@ impl PipelineDefinition {
             state_types: self.state.clone(),
             resolver,
             llm: runtimes.llm.clone(),
+            code: runtimes.code.clone(),
+            code_recovery: runtimes.node_recovery.is_some(),
             events: runtimes.events.clone(),
             root_session: binding.root_session.clone(),
             delegated_servers: runtimes.delegated_servers(),
@@ -477,6 +487,9 @@ impl PipelineDefinition {
             Some(PipelineNodeDefinition::StateModifier(node)) => {
                 OwnedBranch::StateModifier(node.clone())
             }
+            Some(PipelineNodeDefinition::Code(node)) => {
+                OwnedBranch::Code(Box::new(self.code_child(node, Some(map))))
+            }
             Some(other) => {
                 return Err(PipelineConfigurationError::FanoutChildUnsupported {
                     node: other.id().to_owned(),
@@ -510,6 +523,7 @@ impl PipelineDefinition {
                 "the Map LLM worker runtime is not bound to this compiler",
             ));
         }
+        require_code_runtime([&worker], runtimes)?;
         let member_name = match &worker {
             OwnedBranch::Agent(node) => node.selection().alias().to_owned(),
             other => other.id().to_owned(),
@@ -521,6 +535,8 @@ impl PipelineDefinition {
             state_types: self.state.clone(),
             resolver: runtimes.application.clone(),
             llm: runtimes.llm.clone(),
+            code: runtimes.code.clone(),
+            code_recovery: runtimes.node_recovery.is_some(),
             events: runtimes.events.clone(),
             root_session: binding.root_session.clone(),
             // M1: a Map item's delegated sign-in pause meets the same
@@ -583,6 +599,46 @@ fn reject_agent_calling_pipeline(
     Ok(())
 }
 
+/// A Code child needs the run's admitted sandbox runtime (W3-2).
+fn require_code_runtime<'a>(
+    owned: impl IntoIterator<Item = &'a OwnedBranch>,
+    runtimes: &PipelineNodeRuntimes,
+) -> Result<(), PipelineConfigurationError> {
+    if runtimes.code.is_none()
+        && owned
+            .into_iter()
+            .any(|branch| matches!(branch, OwnedBranch::Code(_)))
+    {
+        return Err(PipelineConfigurationError::Unsupported(
+            "Code execution requires an admitted sandbox backend",
+        ));
+    }
+    Ok(())
+}
+
+impl PipelineDefinition {
+    /// A Code child: its definition pinned to this compiled definition as a
+    /// root Code node is (`bind_code_node`), and the state types it reads. A
+    /// Map worker also reads its item (any JSON, read-only) and its index.
+    fn code_child(
+        &self,
+        node: &CodeNodeDefinition,
+        map: Option<&crate::agents::graph::map_reduce::MapDefinition>,
+    ) -> CodeChild {
+        let mut bound = node.clone();
+        bound.refresh_debug_compiler_digest(self.definition_digest);
+        let mut types = self.state.clone();
+        if let Some(map) = map {
+            types.insert(
+                map.item.clone(),
+                super::super::code_state::MAP_ITEM_INPUT_KIND.to_owned(),
+            );
+            types.insert(map.index.clone(), "int".to_owned());
+        }
+        CodeChild { node: bound, types }
+    }
+}
+
 fn reject_nested_parallel(
     owned: &BTreeMap<String, OwnedBranch>,
     runtimes: &PipelineNodeRuntimes,
@@ -593,7 +649,7 @@ fn reject_nested_parallel(
         .iter()
         .filter_map(|(key, branch)| match branch {
             OwnedBranch::Agent(node) => Some((key.clone(), node)),
-            OwnedBranch::Llm(_) | OwnedBranch::StateModifier(_) => None,
+            OwnedBranch::Llm(_) | OwnedBranch::StateModifier(_) | OwnedBranch::Code(_) => None,
         })
         .collect::<BTreeMap<_, _>>();
     if let Some(definitions) = runtimes.composition_definitions() {
@@ -665,6 +721,14 @@ pub(super) fn validate_parallel_ownership(
                 Some(PipelineNodeDefinition::Application(node)) => (node.id(), node.transition()),
                 // An inline LLM node runs as a branch too (T-2A D1).
                 Some(PipelineNodeDefinition::Llm(node)) => (node.id(), node.transition()),
+                // A Code node runs as a branch on its own (W3-2).
+                Some(PipelineNodeDefinition::Code(node)) => (node.id(), node.transition()),
+                Some(PipelineNodeDefinition::Router(node)) => {
+                    return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                        node: node.id().to_owned(),
+                        refusal: FanoutChildRefusal::Router,
+                    });
+                }
                 // Other kinds run as branches once Wave 3 admits them one by one.
                 Some(other) => {
                     return Err(PipelineConfigurationError::FanoutChildUnsupported {
@@ -709,6 +773,15 @@ enum OwnedBranch {
     Llm(LlmNodeDefinition),
     /// A Map's State Modifier worker (T-2A3); a fixed Parallel never owns one.
     StateModifier(StateModifierNodeDefinition),
+    /// A Code node run on its own as a Map item or Parallel branch (W3-2).
+    Code(Box<CodeChild>),
+}
+
+/// A Code child's pinned definition and the state types it reads.
+#[derive(Clone)]
+struct CodeChild {
+    node: CodeNodeDefinition,
+    types: BTreeMap<String, String>,
 }
 
 impl OwnedBranch {
@@ -717,6 +790,7 @@ impl OwnedBranch {
             Self::Agent(node) => node.id(),
             Self::Llm(node) => node.id(),
             Self::StateModifier(node) => node.id(),
+            Self::Code(child) => child.node.id(),
         }
     }
 
@@ -725,6 +799,7 @@ impl OwnedBranch {
             Self::Agent(node) => node.output_keys(),
             Self::Llm(node) => node.output_keys(),
             Self::StateModifier(node) => node.output_keys(),
+            Self::Code(child) => child.node.output_keys(),
         }
     }
 }
@@ -735,6 +810,11 @@ struct CompilerParallelBranches {
     /// Present whenever an Agent branch exists (checked at compile time).
     resolver: Option<Arc<dyn PipelineApplicationResolver>>,
     llm: Option<Arc<dyn PipelineLlmAgentFactory>>,
+    /// Present whenever a Code child exists (checked at compile time).
+    code: Option<Arc<dyn CodeSandboxRuntime>>,
+    /// Whether the run journals its Code attempts (node recovery on): a
+    /// Code child then journals through its branch family's writer.
+    code_recovery: bool,
     events: Option<PipelineNodeEventSender>,
     root_session: Option<Arc<dyn RootSessionSource>>,
     /// FU-250: the servers the run holds a resolved token for.
@@ -946,6 +1026,87 @@ impl CompilerParallelBranches {
             })
     }
 
+    /// A Code child (W3-2): the owned Code node alone, under the child's own
+    /// thread. With node recovery on, its attempts journal through the
+    /// branch family's fenced writer, scoped to the child's visit, and its
+    /// Main visits name the child's owner scope (C1). It shares the run's
+    /// Code runtime, so every attempt passes W3-1 admission and slots.
+    fn compile_code_branch(
+        &self,
+        child: &CodeChild,
+        execution: &ParallelBranchExecution,
+    ) -> Result<CompiledGraph, GraphError> {
+        let definition = &child.node;
+        let unavailable =
+            |message: &str| GraphError::InvalidGraph(format!("graph.fanout.code_child: {message}"));
+        let runtime = self
+            .code
+            .clone()
+            .ok_or_else(|| unavailable("the Code runtime is unavailable"))?;
+        let failure = super::super::fanout_code_child::failure_slot();
+        let node: Box<dyn Node> = if self.code_recovery {
+            let journals = execution
+                .node_recovery()
+                .ok_or_else(|| unavailable("the branch's node journal is unavailable"))?;
+            let scope = super::super::fanout_code_child::FanoutCodeChildScopeProvider::for_branch(
+                execution,
+                definition.id(),
+            )?;
+            let runtime = runtime.bind_saved_child_scope(Arc::new(scope))?;
+            let body = CodeNode::new(definition.clone(), child.types.clone(), runtime)?
+                .with_failure_slot(Arc::clone(&failure));
+            Box::new(
+                super::super::node_recovery_runtime::RecoverableNode::new(
+                    Arc::new(body),
+                    definition.validated_digest(),
+                    super::super::node_recovery::NodeRecoveryPolicy::default(),
+                    journals,
+                    None,
+                )
+                .with_legacy_first_attempt(),
+            )
+        } else {
+            Box::new(
+                CodeNode::new(definition.clone(), child.types.clone(), runtime)?
+                    .with_failure_slot(Arc::clone(&failure)),
+            )
+        };
+        let mut channels = BTreeSet::from([
+            "messages".to_owned(),
+            "_pipeline_blocked".to_owned(),
+            PIPELINE_NODE_EVENT_SCOPE_STATE_KEY.to_owned(),
+            crate::agents::graph::application::APPLICATION_VISIT_STATE_KEY.to_owned(),
+        ]);
+        channels.extend(definition.input_keys().iter().cloned());
+        channels.extend(definition.output_keys().iter().cloned());
+        let mut schema = StateSchema::new();
+        for key in channels {
+            let default = child
+                .types
+                .get(&key)
+                .map_or(serde_json::Value::Null, |kind| typed_default(kind));
+            schema
+                .channels
+                .insert(key.clone(), Channel::new(&key).with_default(default));
+        }
+        StateGraph::new(schema)
+            .add_node(
+                execution.wrap_node(super::super::fanout_code_child::CodeBranchNode {
+                    inner: node,
+                    failure,
+                }),
+            )
+            .add_edge(START, definition.id())
+            .add_edge(definition.id(), END)
+            .compile()
+            .map(|graph| {
+                graph
+                    .with_checkpointer_arc(execution.checkpointer())
+                    .with_max_concurrency(1)
+                    .with_strict_channels()
+            })
+    }
+
     fn definition(
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,
@@ -974,6 +1135,37 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         self.owned_definition_digest(branch).map(|_| ())
     }
 
+    /// W3-2 (D3): a child with Code counts its Code nodes' time; a child
+    /// without Code is not admitted here (it has no Code time to bound).
+    fn admit_activation(
+        &self,
+        branches: &[crate::agents::graph::ParallelBranchDefinition],
+        concurrency: u32,
+        node_id: &str,
+    ) -> Result<(), GraphError> {
+        let Some(code) = &self.code else {
+            return Ok(());
+        };
+        let children = branches
+            .iter()
+            .filter_map(|branch| match self.owned.get(branch.id()) {
+                Some(OwnedBranch::Code(child)) => {
+                    Some(vec![(child.node.language(), child.node.platform_client())])
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if children.is_empty() {
+            return Ok(());
+        }
+        code.admit_fanout(&FanoutCodeAdmission {
+            node_id,
+            children,
+            concurrency,
+        })
+        .map_err(|_| crate::agents::graph::parallel::fanout_deadline_refusal())
+    }
+
     fn owned_definition_digest(
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,
@@ -990,6 +1182,14 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             }
             // The Map worker digest main binds into every item id.
             OwnedBranch::StateModifier(node) => return Ok(node.config_digest()),
+            OwnedBranch::Code(child) => {
+                let mut digest = digest::Context::new(&digest::SHA256);
+                digest.update(b"elitea.graph.fanout.owned-code.v1\0");
+                digest.update(&child.node.validated_digest());
+                let mut result = [0; 32];
+                result.copy_from_slice(digest.finish().as_ref());
+                return Ok(result);
+            }
         };
         let participant = self
             .resolver()?
@@ -1036,6 +1236,35 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
                         })
                 })
                 .collect(),
+            // A Code child reads its declared inputs too, and carries its own
+            // journal visit (W3-2): its thread is not the run root.
+            OwnedBranch::Code(child) => {
+                let node = &child.node;
+                let mut input = node
+                    .input_keys()
+                    .iter()
+                    .map(|key| {
+                        parent
+                            .get(key)
+                            .map(|value| (key.clone(), value.clone()))
+                            .ok_or_else(|| {
+                                GraphError::InvalidGraph(
+                                    "a Code child input is missing from its parent".to_owned(),
+                                )
+                            })
+                    })
+                    .collect::<Result<State, _>>()?;
+                let visit = super::super::fanout_code_child::code_child_visit(
+                    branch.id(),
+                    node.id(),
+                    &input,
+                )?;
+                input.insert(
+                    crate::agents::graph::application::APPLICATION_VISIT_STATE_KEY.to_owned(),
+                    serde_json::Value::String(visit),
+                );
+                Ok(input)
+            }
         }
     }
 
@@ -1048,6 +1277,7 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             OwnedBranch::Agent(node) => node.clone(),
             OwnedBranch::Llm(node) => return self.compile_llm_branch(node, &execution),
             OwnedBranch::StateModifier(node) => return self.compile_item(node, &execution),
+            OwnedBranch::Code(child) => return self.compile_code_branch(child, &execution),
         };
         let mut failure_events = None;
         let resolver = match self.events.as_ref() {
@@ -1189,7 +1419,13 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         branch: &crate::agents::graph::ParallelBranchDefinition,
         pause: &ParallelBranchPause,
     ) -> Result<Vec<ParallelPauseCard>, GraphError> {
-        self.definition(branch)?;
+        if matches!(self.definition(branch)?, OwnedBranch::Code(_)) {
+            // A Code child never pauses: an attempt that needs an operator
+            // ends typed in its visit-scoped journal (W3-2).
+            return Err(GraphError::InvalidGraph(
+                "a Code child has no pause card".to_owned(),
+            ));
+        }
         Ok(vec![super::super::parallel_cards::child_card(pause)?.card])
     }
 
@@ -1199,9 +1435,17 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         pause: &ParallelBranchPause,
         decisions: &[ParallelDecision],
     ) -> Result<State, GraphError> {
-        let OwnedBranch::Agent(definition) = self.definition(branch)? else {
+        let definition = match self.definition(branch)? {
+            OwnedBranch::Agent(definition) => definition,
+            OwnedBranch::Code(_) => {
+                return Err(GraphError::InvalidGraph(
+                    "a Code child has no pause to resume".to_owned(),
+                ));
+            }
             // An LLM branch's pause is its own node's card: no authored catalog.
-            return super::super::parallel_cards::child_resume(pause, None, decisions).await;
+            OwnedBranch::Llm(_) | OwnedBranch::StateModifier(_) => {
+                return super::super::parallel_cards::child_resume(pause, None, decisions).await;
+            }
         };
         if super::super::parallel_cards::is_application_member_pause(pause) {
             return self.resume_agent_member(definition, pause, decisions).await;

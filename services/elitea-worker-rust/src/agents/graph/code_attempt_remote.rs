@@ -108,12 +108,17 @@ impl RemoteCodeRuntime {
         } else {
             self.admit_fresh(profile, Some(declaration.node_id.as_str()))
                 .await
-                .map_err(|_| {
-                    before(
+                .map_err(|refusal| {
+                    let failure = before(
                         CodeAttemptPhase::Admission,
                         NodeFailureClass::InvalidConfiguration,
-                    )
-                    .with_deadline_insufficient()
+                    );
+                    // R1: a nested acquire is an internal fault, not a deadline.
+                    if refusal.cause == elitea_agent_runtime::graph::fanout::admission::CodeRefusalCause::NestedSlot {
+                        failure
+                    } else {
+                        failure.with_deadline_insufficient()
+                    }
                 })?
         };
         let declaration = crate::sandbox::code_recovery::OriginalCodeDeclarationInput {
@@ -365,6 +370,24 @@ impl RemoteCodeRuntime {
                 .await;
             }
             hydrated?;
+        }
+        // N3 (W3-2): preparation and hydration ran inside the slot and were not
+        // in the admission window. A fresh attempt is re-admitted here, before
+        // its first submission; one that may already have started is observed,
+        // never refused (C2).
+        if !prior_dispatch
+            && self
+                .recheck_after_preparation(profile, Some(declaration.node_id))
+                .is_err()
+        {
+            let failure = before(
+                CodeAttemptPhase::Admission,
+                NodeFailureClass::InvalidConfiguration,
+            )
+            .with_deadline_insufficient();
+            self.release_undispatched(profile, &invocation.activation, &request_digest, &failure)
+                .await;
+            return Err(failure);
         }
         let mut platform_call_effect = None;
         let mut platform_unknown_effect = false;
