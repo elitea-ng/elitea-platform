@@ -83,6 +83,27 @@ modified by C3. Conditions C1–C7 and notes N1–N3 are covered below.
 | `src/{spool.rs,transport/output_grpc.rs,transport/output_session.rs,protocol/error.rs}` | Safe renderers for the Worker's own data-free error types. |
 | `Containerfile` | Copies `libs/go/faults/registry`, which the build script reads. |
 
+## Consumers of Worker logs (C4)
+
+The Worker's stdout changes from compact text to JSON lines, so every reader of it was searched on the branch head. The
+search covered the repository and the local handoff tooling for:
+- `docker logs`, `compose logs` and `stack logs` of the Worker;
+- `subprocess` readers of container output;
+- text-format patterns (`event=…`, `time.busy`, `time.idle`, span `close`);
+- log collectors in `deploy/` (`filelog`, fluent, promtail, loki, logging drivers);
+- Rust tests that spawn the Worker binary;
+- runbooks that grep Worker lines.
+
+| Consumer | What it does with Worker output | Change |
+|---|---|---|
+| `apps/elitea-web/scripts/chat-stream-e2e.sh`, `deploy/scripts/{native,governed}-conformance.sh`, `deploy/scripts/handoff-live.sh` | dump `stack logs elitea-worker …` for a person when a run fails; no parsing | none needed: JSON lines are as readable in a dump |
+| `scripts/runtime/probe_code_{runner,adapters}_container.py` | compare `docker logs` of a **code runner** container byte for byte | none needed: not the Worker |
+| `deploy/` (Helm, compose, OTel collector) | no log-file collector; the collector takes OTLP, and `ELITEA_RUST_LOG` is unchanged | none needed; span timing still reaches OTLP |
+| `production-profile*/stack.sh` and `verify-profile` (handoffs) | read only PostgreSQL's container log during restore | none needed |
+| Crash-recovery suite (`handoffs/crash-recovery-suite`) | its DESIGN describes matching `crashpoint.arrived name=X` in container logs, but no crashpoint emitter or matcher exists in code yet | none now; whoever builds the suite matches the JSON `event`/fields (`recovery-guarantees.md` mentions crashpoints only as design) |
+| Worker tests that read log output | `runtime_log_safety_tests.rs` and the diagnostics tests capture the subscriber in a child process through the shared `elitea_faults::logtest` | the one approved setup edit (Tests); no test spawns the Worker binary and parses its stdout |
+| Operators and runbooks | no runbook in `docs/` or `deploy/` greps a Worker text line | the upgrade note tells log pipelines to parse JSON and match `code`/`event` |
+
 ## Where each gate runs (C5)
 
 All the Go gates are tests in `libs/go/faults`. `scripts/go/workspace-run.sh` tests every `go.work` module in the
