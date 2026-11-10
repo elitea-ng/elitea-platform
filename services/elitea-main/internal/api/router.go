@@ -46,6 +46,7 @@ import (
 	v2configs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2connectorrequests "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/connectorrequests"
 	v2contextmgr "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextmgr"
+	v2contextviews "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/contextviews"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
@@ -4456,6 +4457,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post(v2agentteams.FromConversationPath, teams.CreateFromConversation)
 					r.With(readTeams, projectPermission("models.chat.conversations.create")).
 						Post(v2agentteams.StartPath, teams.Start)
+
+					// "What the agent saw" (ADR-0050 decision 9, #1669;
+					// tenant/0166): the view one answer was given. The
+					// message read's permission, and the handler applies the
+					// conversation's rule to the message before it reads.
+					contextViews := v2contextviews.NewHandler(dbrepos.NewContextViews(cfg.Pool), cfg.ConvsRepo)
+					r.With(projectPermission(v2contextviews.Permission)).
+						Get(v2contextviews.Path, contextViews.Get)
 				}
 
 				// Share a conversation by link — the OWNER-FACING half. The

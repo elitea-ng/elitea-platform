@@ -1345,7 +1345,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 165: tenant/0165_application_version_avatar_pack.sql, the nullable
 	// application_versions.avatar_pack jsonb column (ADR-0050 decision 6,
 	// issue 1619). No data, no permission.
-	require.EqualValues(t, 165, Head(tenant))
+	//
+	// 166: tenant/0166_chat_message_context_views.sql, the view each agent
+	// answer was given: reader, mode, window, digest and the projected
+	// message ids with why each was dropped (ADR-0050 decision 9, issue
+	// 1669). No data, no permission.
+	require.EqualValues(t, 166, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
