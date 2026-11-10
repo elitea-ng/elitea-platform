@@ -540,6 +540,7 @@ fn runtime_config(broker: bool) -> SandboxRuntimeConfig {
 
 struct Harness {
     _database: IsolatedPostgres,
+    pool: sqlx::PgPool,
     factory: CodeRuntimeFactory,
     runtime: Arc<dyn CodeSandboxRuntime>,
     authority: Arc<ClaimBoundSandboxAuthority>,
@@ -551,8 +552,24 @@ struct Harness {
     answers: Arc<StdMutex<std::collections::VecDeque<pb::SubmitSandboxJobResponseV1>>>,
 }
 
-#[allow(clippy::too_many_lines)] // One harness wires every fake the code-recovery proofs share.
 async fn harness(script: MainScript, fail_after: Duration) -> Harness {
+    harness_with(
+        script,
+        fail_after,
+        None,
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await
+}
+
+/// The harness with the profiles' `code_slots` and the run's deadline (W3-1).
+#[allow(clippy::too_many_lines)] // One harness wires every fake the code-recovery proofs share.
+async fn harness_with(
+    script: MainScript,
+    fail_after: Duration,
+    code_slots: Option<u32>,
+    execution_deadline: tokio::time::Instant,
+) -> Harness {
     let url = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL")
         .expect("ELITEA_TEST_DATABASE_URL is required");
     let database = IsolatedPostgres::create(&url).await;
@@ -637,7 +654,9 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
         )
         .unwrap()
     };
-    let (pure, broker) = (runtime_config(false), runtime_config(true));
+    let (mut pure, mut broker) = (runtime_config(false), runtime_config(true));
+    pure.code_slots = code_slots;
+    broker.code_slots = code_slots;
     let factory = CodeRuntimeFactory::new(
         control,
         vec![(pure.clone(), client(&pure), None)],
@@ -653,11 +672,12 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
     .unwrap()
     .with_code_intents(content);
     Harness {
-        runtime: factory.bind(authority.clone()),
+        runtime: factory.bind(authority.clone(), execution_deadline),
         factory,
         authority,
         dispatch: DispatchJournal::new(database.pool.clone()),
         effects,
+        pool: database.pool.clone(),
         _database: database,
         scope,
         main,
@@ -1397,4 +1417,112 @@ async fn a_lost_platform_client_runtime_with_a_clean_journal_settles_typed_and_n
     let failure = run.ledger().await.effective_failure().unwrap();
     assert_eq!(failure.class, NodeFailureClass::InvalidResult);
     assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
+}
+
+// ------------------------------------------- W3-1: Code slots and admission
+
+/// Root Code with 30 s left and `timeout_seconds` 30 (needs 120 s): refused
+/// readably before the original visit, with no dispatch row and no
+/// submission; the node fails typed, once.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_root_code_with_too_little_time_is_refused_without_a_dispatch_row() {
+    let h = harness_with(
+        QUIET,
+        Duration::ZERO,
+        None,
+        tokio::time::Instant::now() + Duration::from_secs(30),
+    )
+    .await;
+    let run = default_run(&h, PURE_YAML);
+    let error = run.node.execute(&run.context).await.err().unwrap();
+    assert!(error.to_string().contains("pipeline.node_recovery.failed"));
+    assert_eq!(
+        run.events().await,
+        [crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE]
+    );
+    assert_eq!(h.supervisor.lock().unwrap().submits, 0);
+    assert_eq!(
+        h.main.lock().unwrap().visit_attempts,
+        Vec::<u64>::new(),
+        "no original visit"
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM elitea_runtime.sandbox_dispatches")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "no sandbox dispatch row");
+    let failure = run.ledger().await.effective_failure().unwrap();
+    assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
+    assert_eq!(run.ledger().await.history().len(), 1);
+}
+
+/// A Supervisor Busy/Pending caused by another Worker keeps the existing
+/// backoff, and the attempt keeps its one slot through it until the
+/// terminal receipt.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_busy_from_another_worker_backs_off_without_releasing_the_slot() {
+    let h = harness_with(
+        QUIET,
+        Duration::ZERO,
+        Some(1),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await;
+    let pending = pb::SubmitSandboxJobResponseV1 {
+        status: pb::SandboxJobStatusV1::Pending.into(),
+        result_json: Vec::new(),
+        failure_code: String::new(),
+        cleanup_pending: false,
+    };
+    h.answers
+        .lock()
+        .unwrap()
+        .extend([pending.clone(), pending, completed()]);
+    let slots = h
+        .factory
+        .code_slots_for_tests("sandbox.internal:9446")
+        .expect("the target's slots");
+    let run = default_run(&h, PURE_YAML);
+    let attempt = run.node.execute(&run.context);
+    tokio::pin!(attempt);
+    let mut saw_held = false;
+    let output = loop {
+        tokio::select! {
+            output = &mut attempt => break output.unwrap(),
+            () = tokio::time::sleep(Duration::from_millis(50)) => {
+                if h.supervisor.lock().unwrap().submits >= 1 {
+                    assert_eq!(slots.available(), 0, "the slot was released during backoff");
+                    saw_held = true;
+                }
+            }
+        }
+    };
+    assert!(saw_held, "the backoff was observed");
+    assert_eq!(output.updates["count"], serde_json::json!(41));
+    assert_eq!(h.supervisor.lock().unwrap().submits, 3);
+    assert_eq!(slots.available(), 1);
+}
+
+/// The deadlock regression end to end: `code_slots = 1`, one attempt runs
+/// its preparation and its job on one slot and completes.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_one_slot_runs_one_attempt_through_preparation_and_run() {
+    let h = harness_with(
+        QUIET,
+        Duration::ZERO,
+        Some(1),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await;
+    h.answers.lock().unwrap().push_back(completed());
+    let run = default_run(&h, PURE_YAML);
+    let output = tokio::time::timeout(Duration::from_secs(60), run.node.execute(&run.context))
+        .await
+        .expect("one attempt never waits on its own slot")
+        .unwrap();
+    assert_eq!(output.updates["count"], serde_json::json!(41));
+    assert_eq!(h.supervisor.lock().unwrap().submits, 1);
 }

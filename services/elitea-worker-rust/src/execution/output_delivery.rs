@@ -28,7 +28,8 @@ use crate::protocol::elitea::runtime::v1::{ExecutionOutputFrameV1, NodeEventV1};
 use crate::protocol::node_event::encode_current_node_event_json;
 use crate::protocol::output::{
     AgentTerminalOutput, RuntimeFailureKind, ValidatedAgentOutputFrameKind,
-    build_agent_terminal_output_frame, failure_after_deadline, restored_terminal_failure_kind,
+    build_agent_terminal_output_frame, failure_after_deadline, refused_terminal_replacement,
+    restored_terminal_failure_kind,
 };
 use crate::spool::{
     EncryptedOutputSpool, ExecutionSpoolBinding, SpoolError, SpoolLimits, SpoolMasterKey,
@@ -2367,14 +2368,17 @@ async fn replay_terminal_with_replacement<T: AgentTerminalReplay>(
                 // PROTOCOL_VIOLATION). The same bytes can never be accepted,
                 // so it is replaced once by a canonical failure; a refused
                 // canonical failure (or an undecidable lease) is returned.
+                // W3-1 (C3): a kind newer than that Main is replaced by the
+                // older kind it admits under the same wire code.
                 None if matches!(
                     error,
                     OutputGrpcError::Protocol(OutputProtocolError::FrameRefused)
-                ) && restored_terminal_failure_kind(&frame).is_none() =>
+                ) && refused_terminal_replacement(&frame).is_some() =>
                 {
                     match lease.check_now().await {
                         Ok(()) => failure_after_deadline(
-                            RuntimeFailureKind::Internal,
+                            refused_terminal_replacement(&frame)
+                                .unwrap_or(RuntimeFailureKind::Internal),
                             lease.now_unix_millis(),
                             verified.command().deadline_unix_millis,
                         ),

@@ -812,8 +812,8 @@ pub(crate) struct AuthorizedNativeCommandBinding {
     client_stream_id: String,
     client_message_id: String,
     sio_event: String,
-    /// The original command deadline, in Unix milliseconds. Fan-out nodes are
-    /// bounded by it (`OrdinaryNativeAgentPlan::fanout_deadline`).
+    /// The original command deadline, in Unix milliseconds. Fan-out nodes and
+    /// Code admission are bounded by it (`OrdinaryNativeAgentPlan::execution_deadline`).
     deadline_unix_millis: i64,
     /// The execution's public egress policy and ledger (#1490), the same
     /// instance every path of this execution uses.
@@ -1039,11 +1039,14 @@ impl OrdinaryNativeAgentPlan {
         self
     }
 
-    /// The original command deadline as a monotonic instant for fan-out
-    /// nodes. A deadline already passed is refused: the run lifecycle ends it
-    /// as `DeadlineExceeded` anyway, and a fan-out must never start past it.
-    pub(super) fn fanout_deadline(&self) -> Result<tokio::time::Instant, NativeAgentAssemblyError> {
-        fanout_deadline_at(
+    /// The original command deadline as a monotonic instant: fan-out nodes
+    /// and Code admission (W3-1) are bounded by it. A deadline already passed
+    /// is refused: the run lifecycle ends it as `DeadlineExceeded` anyway, and
+    /// a fan-out must never start past it.
+    pub(super) fn execution_deadline(
+        &self,
+    ) -> Result<tokio::time::Instant, NativeAgentAssemblyError> {
+        execution_deadline_at(
             self.deadline_unix_millis,
             chrono::Utc::now().timestamp_millis(),
             tokio::time::Instant::now(),
@@ -2853,7 +2856,7 @@ fn fanout_wake_without_park() -> NativeAgentAssemblyError {
 
 /// Convert the command deadline to a monotonic instant, given one reading
 /// of each clock. The remaining time must be positive.
-fn fanout_deadline_at(
+fn execution_deadline_at(
     deadline_unix_millis: i64,
     now_unix_millis: i64,
     now: tokio::time::Instant,
@@ -2940,14 +2943,14 @@ fn pipeline_turn(
         // Without the claim's ledger no card could ever be decided: refused.
         FanoutComposition::Bound => super::graph::compiler::ParallelCompilerBinding::new(
             Arc::clone(&authority),
-            plan.fanout_deadline()?,
+            plan.execution_deadline()?,
             decisions.ok_or_else(fanout_decisions_unavailable)?,
         ),
         #[cfg(test)]
         FanoutComposition::BoundForTests(source) => {
             super::graph::compiler::ParallelCompilerBinding::for_tests(
                 Arc::clone(&authority),
-                plan.fanout_deadline()?,
+                plan.execution_deadline()?,
                 source.clone().or(decisions),
             )
         }
@@ -5258,10 +5261,10 @@ mod fanout_start_tests {
     #[test]
     fn the_remaining_command_time_becomes_the_fanout_instant() {
         let now = tokio::time::Instant::now();
-        let deadline = fanout_deadline_at(NOW_UNIX_MILLIS + 1_500, NOW_UNIX_MILLIS, now)
+        let deadline = execution_deadline_at(NOW_UNIX_MILLIS + 1_500, NOW_UNIX_MILLIS, now)
             .expect("a future deadline is accepted");
         assert_eq!(deadline - now, std::time::Duration::from_millis(1_500));
-        let last = fanout_deadline_at(NOW_UNIX_MILLIS + 1, NOW_UNIX_MILLIS, now)
+        let last = execution_deadline_at(NOW_UNIX_MILLIS + 1, NOW_UNIX_MILLIS, now)
             .expect("one millisecond left is still a deadline");
         assert_eq!(last - now, std::time::Duration::from_millis(1));
     }
@@ -5270,7 +5273,7 @@ mod fanout_start_tests {
     fn a_deadline_that_has_passed_is_refused_typed() {
         let now = tokio::time::Instant::now();
         for deadline in [NOW_UNIX_MILLIS, NOW_UNIX_MILLIS - 1, 0, -1, i64::MIN] {
-            let error = fanout_deadline_at(deadline, NOW_UNIX_MILLIS, now)
+            let error = execution_deadline_at(deadline, NOW_UNIX_MILLIS, now)
                 .expect_err("a passed deadline never starts a fan-out");
             assert_eq!(
                 error.code(),
@@ -5298,7 +5301,7 @@ mod fanout_start_tests {
         };
         let future = chrono::Utc::now().timestamp_millis() + 60_000;
         let remaining = plan(future)
-            .fanout_deadline()
+            .execution_deadline()
             .expect("a running command has time left")
             .saturating_duration_since(tokio::time::Instant::now());
         assert!(
@@ -5307,7 +5310,7 @@ mod fanout_start_tests {
             "{remaining:?}"
         );
         let passed = chrono::Utc::now().timestamp_millis() - 1;
-        assert!(plan(passed).fanout_deadline().is_err());
+        assert!(plan(passed).execution_deadline().is_err());
     }
 
     fn wake_start() -> PipelineNativeStart {

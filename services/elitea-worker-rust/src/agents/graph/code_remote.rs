@@ -16,7 +16,10 @@ use crate::{
 };
 use adk_rust::graph::GraphError;
 use async_trait::async_trait;
-use std::{sync::Arc, time::Duration};
+use elitea_agent_runtime::graph::fanout::admission::{
+    CodeDeadlineRefusal, CodeRefusalCause, CodeSlot, CodeSlots, required_window,
+};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 #[path = "code_attempt_remote.rs"]
 pub(in crate::agents::graph) mod attempt_remote;
 #[path = "code_compiled.rs"]
@@ -37,6 +40,9 @@ pub(super) struct CodeRuntimeProfile {
     preparation: Option<crate::config::PythonPreparationConfig>,
     preparation_client: Option<SandboxClient>,
     compiled_profile: Option<Arc<crate::sandbox::compiled_snapshot::SnapshotProfile>>,
+    /// W3-1: the slots of this profile's Supervisor target, shared with every
+    /// profile on the same normalised target.
+    pub(super) slots: CodeSlots,
 }
 
 pub(super) struct RemoteCodeRuntime {
@@ -50,6 +56,9 @@ pub(super) struct RemoteCodeRuntime {
     journal: Arc<crate::sandbox::dispatch::DispatchJournal>,
     compiled_profile: Option<Arc<crate::sandbox::compiled_snapshot::SnapshotProfile>>,
     debug_sink: Option<Arc<dyn super::code_debug::CodeDebugArtifactSink>>,
+    /// The run's deadline (the signed command's), which every fresh Code
+    /// attempt is admitted against (W3-1).
+    pub(super) execution_deadline: tokio::time::Instant,
 }
 
 pub(crate) struct CodeRuntimeFactory {
@@ -59,6 +68,20 @@ pub(crate) struct CodeRuntimeFactory {
     journal: Arc<crate::sandbox::dispatch::DispatchJournal>,
     compiled_profile: Option<Arc<crate::sandbox::compiled_snapshot::SnapshotProfile>>,
     debug_sink: Option<Arc<dyn super::code_debug::CodeDebugArtifactSink>>,
+    /// One set of Code slots per normalised Supervisor target (W3-1, C4).
+    code_slots: BTreeMap<String, CodeSlots>,
+}
+
+/// The slots of `target`: the existing set of its normalised Supervisor, or
+/// a new one of `capacity`. `RuntimeDeployConfig::validate` has already
+/// refused a target that does not normalise and profiles on one target that
+/// disagree, so the first capacity is every profile's.
+fn slots_for(table: &mut BTreeMap<String, CodeSlots>, target: &str, capacity: u32) -> CodeSlots {
+    let key = crate::config::code_slot_target(target).unwrap_or_else(|_| target.to_owned());
+    table
+        .entry(key)
+        .or_insert_with(|| CodeSlots::new(capacity))
+        .clone()
 }
 impl CodeRuntimeFactory {
     pub(crate) fn new(
@@ -70,9 +93,15 @@ impl CodeRuntimeFactory {
         )>,
         state: sqlx::PgPool,
     ) -> Self {
+        let mut code_slots = BTreeMap::new();
         let profiles = profiles
             .into_iter()
             .map(|(config, client, preparation_client)| CodeRuntimeProfile {
+                slots: slots_for(
+                    &mut code_slots,
+                    &config.target,
+                    config.effective_code_slots(),
+                ),
                 language: match config.language {
                     Language::Python => CodeLanguage::Python,
                     Language::JavaScript => CodeLanguage::JavaScript,
@@ -97,6 +126,20 @@ impl CodeRuntimeFactory {
             journal: Arc::new(crate::sandbox::dispatch::DispatchJournal::new(state)),
             compiled_profile: None,
             debug_sink: None,
+            code_slots,
+        }
+    }
+
+    /// One startup INFO line per Supervisor target: the Code slots in force
+    /// (D2: the default is the shipped Supervisor concurrency, so an operator
+    /// sees what to match).
+    pub(crate) fn log_code_slots(&self) {
+        for (target, slots) in &self.code_slots {
+            tracing::info!(
+                event = "code_slots_configured",
+                target = target.as_str(),
+                code_slots = slots.capacity(),
+            );
         }
     }
     /// Add one exact operator/image broker profile. Existing pure profiles stay
@@ -155,6 +198,11 @@ impl CodeRuntimeFactory {
         }
         let mut profiles = self.profiles.iter().cloned().collect::<Vec<_>>();
         profiles.push(CodeRuntimeProfile {
+            slots: slots_for(
+                &mut self.code_slots,
+                &config.target,
+                config.effective_code_slots(),
+            ),
             language,
             platform_client: Some(binding),
             image_digest: config.image_digest,
@@ -192,17 +240,21 @@ impl CodeRuntimeFactory {
         self.compiled_profile = Some(profile);
         self
     }
+    /// `execution_deadline` is the run's (`OrdinaryNativeAgentPlan::execution_deadline`):
+    /// every fresh Code attempt of this runtime is admitted against it.
     pub(crate) fn attach(
         &self,
         nodes: super::compiler::PipelineNodeRuntimes,
         authority: Arc<ClaimBoundSandboxAuthority>,
+        execution_deadline: tokio::time::Instant,
     ) -> super::compiler::PipelineNodeRuntimes {
-        nodes.with_code(self.bind(authority))
+        nodes.with_code(self.bind(authority, execution_deadline))
     }
 
     pub(in crate::agents) fn bind(
         &self,
         authority: Arc<ClaimBoundSandboxAuthority>,
+        execution_deadline: tokio::time::Instant,
     ) -> Arc<dyn CodeSandboxRuntime> {
         Arc::new(RemoteCodeRuntime {
             saved_child_scope: None,
@@ -213,6 +265,7 @@ impl CodeRuntimeFactory {
             journal: self.journal.clone(),
             compiled_profile: self.compiled_profile.clone(),
             debug_sink: self.debug_sink.clone(),
+            execution_deadline,
         })
     }
 }
@@ -238,6 +291,66 @@ impl RemoteCodeRuntime {
             self.release_hydrated_job(profile, activation, digest).await;
         }
         hydrated
+    }
+
+    /// W3-1: admit a fresh attempt (nothing of it started) on `profile`'s
+    /// target. The slot is held until the attempt's terminal receipt or typed
+    /// failure; a refusal holds nothing and is logged as one WARN fault line.
+    pub(super) async fn admit_fresh(
+        &self,
+        profile: &CodeRuntimeProfile,
+        node_id: Option<&str>,
+    ) -> Result<CodeSlot, CodeDeadlineRefusal> {
+        let required = required_window(
+            1,
+            1,
+            profile.slots.capacity(),
+            Duration::from_secs(u64::from(profile.timeout_seconds)),
+        );
+        let admitted = profile
+            .slots
+            .admit_fresh(self.execution_deadline, required)
+            .await;
+        match &admitted {
+            Ok(slot) => note_slot_wait(slot, profile),
+            Err(refusal) => self.log_deadline_refusal(refusal, profile, node_id),
+        }
+        admitted
+    }
+
+    fn log_deadline_refusal(
+        &self,
+        refusal: &CodeDeadlineRefusal,
+        profile: &CodeRuntimeProfile,
+        node_id: Option<&str>,
+    ) {
+        let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        let (support_ref, _) = self.authority.trace_identity();
+        let code = elitea_faults::codes::PIPELINE_CODE_DEADLINE_INSUFFICIENT;
+        match refusal.cause {
+            CodeRefusalCause::Clock => elitea_faults::fault!(
+                tracing::Level::WARN,
+                code = code,
+                event = "code_deadline_insufficient",
+                node_id = node_id.unwrap_or_default(),
+                required_ms = millis(refusal.required),
+                remaining_ms = millis(refusal.remaining),
+                slots = profile.slots.capacity(),
+                support_ref = support_ref
+            ),
+            CodeRefusalCause::SlotWait => elitea_faults::fault!(
+                tracing::Level::WARN,
+                code = code,
+                event = "code_deadline_insufficient",
+                node_id = node_id.unwrap_or_default(),
+                required_ms = millis(refusal.required),
+                remaining_ms = millis(refusal.remaining),
+                slots = profile.slots.capacity(),
+                support_ref = support_ref,
+                cause = "slot_wait",
+                slot_wait_ms = millis(refusal.slot_wait)
+            ),
+        }
     }
 
     fn selected_compiled_profile<'a>(
@@ -291,6 +404,13 @@ impl RemoteCodeRuntime {
                 "Multiple sandbox runtimes are configured for this Code language.",
             ));
         }
+        // W3-1: one slot for the whole attempt, taken before its first effect
+        // (preparation, journal registration, submission); refused typed
+        // when the run's time left cannot hold the timeout plus the margin.
+        let _slot = self.admit_fresh(profile, None).await.map_err(|_| {
+            note(super::code_runtime::ToolCodeError::DeadlineInsufficient);
+            deadline_insufficient()
+        })?;
         let trace = invocation
             .trace
             .as_ref()
@@ -472,6 +592,7 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
             journal: self.journal.clone(),
             compiled_profile: self.compiled_profile.clone(),
             debug_sink: self.debug_sink.clone(),
+            execution_deadline: self.execution_deadline,
         }))
     }
     #[allow(
@@ -504,6 +625,27 @@ impl CodeSandboxRuntime for RemoteCodeRuntime {
     async fn execute(&self, invocation: CodeInvocation<'_>) -> Result<Vec<u8>, GraphError> {
         Box::pin(self.execute_reporting(invocation, None)).await
     }
+
+    async fn execute_node(
+        &self,
+        invocation: CodeInvocation<'_>,
+    ) -> Result<Vec<u8>, (GraphError, Option<&'static str>)> {
+        let report = std::sync::Mutex::new(None);
+        Box::pin(self.execute_reporting(invocation, Some(&report)))
+            .await
+            .map_err(|error| {
+                let refused = matches!(
+                    report.lock().ok().and_then(|mut slot| slot.take()),
+                    Some(super::code_runtime::ToolCodeError::DeadlineInsufficient)
+                );
+                (
+                    error,
+                    refused.then_some(
+                        crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE,
+                    ),
+                )
+            })
+    }
 }
 
 fn validate_invocation(invocation: &CodeInvocation<'_>) -> Result<(), GraphError> {
@@ -524,6 +666,26 @@ fn validate_invocation(invocation: &CodeInvocation<'_>) -> Result<(), GraphError
 fn failed(message: &str) -> GraphError {
     GraphError::Other(format!("graph.code.execution_failed: {message}"))
 }
+/// The raw path's refusal: the registered user sentence, nothing else.
+fn deadline_insufficient() -> GraphError {
+    failed(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_MESSAGE)
+}
+
+/// One DEBUG line when a slot wait passed [`SLOT_WAIT_DEBUG_AFTER`]. No
+/// per-acquire INFO; nothing user-supplied.
+fn note_slot_wait(slot: &CodeSlot, profile: &CodeRuntimeProfile) {
+    if slot.waited() > SLOT_WAIT_DEBUG_AFTER {
+        tracing::debug!(
+            event = "code_slot_waited",
+            slot_wait_ms = u64::try_from(slot.waited().as_millis()).unwrap_or(u64::MAX),
+            slots = profile.slots.capacity(),
+        );
+    }
+}
+
+/// A slot wait longer than this gets one DEBUG line.
+const SLOT_WAIT_DEBUG_AFTER: Duration = Duration::from_secs(1);
+
 fn uncertain() -> GraphError {
     failed(
         "Sandbox completion could not be confirmed. The job was not restarted; reconcile its durable status before retrying the pipeline.",
@@ -627,6 +789,7 @@ pub(super) fn original_prepared_job_fixture(
         preparation: None,
         preparation_client: None,
         compiled_profile: None,
+        slots: CodeSlots::new(1),
     };
     prepare_job(invocation, &profile)
 }
@@ -636,7 +799,18 @@ pub(super) fn original_prepared_job_fixture(
 mod authority_tests;
 
 #[cfg(test)]
+#[path = "code_slots_tests.rs"]
+mod slots_tests;
+
+#[cfg(test)]
 impl CodeRuntimeFactory {
+    /// The Code slots of `target`'s normalised Supervisor (W3-1 tests).
+    pub(in crate::agents) fn code_slots_for_tests(&self, target: &str) -> Option<CodeSlots> {
+        self.code_slots
+            .get(&crate::config::code_slot_target(target).ok()?)
+            .cloned()
+    }
+
     /// Drive the raw-path hydration step with a bundle and no preparation
     /// profile, so hydration fails before any submission (review L6).
     pub(in crate::agents) async fn raw_hydration_failure_fixture(
@@ -654,6 +828,7 @@ impl CodeRuntimeFactory {
             journal: self.journal.clone(),
             compiled_profile: self.compiled_profile.clone(),
             debug_sink: self.debug_sink.clone(),
+            execution_deadline: tokio::time::Instant::now() + Duration::from_secs(3600),
         };
         let profile = runtime
             .profiles

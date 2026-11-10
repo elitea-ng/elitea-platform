@@ -28,10 +28,14 @@ const (
 	DependencyDatabaseUnavailable Code = "dependency.database_unavailable"
 	// Main lost NATS; admitted runs wait in the outbox and claimed runs continue.
 	DependencyNatsUnavailable Code = "dependency.nats_unavailable"
+	// A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline.
+	GraphFanoutDeadlineInsufficient Code = "graph.fanout.deadline_insufficient"
 	// A component crashed on an unexpected condition; the request or task it was handling failed.
 	InternalPanic Code = "internal.panic"
 	// An unexpected error stopped this request.
 	InternalUnexpected Code = "internal.unexpected"
+	// A Code attempt was refused before it started because the run's remaining time is shorter than the Code timeout plus the observation margin.
+	PipelineCodeDeadlineInsufficient Code = "pipeline.code.deadline_insufficient"
 	// A background runner failed its pass and will try again.
 	RunnerCycleFailed Code = "runner.cycle_failed"
 	// A background runner stopped on a dependency failure and is being restarted.
@@ -56,6 +60,8 @@ const (
 	RuntimeCapReachedMaxRecordsRead Code = "runtime.cap_reached.max_records_read"
 	// The run stopped because it reached the maximum number of tool calls an administrator set. The task may be incomplete. Check what it completed before you continue.
 	RuntimeCapReachedMaxToolCalls Code = "runtime.cap_reached.max_tool_calls"
+	// The Code node could not start because too little time was left before the run's deadline.
+	RuntimeCodeDeadlineInsufficient Code = "runtime.code_deadline_insufficient"
 	// Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.
 	RuntimeCodePreparationCancelled Code = "runtime.code_preparation_cancelled"
 	// Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying.
@@ -78,6 +84,10 @@ const (
 	RuntimeExecutionInputFieldLimitUserMessage Code = "runtime.execution_input_field_limit.user_message"
 	// The request cannot start because its input exceeds a platform size limit. Reduce the message, instructions, or attached context. This is not a model token limit. Share the support reference if the cause is unclear.
 	RuntimeExecutionInputLimit Code = "runtime.execution_input_limit"
+	// A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools.
+	RuntimeFanoutAgentCallsPipeline Code = "runtime.fanout_agent_calls_pipeline"
+	// The fan-out node could not start because its items cannot finish before the run's deadline.
+	RuntimeFanoutDeadlineInsufficient Code = "runtime.fanout_deadline_insufficient"
 	// The pipeline stopped because a Map item or Parallel branch failed (On Error is Stop, or every item failed). The other items finished first; later nodes did not run. Open Execution details to see the failed item.
 	RuntimeFanoutMemberFailed Code = "runtime.fanout_member_failed"
 	// The requested contract version is not compatible.

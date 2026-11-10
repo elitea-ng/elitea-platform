@@ -23,6 +23,7 @@ runtime.execution_input_field_limit.chat_history
 runtime.execution_input_field_limit.tool_configuration
 runtime.execution_input_field_limit.user_message
 runtime.execution_input_limit
+runtime.fanout_agent_calls_pipeline
 runtime.fanout_member_failed
 runtime.incompatible_version
 runtime.internal

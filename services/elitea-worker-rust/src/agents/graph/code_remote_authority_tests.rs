@@ -21,12 +21,29 @@ fn profile(language: CodeLanguage) -> CodeRuntimeProfile {
         preparation: None,
         preparation_client: None,
         compiled_profile: None,
+        slots: CodeSlots::new(4),
     }
 }
 impl CodeRuntimeFactory {
     pub(in crate::agents) fn original_visit_debug_caller_fixture(
         content: Arc<crate::transport::InputContentClient>,
         sink: Arc<dyn super::super::code_debug::CodeDebugArtifactSink>,
+    ) -> Arc<dyn CodeSandboxRuntime> {
+        Self::original_visit_admission_fixture(
+            content,
+            Some(sink),
+            tokio::time::Instant::now() + Duration::from_secs(3600),
+            &CodeSlots::new(4),
+        )
+    }
+
+    /// The journaled-path fixture with the run's deadline and the target's
+    /// slots chosen by the test (W3-1). The dispatch journal never connects.
+    pub(in crate::agents) fn original_visit_admission_fixture(
+        content: Arc<crate::transport::InputContentClient>,
+        sink: Option<Arc<dyn super::super::code_debug::CodeDebugArtifactSink>>,
+        execution_deadline: tokio::time::Instant,
+        slots: &CodeSlots,
     ) -> Arc<dyn CodeSandboxRuntime> {
         let authority =
             Arc::new(ClaimBoundSandboxAuthority::original_code_visit_conformance_fixture());
@@ -47,15 +64,18 @@ impl CodeRuntimeFactory {
             .acquire_timeout(Duration::from_millis(50))
             .connect_lazy("postgres://fixture:fixture@127.0.0.1:1/never_connect")
             .unwrap();
+        let mut rust = profile(CodeLanguage::Rust);
+        rust.slots = slots.clone();
         let factory = CodeRuntimeFactory {
             intent_content: Some(content),
             control,
-            profiles: vec![profile(CodeLanguage::Rust)].into(),
+            profiles: vec![rust].into(),
             journal: Arc::new(crate::sandbox::dispatch::DispatchJournal::new(state)),
             compiled_profile: None,
-            debug_sink: Some(sink),
+            debug_sink: sink,
+            code_slots: BTreeMap::new(),
         };
-        factory.bind(authority)
+        factory.bind(authority, execution_deadline)
     }
 }
 

@@ -144,6 +144,10 @@ fn both_supported_agent_pause_results_settle_as_success() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "One table row per registered failure keeps the canonical policy visible."
+)]
 fn all_registered_runtime_failures_use_only_canonical_safe_policy() {
     let verified = verified_command();
     for (kind, expected_code, expected_message, expected_retryable) in [
@@ -208,6 +212,18 @@ fn all_registered_runtime_failures_use_only_canonical_safe_policy() {
             false,
         ),
         (
+            RuntimeFailureKind::CodeDeadlineInsufficient,
+            RuntimeErrorCodeV1::PipelineCodeFailed,
+            "The Code node could not start because too little time was left before the run's deadline.",
+            false,
+        ),
+        (
+            RuntimeFailureKind::FanoutDeadlineInsufficient,
+            RuntimeErrorCodeV1::PipelineToolFailed,
+            "The fan-out node could not start because its items cannot finish before the run's deadline.",
+            false,
+        ),
+        (
             RuntimeFailureKind::Internal,
             RuntimeErrorCodeV1::Internal,
             "The runtime operation failed.",
@@ -229,11 +245,17 @@ fn all_registered_runtime_failures_use_only_canonical_safe_policy() {
         assert_eq!(error.code, expected_code as i32);
         assert_eq!(error.safe_message, expected_message);
         assert_eq!(error.retryable, expected_retryable);
-        assert!(
-            frame
-                .encode_to_vec()
+        // No upstream cause rides in the frame: the only "cause" bytes are the
+        // registered sentence's own ("because").
+        let causes = |bytes: &[u8]| {
+            bytes
                 .windows(5)
-                .all(|window| window != b"cause")
+                .filter(|window| *window == b"cause")
+                .count()
+        };
+        assert_eq!(
+            causes(&frame.encode_to_vec()),
+            causes(expected_message.as_bytes())
         );
         assert_eq!(
             frame.settlement_proposal.unwrap().requested_outcome,
