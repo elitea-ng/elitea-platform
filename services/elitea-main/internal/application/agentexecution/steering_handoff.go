@@ -69,8 +69,13 @@ const ServerHandOffKey = "server"
 // MaxServerHandOffsPerPass bounds one pass of the routine.
 const MaxServerHandOffsPerPass = 32
 
+// ChatTurnPermission is the permission a chat turn needs: the send's
+// (agentexecution API CurrentApplicationStartPermission). A server-started
+// turn on a person's behalf rechecks it.
+const ChatTurnPermission = "models.chat.messages.create"
+
 // SteeringHandOffPermission is what the author must still hold: the send's.
-const SteeringHandOffPermission = "models.chat.messages.create"
+const SteeringHandOffPermission = ChatTurnPermission
 
 // ServerHandOff is one group the routine took: the turn_ended messages of one
 // author on one ended answer.

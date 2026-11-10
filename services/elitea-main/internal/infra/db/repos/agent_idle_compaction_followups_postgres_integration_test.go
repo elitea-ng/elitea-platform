@@ -222,3 +222,47 @@ VALUES (1, gen_random_uuid(), 1, $1, 1, $3, 300, $3, 'idle-compaction/' || $1, '
 	require.NoError(t, err)
 	require.Equal(t, "manual", source.TriggerOrigin)
 }
+
+// Items 5 and 6: the lost-hook backstop leaves a QUARANTINED idle job's row
+// ADMITTED (it can still be recovered), retires a FAILED one, and runs at
+// most once a minute on a replica.
+func TestIdleCompactionBackstopSkipsQuarantinedAndRunsOncePerMinute(t *testing.T) {
+	h := newIdleHarness(t)
+	clock := time.Now()
+	h.idle.now = func() time.Time { return clock }
+	admit := func(participant int64) (string, string) {
+		t.Helper()
+		source := h.settledAnswer(h.newResponse(), participant)
+		require.True(t, h.arm(source))
+		h.makeDue(source)
+		created, err := h.admitter.Sweep(t.Context())
+		require.NoError(t, err)
+		require.Equal(t, 1, created, "state %q", h.checkState(source))
+		return source, h.idleExecution(source)
+	}
+	// The first sweep ran the backstop (nothing to retire) and set the timer.
+	// (A live idle run makes the conversation busy, so each is ended before
+	// the next is admitted.)
+	quarantinedSource, quarantined := admit(h.agent)
+	h.exec(`UPDATE elitea_runtime.execution_jobs SET state = 'QUARANTINED' WHERE execution_id = $1`, quarantined)
+	failedSource, failed := admit(h.peer)
+	h.exec(`UPDATE elitea_runtime.execution_jobs SET state = 'FAILED', settled_at = clock_timestamp() WHERE execution_id = $1`, failed)
+
+	// Within the minute, a pass does not run the backstop.
+	clock = clock.Add(30 * time.Second)
+	_, err := h.admitter.Sweep(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "ADMITTED", h.checkState(failedSource), "the backstop ran twice within a minute")
+
+	// After it, the FAILED row is retired; the QUARANTINED one stays.
+	clock = clock.Add(31 * time.Second)
+	_, err = h.admitter.Sweep(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "SKIPPED:"+agentexecutionapp.IdleCompactionSkipRunFailed, h.checkState(failedSource))
+	require.Equal(t, "ADMITTED", h.checkState(quarantinedSource))
+
+	// A recovered quarantined job settles its row through the hook.
+	h.exec(`UPDATE elitea_runtime.execution_jobs SET state = 'SUCCEEDED', settled_at = clock_timestamp() WHERE execution_id = $1`, quarantined)
+	require.NoError(t, h.idle.SettleIdleCompactionRun(t.Context(), quarantined, "SUCCEEDED"))
+	require.Equal(t, "DONE", h.checkState(quarantinedSource))
+}

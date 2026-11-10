@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -41,6 +42,10 @@ import (
 // AgentIdleCompactionsRepository is the PostgreSQL store of idle checks.
 type AgentIdleCompactionsRepository struct {
 	pool *pgxpool.Pool
+	now  func() time.Time
+
+	retireMu   sync.Mutex
+	lastRetire time.Time
 }
 
 // NewAgentIdleCompactionsRepository builds the repository.
@@ -48,7 +53,7 @@ func NewAgentIdleCompactionsRepository(pool *pgxpool.Pool) (*AgentIdleCompaction
 	if pool == nil {
 		return nil, errors.New("idle compaction repository requires a pool")
 	}
-	return &AgentIdleCompactionsRepository{pool: pool}, nil
+	return &AgentIdleCompactionsRepository{pool: pool, now: time.Now}, nil
 }
 
 var (
@@ -352,7 +357,7 @@ type claimedIdleCompaction struct {
 // attempts exceed maxAttempts ends SKIPPED (admission_exhausted); a row whose
 // source can never be admitted ends SKIPPED (source_input_invalid). Each
 // pass also retires ADMITTED rows whose idle job is terminal (a lost
-// after-settle hook).
+// after-settle hook), at most once a minute on this replica.
 func (r *AgentIdleCompactionsRepository) ClaimIdleCompactions(ctx context.Context, limit int, lease time.Duration, maxAttempts int) ([]agentexecutionapp.IdleCompactionTarget, error) {
 	if r == nil || r.pool == nil || limit < 1 || limit > agentexecutionapp.IdleCompactionSweepBatch ||
 		lease <= 0 || maxAttempts < 1 || maxAttempts > 1000 {
@@ -422,13 +427,23 @@ RETURNING row.idempotency_key, row.project_id, row.conversation_uuid::text, row.
 
 // retireSettledIdleRuns ends ADMITTED rows whose idle job reached a
 // terminal state without its projection or its settle hook ending the row.
+// A QUARANTINED job is not retired (issue 1776): it can still be recovered
+// and run, and its measurement and settle hook then need the ADMITTED row.
+// One that is never recovered is ended by the agent's next turn
+// (cancelParticipantIdleCompactions), which frees the participant's check.
+//
+// It is a backstop for a lost after-settle hook, so it runs at most once per
+// retireInterval on each replica, not on every sweep pass.
 func (r *AgentIdleCompactionsRepository) retireSettledIdleRuns(ctx context.Context, limit int) error {
+	if !r.retireDue() {
+		return nil
+	}
 	if _, err := r.pool.Exec(ctx, `
 WITH settled AS (
   SELECT row.id, job.state
   FROM elitea_runtime.agent_idle_compactions AS row
   JOIN elitea_runtime.execution_jobs AS job ON job.execution_id = row.idle_execution_id
-  WHERE row.state = 'ADMITTED' AND job.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'QUARANTINED')
+  WHERE row.state = 'ADMITTED' AND job.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
   ORDER BY row.id
   LIMIT $1
   FOR UPDATE OF row SKIP LOCKED
@@ -441,9 +456,33 @@ SET state = CASE WHEN settled.state = 'SUCCEEDED' THEN 'DONE' ELSE 'SKIPPED' END
 FROM settled
 WHERE row.id = settled.id`, limit, agentexecutionapp.IdleCompactionSkipRunCancelled,
 		agentexecutionapp.IdleCompactionSkipRunFailed); err != nil {
+		r.retireFailed()
 		return fmt.Errorf("retire settled idle runs: %w", err)
 	}
 	return nil
+}
+
+// retireInterval is the lost-hook backstop's period on one replica.
+const retireInterval = time.Minute
+
+// retireDue reports whether this replica's backstop is due, and if so marks
+// it run now.
+func (r *AgentIdleCompactionsRepository) retireDue() bool {
+	r.retireMu.Lock()
+	defer r.retireMu.Unlock()
+	now := r.now()
+	if !r.lastRetire.IsZero() && now.Sub(r.lastRetire) < retireInterval {
+		return false
+	}
+	r.lastRetire = now
+	return true
+}
+
+// retireFailed lets the next pass retry a backstop that failed.
+func (r *AgentIdleCompactionsRepository) retireFailed() {
+	r.retireMu.Lock()
+	r.lastRetire = time.Time{}
+	r.retireMu.Unlock()
 }
 
 // loadIdleCompactionTarget reads the source's job, binding and exact
@@ -650,8 +689,9 @@ FOR UPDATE`, agentexecutionapp.IdleCompactionIdempotencyKey(turn.SourceExecution
 	if busy {
 		return agentexecutionapp.ErrIdleCompactionAgentBusy
 	}
-	// Authorization inside the effect transaction, after the locks.
-	if err := checkInterruptPermission(ctx, tx, turn.ProjectID, turn.ActorUserID, interruptdomain.PermissionDecide); err != nil {
+	// Authorization inside the effect transaction, after the locks: the
+	// permission an ordinary chat turn of the actor needs (issue 1776).
+	if err := checkInterruptPermission(ctx, tx, turn.ProjectID, turn.ActorUserID, agentexecutionapp.ChatTurnPermission); err != nil {
 		if errors.Is(err, interruptdomain.ErrNotAllowed) {
 			return agentexecutionapp.ErrIdleCompactionActorNotAllowed
 		}
