@@ -8,7 +8,7 @@
 //! `span` (the innermost span's name), the event's fields, then every field of
 //! the spans in scope, inner span first (`execution_id`, `support_ref`,
 //! `tenant_id`, the project ids, `command_id`, …). `ELITEA_RUST_LOG` sets the
-//! one level for the crates in [`OWNED_TARGETS`], as before.
+//! one level for the crates in `OWNED_TARGETS`, as before.
 //!
 //! Span timing (`close time.busy=… time.idle=…`) goes to OpenTelemetry only.
 //! For local performance evidence start the process with
