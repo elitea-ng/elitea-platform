@@ -265,7 +265,10 @@ impl Node for CodeNode {
         let result = self.execute_code(context, &mut typed).await;
         if let Err(error) = &result {
             let code = typed.unwrap_or("pipeline.code_failed");
-            tracing::error!(node_id = self.definition.id(), error_code = code, failure_reason = %error, "pipeline Code node failed");
+            // A deadline refusal already wrote its one WARN fault line.
+            if code != crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE {
+                tracing::error!(node_id = self.definition.id(), error_code = code, failure_reason = %error, "pipeline Code node failed");
+            }
             if let Some(events) = &self.events {
                 events
                     .send_execution_failure(code)

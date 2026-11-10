@@ -1453,7 +1453,7 @@ impl PipelineNativeAgentAssembler {
             // W3-1: every Code runtime of this pipeline (its nodes and its
             // tools) is admitted against the run's deadline.
             let code_deadline = match (&self.sandbox, &sandbox_authority) {
-                (Some(_), Some(_)) => Some(plan.execution_deadline()?),
+                (Some(_), Some(_)) => Some(plan.code_admission_deadline()?),
                 _ => None,
             };
             let mut node_runtimes = self

@@ -245,7 +245,8 @@ const FAULT_LINE_CHILD_ENV: &str = "ELITEA_CODE_DEADLINE_FAULT_LINE_CHILD";
 
 /// The refusal is one WARN fault line with the registered code, the ids and
 /// the numbers; when the slot wait used up the margin it says so (N1). The
-/// Code source and inputs never appear.
+/// raw graph node adds no ERROR line of its own. The Code source and inputs
+/// never appear.
 #[test]
 fn a_refusal_is_one_fault_line_with_its_cause_and_no_user_data() {
     let output = elitea_faults::logtest::run_child(
@@ -258,7 +259,12 @@ fn a_refusal_is_one_fault_line_with_its_cause_and_no_user_data() {
         .iter()
         .filter(|line| line["code"] == code.as_str())
         .collect();
-    assert_eq!(refusals.len(), 2, "{}", output.stdout);
+    assert_eq!(refusals.len(), 3, "{}", output.stdout);
+    assert!(
+        lines.iter().all(|line| line["level"] != "ERROR"),
+        "a deadline refusal is never an ERROR line: {}",
+        output.stdout
+    );
     for line in &refusals {
         assert_eq!(line["level"], "WARN");
         assert_eq!(line["msg"], code.sentence());
@@ -319,6 +325,25 @@ fn fault_line_child() {
             .execute_tool(invocation())
             .await;
         drop(held);
+        // The raw graph node: its refusal is the same single WARN line.
+        let node = CodeNode::new(
+            CodeNodeDefinition::from_yaml(
+                "id: run\ntype: code\ncode: '7'\ninput: [count]\noutput: [count]\ntransition: END\n",
+            )
+            .unwrap(),
+            BTreeMap::from([("count".into(), "int".into())]),
+            Arc::new(raw_runtime(
+                tokio::time::Instant::now() + Duration::from_secs(10),
+                &slots,
+            )),
+        )
+        .unwrap();
+        let context = NodeContext::new(
+            State::from([("count".into(), json!(2))]),
+            ExecutionConfig::new("root"),
+            4,
+        );
+        assert!(node.execute(&context).await.is_err());
     });
     elitea_faults::logtest::child_ran();
 }

@@ -1053,6 +1053,21 @@ impl OrdinaryNativeAgentPlan {
         )
     }
 
+    /// W3-1: the deadline Code admission measures against. Unlike
+    /// [`Self::execution_deadline`], a passed deadline is not an assembly
+    /// failure: an agent or pipeline that never runs Code still assembles and
+    /// the lifecycle ends it as `DeadlineExceeded`, and every fresh Code
+    /// attempt is refused by admission (nothing is left of the window).
+    pub(super) fn code_admission_deadline(
+        &self,
+    ) -> Result<tokio::time::Instant, NativeAgentAssemblyError> {
+        code_admission_deadline_at(
+            self.deadline_unix_millis,
+            chrono::Utc::now().timestamp_millis(),
+            tokio::time::Instant::now(),
+        )
+    }
+
     pub(super) fn model_scope_sessions(
         &self,
         sessions: super::model_scope::ModelScopeBackend,
@@ -2868,6 +2883,18 @@ fn execution_deadline_at(
         .ok_or_else(fanout_deadline_passed)?;
     now.checked_add(std::time::Duration::from_millis(remaining))
         .ok_or_else(invalid_configuration)
+}
+
+/// [`execution_deadline_at`] for Code admission: a passed deadline is `now`.
+fn code_admission_deadline_at(
+    deadline_unix_millis: i64,
+    now_unix_millis: i64,
+    now: tokio::time::Instant,
+) -> Result<tokio::time::Instant, NativeAgentAssemblyError> {
+    if deadline_unix_millis <= now_unix_millis {
+        return Ok(now);
+    }
+    execution_deadline_at(deadline_unix_millis, now_unix_millis, now)
 }
 
 fn fanout_deadline_passed() -> NativeAgentAssemblyError {
@@ -5284,6 +5311,19 @@ mod fanout_start_tests {
                 Some("graph.fanout.deadline_passed")
             );
         }
+    }
+
+    #[test]
+    fn a_passed_deadline_admits_no_code_and_does_not_fail_assembly() {
+        let now = tokio::time::Instant::now();
+        for deadline in [NOW_UNIX_MILLIS, NOW_UNIX_MILLIS - 1, 0, -1, i64::MIN] {
+            let instant = code_admission_deadline_at(deadline, NOW_UNIX_MILLIS, now)
+                .expect("a passed deadline is not an assembly failure");
+            assert_eq!(instant, now, "nothing is left for a Code attempt");
+        }
+        let future = code_admission_deadline_at(NOW_UNIX_MILLIS + 1_500, NOW_UNIX_MILLIS, now)
+            .expect("a future deadline is accepted");
+        assert_eq!(future - now, std::time::Duration::from_millis(1_500));
     }
 
     #[test]
