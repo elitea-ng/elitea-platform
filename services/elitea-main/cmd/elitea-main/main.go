@@ -2400,6 +2400,21 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			); scheduleErr != nil {
 				return fmt.Errorf("compose pipeline schedule job: %w", scheduleErr)
 			}
+			// The heartbeat of proactive agents (ADR-0050 decision 2): the
+			// same scheduler, the same start use case, the owner's mandate
+			// and the kill switch. Its triage shares the run brief's
+			// completer, which the gateway composition sets below.
+			if runBriefCompleter != nil {
+				if heartbeatErr := startAgentHeartbeatRunner(ctx, agentHeartbeatDeps{
+					Pool: runtimePools.Admission, Start: publicRoutes.AgentStart, Mandates: governedTriggers.Runs,
+					Gate: executionSuspensions.gate, Completer: runBriefCompleter,
+					Models:      lowTierModels{catalog: runBriefCatalog, publicProjectID: currentConfigurationsConfig.PublicProjectID},
+					Permissions: legacyrbac.NewPostgresResolver(pool), InstanceID: runtimeConfig.SchedulerInstanceID,
+					Logger: logger,
+				}); heartbeatErr != nil {
+					return fmt.Errorf("compose agent heartbeat job: %w", heartbeatErr)
+				}
+			}
 			// The server's hand-off of leftover steering messages: it starts
 			// the next turn through the same use case as the chat composer.
 			if publicRoutes.Steering != nil {
@@ -3022,6 +3037,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		ExecutionSuspensions:          executionSuspensions.handler,
 		MandateAttachments:            governedTriggers.Attachments,
+		AgentHeartbeatMandates:        governedTriggers.Runs,
 		CredentialReferencesAdmin:     credentialReferencesHandler,
 		AgentAssertionWellKnown:       eliteaNative.WellKnown,
 		GovernedMCPInbound:            governedMCPComposed.Inbound,

@@ -28,6 +28,7 @@ import (
 	nativeapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/nativeauth"
 	scimapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/scim"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	v2agentheartbeat "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentheartbeat"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2agentlifecycle "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentlifecycle"
 	v2agentmedia "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentmediaapi"
@@ -103,6 +104,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/projectprovisioning"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runevidence"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcatalogue"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcleanup"
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
@@ -800,6 +802,10 @@ type RouterConfig struct {
 	// 1122). Set only with the credential governance flag on; nil mounts
 	// none of its routes.
 	MandateAttachments *v2mandateattachments.Handler
+	// AgentHeartbeatMandates checks the mandate an owner attaches to an
+	// agent's heartbeat (ADR-0050 decision 2). Nil with credential
+	// governance off: then a mandate attach is refused.
+	AgentHeartbeatMandates *runmandate.Service
 	// CredentialReferencesAdmin serves the credential reference lifecycle,
 	// toolkit attachment and agent toolkit binding routes (ADR-0039, issue
 	// 1124). Set only with the credential governance flag on; nil mounts
@@ -4742,6 +4748,24 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(readMemory).Patch(v2agentmemory.EntryPath, memory.Update)
 					r.With(readMemory).Delete(v2agentmemory.EntryPath, memory.Delete)
 					r.With(readMemory).Put(v2agentmemory.OptOutPath, memory.SetOptOut)
+				}
+				// The heartbeat of a proactive agent (ADR-0050 decision 2,
+				// #1618): reads take models.applications.versions.get, saves
+				// take models.applications.publish.post; the handler applies
+				// the tier rule and checks the mandate.
+				{
+					var heartbeatStore *dbrepos.AgentHeartbeats
+					if cfg.Pool != nil {
+						heartbeatStore = dbrepos.NewAgentHeartbeats(cfg.Pool)
+					}
+					beats := v2agentheartbeat.NewHandler(heartbeatStore, cfg.AgentHeartbeatMandates)
+					readBeats := projectPermission(v2agentheartbeat.ReadPermission)
+					writeBeats := projectPermission(v2agentheartbeat.WritePermission)
+					r.With(readBeats).Get(v2agentheartbeat.SettingsPath, beats.Get)
+					r.With(writeBeats).Put(v2agentheartbeat.SettingsPath, beats.Put)
+					r.With(readBeats).Get(v2agentheartbeat.HistoryPath, beats.History)
+					r.With(readBeats).Get(v2agentheartbeat.ProjectPath, beats.GetProject)
+					r.With(writeBeats).Put(v2agentheartbeat.ProjectPath, beats.PutProject)
 				}
 				// Agent proposals and Copy to project (ADR-0050 decisions 5a
 				// and 1, #1615). Reading takes applications.list; Create

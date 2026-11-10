@@ -292,6 +292,11 @@ mod agent_floor_tests {
         let human = agent_floor(&floor("human_message", Vec::new())).expect("ok");
         assert_eq!(human.cause, FloorCause::HumanMessage);
         assert_eq!(human.peers, Vec::new());
+        // ADR-0050 decision 2: a heartbeat act binds only unattended tools.
+        let heartbeat = agent_floor(&floor("heartbeat", Vec::new())).expect("ok");
+        assert_eq!(heartbeat.cause, FloorCause::Heartbeat);
+        assert!(heartbeat.unattended_tools_only);
+        assert!(agent_floor(&floor("cron", Vec::new())).is_err());
     }
 
     #[test]
@@ -644,6 +649,7 @@ fn agent_floor(
     let cause = match floor.cause.as_str() {
         "human_message" => FloorCause::HumanMessage,
         "agent_mention" => FloorCause::AgentMention,
+        "heartbeat" => FloorCause::Heartbeat,
         _ => {
             return Err(AgentProtocolError::InvalidInput(
                 "the agent floor cause is unknown",

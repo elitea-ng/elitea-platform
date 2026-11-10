@@ -50,6 +50,7 @@ export const guidesTab: NavTab = {
         { kind: 'page', slug: 'how-tos/agents-pipelines/import-export', title: 'Import and export entities' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/forking', title: 'Fork an agent or toolkit' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-memory', title: 'Agent memory' },
+        { kind: 'page', slug: 'how-tos/agents-pipelines/agent-heartbeat', title: 'Proactive agents (heartbeat)' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-context-view', title: 'What an agent sees of a conversation' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-tool-envelope', title: "Limit an agent's tools" },
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-teams', title: 'Saved teams of agents' },

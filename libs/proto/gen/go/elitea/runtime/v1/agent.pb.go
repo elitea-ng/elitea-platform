@@ -884,7 +884,8 @@ func (x *AgentToolLimitV1) GetMaxCalls() uint32 {
 // (ADR-0050 decisions 7c and 7d).
 type AgentFloorV1 struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// What started this turn: human_message or agent_mention.
+	// What started this turn: human_message, agent_mention or heartbeat (a
+	// proactive agent's act, ADR-0050 decision 2).
 	Cause string `protobuf:"bytes,1,opt,name=cause,proto3" json:"cause,omitempty"`
 	// The other agents of the conversation the reader may hand the floor to,
 	// at most 16. Empty: no hand_floor tool.

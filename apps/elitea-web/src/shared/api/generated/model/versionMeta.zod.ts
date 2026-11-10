@@ -43,6 +43,7 @@
 import * as zod from "zod";
 import { AgentContextSettings } from "./agentContextSettings.zod";
 import { AgentMemorySettings } from "./agentMemorySettings.zod";
+import { AgentProactivity } from "./agentProactivity.zod";
 import { AgentToolEnvelope } from "./agentToolEnvelope.zod";
 import { OutputContract } from "./outputContract.zod";
 import { VersionRunCaps } from "./versionRunCaps.zod";
@@ -111,6 +112,12 @@ export const VersionMeta = zod.object({
     .nullish()
     .describe(
       "Whether the agent must cite its sources (ADR-0043 decision 5). With `required`, the worker numbers the tool results the model sees, asks the model to cite them as [n], and stores a grounding indicator on the answer (`meta.grounding` of the message). Null, absent or `off` is no citation rule. A save with another value is refused with 400. Pipelines and nested agents ignore it.\n",
+    ),
+  proactivity: zod
+    .union([AgentProactivity, zod.null()])
+    .optional()
+    .describe(
+      "The agent's heartbeat (ADR-0050 decision 2): how often it wakes, its quiet hours, what it reads, where it acts and its daily limits. The heartbeat reads the block of the published release. A save with an invalid block is refused with 422 proactivity_invalid.\n",
     ),
   tool_envelope: zod
     .union([AgentToolEnvelope, zod.null()])

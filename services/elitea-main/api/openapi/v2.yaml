@@ -6595,6 +6595,14 @@ components:
             `chain_root_execution_id`, `execution_id` (the chain's last run),
             `origin` (`cloud` or `desktop`) and `continuations`
             (internal/infra/db/repos/run_finished.go). One row per chain end.
+            For `agent_heartbeat` (ADR-0050 decision 2) a proactive agent
+            wrote to its owner: `conversation_id` (the home thread UUID),
+            `message_id`, `project_id`, `application_id`, `agent_name`,
+            `outcome` (`notify`, `act_degraded` or `paused`), `reason_code`
+            `text` (the first 280 bytes of the message) and `message` (the
+            agent's name, the text and an empty `[...]()` link to the
+            conversation)
+            (internal/infra/db/repos/agent_heartbeats.go, PostToOwner).
           properties:
             sender:
               type: object
@@ -8809,6 +8817,229 @@ components:
         kind: { type: string, enum: [fact, preference, episode] }
         pinned: { type: boolean }
         status: { $ref: '#/components/schemas/AgentMemoryStatus' }
+    AgentProactivity:
+      type: object
+      additionalProperties: false
+      description: >
+        The heartbeat block of an agent version (ADR-0050 decision 2),
+        meta.proactivity. The heartbeat reads the block of the agent's
+        published release, never of a draft. Every field is optional; an
+        empty object is mode heartbeat with the defaults.
+      properties:
+        mode: { type: string, enum: ['off', heartbeat], description: 'off (the default when the block is absent) or heartbeat.' }
+        interval:
+          type: string
+          description: Whole minutes from 15m to 24h, as a Go duration ("1h", "30m"). Default 1h.
+        jitter:
+          description: A whole percentage of the interval from 0 to 50, as a number or "10%". Default 10.
+          oneOf:
+            - { type: integer, minimum: 0, maximum: 50 }
+            - { type: string, pattern: '^[0-9]{1,2}%?$' }
+        quiet_hours:
+          type: string
+          description: '"HH:MM-HH:MM Zone" with an IANA zone, for example "22:00-07:00 Europe/Berlin". No wake starts inside the window.'
+        watch:
+          type: array
+          maxItems: 16
+          description: >
+            What a wake reads. Default conversation and schedule_note.
+            toolkit_read names a read-only tool for the triage; v1 lists it
+            in the digest and does not call it.
+          items:
+            type: object
+            additionalProperties: false
+            required: [kind]
+            properties:
+              kind: { type: string, description: 'conversation, schedule_note or toolkit_read.' }
+              tool: { type: string, maxLength: 128 }
+        act_target:
+          type: string
+          enum: [home_thread, new_conversation]
+          description: Where an act runs. Default home_thread. workspace_thread is not available in v1 (422).
+        limits:
+          type: object
+          additionalProperties: false
+          description: >
+            The agent's daily envelope. The platform's maximums (section
+            proactivity) apply when they are lower; a personal project also
+            has its own act limit.
+          properties:
+            wakes_per_day: { type: integer, minimum: 1, maximum: 96, description: 'Default 24.' }
+            acts_per_day: { type: integer, minimum: 0, maximum: 96, description: 'Default 4.' }
+            spend_per_day_usd: { type: number, minimum: 0, maximum: 1000, description: 'The triage and the runs it starts. Default 2.0.' }
+      example:
+        mode: heartbeat
+        interval: 1h
+        quiet_hours: 22:00-07:00 Europe/Berlin
+        watch: [{ kind: conversation }, { kind: schedule_note }]
+        act_target: home_thread
+        limits: { wakes_per_day: 24, acts_per_day: 4, spend_per_day_usd: 2 }
+    AgentHeartbeatSave:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        mandate_id:
+          type: string
+          description: A delegated mandate of the caller (a UUID). An empty string removes the mandate; absent keeps it.
+      example: { enabled: true, mandate_id: 7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f }
+    AgentHeartbeatSettings:
+      type: object
+      description: >
+        NOTE(W2): internal/api/v2/agentheartbeat/handler.go:107 (Settings),
+        which embeds internal/infra/db/repos/agent_heartbeats.go:731
+        (HeartbeatSettings).
+      required: [application_id, enabled, owner_user_id, mandate_id, home_conversation_uuid, release_id,
+        next_wake_at, last_wake_at, paused_until, last_skip_reason, updated_at, configured, governance, release]
+      properties:
+        application_id: { type: integer, format: int64 }
+        configured: { type: boolean, description: 'false when nobody turned the heartbeat on yet.' }
+        enabled: { type: boolean }
+        owner_user_id: { type: integer, format: int64 }
+        mandate_id: { type: string, nullable: true }
+        home_conversation_uuid: { type: string, nullable: true, description: 'The agent''s home thread, created at its first message.' }
+        release_id: { type: integer, format: int64, nullable: true, description: 'The release the last wake read.' }
+        next_wake_at: { type: string, format: date-time }
+        last_wake_at: { type: string, format: date-time, nullable: true }
+        paused_until: { type: string, format: date-time, nullable: true, description: 'A daily limit paused the heartbeat until this time.' }
+        last_skip_reason:
+          type: string
+          description: Why the last due wake did not reach the triage (quiet_hours, suspended, previous_run_active, review_required, ...). Empty after a triaged wake.
+        updated_at: { type: string, format: date-time }
+        governance: { $ref: '#/components/schemas/AgentHeartbeatGovernance' }
+        release:
+          allOf: [{ $ref: '#/components/schemas/AgentHeartbeatRelease' }]
+          nullable: true
+          description: The published release's block. Null without a published release.
+      example:
+        application_id: 31
+        configured: true
+        enabled: true
+        owner_user_id: 11
+        mandate_id: 7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f
+        home_conversation_uuid: 10000000-0000-4000-8000-000000000031
+        release_id: 5
+        next_wake_at: '2026-11-09T15:00:00Z'
+        last_wake_at: '2026-11-09T14:00:00Z'
+        paused_until: null
+        last_skip_reason: ''
+        updated_at: '2026-11-09T14:00:00Z'
+        governance:
+          platform_enabled: true
+          project_enabled: true
+          tier: medium
+          personal: false
+          can_enable: true
+          wakes_per_day: 24
+          acts_per_day: 4
+          spend_per_day_usd: 2
+        release:
+          release_id: 5
+          version_id: 42
+          mode: heartbeat
+          interval: 1h0m0s
+          quiet_hours: 22:00-07:00 Europe/Berlin
+          act_target: home_thread
+          goal_count: 1
+    AgentHeartbeatGovernance:
+      type: object
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:117 (Governance).
+      required: [platform_enabled, project_enabled, tier, personal, can_enable, wakes_per_day, acts_per_day, spend_per_day_usd]
+      properties:
+        platform_enabled: { type: boolean }
+        project_enabled: { type: boolean }
+        tier: { $ref: '#/components/schemas/AgentRiskTier' }
+        personal: { type: boolean, description: 'The project is the caller''s personal project.' }
+        can_enable: { type: boolean }
+        reason:
+          type: string
+          enum: [proactivity_platform_off, proactivity_tier_too_low, proactivity_no_release, proactivity_not_reviewed,
+            proactivity_block_off]
+          description: Why can_enable is false. Absent when it is true.
+        wakes_per_day: { type: integer, description: 'The effective limit after the platform maximums.' }
+        acts_per_day: { type: integer }
+        spend_per_day_usd: { type: number }
+    AgentHeartbeatRelease:
+      type: object
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:130 (ReleaseView).
+      required: [release_id, version_id, mode, interval, act_target, goal_count]
+      properties:
+        release_id: { type: integer, format: int64 }
+        version_id: { type: integer, format: int64 }
+        mode: { type: string, enum: ['off', heartbeat] }
+        interval: { type: string }
+        quiet_hours: { type: string }
+        act_target: { type: string }
+        goal_count: { type: integer, description: 'How many soul proactive_goals the release has.' }
+    AgentHeartbeatRefusal:
+      type: object
+      required: [error, code]
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:261 (Put).
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          description: >
+            proactivity_platform_off, proactivity_tier_too_low,
+            proactivity_no_release, proactivity_not_reviewed, proactivity_block_off,
+            proactivity_mandate_refused, proactivity_mandate_not_owner or
+            proactivity_not_owner (403: the heartbeat is on and belongs to
+            another person, and the caller is not an owner of the agent).
+      example: { error: A proactive agent must be at least medium risk., code: proactivity_tier_too_low }
+    AgentHeartbeatEntry:
+      type: object
+      description: NOTE(W2) internal/infra/db/repos/agent_heartbeats.go:808 (HeartbeatEntry).
+      required: [id, wake_id, woke_at, outcome, reason_code, reason, release_id, digest_sha256, triage_spend_usd,
+        execution_id, conversation_uuid, paused_until]
+      properties:
+        id: { type: integer, format: int64 }
+        wake_id: { type: string }
+        woke_at: { type: string, format: date-time }
+        outcome:
+          type: string
+          description: >
+            no_op, notify, act, act_degraded, failed or paused. act_degraded is an act that became a notify (no mandate, the act
+            limit, a refused start); reason_code says why.
+        reason_code: { type: string }
+        reason: { type: string, description: 'The triage''s reason, or why the wake failed or paused.' }
+        release_id: { type: integer, format: int64, nullable: true }
+        digest_sha256: { type: string, nullable: true, description: 'The SHA-256 of the wake digest the triage read.' }
+        triage_spend_usd: { type: number }
+        execution_id: { type: string, nullable: true, description: 'The run an act started.' }
+        conversation_uuid: { type: string, nullable: true }
+        paused_until: { type: string, format: date-time, nullable: true }
+    AgentHeartbeatList:
+      type: object
+      required: [total, rows]
+      description: NOTE(W2) internal/api/v2/agentheartbeat/handler.go:365 (History).
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentHeartbeatEntry' }
+      example:
+        total: 1
+        rows:
+          - id: 1
+            wake_id: 3f2b8d4e-1a2c-4b5d-9e8f-7a6b5c4d3e2f
+            woke_at: '2026-11-09T14:00:00Z'
+            outcome: notify
+            reason_code: ''
+            reason: The nightly build failed.
+            release_id: 5
+            digest_sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+            triage_spend_usd: 0.0004
+            execution_id: null
+            conversation_uuid: 10000000-0000-4000-8000-000000000031
+            paused_until: null
+    ProjectProactivity:
+      type: object
+      additionalProperties: false
+      required: [proactive_agents_enabled]
+      properties:
+        proactive_agents_enabled: { type: boolean }
+      example: { proactive_agents_enabled: true }
     AgentMemoryRefusal:
       type: object
       required: [error, code]
@@ -11821,6 +12052,15 @@ components:
             indicator on the answer (`meta.grounding` of the message). Null,
             absent or `off` is no citation rule. A save with another value is
             refused with 400. Pipelines and nested agents ignore it.
+        proactivity:
+          allOf: [{ $ref: '#/components/schemas/AgentProactivity' }]
+          nullable: true
+          description: >
+            The agent's heartbeat (ADR-0050 decision 2): how often it wakes,
+            its quiet hours, what it reads, where it acts and its daily
+            limits. The heartbeat reads the block of the published release.
+            A save with an invalid block is refused with 422
+            proactivity_invalid.
         tool_envelope:
           allOf: [{ $ref: '#/components/schemas/AgentToolEnvelope' }]
           nullable: true
@@ -28794,6 +29034,133 @@ paths:
                 required: [opted_out]
                 properties:
                   opted_out: { type: boolean }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_heartbeat/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentHeartbeat
+      summary: Read an agent's heartbeat settings
+      description: >
+        The heartbeat of a proactive agent (ADR-0050 decision 2): whether it
+        is on, its owner, its mandate, its clock, the block of the published
+        release, and whether the caller may turn it on (governance). An
+        agent nobody configured answers configured false. Requires
+        `models.applications.versions.get`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The heartbeat settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatSettings' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    put:
+      operationId: saveAgentHeartbeat
+      summary: Turn an agent's heartbeat on or off and attach its mandate
+      description: >
+        Turning the heartbeat on needs the platform switch on, an agent of at
+        least medium risk (or a personal project that approves its own
+        agents), and a published release with a proactivity block of mode
+        heartbeat. The caller becomes the owner: the person the agent
+        notifies and acts for. mandate_id attaches a delegated mandate of the
+        owner (an empty string removes it); without one the agent can notify
+        but not act. Requires `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentHeartbeatSave' }
+      responses:
+        '200':
+          description: The stored heartbeat settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatSettings' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '422':
+          description: The heartbeat cannot be turned on, or the mandate cannot be attached
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatRefusal' }
+
+  /elitea_core/agent_heartbeats/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: listAgentHeartbeats
+      summary: List an agent's heartbeat history
+      description: >
+        One row per wake that reached the triage, or that paused the
+        heartbeat at a daily limit, newest first. A skipped wake (quiet
+        hours, kill switch, a run still active) writes no row; the settings
+        show the last skip reason. Requires `models.applications.versions.get`.
+      tags: [applications]
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: The heartbeat rows
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentHeartbeatList' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_heartbeat_project/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getProjectProactivity
+      summary: Read the project's proactive agents switch
+      description: Requires `models.applications.versions.get`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The switch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectProactivity' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    put:
+      operationId: setProjectProactivity
+      summary: Turn every heartbeat of the project on or off
+      description: >
+        Off stops every heartbeat of the project at its next wake; the
+        settings of each agent stay. Requires
+        `models.applications.publish.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectProactivity' }
+      responses:
+        '200':
+          description: The stored switch
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectProactivity' }
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }

@@ -3764,6 +3764,42 @@
       ]
     },
     {
+      "id": "agentHeartbeat.get",
+      "method": "GET",
+      "path": "/elitea_core/agent_heartbeat/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "getAgentHeartbeat",
+      "source": "generated",
+      "responseSchema": "AgentHeartbeatSettings",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-heartbeat"
+      ]
+    },
+    {
+      "id": "agentHeartbeat.save",
+      "method": "PUT",
+      "path": "/elitea_core/agent_heartbeat/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "saveAgentHeartbeat",
+      "source": "generated",
+      "responseSchema": "AgentHeartbeatSettings",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-heartbeat"
+      ]
+    },
+    {
+      "id": "agentHeartbeat.history",
+      "method": "GET",
+      "path": "/elitea_core/agent_heartbeats/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "listAgentHeartbeats",
+      "source": "generated",
+      "responseSchema": "AgentHeartbeatList",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-heartbeat"
+      ]
+    },
+    {
       "id": "agentProposals.list",
       "method": "GET",
       "path": "/elitea_core/agent_proposals/prompt_lib/{projectId}",

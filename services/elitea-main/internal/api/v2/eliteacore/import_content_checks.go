@@ -2,6 +2,7 @@ package eliteacore
 
 import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/citations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/proactivity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolenvelope"
 )
 
@@ -33,6 +34,10 @@ func importedVersionsRefusal(versions []any) error {
 		}
 		// ADR-0050 decision 3 (#1613): the tool envelope a worker would refuse.
 		if err := toolenvelope.Check(meta); err != nil {
+			return err
+		}
+		// ADR-0050 decision 2 (#1618): the heartbeat block.
+		if err := proactivity.Check(meta); err != nil {
 			return err
 		}
 	}

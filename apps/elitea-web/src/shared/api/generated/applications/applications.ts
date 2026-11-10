@@ -64,6 +64,10 @@ import type {
   AgentChangeRequestCreate,
   AgentChangeRequestList,
   AgentGateOverride,
+  AgentHeartbeatList,
+  AgentHeartbeatRefusal,
+  AgentHeartbeatSave,
+  AgentHeartbeatSettings,
   AgentLifecycleReason,
   AgentLifecycleRefusal,
   AgentMediaGenerateRequest,
@@ -148,6 +152,7 @@ import type {
   InvalidClientVersionResponse,
   InvalidQueryParameterError,
   ListAgentAttestationsParams,
+  ListAgentHeartbeatsParams,
   ListAgentMemoryParams,
   ListAgentProposalsParams,
   ListApplicationsParams,
@@ -189,6 +194,7 @@ import type {
   ProjectInfo,
   ProjectInfoUpdateRequest,
   ProjectInfoUpdateResponse,
+  ProjectProactivity,
   ProjectQuota,
   ProjectQuotaUpdate,
   ProjectStatistics,
@@ -6673,6 +6679,1243 @@ export function useSetAgentMemoryOptOut<
     projectId,
     applicationId,
     setAgentMemoryOptOutBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAgentHeartbeatResponse200 = {
+  data: AgentHeartbeatSettings;
+  status: 200;
+};
+
+export type getAgentHeartbeatResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getAgentHeartbeatResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAgentHeartbeatResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAgentHeartbeatResponseSuccess = getAgentHeartbeatResponse200 & {
+  headers: Headers;
+};
+export type getAgentHeartbeatResponseError = (
+  | getAgentHeartbeatResponse400
+  | getAgentHeartbeatResponse401
+  | getAgentHeartbeatResponse403
+) & {
+  headers: Headers;
+};
+
+export type getAgentHeartbeatResponse =
+  getAgentHeartbeatResponseSuccess | getAgentHeartbeatResponseError;
+
+export const getGetAgentHeartbeatUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/agent_heartbeat/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * The heartbeat of a proactive agent (ADR-0050 decision 2): whether it is on, its owner, its mandate, its clock, the block of the published release, and whether the caller may turn it on (governance). An agent nobody configured answers configured false. Requires `models.applications.versions.get`.
+ * @summary Read an agent's heartbeat settings
+ */
+export const getAgentHeartbeat = async (
+  projectId: string,
+  applicationId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentHeartbeatResponse> => {
+  return eliteaFetch<getAgentHeartbeatResponse>(
+    getGetAgentHeartbeatUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAgentHeartbeatQueryKey = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return [
+    `/elitea_core/agent_heartbeat/prompt_lib/${projectId}/${applicationId}`,
+  ] as const;
+};
+
+export const getGetAgentHeartbeatQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentHeartbeat>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentHeartbeat>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetAgentHeartbeatQueryKey(projectId, applicationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAgentHeartbeat>>
+  > = ({ signal }) =>
+    getAgentHeartbeat(projectId, applicationId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentHeartbeat>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentHeartbeatQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentHeartbeat>>
+>;
+export type GetAgentHeartbeatQueryError =
+  N400Response | N401Response | N403Response;
+
+export function useGetAgentHeartbeat<
+  TData = Awaited<ReturnType<typeof getAgentHeartbeat>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentHeartbeat>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentHeartbeat>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentHeartbeat>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentHeartbeat<
+  TData = Awaited<ReturnType<typeof getAgentHeartbeat>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentHeartbeat>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentHeartbeat>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentHeartbeat>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentHeartbeat<
+  TData = Awaited<ReturnType<typeof getAgentHeartbeat>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentHeartbeat>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read an agent's heartbeat settings
+ */
+
+export function useGetAgentHeartbeat<
+  TData = Awaited<ReturnType<typeof getAgentHeartbeat>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentHeartbeat>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentHeartbeatQueryOptions(
+    projectId,
+    applicationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type saveAgentHeartbeatResponse200 = {
+  data: AgentHeartbeatSettings;
+  status: 200;
+};
+
+export type saveAgentHeartbeatResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type saveAgentHeartbeatResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type saveAgentHeartbeatResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type saveAgentHeartbeatResponse422 = {
+  data: AgentHeartbeatRefusal;
+  status: 422;
+};
+
+export type saveAgentHeartbeatResponseSuccess =
+  saveAgentHeartbeatResponse200 & {
+    headers: Headers;
+  };
+export type saveAgentHeartbeatResponseError = (
+  | saveAgentHeartbeatResponse400
+  | saveAgentHeartbeatResponse401
+  | saveAgentHeartbeatResponse403
+  | saveAgentHeartbeatResponse422
+) & {
+  headers: Headers;
+};
+
+export type saveAgentHeartbeatResponse =
+  saveAgentHeartbeatResponseSuccess | saveAgentHeartbeatResponseError;
+
+export const getSaveAgentHeartbeatUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/agent_heartbeat/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Turning the heartbeat on needs the platform switch on, an agent of at least medium risk (or a personal project that approves its own agents), and a published release with a proactivity block of mode heartbeat. The caller becomes the owner: the person the agent notifies and acts for. mandate_id attaches a delegated mandate of the owner (an empty string removes it); without one the agent can notify but not act. Requires `models.applications.publish.post`.
+ * @summary Turn an agent's heartbeat on or off and attach its mandate
+ */
+export const saveAgentHeartbeat = async (
+  projectId: string,
+  applicationId: number,
+  agentHeartbeatSave: AgentHeartbeatSave,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<saveAgentHeartbeatResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<saveAgentHeartbeatResponse>(
+    getSaveAgentHeartbeatUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentHeartbeatSave),
+    },
+  );
+};
+
+export const getSaveAgentHeartbeatQueryKey = (
+  projectId: string,
+  applicationId: number,
+  agentHeartbeatSave?: AgentHeartbeatSave,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/agent_heartbeat/prompt_lib/${projectId}/${applicationId}`,
+    agentHeartbeatSave,
+  ] as const;
+};
+
+export const getSaveAgentHeartbeatQueryOptions = <
+  TData = Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+  TError = N400Response | N401Response | N403Response | AgentHeartbeatRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  agentHeartbeatSave: AgentHeartbeatSave,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSaveAgentHeartbeatQueryKey(projectId, applicationId, agentHeartbeatSave);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof saveAgentHeartbeat>>
+  > = ({ signal }) =>
+    saveAgentHeartbeat(projectId, applicationId, agentHeartbeatSave, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SaveAgentHeartbeatQueryResult = NonNullable<
+  Awaited<ReturnType<typeof saveAgentHeartbeat>>
+>;
+export type SaveAgentHeartbeatQueryError =
+  N400Response | N401Response | N403Response | AgentHeartbeatRefusal;
+
+export function useSaveAgentHeartbeat<
+  TData = Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+  TError = N400Response | N401Response | N403Response | AgentHeartbeatRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  agentHeartbeatSave: AgentHeartbeatSave,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+          TError,
+          Awaited<ReturnType<typeof saveAgentHeartbeat>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveAgentHeartbeat<
+  TData = Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+  TError = N400Response | N401Response | N403Response | AgentHeartbeatRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  agentHeartbeatSave: AgentHeartbeatSave,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+          TError,
+          Awaited<ReturnType<typeof saveAgentHeartbeat>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveAgentHeartbeat<
+  TData = Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+  TError = N400Response | N401Response | N403Response | AgentHeartbeatRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  agentHeartbeatSave: AgentHeartbeatSave,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Turn an agent's heartbeat on or off and attach its mandate
+ */
+
+export function useSaveAgentHeartbeat<
+  TData = Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+  TError = N400Response | N401Response | N403Response | AgentHeartbeatRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  agentHeartbeatSave: AgentHeartbeatSave,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveAgentHeartbeat>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSaveAgentHeartbeatQueryOptions(
+    projectId,
+    applicationId,
+    agentHeartbeatSave,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAgentHeartbeatsResponse200 = {
+  data: AgentHeartbeatList;
+  status: 200;
+};
+
+export type listAgentHeartbeatsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listAgentHeartbeatsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAgentHeartbeatsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAgentHeartbeatsResponseSuccess =
+  listAgentHeartbeatsResponse200 & {
+    headers: Headers;
+  };
+export type listAgentHeartbeatsResponseError = (
+  | listAgentHeartbeatsResponse400
+  | listAgentHeartbeatsResponse401
+  | listAgentHeartbeatsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listAgentHeartbeatsResponse =
+  listAgentHeartbeatsResponseSuccess | listAgentHeartbeatsResponseError;
+
+export const getListAgentHeartbeatsUrl = (
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentHeartbeatsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/agent_heartbeats/prompt_lib/${projectId}/${applicationId}?${stringifiedParams}`
+    : `/elitea_core/agent_heartbeats/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * One row per wake that reached the triage, or that paused the heartbeat at a daily limit, newest first. A skipped wake (quiet hours, kill switch, a run still active) writes no row; the settings show the last skip reason. Requires `models.applications.versions.get`.
+ * @summary List an agent's heartbeat history
+ */
+export const listAgentHeartbeats = async (
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentHeartbeatsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAgentHeartbeatsResponse> => {
+  return eliteaFetch<listAgentHeartbeatsResponse>(
+    getListAgentHeartbeatsUrl(projectId, applicationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAgentHeartbeatsQueryKey = (
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentHeartbeatsParams,
+) => {
+  return [
+    `/elitea_core/agent_heartbeats/prompt_lib/${projectId}/${applicationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListAgentHeartbeatsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAgentHeartbeats>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentHeartbeatsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentHeartbeats>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListAgentHeartbeatsQueryKey(projectId, applicationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAgentHeartbeats>>
+  > = ({ signal }) =>
+    listAgentHeartbeats(projectId, applicationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAgentHeartbeats>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAgentHeartbeatsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAgentHeartbeats>>
+>;
+export type ListAgentHeartbeatsQueryError =
+  N400Response | N401Response | N403Response;
+
+export function useListAgentHeartbeats<
+  TData = Awaited<ReturnType<typeof listAgentHeartbeats>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: undefined | ListAgentHeartbeatsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentHeartbeats>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentHeartbeats>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentHeartbeats>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentHeartbeats<
+  TData = Awaited<ReturnType<typeof listAgentHeartbeats>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentHeartbeatsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentHeartbeats>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentHeartbeats>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentHeartbeats>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentHeartbeats<
+  TData = Awaited<ReturnType<typeof listAgentHeartbeats>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentHeartbeatsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentHeartbeats>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List an agent's heartbeat history
+ */
+
+export function useListAgentHeartbeats<
+  TData = Awaited<ReturnType<typeof listAgentHeartbeats>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentHeartbeatsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentHeartbeats>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAgentHeartbeatsQueryOptions(
+    projectId,
+    applicationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getProjectProactivityResponse200 = {
+  data: ProjectProactivity;
+  status: 200;
+};
+
+export type getProjectProactivityResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getProjectProactivityResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getProjectProactivityResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getProjectProactivityResponseSuccess =
+  getProjectProactivityResponse200 & {
+    headers: Headers;
+  };
+export type getProjectProactivityResponseError = (
+  | getProjectProactivityResponse400
+  | getProjectProactivityResponse401
+  | getProjectProactivityResponse403
+) & {
+  headers: Headers;
+};
+
+export type getProjectProactivityResponse =
+  getProjectProactivityResponseSuccess | getProjectProactivityResponseError;
+
+export const getGetProjectProactivityUrl = (projectId: string) => {
+  return `/elitea_core/agent_heartbeat_project/prompt_lib/${projectId}`;
+};
+
+/**
+ * Requires `models.applications.versions.get`.
+ * @summary Read the project's proactive agents switch
+ */
+export const getProjectProactivity = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getProjectProactivityResponse> => {
+  return eliteaFetch<getProjectProactivityResponse>(
+    getGetProjectProactivityUrl(projectId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetProjectProactivityQueryKey = (projectId: string) => {
+  return [
+    `/elitea_core/agent_heartbeat_project/prompt_lib/${projectId}`,
+  ] as const;
+};
+
+export const getGetProjectProactivityQueryOptions = <
+  TData = Awaited<ReturnType<typeof getProjectProactivity>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getProjectProactivity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetProjectProactivityQueryKey(projectId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getProjectProactivity>>
+  > = ({ signal }) =>
+    getProjectProactivity(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getProjectProactivity>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetProjectProactivityQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getProjectProactivity>>
+>;
+export type GetProjectProactivityQueryError =
+  N400Response | N401Response | N403Response;
+
+export function useGetProjectProactivity<
+  TData = Awaited<ReturnType<typeof getProjectProactivity>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getProjectProactivity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProjectProactivity>>,
+          TError,
+          Awaited<ReturnType<typeof getProjectProactivity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetProjectProactivity<
+  TData = Awaited<ReturnType<typeof getProjectProactivity>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getProjectProactivity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getProjectProactivity>>,
+          TError,
+          Awaited<ReturnType<typeof getProjectProactivity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetProjectProactivity<
+  TData = Awaited<ReturnType<typeof getProjectProactivity>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getProjectProactivity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the project's proactive agents switch
+ */
+
+export function useGetProjectProactivity<
+  TData = Awaited<ReturnType<typeof getProjectProactivity>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getProjectProactivity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetProjectProactivityQueryOptions(projectId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setProjectProactivityResponse200 = {
+  data: ProjectProactivity;
+  status: 200;
+};
+
+export type setProjectProactivityResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type setProjectProactivityResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setProjectProactivityResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setProjectProactivityResponseSuccess =
+  setProjectProactivityResponse200 & {
+    headers: Headers;
+  };
+export type setProjectProactivityResponseError = (
+  | setProjectProactivityResponse400
+  | setProjectProactivityResponse401
+  | setProjectProactivityResponse403
+) & {
+  headers: Headers;
+};
+
+export type setProjectProactivityResponse =
+  setProjectProactivityResponseSuccess | setProjectProactivityResponseError;
+
+export const getSetProjectProactivityUrl = (projectId: string) => {
+  return `/elitea_core/agent_heartbeat_project/prompt_lib/${projectId}`;
+};
+
+/**
+ * Off stops every heartbeat of the project at its next wake; the settings of each agent stay. Requires `models.applications.publish.post`.
+ * @summary Turn every heartbeat of the project on or off
+ */
+export const setProjectProactivity = async (
+  projectId: string,
+  projectProactivity: ProjectProactivity,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setProjectProactivityResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setProjectProactivityResponse>(
+    getSetProjectProactivityUrl(projectId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(projectProactivity),
+    },
+  );
+};
+
+export const getSetProjectProactivityQueryKey = (
+  projectId: string,
+  projectProactivity?: ProjectProactivity,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/agent_heartbeat_project/prompt_lib/${projectId}`,
+    projectProactivity,
+  ] as const;
+};
+
+export const getSetProjectProactivityQueryOptions = <
+  TData = Awaited<ReturnType<typeof setProjectProactivity>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  projectProactivity: ProjectProactivity,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectProactivity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetProjectProactivityQueryKey(projectId, projectProactivity);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setProjectProactivity>>
+  > = ({ signal }) =>
+    setProjectProactivity(projectId, projectProactivity, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setProjectProactivity>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetProjectProactivityQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setProjectProactivity>>
+>;
+export type SetProjectProactivityQueryError =
+  N400Response | N401Response | N403Response;
+
+export function useSetProjectProactivity<
+  TData = Awaited<ReturnType<typeof setProjectProactivity>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  projectProactivity: ProjectProactivity,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectProactivity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setProjectProactivity>>,
+          TError,
+          Awaited<ReturnType<typeof setProjectProactivity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetProjectProactivity<
+  TData = Awaited<ReturnType<typeof setProjectProactivity>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  projectProactivity: ProjectProactivity,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectProactivity>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setProjectProactivity>>,
+          TError,
+          Awaited<ReturnType<typeof setProjectProactivity>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetProjectProactivity<
+  TData = Awaited<ReturnType<typeof setProjectProactivity>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  projectProactivity: ProjectProactivity,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectProactivity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Turn every heartbeat of the project on or off
+ */
+
+export function useSetProjectProactivity<
+  TData = Awaited<ReturnType<typeof setProjectProactivity>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  projectProactivity: ProjectProactivity,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setProjectProactivity>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetProjectProactivityQueryOptions(
+    projectId,
+    projectProactivity,
     options,
   );
 
