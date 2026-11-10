@@ -169,24 +169,56 @@ plain `cargo test` without a database fail, so they stay ignored; no workflow ch
 | Component × phase | Class | Enforced by | Proven by |
 |---|---|---|---|
 | Worker × Code slot wait (fresh) | I (pre-dispatch, nothing started) | `code_attempt_remote.rs:99`, `code_remote.rs:410` | `journaled_path_admits_exactly_required_and_refuses_one_ms_less`, `raw_path_admits_…` |
-| Worker × Code refused by deadline admission | F (typed; the Worker cannot extend the deadline) | `admission.rs:315` | as above; real-PG no-row test written, not run |
+| Worker × Code refused by deadline admission | F (typed; the Worker cannot extend the deadline) | `admission.rs:315` | as above; `real_pg_root_code_with_too_little_time_is_refused_without_a_dispatch_row` (real PG) |
 | Worker × started attempt recovered near the deadline | R/C unchanged: reconciled, never refused | `admit_started`, `code_attempt_remote.rs:99` | `a_started_attempt_recovered_with_too_little_time_is_reconciled_not_refused` |
 | Worker × slot held across a Worker crash | R/I unchanged (FU-214, owner recovery) | slots are process memory | per-target test (a new factory starts with every slot free) |
-| Supervisor × Busy from other Workers | unchanged backoff, slot kept | `code_attempt_remote.rs` submit loop | `real_pg_busy_from_another_worker_backs_off_without_releasing_the_slot` (not run) |
+| Supervisor × Busy from other Workers | unchanged backoff, slot kept | `code_attempt_remote.rs` submit loop | `real_pg_busy_from_another_worker_backs_off_without_releasing_the_slot` (real PG); browser case 3: 0 Busy answers |
 | Main older than Worker (mixed rollout) × output delivery of a post-baseline failure | **I**: the refused terminal is replaced once, at the same sequence, by its baseline fallback; the older Main shows the generic Code or tool failure text; typed, not lost, never looped | `protocol/output.rs:330` (`refused_terminal_replacement`), `protocol/output.rs:935` (`older_main_fallback`), `execution/output_delivery.rs:2376` | `a_refused_post_baseline_failure_is_replaced_once_by_its_fallback_and_settles`, `a_refused_fallback_is_not_substituted_again`, `post_baseline_kinds_fall_back_to_a_baseline_kind_of_the_same_wire_code`, Main `TestAnUnknownFailureIsRefusedOnceAndItsSameCodeFallbackEndsTheRunTyped` |
 
 ## Real-browser evidence
 
-Not done in this change: no stack was started (the session ran with no Docker). PLAN §5 cases 1-3 remain.
+Disposable stack `w31a` (`w31a.localhost:48600`, production profile: `stack.sh verify-profile` 50 passed, 0 failed,
+before case 1 and again after the case 3 config change), real-model dump `product-real-models-main-ce2756fad`.
+
+| Image | Tag | Identity | Branch check (§3b) |
+|---|---|---|---|
+| Worker | `elitea-worker-rust:w31-e996b024a` (this branch's head) | `sha256:54aad93a7e5b…` | binary extracted with `docker create` + `docker cp`: `pipeline.code.slot_waited`, `pipeline.code.supervisor_busy`, `code_slots_configured`, `supervisor_target`, `pipeline.code.deadline_insufficient` each found once |
+| Main | `elitea-main:w31-f8d960003` | Main has no change after `f8d960003` (later commits touch the Worker and docs only) | built from this branch |
+
+Fixture: pipeline 170 "W31 slot check", created in the UI: one Python Code node (`time.sleep(5)`, returns
+`slot check done`), run from the designer's test chat. Python runs on `elitea-sandbox-deno:9446`, which no other
+language uses.
+
+1. **Defaults (case 1).** Startup logs one INFO `code_slots_configured` per Supervisor target, each `code_slots: 4`:
+   `elitea-sandbox-deno:9446`, `elitea-sandbox-deno-native:9450` (JavaScript and TypeScript share it),
+   `elitea-sandbox-rust:9447`. One run, execution `11af2e086716e776661e813101cf7e39`: SUCCEEDED in 12 s,
+   "slot check done". Worker logs for it: no `slot_waited`, no `supervisor_busy`, no WARN, no ERROR (an uncontended
+   acquire writes no line). After a reload the run history shows it SUCCEEDED with its preparation, hydration and
+   execution trace.
+2. **Too little time (case 2).** Proven with real PostgreSQL only (N4): the stack has no setting that shortens the
+   24 h agent TTL, so a browser run cannot reach the 150 s window. See
+   `real_pg_root_code_with_too_little_time_is_refused_without_a_dispatch_row`.
+3. **One slot, two runs at once (case 3).** `"code_slots": 1` set on the Python entry of the stack's
+   `material/worker-runtime.json`, Worker restarted. Startup then logs `elitea-sandbox-deno:9446` `code_slots: 1`, and the
+   other targets stay at 4. Two runs were sent from two tabs within a second of each other (12:46:09.15 and 12:46:09.17).
+   - `16729b89cda3266df2c9343160ce4453` took the slot: SUCCEEDED in 13 s.
+   - `c927074e56650cf646a1199aab0f12be` waited for it. The Worker wrote exactly one INFO line:
+     `code: pipeline.code.slot_waited`, `slot_wait_ms: 12213`, `slots_capacity: 1`,
+     `supervisor_target: elitea-sandbox-deno:9446`, `execution_id: c927074e…`. Its trace shows preparation starting at
+     12:46:21.57, 12.2 s after the run started. The run SUCCEEDED in 24 s with "slot check done".
+   - The wait is longer than the 5 s sleep because one slot covers a whole attempt, preparation and run (D1).
+   - Worker logs over the whole case: 0 `pipeline.code.supervisor_busy` lines (the Supervisor never answered Busy), 0 WARN,
+     0 ERROR.
+   - After a reload the run history lists both runs SUCCEEDED, with their traces.
 
 ## Fixtures
 
 All unit fixtures are in-process fakes (never-connecting PostgreSQL pool, in-memory node journal, fixture Main RPC).
-No database fixture was created.
+No database fixture was created. The browser fixture (pipeline 170) was created through the UI; the case 3
+`code_slots: 1` was a hand edit of the disposable stack's generated Worker config, as PLAN §5 asks.
 
 ## Follow-ups
 
-- Browser acceptance (PLAN §5).
 - The restored-terminal path (`report_restored_terminal_failure`) knows only the class, so a refusal restored from the
   node journal after a Worker restart shows the generic Code failure text.
 - The raw path has no node id for the fault line (`node_id` is empty there).
