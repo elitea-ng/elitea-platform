@@ -1135,6 +1135,19 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         self.owned_definition_digest(branch).map(|_| ())
     }
 
+    /// R3: an Agent or inline LLM child has an admitted family; a State
+    /// Modifier or Code child has none. An unknown branch is treated as
+    /// owning one, so its missing family is refused.
+    fn requires_application_family(
+        &self,
+        branch: &crate::agents::graph::ParallelBranchDefinition,
+    ) -> bool {
+        !matches!(
+            self.definition(branch),
+            Ok(OwnedBranch::StateModifier(_) | OwnedBranch::Code(_))
+        )
+    }
+
     /// W3-2 (D3): a child with Code counts its Code nodes' time; a child
     /// without Code is not admitted here (it has no Code time to bound).
     fn admit_activation(

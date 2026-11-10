@@ -256,6 +256,9 @@ pub(crate) struct ParallelChildRequest<'a> {
     pub(crate) branch: &'a ParallelBranchDefinition,
     pub(crate) ordinal: usize,
     pub(crate) input_digest: &'a [u8; 32],
+    /// The owned node runs no application subgraph (State Modifier, Code), so
+    /// an empty checkpoint family is its admitted family (R3).
+    pub(crate) path_free: bool,
 }
 
 /// An activated child writer and the latest checkpoint it held at activation.
@@ -383,6 +386,13 @@ pub(crate) trait ParallelCheckpointAuthority:
 #[async_trait]
 pub(crate) trait ParallelBranchGraphFactory: Send + Sync {
     fn validate_branch(&self, branch: &ParallelBranchDefinition) -> Result<(), GraphError>;
+
+    /// Whether `branch`'s owned node runs an application subgraph (an Agent
+    /// or an inline LLM node) and so must have an admitted checkpoint family
+    /// (R3). Default: yes, fail closed.
+    fn requires_application_family(&self, _branch: &ParallelBranchDefinition) -> bool {
+        true
+    }
 
     /// W3-2 (D3): admit a first activation of `branches` against the run's
     /// deadline, before it freezes. Only Code children are counted. Default:
@@ -960,6 +970,7 @@ impl AdkParallelBranchRuntime {
                 branch,
                 ordinal: input.ordinal,
                 input_digest: &input.input_digest,
+                path_free: !self.graphs.requires_application_family(branch),
             })
             .collect::<Vec<_>>();
         // One batched activation and one batched receipt read for every child.

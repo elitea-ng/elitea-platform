@@ -476,6 +476,11 @@ impl ParallelBranchGraphFactory for LineageWorkers {
         Ok(())
     }
 
+    /// The counting worker is a State Modifier: no application family (R3).
+    fn requires_application_family(&self, _branch: &ParallelBranchDefinition) -> bool {
+        false
+    }
+
     fn owned_definition_digest(
         &self,
         _branch: &ParallelBranchDefinition,
