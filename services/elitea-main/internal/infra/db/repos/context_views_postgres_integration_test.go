@@ -128,6 +128,28 @@ func TestContextViewReadsBackTheAnswersOwnView(t *testing.T) {
 		t.Fatalf("no record: err = %v, want 404", err)
 	}
 
+	// The compaction measurement is this run's only: one stamped with the
+	// current task and generation shows, one left from an earlier run does not.
+	measurement := `{"phase":"compacted","estimated_input_tokens":90000,"usable_input_tokens":100000,"compaction_trigger_tokens":80000}`
+	if _, err := pool.Exec(ctx, `
+UPDATE p_1.chat_message_group
+SET task_id = 'run-2',
+    meta = meta || jsonb_build_object('execution_generation', '2',
+        'runtime_context', jsonb_build_object('execution_id', $2::text, 'execution_generation', '2', 'measurement', $3::jsonb))
+WHERE uuid = $1::uuid`, answer, "run-2", measurement); err != nil {
+		t.Fatal(err)
+	}
+	if view, err = store.MessageContextView(ctx, "1", answer); err != nil || view.Compaction == nil ||
+		view.Compaction.Phase != "compacted" || view.Compaction.EstimatedInputTokens != 90000 {
+		t.Fatalf("current run's measurement: %+v %v", view.Compaction, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_message_group SET task_id = 'run-3' WHERE uuid = $1::uuid`, answer); err != nil {
+		t.Fatal(err)
+	}
+	if view, err = store.MessageContextView(ctx, "1", answer); err != nil || view.Compaction != nil {
+		t.Fatalf("a previous run's measurement must not show: %+v %v", view.Compaction, err)
+	}
+
 	// A regeneration replaces the record.
 	recordView(t, repo, answer, agentexecutionapp.ContextViewRecord{
 		ReaderParticipantID: int64(reader), Settings: contextview.Default, WindowTokens: 4096, Digest: digest,

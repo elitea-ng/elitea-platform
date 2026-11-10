@@ -23,6 +23,7 @@ import { ChatMessageList, currentNodeRecoveryBinding, applySteeringEvent, useCha
 import { getAllTokens } from '@/features/mcps';
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
+import { WELCOME_MESSAGE_ID } from '@/shared/lib/enums';
 import { useDoubleEscape } from '@/shared/lib/useDoubleEscape';
 
 import {
@@ -181,7 +182,7 @@ const ChatBoxInner = memo(function ChatBox({
   });
   useChatBoxInterruptLedger({ projectId, conversationUuid, messages, setChatHistory: data.setChatHistory, reattach: reattachStreamedExecution }); // per-interrupt cards across tabs; a fan-out wake attaches
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
-  const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), onConversationCreated, hasMessages: messages.length > 0 });
+  const entityParticipantActions = useAddEntityParticipant({ projectId, conversationId, participants: normalisedParticipants, onChangeParticipant, createConversation: () => createConversationForSend(''), onConversationCreated, hasMessages: messages.some((message) => message.id !== WELCOME_MESSAGE_ID) }); // the client-only welcome row is not history
   // `isStreamingNow` is derived from the PERSISTED message groups, which carry no
   // in-flight flag while an SSE turn runs — without the transport's own flag the
   // composer never offers Stop for the turn Stop exists to cancel (#328).

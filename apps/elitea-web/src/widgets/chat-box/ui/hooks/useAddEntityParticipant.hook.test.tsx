@@ -176,6 +176,30 @@ describe('useAddEntityParticipant: share history from (issue 1669)', () => {
     expect(addedBodies).toHaveLength(0);
   });
 
+  it('selects, never detaches, an agent that joined while the question was open', async () => {
+    const deleted = vi.fn();
+    server.use(http.delete(`${BASE}/elitea_core/participant/*`, () => { deleted(); return new HttpResponse(null, { status: 204 }); }));
+    const onChangeParticipant = vi.fn();
+    const joined = { id: '41', entityName: 'application' as const, entityMeta: { id: '12', projectId: '2' }, entitySettings: {} };
+    const { result, rerender } = renderHook((props: { readonly participants: readonly (typeof joined)[] }) => useAddEntityParticipant({
+      projectId: 2,
+      conversationId: 77,
+      participants: props.participants,
+      onChangeParticipant,
+      hasMessages: true,
+    }), { wrapper: createWrapper(), initialProps: { participants: [] as readonly (typeof joined)[] } });
+
+    act(() => { result.current.onSelectParticipant(AGENT_LIST_ROW); });
+    expect(result.current.shareHistory.open).toBe(true);
+    rerender({ participants: [joined] });
+    act(() => { result.current.shareHistory.onChoose('now'); });
+    await Promise.resolve();
+
+    expect(onChangeParticipant).toHaveBeenCalledWith(joined);
+    expect(deleted).not.toHaveBeenCalled();
+    expect(addedBodies).toHaveLength(0);
+  });
+
   it('does not ask on an empty conversation', async () => {
     const { result } = renderHook(() => useAddEntityParticipant({
       projectId: 2,

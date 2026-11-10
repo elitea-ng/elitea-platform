@@ -86,6 +86,14 @@ export function useAddEntityParticipant(params: {
     const key = selectionKey(selection);
     if (runtime.projectId === undefined || !key || pendingRef.current.has(key)) return;
     const existing = findSelectedConversationParticipant(selection, runtime.participants);
+    // Re-checked here, not only in `onSelectParticipant`: the agent may have
+    // joined while the "Share history from" question was open, and the
+    // existing branch of `applyParticipantSelection` DETACHES. An attached
+    // agent is selected, never removed.
+    if (existing && !isToolkitSelection(selection)) {
+      if (canBecomeActive(existing)) runtime.onChangeParticipant?.(existing);
+      return;
+    }
     pendingRef.current.add(key);
     setPendingKeys(new Set(pendingRef.current));
     // Cleared on EVERY settlement, not just a rejection: `applyParticipantSelection`

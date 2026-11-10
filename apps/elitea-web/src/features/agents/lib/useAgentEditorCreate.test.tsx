@@ -129,6 +129,38 @@ describe('useAgentEditorCreate', () => {
     });
   });
 
+  it('submit sends the Conversation history block the field wrote, and no key for the default (ADR-0050 decision 9)', async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      getCreateApplicationMockHandler(async (info) => {
+        bodies.push(await info.request.json());
+        return {
+          id: '42',
+          name: 'My Agent',
+          description: '',
+          type: 'interface',
+          icon: '',
+          owner_id: 'u1',
+          created_at: '2026-01-01T00:00:00Z',
+        };
+      }),
+    );
+    const { result } = renderHookWithProviders(() => useAgentEditorCreate('p1'));
+
+    act(() => result.current.onFieldChange('name', 'My Agent'));
+    await act(async () => {
+      await result.current.submit();
+    });
+    act(() => result.current.onFieldChange('version_details.meta.context', { history: 'addressed_only', include_side_talk: 'none' }));
+    await act(async () => {
+      await result.current.submit();
+    });
+
+    const metaOf = (body: unknown) => (body as { versions: { meta: Record<string, unknown> }[] }).versions[0]?.meta;
+    expect(metaOf(bodies[0])).not.toHaveProperty('context');
+    expect(metaOf(bodies[1])).toMatchObject({ context: { history: 'addressed_only', include_side_talk: 'none' } });
+  });
+
   it('starts clean and becomes dirty once a field changes', () => {
     const { result } = renderHookWithProviders(() => useAgentEditorCreate('p1'));
     expect(result.current.isDirty).toBe(false);

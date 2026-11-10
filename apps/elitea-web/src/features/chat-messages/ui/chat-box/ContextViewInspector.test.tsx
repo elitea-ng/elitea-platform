@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from '@mui/material/styles';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -114,6 +114,36 @@ describe('ApplicationAnswerActions — What the agent saw', () => {
     fireEvent.click(screen.getByTestId('answer-more-actions'));
     fireEvent.click(screen.getByTestId('answer-context-view'));
     expect(await screen.findByTestId('context-view')).toBeInTheDocument();
+  });
+
+  it('reads the view afresh on every open, so a failed load retries and a regenerated answer shows its new view', async () => {
+    let calls = 0;
+    server.use(
+      http.get(URL, () => {
+        calls += 1;
+        return calls === 1 ? HttpResponse.json({ error: 'down' }, { status: 503 }) : HttpResponse.json(VIEW);
+      }),
+    );
+    // No gcTime override here: the component itself must not keep the result.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <ApplicationAnswerActions state={state} handlers={{}} feedback={{ projectId: '7', messageId: MESSAGE }} memoryContent="x" alwaysVisible />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId('answer-more-actions'));
+    fireEvent.click(screen.getByTestId('answer-context-view'));
+    expect(await screen.findByTestId('context-view-unavailable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByTestId('context-view-unavailable')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('answer-more-actions'));
+    fireEvent.click(screen.getByTestId('answer-context-view'));
+    expect(await screen.findByTestId('context-view')).toBeInTheDocument();
+    expect(calls).toBe(2);
   });
 
   it('offers no inspector without a resolved project and a settled answer', () => {

@@ -184,7 +184,11 @@ export function ContextViewInspector({ open, projectId, messageId, onClose }: Co
     queryKey: ['chat-messages', 'contextView', projectId, messageId],
     queryFn: () => fetchMessageContextView(projectId, messageId),
     enabled: open,
-    staleTime: Infinity,
+    // Read afresh on every open: a regenerate replaces the record under the
+    // same answer id, and a failure resolves to a value (`unavailable`), so a
+    // cached result would show the previous run's view or never retry.
+    staleTime: 0,
+    gcTime: 0,
   });
   return (
     <BaseModal

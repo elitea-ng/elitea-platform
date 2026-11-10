@@ -89,15 +89,28 @@ func (s *ContextViews) MessageContextView(ctx context.Context, projectID, messag
 	if _, parseErr := uuid.Parse(messageUUID); parseErr != nil {
 		return ContextView{}, apierr.NotFound("context view not found")
 	}
+	// Header and entries from one snapshot: a regenerate that replaces the
+	// record between the two reads must not pair one run's header with the
+	// other's entries.
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return ContextView{}, fmt.Errorf("read context view: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var view ContextView
 	var conversationID int64
 	var compaction []byte
-	err = s.pool.QueryRow(ctx, fmt.Sprintf(`
+	err = tx.QueryRow(ctx, fmt.Sprintf(`
 SELECT response.uuid::text, view.reader_participant_id,
        NULLIF(COALESCE(reader.meta->>'name', reader.meta->>'user_name', ''), ''),
        view.history, view.include_side_talk, view.participant_history,
        view.window_tokens, view.digest, view.created_at, response.conversation_id,
+       -- The measurement belongs to this run only: the same gate
+       -- GetContextStatus applies, so a regenerated answer never shows the
+       -- previous run's numbers.
        CASE WHEN jsonb_typeof(response.meta->'runtime_context'->'measurement') = 'object'
+             AND response.meta->'runtime_context'->>'execution_id' = response.task_id
+             AND response.meta->'runtime_context'->>'execution_generation' = response.meta->>'execution_generation'
             THEN response.meta->'runtime_context'->'measurement' END
 FROM %[1]s.chat_message_context_views view
 JOIN %[1]s.chat_message_group response ON response.uuid = view.message_group_uuid
@@ -117,14 +130,18 @@ WHERE view.message_group_uuid = $1::uuid
 	view.Compaction = decodeContextViewCompaction(compaction)
 	// The entries in recorded order, each joined to its message in the same
 	// conversation only: an id that names a group elsewhere labels nothing.
-	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
 SELECT entry.value->>'message_id', NULLIF(entry.value->>'reason', ''),
        NULLIF(COALESCE(author.meta->>'name', author.meta->>'user_name', ''), ''),
        COALESCE(message.author_kind, author.kind), message.created_at
 FROM %[1]s.chat_message_context_views view
 CROSS JOIN LATERAL jsonb_array_elements(view.entries) WITH ORDINALITY AS entry(value, position)
 LEFT JOIN %[1]s.chat_message_group message
-       ON message.uuid::text = entry.value->>'message_id' AND message.conversation_id = $2
+       -- Compare as uuid so the unique index on chat_message_group.uuid is
+       -- used; an entry id that is not a uuid labels nothing.
+       ON message.uuid = CASE WHEN entry.value->>'message_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                              THEN (entry.value->>'message_id')::uuid END
+      AND message.conversation_id = $2
 LEFT JOIN %[1]s.chat_participants author ON author.id = message.author_participant_id
 WHERE view.message_group_uuid = $1::uuid
 ORDER BY entry.position`, tenant), messageUUID, conversationID)
@@ -147,6 +164,10 @@ ORDER BY entry.position`, tenant), messageUUID, conversationID)
 	}
 	if err := rows.Err(); err != nil {
 		return ContextView{}, fmt.Errorf("read context view entries: %w", err)
+	}
+	rows.Close()
+	if err := tx.Commit(ctx); err != nil {
+		return ContextView{}, fmt.Errorf("read context view: %w", err)
 	}
 	return view, nil
 }
