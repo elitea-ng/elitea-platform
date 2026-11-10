@@ -122,6 +122,7 @@ import type {
   MemoryEntry,
   MemoryEntryList,
   MemoryEntryWriteRequest,
+  MessageContextView,
   MessageFeedbackRequest,
   MessageFeedbackSummary,
   MessageTraceListing,
@@ -25191,6 +25192,266 @@ export function useDeleteMessageFeedback<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getDeleteMessageFeedbackQueryOptions(
+    projectId,
+    messageId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getMessageContextViewResponse200 = {
+  data: MessageContextView;
+  status: 200;
+};
+
+export type getMessageContextViewResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getMessageContextViewResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getMessageContextViewResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getMessageContextViewResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getMessageContextViewResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type getMessageContextViewResponseSuccess =
+  getMessageContextViewResponse200 & {
+    headers: Headers;
+  };
+export type getMessageContextViewResponseError = (
+  | getMessageContextViewResponse401
+  | getMessageContextViewResponse403
+  | getMessageContextViewResponse404
+  | getMessageContextViewResponse500
+  | getMessageContextViewResponse503
+) & {
+  headers: Headers;
+};
+
+export type getMessageContextViewResponse =
+  getMessageContextViewResponseSuccess | getMessageContextViewResponseError;
+
+export const getGetMessageContextViewUrl = (
+  projectId: string,
+  messageId: string,
+) => {
+  return `/elitea_core/message_context_view/prompt_lib/${projectId}/${messageId}`;
+};
+
+/**
+ * internal/api/v2/contextviews/handler.go's Get (ADR-0050 decision 9,
+ * issue 1669). The view Main sent the answering agent on that turn,
+ * recorded with the answer (tenant/0167_chat_message_context_views.sql):
+ * the mode, the model window, the digest the worker checked, and every
+ * visible message the conversation projected, in order, each with the
+ * rule that dropped it or no reason when it was in the view. Gated on
+ * `models.chat.messages.details`, and the conversation's read rule is
+ * applied to the message first, so a message the caller cannot read is
+ * a 404. Only the answer's own reader's view is ever answered, and no
+ * message body, tool call, tool result or thinking step is in it. An
+ * answer admitted before the record existed answers 404.
+ * @summary What the agent saw for one answer
+ */
+export const getMessageContextView = async (
+  projectId: string,
+  messageId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getMessageContextViewResponse> => {
+  return eliteaFetch<getMessageContextViewResponse>(
+    getGetMessageContextViewUrl(projectId, messageId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetMessageContextViewQueryKey = (
+  projectId: string,
+  messageId: string,
+) => {
+  return [
+    `/elitea_core/message_context_view/prompt_lib/${projectId}/${messageId}`,
+  ] as const;
+};
+
+export const getGetMessageContextViewQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMessageContextView>>,
+  TError =
+    N401Response | N403Response | N404Response | N500Response | ErrorResponse,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageContextView>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetMessageContextViewQueryKey(projectId, messageId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMessageContextView>>
+  > = ({ signal }) =>
+    getMessageContextView(projectId, messageId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      messageId !== null &&
+      messageId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMessageContextView>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetMessageContextViewQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMessageContextView>>
+>;
+export type GetMessageContextViewQueryError =
+  N401Response | N403Response | N404Response | N500Response | ErrorResponse;
+
+export function useGetMessageContextView<
+  TData = Awaited<ReturnType<typeof getMessageContextView>>,
+  TError =
+    N401Response | N403Response | N404Response | N500Response | ErrorResponse,
+>(
+  projectId: string,
+  messageId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageContextView>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMessageContextView>>,
+          TError,
+          Awaited<ReturnType<typeof getMessageContextView>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMessageContextView<
+  TData = Awaited<ReturnType<typeof getMessageContextView>>,
+  TError =
+    N401Response | N403Response | N404Response | N500Response | ErrorResponse,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageContextView>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMessageContextView>>,
+          TError,
+          Awaited<ReturnType<typeof getMessageContextView>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMessageContextView<
+  TData = Awaited<ReturnType<typeof getMessageContextView>>,
+  TError =
+    N401Response | N403Response | N404Response | N500Response | ErrorResponse,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageContextView>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary What the agent saw for one answer
+ */
+
+export function useGetMessageContextView<
+  TData = Awaited<ReturnType<typeof getMessageContextView>>,
+  TError =
+    N401Response | N403Response | N404Response | N500Response | ErrorResponse,
+>(
+  projectId: string,
+  messageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMessageContextView>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetMessageContextViewQueryOptions(
     projectId,
     messageId,
     options,

@@ -1984,6 +1984,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/internal_mcp_pat_status/prompt_lib/{projectID}/{toolkitType}",
 		"GET /api/v2/elitea_core/memories/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/message/prompt_lib/{projectID}/{messageID}",
+		"GET /api/v2/elitea_core/message_context_view/prompt_lib/{projectID}/{messageID}",
 		"GET /api/v2/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
 		"GET /api/v2/elitea_core/message_trace/prompt_lib/{projectID}/{stepID}",
 		"GET /api/v2/elitea_core/message_traces/prompt_lib/{projectID}/{conversationID}",

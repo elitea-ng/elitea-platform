@@ -1,12 +1,7 @@
 import type { ApplicationCreationInput, ApplicationVersionDraft } from '@/entities/application-form';
 import type { VersionSummary } from '@/entities/version';
 import { toAgentLlmSettings, toLlmSettingsBody, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
-import type {
-  ApplicationDetail,
-  ApplicationVersionDetail,
-  ApplicationVersionSummary,
-  VersionWriteRequest,
-} from '@/shared/api/generated/model';
+import type { ApplicationDetail, ApplicationVersionDetail, ApplicationVersionSummary, VersionWriteRequest } from '@/shared/api/generated/model';
 
 import { soulWriteField } from './agentSoulDraft';
 import { avatarPackWriteField } from './avatarPackDraft';
@@ -203,8 +198,9 @@ function toVersionMetaBody(
       notes: edits.notes,
       // #1500 — always sent: `null` clears a stored contract (an omitted key keeps it through the merge).
       output_contract: edits.outputContract,
-      // ADR-0043 decision 5 — always sent: `null` clears a stored setting.
+      // ADR-0043 decision 5 and ADR-0050 decision 9 — always sent: `null` clears a stored setting.
       citations: edits.citations ?? null,
+      context: edits.contextBlock ?? null,
     },
   };
 }

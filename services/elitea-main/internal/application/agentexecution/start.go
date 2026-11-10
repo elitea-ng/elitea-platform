@@ -101,6 +101,9 @@ type CurrentApplicationTurn struct {
 	QuestionVisibility string
 	// QuestionCause is empty (derived from the author) or a turntaking cause.
 	QuestionCause string
+	// ContextView is the view the turn's input carries (issue 1669); the
+	// admission records it on the response. nil records nothing.
+	ContextView *ContextViewRecord
 }
 
 func (turn CurrentApplicationTurn) Validate() error {
@@ -128,6 +131,7 @@ func (turn *CurrentApplicationTurn) Clone() *CurrentApplicationTurn {
 	clone.QuestionMeta = bytes.Clone(turn.QuestionMeta)
 	clone.Attachments = cloneCurrentTurnAttachments(turn.Attachments)
 	clone.QuestionAddressedTo = append([]int64(nil), turn.QuestionAddressedTo...)
+	clone.ContextView = turn.ContextView.Clone()
 	return &clone
 }
 
@@ -466,7 +470,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	)
 	modelRequest := request
 	modelRequest.UserInput = floorModelInput(request)
-	input, err := currentApplicationInput(
+	input, view, err := currentApplicationInputWithView(
 		modelRequest, target, toolkitGuardrails, attachments,
 		joinRecallText(memoryRecall.Text, agentMemoryText), projectContextText,
 	)
@@ -505,6 +509,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		ResponseMessageID: responseMessageID, QuestionMeta: questionMeta,
 		UserInput: request.UserInput, AllowEmptyUserInput: request.AllowEmptyUserInput,
 		Attachments: attachments,
+		ContextView: newContextViewRecord(request.TargetParticipantID, target.ParticipantContextHistory, view, input),
 	}
 	applyFloorTurn(currentTurn, floor, request)
 	if request.Heartbeat {
@@ -573,13 +578,27 @@ func currentApplicationInput(
 	memoryText string,
 	projectContextText string,
 ) (*runtimev1.AgentExecutionInputV1, error) {
+	input, _, err := currentApplicationInputWithView(request, target, toolkitGuardrails, attachments, memoryText, projectContextText)
+	return input, err
+}
+
+// currentApplicationInputWithView also returns the reader's view, which the turn
+// records (issue 1669).
+func currentApplicationInputWithView(
+	request CurrentApplicationStartRequest,
+	target CurrentApplicationTarget,
+	toolkitGuardrails json.RawMessage,
+	attachments []CurrentTurnAttachment,
+	memoryText string,
+	projectContextText string,
+) (*runtimev1.AgentExecutionInputV1, ReaderView, error) {
 	skills, err := projectCurrentApplicationSkills(request.UserInput, target.VersionDetails, request.projectSkills)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	userInput, err := json.Marshal(skills.userInput)
 	if err != nil {
-		return nil, ErrInvalidCurrentAgentStart
+		return nil, ReaderView{}, ErrInvalidCurrentAgentStart
 	}
 	// #870: appended AFTER skill processing, onto version_details as it
 	// stands, so recalled memory text is never itself scanned for
@@ -599,9 +618,9 @@ func currentApplicationInput(
 		// unsupported-start identity and also carries the typed refusal, so
 		// the route can name it.
 		if pipelinelimits.Refusal(err) != nil {
-			return nil, unsupportedStartBecause("pipeline refused by start admission", err)
+			return nil, ReaderView{}, unsupportedStartBecause("pipeline refused by start admission", err)
 		}
-		return nil, ErrUnsupportedCurrentAgentStart
+		return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 	}
 	applicationFields := map[string]any{
 		"id":              target.ApplicationID,
@@ -611,48 +630,48 @@ func currentApplicationInput(
 	}
 	if target.OriginalSource != nil {
 		if target.OriginalSource.Validate() != nil {
-			return nil, ErrUnsupportedCurrentAgentStart
+			return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 		}
 		applicationFields["source_definition"] = target.OriginalSource
 	}
 	application, err := json.Marshal(applicationFields)
 	if err != nil {
-		return nil, ErrInvalidCurrentAgentStart
+		return nil, ReaderView{}, ErrInvalidCurrentAgentStart
 	}
 	// One decode serves both readers below. The projection already decoded
 	// this document once to build it; decoding it again per reader put three
 	// full UseNumber passes over the same bytes on every turn start.
 	version, err := decodeCurrentApplicationVersion(skills.versionDetails)
 	if err != nil {
-		return nil, ErrUnsupportedCurrentAgentStart
+		return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 	}
 	llm, err := currentApplicationRuntimeLLM(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	internalTools, err := currentRuntimeInternalTools(target.InternalTools)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	stepsLimit, err := currentApplicationStepsLimit(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	projectContext, err := currentFrozenProjectContext(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	modelContextLimits, err := currentFrozenModelContextLimits(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	modelReasoning, err := currentFrozenModelReasoning(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	summaryModel, err := currentFrozenSummaryModel(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	// ADR-0050 decision 9 (issue 1609): the history is this reader's view.
 	view, err := BuildReaderView(
@@ -660,7 +679,7 @@ func currentApplicationInput(
 		target.ChatHistory, target.ChatHistoryRefs,
 	)
 	if err != nil {
-		return nil, ErrUnsupportedCurrentAgentStart
+		return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
@@ -693,7 +712,7 @@ func currentApplicationInput(
 		input.StepsLimit = stepsLimit
 	}
 	input.ContextView = contextViewInput(view.Settings, modelContextLimits, input.ChatHistory, input.ChatHistoryRefs)
-	return input, nil
+	return input, view, nil
 }
 
 // currentApplicationStepsLimit lifts the authored step limit out of the frozen

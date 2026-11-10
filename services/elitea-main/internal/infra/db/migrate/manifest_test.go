@@ -1373,7 +1373,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 166: tenant/0166_agent_heartbeat_settings.sql, the heartbeat state of
 	// each proactive agent and the project switch proactive_agents_enabled
 	// (ADR-0050 decision 2, issue 1618). No data, no permission.
-	require.EqualValues(t, 166, Head(tenant))
+	//
+	// 167: tenant/0167_chat_message_context_views.sql, the view each agent
+	// answer was given: reader, mode, window, digest and the projected
+	// message ids with why each was dropped (ADR-0050 decision 9, issue
+	// 1669). No data, no permission.
+	require.EqualValues(t, 167, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

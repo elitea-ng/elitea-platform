@@ -7159,6 +7159,71 @@ components:
           description: '-1 = dislike, 1 = like.'
         comment: { type: string }
 
+    MessageContextView:
+      type: object
+      description: >
+        The view one agent answer was given (ADR-0050 decision 9, issue
+        1669): what Main sent the answering agent as the conversation on that
+        turn. `history` is the mode after the participant's own mode;
+        `participant_history` is the participant's own setting ("share
+        history from: now" is `since_joined`), null when unset. `compaction`
+        is the answer's last context measurement, null when the runtime
+        reported none.
+        NOTE(W2): internal/infra/db/repos/context_views.go:63 (`ContextView`).
+      required: [message_id, reader_participant_id, reader_name, history, include_side_talk,
+        participant_history, window_tokens, digest, recorded_at, entries, compaction]
+      properties:
+        message_id: { type: string, format: uuid }
+        reader_participant_id: { type: integer, format: int64 }
+        reader_name: { type: string, nullable: true }
+        history:
+          type: string
+          description: "`full`, `since_joined`, `addressed_only` or `none`."
+        include_side_talk:
+          type: string
+          description: "`party` or `none`."
+        participant_history: { type: string, nullable: true }
+        window_tokens: { type: integer, format: int64 }
+        digest: { type: string, description: The lowercase hex SHA-256 view digest. }
+        recorded_at: { type: string, format: date-time }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/MessageContextViewEntry' }
+        compaction:
+          allOf:
+            - $ref: '#/components/schemas/MessageContextViewCompaction'
+          nullable: true
+
+    MessageContextViewEntry:
+      type: object
+      description: >
+        One visible message of the conversation, in transcript order.
+        `reason` is null when the message was in the view, else
+        `side_talk_of_others`, `side_talk_off`, `history_none`,
+        `before_joined` or `not_addressed`. The author fields are null when
+        the message was deleted after the turn. No message body.
+        NOTE(W2): internal/infra/db/repos/context_views.go:42 (`ContextViewEntry`).
+      required: [message_id, reason, author_name, author_kind, created_at]
+      properties:
+        message_id: { type: string, format: uuid }
+        reason: { type: string, nullable: true }
+        author_name: { type: string, nullable: true }
+        author_kind: { type: string, nullable: true }
+        created_at: { type: string, format: date-time, nullable: true }
+
+    MessageContextViewCompaction:
+      type: object
+      description: >
+        The answer's last context measurement (`meta.runtime_context`):
+        `phase` is `measured`, `compacting` or `compacted`.
+        NOTE(W2): internal/infra/db/repos/context_views.go:55 (`ContextViewCompaction`).
+      required: [phase, estimated_input_tokens, usable_input_tokens, compaction_trigger_tokens]
+      properties:
+        phase: { type: string }
+        estimated_input_tokens: { type: integer, format: int64 }
+        usable_input_tokens: { type: integer, format: int64 }
+        compaction_trigger_tokens: { type: integer, format: int64 }
+
     MessageFeedbackSummary:
       type: object
       description: >
@@ -36521,6 +36586,54 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/message_context_view/prompt_lib/{project_id}/{message_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: message_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: >
+          The agent answer's message-GROUP uuid, the same `{messageID}`
+          GetMessage reads.
+    get:
+      operationId: getMessageContextView
+      summary: What the agent saw for one answer
+      description: |
+        internal/api/v2/contextviews/handler.go's Get (ADR-0050 decision 9,
+        issue 1669). The view Main sent the answering agent on that turn,
+        recorded with the answer (tenant/0167_chat_message_context_views.sql):
+        the mode, the model window, the digest the worker checked, and every
+        visible message the conversation projected, in order, each with the
+        rule that dropped it or no reason when it was in the view. Gated on
+        `models.chat.messages.details`, and the conversation's read rule is
+        applied to the message first, so a message the caller cannot read is
+        a 404. Only the answer's own reader's view is ever answered, and no
+        message body, tool call, tool result or thinking step is in it. An
+        answer admitted before the record existed answers 404.
+      tags: [chat]
+      responses:
+        '200':
+          description: The recorded view.
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: Always `no-store`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageContextView'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The database is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   # ==========================================================================
   # PREDICT — one stateless LLM turn

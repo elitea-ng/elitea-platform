@@ -37,6 +37,8 @@ type CurrentAdhocTurn struct {
 	// Attachments are the `attachment_message` items written onto the QUESTION
 	// group in the same transaction (#606). Empty for a turn with no files.
 	Attachments []CurrentTurnAttachment
+	// ContextView is the view the turn's input carries (issue 1669).
+	ContextView *ContextViewRecord
 }
 
 func (turn CurrentAdhocTurn) Validate() error {
@@ -58,6 +60,7 @@ func (turn *CurrentAdhocTurn) Clone() *CurrentAdhocTurn {
 	clone := *turn
 	clone.QuestionMeta = bytes.Clone(turn.QuestionMeta)
 	clone.Attachments = cloneCurrentTurnAttachments(turn.Attachments)
+	clone.ContextView = turn.ContextView.Clone()
 	return &clone
 }
 
@@ -209,7 +212,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	// replaced refused ResolveCurrentAdhocTurn exactly as it refused the
 	// selected-application path.
 	projectContextText := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
-	input, err := currentAdhocInput(
+	input, view, err := currentAdhocInputWithView(
 		request, target, frozen, toolkitGuardrails, attachments, memoryRecall.Text,
 		projectContextText,
 	)
@@ -264,6 +267,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 			QuestionID: request.QuestionID, QuestionItemID: questionItemID,
 			ResponseMessageID: responseMessageID, QuestionMeta: questionMeta,
 			UserInput: request.UserInput, Attachments: attachments,
+			ContextView: newContextViewRecord(target.TargetParticipantID, "", view, input),
 		},
 	})
 	if err != nil {
@@ -396,25 +400,40 @@ func currentAdhocInput(
 	memoryText string,
 	projectContextText string,
 ) (*runtimev1.AgentExecutionInputV1, error) {
+	input, _, err := currentAdhocInputWithView(request, target, frozen, toolkitGuardrails, attachments, memoryText, projectContextText)
+	return input, err
+}
+
+// currentAdhocInputWithView also returns the reader's view, which the turn
+// records (issue 1669).
+func currentAdhocInputWithView(
+	request CurrentAdhocStartRequest,
+	target CurrentAdhocTarget,
+	frozen json.RawMessage,
+	toolkitGuardrails json.RawMessage,
+	attachments []CurrentTurnAttachment,
+	memoryText string,
+	projectContextText string,
+) (*runtimev1.AgentExecutionInputV1, ReaderView, error) {
 	var snapshot map[string]any
 	if err := decodeCurrentJSON(frozen, &snapshot); err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	settings, ok := snapshot["llm_settings"].(map[string]any)
 	if !ok || settings == nil {
-		return nil, ErrUnsupportedCurrentAgentStart
+		return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 	}
 	tools, ok := snapshot["tools"].([]any)
 	if !ok {
-		return nil, ErrUnsupportedCurrentAgentStart
+		return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 	}
 	llm, err := currentAdhocRuntimeLLM(settings)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	toolsJSON, err := json.Marshal(tools)
 	if err != nil {
-		return nil, ErrUnsupportedCurrentAgentStart
+		return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 	}
 	// #870: appended in the SAME position ResolveCurrentAdhocTurn's own SQL
 	// already uses for `default_instructions` (agent_chat.sql) — see
@@ -427,48 +446,48 @@ func currentAdhocInput(
 	applicationFields := map[string]any{"instructions": instructions}
 	if target.OriginalSource != nil {
 		if target.OriginalSource.Validate() != nil {
-			return nil, ErrUnsupportedCurrentAgentStart
+			return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 		}
 		applicationFields["source_definition"] = target.OriginalSource
 	}
 	application, err := json.Marshal(applicationFields)
 	if err != nil {
-		return nil, ErrUnsupportedCurrentAgentStart
+		return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 	}
 	userInput, err := json.Marshal(request.UserInput)
 	if err != nil {
-		return nil, ErrInvalidCurrentAgentStart
+		return nil, ReaderView{}, ErrInvalidCurrentAgentStart
 	}
 	persona, stepsLimit, err := currentAdhocConversationOptions(target.ConversationMeta)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	internalTools, err := currentAdhocRuntimeInternalTools(target.ConversationMeta)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	projectContext, err := currentFrozenProjectContext(snapshot)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	modelContextLimits, err := currentFrozenModelContextLimits(snapshot)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	modelReasoning, err := currentFrozenModelReasoning(snapshot)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	summaryModel, err := currentFrozenSummaryModel(snapshot)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	// ADR-0050 decision 9 (issue 1609): a model participant has no version,
 	// so its view is the default one (every visible message, side talk only
 	// when it is a party).
 	view, err := BuildReaderView(contextview.Default, target.ChatHistory, target.ChatHistoryRefs)
 	if err != nil {
-		return nil, ErrUnsupportedCurrentAgentStart
+		return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
@@ -498,7 +517,7 @@ func currentAdhocInput(
 		input.StepsLimit = stepsLimit
 	}
 	input.ContextView = contextViewInput(view.Settings, modelContextLimits, input.ChatHistory, input.ChatHistoryRefs)
-	return input, nil
+	return input, view, nil
 }
 
 func currentAdhocRuntimeInternalTools(meta json.RawMessage) ([]byte, error) {

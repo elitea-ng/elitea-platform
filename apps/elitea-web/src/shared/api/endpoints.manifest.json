@@ -3390,6 +3390,16 @@
       "usedBy": ["features/chat-messages/api/interruptLedgerApi.ts"]
     },
     {
+      "id": "chat.getMessageContextView",
+      "method": "GET",
+      "path": "/elitea_core/message_context_view/prompt_lib/{projectId}/{messageId}",
+      "operationId": "getMessageContextView",
+      "source": "generated",
+      "responseSchema": "MessageContextView",
+      "fixture": null,
+      "usedBy": ["features/chat-messages/api/contextViewApi.ts"]
+    },
+    {
       "id": "chat.decideExecutionInterrupt",
       "method": "POST",
       "path": "/elitea_core/task/prompt_lib/{projectId}/{responseMessageId}/interrupts/{interruptKey}/decision",
