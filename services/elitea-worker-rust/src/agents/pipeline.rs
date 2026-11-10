@@ -8,6 +8,7 @@
 #![allow(dead_code)] // Capability routing remains intentionally disabled.
 pub(crate) mod saved_child_http;
 pub(crate) mod saved_child_scope_provider;
+pub(crate) mod saved_code_child;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -1042,6 +1043,7 @@ impl PipelineNativeAgentAssembler {
             return Ok((None, ApplicationRuntimeProjection::default(), None));
         }
         let runtime = runtime.ok_or_else(unsupported_pipeline_runtime)?;
+        composition::refuse_nested_saved_code(profile.definition(), &composition.children)?;
         let mut scopes = scoped_applications::PipelineApplicationScopeRegistry::default();
         scopes.register_scope(String::new(), profile.definition(), None)?;
         let mut nodes = BTreeMap::new();
@@ -1052,8 +1054,21 @@ impl PipelineNativeAgentAssembler {
             let alias = selection.alias();
             call_owners.insert(node.to_owned(), scopes.graph_call_owner("", node)?);
             let participant = if let Some(child) = composition.children.get(alias) {
-                let bound =
+                let mut bound =
                     bind_admitted_saved_pipeline(child.as_ref(), &runtime, node.to_owned()).await?;
+                // W3-2b: a saved pipeline a root-level Agent node runs names
+                // Main's freeze of it as its Code owner. Without that digest
+                // its Code has no owner scope and is refused fail closed.
+                if let Some(digest) = child.frozen_definition_sha256.as_ref() {
+                    bound.runtimes = bound.runtimes.with_saved_code_owner(
+                        saved_code_child::SavedCodeOwner::new(
+                            child.revision.application_id,
+                            child.revision.version_id,
+                            digest,
+                            child.profile.definition().code_node_ids(),
+                        ),
+                    );
+                }
                 if let Some(child_scopes) = bound.runtimes.application_scopes() {
                     scopes.merge(child_scopes.clone())?;
                 }
@@ -1627,13 +1642,16 @@ impl NativePipelineApplicationResolver {
         participant: NativePipelineApplicationParticipant,
         checkpointer: Arc<dyn adk_rust::graph::Checkpointer>,
     ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
-        Self::resolved_with(participant, checkpointer, None)
+        Self::resolved_with(participant, checkpointer, None, None)
     }
 
+    /// `node`: the Agent node that runs this use of a saved pipeline; its Code
+    /// nodes name that use as their owner scope (W3-2b).
     fn resolved_with(
         participant: NativePipelineApplicationParticipant,
         checkpointer: Arc<dyn adk_rust::graph::Checkpointer>,
         fanout: Option<Arc<crate::agents::graph::compiler::ParallelCompilerBinding>>,
+        node: Option<&str>,
     ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
         match participant {
             NativePipelineApplicationParticipant::ScopedAgent { tool, scope, .. } => {
@@ -1648,6 +1666,10 @@ impl NativePipelineApplicationResolver {
                 events,
                 display_name,
             } => {
+                let runtimes = match node {
+                    Some(node) => runtimes.for_saved_code_use(node),
+                    None => runtimes,
+                };
                 // FU-249: the child's Parallel binds the run's binding rebased
                 // on the child's own checkpoint chain.
                 let runtimes = match fanout {
@@ -1682,6 +1704,13 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
     ) -> Result<Arc<dyn PipelineApplicationResolver>, ApplicationExecutionError> {
         self.rebind_parallel_events(&events)
             .map(|resolver| Arc::new(resolver) as Arc<dyn PipelineApplicationResolver>)
+    }
+
+    fn for_saved_code_member(
+        &self,
+        member: &saved_code_child::SavedCodeFanoutMember,
+    ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+        Some(Arc::new(self.rebind_saved_code_member(member)))
     }
 
     fn agent_calls_saved_pipeline(&self, node: &str, alias: &str) -> bool {
@@ -1727,7 +1756,7 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
         if alias != selection.alias() {
             return Err(ApplicationExecutionError::Unavailable);
         }
-        Self::resolved(participant.clone(), checkpointer)
+        Self::resolved_with(participant.clone(), checkpointer, None, Some(node))
     }
     fn resolve_node_in_fanout(
         &self,
@@ -1746,7 +1775,7 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
         };
         match participant {
             Some(participant @ NativePipelineApplicationParticipant::Pipeline { .. }) => {
-                Self::resolved_with(participant.clone(), checkpointer, Some(binding))
+                Self::resolved_with(participant.clone(), checkpointer, Some(binding), Some(node))
             }
             _ => Err(ApplicationExecutionError::Unavailable),
         }
@@ -2619,6 +2648,37 @@ fn bind_admitted_saved_pipeline<'a>(
             .with_application_scope_path(graph_path)
             .with_application_scopes(Arc::new(scopes));
         Ok(bound)
+    })
+}
+
+/// The production resolver over saved pipeline participants, one per Agent
+/// node `(node, alias, definition, runtimes)`, for tests that drive the
+/// compiled graph on real journals (W3-2b). No graph-call owners.
+#[cfg(test)]
+pub(crate) fn saved_pipeline_resolver_for_tests(
+    participants: Vec<(String, String, PipelineDefinition, PipelineNodeRuntimes)>,
+    events: &PipelineNodeEventSender,
+) -> Arc<dyn PipelineApplicationResolver> {
+    Arc::new(NativePipelineApplicationResolver {
+        participants: BTreeMap::new(),
+        nodes: participants
+            .into_iter()
+            .map(|(node, alias, definition, runtimes)| {
+                (
+                    node,
+                    (
+                        alias.clone(),
+                        NativePipelineApplicationParticipant::Pipeline {
+                            definition: Box::new(definition),
+                            runtimes,
+                            events: events.clone(),
+                            display_name: alias,
+                        },
+                    ),
+                )
+            })
+            .collect(),
+        call_owners: BTreeMap::new(),
     })
 }
 

@@ -860,3 +860,57 @@ fn a_code_child_visit_is_canonical_over_its_input_order() {
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(visits.len(), 1);
 }
+
+/// W3-2b: the ETL `silver_partition` shape, a Map whose worker is an Agent
+/// node running a saved pipeline `validate (Code) → route_quality (Router) →
+/// normalize (Code)`. It compiles (the `ContainsCode` refusal is gone; a
+/// Router inside the saved child is admitted), and the activation is admitted
+/// against each item's Code time: Q2, its two Code nodes each once, though
+/// the Router can re-enter `validate` (B6 guards that per attempt).
+const SAVED_CODE_MAP: &str = "entry_point: map_partitions\nstate:\n  partitions: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: map_partitions, type: map, worker: silver, source: partitions, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 8, max_concurrency: 2, reduction: ordered_collection, transition: END}\n  - {id: silver, type: agent, tool: silver_partition, input: [entity, item_index], input_mapping: {task: {type: fixed, value: partition}}, output: [item_result]}\n";
+const SILVER_PARTITION: &str = "entry_point: validate\nstate:\n  messages: list\n  quality: str\nnodes:\n  - id: validate\n    type: code\n    code: 'print(1)'\n    input: [messages]\n    output: [quality]\n    transition: route_quality\n  - id: route_quality\n    type: router\n    condition: '{{ quality }}'\n    routes: [normalize, validate]\n    default_output: END\n    input: [quality]\n  - id: normalize\n    type: code\n    language: javascript\n    code: 'b'\n    input: [quality]\n    output: [quality]\n    transition: END\n";
+
+#[tokio::test]
+async fn a_saved_pipeline_with_code_and_a_router_runs_as_a_map_worker_admitted_per_code_node() {
+    let child = PipelineDefinition::from_yaml(SILVER_PARTITION).expect("the saved child");
+    assert_eq!(child.code_node_ids().len(), 2);
+    let definition = PipelineDefinition::from_yaml(SAVED_CODE_MAP).unwrap();
+    let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(MemoryAuthority::default());
+    let checkpointer: Arc<dyn Checkpointer> = authority.clone();
+    let runtimes = PipelineNodeRuntimes::new(None, None, Some(Arc::new(super::ProvedResolver)))
+        .with_parallel(ParallelCompilerBinding::for_tests(
+            authority,
+            tokio::time::Instant::now() + Duration::from_secs(30),
+            None,
+        ))
+        .with_composition_definitions(std::collections::BTreeMap::from([(
+            "silver".to_owned(),
+            child,
+        )]));
+    let code = Arc::new(FakeCode {
+        refuse_fanout: true,
+        ..FakeCode::default()
+    });
+    let graph = definition
+        .compile_subgraph_with_runtime(checkpointer, &with_code(runtimes, &code))
+        .expect("a saved pipeline with Code compiles as a Map worker");
+    let error = graph
+        .invoke(
+            HashMap::from([("partitions".to_owned(), json!(["p1", "p2", "p3"]))]),
+            ExecutionConfig::new("root-saved-code-map"),
+        )
+        .await
+        .expect_err("the refused activation ends the run");
+    assert!(
+        error
+            .to_string()
+            .contains(crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE),
+        "{error}"
+    );
+    assert_eq!(
+        *code.admissions.lock().unwrap(),
+        vec![(vec![2, 2, 2], 2)],
+        "each item counts its saved pipeline's two Code nodes once"
+    );
+    assert_eq!(*code.attempts.lock().unwrap(), 0, "no item started");
+}

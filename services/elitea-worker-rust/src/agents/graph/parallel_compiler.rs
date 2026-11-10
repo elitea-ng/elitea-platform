@@ -10,7 +10,7 @@ use crate::agents::graph::application::{
     APPLICATION_MESSAGES_STATE_KEY, APPLICATION_RESULT_STATE_KEY, APPLICATION_TASK_STATE_KEY,
     ApplicationNode, ApplicationNodeDefinition, PipelineApplicationResolver,
 };
-use crate::agents::graph::code::CodeNodeDefinition;
+use crate::agents::graph::code::{CodeLanguage, CodeNodeDefinition};
 use crate::agents::graph::code_runtime::{CodeNode, CodeSandboxRuntime, FanoutCodeAdmission};
 use crate::agents::graph::direct_tool::DIRECT_TOOL_RESUME_STATE_KEY;
 use crate::agents::graph::fanout_control::FanoutCancellation;
@@ -429,6 +429,7 @@ impl PipelineDefinition {
                 None => branch.node().to_owned(),
             })
             .collect();
+        let saved_code = saved_code_languages(owned.values(), runtimes);
         let factory = Arc::new(CompilerParallelBranches {
             owned,
             state_types: self.state.clone(),
@@ -436,6 +437,7 @@ impl PipelineDefinition {
             llm: runtimes.llm.clone(),
             code: runtimes.code.clone(),
             code_recovery: runtimes.node_recovery.is_some(),
+            saved_code,
             events: runtimes.events.clone(),
             root_session: binding.root_session.clone(),
             delegated_servers: runtimes.delegated_servers(),
@@ -528,6 +530,7 @@ impl PipelineDefinition {
             OwnedBranch::Agent(node) => node.selection().alias().to_owned(),
             other => other.id().to_owned(),
         };
+        let saved_code = saved_code_languages([&worker], runtimes);
         let factory = Arc::new(CompilerParallelBranches {
             owned: (0..map.max_items)
                 .map(|index| (index.to_string(), worker.clone()))
@@ -537,6 +540,7 @@ impl PipelineDefinition {
             llm: runtimes.llm.clone(),
             code: runtimes.code.clone(),
             code_recovery: runtimes.node_recovery.is_some(),
+            saved_code,
             events: runtimes.events.clone(),
             root_session: binding.root_session.clone(),
             // M1: a Map item's delegated sign-in pause meets the same
@@ -597,6 +601,29 @@ fn reject_agent_calling_pipeline(
         }
     }
     Ok(())
+}
+
+/// Q2 (W3-2b): the Code nodes of the saved pipeline each Agent child runs,
+/// read from the composition these runtimes compile (keyed relative to it).
+/// A child whose saved pipeline holds no Code is absent.
+fn saved_code_languages<'a>(
+    owned: impl IntoIterator<Item = &'a OwnedBranch>,
+    runtimes: &PipelineNodeRuntimes,
+) -> BTreeMap<String, Vec<(CodeLanguage, bool)>> {
+    let Some(definitions) = runtimes.composition_definitions() else {
+        return BTreeMap::new();
+    };
+    owned
+        .into_iter()
+        .filter_map(|branch| match branch {
+            OwnedBranch::Agent(node) => definitions
+                .get(node.id())
+                .map(PipelineDefinition::code_languages)
+                .filter(|languages| !languages.is_empty())
+                .map(|languages| (node.id().to_owned(), languages)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// A Code child needs the run's admitted sandbox runtime (W3-2).
@@ -666,22 +693,9 @@ fn reject_nested_parallel(
             OwnedBranch::Llm(_) | OwnedBranch::StateModifier(_) | OwnedBranch::Code(_) => None,
         })
         .collect::<BTreeMap<_, _>>();
+    // W3-2b: a saved pipeline with Code runs as a member; its Code names the
+    // member in its owner scope, and Main proves it from the run root.
     if let Some(definitions) = runtimes.composition_definitions() {
-        for node in owned.values() {
-            // Keyed relative to the pipeline these runtimes compile (PM-2).
-            let path = node.id().to_owned();
-            let descendants = format!("{path}/");
-            // Code inside a fan-out child needs the Wave 3 Code-slot and
-            // receipt work; refuse it by name until then, as Map does.
-            if definitions.iter().any(|(key, definition)| {
-                (key == &path || key.starts_with(&descendants)) && definition.has_code_nodes()
-            }) {
-                return Err(PipelineConfigurationError::FanoutChildUnsupported {
-                    node: node.id().to_owned(),
-                    refusal: FanoutChildRefusal::ContainsCode,
-                });
-            }
-        }
         for node in owned.values() {
             // Keyed relative to the pipeline these runtimes compile (PM-2).
             let path = node.id().to_owned();
@@ -852,6 +866,9 @@ struct CompilerParallelBranches {
     /// Whether the run journals its Code attempts (node recovery on): a
     /// Code child then journals through its branch family's writer.
     code_recovery: bool,
+    /// Q2 (W3-2b): the Code nodes of the saved pipeline each Agent child
+    /// runs, by the Agent node's id (language, platform client; each once).
+    saved_code: BTreeMap<String, Vec<(CodeLanguage, bool)>>,
     events: Option<PipelineNodeEventSender>,
     root_session: Option<Arc<dyn RootSessionSource>>,
     /// FU-250: the servers the run holds a resolved token for.
@@ -1202,6 +1219,9 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
                 Some(OwnedBranch::Code(child)) => {
                     Some(vec![(child.node.language(), child.node.platform_client())])
                 }
+                // Q2: a saved pipeline child's Code time is the sum over its
+                // Code nodes, each once; a Router loop is guarded per attempt.
+                Some(OwnedBranch::Agent(node)) => self.saved_code.get(node.id()).cloned(),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -1542,13 +1562,19 @@ fn typed_default(kind: &str) -> serde_json::Value {
 
 /// FU-248: an Agent member's child threads belong to its branch's family, so
 /// the saved pipeline it runs journals its effectful direct nodes through it.
+///
+/// W3-2b: the saved pipeline the member runs also names the member in its
+/// Code owner scope. An unproved family names none and is refused by Main.
 fn branch_journal_resolver(
     execution: &ParallelBranchExecution,
     resolver: Arc<dyn PipelineApplicationResolver>,
 ) -> Arc<dyn PipelineApplicationResolver> {
-    execution
+    let resolver = execution
         .node_recovery()
         .and_then(|journals| resolver.for_branch_journals(journals))
+        .unwrap_or(resolver);
+    crate::agents::pipeline::saved_code_child::SavedCodeFanoutMember::of(execution)
+        .and_then(|member| resolver.for_saved_code_member(&member))
         .unwrap_or(resolver)
 }
 

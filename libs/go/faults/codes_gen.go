@@ -40,6 +40,8 @@ const (
 	GraphFanoutCodeBelowRoot Code = "graph.fanout.code_below_root"
 	// A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline.
 	GraphFanoutDeadlineInsufficient Code = "graph.fanout.deadline_insufficient"
+	// A Code node sits in a saved pipeline that another saved pipeline runs, so the pipeline was refused before it started: Code runs only in a saved pipeline the started pipeline runs directly, for now.
+	GraphFanoutNestedSavedCode Code = "graph.fanout.nested_saved_code"
 	// A component crashed on an unexpected condition; the request or task it was handling failed.
 	InternalPanic Code = "internal.panic"
 	// An unexpected error stopped this request.

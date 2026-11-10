@@ -26,6 +26,9 @@ pub(crate) enum CodeVisitScope {
     /// A Code node run directly as a Map item or Parallel branch of the run
     /// root (W3-2).
     FanoutChild(FanoutCodeChildScope),
+    /// A Code node inside a saved pipeline a root-level Agent node runs
+    /// (W3-2b).
+    SavedChild(super::saved_code_child::SavedCodeChildScope),
 }
 
 /// The wire schema of [`FanoutCodeChildScope`].

@@ -88,6 +88,45 @@ impl NativePipelineApplicationResolver {
         }
     }
 
+    /// W3-2b: the same participants, their root-level saved pipelines run by
+    /// one root fan-out member; their Code names that member in its scope.
+    pub(super) fn rebind_saved_code_member(
+        &self,
+        member: &super::saved_code_child::SavedCodeFanoutMember,
+    ) -> Self {
+        let rebind = |participant: &NativePipelineApplicationParticipant| match participant {
+            NativePipelineApplicationParticipant::Pipeline {
+                definition,
+                runtimes,
+                events,
+                display_name,
+            } if runtimes.has_saved_code_owner() => {
+                NativePipelineApplicationParticipant::Pipeline {
+                    definition: definition.clone(),
+                    runtimes: runtimes.clone().with_saved_code_member(member.clone()),
+                    events: events.clone(),
+                    display_name: display_name.clone(),
+                }
+            }
+            other => other.clone(),
+        };
+        Self {
+            call_owners: self.call_owners.clone(),
+            nodes: self
+                .nodes
+                .iter()
+                .map(|(node, (alias, participant))| {
+                    (node.clone(), (alias.clone(), rebind(participant)))
+                })
+                .collect(),
+            participants: self
+                .participants
+                .iter()
+                .map(|(alias, participant)| (alias.clone(), rebind(participant)))
+                .collect(),
+        }
+    }
+
     pub(super) fn parallel_participant_digest(
         &self,
         node: &str,

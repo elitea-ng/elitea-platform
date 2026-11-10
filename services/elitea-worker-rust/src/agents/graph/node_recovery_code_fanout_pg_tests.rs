@@ -655,3 +655,6 @@ async fn real_pg_a_supervisor_losing_parallel_code_branches_reruns_each_once() {
     );
     assert_eq!(dispatch_rows(&h).await, (6, 0));
 }
+
+#[path = "node_recovery_saved_code_pg_tests.rs"]
+mod saved_code_pg_tests;
