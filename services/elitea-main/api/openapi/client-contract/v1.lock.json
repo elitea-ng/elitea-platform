@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.45",
+  "client_contract": "1.46",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -2821,6 +2821,80 @@
           "headers": {
             "retry-after": {
               "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "GET /agent_media/{project_id}/{file}": {
+      "operation_id": "getAgentMedia",
+      "parameters": {
+        "path:file": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "image/jpeg": {
+              "type": "string",
+              "format": "binary"
+            },
+            "image/png": {
+              "type": "string",
+              "format": "binary"
+            },
+            "image/svg+xml": {
+              "type": "string",
+              "format": "binary"
+            },
+            "image/webp": {
+              "type": "string",
+              "format": "binary"
+            },
+            "video/mp4": {
+              "type": "string",
+              "format": "binary"
+            },
+            "video/webm": {
+              "type": "string",
+              "format": "binary"
+            }
+          }
+        },
+        "206": {
+          "content": {
+            "video/mp4": {
+              "type": "string",
+              "format": "binary"
+            },
+            "video/webm": {
+              "type": "string",
+              "format": "binary"
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
             }
           }
         }

@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.45"
+  x-elitea-client-contract: "1.46"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3034,7 +3034,17 @@ components:
         role: { type: string }
         avatar_pack:
           type: string
-          description: Reserved for the avatar pack of a later release.
+          description: >-
+            Client contract 1.46 (ADR-0050 decision 6): on a read, the avatar pack of
+            the version the agent participant runs, an AgentAvatarPackV1
+            OBJECT, read live from the version on every participants read;
+            absent when the version has none (the client then shows
+            `entity_settings.icon_meta`). It stays declared as a string, the
+            "reserved" type contract 1.38 locked, because a type change is a
+            breaking change within the major. A client reads the value as
+            unknown JSON and validates it (`avatarPackOf` in
+            `@elitea/client-core/conversation`); a value that is not a valid
+            pack is ignored. A create request does not set it.
 
     # --- Client frame catalogue (client contract 1.1). The `data` of an
     # `execution.node_event` SSE event, per `data.type`; see
@@ -30607,8 +30617,11 @@ paths:
       summary: Download one avatar pack media file
       description: >
         Immutable for a year. A `Range` request answers 206, as a <video>
-        element asks.
-      tags: [applications]
+        element asks. Client contract 1.46: a native client downloads the
+        pack media `persona.avatar_pack` names through this route. It is
+        root-mounted with no credential, so the X-Client-Version gate never
+        judges it (like getBrandingPackJSON) and it never answers 426.
+      tags: [applications, client]
       security: []
       responses:
         '200':
