@@ -38,11 +38,11 @@ func TestSubagentsMaxDepth(t *testing.T) {
 			t.Errorf("subagents_max_depth %v = %d, want %d", raw, got, want)
 		}
 	}
-	if !AgentToolSettingsFromValues(Values{KeyAgentsSubagentsMaxDepth: float64(1)}).Empty() {
-		t.Error("depth 1 is the default, so the section is empty")
-	}
-	if AgentToolSettingsFromValues(Values{KeyAgentsSubagentsMaxDepth: float64(2)}).Empty() {
-		t.Error("depth 2 is not the default")
+	// The depth is no tool ceiling: it never makes a run carry an envelope.
+	for _, depth := range []float64{1, 2} {
+		if !AgentToolSettingsFromValues(Values{KeyAgentsSubagentsMaxDepth: depth}).Empty() {
+			t.Errorf("depth %v alone sets no tool ceiling", depth)
+		}
 	}
 	for raw, want := range map[any]bool{float64(1): true, float64(2): true, float64(0): false, float64(3): false, "1": false} {
 		if got := ValidSubagentsMaxDepth(raw); got != want {

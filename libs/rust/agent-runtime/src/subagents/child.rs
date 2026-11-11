@@ -294,6 +294,10 @@ struct Shared {
     counters: Arc<Counters>,
     inbox: Mutex<Option<mpsc::UnboundedSender<String>>>,
     abort: Mutex<Option<AbortHandle>>,
+    /// The registry of this child's own children, when it may start some
+    /// (#1824): they are closed, and the host told, when this child ends,
+    /// answers or is closed, so none outlives the child that started it.
+    descendants: Option<Arc<super::Registry>>,
 }
 
 /// A handle on one child; clones share it.
@@ -317,6 +321,14 @@ impl Child {
 
     pub(super) fn status(&self) -> ChildStatus {
         *self.shared.status.borrow()
+    }
+
+    /// Close every child this child started that still runs, telling the
+    /// host (#1824). Their work is for this child, which no longer waits.
+    fn close_descendants(&self) {
+        if let Some(descendants) = &self.shared.descendants {
+            descendants.close_all();
+        }
     }
 
     pub(super) fn report(&self) -> ChildReport {
@@ -391,6 +403,7 @@ impl Child {
         if let Ok(mut inbox) = self.shared.inbox.lock() {
             inbox.take();
         }
+        self.close_descendants();
         let stopped = {
             let mut state = self.shared.state.lock().ok()?;
             let running = state.status == ChildStatus::Running;
@@ -480,9 +493,9 @@ pub(super) struct Start {
     /// The model the child runs on (`profile.model`, else the one its
     /// creator inherited); `None`: the run agent's (#1825).
     pub model: Option<String>,
-    /// The four tools over the child's own registry, when it may start
-    /// children of its own (#1824).
-    pub nested: Option<Arc<dyn Toolset>>,
+    /// The child's own registry, when it may start children of its own
+    /// (#1824): the child gets the four tools over it.
+    pub nested: Option<Arc<super::Registry>>,
 }
 
 /// The tools the host gives the child: those of a checkout of its own when
@@ -632,8 +645,8 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
     }
     // #1824: the child's own four tools, past the filter (which drops them
     // from the host's toolsets).
-    if let Some(nested) = nested {
-        builder = builder.toolset(nested);
+    if let Some(nested) = &nested {
+        builder = builder.toolset(nested.toolset());
     }
     let agent = builder.build().map_err(|_| "subagent_invalid")?;
     let runner = child_runner(agent, &identity.agent_id).await?;
@@ -652,6 +665,7 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
             counters,
             inbox: Mutex::new(Some(inbox)),
             abort: Mutex::new(None),
+            descendants: nested,
         }),
     };
     host.started(child.identity());
@@ -705,7 +719,13 @@ async fn drive(
     let mut message = task;
     loop {
         let outcome = run(&child, &runner, message, host.as_ref()).await;
-        if child.settle(outcome) {
+        let settled = child.settle(outcome);
+        // #1824: a child that answered or ended no longer waits for its own
+        // children; they stop before it is reported.
+        if child.status() != ChildStatus::Running {
+            child.close_descendants();
+        }
+        if settled {
             host.finished(child.identity(), &child.report());
         }
         // Only an answered child is continued; any other end is final.

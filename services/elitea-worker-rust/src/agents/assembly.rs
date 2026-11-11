@@ -121,22 +121,27 @@ pub(crate) struct SubAgentModels {
 }
 
 impl SubAgentModels {
+    /// A frozen model this agent's context settings cannot admit (its
+    /// limits are fallbacks under a `full` budget, or its output does not
+    /// fit an explicit one) is left out, never the whole turn refused: a
+    /// sub-agent that names it is refused with `SUBAGENT_MODEL_NOT_ALLOWED`
+    /// at spawn, and every other turn runs as before.
     fn admit(
         policy: Option<&super::request::SubAgentPolicy>,
         settings: &Map<String, Value>,
-    ) -> Result<Self, NativeAgentAssemblyError> {
+    ) -> Self {
         let Some(policy) = policy else {
-            return Ok(Self::default());
+            return Self::default();
         };
         let models = policy
             .models
             .iter()
-            .map(|snapshot| SummaryModelProfile::admit(snapshot, settings))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self {
+            .filter_map(|snapshot| SummaryModelProfile::admit(snapshot, settings).ok())
+            .collect::<Vec<_>>();
+        Self {
             max_depth: policy.max_depth,
             models: Arc::new(models),
-        })
+        }
     }
 }
 
@@ -409,7 +414,7 @@ impl OrdinaryNoToolProfile {
             subagent_policy: SubAgentModels::admit(
                 request.payload.subagent_policy.as_ref(),
                 &request.payload.context_settings,
-            )?,
+            ),
             recalled_memory: application_recalled_memory(request),
             can_review_agents: application_capability(
                 request,

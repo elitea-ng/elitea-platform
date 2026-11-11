@@ -129,7 +129,6 @@ fn spawn_arguments(args: &Value) -> Result<(String, Option<String>, Profile, Bri
     Ok((task, label, profile, brief))
 }
 
-/// A brief the host refused, by its code.
 /// The answer to a spawn whose child could not be started, by its code.
 fn start_refused(code: &'static str) -> Value {
     match code {
@@ -144,6 +143,7 @@ fn start_refused(code: &'static str) -> Value {
 const TOOL_NOT_GRANTED_MESSAGE: &str = "A tool in `profile.tools` is not one of your tools a sub-agent may get. Name only your own tools that the agent's sub-agent tools allow (read-only tools when it sets none).";
 const MODEL_NOT_ALLOWED_MESSAGE: &str = "The model in `profile.model` is not one a sub-agent may use here. Name a model of this project that you may use, or \"inherit\".";
 
+/// A brief the host refused, by its code.
 fn brief_refused(code: &str) -> Value {
     let message = match code {
         BRIEF_EXCERPT_NOT_VISIBLE => {
@@ -294,7 +294,7 @@ impl SubAgentTool {
             None => Ok(false),
             Some(value) => match value.as_str() {
                 Some("none") => Ok(false),
-                Some("worktree") if self.registry.host.supports_worktree_isolation() => Ok(true),
+                Some("worktree") if self.registry.isolation_allowed() => Ok(true),
                 Some("worktree") => Err(refused(
                     "subagent_isolation_unsupported",
                     "Sub-agents here cannot get a checkout of their own; spawn a read-only one.",
@@ -510,16 +510,14 @@ impl SubAgentTool {
         // #1824: a child that may start children gets the four tools over a
         // registry of its own, one level deeper, under its own scope.
         let nested = nests.then(|| {
-            self.registry
-                .nested(Nesting {
-                    owner: identity.clone(),
-                    delegation: delegation
-                        .as_ref()
-                        .map(|delegation| delegation.scope.clone()),
-                    model: model.clone(),
-                    requested: requested.clone(),
-                })
-                .toolset()
+            self.registry.nested(Nesting {
+                owner: identity.clone(),
+                delegation: delegation
+                    .as_ref()
+                    .map(|delegation| delegation.scope.clone()),
+                model: model.clone(),
+                requested: requested.clone(),
+            })
         });
         let started = child::start(child::Start {
             identity,
@@ -695,7 +693,7 @@ impl Tool for SubAgentTool {
     fn description(&self) -> &str {
         match self.action {
             Action::Spawn => {
-                if self.registry.host.supports_worktree_isolation() {
+                if self.registry.isolation_allowed() {
                     "Start a sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task) and runs alongside other sub-agents. By default it can read and search but never change anything: use it for independent investigations that would fill your context. With isolation \"worktree\" it works in a git checkout of its own and may change files there, never yours. A `profile` names it and gives it a role; a `context` brief passes it quotes, attachments, facts and memory entries that you can see. Then wait_agent for the results."
                 } else {
                     "Start a read-only sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task), can read and search but never change anything, and runs alongside other sub-agents. Use it for independent investigations that would fill your context. A `profile` names it and gives it a role; a `context` brief passes it quotes, attachments, facts and memory entries that you can see. Then wait_agent for the results."
@@ -713,7 +711,7 @@ impl Tool for SubAgentTool {
 
     fn parameters_schema(&self) -> Option<Value> {
         Some(match self.action {
-            Action::Spawn if self.registry.host.supports_worktree_isolation() => {
+            Action::Spawn if self.registry.isolation_allowed() => {
                 let mut schema = spawn_schema();
                 schema["properties"]["isolation"] = json!({
                     "type": "string",

@@ -370,3 +370,71 @@ async fn a_named_model_binds_or_is_refused() {
         Profile::default().digest()
     );
 }
+
+/// #1824 review: a child that answers without waiting for its own children
+/// stops them, and the host is told, so none runs on after its parent.
+#[tokio::test]
+async fn a_childs_children_stop_when_it_answers() {
+    let host = TestHost::new();
+    let children = nesting(&host, SubAgentConfig::new(""));
+    let responses = run_parent(
+        "parent",
+        &children,
+        spawn_then_wait(vec!["leave hang".into()]),
+    )
+    .await;
+    let results = wait_results(&responses);
+    assert_eq!(results[0]["status"], "completed");
+    assert_eq!(results[0]["result"], "left");
+    assert_eq!(host.started.lock().unwrap().len(), 2);
+    let finished = host.finished.lock().unwrap().clone();
+    assert_eq!(finished.len(), 2, "{finished:?}");
+    let grandchild = &host.started.lock().unwrap()[1];
+    let report = finished
+        .iter()
+        .find(|report| report.agent_id == grandchild.agent_id)
+        .expect("the grandchild is reported");
+    assert_eq!(report.status, ChildStatus::Cancelled);
+    // The run sees it settled, and closing the run reports it no second time.
+    let run = children.run_reports();
+    assert_eq!(run[1].1.status, ChildStatus::Cancelled);
+    children.close_all();
+    assert_eq!(host.finished.lock().unwrap().len(), 2);
+}
+
+/// #1824 review: only the run's agent may give a child a checkout of its
+/// own; a sub-agent's spawn is offered no `isolation` and refused one, so an
+/// isolated grandchild never escapes its ancestors' `profile.tools`.
+#[tokio::test]
+async fn a_sub_agent_cannot_start_an_isolated_child() {
+    let host = TestHost::with_isolation(true);
+    let nested = SubAgents::new(
+        host.clone(),
+        SubAgentConfig::new("").with_max_depth(MAX_DEPTH),
+    )
+    .inner
+    .nested(Nesting {
+        owner: ChildIdentity {
+            agent_id: "a_00000000".to_owned(),
+            parent_call_id: "call-0".to_owned(),
+            label: None,
+            ordinal: 1,
+            depth: 1,
+            parent_agent_id: None,
+            record: profile::SpawnRecord::new(&Profile::default(), &Brief::default()),
+        },
+        delegation: None,
+        model: None,
+        requested: None,
+    });
+    assert!(!nested.isolation_allowed());
+    let spawn = tools::tool(tools::Action::Spawn, Arc::clone(&nested));
+    let schema = spawn.parameters_schema().expect("schema");
+    assert!(schema["properties"].get("isolation").is_none(), "{schema}");
+
+    let root = nesting(&host, SubAgentConfig::new(""));
+    assert!(root.inner.isolation_allowed());
+    let spawn = tools::tool(tools::Action::Spawn, Arc::clone(&root.inner));
+    let schema = spawn.parameters_schema().expect("schema");
+    assert!(schema["properties"].get("isolation").is_some(), "{schema}");
+}

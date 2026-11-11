@@ -185,6 +185,18 @@ impl Llm for ChildModel {
                 std::future::pending::<()>().await;
                 unreachable!()
             }
+            // #1824: `leave <task>` spawns a child of its own on `<task>`
+            // and answers at once, without waiting for it.
+            Some("leave") => {
+                let task = words.collect::<Vec<_>>().join(" ");
+                response(
+                    match last_response(&request) {
+                        None => vec![call("leave-spawn", SPAWN_AGENT, json!({"task": task}))],
+                        Some(_) => vec![text("left")],
+                    },
+                    100,
+                )
+            }
             // #1824: `nest [tools=a,b] <task>` spawns a child of its own on
             // `<task>`, waits for it and answers what it said (or the code
             // its spawn was refused with).

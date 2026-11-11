@@ -841,6 +841,14 @@ impl Registry {
         })
     }
 
+    /// Whether a child this registry starts may get a checkout of its own:
+    /// the host supports it, and this is the run's agent (#1824). A
+    /// sub-agent's own children stay read-only, so an isolated grandchild
+    /// can never escape the narrowing of its ancestors' `profile.tools`.
+    fn isolation_allowed(&self) -> bool {
+        self.level == 0 && self.host.supports_worktree_isolation()
+    }
+
     /// Whether a child this registry starts may start children of its own:
     /// it is not isolated, and it is above the deepest level.
     const fn child_nests(&self, isolated: bool) -> bool {

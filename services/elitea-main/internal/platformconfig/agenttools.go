@@ -51,10 +51,12 @@ type AgentToolSettings struct {
 	SubagentsMaxDepth uint32 `json:"subagents_max_depth"`
 }
 
-// Empty reports the defaults: no ceiling, no tool that writes allowed
-// unattended, and sub-agents one level deep.
+// Empty reports no tool ceilings: no per-tool limit and no tool that
+// writes allowed unattended. The sub-agent depth is not a tool ceiling: it
+// travels in the run's sub-agent policy, not in the tool envelope, so a
+// depth of 2 alone leaves a run's envelope absent.
 func (s AgentToolSettings) Empty() bool {
-	return s.MaxToolLimit == 0 && len(s.UnattendedToolsAllowlist) == 0 && s.SubagentsDepth() == DefaultSubagentsMaxDepth
+	return s.MaxToolLimit == 0 && len(s.UnattendedToolsAllowlist) == 0
 }
 
 // AgentToolSettingsFromValues is the overlay. A limit out of range is
