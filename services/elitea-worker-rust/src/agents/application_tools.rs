@@ -3070,6 +3070,8 @@ pub(crate) struct MaterializedApplicationTool {
     pub(crate) tool: Arc<dyn Tool>,
     /// A saved Agent's per-invocation factory (T-2A3); `None` for a pipeline child.
     pub(crate) member: Option<ScopedAgentMember>,
+    /// FU-291: why a fan-out member cannot run this pipeline child durably.
+    tool_pipeline_refusal: Option<crate::agents::graph::compiler::ToolPipelineCause>,
 }
 
 impl MaterializedApplicationTool {
@@ -3081,6 +3083,7 @@ impl MaterializedApplicationTool {
             self.internal_tools,
         )
         .with_delegation(self.delegation.clone())
+        .with_tool_pipeline_refusal(self.tool_pipeline_refusal)
     }
 }
 
@@ -3386,6 +3389,14 @@ async fn materialize_pipeline_children(
                 continue;
             }
         };
+        // FU-291 D-7: what a fan-out member's durable nested thread cannot carry.
+        let tool_pipeline_refusal = if definition.has_code_nodes() {
+            Some(crate::agents::graph::compiler::ToolPipelineCause::Code)
+        } else if definition.has_application_nodes() {
+            Some(crate::agents::graph::compiler::ToolPipelineCause::Agent)
+        } else {
+            None
+        };
         let name = application_tool_name(reference.identity);
         let tool = Arc::new(ApplicationPipelineTool::new(
             name,
@@ -3413,6 +3424,7 @@ async fn materialize_pipeline_children(
             delegation,
             tool,
             member: None,
+            tool_pipeline_refusal,
         });
     }
     Ok(MaterializedPipelineChildren { tools, skipped })
@@ -3503,6 +3515,7 @@ pub(crate) async fn materialize_application_tools(
             internal_tools: application.internal_tools,
             delegation: Some(application.delegation.clone()),
             member: Some(ScopedAgentMember(Arc::clone(&application), identity)),
+            tool_pipeline_refusal: None,
             tool: Arc::new(ApplicationAgentTool::new(
                 application,
                 identity,
@@ -4059,6 +4072,7 @@ fn refused_application_tool(
         internal_tools: InternalToolCatalog::default(),
         delegation: Some(refused.evidence.clone()),
         member: None,
+        tool_pipeline_refusal: None,
         tool: Arc::new(DelegationRefusedTool::new(
             refused.name.clone(),
             refused.description.clone(),
@@ -4091,6 +4105,7 @@ fn refused_pipeline_tool(
         internal_tools: InternalToolCatalog::default(),
         delegation: Some(refused.evidence),
         member: None,
+        tool_pipeline_refusal: None,
         tool: Arc::new(DelegationRefusedTool::new(
             application_tool_name(reference.identity),
             pipeline_tool_description(&reference.alias, reference.description.as_deref()),

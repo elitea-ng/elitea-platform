@@ -98,6 +98,14 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "graph.fanout.agent_tool_pipeline_unsupported",
+      "sentence": "A Map item or Parallel branch runs a saved Agent whose saved pipeline tool holds a Code or Agent node, or is reached through another Agent, so the pipeline was refused before it started.",
+      "action": "Nothing on the platform; the author removes that node from the pipeline tool, or attaches the pipeline to the Agent directly.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "graph.fanout.deadline_insufficient",
       "sentence": "A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline.",
       "action": "Nothing on the platform; the user lowers the item count or raises the node's concurrency, or the run is given more time.",

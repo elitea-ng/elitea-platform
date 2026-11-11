@@ -340,11 +340,17 @@ impl PipelineApplicationNodeRuntime {
         let tool = Arc::clone(tool);
         let member_events = self.member_events.clone();
         // FU-291: the member's Agent runs its pipeline tools on nested threads
-        // its own family admits, `A` being this activation's own thread.
+        // its own family admits. `A` is this activation's own node thread: the
+        // Agent node's admitted path under the thread it runs on, which no
+        // graph writes (a saved Agent runs no subgraph there).
         let tool_pipelines = self.tool_pipelines.clone().map(|admission| {
             crate::agents::application_tools::MemberToolPipelines {
                 admission,
-                agent_thread: receipt.activation().thread_id().to_owned(),
+                agent_thread: format!(
+                    "{}/{}",
+                    receipt.activation().thread_id(),
+                    receipt.activation().node_name()
+                ),
             }
         });
         let mut terminal = None;

@@ -577,6 +577,9 @@ pub(crate) struct ApplicationToolGuardCatalogs {
     /// The delegation evidence of the child this tool calls (ADR-0044
     /// decision 3): its depth, effective grant digest and any refusal.
     delegation: Option<DelegationEvidence>,
+    /// FU-291: why a fan-out member cannot run this saved pipeline tool
+    /// durably, read from its definition when it was materialized.
+    tool_pipeline_refusal: Option<super::graph::compiler::ToolPipelineCause>,
 }
 
 impl ApplicationToolGuardCatalogs {
@@ -590,7 +593,17 @@ impl ApplicationToolGuardCatalogs {
             delegated_authorization,
             internal_tools,
             delegation: None,
+            tool_pipeline_refusal: None,
         }
+    }
+
+    /// FU-291: the cause a member cannot run this pipeline tool durably.
+    pub(crate) const fn with_tool_pipeline_refusal(
+        mut self,
+        refusal: Option<super::graph::compiler::ToolPipelineCause>,
+    ) -> Self {
+        self.tool_pipeline_refusal = refusal;
+        self
     }
 
     /// The child's delegation evidence, when it was delegated.
@@ -701,6 +714,32 @@ impl ApplicationToolPresentationCatalog {
     #[must_use]
     pub(crate) fn contains_runtime_tool(&self, tool_name: &str) -> bool {
         self.by_tool_name.contains_key(tool_name)
+    }
+
+    /// FU-291 D-7: why a fan-out member cannot run this Agent's saved pipeline
+    /// tools durably: one holds Code or an Agent node, or one sits below
+    /// another Agent. `None` when every pipeline tool can.
+    /// `self` is a scoped Agent node's catalog: its saved Agent, whose own
+    /// tools are read.
+    #[must_use]
+    pub(crate) fn fanout_tool_pipeline_refusal(
+        &self,
+    ) -> Option<super::graph::compiler::ToolPipelineCause> {
+        self.by_tool_name
+            .values()
+            .find_map(|agent| agent.child_tools.direct_tool_pipeline_refusal())
+    }
+
+    fn direct_tool_pipeline_refusal(&self) -> Option<super::graph::compiler::ToolPipelineCause> {
+        self.by_tool_name
+            .values()
+            .find_map(|entry| match entry.agent_type.as_str() {
+                "pipeline" => entry.guards.tool_pipeline_refusal,
+                _ => entry
+                    .child_tools
+                    .has_pipeline_descendant()
+                    .then_some(super::graph::compiler::ToolPipelineCause::NestedAgents),
+            })
     }
 
     /// Whether a saved pipeline is among these tools or any nested tools.

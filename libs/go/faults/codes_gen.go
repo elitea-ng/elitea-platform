@@ -34,6 +34,8 @@ const (
 	DependencyDatabaseUnavailable Code = "dependency.database_unavailable"
 	// Main lost NATS; admitted runs wait in the outbox and claimed runs continue.
 	DependencyNatsUnavailable Code = "dependency.nats_unavailable"
+	// A Map item or Parallel branch runs a saved Agent whose saved pipeline tool holds a Code or Agent node, or is reached through another Agent, so the pipeline was refused before it started.
+	GraphFanoutAgentToolPipelineUnsupported Code = "graph.fanout.agent_tool_pipeline_unsupported"
 	// A Map item or Parallel branch failed; this line names its own code, its fixed sentence and a safe cause chain, so the fan-out failure can be traced to one item.
 	GraphFanoutChildFailed Code = "graph.fanout.child_failed"
 	// A Map or Parallel whose worker or branch is a Code node sits inside a saved child pipeline, so the pipeline was refused before it started: fan-out Code runs only in the started pipeline for now.
@@ -110,6 +112,8 @@ const (
 	RuntimeExecutionInputLimit Code = "runtime.execution_input_limit"
 	// A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools.
 	RuntimeFanoutAgentCallsPipeline Code = "runtime.fanout_agent_calls_pipeline"
+	// A Map item or Parallel branch runs an Agent whose saved pipeline tool holds a Code or Agent node, or that reaches a saved pipeline through another Agent, which cannot run there yet; remove that node, or attach the pipeline to the Agent directly.
+	RuntimeFanoutAgentToolPipelineUnsupported Code = "runtime.fanout_agent_tool_pipeline_unsupported"
 	// The fan-out node could not start: too little time was left before the run's deadline for its items.
 	RuntimeFanoutDeadlineInsufficient Code = "runtime.fanout_deadline_insufficient"
 	// The pipeline stopped because a Map item or Parallel branch failed (On Error is Stop, or every item failed). The other items finished first; later nodes did not run. Open Execution details to see the failed item.

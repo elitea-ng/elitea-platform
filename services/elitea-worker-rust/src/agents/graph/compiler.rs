@@ -3692,6 +3692,20 @@ pub(crate) enum FanoutChildRefusal {
     /// A Code worker or branch of a Map or Parallel inside a saved child
     /// pipeline: its visit scope is the run root's only (R4, W3-2b; FU-317).
     CodeBelowRoot,
+    /// FU-291 D5/D-7: the member's saved Agent reaches a saved pipeline tool
+    /// a member cannot run durably yet.
+    AgentToolPipeline(ToolPipelineCause),
+}
+
+/// FU-291: why a member's saved Agent's pipeline tool cannot run durably yet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ToolPipelineCause {
+    /// A Code node in the pipeline (FU-319: Main needs its tool-lineage edge).
+    Code,
+    /// An Agent node in the pipeline (a scoped ordinary descendant).
+    Agent,
+    /// The pipeline is reached through another Agent (tier 2 or deeper).
+    NestedAgents,
 }
 
 impl FanoutChildRefusal {
@@ -3702,6 +3716,9 @@ impl FanoutChildRefusal {
             Self::ContainsParallel => "graph.fanout.parallel_in_child_pipeline",
             Self::AgentCallsPipeline => "graph.fanout.agent_calls_saved_pipeline",
             Self::CodeBelowRoot => elitea_faults::codes::GRAPH_FANOUT_CODE_BELOW_ROOT.as_str(),
+            Self::AgentToolPipeline(_) => {
+                elitea_faults::codes::GRAPH_FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED.as_str()
+            }
         }
     }
 
@@ -3714,6 +3731,7 @@ impl FanoutChildRefusal {
             Self::ContainsParallel,
             Self::AgentCallsPipeline,
             Self::CodeBelowRoot,
+            Self::AgentToolPipeline(ToolPipelineCause::Code),
         ]
         .iter()
         .any(|refusal| refusal.code() == code)
@@ -3735,6 +3753,15 @@ impl std::fmt::Display for FanoutChildRefusal {
             }
             Self::CodeBelowRoot => {
                 "a Code worker or branch runs only in a Map or Parallel of the started pipeline, not inside a saved child pipeline yet"
+            }
+            Self::AgentToolPipeline(ToolPipelineCause::Code) => {
+                "the Agent's saved pipeline tool holds a Code node, which a Map item or Parallel branch cannot run yet"
+            }
+            Self::AgentToolPipeline(ToolPipelineCause::Agent) => {
+                "the Agent's saved pipeline tool holds an Agent node, which a Map item or Parallel branch cannot run yet"
+            }
+            Self::AgentToolPipeline(ToolPipelineCause::NestedAgents) => {
+                "the Agent reaches a saved pipeline through another Agent, which a Map item or Parallel branch cannot run yet"
             }
         })
     }
@@ -3777,6 +3804,15 @@ impl PipelineConfigurationError {
                 FanoutChildRefusal::ContainsParallel => "parallel_in_child_pipeline",
                 FanoutChildRefusal::AgentCallsPipeline => "fanout_agent_calls_pipeline",
                 FanoutChildRefusal::CodeBelowRoot => "fanout_code_below_root",
+                FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::Code) => {
+                    "fanout_agent_tool_pipeline_code"
+                }
+                FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::Agent) => {
+                    "fanout_agent_tool_pipeline_agent"
+                }
+                FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::NestedAgents) => {
+                    "fanout_agent_tool_pipeline_nested_agents"
+                }
             }),
         }
     }

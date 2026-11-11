@@ -1727,7 +1727,11 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
             .map(|resolver| Arc::new(resolver) as Arc<dyn PipelineApplicationResolver>)
     }
 
-    fn agent_calls_saved_pipeline(&self, node: &str, alias: &str) -> bool {
+    fn agent_tool_pipeline_refusal(
+        &self,
+        node: &str,
+        alias: &str,
+    ) -> Option<super::graph::compiler::ToolPipelineCause> {
         let participant = if self.nodes.is_empty() {
             self.participants.get(alias)
         } else {
@@ -1736,11 +1740,13 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
                 .filter(|(selected, _)| selected == alias)
                 .map(|(_, participant)| participant)
         };
-        matches!(
-            participant,
-            Some(NativePipelineApplicationParticipant::ScopedAgent { scope, .. })
-                if scope.applications.presentation_catalog().has_pipeline_descendant()
-        )
+        match participant {
+            Some(NativePipelineApplicationParticipant::ScopedAgent { scope, .. }) => scope
+                .applications
+                .presentation_catalog()
+                .fanout_tool_pipeline_refusal(),
+            _ => None,
+        }
     }
 
     fn fixed_parallel_definition_digest(

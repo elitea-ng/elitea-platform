@@ -106,8 +106,13 @@ pub enum RuntimeFailureKind {
     /// `stop`; the node failed after the other members drained.
     FanoutMemberFailed,
     /// A Map item or Parallel branch runs a saved Agent that calls a saved
-    /// pipeline, refused before the run (FU-291).
+    /// pipeline, refused before the run (FU-291). Kept for restored frames;
+    /// nothing sends it since FU-291 lifted the refusal.
     FanoutAgentCallsPipeline,
+    /// FU-291 D5: the member's saved Agent reaches a saved pipeline tool a
+    /// member cannot run durably yet (Code or an Agent node in it, or another
+    /// Agent between them), refused before the run.
+    FanoutAgentToolPipelineUnsupported,
     PipelineResultInvalid,
     PipelineResultLimit,
     PipelineCodeFailed,
@@ -942,6 +947,7 @@ impl RuntimeFailureKind {
             // ---- added after the FU-299 baseline: a baseline fallback each.
             Self::CodeDeadlineInsufficient => Some(Self::PipelineCodeFailed),
             Self::FanoutDeadlineInsufficient => Some(Self::PipelineToolFailed),
+            Self::FanoutAgentToolPipelineUnsupported => Some(Self::FanoutAgentCallsPipeline),
             // ---- the FU-299 baseline. FanoutAgentCallsPipeline belongs here:
             // Main has admitted its text since FU-291; W3-1 (D5) only added it
             // to the Worker's table.
@@ -1038,6 +1044,10 @@ pub(crate) const FANOUT_MEMBER_FAILED_MESSAGE: &str = "The pipeline stopped beca
 
 /// The chat-visible text for [`RuntimeFailureKind::FanoutAgentCallsPipeline`] (FU-291).
 pub(crate) const FANOUT_AGENT_CALLS_PIPELINE_MESSAGE: &str = "A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools.";
+
+/// The chat-visible text for
+/// [`RuntimeFailureKind::FanoutAgentToolPipelineUnsupported`] (FU-291 D5).
+pub(crate) const FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED_MESSAGE: &str = "A Map item or Parallel branch runs an Agent whose saved pipeline tool holds a Code or Agent node, or that reaches a saved pipeline through another Agent, which cannot run there yet; remove that node, or attach the pipeline to the Agent directly.";
 
 /// The internal (never user-facing) detail every "may have started" refusal
 /// carries; the user sees [`RECOVERY_REFUSED_MESSAGE`].
@@ -1160,6 +1170,11 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::FanoutAgentCallsPipeline => (
             RuntimeErrorCodeV1::UnsupportedCapability,
             FANOUT_AGENT_CALLS_PIPELINE_MESSAGE,
+            false,
+        ),
+        RuntimeFailureKind::FanoutAgentToolPipelineUnsupported => (
+            RuntimeErrorCodeV1::UnsupportedCapability,
+            FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED_MESSAGE,
             false,
         ),
         RuntimeFailureKind::PipelineResultInvalid => (
@@ -1371,6 +1386,7 @@ const REGISTERED_RUNTIME_FAILURES: &[RuntimeFailureKind] = &[
     RuntimeFailureKind::PipelineToolFailed,
     RuntimeFailureKind::FanoutMemberFailed,
     RuntimeFailureKind::FanoutAgentCallsPipeline,
+    RuntimeFailureKind::FanoutAgentToolPipelineUnsupported,
     RuntimeFailureKind::FanoutDeadlineInsufficient,
     RuntimeFailureKind::PipelineResultInvalid,
     RuntimeFailureKind::PipelineResultLimit,
@@ -2570,6 +2586,26 @@ mod deadline_admission_failure_tests {
         assert_eq!(error.safe_message, FANOUT_AGENT_CALLS_PIPELINE_MESSAGE);
     }
 
+    /// FU-291 D5: the precise refusal is registered with its own text; the
+    /// older one stays registered for restored frames.
+    #[test]
+    fn fanout_agent_tool_pipeline_unsupported_is_registered_beside_the_older_text() {
+        let error = runtime_error(RuntimeFailureKind::FanoutAgentToolPipelineUnsupported);
+        assert_eq!(
+            canonical_runtime_failure(&error),
+            Some(RuntimeFailureKind::FanoutAgentToolPipelineUnsupported)
+        );
+        assert_eq!(
+            error.safe_message,
+            FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED_MESSAGE
+        );
+        assert_ne!(error.safe_message, FANOUT_AGENT_CALLS_PIPELINE_MESSAGE);
+        assert_eq!(
+            error.code,
+            runtime_error(RuntimeFailureKind::FanoutAgentCallsPipeline).code
+        );
+    }
+
     fn terminal(kind: RuntimeFailureKind) -> ExecutionOutputFrameV1 {
         ExecutionOutputFrameV1 {
             terminal: true,
@@ -2595,6 +2631,10 @@ mod deadline_admission_failure_tests {
                 RuntimeFailureKind::FanoutDeadlineInsufficient,
                 RuntimeFailureKind::PipelineToolFailed,
             ),
+            (
+                RuntimeFailureKind::FanoutAgentToolPipelineUnsupported,
+                RuntimeFailureKind::FanoutAgentCallsPipeline,
+            ),
         ] {
             assert_eq!(refused_terminal_replacement(&terminal(kind)), Some(older));
             assert_eq!(
@@ -2609,6 +2649,7 @@ mod deadline_admission_failure_tests {
                 kind,
                 RuntimeFailureKind::CodeDeadlineInsufficient
                     | RuntimeFailureKind::FanoutDeadlineInsufficient
+                    | RuntimeFailureKind::FanoutAgentToolPipelineUnsupported
             ) {
                 assert_eq!(
                     refused_terminal_replacement(&terminal(*kind)),

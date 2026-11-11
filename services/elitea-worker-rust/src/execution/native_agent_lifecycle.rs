@@ -1951,6 +1951,14 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
         }
         NativeAgentAssemblyErrorCode::UnsupportedCapability
             if error.cause().is_some_and(|cause| {
+                cause.code()
+                    == elitea_faults::codes::GRAPH_FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED.as_str()
+            }) =>
+        {
+            RuntimeFailureKind::FanoutAgentToolPipelineUnsupported
+        }
+        NativeAgentAssemblyErrorCode::UnsupportedCapability
+            if error.cause().is_some_and(|cause| {
                 // A toolkit a direct node's position cannot serve, or a node
                 // kind a Parallel branch cannot run (an inline LLM node until
                 // FU-247), is fixed by editing the pipeline.
@@ -2270,6 +2278,50 @@ mod taxonomy_tests {
         assert!(message.contains("Map item or Parallel branch"));
         assert!(!message.contains("release-agent"), "data-free text");
         assert!(!retryable);
+    }
+
+    /// FU-291 D5/D-7: a member whose saved Agent's pipeline tool holds Code
+    /// or an Agent node, or sits below another Agent, ends as the precise
+    /// registered text (data-free); the diagnostic names the node, the Agent
+    /// and the cause.
+    #[test]
+    fn an_agent_member_with_an_unsupported_pipeline_tool_ends_as_its_precise_text() {
+        use crate::agents::graph::compiler::{
+            FanoutChildRefusal, PipelineConfigurationError, ToolPipelineCause,
+        };
+        use crate::protocol::output::{
+            FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED_MESSAGE, runtime_error_policy,
+        };
+
+        for (cause, named) in [
+            (ToolPipelineCause::Code, "Code node"),
+            (ToolPipelineCause::Agent, "Agent node"),
+            (ToolPipelineCause::NestedAgents, "another Agent"),
+        ] {
+            let refusal = PipelineConfigurationError::FanoutChildUnsupported {
+                node: "asker/release-agent".to_owned(),
+                refusal: FanoutChildRefusal::AgentToolPipeline(cause),
+            };
+            let diagnostic = refusal.to_string();
+            assert!(diagnostic.contains("asker/release-agent"), "{diagnostic}");
+            assert!(diagnostic.contains(named), "{diagnostic}");
+            let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+                &refusal,
+                "the stored pipeline could not be compiled",
+            );
+            assert_eq!(
+                error
+                    .cause()
+                    .map(crate::agents::runtime::NativeAgentAssemblyCause::code),
+                Some(elitea_faults::codes::GRAPH_FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED.as_str())
+            );
+            let kind = assembly_failure(&error);
+            assert_eq!(kind, RuntimeFailureKind::FanoutAgentToolPipelineUnsupported);
+            let (_, message, retryable) = runtime_error_policy(kind);
+            assert_eq!(message, FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED_MESSAGE);
+            assert!(!message.contains("release-agent"), "data-free text");
+            assert!(!retryable);
+        }
     }
 
     /// A saved child pipeline holding a Parallel (FU-249) ends as the

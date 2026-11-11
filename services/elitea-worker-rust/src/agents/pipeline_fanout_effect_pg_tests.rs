@@ -6303,12 +6303,32 @@ fn helper_pipeline() -> Value {
     pipeline
 }
 
-/// FU-291 (T-2A3 review R3): a fan-out member whose saved Agent calls a saved
-/// pipeline cannot run yet (the pipeline's checkpoint threads are not the
-/// member's). `yaml` is refused before the run with the typed cause the chat
-/// maps to its registered text (the refusal's own text names the node and the
-/// Agent: `an_agent_member_calling_a_saved_pipeline_ends_as_its_registered_text`).
-async fn assert_agent_member_calling_a_pipeline_is_refused(yaml: String) {
+/// A Parallel of two branches whose Agent nodes run the same saved Agent.
+const SAVED_AGENT_PARALLEL_YAML: &str = "state:\n  left: str\n  right: str\n  joined: list\n  messages: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{id: left, node: ask_left}, {id: right, node: ask_right}]\n    max_concurrency: 2\n    wait: all\n    on_error: continue\n    output: [joined]\n    transition: END\n  - id: ask_left\n    type: agent\n    tool: release-agent\n    input_mapping:\n      task: {type: fixed, value: 'topic-left'}\n    output: [left]\n  - id: ask_right\n    type: agent\n    tool: release-agent\n    input_mapping:\n      task: {type: fixed, value: 'topic-right'}\n    output: [right]\n";
+
+/// The nested saved pipeline with a Code node after its LLM node.
+fn helper_pipeline_with_code() -> Value {
+    let mut pipeline = helper_pipeline();
+    pipeline["instructions"] = json!(
+        "state:\n  input: str\n  messages: list\n  answer: str\nentry_point: answer\nnodes:\n  - id: answer\n    type: llm\n    input: [input]\n    input_mapping:\n      system: {type: fixed, value: 'Answer the topic you are given.'}\n      task: {type: variable, value: input}\n    output: [answer]\n    transition: tidy\n  - id: tidy\n    type: code\n    code: 'answer'\n    input: [answer]\n    output: [answer]\n    transition: END\n"
+    );
+    pipeline
+}
+
+async fn nested_tool_threads(pool: &sqlx::PgPool) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT thread_id FROM elitea_runtime.agent_graph_checkpoint_writers \
+         WHERE thread_id LIKE '%/pt1:%' ORDER BY thread_id",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("nested pipeline threads")
+}
+
+/// FU-291 D-7 (T5): a member whose saved Agent's pipeline tool holds a Code
+/// node is refused before the run, by name, with the precise registered
+/// code and its cause; no model call, no nested thread.
+async fn assert_member_with_a_code_pipeline_tool_is_refused(yaml: String) {
     let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 refusal proof");
         return;
@@ -6322,7 +6342,7 @@ async fn assert_agent_member_calling_a_pipeline_is_refused(yaml: String) {
     let runtime = saved_runtime_on(
         Vec::new(),
         pipeline_delegating_agent(),
-        Some(helper_pipeline()),
+        Some(helper_pipeline_with_code()),
         None,
         test_model_gateway_config(),
     );
@@ -6343,35 +6363,206 @@ async fn assert_agent_member_calling_a_pipeline_is_refused(yaml: String) {
         .assemble(claim(&request, 1))
         .await
     else {
-        panic!("an Agent member calling a saved pipeline was assembled");
+        panic!("a member whose pipeline tool holds Code was assembled");
     };
     let cause = error.cause().expect("a typed cause");
     assert_eq!(
         cause.code(),
-        crate::agents::graph::compiler::FanoutChildRefusal::AgentCallsPipeline.code()
+        elitea_faults::codes::GRAPH_FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED.as_str()
     );
-    assert_eq!(cause.detail(), Some("fanout_agent_calls_pipeline"));
+    assert_eq!(cause.detail(), Some("fanout_agent_tool_pipeline_code"));
     assert_eq!(model_requests(&captured), 0, "nothing ran");
+    assert!(nested_tool_threads(&db.pool).await.is_empty());
     db.pool.close().await;
 }
 
-/// FU-291: a Map whose item Agent calls a saved pipeline is refused readably.
+/// FU-291 T5: a Map whose item Agent's pipeline tool holds Code is refused.
 #[tokio::test(flavor = "current_thread")]
-async fn postgres_a_map_item_agent_calling_a_saved_pipeline_is_refused_readably() {
+async fn postgres_a_map_item_agent_with_a_code_pipeline_tool_is_refused_readably() {
     let topics = (0..3)
         .map(|index| format!("topic-p{index:02}x"))
         .collect::<Vec<_>>();
-    assert_agent_member_calling_a_pipeline_is_refused(saved_agent_map_yaml(&topics, 3)).await;
+    assert_member_with_a_code_pipeline_tool_is_refused(saved_agent_map_yaml(&topics, 3)).await;
 }
 
-/// FU-291: a Parallel branch whose Agent calls a saved pipeline is refused
-/// the same way.
+/// FU-291 T5: a Parallel branch whose Agent's pipeline tool holds Code is
+/// refused the same way.
 #[tokio::test(flavor = "current_thread")]
-async fn postgres_a_parallel_branch_agent_calling_a_saved_pipeline_is_refused_readably() {
-    assert_agent_member_calling_a_pipeline_is_refused(
-        "state:\n  left: str\n  right: str\n  joined: list\n  messages: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{id: left, node: ask_left}, {id: right, node: ask_right}]\n    max_concurrency: 2\n    wait: all\n    on_error: continue\n    output: [joined]\n    transition: END\n  - id: ask_left\n    type: agent\n    tool: release-agent\n    input_mapping:\n      task: {type: fixed, value: 'left'}\n    output: [left]\n  - id: ask_right\n    type: agent\n    tool: release-agent\n    input_mapping:\n      task: {type: fixed, value: 'right'}\n    output: [right]\n".to_owned(),
-    )
-    .await;
+async fn postgres_a_parallel_branch_agent_with_a_code_pipeline_tool_is_refused_readably() {
+    assert_member_with_a_code_pipeline_tool_is_refused(SAVED_AGENT_PARALLEL_YAML.to_owned()).await;
+}
+
+/// Per topic, in order: the member's Agent calls the pipeline tool, the
+/// pipeline's LLM node answers, the Agent reports. Each request carries its
+/// own topic.
+fn pipeline_member_outcomes(topics: &[String]) -> Vec<TestModelGatewayOutcome> {
+    let mut outcomes = Vec::new();
+    for (index, topic) in topics.iter().enumerate() {
+        let marker: &'static str = Box::leak(topic.clone().into_boxed_str());
+        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+            marker,
+            response: nested_agent_call_response(&format!("call_item_{index}"), topic),
+        });
+        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+            marker,
+            response: pipeline_text_response(&format!("nested answer for {topic}")),
+        });
+        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+            marker,
+            response: pipeline_text_response(&format!("outer answer for {topic}")),
+        });
+    }
+    outcomes
+}
+
+/// Run `yaml` whose members' saved Agent calls the helper pipeline; returns
+/// the model request count and the nested texts each projected frame carried.
+async fn run_pipeline_members(
+    db: &IsolatedPostgres,
+    topics: &[String],
+    yaml: String,
+) -> (usize, Vec<(String, Value)>) {
+    let mut config = test_model_gateway_config();
+    config.response_header_timeout = Duration::from_secs(60);
+    let runtime = saved_runtime_on(
+        pipeline_member_outcomes(topics),
+        pipeline_delegating_agent(),
+        Some(helper_pipeline()),
+        None,
+        config,
+    );
+    let (assembler, captured) = assembler_on(
+        &db.pool,
+        runtime,
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        }),
+    );
+    let mut request = request("continue");
+    request.payload.application["version_details"]["instructions"] = json!(yaml);
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let mut invocation = assembler
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .expect("assemble the fan-out pipeline");
+    invocation
+        .project_start(timestamp(1))
+        .expect("pipeline browser start");
+    let (mut run, mut projector, completion) = invocation.start().expect("pipeline start");
+    let mut nested = Vec::new();
+    while let Some(event) = run.next_event().await.expect("the run streams") {
+        for frame in projector.project(&event).expect("projected frames") {
+            let text = String::from_utf8_lossy(&frame.content).into_owned();
+            if text.contains("nested answer for") {
+                let metadata: Value =
+                    serde_json::from_slice(&frame.response_metadata).unwrap_or_default();
+                nested.push((text, metadata["parent_agent_path"].clone()));
+            }
+        }
+    }
+    completion.select().await.expect("the fan-out completes");
+    (model_requests(&captured), nested)
+}
+
+/// FU-291: three concurrent Map items of a saved Agent that calls a saved
+/// pipeline as a tool. Each call runs on its own durable nested thread under
+/// its item (one writer per item, distinct), every nested answer streams
+/// under the item that ran it, and every item lands with its own answer.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_map_items_of_a_saved_agent_calling_a_saved_pipeline_run_on_their_own_nested_threads()
+ {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 Map proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let topics = (0..3)
+        .map(|index| format!("topic-r{index:02}x"))
+        .collect::<Vec<_>>();
+    let (requests, nested) =
+        run_pipeline_members(&db, &topics, saved_agent_map_yaml(&topics, 3)).await;
+    assert_eq!(
+        requests, 9,
+        "each item: its call, the nested answer, its report"
+    );
+    assert!(!nested.is_empty(), "the nested answers stream to the run");
+    for (text, path) in &nested {
+        let topic = topics
+            .iter()
+            .position(|topic| text.contains(topic.as_str()))
+            .expect("the nested answer names its topic");
+        assert_eq!(
+            path[0]["sibling_ordinal"],
+            topic + 1,
+            "a nested event lands under the item that ran it: {text} {path}"
+        );
+    }
+    let threads = nested_tool_threads(&db.pool).await;
+    assert_eq!(threads.len(), 3, "one nested thread per item: {threads:?}");
+    let agents = threads
+        .iter()
+        .map(|thread| thread.split_once("/pt1:").expect("nested").0.to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(agents.len(), 3, "each under its own item: {threads:?}");
+    assert!(
+        agents.iter().all(|agent| agent.starts_with("m1:")),
+        "{agents:?}"
+    );
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    for (index, (entry, topic)) in entries.iter().zip(&topics).enumerate() {
+        assert_eq!(entry["index"], index, "{entries:?}");
+        assert_eq!(entry["status"], "succeeded", "{entries:?}");
+        assert_eq!(
+            entry["outputs"]["answer"],
+            format!("outer answer for {topic}"),
+            "{entries:?}"
+        );
+    }
+    db.pool.close().await;
+}
+
+/// FU-291: the same for a Parallel of two branches of one saved Agent.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_parallel_branches_of_a_saved_agent_calling_a_saved_pipeline_run_on_their_own_nested_threads()
+ {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 Parallel proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let topics = ["topic-left".to_owned(), "topic-right".to_owned()];
+    let (requests, nested) =
+        run_pipeline_members(&db, &topics, SAVED_AGENT_PARALLEL_YAML.to_owned()).await;
+    assert_eq!(
+        requests, 6,
+        "each branch: its call, the nested answer, its report"
+    );
+    assert!(!nested.is_empty(), "the nested answers stream to the run");
+    let threads = nested_tool_threads(&db.pool).await;
+    assert_eq!(
+        threads.len(),
+        2,
+        "one nested thread per branch: {threads:?}"
+    );
+    assert!(
+        threads.iter().all(|thread| thread.starts_with("p1:")),
+        "{threads:?}"
+    );
+    db.pool.close().await;
 }
 
 /// FU-291 scope: a saved pipeline used directly as the Map worker is not
@@ -6923,4 +7114,258 @@ async fn postgres_a_saved_child_lost_inside_a_later_code_attempt_is_recovered_by
         return;
     };
     saved_code_scenario(&url, "leaf").await;
+}
+
+const TOOL_PIPELINE_TEST: &str =
+    "agents::pipeline_tests::fanout_effect_pg_tests::postgres_member_pipeline_tool_child";
+/// `map` (one Map item) or `parallel` (two Parallel branches).
+const TOOL_PIPELINE_SHAPE_ENV: &str = "ELITEA_FU291_PG_SHAPE";
+const NESTED_SYSTEM: &str = "Answer the topic you are given.";
+
+fn tool_pipeline_topics(shape: &str) -> Vec<String> {
+    match shape {
+        "map" => vec!["topic-k00x".to_owned()],
+        _ => vec!["topic-left".to_owned(), "topic-right".to_owned()],
+    }
+}
+
+fn tool_pipeline_yaml(shape: &str) -> String {
+    match shape {
+        "map" => saved_agent_map_yaml(&tool_pipeline_topics(shape), 1),
+        _ => SAVED_AGENT_PARALLEL_YAML.to_owned(),
+    }
+}
+
+/// One process per phase of the FU-291 member kill: `crash` dies once every
+/// member is inside its nested pipeline's LLM node (its Agent chose the call,
+/// the call batch is recorded, its nested thread admitted and its frontier
+/// saved, the nested model request held in flight); `recover` is the
+/// production reclaim with model-checkpoint recovery on.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_member_pipeline_tool_child() {
+    let Ok(database) = std::env::var(DATABASE_ENV) else {
+        return;
+    };
+    assert!(
+        database.starts_with("elitea_rust_session_")
+            && database
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    );
+    let shape = std::env::var(TOOL_PIPELINE_SHAPE_ENV).expect("shape");
+    let topics = tool_pipeline_topics(&shape);
+    let pool = connect(&database).await;
+    let mut request = request("continue");
+    request.payload.application["version_details"]["instructions"] =
+        json!(tool_pipeline_yaml(&shape));
+    let mut config = test_model_gateway_config();
+    config.response_header_timeout = Duration::from_secs(60);
+    let connector = || {
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        })
+    };
+    if std::env::var(PHASE_ENV).expect("phase") == "crash" {
+        // Each member's Agent chooses its call; each nested LLM request is
+        // held. Once every member's nested frontier is durable, the process
+        // dies: every member is inside its nested pipeline's LLM node.
+        let held = Arc::new(tokio::sync::Notify::new());
+        let mut outcomes = Vec::new();
+        for (index, topic) in topics.iter().enumerate() {
+            let marker: &'static str = Box::leak(topic.clone().into_boxed_str());
+            outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+                marker,
+                response: nested_agent_call_response(&format!("call_item_{index}"), topic),
+            });
+            outcomes.push(TestModelGatewayOutcome::ResponseForRequestAfter {
+                marker,
+                gate: Arc::clone(&held),
+                response: pipeline_text_response("never served"),
+            });
+        }
+        let watcher = pool.clone();
+        let members = i64::try_from(topics.len()).expect("members");
+        tokio::spawn(async move {
+            loop {
+                let durable = sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+                     WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'",
+                )
+                .fetch_one(&watcher)
+                .await
+                .unwrap_or_default();
+                if durable >= members {
+                    std::process::exit(CRASH_EXIT_CODE);
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        let runtime = saved_runtime_on(
+            outcomes,
+            pipeline_delegating_agent(),
+            Some(helper_pipeline()),
+            None,
+            config,
+        );
+        let (assembler, _) = assembler_on(&pool, runtime, connector());
+        let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+        let invocation = assembler
+            .with_fanout_decisions_for_tests(ledger.client(1))
+            .assemble(claim(&request, 1))
+            .await
+            .unwrap_or_else(|error| panic!("crash: assemble: {error}"));
+        let outcome = run_to_end(invocation).await;
+        panic!("crash: the process outlived the nested model call: {outcome:?}");
+    }
+    let mut outcomes = Vec::new();
+    for topic in &topics {
+        let marker: &'static str = Box::leak(topic.clone().into_boxed_str());
+        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+            marker,
+            response: pipeline_text_response(&format!("nested answer for {topic}")),
+        });
+        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+            marker,
+            response: pipeline_text_response(&format!("outer answer for {topic}")),
+        });
+    }
+    let runtime = saved_runtime_on(
+        outcomes,
+        pipeline_delegating_agent(),
+        Some(helper_pipeline()),
+        None,
+        config,
+    );
+    let (assembler, captured) = assembler_on(&pool, runtime, connector());
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let assembler = assembler.with_fanout_decisions_for_tests(ledger.client(2));
+    let invocation = recovered(&assembler, &request, EXECUTION, 2)
+        .await
+        .unwrap_or_else(|error| panic!("recover: the reclaim recovers: {error}"));
+    run_to_end(invocation)
+        .await
+        .unwrap_or_else(|error| panic!("recover: the members complete: {error}"));
+    // C2: no member's Agent asked the model again for its call. Each member's
+    // first request after the kill is its nested LLM node's; then its report.
+    let bodies = captured
+        .lock()
+        .expect("captured")
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(bodies.len(), 2 * topics.len(), "recover: {bodies:?}");
+    for topic in &topics {
+        let mine = bodies
+            .iter()
+            .filter(|body| body.contains(topic.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(mine.len(), 2, "recover: {topic}");
+        assert!(
+            mine[0].contains(NESTED_SYSTEM),
+            "recover: {topic}'s first request is the nested node's"
+        );
+        assert!(!mine[1].contains(NESTED_SYSTEM), "recover: then the report");
+    }
+}
+
+/// FU-291 T1a/T1c (Map item, Parallel branches): a Worker killed inside the
+/// nested pipeline's LLM node of a member's pipeline tool call. The reclaim
+/// replays the stored call batch with no new model completion (C2), re-enters
+/// the same nested thread (no second writer, the same name), runs the nested
+/// node once more and lands one answer per member.
+async fn member_pipeline_tool_kill(url: &str, shape: &str) {
+    let db = IsolatedPostgres::create(url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let phase = |phase: &'static str| {
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args([
+                "--exact",
+                TOOL_PIPELINE_TEST,
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(DATABASE_ENV, &db.database_name)
+            .env(TOOL_PIPELINE_SHAPE_ENV, shape)
+            .env(PHASE_ENV, phase);
+        command
+    };
+    let output = run_phase("crash", phase("crash"));
+    assert_eq!(
+        output.status.code(),
+        Some(CRASH_EXIT_CODE),
+        "crash: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let crashed = nested_tool_threads(&db.pool).await;
+    assert_eq!(
+        crashed.len(),
+        tool_pipeline_topics(shape).len(),
+        "each killed call's nested thread was admitted before its first effect"
+    );
+    let durable = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+         WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .expect("nested rows");
+    assert_eq!(
+        usize::try_from(durable).expect("rows"),
+        tool_pipeline_topics(shape).len(),
+        "each nested thread's frontier is durable, pending its LLM node"
+    );
+    let output = run_phase("recover", phase("recover"));
+    assert!(
+        output.status.success(),
+        "recover: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let recovered = nested_tool_threads(&db.pool).await;
+    assert_eq!(
+        recovered.len(),
+        tool_pipeline_topics(shape).len(),
+        "one nested thread per member: {recovered:?}"
+    );
+    assert_eq!(
+        crashed, recovered,
+        "the same nested threads before and after the kill"
+    );
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert_eq!(
+        entries.len(),
+        tool_pipeline_topics(shape).len(),
+        "{entries:?}"
+    );
+    for entry in &entries {
+        assert_eq!(entry["status"], "succeeded", "{entries:?}");
+    }
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_map_item_killed_inside_its_pipeline_tool_resumes_on_the_same_nested_thread() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 kill proof");
+        return;
+    };
+    member_pipeline_tool_kill(&url, "map").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_parallel_branches_killed_inside_their_pipeline_tools_resume_on_the_same_nested_threads()
+ {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 kill proof");
+        return;
+    };
+    member_pipeline_tool_kill(&url, "parallel").await;
 }

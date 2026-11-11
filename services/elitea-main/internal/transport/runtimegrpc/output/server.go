@@ -1175,6 +1175,13 @@ const fanoutMemberFailedSafeMessage = "The pipeline stopped because a Map item o
 // before the run (FU-291).
 const fanoutAgentCallsPipelineSafeMessage = "A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools."
 
+// fanoutAgentToolPipelineUnsupportedSafeMessage is the Worker's registered text
+// for a Map item or Parallel branch whose saved Agent reaches a saved pipeline
+// tool a member cannot run durably yet (Code or an Agent node in it, or another
+// Agent between them), refused before the run (FU-291 D5). The older text above
+// stays admitted for frames an older Worker spooled.
+const fanoutAgentToolPipelineUnsupportedSafeMessage = "A Map item or Parallel branch runs an Agent whose saved pipeline tool holds a Code or Agent node, or that reaches a saved pipeline through another Agent, which cannot run there yet; remove that node, or attach the pipeline to the Agent directly."
+
 // W3-1: a fresh Code attempt refused before dispatch because the run's time
 // left cannot hold the Code timeout plus the observation margin. Nothing ran;
 // not retryable. The Worker's registered text (protocol/output.rs
@@ -1229,6 +1236,9 @@ func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFai
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY && payload.GetSafeMessage() == fanoutAgentCallsPipelineSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_NODE_TYPE_NOT_AVAILABLE", SafeMessage: fanoutAgentCallsPipelineSafeMessage}, true
+	}
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY && payload.GetSafeMessage() == fanoutAgentToolPipelineUnsupportedSafeMessage {
+		return runtimeFailurePolicy{Code: "PIPELINE_NODE_TYPE_NOT_AVAILABLE", SafeMessage: fanoutAgentToolPipelineUnsupportedSafeMessage}, true
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY && payload.GetSafeMessage() == nodeTypeNotAvailableSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_NODE_TYPE_NOT_AVAILABLE", SafeMessage: nodeTypeNotAvailableSafeMessage}, true
