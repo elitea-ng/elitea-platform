@@ -84,6 +84,9 @@ beforeEach(() => {
 });
 afterEach(() => queries.clear());
 
+/** The notes the virtualised list holds (its data), mounted or not. */
+const listed = (): string[] => (screen.getByTestId('agent-memory-list').props.data as { content: string }[]).map((row) => row.content);
+
 it('lists the notes the caller may see, with what each is, who it is about and who wrote it', async () => {
   const server = install();
   server.on('GET', LIST, { status: 200, body: list([MINE, PROJECT, BOS], { can_manage: true }) });
@@ -205,8 +208,11 @@ it('loads the next page when scrolled to the end', async () => {
   server.on('GET', `${LIST}?offset=50`, { status: 200, body: list([entry(51, { content: 'The last note' })], { total: 51 }) });
   await render(withQueries(<AgentMemoryScreen />));
   await screen.findByText('Note 1');
-  await fireEvent.scroll(screen.getByTestId('agent-memory-list'), { nativeEvent: { contentOffset: { y: 2000 }, contentSize: { height: 2400 }, layoutMeasurement: { height: 800 } } });
-  expect(await screen.findByText('The last note')).toBeTruthy();
+  // The list is a FlatList (issue 1839): reaching its end asks for the next page.
+  await fireEvent(screen.getByTestId('agent-memory-list'), 'endReached', { distanceFromEnd: 0 });
+  // Virtualised: the 51st row is in the list's data, mounted once scrolled to.
+  await waitFor(() => expect(listed()).toContain('The last note'));
+  expect(listed()).toHaveLength(51);
 });
 
 it('a server before client contract 1.44 shows no agent memory and asks nothing', async () => {
@@ -268,9 +274,8 @@ it('shows a note once when a page boundary shifted between reads', async () => {
   server.on('GET', `${LIST}?offset=50`, { status: 200, body: list([entry(50), entry(51, { content: 'The last note' })], { total: 52 }) });
   await render(withQueries(<AgentMemoryScreen />));
   await screen.findByText('Note 1');
-  await fireEvent.scroll(screen.getByTestId('agent-memory-list'), {
-    nativeEvent: { contentOffset: { y: 2000 }, contentSize: { height: 2400 }, layoutMeasurement: { height: 800 } },
-  });
-  expect(await screen.findByText('The last note')).toBeTruthy();
-  expect(screen.getAllByText('Note 50')).toHaveLength(1);
+  // The list is a FlatList (issue 1839): reaching its end asks for the next page.
+  await fireEvent(screen.getByTestId('agent-memory-list'), 'endReached', { distanceFromEnd: 0 });
+  await waitFor(() => expect(listed()).toContain('The last note'));
+  expect(listed().filter((content) => content === 'Note 50')).toHaveLength(1);
 });

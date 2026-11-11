@@ -58,7 +58,7 @@ const extensionOf = (uri: string) => (uri.split(/[?#]/, 1)[0].match(/\.([a-z0-9]
  */
 export async function fetchBrandAsset(
   uri: string,
-  type: RegExp,
+  type: { test(contentType: string): boolean },
   maxBytes: number,
   fetchImpl: BaseFetch = noRedirectFetch,
 ): Promise<Uint8Array | null> {
