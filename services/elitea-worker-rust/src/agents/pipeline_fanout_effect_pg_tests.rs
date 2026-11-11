@@ -6372,7 +6372,7 @@ async fn assert_member_with_a_code_pipeline_tool_is_refused(yaml: String) {
     );
     assert_eq!(cause.detail(), Some("fanout_agent_tool_pipeline_code"));
     assert_eq!(model_requests(&captured), 0, "nothing ran");
-    assert!(nested_tool_threads(&db.pool).await.is_empty());
+    assert_eq!(nested_tool_threads(&db.pool).await, Vec::<String>::new());
     db.pool.close().await;
 }
 
@@ -7145,6 +7145,7 @@ fn tool_pipeline_yaml(shape: &str) -> String {
 /// saved, the nested model request held in flight); `recover` is the
 /// production reclaim with model-checkpoint recovery on.
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One child process per phase and mode: crash, then recover with its assertions.
 async fn postgres_member_pipeline_tool_child() {
     let Ok(database) = std::env::var(DATABASE_ENV) else {
         return;

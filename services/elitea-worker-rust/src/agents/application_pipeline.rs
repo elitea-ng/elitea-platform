@@ -1410,6 +1410,77 @@ impl ApplicationPipelineTool {
                 .is_some_and(super::pipeline::scoped_applications::PipelineApplicationScopeRegistry::has_ordinary_applications)
     }
 
+    /// Admit the call's nested thread and read its latest row, retrying a
+    /// transient store failure in process (C5). `Err(result)` is the typed
+    /// tool error the model reads past the member's bound (D3).
+    async fn admit_durable(
+        &self,
+        ctx: &dyn ToolContext,
+        member: &super::application_tools::MemberToolPipelines,
+        lineage: &PipelineToolCallLineage,
+    ) -> adk_rust::Result<
+        Result<
+            (
+                super::graph::tool_pipeline_threads::AdmittedToolPipeline,
+                Option<Checkpoint>,
+            ),
+            Value,
+        >,
+    > {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let read = async {
+                let admitted = member
+                    .admission
+                    .admit_tool_pipeline(&member.agent_thread, lineage)
+                    .await?;
+                let latest = admitted.writer.load(&admitted.thread_id).await?;
+                Ok::<_, adk_rust::graph::GraphError>((admitted, latest))
+            }
+            .await;
+            match read {
+                Ok(read) => return Ok(Ok(read)),
+                Err(error)
+                    if super::graph::tool_pipeline_threads::is_tool_pipeline_limit(&error) =>
+                {
+                    tracing::warn!(
+                        event = "nested_pipeline_thread_limit",
+                        function_call_id = %ctx.function_call_id(),
+                        "a fan-out member reached its nested pipeline call bound"
+                    );
+                    return Ok(Err(tool_thread_limit_result(&self.name)));
+                }
+                Err(error)
+                    if is_transient_checkpoint_error(&error)
+                        && attempt < DURABLE_DEPENDENCY_ATTEMPTS =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(250 * u64::from(attempt)))
+                        .await;
+                }
+                Err(error) if is_transient_checkpoint_error(&error) => {
+                    tracing::warn!(
+                        event = "nested_pipeline_thread_unavailable",
+                        function_call_id = %ctx.function_call_id(),
+                        attempts = attempt,
+                        "the nested pipeline thread's store is unavailable; answered retryable"
+                    );
+                    return Err(tool_thread_unavailable());
+                }
+                Err(error) => {
+                    // Absent or denied: never retried, never widened.
+                    tracing::warn!(
+                        event = "nested_pipeline_thread_refused",
+                        function_call_id = %ctx.function_call_id(),
+                        error_code = %error_code(&error),
+                        "the nested pipeline thread was not admitted"
+                    );
+                    return Err(child_execution_error());
+                }
+            }
+        }
+    }
+
     /// FU-291 D-3/D-4: one call by a fan-out member's Agent, on the nested
     /// thread the member's own family admits for the captured call lineage,
     /// durable before the nested graph's first effect. A completed thread
@@ -1439,57 +1510,9 @@ impl ApplicationPipelineTool {
             )
             .await
             .map_err(|_| child_execution_error())?;
-        let mut attempt = 0;
-        let (admitted, latest) = loop {
-            attempt += 1;
-            let read = async {
-                let admitted = member
-                    .admission
-                    .admit_tool_pipeline(&member.agent_thread, &lineage)
-                    .await?;
-                let latest = admitted.writer.load(&admitted.thread_id).await?;
-                Ok::<_, adk_rust::graph::GraphError>((admitted, latest))
-            }
-            .await;
-            match read {
-                Ok(read) => break read,
-                Err(error)
-                    if super::graph::tool_pipeline_threads::is_tool_pipeline_limit(&error) =>
-                {
-                    tracing::warn!(
-                        event = "nested_pipeline_thread_limit",
-                        function_call_id = %ctx.function_call_id(),
-                        "a fan-out member reached its nested pipeline call bound"
-                    );
-                    return Ok(tool_thread_limit_result(&self.name));
-                }
-                Err(error)
-                    if is_transient_checkpoint_error(&error)
-                        && attempt < DURABLE_DEPENDENCY_ATTEMPTS =>
-                {
-                    tokio::time::sleep(std::time::Duration::from_millis(250 * u64::from(attempt)))
-                        .await;
-                }
-                Err(error) if is_transient_checkpoint_error(&error) => {
-                    tracing::warn!(
-                        event = "nested_pipeline_thread_unavailable",
-                        function_call_id = %ctx.function_call_id(),
-                        attempts = attempt,
-                        "the nested pipeline thread's store is unavailable; answered retryable"
-                    );
-                    return Err(tool_thread_unavailable());
-                }
-                Err(error) => {
-                    // Absent or denied: never retried, never widened.
-                    tracing::warn!(
-                        event = "nested_pipeline_thread_refused",
-                        function_call_id = %ctx.function_call_id(),
-                        error_code = %error_code(&error),
-                        "the nested pipeline thread was not admitted"
-                    );
-                    return Err(child_execution_error());
-                }
-            }
+        let (admitted, latest) = match self.admit_durable(ctx.as_ref(), &member, &lineage).await? {
+            Ok(admitted) => admitted,
+            Err(refused) => return Ok(refused),
         };
         tracing::Span::current().record("resumed", latest.is_some());
         if let Some(finished) = latest.as_ref().filter(|row| row.pending_nodes.is_empty()) {

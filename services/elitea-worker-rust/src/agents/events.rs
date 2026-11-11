@@ -1759,20 +1759,16 @@ impl AgentEventProjector {
         Ok(None)
     }
 
-    fn project_immediate_descendant(
-        &mut self,
+    /// The checkpoint thread of a pipeline child's first event: a durable
+    /// nested thread proved by its receipt (FU-291), a static tool thread, or
+    /// the derived descendant thread.
+    fn descendant_thread(
+        &self,
         event: &Event,
+        active: &ActiveToolCall,
+        application: &ApplicationToolPresentation,
         parent_call_id: &str,
-    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
-        let active = self
-            .active_tools
-            .get(parent_call_id)
-            .cloned()
-            .ok_or_else(AgentEventProjectionError::invalid_state)?;
-        let application = active
-            .application
-            .clone()
-            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    ) -> Result<Option<String>, AgentEventProjectionError> {
         // FU-291: a fan-out member's durable nested pipeline names its thread
         // with a receipt for exactly this call (the member's projector proved
         // the thread is its own and admitted).
@@ -1785,7 +1781,7 @@ impl AgentEventProjector {
             &active.arguments,
         )
         .map_err(|_| AgentEventProjectionError::invalid_state())?;
-        let checkpoint_thread_id = if let Some(thread) = durable {
+        Ok(if let Some(thread) = durable {
             if application.agent_type != "pipeline" {
                 return Err(AgentEventProjectionError::invalid_state());
             }
@@ -1811,13 +1807,31 @@ impl AgentEventProjector {
                 Some(_) => return Err(AgentEventProjectionError::invalid_state()),
                 None => descendant_checkpoint_thread(
                     event,
-                    &application,
+                    application,
                     self.context.graph_checkpoint_thread_id.as_deref(),
                     &self.context.thread_id,
                     parent_call_id,
                 )?,
             }
-        };
+        })
+    }
+
+    fn project_immediate_descendant(
+        &mut self,
+        event: &Event,
+        parent_call_id: &str,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        let active = self
+            .active_tools
+            .get(parent_call_id)
+            .cloned()
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let application = active
+            .application
+            .clone()
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let checkpoint_thread_id =
+            self.descendant_thread(event, &active, &application, parent_call_id)?;
         if !self.descendants.contains_key(parent_call_id) {
             let nested_context = self.context.nested(
                 active.name.clone(),

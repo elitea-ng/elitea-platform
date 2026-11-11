@@ -352,7 +352,7 @@ async fn the_per_call_nested_admission_cost_is_within_the_child_overhead_budget(
         let mut best = std::time::Duration::MAX;
         for _ in 0..REPEATS {
             // A fresh member family object every 8 calls keeps each within D3.
-            if call > 0 && call % MAX_TOOL_PIPELINE_THREADS_PER_MEMBER == 0 {
+            if call > 0 && call.is_multiple_of(MAX_TOOL_PIPELINE_THREADS_PER_MEMBER) {
                 admission = member(&family).await.tool_pipelines.unwrap();
             }
             let lineage = lineage(&format!("call-{call}"));

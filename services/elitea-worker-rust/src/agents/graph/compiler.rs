@@ -303,7 +303,7 @@ pub(crate) struct PipelineNodeRuntimes {
     direct_tool_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
     /// FU-291 D-6: a durable nested pipeline's visit, seeded into its first
     /// frontier so its direct nodes journal as a saved child's do.
-    tool_visit: Option<String>,
+    tool_visit: Option<Arc<String>>,
     saved_child_scope_provider: Option<
         Arc<dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider>,
     >,
@@ -501,7 +501,7 @@ impl PipelineNodeRuntimes {
         visit: String,
     ) -> Self {
         self.direct_tool_recovery = Some(journals);
-        self.tool_visit = Some(visit);
+        self.tool_visit = Some(Arc::new(visit));
         self
     }
 
@@ -1699,7 +1699,7 @@ impl PipelineDefinition {
                         if let Some(visit) = &runtimes.tool_visit {
                             defaults.insert(
                                 APPLICATION_VISIT_STATE_KEY.to_owned(),
-                                serde_json::Value::String(visit.clone()),
+                                serde_json::Value::String(visit.as_ref().clone()),
                             );
                         }
                         defaults
@@ -2141,6 +2141,18 @@ impl PipelineDefinition {
                     .map(|outputs| (node.id().to_owned(), outputs))
             })
             .collect()
+    }
+
+    /// FU-291 D-7: why a fan-out member cannot run this pipeline as its
+    /// Agent's tool on a durable nested thread yet.
+    pub(crate) fn durable_tool_refusal(&self) -> Option<ToolPipelineCause> {
+        if self.has_code_nodes() {
+            Some(ToolPipelineCause::Code)
+        } else if self.has_application_nodes() {
+            Some(ToolPipelineCause::Agent)
+        } else {
+            None
+        }
     }
 
     /// FU-291 C3: the text a finished run of this pipeline answers, from its

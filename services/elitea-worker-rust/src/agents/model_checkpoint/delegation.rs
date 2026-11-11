@@ -68,6 +68,31 @@ impl ModelCheckpointWriter {
         self
     }
 
+    /// C2/C4: a durable record replays only where this Worker binds its call
+    /// to its durable thread, and always under its original batch event; any
+    /// other record carries no batch id.
+    pub(super) fn durable_replay_batch(
+        &self,
+        phase: Phase,
+        content: &Content,
+        batch: Option<String>,
+    ) -> adk_rust::Result<Option<String>> {
+        if !matches!(phase, Phase::DurableDelegationPending) {
+            return if batch.is_some() {
+                Err(invalid_checkpoint())
+            } else {
+                Ok(None)
+            };
+        }
+        if !self.holds_durable_call(content) {
+            return Err(invalid_checkpoint());
+        }
+        batch
+            .filter(|batch| valid_batch_event_id(batch))
+            .map(Some)
+            .ok_or_else(invalid_checkpoint)
+    }
+
     /// Whether `content` calls at least one of this writer's durable pipeline tools.
     pub(super) fn holds_durable_call(&self, content: &Content) -> bool {
         content.parts.iter().any(|part| {

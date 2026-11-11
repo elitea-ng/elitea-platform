@@ -420,19 +420,8 @@ impl ModelCheckpointWriter {
             delegation::validate_calls(&content, |name| model.tools.contains_key(name))?;
             // A durable pipeline call replays only where this Worker binds it
             // to its durable thread; never through a memory checkpointer.
-            if matches!(checkpoint.phase, Phase::DurableDelegationPending) {
-                if !self.holds_durable_call(&content) {
-                    return Err(invalid_checkpoint());
-                }
-                self.replay_batch = Some(
-                    checkpoint
-                        .batch_event_id
-                        .filter(|batch| delegation::valid_batch_event_id(batch))
-                        .ok_or_else(invalid_checkpoint)?,
-                );
-            } else if checkpoint.batch_event_id.is_some() {
-                return Err(invalid_checkpoint());
-            }
+            self.replay_batch =
+                self.durable_replay_batch(checkpoint.phase, &content, checkpoint.batch_event_id)?;
             self.replay_delegation = Some(Arc::new(Mutex::new(Some(content))));
         } else if checkpoint.delegation.is_some() || checkpoint.batch_event_id.is_some() {
             return Err(invalid_checkpoint());

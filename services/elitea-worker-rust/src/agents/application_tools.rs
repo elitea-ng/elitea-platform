@@ -3390,13 +3390,7 @@ async fn materialize_pipeline_children(
             }
         };
         // FU-291 D-7: what a fan-out member's durable nested thread cannot carry.
-        let tool_pipeline_refusal = if definition.has_code_nodes() {
-            Some(crate::agents::graph::compiler::ToolPipelineCause::Code)
-        } else if definition.has_application_nodes() {
-            Some(crate::agents::graph::compiler::ToolPipelineCause::Agent)
-        } else {
-            None
-        };
+        let tool_pipeline_refusal = definition.durable_tool_refusal();
         let name = application_tool_name(reference.identity);
         let tool = Arc::new(ApplicationPipelineTool::new(
             name,
