@@ -89,7 +89,7 @@ proof asserts the Agent's task text is absent from every log line. The user text
 | Worker × root saved-Agent node, any phase (model call, tool call, nested pipeline tool), reclaimed | F typed `RECOVERY_FRONTIER_UNSUPPORTED` (was `Internal`, an untyped F) | `W/agents/session.rs:2271-2290`, `W/execution/native_agent_lifecycle.rs:1931-1937` | the two-process test above |
 | Main × an older Main during rollout | F typed, generic frontier text | `older_main_fallback` (`W/protocol/output.rs:944`) | `a_refused_new_kind_is_replaced_by_the_kind_an_older_main_admits` |
 
-Known gap: R is possible from the Agent's model checkpoint; FU-323 (HIGH, exit work next to FU-310).
+Known gap: R is possible from the Agent's model checkpoint; FU-323 (HIGH, functional, ordered right after FU-291 and before 5b, because a planned Worker stop drains for only 30 s and a rolling deploy would otherwise fail such runs).
 
 ## Real-browser evidence
 
@@ -98,5 +98,18 @@ reload, should show the new text with a support reference.
 
 ## Follow-ups
 
+- **FU-324 (polish): other unsupported frontier kinds still end with an uncaused `Internal`.**
+  - The generic refusal is `session.rs:2290`, reached when `recovery_frontier_supported` (`compiler.rs:1056`) rejects a
+    pending node that is not a saved-Agent node. This PR names only the saved-Agent case (`compiler.rs:1088`).
+  - The remaining kinds:
+    - a root **direct toolkit/MCP node** (`DirectTool`): it is admitted only as a walk leaf below a saved child
+      (FU-248);
+    - a **HITL** node (`Hitl`) pending outside the continuation pause, which `session.rs:2265` handles before the gate;
+    - a **Printer** node (`Printer`);
+    - a pending node **owned by a root Parallel or Map** (the `parallel_owned_nodes` / `map_owned_nodes` exclusion).
+  - Separately, `session.rs:2261` refuses uncaused when the checkpoint thread is not the run's session or carries a
+    cleared interrupt. That is an integrity refusal, so its cause should be named too.
+  - **Do:** give each a registered cause and the same ids-only WARN, the way this PR does for the saved-Agent node.
+    Admit nothing new.
 - **FU-323:** a root saved-Agent node as a recovery frontier (frontier gate, skip the child walk for a saved Agent,
   root re-entry through the model checkpoint, security review of the admission change).
