@@ -1984,4 +1984,120 @@ mod durable_member_calls {
         );
         assert_eq!(unavailable.store.saves.load(Ordering::SeqCst), 0);
     }
+
+    const LOG_CHILD_ENV: &str = "ELITEA_FU291_DURABLE_LOG_CHILD";
+    const TASK_MARKER: &str = "secret_task_marker_fu291";
+
+    /// C7 log capture: a durable member call that runs, one refused past its
+    /// bound, one retried then answered retryable, and one whose thread is
+    /// not admitted log no task text, no result, no arguments digest and no
+    /// nested thread name: only ids, stages and codes.
+    #[test]
+    fn durable_member_calls_log_no_task_result_lineage_or_thread() {
+        let output = elitea_faults::logtest::run_child(
+            "agents::application_pipeline_tests::durable_member_calls::durable_member_calls_log_child",
+            LOG_CHILD_ENV,
+        );
+        let lineage = crate::agents::application_pipeline::PipelineToolCallLineage::for_test(
+            "root-call",
+            1,
+            CALL_ID,
+            TOOL_NAME,
+            &json!({"task": TASK_MARKER}),
+        );
+        let digest = serde_json::to_value(&lineage).unwrap()["arguments_digest"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for secret in [TASK_MARKER, digest.as_str(), "/pt1:", "HANDLED"] {
+            assert!(
+                !output.stdout.contains(secret) && !output.stderr.contains(secret),
+                "{secret} reached the log"
+            );
+        }
+        let lines = output.operator_lines();
+        for event in [
+            "nested_pipeline_thread_limit",
+            "nested_pipeline_thread_unavailable",
+            "nested_pipeline_thread_refused",
+        ] {
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.get("event").is_some_and(|value| value == event)),
+                "{event} has its operator line: {lines:?}"
+            );
+        }
+    }
+
+    /// Refuses every admission as `denied` does (not this family's thread).
+    struct Denied(Arc<ToolPipelineThreads>);
+
+    #[async_trait::async_trait]
+    impl ToolPipelineAdmission for Denied {
+        fn tool_threads(&self) -> Arc<ToolPipelineThreads> {
+            Arc::clone(&self.0)
+        }
+        async fn admit_tool_pipeline(
+            &self,
+            _: &str,
+            _: &crate::agents::application_pipeline::PipelineToolCallLineage,
+        ) -> Result<AdmittedToolPipeline, GraphError> {
+            Err(GraphError::CheckpointError(
+                "checkpoint.invalid_scope: not admitted".to_owned(),
+            ))
+        }
+    }
+
+    #[test]
+    fn durable_member_calls_log_child() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        use tracing_subscriber::util::SubscriberInitExt as _;
+        if !elitea_faults::logtest::is_child(LOG_CHILD_ENV) {
+            return;
+        }
+        tracing_subscriber::registry()
+            .with(
+                crate::diagnostics::log_layer(Some("debug"), std::io::stdout)
+                    .expect("operator stream"),
+            )
+            .init();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut call = turn_root_call_event("root-call", INVOCATION_ID);
+            if let Some(Part::FunctionCall { args, .. }) = call
+                .llm_response
+                .content
+                .as_mut()
+                .and_then(|content| content.parts.first_mut())
+            {
+                *args = json!({"task": TASK_MARKER});
+            }
+            let harness = harness(PLAIN_PIPELINE);
+            harness.resume.observe_call_lineage(&call).await.unwrap();
+            let execute = |admission: Arc<dyn ToolPipelineAdmission>| {
+                with_member_tool_pipelines(
+                    MemberToolPipelines {
+                        admission,
+                        agent_thread: AGENT_THREAD.to_owned(),
+                    },
+                    harness
+                        .tool
+                        .execute(context(), json!({"task": TASK_MARKER})),
+                )
+            };
+            assert!(execute(admission(0, false)).await.is_ok());
+            assert!(execute(admission(0, true)).await.is_ok());
+            assert!(execute(admission(3, false)).await.is_ok());
+            assert!(
+                execute(Arc::new(Denied(Arc::new(ToolPipelineThreads::new(2)))))
+                    .await
+                    .is_err()
+            );
+        });
+        elitea_faults::logtest::child_ran();
+    }
 }

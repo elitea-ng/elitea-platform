@@ -322,3 +322,66 @@ async fn a_locked_writer_table_answers_retryable_and_admits_once_released() {
         .expect("the same admission succeeds once released");
     assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 1);
 }
+
+/// C7 budget: the per-call cost a durable nested pipeline call adds over the
+/// same pipeline run at the root. The nested graph's own rows are the same
+/// a root run saves (same compiler, same checkpointer, one row per step), and
+/// its `durable_delegation_pending` record replaces the root's
+/// `tool_may_have_started` record one for one; what is new per call is the
+/// fenced admission (one activation transaction) and the latest-row read
+/// (C3). Each sample is a fresh call on a fresh member family, the minimum of
+/// `REPEATS` runs; the gate is p99 ≤ `CHILD_OVERHEAD_P99` (30 ms).
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn the_per_call_nested_admission_cost_is_within_the_child_overhead_budget() {
+    const SAMPLES: usize = 20;
+    const REPEATS: usize = 3;
+    let database = database().await;
+    let family = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let first = member(&family).await;
+    let agent = format!("{}/fetch_short", first.thread_id);
+    let mut admission = first.tool_pipelines.clone().unwrap();
+    let mut costs = Vec::new();
+    let mut call = 0_usize;
+    // One warm-up sample is discarded.
+    for sample in 0..=SAMPLES {
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..REPEATS {
+            // A fresh member family object every 8 calls keeps each within D3.
+            if call > 0 && call % MAX_TOOL_PIPELINE_THREADS_PER_MEMBER == 0 {
+                admission = member(&family).await.tool_pipelines.unwrap();
+            }
+            let lineage = lineage(&format!("call-{call}"));
+            call += 1;
+            let started = std::time::Instant::now();
+            let admitted = admission
+                .admit_tool_pipeline(&agent, &lineage)
+                .await
+                .expect("admit");
+            let latest = admitted
+                .writer
+                .load(&admitted.thread_id)
+                .await
+                .expect("read");
+            best = best.min(started.elapsed());
+            assert!(latest.is_none());
+        }
+        if sample > 0 {
+            costs.push(best.as_secs_f64() * 1e3);
+        }
+    }
+    costs.sort_by(f64::total_cmp);
+    let p = |percentile: usize| costs[(costs.len() * percentile).div_ceil(100).saturating_sub(1)];
+    let (p50, p99) = (p(50), p(99));
+    println!(
+        "FU-291-NESTED-CALL-OVERHEAD samples={SAMPLES} repeats={REPEATS} p50_ms={p50:.1} p99_ms={p99:.1}"
+    );
+    assert!(
+        p99 <= crate::agents::graph::fanout_budget::CHILD_OVERHEAD_P99.as_secs_f64() * 1e3,
+        "per-call nested admission p99 {p99:.1} ms"
+    );
+}
