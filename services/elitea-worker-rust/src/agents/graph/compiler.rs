@@ -1161,6 +1161,29 @@ impl PipelineDefinition {
         })
     }
 
+    /// The first pending Agent node no fan-out owns whose attachment Main did
+    /// not freeze as a saved pipeline: it runs a saved Agent, which
+    /// [`Self::recovery_frontier_supported`] never admits (FU-323 is the
+    /// resume). Names the refusal; admits nothing.
+    pub(crate) fn saved_agent_frontier_node<'a>(
+        &self,
+        pending: &'a [String],
+        pipeline_aliases: &BTreeSet<String>,
+    ) -> Option<&'a str> {
+        pending
+            .iter()
+            .find(|id| {
+                !self.parallel_owned_nodes.contains(*id)
+                    && !self.map_owned_nodes.contains(*id)
+                    && self.nodes.iter().any(|node| {
+                        node.id() == id.as_str()
+                            && matches!(node, PipelineNodeDefinition::Application(agent)
+                                if !pipeline_aliases.contains(agent.selection().alias()))
+                    })
+            })
+            .map(String::as_str)
+    }
+
     /// Whether the definition holds a node `id` (PM-2 recovery walk).
     pub(crate) fn has_node(&self, id: &str) -> bool {
         self.nodes.iter().any(|node| node.id() == id)

@@ -263,5 +263,7 @@ Pending (orchestrating session).
 - **FU-323**: a root saved-Agent node as a recovery frontier (the root pipeline tool stays F until then).
 - **FU-329**: the stored-response-before-batch window (polish, after FU-323).
 - **FU-330**: raising or reshaping the 1024-call lineage cap (polish); call 1025 is typed here.
-- New, to register: the ordinary (non-graph) root's pipeline tool; a shared pipeline tool's members run its calls one
-  at a time (node-event drain, perf); an Agent node inside a pipeline tool (D4 b).
+- **FU-322**: the ordinary (non-graph) root's pipeline tool, which still uses the in-memory checkpointer.
+- **FU-331 (perf, polish)**: a shared pipeline tool's members run their calls one at a time, because each call drains
+  the tool's node-event channel (`node_events.rs:620`).
+- **FU-332**: an Agent node inside a pipeline tool (D4 b), refused here before the run.

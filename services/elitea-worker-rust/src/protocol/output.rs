@@ -160,6 +160,10 @@ pub enum RuntimeFailureKind {
     /// a saved child pipeline's stored frontier fails the recovery walk).
     /// Nothing is repeated; never retryable.
     RecoveryFrontierUnsupported,
+    /// A checkpoint reclaim met a root Agent node running a saved Agent,
+    /// which is not a recovery frontier (FU-323 makes it one). Sent under
+    /// `RECOVERY_FRONTIER_UNSUPPORTED` with its own text; never retryable.
+    RecoveryFrontierAgentStep,
     /// The run reached a run cap (ADR-0041 decision 3): `RESOURCE_EXHAUSTED`
     /// with the cap's registered message, which Main maps to `CAP_REACHED` and
     /// the cap's name. Never retryable.
@@ -953,6 +957,7 @@ impl RuntimeFailureKind {
             Self::CodeDeadlineInsufficient => Some(Self::PipelineCodeFailed),
             Self::FanoutDeadlineInsufficient => Some(Self::PipelineToolFailed),
             Self::FanoutAgentToolPipelineUnsupported => Some(Self::FanoutAgentCallsPipeline),
+            Self::RecoveryFrontierAgentStep => Some(Self::RecoveryFrontierUnsupported),
             // ---- the FU-299 baseline. FanoutAgentCallsPipeline belongs here:
             // Main has admitted its text since FU-291; W3-1 (D5) only added it
             // to the Worker's table.
@@ -1062,6 +1067,10 @@ pub(crate) const RECOVERY_REFUSED_DETAIL: &str =
 /// Registered text of [`RuntimeFailureKind::RecoveryFrontierUnsupported`]; Main holds the
 /// same text. Data-free: the walk's distinct cause stays in the Worker's logs.
 pub(crate) const RECOVERY_FRONTIER_UNSUPPORTED_MESSAGE: &str = "This run stopped at a point where it cannot be safely continued. Nothing was repeated. Start it again, and share the support reference with your administrator if it happens again.";
+
+/// Registered text of [`RuntimeFailureKind::RecoveryFrontierAgentStep`]; Main holds the same
+/// text. Data-free: the node is named on the Worker's fault line only.
+pub(crate) const RECOVERY_FRONTIER_AGENT_STEP_MESSAGE: &str = "This run stopped during an Agent step that cannot continue after a restart, so nothing after that step ran and nothing was repeated; check what the Agent completed, then start the run again.";
 
 /// Registered texts of [`RuntimeFailureKind::CapReached`], one per cap, sent
 /// under `RESOURCE_EXHAUSTED`. Main holds the same texts and maps each to the
@@ -1267,6 +1276,11 @@ pub(crate) fn runtime_error_policy(
             RECOVERY_FRONTIER_UNSUPPORTED_MESSAGE,
             false,
         ),
+        RuntimeFailureKind::RecoveryFrontierAgentStep => (
+            RuntimeErrorCodeV1::RecoveryFrontierUnsupported,
+            RECOVERY_FRONTIER_AGENT_STEP_MESSAGE,
+            false,
+        ),
         RuntimeFailureKind::OutputContinuationExhausted => (
             RuntimeErrorCodeV1::OutputContinuationExhausted,
             "Continuation could not finish. The model response is incomplete.",
@@ -1408,6 +1422,7 @@ const REGISTERED_RUNTIME_FAILURES: &[RuntimeFailureKind] = &[
     RuntimeFailureKind::ResultRefused,
     RuntimeFailureKind::RecoveryRefused,
     RuntimeFailureKind::RecoveryFrontierUnsupported,
+    RuntimeFailureKind::RecoveryFrontierAgentStep,
     RuntimeFailureKind::CapReached(RunCap::MaxToolCalls),
     RuntimeFailureKind::CapReached(RunCap::MaxModelTurns),
     RuntimeFailureKind::CapReached(RunCap::MaxRecordsRead),
@@ -2640,6 +2655,10 @@ mod deadline_admission_failure_tests {
                 RuntimeFailureKind::FanoutAgentToolPipelineUnsupported,
                 RuntimeFailureKind::FanoutAgentCallsPipeline,
             ),
+            (
+                RuntimeFailureKind::RecoveryFrontierAgentStep,
+                RuntimeFailureKind::RecoveryFrontierUnsupported,
+            ),
         ] {
             assert_eq!(refused_terminal_replacement(&terminal(kind)), Some(older));
             assert_eq!(
@@ -2655,6 +2674,7 @@ mod deadline_admission_failure_tests {
                 RuntimeFailureKind::CodeDeadlineInsufficient
                     | RuntimeFailureKind::FanoutDeadlineInsufficient
                     | RuntimeFailureKind::FanoutAgentToolPipelineUnsupported
+                    | RuntimeFailureKind::RecoveryFrontierAgentStep
             ) {
                 assert_eq!(
                     refused_terminal_replacement(&terminal(*kind)),

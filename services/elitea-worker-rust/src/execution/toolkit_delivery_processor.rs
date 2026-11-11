@@ -2276,6 +2276,9 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::ResultRefused => "runtime.result_refused",
         RuntimeFailureKind::RecoveryRefused => "runtime.recovery_refused",
         RuntimeFailureKind::RecoveryFrontierUnsupported => "runtime.recovery_frontier_unsupported",
+        RuntimeFailureKind::RecoveryFrontierAgentStep => {
+            elitea_faults::codes::PIPELINE_RECOVERY_SAVED_AGENT_FRONTIER.as_str()
+        }
         RuntimeFailureKind::CapReached(cap) => cap.error_code(),
         RuntimeFailureKind::OutputContinuationExhausted => "runtime.output_continuation_exhausted",
         RuntimeFailureKind::OutputContractViolation => {

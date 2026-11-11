@@ -512,6 +512,16 @@
       "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_UNAVAILABLE"
     },
     {
+      "code": "runtime.recovery_frontier_agent_step",
+      "sentence": "This run stopped during an Agent step that cannot continue after a restart, so nothing after that step ran and nothing was repeated; check what the Agent completed, then start the run again.",
+      "action": "Report the support reference to the platform team; an Agent step of a pipeline cannot continue after a Worker restart yet.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "RecoveryFrontierAgentStep",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_RECOVERY_FRONTIER_UNSUPPORTED"
+    },
+    {
       "code": "runtime.recovery_frontier_unsupported",
       "sentence": "This run stopped at a point where it cannot be safely continued. Nothing was repeated. Start it again, and share the support reference with your administrator if it happens again.",
       "action": "Report the support reference to the platform team; the run cannot continue from its checkpoint.",

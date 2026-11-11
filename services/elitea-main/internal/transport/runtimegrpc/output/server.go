@@ -1182,6 +1182,12 @@ const fanoutAgentCallsPipelineSafeMessage = "A Map item or Parallel branch runs 
 // stays admitted for frames an older Worker spooled.
 const fanoutAgentToolPipelineUnsupportedSafeMessage = "A Map item or Parallel branch runs an Agent whose saved pipeline tool holds a Code or Agent node, or that reaches a saved pipeline through another Agent, which cannot run there yet; remove that node, or attach the pipeline to the Agent directly."
 
+// A checkpoint reclaim met a root Agent node running a saved Agent, which is
+// not a recovery frontier (FU-323 makes it one): the Worker's registered text
+// (protocol/output.rs RECOVERY_FRONTIER_AGENT_STEP_MESSAGE, registry
+// runtime.recovery_frontier_agent_step) under RECOVERY_FRONTIER_UNSUPPORTED.
+const recoveryFrontierAgentStepSafeMessage = "This run stopped during an Agent step that cannot continue after a restart, so nothing after that step ran and nothing was repeated; check what the Agent completed, then start the run again."
+
 // W3-1: a fresh Code attempt refused before dispatch because the run's time
 // left cannot hold the Code timeout plus the observation margin. Nothing ran;
 // not retryable. The Worker's registered text (protocol/output.rs
@@ -1233,6 +1239,9 @@ func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFai
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_INVALID && payload.GetSafeMessage() == childInputTypeSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_INPUT_INVALID", SafeMessage: childInputTypeSafeMessage}, true
+	}
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_RECOVERY_FRONTIER_UNSUPPORTED && payload.GetSafeMessage() == recoveryFrontierAgentStepSafeMessage {
+		return runtimeFailurePolicy{Code: "RECOVERY_FRONTIER_UNSUPPORTED", SafeMessage: recoveryFrontierAgentStepSafeMessage}, true
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY && payload.GetSafeMessage() == fanoutAgentCallsPipelineSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_NODE_TYPE_NOT_AVAILABLE", SafeMessage: fanoutAgentCallsPipelineSafeMessage}, true
