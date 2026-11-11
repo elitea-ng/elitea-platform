@@ -21,6 +21,9 @@
     - an Agent node in the pipeline tool;
     - a pipeline reached through another Agent (Agent → Agent → pipeline).
     The operator line names the node, the Agent and which of the three it is.
+  - **An Agent node whose members make more than 1024 tool calls in all** now ends typed with the registered
+    resource-limit text ("The execution exceeded an approved resource limit."); before, it ended as an internal
+    error. A nested Agent reports it to its parent model as a tool error. The limit itself is unchanged (FU-330).
   - **Unchanged:** an Agent node of the started pipeline (not inside a Map or Parallel) that calls a pipeline tool
     keeps its in-memory pipeline run. A Worker lost during it ends typed `RECOVERY_FRONTIER_UNSUPPORTED` (#1933); the
     real fix is FU-323. An ordinary Agent's pipeline tool is unchanged.

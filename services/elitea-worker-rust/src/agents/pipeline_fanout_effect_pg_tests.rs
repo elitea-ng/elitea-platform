@@ -7723,6 +7723,7 @@ async fn crashed_frontier(pool: &sqlx::PgPool, mode: &str) -> usize {
 /// nested thread was admitted and its frontier saved before its first effect;
 /// the reclaim re-enters the same nested threads (no new writer); every member
 /// lands one answer, its own.
+#[allow(clippy::too_many_lines)] // One parent per mode: the crash's durable evidence, then the reclaim's.
 async fn member_pipeline_tool_kill(url: &str, shape: &str, mode: &str) {
     let db = IsolatedPostgres::create(url).await;
     install_schema(&db.pool).await;

@@ -842,6 +842,9 @@ impl ChildFailure {
             Self::Refused(REFUSED_LIMIT_PUBLIC_CODE)
         } else if code.starts_with("direct_hitl.") {
             Self::Refused(REFUSED_PUBLIC_CODE)
+        } else if code == crate::agents::application_tools::CALL_LINEAGE_LIMIT_CODE {
+            // FU-291: the node's call-lineage store is full: a typed limit.
+            Self::Refused(crate::agents::application_tools::CALL_LINEAGE_LIMIT_CODE)
         } else {
             Self::Child
         }
@@ -890,6 +893,40 @@ mod tests {
     use adk_rust::graph::{Checkpoint, ExecutionConfig, MemoryCheckpointer, State};
     use adk_rust::{Content, FunctionResponseData};
     use serde_json::json;
+
+    /// FU-291 (orchestrator item 2): a member's Agent whose node's
+    /// call-lineage store is full ends its node typed with the registered
+    /// resource limit, never as a broken scope.
+    #[tokio::test]
+    async fn the_call_lineage_limit_ends_the_node_with_its_typed_resource_limit() {
+        use crate::protocol::output::{RuntimeFailureKind, model_failure};
+        let definition=PipelineDefinition::from_yaml("state: {answer: str}\nentry_point: child\nnodes:\n  - id: child\n    type: agent\n    tool: assistant\n    input_mapping: {task: {type: fixed, value: work}}\n    output: [answer]\n    transition: END\n").unwrap();
+        let scope = PipelineApplicationScope::new(String::new(), &definition, None).unwrap();
+        let (events, receiver) = pipeline_node_event_channel();
+        let runtime = PipelineApplicationNodeRuntime::new(
+            scope,
+            "child".to_owned(),
+            Arc::new(ApplicationRuntimeProjection::default()),
+            events,
+            Arc::new(Mutex::new(())),
+        );
+        let error = runtime
+            .child_failure(ChildFailure::from_child(
+                crate::agents::application_tools::CALL_LINEAGE_LIMIT_CODE,
+            ))
+            .await;
+        assert_eq!(
+            receiver
+                .try_failure_code()
+                .await
+                .map(|code| model_failure(Some(code))),
+            Some(RuntimeFailureKind::ResourceExhausted)
+        );
+        let GraphError::NodeExecutionFailed { node, .. } = error else {
+            panic!("a node failure");
+        };
+        assert_eq!(node, "child");
+    }
 
     /// Each typed refusal of a scoped Agent node's child ends the run with its
     /// registered public code; a broken scope or an untyped child failure sends

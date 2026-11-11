@@ -385,3 +385,76 @@ async fn the_per_call_nested_admission_cost_is_within_the_child_overhead_budget(
         "per-call nested admission p99 {p99:.1} ms"
     );
 }
+
+/// FU-291 A = `<member thread>/<agent node>` (the activation's thread and
+/// node): the nested thread never collides with the member's own graph
+/// paths below that node. A member whose Agent node also owns application
+/// paths (`fetch_short/inner`) admits distinct nested threads under each, and
+/// leaves its graph writers alone. A member family that admitted a path equal
+/// to the derived nested thread refuses the admission, with no row.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_nested_thread_never_collides_with_the_members_own_graph_paths() {
+    let database = database().await;
+    let family = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_short/inner", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member_1 = member(&family).await;
+    let graph = member_1.admitted_threads.clone();
+    let agent = format!("{}/fetch_short", member_1.thread_id);
+    let inner = format!("{agent}/inner");
+    assert!(
+        graph.contains(&agent) && graph.contains(&inner),
+        "{graph:?}"
+    );
+    let admission = member_1.tool_pipelines.clone().unwrap();
+    let call = lineage("call-1");
+    let nested = admission.admit_tool_pipeline(&agent, &call).await.unwrap();
+    let below_inner = admission.admit_tool_pipeline(&inner, &call).await.unwrap();
+    for thread in [&nested.thread_id, &below_inner.thread_id] {
+        assert!(!graph.contains(thread), "{thread} is a graph path");
+    }
+    assert_ne!(nested.thread_id, below_inner.thread_id);
+    assert!(nested.thread_id.starts_with(&format!("{agent}/pt1:")));
+    assert_eq!(
+        writers(&database.pool, &inner).await,
+        1,
+        "the graph writer is untouched"
+    );
+
+    // The derived segment admitted as a graph path refuses the admission.
+    let segment = nested
+        .thread_id
+        .strip_prefix(&format!("{}/", member_1.thread_id))
+        .expect("below the member")
+        .to_owned();
+    let family_2 = root(database.pool.clone(), 2)
+        .await
+        .with_application_children(
+            ["fetch_short".to_owned(), segment, "fetch_long".to_owned()]
+                .iter()
+                .map(String::as_str),
+        )
+        .await
+        .expect("a family whose path equals the nested thread");
+    let member_2 = member(&family_2).await;
+    assert_eq!(
+        member_2.thread_id, member_1.thread_id,
+        "the member re-derives"
+    );
+    assert!(member_2.admitted_threads.contains(&nested.thread_id));
+    let rows = writers(&database.pool, "%/pt1:%").await;
+    let Err(refused) = member_2
+        .tool_pipelines
+        .clone()
+        .unwrap()
+        .admit_tool_pipeline(&agent, &call)
+        .await
+    else {
+        panic!("a nested thread that is an admitted graph path was admitted");
+    };
+    assert!(refused.to_string().contains("collides"), "{refused}");
+    assert_eq!(writers(&database.pool, "%/pt1:%").await, rows, "no row");
+}

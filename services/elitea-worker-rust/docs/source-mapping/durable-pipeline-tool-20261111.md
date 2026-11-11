@@ -33,9 +33,17 @@ ends typed `RECOVERY_FRONTIER_UNSUPPORTED` (side PR #1933). That is F, not in sc
 - **Nested thread (D-2).** `NT = A + "/pt1:" + b64url(SHA256("elitea.pipeline.tool-thread.v1\0", len‖A,
   len‖lineage))` (`W/agents/graph/tool_pipeline_threads.rs:76`). `A` is the member Agent node's own admitted path,
   `<member thread>/<agent node>` (the activation receipt's thread and node, `W/agents/pipeline/scoped_runtime.rs:349`):
-  the path the family admits for the node, on which a saved Agent writes no graph. The plan named the receipt's
-  thread as `A`; the receipt's thread is the member thread itself, which the admission refuses as a root, so the
-  node path is used. `NT ≤ 480` bytes; an `A` holding `/pt1:` is refused, so nothing nests below a nested thread.
+  the path the family admits for the node, on which a saved Agent writes no graph.
+  - **Deviation from the plan.** The plan took `A` = the activation receipt's thread. That thread is the member's own
+    thread (the graph thread the Agent node runs on), and the admission refuses a family's root as an Agent thread
+    (`application_children.rs:452`, the root filter), so every member call was refused. `A` is therefore
+    `<receipt thread>/<node name>`.
+  - **No collision.** `NT` never equals a member graph path: the admission refuses an `NT` that is an admitted thread
+    (`application_children.rs:465`). Test: `a_nested_thread_never_collides_with_the_members_own_graph_paths` (real
+    PG). It uses a member whose Agent node also owns `{thread}/{node}/inner`. Nested threads under the node and under
+    `inner` are distinct and touch no graph writer. A family that admitted the derived `NT` as a graph path refuses
+    the admission with no row (seen failing with the guard disabled).
+  - `NT ≤ 480` bytes; an `A` holding `/pt1:` is refused, so nothing nests below a nested thread.
 - **Admission (D-3).** `ApplicationCheckpointers::admit_tool_pipeline` (`W/state/postgres_checkpointer/application_children.rs:452`):
   `A` must be one of the family's own threads and not its root; `NT` must not collide with an admitted thread; per
   member one admission at a time; the bound is checked (`tool_pipeline_threads.rs:161`); the writer is activated under
@@ -66,13 +74,35 @@ ends typed `RECOVERY_FRONTIER_UNSUPPORTED` (side PR #1933). That is F, not in sc
   it is materialized (`PipelineDefinition::durable_tool_refusal`), a pipeline below another Agent is `NestedAgents`.
   New kind `FanoutAgentToolPipelineUnsupported`, its older-Main fallback `FanoutAgentCallsPipeline` (same wire code).
 
-## Item 5, the lineage map (decision)
+## Item 5, the lineage map
 
-The coordinator's call-lineage map stays shared by the node and capped at 1024 (`W/agents/application_tools.rs:578`).
-It already held every call of every member's Agent before FU-291 (it records whole batches), so its exposure is
-unchanged; FU-291 adds at most 8 durable pipeline calls per member, 512 for a 64-member Map, inside the cap. A
-per-member map would multiply the worst case by 64 (65 536 entries). A Map whose 64 Agents make more than 16 calls
-each already hits the cap today (typed `resource_exhausted`); that is a pre-existing bound, registered below.
+The coordinator's call-lineage map stays shared by the node and capped at `MAX_CALL_LINEAGE` = 1024
+(`W/agents/application_tools.rs:614`). It already held every call of every member's Agent before FU-291 (it records
+whole batches). FU-291 adds at most 8 durable pipeline calls per member, 512 for a 64-member Map. Raising or
+reshaping the cap is **FU-330**.
+
+**Call 1025, before this branch:** `observe_call_lineage` returned `resource_exhausted`. Both callers mapped every
+error to `application_event_channel_error` (`ErrorCategory::Internal`, `elitea_nested_agent.event_channel_unavailable`):
+
+- `application_tools.rs:5078`, a saved Agent's own event loop;
+- `:5522`, an ordinary root's streaming Agent.
+
+The run ended Internal, and a member ended as a broken scope with no code (both seen in the tests below, failing first).
+
+**Now:** `lineage_observation_error` (`application_tools.rs:6282`) answers the bound with
+`CALL_LINEAGE_LIMIT_CODE` = `elitea_nested_agent.call_lineage_limit`. Any other observation error (a changed or
+malformed lineage) is still a broken channel.
+
+- The run's terminal is the registered `ResourceExhausted` kind ("The execution exceeded an approved resource
+  limit.", not retryable; `protocol/output.rs:852`).
+- A nested Agent reports it to its parent model as a typed tool error (`child_failure_report`).
+- A member's Agent node ends typed and sends that code (`ChildFailure::Refused`, `pipeline/scoped_runtime.rs:845`).
+
+Tests, at the limit and past it:
+
+- `the_call_lineage_store_admits_1024_calls_and_refuses_the_1025th_typed` (1024 admitted, a replayed call is not a
+  new entry, the 1025th typed, a changed lineage still a broken channel);
+- `the_call_lineage_limit_ends_the_node_with_its_typed_resource_limit`.
 
 ## C1–C7
 
@@ -138,14 +168,15 @@ failures retried then retryable; a pause inside a durable nested pipeline is ref
 | Component × phase | Recovery on (production profile) | Recovery off (Helm default) | Proven by |
 |---|---|---|---|
 | Worker × member Agent model call, before its call batch | R (model scope, existing) | F, run not resumed | existing |
-| Worker × response stored, call batch not yet recorded | **F** `invalid_checkpoint` (pre-existing, also for saved-Agent tools) | F | seen in a non-gated kill; follow-up |
+| Worker × response stored, call batch not yet recorded | **F** `invalid_checkpoint` (pre-existing, also for saved-Agent tools; **FU-329**) | F | seen in a non-gated kill |
 | Worker × call batch recorded, before the nested first save | R: replay, fresh nested start | F | replay test; kill tests (admission before effects) |
 | Worker × nested pipeline between nodes | R: re-enters the nested frontier | F | risk-1 test (8c3f6086e), kill tests |
 | Worker × nested LLM node, mid-model | R | F | `…killed_inside_…` (Map, Parallel) |
-| Worker × nested LLM node's own tool in flight | I read-only / F effectful (existing rule) | F | not proven here (T1d) |
-| Worker × nested direct toolkit/MCP node | R committed / I not started / F started (journal) | F; the nested node still journals | not proven here (T1e) |
+| Worker × nested LLM node's own tool in flight | I read-only (replayed) / F effectful (never repeated, typed to the Agent) | F | T1d kills (Map, Parallel) |
+| Worker × nested direct toolkit/MCP node, call started | F (journal Started; never repeated, typed to the Agent) | F; the nested node still journals | T1e kills (Map, Parallel) |
+| Worker × call recorded, nested thread admitted, waiting for the shared tool | R: replay, fresh nested start | F | T4 kill |
 | Worker × nested pipeline completed, Agent not answered | R: stored result, never re-run | F | `…killed_after_…` (Map, Parallel) |
-| Main restart / lease loss × above | as the Worker rows (takeover re-derives `NT`) | F | admission takeover test; not as a two-process T2 |
+| Main restart / lease loss × above | as the Worker rows (takeover re-derives `NT`; a superseded reclaim runs nothing) | F | admission takeover test; T2 kill |
 | PostgreSQL × admission or read | retryable dependency failure | same | T6 tests |
 | Supervisor | n/a (no Code in scope) | n/a | — |
 | Root Agent node × pipeline tool | F `RECOVERY_FRONTIER_UNSUPPORTED` (#1933) | F | FU-323 |
@@ -162,11 +193,13 @@ New or changed, all green on PostgreSQL 18 (disposable `postgres:18`):
 - `application_pipeline_tests.rs` `durable_member_calls`: 7 (run, C3, D3, lineage, C5, log capture and its child).
 - `execution/native_agent_lifecycle.rs` (1) and `protocol/output.rs` (1) for the new kind; the older-Main fallback
   table test gains the new pair (extended, not weakened).
-- Real PG, `state::postgres_checkpointer_tests::tool_pipeline_admission` (CI prefix, `#[ignore]`): 6 (admission,
-  foreign threads, 8/9, takeover, T6, cost budget).
+- Real PG, `state::postgres_checkpointer_tests::tool_pipeline_admission` (CI prefix, `#[ignore]`): 7 (admission,
+  foreign threads, 8/9, takeover, T6, cost budget, no collision).
 - Real PG, `pipeline_fanout_effect_pg_tests` (production assembler; runs whenever `ELITEA_TEST_DATABASE_URL` is set):
-  Map and Parallel runs (2), T5 Code refusals (2), two-process kills inside the nested LLM node (2) and after the
-  nested pipeline finished (2), plus their child process test.
+  Map and Parallel runs (2), T5 Code refusals (2), and 12 two-process kills (see "The member kills"), plus their
+  child process test.
+- Real PG, `tool_pipeline_admission` also: `a_nested_thread_never_collides_with_the_members_own_graph_paths`.
+- Unit: the 1024/1025 lineage-cap tests (2).
 - Go: `TestFanoutAgentToolPipelineUnsupportedShowsItsReadableText`, the registry-parity table extended; faults gate.
 
 Deleted (they only pinned the lifted refusal): `postgres_a_map_item_agent_calling_a_saved_pipeline_is_refused_readably`,
@@ -176,14 +209,48 @@ Fixtures: the real-PG tests build their pipelines from YAML in the test and fake
 source (`test_session_authority_for_reclaim`) and the model gateway; the reclaim is the production inspect →
 authorize → assemble. No claim rests on Main logic. Real Main is proven in the browser (FU-321 is the harness gap).
 
+## The member kills (T1a–T1f, T2, T4)
+
+All of them are two OS processes on real PostgreSQL, through the production assembler and the production reclaim
+(`postgres_member_pipeline_tool_child`, `member_pipeline_tool_kill`). The recovery's model outcomes are routed by
+what each request carries: a nested node's request, or a member Agent's report, which holds the nested answer.
+
+**The gated kill wait (FU-329).** The crash process dies only once every member it kills is past its call batch:
+
+- a watcher waits for the nested threads' durable frontier;
+- or the nested tool waits until every member is inside it.
+
+A member killed between its stored model response and its recorded batch is F today. That window is
+`invalid_checkpoint` on restore, and it is pre-existing for saved-Agent tools too. It is **FU-329** (its own plan,
+after FU-323), so the tests do not kill there; it is left as it is.
+
+| Test | Kill point | Recovery | First run |
+|---|---|---|---|
+| `…killed_inside_its_pipeline_tool_resumes_on_the_same_nested_thread` (Map, Parallel) | nested LLM node mid-model | R, same `NT`, first request is the nested node's (C2) | failed until C2 |
+| `…killed_after_its_pipeline_tool_finished_reads_the_stored_result` (Map, Parallel) | nested pipeline done, Agent report held | R, stored result, no nested run, no new nested row (C3) | — |
+| `…killed_inside_its_nested_llm_effectful_tool_never_repeats_it` (Map, Parallel) | nested LLM node's effectful MCP call, boundary durable | F: not repeated, nested model not asked, the Agent reads `RECOVERY_REFUSED` | passed (the node's own boundary) |
+| `…killed_inside_its_nested_llm_read_only_tool_replays_it` (Map, Parallel) | nested LLM node's read-only call | I: the stored nested batch replays, the read runs once more | **failed: F instead of I**; fixed below |
+| `…killed_inside_its_nested_direct_tool_never_repeats_it` (Map, Parallel) | nested direct MCP node, lent journal Started durable | F: not repeated, typed to the Agent | passed; without the lent journal the nested direct node fails before its call |
+| `postgres_a_superseded_reclaim_runs_nothing_and_the_newer_claim_resumes_the_nested_thread` (T2) | nested LLM node; claim 2 authorized at inspect, claim 3 takes the run before claim 2 assembles | claim 2's assembly refused (session writer moved), no model request, no nested row; claim 3 resumes and owns the nested writer | test expectation corrected only |
+| `postgres_eight_map_items_killed_with_four_in_flight_keep_their_own_nested_threads` (T4) | 8 items at concurrency 4; 4 in flight | 8 distinct `NT`, the 4 killed replay (2 requests each), the 4 others run whole (3), every item its own answer | test expectation corrected only |
+
+**T1d fix.** A durable nested pipeline's LLM nodes get the D2 recovery of an inline fan-out LLM branch: pending-model
+recovery and read-only replay (`with_member_llm_recovery`, `W/agents/graph/compiler.rs:512`;
+`for_member_recovery`, `W/agents/pipeline.rs:2062`, used at `:1929`).
+
+- It is a new factory flag, `member_recovery`.
+- `for_fanout_branch` would also silence the node's events (`event_sender`). That was tried, and it broke the member
+  streaming tests.
+
+**T4 finding.** One pipeline tool is shared by the members of one Agent node, and its child run holds the tool's
+node-event drain (`W/agents/graph/node_events.rs:620`). So the members' calls of one pipeline tool run one at a time.
+This is correct (events never cross calls), but a 4-wide Map runs its nested pipelines serially. New follow-up (perf).
+
 ## Not done, limits
 
-- T1d (nested LLM node's own tool in flight), T1e (nested direct toolkit/MCP node kill, with the lent journal), T2 as
-  a two-process takeover between inspect and assembly, T4 (8 items, 4 in flight) are not written.
-- The window between a member Agent's stored model response and its recorded batch is F (pre-existing, saved-Agent
-  tools too). Closing it means treating an all-replayable stored response as a delegation replay on restore: a
-  recovery-ordering change for every Agent tool, left for a decision.
 - With recovery off, a nested direct node journals one row per node (it is lent the journal in both profiles).
+- T1e covers the "started" journal state; the "committed" and "undispatched" states are the FU-248 journal's own
+  tests at the root and at depth (`child_direct_scenario`), not repeated under a member.
 
 ## Real-browser evidence
 
@@ -194,5 +261,7 @@ Pending (orchestrating session).
 - **FU-319**: Code in a pipeline tool (Main needs the tool-lineage edge).
 - **FU-322**: as registered by the orchestrator for this slice.
 - **FU-323**: a root saved-Agent node as a recovery frontier (the root pipeline tool stays F until then).
-- New, to register: the ordinary (non-graph) root's pipeline tool; the response-before-batch window; T1d/T1e/T2/T4;
-  the shared 1024-call lineage cap per Agent node; an Agent node inside a pipeline tool (D4 b).
+- **FU-329**: the stored-response-before-batch window (polish, after FU-323).
+- **FU-330**: raising or reshaping the 1024-call lineage cap (polish); call 1025 is typed here.
+- New, to register: the ordinary (non-graph) root's pipeline tool; a shared pipeline tool's members run its calls one
+  at a time (node-event drain, perf); an Agent node inside a pipeline tool (D4 b).
