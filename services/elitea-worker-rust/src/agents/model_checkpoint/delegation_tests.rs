@@ -501,3 +501,185 @@ async fn a_guarded_read_only_tool_in_flight_is_refused_as_may_have_started() {
     assert_eq!(probe.models.load(Ordering::SeqCst), 1);
     assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
 }
+
+/// FU-291 C4: the Phase and Checkpoint decode of the Worker before FU-291
+/// (`e77b467fd`, `model_checkpoint.rs:20-49`), copied verbatim. An older
+/// Worker reads a stored record with exactly this strict decode in
+/// `restore_validated` (`model_checkpoint.rs:331-332` there), reached from the
+/// member's model scope (`model_scope.rs:466-470` there) before any model call
+/// or tool dispatch.
+mod pre_fu291 {
+    use crate::agents::model_checkpoint::output;
+    use adk_rust::LlmRequest;
+    use serde::Deserialize;
+    use serde_json::Value;
+    use std::collections::HashMap;
+
+    #[derive(Clone, Copy, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[allow(dead_code)] // The variants are the decode contract.
+    pub(super) enum Phase {
+        ContextPending,
+        ModelPending,
+        OutputFailed,
+        ToolMayHaveStarted,
+        DelegationPending,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)] // The fields are the decode contract.
+    pub(super) struct Checkpoint {
+        version: u8,
+        execution_id: String,
+        generation: u64,
+        definition_digest: [u8; 32],
+        invocation_id: String,
+        phase: Phase,
+        model: Option<ModelSnapshot>,
+        #[serde(default)]
+        delegation: Option<adk_rust::Content>,
+        #[serde(default)]
+        output_continuation: Option<output::OutputContinuation>,
+        #[serde(default)]
+        steering_ids: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)] // The fields are the decode contract.
+    struct ModelSnapshot {
+        request: LlmRequest,
+        tools: HashMap<String, Value>,
+    }
+}
+
+/// Interrupts a batch of `saved_agent` (here the durable pipeline tool)
+/// inside its tool and returns the stored session.
+async fn interrupted_durable_batch(
+    sessions: Arc<dyn SessionService>,
+    writer: &ModelCheckpointWriter,
+    probe: &Arc<Probe>,
+) -> Box<dyn Session> {
+    sessions
+        .create(CreateRequest {
+            app_name: "delegation-test".into(),
+            user_id: "user".into(),
+            session_id: Some("parent".into()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let first = runner(writer.clone(), probe.clone(), sessions.clone());
+    let task = tokio::spawn(async move {
+        let mut events = first
+            .run(
+                "user".try_into().unwrap(),
+                "parent".try_into().unwrap(),
+                Content::new("user").with_text("Delegate the inspection"),
+            )
+            .await
+            .unwrap();
+        while let Some(event) = events.next().await {
+            event.unwrap();
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), probe.entered.notified())
+        .await
+        .unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    session(sessions.as_ref()).await
+}
+
+fn blocking_probe() -> Arc<Probe> {
+    Arc::new(Probe {
+        models: AtomicUsize::new(0),
+        calls: AtomicUsize::new(0),
+        block: AtomicBool::new(true),
+        entered: tokio::sync::Notify::new(),
+    })
+}
+
+/// C4: a batch holding a durable pipeline call is recorded as
+/// `durable_delegation_pending`, and a Worker that binds the call durably
+/// replays the stored batch with no new model completion (C2).
+#[tokio::test]
+async fn a_durable_pipeline_batch_is_recorded_under_its_own_phase_and_replayed() {
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let probe = blocking_probe();
+    let writer = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 1, [1; 32])
+        .with_durable_pipeline_tools(["saved_agent"].into_iter());
+    let stored = interrupted_durable_batch(sessions.clone(), &writer, &probe).await;
+    assert_eq!(
+        stored.state().get(CHECKPOINT_KEY).unwrap()["phase"],
+        "durable_delegation_pending"
+    );
+    let restored = writer.restore(stored.as_ref()).unwrap();
+    probe.block.store(false, Ordering::SeqCst);
+    let mut events = runner(restored, probe.clone(), sessions)
+        .run(
+            "user".try_into().unwrap(),
+            "parent".try_into().unwrap(),
+            Content::new("user").with_text("RECOVERY_INPUT"),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = events.next().await {
+        event.unwrap();
+    }
+    // The first completion chose the call; the replay re-emitted it; the
+    // second completion is the final answer after the tool result.
+    assert_eq!(probe.models.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        probe.calls.load(Ordering::SeqCst),
+        2,
+        "the same call, once more"
+    );
+}
+
+/// C4, fail closed on this Worker too: without the durable binding for the
+/// call (it would run on a memory checkpointer), the record is refused.
+#[tokio::test]
+async fn a_durable_delegation_record_without_its_durable_binding_is_refused() {
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let probe = blocking_probe();
+    let writer = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 1, [1; 32])
+        .with_durable_pipeline_tools(["saved_agent"].into_iter());
+    let stored = interrupted_durable_batch(sessions.clone(), &writer, &probe).await;
+    let unbound = ModelCheckpointWriter::new(sessions, "execution".into(), 1, [1; 32])
+        .with_application_tools(["saved_agent"].into_iter());
+    let Err(error) = unbound.restore(stored.as_ref()) else {
+        panic!("a durable record restored without its durable binding");
+    };
+    assert_eq!(error.code, "agent_recovery.invalid_checkpoint");
+}
+
+/// C4, rollback: the record decoded through the pre-FU-291 strict decode is a
+/// typed failure, so an older Worker's restore refuses it
+/// (`agent_recovery.invalid_checkpoint`) before any model call or tool
+/// dispatch: it resumes nothing and never re-runs the pipeline. The same
+/// record with the pre-FU-291 phase decodes, so only the phase refuses it.
+#[tokio::test]
+async fn an_older_worker_refuses_a_durable_delegation_record_typed() {
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let probe = blocking_probe();
+    let writer = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 1, [1; 32])
+        .with_durable_pipeline_tools(["saved_agent"].into_iter());
+    let stored = interrupted_durable_batch(sessions, &writer, &probe).await;
+    let mut record = stored.state().get(CHECKPOINT_KEY).unwrap();
+    let error = serde_json::from_value::<pre_fu291::Checkpoint>(record.clone())
+        .err()
+        .expect("the older decode refuses the durable phase");
+    assert!(
+        error.to_string().contains("durable_delegation_pending"),
+        "{error}"
+    );
+    record["phase"] = json!("delegation_pending");
+    assert!(serde_json::from_value::<pre_fu291::Checkpoint>(record).is_ok());
+    assert_eq!(
+        probe.calls.load(Ordering::SeqCst),
+        1,
+        "only the original dispatch"
+    );
+}

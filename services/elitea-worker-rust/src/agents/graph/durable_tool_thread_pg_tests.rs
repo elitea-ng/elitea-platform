@@ -105,9 +105,9 @@ async fn real_pg_a_durable_thread_re_enters_its_pending_node_and_runs_nothing_wh
     .await;
     assert!(crashed.is_err(), "the run is lost after its first save");
     let frontier = history(lost.checkpointer.as_ref()).await;
-    let last = frontier.last().expect("the durable row");
-    assert_eq!(last.pending_nodes, ["second"]);
-    assert_eq!(trail(last), json!(["first"]));
+    let paused = frontier.last().expect("the durable row");
+    assert_eq!(paused.pending_nodes, ["second"]);
+    assert_eq!(trail(paused), json!(["first"]));
     lost.pool.close().await;
 
     // Claim 2 (a replacement writer): the same path re-enters at `second`.
@@ -121,7 +121,7 @@ async fn real_pg_a_durable_thread_re_enters_its_pending_node_and_runs_nothing_wh
     .await;
     let after = history(resumed.checkpointer.as_ref()).await;
     let finished = after.last().expect("the finished row");
-    assert!(finished.pending_nodes.is_empty());
+    assert_eq!(finished.pending_nodes, Vec::<String>::new());
     assert_eq!(
         trail(finished),
         json!(["first", "second"]),
@@ -147,9 +147,13 @@ async fn real_pg_a_durable_thread_re_enters_its_pending_node_and_runs_nothing_wh
     );
     let again = history(resumed.checkpointer.as_ref()).await;
     assert_eq!(again.len(), after.len() + 1, "one more row, no node");
-    let last = again.last().expect("the latest row");
-    assert!(last.pending_nodes.is_empty());
-    assert_eq!(trail(last), json!(["first", "second"]), "no node ran again");
+    let latest = again.last().expect("the latest row");
+    assert_eq!(latest.pending_nodes, Vec::<String>::new());
+    assert_eq!(
+        trail(latest),
+        json!(["first", "second"]),
+        "no node ran again"
+    );
     assert_eq!(SESSION, finished.thread_id);
     resumed.pool.close().await;
 }

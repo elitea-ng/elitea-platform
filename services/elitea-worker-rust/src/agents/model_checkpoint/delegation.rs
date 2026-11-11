@@ -54,6 +54,24 @@ impl ModelCheckpointWriter {
         self
     }
 
+    /// The pipeline tools this Agent runs on a durable thread (FU-291).
+    #[cfg_attr(not(test), allow(dead_code))] // The member binding wires it (FU-291 D-5).
+    pub(in crate::agents) fn with_durable_pipeline_tools<'a>(
+        mut self,
+        names: impl Iterator<Item = &'a str>,
+    ) -> Self {
+        self.durable_pipeline_tools = Arc::new(names.map(str::to_owned).collect());
+        self
+    }
+
+    /// Whether `content` calls at least one of this writer's durable pipeline tools.
+    pub(super) fn holds_durable_call(&self, content: &Content) -> bool {
+        content.parts.iter().any(|part| {
+            matches!(part, Part::FunctionCall { name, .. }
+                if self.durable_pipeline_tools.contains(name))
+        })
+    }
+
     pub(in crate::agents) fn delegation_model(&self, inner: Arc<dyn Llm>) -> Arc<dyn Llm> {
         match &self.replay_delegation {
             Some(pending) => Arc::new(DelegationReplayModel {
@@ -129,7 +147,7 @@ impl ModelCheckpointWriter {
         // A prior ordinary effect cannot be upgraded into replay permission.
         if !matches!(
             checkpoint.phase,
-            Phase::ModelPending | Phase::DelegationPending
+            Phase::ModelPending | Phase::DelegationPending | Phase::DurableDelegationPending
         ) {
             return Ok(false);
         }
@@ -143,7 +161,9 @@ impl ModelCheckpointWriter {
             })
             .ok_or_else(invalid_checkpoint)?;
         let content = match checkpoint.phase {
-            Phase::DelegationPending => checkpoint.delegation.ok_or_else(invalid_checkpoint)?,
+            Phase::DelegationPending | Phase::DurableDelegationPending => {
+                checkpoint.delegation.ok_or_else(invalid_checkpoint)?
+            }
             Phase::ModelPending => {
                 let Some(content) = events[marker + 1..]
                     .iter()
@@ -187,6 +207,11 @@ impl ModelCheckpointWriter {
         request: &LlmRequest,
         content: &Content,
     ) -> adk_rust::Result<()> {
+        let phase = if self.holds_durable_call(content) {
+            Phase::DurableDelegationPending
+        } else {
+            Phase::DelegationPending
+        };
         let mut event = Event::new(invocation);
         "elitea-recovery".clone_into(&mut event.author);
         event.actions.state_delta.insert(
@@ -194,7 +219,7 @@ impl ModelCheckpointWriter {
             json!({
                 "version": 1, "execution_id": self.execution_id, "generation": self.generation,
                 "definition_digest": self.definition_digest, "invocation_id": invocation,
-                "phase": Phase::DelegationPending,
+                "phase": phase,
                 "model": {"request": request, "tools": request.tools}, "delegation": content,
             }),
         );
