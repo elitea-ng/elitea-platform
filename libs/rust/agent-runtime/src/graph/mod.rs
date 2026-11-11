@@ -33,6 +33,7 @@ pub mod hitl;
 pub mod http_action;
 pub mod llm_failure;
 pub mod node_recovery;
+pub mod node_settings;
 pub mod parallel_control;
 pub mod printer;
 pub mod router;

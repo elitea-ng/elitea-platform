@@ -25,7 +25,7 @@ const (
 
 // contractFamilies are the schema families held to the strict rules below.
 // Older families keep their own Go tests.
-var contractFamilies = []string{"fanout-", "http-action-"}
+var contractFamilies = []string{"fanout-", "http-action-", "pipeline-node-"}
 
 var fixtureName = regexp.MustCompile(`^(.+)-v([0-9]+)(\.[a-z0-9-]+)?(\.invalid\.[a-z0-9-]+)?\.json$`)
 
