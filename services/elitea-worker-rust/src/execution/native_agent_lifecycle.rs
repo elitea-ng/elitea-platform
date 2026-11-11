@@ -999,10 +999,28 @@ where
                         // projection fault must not overwrite the real reason.
                         if failure.is_none()
                             && let Some(requirement) = error.delegated_authorization()
-                            && publish_authorization_notice(run, projector, &requirement, clock)
-                                .await
                         {
-                            return NativeStreamOutcome::Eos;
+                            // #1823: the notice is the turn's result, and no
+                            // progress may follow an acknowledged result, so
+                            // the lane (and an end for each child still
+                            // running) goes out first.
+                            if let Some(ledger) = lane.as_deref() {
+                                ledger.lane().close_running();
+                                if let BatchPublication::RecoveryRequired { code, retryable } =
+                                    Box::pin(publish_lane(run, projector, ledger, pauses, clock))
+                                        .await
+                                {
+                                    return NativeStreamOutcome::RecoveryRequired {
+                                        code,
+                                        retryable,
+                                    };
+                                }
+                            }
+                            if publish_authorization_notice(run, projector, &requirement, clock)
+                                .await
+                            {
+                                return NativeStreamOutcome::Eos;
+                            }
                         }
                         tracing::error!(
                             execution_id = %run.trace_execution_id(),
@@ -1170,6 +1188,13 @@ where
         let entries = ledger.lane().drain();
         if entries.is_empty() {
             return BatchPublication::Acknowledged;
+        }
+        // A pause card or a node-recovery suspension is the turn's last
+        // progress: nothing follows it, so the lane's later entries are
+        // dropped (the stored lane keeps what went out before it; Main
+        // refuses frames once the node is suspended).
+        if projector.is_paused() || projector.is_node_recovery_paused() {
+            continue;
         }
         let Ok((_, occurred_at)) = sampled_time(clock) else {
             return BatchPublication::RecoveryRequired {

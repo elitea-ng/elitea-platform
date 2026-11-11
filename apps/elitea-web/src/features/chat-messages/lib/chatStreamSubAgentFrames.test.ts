@@ -9,6 +9,8 @@ import type { MessageGroupWire } from '@/entities/message/lib/wire';
 import { socketMessageSchema } from '@/shared/api/socket/messages';
 
 import { applyChatStreamFrame, type ChatStreamContext } from './chatStreamReducer';
+import { resetTurnForReplay } from './chatStreamReattach';
+import { settleInFlight } from './chatStreamSettle';
 import { HANDLED_STREAM_TYPES } from './chatStreamFrame';
 import { convertMessagesToChatHistory, type ChatMessage } from './convertMessagesToChatHistory';
 
@@ -60,6 +62,20 @@ describe('agent_subagent on the live stream', () => {
     const live = applyChatStreamFrame([pending], frame(started), CONTEXT);
     const ended = applyChatStreamFrame(live, { type: 'agent_response', message_id: MESSAGE_ID, content: 'done', response_metadata: { finish_reason: 'stop' } }, CONTEXT);
     expect(ended[0]?.subAgents?.[0]?.status).toBe('cancelled');
+  });
+
+  it('a stream that fails or stops without a terminal frame stops a running child too', () => {
+    const live = applyChatStreamFrame([pending], frame(started), CONTEXT);
+    expect(settleInFlight(live, 'cut')[0]?.subAgents?.[0]?.status).toBe('cancelled');
+  });
+
+  it('a replay from cursor 0 rebuilds the seeded lanes once, never doubling their text', () => {
+    const text = frame({ kind: 'text', agent_id: 'a_1', text: 'Looking.' });
+    const seeded = applyChatStreamFrame(applyChatStreamFrame([pending], frame(started), CONTEXT), text, CONTEXT);
+    let replayed = resetTurnForReplay(seeded, MESSAGE_ID);
+    expect(replayed[0]?.subAgents).toBeUndefined();
+    replayed = applyChatStreamFrame(applyChatStreamFrame(replayed, frame(started), CONTEXT), text, CONTEXT);
+    expect(replayed[0]?.subAgents?.[0]?.items).toEqual(seeded[0]?.subAgents?.[0]?.items);
   });
 });
 

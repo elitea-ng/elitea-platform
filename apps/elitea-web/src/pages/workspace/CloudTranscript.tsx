@@ -15,11 +15,11 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
 import { AgentAvatar } from '@/features/chat-messages';
-import { approval, TurnTranscript, type SubAgentLane } from '@/features/workspace';
+import { approval, TurnTranscript } from '@/features/workspace';
 import { t } from '@/shared/i18n';
 
 import type { Card } from './cloudPrompts';
-import { exchangesOf, turnViewOf } from './cloudTranscriptModel';
+import { exchangesOf, turnViewOf, type SubAgentLane } from './cloudTranscriptModel';
 import { useCopyMenu, YourPrompt } from './sessionParts';
 import type { CloudChat } from './useCloudChat';
 

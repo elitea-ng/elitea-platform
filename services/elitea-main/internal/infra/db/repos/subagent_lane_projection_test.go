@@ -1,9 +1,12 @@
 package repos
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 )
 
 func laneEntry(t *testing.T, value map[string]any) json.RawMessage {
@@ -94,6 +97,23 @@ func TestMergeSubAgentLanesResumesAContinuedChild(t *testing.T) {
 	lanes, _ = mergeSubAgentLanes(lanes, laneEntry(t, map[string]any{"kind": "resumed", "agent_id": "a_1"}))
 	if lanes[0].Status != "running" || lanes[0].Result != "" {
 		t.Fatalf("resumed = %+v", lanes[0])
+	}
+}
+
+// TestProjectSubAgentLaneLeavesOtherFramesAlone: a frame of another type, or
+// an agent_subagent frame without its entry, is no business of the lane and
+// never reaches the database (a nil executor would panic), so it never fails
+// the turn.
+func TestProjectSubAgentLaneLeavesOtherFramesAlone(t *testing.T) {
+	for name, data := range map[string]string{
+		"another type":        `{"type":"agent_llm_chunk","content":"x"}`,
+		"names it in content": `{"type":"agent_tool_end","content":"\"agent_subagent\""}`,
+		"no entry":            `{"type":"agent_subagent","response_metadata":{}}`,
+	} {
+		frame := outputapp.NodeEventFrame{BrowserData: json.RawMessage(data)}
+		if err := projectSubAgentLane(context.Background(), nil, 1, frame); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }
 

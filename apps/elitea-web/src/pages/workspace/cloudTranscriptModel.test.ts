@@ -62,6 +62,17 @@ describe('the cloud sub-agent lanes (client contract 1.48)', () => {
     ]);
   });
 
+  it('gives a reloaded lane whose call has no tool row a spawn_agent row of its own, once per call', () => {
+    const lane = (agentId: string, ordinal: number) => ({ agentId, parentCallId: 'call-gone', ordinal, status: 'completed', items: [] });
+    const message = { ...answer([{ id: 'c-other', type: 'tool', name: 'read_file', status: 'complete', toolOutputs: 'x' }]), subAgents: [lane('a_1', 1), lane('a_2', 2)] } as unknown as ChatMessage;
+    const view = turnViewOf(message);
+    const tools = view.items.flatMap((item) => (item.type === 'tool' ? [[item.tool, item.callId]] : []));
+    expect(tools).toEqual([
+      ['read_file', 'c-other'],
+      ['spawn_agent', 'call-gone'],
+    ]);
+  });
+
   it('an answer without sub-agents has no lanes', () => {
     expect(turnViewOf(answer([])).subAgents).toBeUndefined();
   });

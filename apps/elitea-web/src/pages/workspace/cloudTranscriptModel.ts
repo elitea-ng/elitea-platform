@@ -9,12 +9,14 @@ import type { ComponentProps } from 'react';
 
 import type { CloudSubAgentLane } from '@elitea/client-core/stream';
 
-import type { SubAgentLane, TurnTranscript } from '@/features/workspace';
+import type { TurnTranscript } from '@/features/workspace';
 import { forgeLinkLabel, forgeLinkOf, GIT_PUSH, OPEN_PULL_REQUEST } from '@/shared/lib/forgeLink';
 
 /** What the local transcript renders for one turn, and one entry of it. */
 type TurnView = ComponentProps<typeof TurnTranscript>['view'];
 type TranscriptItem = TurnView['items'][number];
+/** One sub-agent lane of a turn, as the local transcript draws it. */
+export type SubAgentLane = NonNullable<TurnView['subAgents']>[number];
 
 const SUMMARY_CHARS = 120;
 const RESULT_CHARS = 4000;
@@ -126,10 +128,26 @@ function lanesOfAnswer(message: ChatMessage): Pick<TurnView, 'subAgents'> {
   return lanes.length === 0 ? {} : { subAgents: lanes.map(laneOf) };
 }
 
+/**
+ * A `spawn_agent` row for each stored lane whose call has no tool row of its
+ * own. A reloaded answer keeps its lanes (`meta.subagents_v1`) but not its
+ * tool calls, and the transcript draws a lane only under its call's row.
+ */
+function spawnRowsOf(message: ChatMessage, tools: readonly TranscriptItem[]): TranscriptItem[] {
+  const known = new Set(tools.flatMap((item) => (item.type === 'tool' ? [item.callId] : [])));
+  const rows: TranscriptItem[] = [];
+  for (const lane of message.subAgents ?? []) {
+    if (known.has(lane.parentCallId)) continue;
+    known.add(lane.parentCallId);
+    rows.push({ type: 'tool', key: `c${lane.parentCallId}`, callId: lane.parentCallId, tool: 'spawn_agent', argsSummary: '', remote: true, result: { ok: true, summary: '', truncated: false } });
+  }
+  return rows;
+}
+
 /** What an assistant message shows: its tool steps, then its text, and its error. */
 export function turnViewOf(message: ChatMessage): TurnView {
   const tools = ((message.toolActions ?? []) as readonly RawAction[]).map(toolItem).filter((item): item is TranscriptItem => item !== undefined);
-  const items: TranscriptItem[] = [...tools, ...(message.content === '' ? [] : [{ type: 'text' as const, key: `t-${message.id}`, text: message.content }])];
+  const items: TranscriptItem[] = [...tools, ...spawnRowsOf(message, tools),...(message.content === '' ? [] : [{ type: 'text' as const, key: `t-${message.id}`, text: message.content }])];
   const running = message.isStreaming === true;
   // A turn paused on an approval is not "done": its card below says what it waits for.
   const paused = ((message.hitlInterrupts ?? []) as readonly { decided?: boolean }[]).some((card) => card.decided !== true) || message.hitlInterrupt !== undefined;

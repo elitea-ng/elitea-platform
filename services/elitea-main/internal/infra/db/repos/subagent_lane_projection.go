@@ -11,10 +11,13 @@ package repos
 // (`elitea_runtime.ephemeral_agents`) keeps no tool calls or text.
 //
 // The lane is display data. Every value is rebuilt into a closed, bounded
-// shape; an entry that does not fit is ignored rather than refusing the
-// frame, so a malformed lane entry never fails the turn.
+// shape; an entry that does not fit (or a frame without one) is ignored
+// rather than refusing the frame, so a malformed lane entry never fails the
+// turn. A frame bound to another answer is still refused, as every
+// projection of the run's response binding refuses it.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -42,6 +45,9 @@ const (
 	maxSubAgentTextRunes  = 600
 	maxSubAgentResultRune = 2000
 )
+
+// subAgentLaneEventMarker is the frame type as it appears in a frame's JSON.
+var subAgentLaneEventMarker = []byte(`"` + subAgentLaneEventType + `"`)
 
 var subAgentLaneStatuses = map[string]bool{
 	"running": true, "completed": true, "failed": true, "budget_exhausted": true, "cancelled": true,
@@ -250,6 +256,11 @@ func decodeSubAgentLanes(raw []byte) []subAgentLane {
 // answer's `meta.subagents_v1`. A frame of another type is not its
 // business.
 func projectSubAgentLane(ctx context.Context, tx sqlExecutor, projectID int64, frame outputapp.NodeEventFrame) error {
+	// Every accepted agent frame passes here: only one that names the type
+	// is decoded.
+	if !bytes.Contains(frame.BrowserData, subAgentLaneEventMarker) {
+		return nil
+	}
 	var event struct {
 		Type                string                     `json:"type"`
 		StreamID            string                     `json:"stream_id"`
@@ -266,7 +277,7 @@ func projectSubAgentLane(ctx context.Context, tx sqlExecutor, projectID int64, f
 	}
 	raw, ok := event.ResponseMetadata[subAgentLaneMetadataKey]
 	if !ok {
-		return outputapp.ErrInvalidNodeEventOutput
+		return nil
 	}
 	projectDatabaseID, valid := currentAgentDatabaseID(projectID)
 	if !valid {
