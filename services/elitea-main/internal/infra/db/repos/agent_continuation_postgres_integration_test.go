@@ -1131,6 +1131,28 @@ WHERE uuid = $1`, response); err != nil {
 		binding.ConversationUuid != conversationID || binding.UserInput != "regenerate this" {
 		t.Fatalf("binding=%+v", binding)
 	}
+	// #1903: the first answer's turn wrote the question. A later answer to
+	// the same question (an addressed agent's) reused it.
+	if binding.QuestionIsOwn == nil || !*binding.QuestionIsOwn {
+		t.Fatalf("the first answer's question is its own: %+v", binding.QuestionIsOwn)
+	}
+	laterAnswer := mustCurrentPGUUID(t, "40000000-0000-4000-8000-000000000032")
+	if _, err := tx.Exec(t.Context(), `
+INSERT INTO chat_message_group (uuid, author_participant_id, conversation_id, reply_to_id, meta, created_at, is_streaming)
+SELECT $2, 21, question.conversation_id, question.id, '{}'::jsonb,
+       now() AT TIME ZONE 'UTC', FALSE
+FROM chat_message_group AS question WHERE question.uuid = $1::uuid`, questionID, laterAnswer); err != nil {
+		t.Fatal(err)
+	}
+	later, err := queries.ResolveCurrentRegeneration(t.Context(), sqlcgen.ResolveCurrentRegenerationParams{
+		ActorUserID: 11, ProjectID: 1, ResponseMessageID: laterAnswer,
+	})
+	if err != nil || later.QuestionIsOwn == nil || *later.QuestionIsOwn {
+		t.Fatalf("a later answer reuses the question: %+v %v", later.QuestionIsOwn, err)
+	}
+	if _, err := tx.Exec(t.Context(), `DELETE FROM chat_message_group WHERE uuid = $1`, laterAnswer); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := queries.ResolveCurrentRegeneration(
 		t.Context(),
 		sqlcgen.ResolveCurrentRegenerationParams{

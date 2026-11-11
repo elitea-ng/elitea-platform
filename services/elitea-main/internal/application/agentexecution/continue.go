@@ -469,6 +469,11 @@ type CurrentContinueTurn struct {
 	PipelineStaticPause  *CurrentPipelineStaticPause
 	PipelineStaticTools  *CurrentPipelineStaticTools
 	OutputLimitSequence  int64
+	// ContextView is the view the continued run's input carries (issue
+	// 1892): the input is rebuilt from the conversation as it stands, so the
+	// admission re-records the answer's view with the resume. nil (a static
+	// continuation, which reuses the original input) records nothing.
+	ContextView *ContextViewRecord
 }
 
 // PipelineDecisionID is stable for retries of one direct review occurrence.
@@ -597,6 +602,7 @@ func (turn *CurrentContinueTurn) Clone() *CurrentContinueTurn {
 	clone.PipelineHITLReview = turn.PipelineHITLReview.clone()
 	clone.PipelineStaticPause = turn.PipelineStaticPause.clone()
 	clone.PipelineStaticTools = turn.PipelineStaticTools.clone()
+	clone.ContextView = turn.ContextView.Clone()
 	return &clone
 }
 
@@ -820,7 +826,8 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		// have known") after the model has already partly answered, which
 		// is out of this issue's scope. "" is the same no-recall behavior
 		// this call site had before #870.
-		input, err = currentApplicationInput(start, resolved, toolkitGuardrails, nil, "",
+		var view ReaderView
+		input, view, err = currentApplicationInputWithView(start, resolved, toolkitGuardrails, nil, "",
 			// #946: project context is NOT a per-turn recall like memories —
 			// it is standing project configuration, so a resumed or
 			// regenerated turn in the same project must carry the same
@@ -832,6 +839,13 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		}
 		turn.ApplicationID = resolved.ApplicationID
 		turn.ApplicationVersionID = resolved.ApplicationVersionID
+		// #1892: an agent's continued run reconciles the conversation as it
+		// stands now, so its answer's view is this one. A pipeline resumes
+		// from its checkpoint with the view it started with (the worker never
+		// re-seeds it), so its start's record stays the true one.
+		if !currentApplicationInstructionsAreAGraph(resolved.VersionDetails) {
+			turn.ContextView = newContextViewRecord(target.TargetParticipantID, resolved.ParticipantContextHistory, view, input)
+		}
 		capabilityID = executiondomain.AgentApplicationCapability
 	case CurrentRegenerationAdhoc:
 		settings, settingsErr := continuationAdhocSettings(policy)
@@ -888,7 +902,8 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 				return nil, nil, "", err
 			}
 		}
-		input, err = currentAdhocInput(start, resolved, frozen, toolkitGuardrails, nil, "", // #870: see currentApplicationInput's continuation call site
+		var view ReaderView
+		input, view, err = currentAdhocInputWithView(start, resolved, frozen, toolkitGuardrails, nil, "", // #870: see currentApplicationInput's continuation call site
 			// #946: project context is NOT a per-turn recall like memories —
 			// it is standing project configuration, so a resumed or
 			// regenerated turn in the same project must carry the same
@@ -898,6 +913,7 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
+		turn.ContextView = newContextViewRecord(target.TargetParticipantID, "", view, input)
 		capabilityID = executiondomain.AgentAdhocCapability
 	default:
 		return nil, nil, "", ErrUnsupportedCurrentAgentStart

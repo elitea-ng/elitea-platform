@@ -855,22 +855,9 @@ WHERE execution_id = $1 AND generation = $2`,
 		if err := recordPausedWriter(ctx, tx, admission.Record.Job.ID, int64(admission.Record.Job.Generation), turn); err != nil {
 			return executionapp.AdmissionOutcome{}, nil, err
 		}
-		var resumeErr error
-		switch turn.ContinuationKind {
-		case agentexecutionapp.CurrentContinuationStatic:
-			// The decision rows of the continued waits commit with the
-			// resume (ADR-0041 decision 5).
-			resumeErr = resumeCurrentAgentStaticWithLedger(ctx, tx, txQueries, admission.Record.Job.ID, turn)
-		case agentexecutionapp.CurrentContinuationOutputLimit:
-			resumeErr = resumeCurrentAgentOutputLimit(ctx, txQueries, admission.Record.Job.ID, turn)
-		case agentexecutionapp.CurrentContinuationAuthorization:
-			resumeErr = resumeCurrentAgentAuthorization(ctx, txQueries, admission.Record.Job.ID, turn)
-		default:
-			resumeErr = resumeCurrentAgentHITLWithLedger(ctx, tx, txQueries, admission.Record.Job.ID, turn,
-				admission.Record.Job.TriggerOrigin.Stored())
-		}
-		if resumeErr != nil {
-			return executionapp.AdmissionOutcome{}, nil, resumeErr
+		if err := resumeCurrentContinueTurn(ctx, tx, txQueries, admission.Record.Job.ID, turn,
+			admission.Record.Job.TriggerOrigin.Stored()); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
 		}
 	}
 	// A turn of an agent participant ends that agent's idle compaction in
@@ -1111,6 +1098,39 @@ func resumeCurrentAgentHITL(
 ) error {
 	_, err := resumeCurrentAgentHITLRow(ctx, queries, executionID, turn)
 	return err
+}
+
+// resumeCurrentContinueTurn resumes the paused response of one continuation,
+// by its kind, in the admission transaction, and records the continued
+// run's view of the conversation with it.
+func resumeCurrentContinueTurn(
+	ctx context.Context,
+	tx pgx.Tx,
+	queries *sqlcgen.Queries,
+	executionID string,
+	turn agentexecutionapp.CurrentContinueTurn,
+	triggerOrigin string,
+) error {
+	var err error
+	switch turn.ContinuationKind {
+	case agentexecutionapp.CurrentContinuationStatic:
+		// The decision rows of the continued waits commit with the
+		// resume (ADR-0041 decision 5).
+		err = resumeCurrentAgentStaticWithLedger(ctx, tx, queries, executionID, turn)
+	case agentexecutionapp.CurrentContinuationOutputLimit:
+		err = resumeCurrentAgentOutputLimit(ctx, queries, executionID, turn)
+	case agentexecutionapp.CurrentContinuationAuthorization:
+		err = resumeCurrentAgentAuthorization(ctx, queries, executionID, turn)
+	default:
+		err = resumeCurrentAgentHITLWithLedger(ctx, tx, queries, executionID, turn, triggerOrigin)
+	}
+	if err != nil {
+		return err
+	}
+	// Issue 1892: the continued run's input is rebuilt from the conversation
+	// as it stands now, so its view replaces the start's, with the resume. A
+	// static continuation reuses its input and carries no record.
+	return recordContextView(ctx, tx, turn.ResponseMessageID, turn.ContextView)
 }
 
 // resumeCurrentAgentHITLWithLedger consumes the pending set and, in the same

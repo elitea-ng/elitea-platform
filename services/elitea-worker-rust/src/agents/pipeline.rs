@@ -1299,6 +1299,49 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
     }
 }
 
+/// ADR-0050 decision 9 (#1668): the pipeline's own view of the conversation,
+/// seeded into graph state on its first invocation only. #1914: a resume, a
+/// continuation or a recovery runs on a checkpoint that already holds its
+/// state and is never seeded, so its view is not built.
+fn pipeline_context_view(
+    request: &AgentExecutionRequest,
+    recovery: bool,
+) -> Result<Vec<serde_json::Value>, NativeAgentAssemblyError> {
+    if recovery || super::runtime::has_continuation(request) {
+        return Ok(Vec::new());
+    }
+    super::assembly::pipeline_state_history(&request.payload.chat_history)
+}
+
+#[cfg(test)]
+mod context_view_skip_tests {
+    use serde_json::json;
+
+    use super::pipeline_context_view;
+    use crate::agents::assembly_tests::ordinary_request;
+    use crate::agents::request::AgentExecutionKind;
+
+    /// #1914: only a first invocation builds the view; a resume or a
+    /// recovery never reads the history it would not seed.
+    #[test]
+    fn only_a_first_invocation_builds_the_view() {
+        let mut request = ordinary_request(AgentExecutionKind::Application);
+        // Refused by the admission a first invocation runs.
+        request.payload.chat_history = vec![json!({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "x"}],
+            "additional_kwargs": {"elitea_author": {"kind": "agent", "name": "Other"}}
+        })];
+        assert!(pipeline_context_view(&request, false).is_err());
+        assert_eq!(pipeline_context_view(&request, true).ok(), Some(Vec::new()));
+        request.payload.hitl_resume = true;
+        assert_eq!(
+            pipeline_context_view(&request, false).ok(),
+            Some(Vec::new())
+        );
+    }
+}
+
 impl PipelineNativeAgentAssembler {
     #[allow(clippy::too_many_lines)] // Keep frozen admission, runtime binding, and coordinator ownership together.
     async fn assemble_with_recovery(
@@ -1338,10 +1381,8 @@ impl PipelineNativeAgentAssembler {
             if recovery {
                 assembly.content_controls().untrusted().record_read();
             }
-            // ADR-0050 decision 9 (#1668): the pipeline's own view of the
-            // conversation, seeded into graph state on its first invocation.
             let context_view =
-                super::assembly::pipeline_state_history(&assembly.request().payload.chat_history)?;
+                pipeline_context_view(assembly.request(), recovery || node_recovery.is_some())?;
             // #606, the pipeline twin of the ordinary path's read. `platform`
             // is optional here only because the injected-state test constructor
             // has none; a stored pipeline that runs for real always does, and a

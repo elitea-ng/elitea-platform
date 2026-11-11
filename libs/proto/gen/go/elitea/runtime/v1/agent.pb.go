@@ -324,11 +324,13 @@ type AgentExecutionInputV1 struct {
 	// #1831 (ADR-0050 decision 9d): the chat message group uuid of this
 	// turn's own question, which `user_input` holds, so the worker can show
 	// the model its short id and accept a `spawn_agent` excerpt of it. Set
-	// only on a turn that writes its question: a fresh turn or an
-	// agent-to-agent turn. ABSENT: a regeneration, a continuation, a resume,
-	// or an addressed agent's turn that reuses the person's question (the
-	// question is in its history). Workers are upgraded before Main, because
-	// a worker from an earlier release refuses this tag.
+	// only on a turn that writes its question: a fresh turn, an
+	// agent-to-agent turn, or (#1903) a regeneration of a turn that wrote its
+	// own question, which asks it again. ABSENT: a continuation, a resume, a
+	// regeneration of an addressed agent's answer, or an addressed agent's
+	// turn that reuses the person's question (the question is in its
+	// history). Workers are upgraded before Main, because a worker from an
+	// earlier release refuses this tag.
 	CurrentMessageId *string `protobuf:"bytes,75,opt,name=current_message_id,json=currentMessageId,proto3,oneof" json:"current_message_id,omitempty"`
 	// #1826 (ADR-0050 decision 9d): the agent memory entries Main recalled
 	// into this turn's instructions, in the order shown, at most 50. The
@@ -1186,7 +1188,18 @@ type ContextViewV1 struct {
 	// mode, the window, the exact `chat_history` bytes and every reference
 	// (each variable-length field prefixed with its big-endian 64-bit
 	// length). The worker refuses a view whose digest does not match.
-	Digest        string `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`
+	Digest string `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`
+	// #1902: lowercase hex SHA-256 over the domain
+	// `elitea.context-view-binding.v1`, the mode, `include_side_talk` and,
+	// under `since_joined`, when the reader joined (each prefixed with its
+	// big-endian 64-bit length): every setting that decides which messages
+	// are eligible. The reader's durable session is bound to it, so a setting
+	// that narrows the view without changing the mode still re-seeds it.
+	// EMPTY: an input from before this field; the session is bound to
+	// `history` alone. Workers are upgraded before Main, because a worker
+	// from an earlier release refuses this tag.
+	// (4 to 15 stay reserved: a reserved tag is never reused.)
+	Binding       string `protobuf:"bytes,16,opt,name=binding,proto3" json:"binding,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1238,6 +1251,13 @@ func (x *ContextViewV1) GetWindowTokens() uint32 {
 func (x *ContextViewV1) GetDigest() string {
 	if x != nil {
 		return x.Digest
+	}
+	return ""
+}
+
+func (x *ContextViewV1) GetBinding() string {
+	if x != nil {
+		return x.Binding
 	}
 	return ""
 }
@@ -2448,11 +2468,12 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x10AgentFloorPeerV1\x12%\n" +
 	"\x0eparticipant_id\x18\x01 \x01(\x03R\rparticipantId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
-	"\x04role\x18\x03 \x01(\tR\x04roleJ\x04\b\x04\x10\x10\"l\n" +
+	"\x04role\x18\x03 \x01(\tR\x04roleJ\x04\b\x04\x10\x10\"\x86\x01\n" +
 	"\rContextViewV1\x12\x18\n" +
 	"\ahistory\x18\x01 \x01(\tR\ahistory\x12#\n" +
 	"\rwindow_tokens\x18\x02 \x01(\rR\fwindowTokens\x12\x16\n" +
-	"\x06digest\x18\x03 \x01(\tR\x06digestJ\x04\b\x04\x10\x10\"R\n" +
+	"\x06digest\x18\x03 \x01(\tR\x06digest\x12\x18\n" +
+	"\abinding\x18\x10 \x01(\tR\abindingJ\x04\b\x04\x10\x10\"R\n" +
 	"\x15RecalledMemoryEntryV1\x12\x19\n" +
 	"\bentry_id\x18\x01 \x01(\tR\aentryId\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontentJ\x04\b\x03\x10\x10\"X\n" +

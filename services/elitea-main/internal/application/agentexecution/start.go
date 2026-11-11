@@ -151,8 +151,12 @@ type CurrentApplicationTarget struct {
 	// ParticipantContextHistory is the participant's own eligibility mode
 	// (entity_settings.context_history: "share history from: now"), or "".
 	ParticipantContextHistory string
-	InternalTools             json.RawMessage
-	OriginalSource            *scope.SourceReference
+	// ParticipantJoinedAt is when the reader joined the conversation, as the
+	// resolver's after_joined fact reads it (#1902): part of the view's
+	// binding, so an agent re-added later is re-seeded under since_joined.
+	ParticipantJoinedAt string
+	InternalTools       json.RawMessage
+	OriginalSource      *scope.SourceReference
 	// Release is the agent release the run executes (release.go); nil for
 	// a run of a draft, of a version published before releases existed, or
 	// of the catalogue. When set, VersionDetails and SourceVersionDetails
@@ -725,7 +729,7 @@ func currentApplicationInputWithView(
 	if stepsLimit != nil {
 		input.StepsLimit = stepsLimit
 	}
-	input.ContextView = contextViewInput(view.Settings, modelContextLimits, input.ChatHistory, input.ChatHistoryRefs)
+	input.ContextView = contextViewInput(view.Settings, target.ParticipantJoinedAt, modelContextLimits, input.ChatHistory, input.ChatHistoryRefs)
 	return input, view, nil
 }
 

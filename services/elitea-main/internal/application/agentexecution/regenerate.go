@@ -39,6 +39,11 @@ type CurrentRegenerationTarget struct {
 	TargetParticipantID int64
 	QuestionID          string
 	UserInput           string
+	// QuestionIsOwn: the regenerated answer's own turn wrote QuestionID (no
+	// earlier answer replies to it), so the regeneration names it to the
+	// worker as this turn's question (issue 1903). False for a later
+	// addressed agent, which answers the person's existing question.
+	QuestionIsOwn bool
 }
 
 func (target CurrentRegenerationTarget) Validate() error {
@@ -326,6 +331,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		}
 		input.ContextSettings = contextSettings
 		input.IsRegenerate = true
+		input.CurrentMessageId = regeneratedQuestionID(target)
 		turn.ApplicationID = resolved.ApplicationID
 		turn.ApplicationVersionID = resolved.ApplicationVersionID
 		turn.ContextView = newContextViewRecord(target.TargetParticipantID, resolved.ParticipantContextHistory, view, input)
@@ -375,11 +381,27 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		}
 		input.ContextSettings = contextSettings
 		input.IsRegenerate = true
+		input.CurrentMessageId = regeneratedQuestionID(target)
 		turn.ContextView = newContextViewRecord(target.TargetParticipantID, "", view, input)
 		return input, turn, executiondomain.AgentAdhocCapability, nil
 	default:
 		return nil, nil, "", errors.New("unsupported current regeneration kind")
 	}
+}
+
+// regeneratedQuestionID is the question a regeneration asks again, for the
+// worker to tag with its short id (issue 1903), as a fresh turn's
+// currentMessageID is: the stored question's real uuid, not the
+// regeneration's own id. Without it the worker stores the question untagged
+// and, with sub-agents bound, re-seeds the reader's session on the next turn.
+// A later addressed agent's answer reuses the person's question, which is in
+// its history already: none, as on its first run.
+func regeneratedQuestionID(target CurrentRegenerationTarget) *string {
+	if !target.QuestionIsOwn {
+		return nil
+	}
+	id := target.QuestionID
+	return &id
 }
 
 // narrowRowID converts a domain id (int64) to the int32 the freeze request and
