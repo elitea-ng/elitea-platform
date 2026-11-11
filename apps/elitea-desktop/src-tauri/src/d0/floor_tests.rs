@@ -52,25 +52,14 @@ enum Later {
     Superseded,
 }
 
-/// How the mock Main routes a person's message (`turntaking.Route`).
-#[derive(Clone, Copy, PartialEq)]
-enum Routing {
-    /// Policy `addressed`: the addressees (the composer's agent first when
-    /// it is one of them), else the composer's agent.
-    Addressed,
-    /// Policy `lead`, with the lead's participant id: the lead answers an
-    /// unaddressed message; an address still wins.
-    Lead(i64),
-    /// A broken Main that routes every start to the other agent: the host
-    /// must never run an agent Main did not answer on.
-    Flip,
+fn floor_platform(later: Later) -> impl Fn(&Req) -> Res {
+    lead_platform(later, None)
 }
 
-/// Main's routed order for a first start (`turntaking.Route`).
-fn route(routing: Routing, participant: i64, addressed: &[i64]) -> Vec<i64> {
-    if routing == Routing::Flip {
-        return vec![if participant == 77 { 88 } else { 77 }];
-    }
+/// Main's routed order for a person's message (`turntaking.Route`): the
+/// addressees (the start's participant first when it is one), else the
+/// lead, else the start's participant.
+fn route(lead: Option<i64>, participant: i64, addressed: &[i64]) -> Vec<i64> {
     if !addressed.is_empty() {
         let mut targets: Vec<i64> = Vec::new();
         if addressed.contains(&participant) {
@@ -79,28 +68,12 @@ fn route(routing: Routing, participant: i64, addressed: &[i64]) -> Vec<i64> {
         targets.extend(addressed.iter().filter(|id| **id != participant));
         return targets;
     }
-    match routing {
-        Routing::Lead(lead) => vec![lead],
-        _ => vec![participant],
-    }
+    vec![lead.unwrap_or(participant)]
 }
 
-/// The execution, response message and executor Main opens for each agent.
-fn opened(participant: i64) -> (&'static str, &'static str, &'static str) {
-    if participant == 88 {
-        (EXECUTION_2, "22222222-2222-4333-8444-555555555555", "cloud")
-    } else {
-        (EXECUTION, "11111111-2222-4333-8444-555555555555", "local")
-    }
-}
-
-fn floor_platform(later: Later) -> impl Fn(&Req) -> Res {
-    main_platform(later, Routing::Addressed)
-}
-
-fn main_platform(later: Later, routing: Routing) -> impl Fn(&Req) -> Res {
+/// The thread's Main, with a lead (`meta.floor.policy: lead`) or none.
+fn lead_platform(later: Later, lead: Option<i64>) -> impl Fn(&Req) -> Res {
     let first_question = Mutex::new(FIRST_QUESTION.to_owned());
-    let first_targets = Mutex::new(Vec::<i64>::new());
     move |req: &Req| {
         let path = req.path.as_str();
         if path == "/api/v2/social/author" {
@@ -133,28 +106,22 @@ fn main_platform(later: Later, routing: Routing) -> impl Fn(&Req) -> Res {
         if path == format!("/api/v2/elitea_core/local_turn/prompt_lib/1/{UUID}") {
             let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
             let question = body["question_id"].as_str().unwrap_or_default().to_owned();
-            if body.get("floor_turn").is_none() {
-                // A person's message: Main routes it, and answers on the
-                // first target (a replay of the same question answers the
-                // same execution).
-                let participant = body["participant_id"].as_i64().unwrap_or_default();
+            if body["participant_id"] == 77 {
+                first_question.lock().unwrap().clone_from(&question);
                 let addressed: Vec<i64> = body
                     .get("addressed_to")
                     .and_then(Value::as_array)
                     .map(|ids| ids.iter().filter_map(Value::as_i64).collect())
                     .unwrap_or_default();
-                let targets = route(routing, participant, &addressed);
-                first_question.lock().unwrap().clone_from(&question);
-                first_targets.lock().unwrap().clone_from(&targets);
-                let (execution, response, executor) = opened(targets[0]);
+                let targets = json!(route(lead, 77, &addressed));
                 return Res::json(
                     200,
                     &json!({
-                        "execution_id": execution, "question_id": question,
-                        "response_message_id": response,
-                        "conversation_uuid": UUID, "participant_id": targets[0], "created": true,
+                        "execution_id": EXECUTION, "question_id": question,
+                        "response_message_id": "11111111-2222-4333-8444-555555555555",
+                        "conversation_uuid": UUID, "participant_id": 77, "created": true,
                         "expires_at": "2026-10-10T00:00:00Z",
-                        "memory_recall": {"text": ""}, "executor": executor,
+                        "memory_recall": {"text": ""}, "executor": "local",
                         "floor": {"question_id": question, "position": 0, "targets": targets, "agents": agents()}
                     }),
                 );
@@ -167,18 +134,15 @@ fn main_platform(later: Later, routing: Routing) -> impl Fn(&Req) -> Res {
                 );
             }
             let first = first_question.lock().unwrap().clone();
-            let targets = first_targets.lock().unwrap().clone();
-            let participant = body["participant_id"].as_i64().unwrap_or_default();
-            let (execution, response, executor) = opened(participant);
             return Res::json(
                 200,
                 &json!({
-                    "execution_id": execution, "question_id": question,
-                    "response_message_id": response,
-                    "conversation_uuid": UUID, "participant_id": participant, "created": true,
+                    "execution_id": EXECUTION_2, "question_id": question,
+                    "response_message_id": "22222222-2222-4333-8444-555555555555",
+                    "conversation_uuid": UUID, "participant_id": 88, "created": true,
                     "expires_at": "2026-10-10T00:00:00Z",
-                    "memory_recall": {"text": ""}, "executor": executor,
-                    "floor": {"question_id": first, "position": 1, "targets": targets, "agents": agents()}
+                    "memory_recall": {"text": ""}, "executor": "cloud",
+                    "floor": {"question_id": first, "position": 1, "targets": [77, 88], "agents": agents()}
                 }),
             );
         }
@@ -380,116 +344,69 @@ fn starts_of(h: &Harness) -> Vec<Value> {
     )
 }
 
-/// The floor fields of the turn's `status` `running`.
-fn running_floor(h: &Harness, turn_id: &str) -> Value {
-    h.emitter
-        .all()
-        .into_iter()
-        .find(|event| {
-            event.turn_id == turn_id
-                && event.kind == "status"
-                && event.payload.get("floor").is_some()
-        })
-        .map(|event| event.payload["floor"].clone())
-        .unwrap_or_else(|| panic!("no floor status: {:?}", h.emitter.kinds()))
+fn unaddressed(h: &Harness) -> TurnRequest {
+    TurnRequest {
+        prompt: "Fix the flaky test".into(),
+        ..request(&h.workspace_id)
+    }
 }
 
 /// A composer pick is not an address (ADR-0050 decision 7c, #1917): a
-/// message that names no agent goes out with no `addressed_to`, and under
-/// `lead` Main routes it to the lead. The host follows: it starts the same
-/// question again as the lead (here a cloud agent), and the turn runs as it,
-/// never as the composer's agent.
+/// message that names no agent goes out with no `addressed_to`, on the
+/// composer's agent as the sticky target. With no lead, that agent answers.
 #[tokio::test]
-async fn an_unaddressed_message_goes_to_the_lead_not_the_composers_agent() {
-    let server = serve(main_platform(Later::Started, Routing::Lead(88))).await;
+async fn an_unaddressed_message_carries_no_address() {
+    let server = serve(floor_platform(Later::Started)).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
-    let started = h
-        .host
-        .start(TurnRequest {
-            prompt: "Review the change".into(),
-            ..request(&h.workspace_id)
-        })
-        .await
-        .unwrap();
-    assert_eq!(started.execution_id, EXECUTION_2);
+    let started = h.host.start(unaddressed(&h)).await.unwrap();
     until_done_of(&h, &started.turn_id).await;
-
     let starts = starts_of(&h);
-    assert_eq!(starts.len(), 2, "{starts:?}");
-    // The composer's agent is the sticky target, never an address.
+    assert_eq!(starts.len(), 1, "{starts:?}");
     assert_eq!(starts[0]["participant_id"], 77);
     assert!(starts[0].get("addressed_to").is_none(), "{}", starts[0]);
-    // The same message, as the lead.
-    assert_eq!(starts[1]["participant_id"], 88);
-    assert_eq!(starts[1]["question_id"], starts[0]["question_id"]);
-    assert!(starts[1].get("addressed_to").is_none());
-    assert!(starts[1].get("floor_turn").is_none());
-
-    // The lead answered, in the cloud: the composer's agent never ran.
-    assert!(seen(&h.server, "/llm/v1/chat/completions").is_empty());
-    let child = bodies(
-        &h.server,
-        &format!("/api/v2/elitea_core/local_child_turn/prompt_lib/1/{EXECUTION_2}"),
-    );
-    assert_eq!(child.len(), 1);
-    assert_eq!(child[0]["application_id"], 6);
-    let floor = running_floor(&h, &started.turn_id);
-    assert_eq!(floor["agent_name"], "Reviewer");
-    assert_eq!(floor["participant_id"], 88);
-    assert_eq!(floor["executor"], "cloud");
-    assert_eq!(floor["followed"], true);
-    assert_eq!(settled_done(&h, &started.turn_id)["commit"], "committed");
+    let done = settled_done(&h, &started.turn_id);
+    assert!(done.get("floor_next").is_none(), "{done}");
     assert!(
-        seen(
-            &h.server,
-            &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}")
-        )
-        .is_empty()
+        h.emitter
+            .all()
+            .iter()
+            .all(|event| event.kind != "turn_continued" && event.kind != "error")
     );
 }
 
-/// The lead is a local agent and the composer shows a cloud one: the host
-/// follows to the lead and runs it here, with the workspace.
+/// Under `lead`, Main routes an unaddressed message to the lead. The UI
+/// starts it on the lead; a start on another agent (the lead changed since
+/// the UI read the thread) is refused before any agent runs: the composer's
+/// agent never answers in the lead's place, and nothing is committed.
 #[tokio::test]
-async fn a_local_lead_answers_a_message_sent_from_a_cloud_agents_composer() {
-    let server = serve(main_platform(Later::Started, Routing::Lead(77))).await;
+async fn a_start_main_routes_to_the_lead_runs_no_other_agent() {
+    let server = serve(lead_platform(Later::Started, Some(88))).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
-    let started = h
-        .host
-        .start(TurnRequest {
-            prompt: "Fix the flaky test".into(),
-            application_id: 6,
-            version_id: 10,
-            cloud: true,
-            ..request(&h.workspace_id)
-        })
-        .await
-        .unwrap();
-    assert_eq!(started.execution_id, EXECUTION);
-    until_done_of(&h, &started.turn_id).await;
+    let refused = h.host.start(unaddressed(&h)).await.unwrap_err();
+    assert_eq!(refused.code, "floor_routed_elsewhere");
     let starts = starts_of(&h);
-    assert_eq!(starts.len(), 2, "{starts:?}");
-    assert_eq!(starts[0]["participant_id"], 88);
-    assert_eq!(starts[1]["participant_id"], 77);
-    // Coder ran here; no cloud relay.
-    assert_eq!(seen(&h.server, "/llm/v1/chat/completions").len(), 1);
+    assert_eq!(starts.len(), 1, "{starts:?}");
+    assert!(starts[0].get("addressed_to").is_none());
+    assert!(seen(&h.server, "/llm/v1/chat/completions").is_empty());
     assert!(
         h.server
             .seen()
             .iter()
-            .all(|req| !req.path.contains("/local_child_turn/"))
+            .all(|req| !req.path.contains("/local_turn_commit/"))
     );
-    let floor = running_floor(&h, &started.turn_id);
-    assert_eq!(floor["agent_name"], "Coder");
-    assert_eq!(floor["executor"], "local");
-    assert_eq!(settled_done(&h, &started.turn_id)["commit"], "committed");
 }
 
-/// An address beats the lead: a message naming one agent goes to it, and
-/// the host follows nothing.
+/// The lead answers the message the UI started on it; an address still
+/// beats the lead.
 #[tokio::test]
-async fn an_addressed_message_goes_to_the_addressee_under_a_lead() {
-    let server = serve(main_platform(Later::Started, Routing::Lead(88))).await;
+async fn the_lead_answers_and_an_address_beats_it() {
+    let server = serve(lead_platform(Later::Started, Some(77))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(unaddressed(&h)).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    assert_eq!(settled_done(&h, &started.turn_id)["commit"], "committed");
+
+    let server = serve(lead_platform(Later::Started, Some(88))).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     let started = h
         .host
@@ -505,92 +422,5 @@ async fn an_addressed_message_goes_to_the_addressee_under_a_lead() {
     assert_eq!(starts.len(), 1, "{starts:?}");
     assert_eq!(starts[0]["addressed_to"], json!([77]));
     assert_eq!(seen(&h.server, "/llm/v1/chat/completions").len(), 1);
-    let floor = running_floor(&h, &started.turn_id);
-    assert_eq!(floor["agent_name"], "Coder");
-    assert!(floor.get("followed").is_none());
-}
-
-/// The host follows once, and only to the agent Main answered on: a Main
-/// that routes the followed start elsewhere again is refused, and no agent
-/// runs.
-#[tokio::test]
-async fn a_start_routed_elsewhere_again_is_refused_and_runs_no_agent() {
-    let server = serve(main_platform(Later::Started, Routing::Flip)).await;
-    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
-    let refused = h
-        .host
-        .start(TurnRequest {
-            prompt: "Fix the flaky test".into(),
-            ..request(&h.workspace_id)
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(refused.code, "floor_routed_elsewhere");
-    assert_eq!(starts_of(&h).len(), 2);
-    assert!(seen(&h.server, "/llm/v1/chat/completions").is_empty());
-    assert!(h.server.seen().iter().all(|req| {
-        !req.path.contains("/local_child_turn/") && !req.path.contains("/local_turn_commit/")
-    }));
-}
-
-/// A followed cloud agent takes none of the composer's sticky modes, and
-/// keeps the message's own picks (which its turn then refuses with its
-/// reason).
-#[test]
-fn a_followed_cloud_agent_drops_the_sticky_modes() {
-    let target = super::super::api::FloorTarget {
-        participant_id: 88,
-        application_id: 6,
-        version_id: 10,
-        cloud: true,
-    };
-    let base = TurnRequest {
-        plan_mode: true,
-        bypass: true,
-        mentions: vec!["a.txt".into()],
-        ..request("w")
-    };
-    let followed = super::super::floor::follow(&base, &target);
-    assert_eq!((followed.application_id, followed.version_id), (6, 10));
-    assert!(followed.cloud && !followed.plan_mode && !followed.bypass);
-    assert!(followed.model.is_none() && followed.unattended.is_none());
-    assert_eq!(followed.mentions, vec!["a.txt".to_owned()]);
-    assert_eq!(followed.prompt, base.prompt);
-    // A local agent keeps them.
-    let local = super::super::floor::follow(
-        &base,
-        &super::super::api::FloorTarget {
-            cloud: false,
-            ..target
-        },
-    );
-    assert!(local.plan_mode && local.bypass && !local.cloud);
-}
-
-/// Main opened a "Run to completion" chain for the composer's grant, and the
-/// followed cloud agent runs without it: its commit ends the chain.
-#[test]
-fn a_chain_the_followed_agent_runs_without_ends_with_its_turn() {
-    use super::super::floor::closing_outcome;
-    use super::super::unattended::ChainOutcome;
-    let started = |fields: Value| -> super::super::api::LocalTurnStarted {
-        let mut body = json!({"execution_id": "e", "question_id": "q",
-            "response_message_id": "r", "memory_recall": {"text": ""}});
-        if let (Value::Object(body), Value::Object(fields)) = (&mut body, fields) {
-            body.extend(fields);
-        }
-        serde_json::from_value(body).unwrap()
-    };
-    let chain = started(json!({"unattended": {"grant_id": "g"}}));
-    let request = request("w");
-    assert_eq!(
-        closing_outcome(&request, &chain, false),
-        Some(ChainOutcome::Completed)
-    );
-    assert_eq!(
-        closing_outcome(&request, &chain, true),
-        Some(ChainOutcome::Failed)
-    );
-    // No chain was opened: nothing to close.
-    assert_eq!(closing_outcome(&request, &started(json!({})), false), None);
+    assert_eq!(settled_done(&h, &started.turn_id)["commit"], "committed");
 }

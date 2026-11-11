@@ -169,9 +169,4 @@ export interface TurnFloorStatus {
   participant_id: number;
   agent_name: string;
   executor: AgentExecutor;
-  /**
-   * Main routed the message to another agent than the composer's (under `lead`, an unaddressed message goes to the
-   * lead: ADR-0050 decision 7c, #1917), and the host started the turn as that agent instead.
-   */
-  followed?: true;
 }

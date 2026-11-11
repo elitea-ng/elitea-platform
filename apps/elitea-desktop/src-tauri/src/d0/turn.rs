@@ -616,12 +616,9 @@ async fn start_turn(
     if let Some(unattended) = &request.unattended {
         body["unattended"] = unattended.wire();
     }
-    // Only the agents the person named address the message (ADR-0050
-    // decision 7c): the composer's agent is the sticky target, never an
-    // address, so a lead conversation routes an unaddressed message to its
-    // lead (#1917).
-    if !request.addressed_to.is_empty() {
-        body["addressed_to"] = json!(request.addressed_to);
+    let addressed = floor::addressed(request);
+    if !addressed.is_empty() {
+        body["addressed_to"] = json!(addressed);
     }
     if let Some(turn) = &request.floor_turn {
         body["floor_turn"] = json!({ "question_id": turn.question_id, "position": turn.position });
@@ -661,10 +658,30 @@ async fn project_skills(
 }
 
 /// The turn runs what Main started (ADR-0050 decision 7f): the participant
-/// the host resolved, where Main says it runs. A start Main routed to
-/// another agent never gets here: the host follows it first
-/// ([`floor::follow`]), and refuses it when it cannot.
-fn check_executor(request: &TurnRequest, started: &LocalTurnStarted) -> Result<(), TurnError> {
+/// the host resolved, where Main says it runs. The UI starts a message on
+/// the agent Main routes it to (the first addressee, else the thread's lead,
+/// else the composer's agent, ADR-0050 decision 7c); a start Main routes to
+/// another agent anyway (the lead changed since the UI read the thread) is
+/// refused here, before any agent runs, and the UI reads the thread again
+/// and sends the message to the routed agent. Never an agent Main did not
+/// route to.
+fn check_routed(
+    request: &TurnRequest,
+    answering: &AnsweringParticipant,
+    started: &LocalTurnStarted,
+) -> Result<(), TurnError> {
+    let routed = started
+        .floor
+        .as_ref()
+        .and_then(|floor| floor.targets.get(floor.position).copied());
+    if let Some(routed) = routed
+        && routed != answering.id
+    {
+        return Err(TurnError::new(
+            "floor_routed_elsewhere",
+            "This message goes to another agent of the thread (its lead, or an agent it names) first. Send it again, or address the agents you want.",
+        ));
+    }
     if started.runs_in_cloud() != request.cloud {
         return Err(TurnError::new(
             "agent_executor_changed",
@@ -2206,10 +2223,8 @@ impl AgentHost {
         let tap = TurnTap::new(self.deps.emitter.clone(), self.deps.history.clone());
         let events = Arc::new(TurnEvents::new(turn_id.clone(), tap.clone()));
         events.status(Phase::Resolving, None);
-        match self.prepare_routed(&request, &events, &tap).await {
-            Ok((prepared, routed)) => {
-                // The turn runs as the agent Main routed the message to.
-                let request = routed;
+        match self.prepare(&request, &events, tap.clone()).await {
+            Ok(prepared) => {
                 // The turn carries the images now; a refused start kept
                 // them, so the person can fix the refusal and send again.
                 self.attachments.consume(&prepared.images);
@@ -2579,71 +2594,12 @@ impl AgentHost {
         })
     }
 
-    /// [`Self::prepare`], following Main's route (ADR-0050 decision 7c,
-    /// #1917): a start Main routed to another agent of the thread is started
-    /// again, on the same question, as that agent ([`floor::follow`]). The
-    /// request answered is the one the turn runs.
-    async fn prepare_routed(
-        &self,
-        request: &TurnRequest,
-        events: &Arc<TurnEvents>,
-        tap: &Arc<TurnTap>,
-    ) -> Result<(Prepared, TurnRequest), TurnError> {
-        let route = match self.prepare(request, events, tap.clone(), None).await? {
-            Prepare::Ready(prepared) => return Ok((*prepared, request.clone())),
-            Prepare::Routed(route) => route,
-        };
-        let followed = self.follow_route(request, &route).await?;
-        log::info!("a message goes to the agent Main routed it to");
-        // A new turn of the routed agent cancels its idle compaction too.
-        if let Ok(conversation) = conversation_key(&followed.conversation_id) {
-            self.idle.turn_started(&AgentKey {
-                thread: ThreadKey {
-                    workspace_id: followed.workspace_id.clone(),
-                    conversation,
-                },
-                application_id: followed.application_id,
-            });
-        }
-        match self
-            .prepare(&followed, events, tap.clone(), Some(route.question_id))
-            .await?
-        {
-            Prepare::Ready(prepared) => Ok((*prepared, followed)),
-            // Followed once: never a second agent Main did not route to.
-            Prepare::Routed(_) => Err(floor::not_followed()),
-        }
-    }
-
-    /// The request of the agent Main routed the message to: its agent and
-    /// version read from the conversation (the participant Main named).
-    async fn follow_route(
-        &self,
-        request: &TurnRequest,
-        route: &Route,
-    ) -> Result<TurnRequest, TurnError> {
-        let pinned = PinnedCredentials::current(self.deps.credentials.clone())?;
-        let api = self.api.with_credentials(Arc::new(pinned));
-        let target = api
-            .floor_target(
-                request.project_id,
-                &route.conversation_uuid,
-                route.participant_id,
-            )
-            .await?;
-        Ok(floor::follow(request, &target))
-    }
-
-    /// `question`: the question of a start Main routed to this request's
-    /// agent ([`Self::prepare_routed`]); the start replays it.
     async fn prepare(
         &self,
         request: &TurnRequest,
         events: &Arc<TurnEvents>,
         tap: Arc<TurnTap>,
-        question: Option<String>,
-    ) -> Result<Prepare, TurnError> {
-        let followed = question.is_some();
+    ) -> Result<Prepared, TurnError> {
         let conversation = conversation_key(&request.conversation_id)?;
         check_project_id(request.project_id)?;
         if request.prompt.trim().is_empty() {
@@ -2852,7 +2808,7 @@ impl AgentHost {
         )?;
         events.status(Phase::Starting, None);
         let starting = std::time::Instant::now();
-        let mut question_id = question.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let mut question_id = uuid::Uuid::new_v4().to_string();
         // A cached version's revalidation runs beside the start: a 304 costs
         // the turn nothing, and whatever it answers is acted on before the
         // model's first request.
@@ -2954,22 +2910,6 @@ impl AgentHost {
                     ));
                 }
             };
-        // Main routed the message to another agent of the thread (under
-        // `lead`, an unaddressed message goes to the lead, ADR-0050 decision
-        // 7c): the host follows it, once, on the same question
-        // ([`Self::prepare_routed`]). The claim and the session are let go
-        // here. A later agent's turn, or a start already followed, is never
-        // run as an agent Main did not route to.
-        if let Some(routed) = floor::routed_elsewhere(&answering, &started) {
-            if followed || request.floor_turn.is_some() {
-                return Err(floor::not_followed());
-            }
-            return Ok(Prepare::Routed(Route {
-                question_id,
-                participant_id: routed,
-                conversation_uuid: answering.conversation_uuid,
-            }));
-        }
         // The freshest definition is admitted before the model is asked: a
         // changed one again, and a refused (or unreadable) one stops the turn
         // here. Its execution expires, as an abandoned run's does.
@@ -2996,10 +2936,11 @@ impl AgentHost {
             }
         };
         events.timed(Timed::Starting, starting.elapsed());
-        // Main runs the agent it named, where Main says it runs (ADR-0050
-        // decision 7f); a start on another executor is refused here, and
-        // its execution expires.
-        check_executor(request, &started)?;
+        // Main routed the message (ADR-0050 decision 7f): the turn runs the
+        // agent Main named, where Main says it runs. A start that answers
+        // another agent than the one the host resolved, or another
+        // executor, is refused here; its execution expires.
+        check_routed(request, &answering, &started)?;
         memory.retag(&started.execution_id);
         let (admitted, models) = self
             .thread_model(request, &api, events, admitted, &memory, models)
@@ -3007,8 +2948,7 @@ impl AgentHost {
         // The model the turn runs on is final: it sees images or it does
         // not, and `read_file` follows.
         check_vision(&images, &admitted, models.as_deref())?;
-        Ok(Prepare::Ready(Box::new(Prepared {
-            followed,
+        Ok(Prepared {
             images,
             conversation,
             conversation_uuid: answering.conversation_uuid,
@@ -3032,7 +2972,7 @@ impl AgentHost {
             ),
             mentioned: checked,
             models,
-        })))
+        })
     }
 
     async fn run(
@@ -3043,7 +2983,6 @@ impl AgentHost {
         awake: AwakeGuard,
     ) {
         let Prepared {
-            followed,
             conversation,
             conversation_uuid,
             tap,
@@ -3147,7 +3086,7 @@ impl AgentHost {
             ));
         }
 
-        if let Some(fields) = floor::status(&started, followed) {
+        if let Some(fields) = floor::status(&started) {
             events.unattended(&fields);
         }
 
@@ -3416,9 +3355,6 @@ impl AgentHost {
             context_summary: turn_context.take_summary(),
             chain_outcome: None,
         };
-        // A chain Main opened for the message that the followed agent runs
-        // without (a cloud agent takes no grant) ends with this turn.
-        let closing = floor::closing_outcome(&request, &started, failure.is_some());
         // The workspace stays held by the commit (below) until it settles:
         // a handoff, restore or removal is refused until the last turn is
         // saved (or its commit failed), and the next turn waits for it.
@@ -3557,7 +3493,7 @@ impl AgentHost {
                 let body = CommitBody {
                     chain_outcome: match chain_step {
                         Some(ChainStep::End(outcome)) => Some(outcome),
-                        _ => closing,
+                        _ => None,
                     },
                     ..commit_body
                 }
@@ -6392,26 +6328,7 @@ struct CommandTurn {
     mentions: Vec<String>,
 }
 
-/// What [`AgentHost::prepare`] answers: a turn ready to run, or a start Main
-/// routed to another agent of the thread, for the host to follow.
-enum Prepare {
-    Ready(Box<Prepared>),
-    Routed(Route),
-}
-
-/// A start Main routed to another agent than the one the host resolved.
-struct Route {
-    /// The start's question: the followed start replays it.
-    question_id: String,
-    /// The agent Main routed the message to (the floor's target).
-    participant_id: i64,
-    conversation_uuid: String,
-}
-
 struct Prepared {
-    /// The host followed Main to another agent than the request's
-    /// ([`floor::follow`]).
-    followed: bool,
     /// The conversation as the UI named it (its id or UUID).
     conversation: String,
     /// Its canonical UUID, from the platform.

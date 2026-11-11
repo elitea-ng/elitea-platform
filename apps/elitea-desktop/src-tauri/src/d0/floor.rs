@@ -32,18 +32,15 @@
 //!
 //! A COMPOSER PICK IS NOT AN ADDRESS (ADR-0050 decision 7c, #1804, #1917).
 //! Main counts only `addressed_to` as addressing: the agents the message
-//! names ("@Name", "#Name"). A message that names no agent goes out with no
-//! `addressed_to`, on the composer's agent as the sticky target, and Main
-//! routes it: under `lead` the lead answers, whichever agent the composer
-//! shows. When Main routes a message to another agent than the one the host
-//! resolved, the host FOLLOWS ([`follow`]): it starts the same message again
-//! (the same `question_id`, so Main replays the execution it opened for the
-//! routed agent) as that agent, read from the conversation, and the turn
-//! runs as it. Its `status` `running` names the agent (`floor.followed`).
-//! The host follows once, and only to the agent Main named: a start Main
-//! routes elsewhere again, or a later agent's turn routed elsewhere, is
-//! refused (`floor_routed_elsewhere`), so no agent Main did not route to
-//! ever runs.
+//! names ("@Name", "#Name"). The host sends the person's addressees as they
+//! are and never adds the composer's agent to them: the start's
+//! `participant_id` is the sticky target, and under `lead` Main routes an
+//! unaddressed message to the lead. The UI starts the turn on the agent Main
+//! will route it to (the first addressee, else the lead, else the composer's
+//! agent); a start Main routes to another agent anyway (the lead changed
+//! since the UI read it) is refused with `floor_routed_elsewhere`, before
+//! any agent runs, and the UI reads the thread again and sends it to the
+//! routed agent. The host never runs an agent Main did not route to.
 //!
 //! The agent-to-agent hand-off (`hand_floor`) stays with the cloud for now.
 
@@ -122,68 +119,13 @@ pub fn check_request(request: &TurnRequest) -> Result<(), TurnError> {
     Ok(())
 }
 
-/// The request a followed start runs (ADR-0050 decision 7c, #1917): the same
-/// message, on the agent Main routed it to (`target`). A cloud agent takes
-/// none of the composer's sticky modes (plan mode, bypass, a model choice, a
-/// "Run to completion" grant), as the web's `routedRequest` drops them; what
-/// the person attached to the message (files, images, skills, a command)
-/// stays, and a cloud agent's turn refuses it with its reason.
+/// The `addressed_to` a start sends: only the agents the person addressed
+/// (ADR-0050 decision 7c). A message that names no agent sends none, so a
+/// lead conversation routes it to its lead; a later agent's turn sends none
+/// (it is the message's, `check_request`).
 #[must_use]
-pub fn follow(request: &TurnRequest, target: &super::api::FloorTarget) -> TurnRequest {
-    let mut next = TurnRequest {
-        application_id: target.application_id,
-        version_id: target.version_id,
-        cloud: target.cloud,
-        ..request.clone()
-    };
-    if target.cloud {
-        next.plan_mode = false;
-        next.bypass = false;
-        next.model = None;
-        next.unattended = None;
-    }
-    next
-}
-
-/// The participant Main routed a start to, when it is not the one the host
-/// resolved (`answering`); `None` when Main answered on it.
-#[must_use]
-pub fn routed_elsewhere(
-    answering: &super::api::AnsweringParticipant,
-    started: &super::api::LocalTurnStarted,
-) -> Option<i64> {
-    let floor = started.floor.as_ref()?;
-    let routed = floor.targets.get(floor.position).copied()?;
-    (routed != answering.id).then_some(routed)
-}
-
-/// The refusal of a start Main routed elsewhere that the host does not
-/// follow: a start already followed once, or a later agent's turn.
-#[must_use]
-pub fn not_followed() -> TurnError {
-    TurnError::new(
-        "floor_routed_elsewhere",
-        "This message goes to another agent of the thread, and the app could not hand it over. Send it again, or address the agents you want.",
-    )
-}
-
-/// The chain outcome the commit of a followed CLOUD agent's turn carries
-/// when Main opened a "Run to completion" chain at the message's first start
-/// (the composer's agent sent the grant) and the cloud agent runs without it
-/// ([`follow`]): the chain ends with this turn, rather than staying open for
-/// Main's sweep to end as failed.
-#[must_use]
-pub fn closing_outcome(
-    request: &TurnRequest,
-    started: &super::api::LocalTurnStarted,
-    failed: bool,
-) -> Option<super::unattended::ChainOutcome> {
-    use super::unattended::ChainOutcome;
-    (request.unattended.is_none() && started.unattended.is_some()).then_some(if failed {
-        ChainOutcome::Failed
-    } else {
-        ChainOutcome::Completed
-    })
+pub fn addressed(request: &TurnRequest) -> &[i64] {
+    &request.addressed_to
 }
 
 /// The name a conversation participant goes by in a relayed transcript.
@@ -332,62 +274,25 @@ pub fn stopped(events: &super::events::TurnEvents, code: &str, message: &str) {
 }
 
 /// The `floor` fields of a turn's `status` `running`: which agent of the
-/// message answers, and where it runs; `followed` when the host followed
-/// Main to another agent than the composer's ([`follow`]).
+/// message answers, and where it runs.
 #[must_use]
-pub fn status(started: &super::api::LocalTurnStarted, followed: bool) -> Option<Value> {
+pub fn status(started: &super::api::LocalTurnStarted) -> Option<Value> {
     let floor = started.floor.as_ref()?;
     let participant = floor.targets.get(floor.position).copied()?;
-    let mut fields = json!({
-        "position": floor.position,
-        "targets": floor.targets.len(),
-        "participant_id": participant,
-        "agent_name": floor.name_of(participant),
-        "executor": if started.runs_in_cloud() { "cloud" } else { "local" },
-    });
-    if followed {
-        fields["followed"] = json!(true);
-    }
-    Some(json!({ "floor": fields }))
+    Some(json!({
+        "floor": {
+            "position": floor.position,
+            "targets": floor.targets.len(),
+            "participant_id": participant,
+            "agent_name": floor.name_of(participant),
+            "executor": if started.runs_in_cloud() { "cloud" } else { "local" },
+        }
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A start's answer, with `fields` (`floor`, `unattended`) added.
-    fn started(fields: Value) -> super::super::api::LocalTurnStarted {
-        let mut body = json!({
-            "execution_id": "e", "question_id": "q", "response_message_id": "r",
-            "memory_recall": {"text": ""},
-        });
-        if let (Value::Object(body), Value::Object(fields)) = (&mut body, fields) {
-            body.extend(fields);
-        }
-        serde_json::from_value(body).unwrap()
-    }
-
-    fn answering(id: i64) -> super::super::api::AnsweringParticipant {
-        super::super::api::AnsweringParticipant {
-            id,
-            application_id: 5,
-            conversation_uuid: "u".into(),
-            numeric_id: None,
-            message_count: None,
-            agents: 2,
-            cloud: false,
-            answer_only: false,
-        }
-    }
-
-    #[test]
-    fn a_start_routed_to_another_agent_names_it() {
-        let lead = started(json!({"floor": {"question_id": "q", "position": 0, "targets": [88]}}));
-        assert_eq!(routed_elsewhere(&answering(77), &lead), Some(88));
-        assert_eq!(routed_elsewhere(&answering(88), &lead), None);
-        // No floor (a thread of one agent): nothing to follow.
-        assert_eq!(routed_elsewhere(&answering(77), &started(json!({}))), None);
-    }
 
     #[test]
     fn a_cloud_agent_gets_the_conversation_text_under_each_authors_name() {

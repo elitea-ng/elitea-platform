@@ -404,6 +404,20 @@ describe('sub-agents (#1226)', () => {
     expect(replayView([...events, finished(5, 'a_1', 'cancelled')]).subAgents?.[0]?.result).toBeUndefined();
   });
 
+  it('keeps the spawn profile a local start names (#1827, #1910)', () => {
+    const named: AgentEvent = {
+      turn_id: T,
+      seq: 2,
+      kind: 'subagent_started',
+      payload: { agent_id: 'a_1', parent_call_id: 'c1', ordinal: 1, label: 'audit', display_name: 'Reviewer', avatar: 'default:owl', brief_digest: 'sha256:x' },
+    };
+    const [lane] = activeView(run([spawn(1, 'c1'), named])).subAgents ?? [];
+    expect(lane).toMatchObject({ label: 'audit', displayName: 'Reviewer', avatar: 'default:owl' });
+    const [plain] = activeView(run([spawn(1, 'c1'), started(2, 'a_1', 'c1', 1)])).subAgents ?? [];
+    expect(plain).not.toHaveProperty('displayName');
+    expect(plain).not.toHaveProperty('avatar');
+  });
+
   it('ignores an event for a child whose start it never heard, and a repeated start', () => {
     const view = activeView(run([inner(1, 'a_9', { kind: 'text_delta', text: 'x' }), finished(2, 'a_9', 'completed'), spawn(3, 'c1'), started(4, 'a_1', 'c1', 1), started(5, 'a_1', 'c1', 1)]));
     expect(view.subAgents?.map((lane) => lane.agentId)).toEqual(['a_1']);
@@ -600,7 +614,7 @@ describe('several agents in a thread (ADR-0050 decision 7f)', () => {
     const state = run([running(T, 0, 'Coder', 'local'), done, continued, running(NEXT, 1, 'Reviewer', 'cloud')]);
     expect(state.activeTurnId).toBe(NEXT);
     const first = earlierViews(state)[0]?.view;
-    expect(first?.agent).toEqual({ name: 'Coder', participantId: 77, executor: 'local', position: 0, targets: 2, followed: false });
+    expect(first?.agent).toEqual({ name: 'Coder', participantId: 77, executor: 'local', position: 0, targets: 2 });
     expect(first?.continuedTo).toEqual({ nextTurnId: NEXT, index: 1, kind: 'floor', agentName: 'Reviewer', executor: 'cloud' });
     expect(activeView(state).agent?.executor).toBe('cloud');
     // A later agent's turn is no chain continuation: no "Continued automatically" marker.
@@ -615,18 +629,5 @@ describe('several agents in a thread (ADR-0050 decision 7f)', () => {
     expect(view.floorStopped).toEqual({ code: 'floor_turn_superseded', message: 'A newer message superseded this one.' });
     expect(waitsForNextTurn(view)).toBe(false);
     expect(waitsForNextTurn(waiting)).toBe(true);
-  });
-
-  it('says when the thread routed an unaddressed message to its lead rather than the composer’s agent (ADR-0050 decision 7c, #1917)', () => {
-    const lead: AgentEvent = {
-      turn_id: T,
-      seq: 1,
-      kind: 'status',
-      payload: { phase: 'running', floor: { position: 0, targets: 1, participant_id: 88, agent_name: 'Reviewer', executor: 'cloud', followed: true } },
-    };
-    const view = activeView(run([lead]));
-    expect(view.agent).toEqual({ name: 'Reviewer', participantId: 88, executor: 'cloud', position: 0, targets: 1, followed: true });
-    // The host started it as the routed agent: it answers the person's own message, no continuation.
-    expect(view.continuation).toBeUndefined();
   });
 });

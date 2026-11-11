@@ -849,22 +849,19 @@ answers the order (`floor: {question_id, position, targets, agents:
 Under `lead`, Main routes an unaddressed message to the lead, whichever
 agent the composer shows.
 
-- **Following Main's route** (#1917). When Main answers on another agent
-  than the composer's (`floor.targets[floor.position]` is not the start's
-  `participant_id`), the host follows it: it reads that agent's application
-  and version from the conversation, starts the same message again with
-  the same `question_id` as that agent (Main replays the execution it
-  opened for it), and runs the turn as it, locally or in the cloud as its
-  mapping says. A followed cloud agent takes none of the composer's sticky
-  modes (plan mode, bypass, model choice, "Run to completion" grant); a
-  chain Main opened for the grant ends with that turn's commit
-  (`chain_outcome`). The turn's `status` `running` names the agent with
-  `floor.followed: true`; `agent_turn_start` answers the followed turn's
-  `turn_id` and `execution_id`. The host follows once, and only to the agent
-  Main named: a start Main routes elsewhere again, or a later agent's turn
-  (`floor_turn`) routed elsewhere, is refused with `floor_routed_elsewhere`
-  and no agent runs. A start whose agent runs elsewhere than `cloud_agent`
-  said is refused with `agent_executor_changed`.
+- **The UI starts the message on the routed agent** (#1917). The UI reads
+  the thread (its agents and `meta.floor`) and starts a message on the
+  agent Main will route it to, with that agent's `application_id`,
+  `version_id` and `cloud_agent`: the first agent the message names, else
+  the thread's lead (`meta.floor.policy: lead`), else the composer's agent.
+  A cloud lead's turn takes none of the composer's sticky modes (plan mode,
+  bypass, model choice, "Run to completion" grant). The host refuses, before
+  any agent runs, a start Main routed to another agent anyway (the lead
+  changed after the UI read the thread): `floor_routed_elsewhere`. The UI
+  then reads the thread again and sends the message once more, on the agent
+  it now routes to. The host never runs an agent Main did not route to. A
+  start whose agent runs elsewhere than `cloud_agent` said is refused with
+  `agent_executor_changed`.
 
 - **The order.** When the message has a next agent, the turn's `done`
   carries `continuing: true` and `floor_next {participant_id, agent_name,
@@ -877,10 +874,8 @@ agent the composer shows.
   `floor_turn_refused`; or the commit did not land, `commit_failed`), the
   finished turn sends `floor_stopped {code, message}` instead. A turn's
   `status` `running` carries `floor {position, targets, participant_id,
-  agent_name, executor, followed?}` (`followed: true` on a turn the host
-  started as the agent Main routed the message to, see above). A later
-  agent's turn is never unattended; an unattended turn's chain does not
-  follow the floor.
+  agent_name, executor}`. A later agent's turn is never unattended; an
+  unattended turn's chain does not follow the floor.
 - **Local and cloud agents.** An agent participant runs where its mapping
   says (`entity_settings.executor`). `local` (the default) runs here, with
   the workspace and its `AGENTS.md` and `SOUL.md`. `cloud` (`cloud_agent:

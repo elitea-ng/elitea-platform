@@ -24,10 +24,34 @@ const REVIEWER = { id: '6', name: 'Reviewer', description: '', versions: [{ id: 
 
 const json = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
+/** The thread's lead (`setLead`): its participant id, 0 for none. */
+let LEAD = 0;
+
+/**
+ * The conversation the sends created (77), once it has a lead: its two agents and `meta.floor` (ADR-0050 decision 8:
+ * a saved team's thread has a lead).
+ */
+function ledThread(): unknown {
+  const agent = (id: number, application: number, name: string, version: number, cloud: boolean) => ({
+    id,
+    entity_name: 'application',
+    entity_meta: { id: application, name, project_id: 42 },
+    entity_settings: { version_id: version, ...(cloud ? { executor: 'cloud' } : {}) },
+  });
+  return {
+    id: 77,
+    uuid: 'c0ffee00-0000-4000-8000-000000000077',
+    name: 'fix the flaky test',
+    meta: { floor: { policy: 'lead', lead_participant_id: LEAD } },
+    participants: [{ id: 7, entity_name: 'user', entity_meta: { id: 3 } }, agent(77, 5, 'Coder', 9, false), agent(88, 6, 'Reviewer', 10, true)],
+  };
+}
+
 /** The API answers several agents in a thread need; `undefined`: the harness's own table answers. */
 export function floorAnswer(method: string, path: string, body: unknown): Response | undefined {
   if (method === 'POST' && /\/elitea_core\/participants\//.test(path)) return json(addedParticipants(body));
   if (method === 'GET' && path.endsWith('/elitea_core/application/prompt_lib/42/6')) return json(REVIEWER);
+  if (LEAD > 0 && method === 'GET' && path.endsWith('/elitea_core/conversation/prompt_lib/42/77')) return json(ledThread());
   return undefined;
 }
 
@@ -68,43 +92,13 @@ function playFloor(emit: (event: AgentEvent) => void, first: string): void {
   emit({ ...b(4), kind: 'status', payload: { phase: 'done' } });
 }
 
-const AGENT_NAMES: Record<number, { name: string; executor: 'local' | 'cloud' }> = { 77: { name: 'Coder', executor: 'local' }, 88: { name: 'Reviewer', executor: 'cloud' } };
-
-/**
- * A message of a thread whose lead is `lead` (`meta.floor.policy: lead`), as Main routes it and the host follows it
- * (ADR-0050 decision 7c, #1917): `addressed` (the start's `addressed_to`) answers on the first agent it names; an
- * unaddressed message goes to the lead, which the host starts in place of the composer's agent (`floor.followed`).
- */
-function playRouted(emit: (event: AgentEvent) => void, turn: string, addressed: readonly number[], composer: number, lead: number): void {
-  const participant = addressed[0] ?? lead;
-  const agent = AGENT_NAMES[participant] ?? { name: 'Agent', executor: 'local' as const };
-  const followed = addressed.length === 0 && participant !== composer;
-  const at = (seq: number) => ({ turn_id: turn, seq });
-  const floor = { position: 0, targets: Math.max(1, addressed.length), participant_id: participant, agent_name: agent.name, executor: agent.executor, ...(followed ? { followed: true as const } : {}) };
-  emit({ ...at(1), kind: 'status', payload: { phase: 'running', floor } });
-  emit({ ...at(2), kind: 'text_delta', payload: { text: `${agent.name} here: on it.` } });
-  emit({ ...at(3), kind: 'done', payload: { committed: false, conversation_id: '77', message_ids: [], changed_files: 0 } });
-  emit({ ...at(4), kind: 'status', payload: { phase: 'done' } });
-}
-
-/** The participant id of the composer's agent of a start (Coder 77, Reviewer 88). */
-const composerOf = (applicationId: unknown): number => (applicationId === 6 ? 88 : 77);
-
-/**
- * What `__harness` gains: the adds' bodies, `playFloor()` on the next turn id, and `playRouted(lead)` (the last start,
- * routed in a thread whose lead is the participant `lead`).
- */
-export function floorHarness(
-  emit: (event: AgentEvent) => void,
-  turnId: () => string,
-  lastStart: () => { addressed_to?: number[] | undefined; application_id: number } | undefined,
-): { participantPosts: AddedRow[][]; playFloor: () => void; playRouted: (lead: number) => void } {
+/** What `__harness` gains: the adds' bodies, `playFloor()` on the next turn id, and `setLead(id)` (the thread's lead from now on). */
+export function floorHarness(emit: (event: AgentEvent) => void, turnId: () => string): { participantPosts: AddedRow[][]; playFloor: () => void; setLead: (participantId: number) => void } {
   return {
     participantPosts: PARTICIPANT_POSTS,
     playFloor: () => playFloor(emit, turnId()),
-    playRouted: (lead) => {
-      const start = lastStart();
-      playRouted(emit, turnId(), start?.addressed_to ?? [], composerOf(start?.application_id), lead);
+    setLead: (participantId) => {
+      LEAD = participantId;
     },
   };
 }

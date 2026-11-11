@@ -304,7 +304,7 @@ export function mountDesktopHarness(container: HTMLElement): void {
     indexIpc,
     handoffIpc,
     compaction,
-    ...floorHarness((event) => ipc.emit(event), turnId, () => ipc.calls.started.at(-1)),
+    ...floorHarness((event) => ipc.emit(event), turnId),
     /** The host summarized a thread in the background while it was idle. */
     compactIdle: (workspaceId = 'w1', conversationId = '71') =>
       compaction.compact({ workspace_id: workspaceId, conversation_id: conversationId, reason: 'idle', before_tokens: 120_000, after_tokens: 24_000 }),
