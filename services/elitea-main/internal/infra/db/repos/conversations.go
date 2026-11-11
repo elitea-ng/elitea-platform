@@ -2083,6 +2083,13 @@ func (r *ConversationsRepo) GetMessageByUUID(ctx context.Context, projectID, mes
 
 	var meta map[string]any
 	_ = json.Unmarshal(metaBytes, &meta) // best-effort: DB column is trusted JSON
+	// issue 1923: this answer's sub-agent lanes are rows of their own
+	// (chat_message_subagent_lanes), folded onto meta.subagents_v1 here.
+	if lanesByGroup, err := subAgentLanesByGroup(ctx, r.pool, s, []int{groupID}); err != nil {
+		return nil, err
+	} else {
+		applySubAgentLanes(&meta, lanesByGroup[groupID])
+	}
 
 	// Get message items with their content, ordered
 	qi := fmt.Sprintf(`SELECT mi.id, mi.uuid::text, mi.item_type, mi.order_index, mi.meta,
@@ -3105,6 +3112,20 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 
 	if len(groupIDs) == 0 {
 		return []map[string]any{}, nil
+	}
+
+	// issue 1923: each answer's sub-agent lanes are rows of their own
+	// (chat_message_subagent_lanes), folded onto meta.subagents_v1 here so
+	// this route reads the same shape ListMessages and GetMessageByUUID do.
+	lanesByGroup, err := subAgentLanesByGroup(ctx, r.pool, s, groupIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i, group := range groups {
+		if metaObj, ok := group["meta"].(map[string]any); ok {
+			applySubAgentLanes(&metaObj, lanesByGroup[groupIDs[i]])
+			groups[i]["meta"] = metaObj
+		}
 	}
 
 	// Fetch message_items with their payload for all groups.

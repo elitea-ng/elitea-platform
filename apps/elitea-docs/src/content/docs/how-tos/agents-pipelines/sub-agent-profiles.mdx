@@ -137,7 +137,7 @@ The lane is a summary, not a transcript:
 
 If the run ends while a sub-agent still runs, the sub-agent's row shows **Stopped**.
 
-The web app, the desktop app and the mobile app show the lane. The mobile app shows each sub-agent's tool calls and its final answer in the answer's tool card, under the sub-agent's name and **temporary**.
+The web app, the desktop app and the mobile app show the lane. At **Sub-Agent Depth** 2, a grandchild's lane shows nested under its parent's own lane on the web and desktop apps. The mobile app has no nested view: each sub-agent's tool calls and its final answer show in the answer's tool card, under the sub-agent's name and **temporary**, a grandchild's steps following its parent's under both names.
 
 A local turn's sub-agents in the desktop app have the same lane, with the profile's display name and, when the profile names an avatar, an avatar. They have no **Temporary** badge or dashed avatar ring: they run on your computer, not as cloud participants. The lane in the chat answer and the lane in the desktop transcript are the same control, so both show the steps and tokens of a sub-agent that has ended.
 

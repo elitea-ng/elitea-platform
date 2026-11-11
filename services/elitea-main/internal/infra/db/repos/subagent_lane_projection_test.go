@@ -124,3 +124,52 @@ func TestDecodeSubAgentLanesReadsGarbageAsNone(t *testing.T) {
 		}
 	}
 }
+
+// TestDecodeAnswerSubAgentLanesNestsGrandchildren (#1872): a depth-2 lane
+// whose parent_agent_id names a depth-1 lane of the same answer is folded
+// under that lane's Children, in ordinal order, and dropped from the
+// top-level list; a depth-2 lane whose named parent is not among the rows
+// (never happens in practice — the worker always starts the parent first —
+// but a malformed or partial write must not lose it) stays at the top level
+// rather than vanishing.
+func TestDecodeAnswerSubAgentLanesNestsGrandchildren(t *testing.T) {
+	marshal := func(lane subAgentLane) []byte {
+		raw, err := json.Marshal(lane)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	rows := [][]byte{
+		marshal(subAgentLane{AgentID: "a_1", Ordinal: 1, Depth: 1, Status: "completed"}),
+		marshal(subAgentLane{AgentID: "a_3", Ordinal: 3, Depth: 2, ParentAgentID: "a_1", Status: "completed"}),
+		marshal(subAgentLane{AgentID: "a_2", Ordinal: 2, Depth: 2, ParentAgentID: "a_1", Status: "running"}),
+		// Depth 2, named parent absent among these rows: kept at the top
+		// level rather than dropped.
+		marshal(subAgentLane{AgentID: "a_orphan", Ordinal: 4, Depth: 2, ParentAgentID: "a_missing", Status: "running"}),
+	}
+	out := decodeAnswerSubAgentLanes(rows)
+	if len(out) != 2 {
+		t.Fatalf("top-level lanes = %+v", out)
+	}
+	if out[0].AgentID != "a_1" || len(out[0].Children) != 2 {
+		t.Fatalf("a_1 = %+v", out[0])
+	}
+	if out[0].Children[0].AgentID != "a_2" || out[0].Children[1].AgentID != "a_3" {
+		t.Fatalf("children order = %+v", out[0].Children)
+	}
+	if out[1].AgentID != "a_orphan" {
+		t.Fatalf("orphaned depth-2 lane dropped: %+v", out)
+	}
+}
+
+// TestDecodeAnswerSubAgentLanesReadsALegacyRow: a row written by the old
+// whole-array projection (a value this read path never produces itself, but
+// may still meet on a row carried over by a migration or a hand-written
+// fixture) decodes as one lane, not none.
+func TestDecodeAnswerSubAgentLanesReadsALegacyRow(t *testing.T) {
+	out := decodeAnswerSubAgentLanes([][]byte{[]byte(`{"agent_id":"a_1","ordinal":1,"status":"completed","items":[]}`)})
+	if len(out) != 1 || out[0].AgentID != "a_1" {
+		t.Fatalf("out = %+v", out)
+	}
+}

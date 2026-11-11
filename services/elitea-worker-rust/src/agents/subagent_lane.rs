@@ -67,7 +67,16 @@ impl SubAgentLane {
             "agent_id": child.agent_id,
             "parent_call_id": child.parent_call_id,
             "ordinal": child.ordinal,
+            // 1 for a child of the run's agent, 2 for a grandchild
+            // (#1824, #1872): Main nests a depth-2 lane under its parent's.
+            "depth": child.depth,
         });
+        put_text(
+            &mut entry,
+            "parent_agent_id",
+            child.parent_agent_id.as_deref(),
+            MAX_NAME_CHARS,
+        );
         put_text(&mut entry, "label", child.label.as_deref(), MAX_NAME_CHARS);
         put_text(
             &mut entry,
