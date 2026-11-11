@@ -16,7 +16,6 @@ import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
-import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
@@ -24,9 +23,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import StarIcon from '@mui/icons-material/Star';
 import StarBorderIcon from '@mui/icons-material/StarBorder';
 
-import { useListApplications } from '@/shared/api/generated/applications/applications';
 import type { AgentTeam, Application } from '@/shared/api/generated/model';
-import { unwrapList } from '@/shared/api/unwrap';
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
@@ -36,8 +34,6 @@ import {
   defaultVersionOf,
   draftOf,
   draftProblem,
-  hasMember,
-  teamErrorMessage,
   withMember,
   withoutMember,
   writeOf,
@@ -45,6 +41,7 @@ import {
   type TeamDraftProblem,
 } from '../lib/teamDraft';
 import { useAgentTeamWrites } from '../model/useAgentTeams';
+import { TeamAgentPicker } from './TeamAgentPicker';
 
 export interface TeamEditDialogProps {
   readonly projectId: string;
@@ -92,7 +89,7 @@ function TeamEditForm({ projectId, team, onClose, onSaved }: Omit<TeamEditDialog
         onSaved?.(saved);
         onClose();
       },
-      onError: (cause: unknown) => setError(teamErrorMessage(cause, t('features.agentTeams.edit.failed', 'The team was not saved. Try again.'))),
+      onError: (cause: unknown) => setError(serverErrorMessage(cause, t('features.agentTeams.edit.failed', 'The team was not saved. Try again.'))),
     };
     if (team === undefined) create.mutate(body, handlers);
     else update.mutate({ teamId: team.id, team: body }, handlers);
@@ -112,7 +109,7 @@ function TeamEditForm({ projectId, team, onClose, onSaved }: Omit<TeamEditDialog
         }
         setDraft((current) => withMember(current, { application_id: applicationId, project_id: memberProject, version_id: versionId, name: agent.name }));
       })
-      .catch((cause: unknown) => setError(teamErrorMessage(cause, t('features.agentTeams.edit.addFailed', 'The agent could not be added. Try again.'))))
+      .catch((cause: unknown) => setError(serverErrorMessage(cause, t('features.agentTeams.edit.addFailed', 'The agent could not be added. Try again.'))))
       .finally(() => setAdding(false));
   };
 
@@ -142,7 +139,7 @@ function TeamEditForm({ projectId, team, onClose, onSaved }: Omit<TeamEditDialog
           />
           <MemberList draft={draft} onChange={setDraft} />
           {draft.members.length < MAX_TEAM_MEMBERS && (
-            <AgentPicker projectId={projectId} draft={draft} disabled={adding} onPick={addAgent} />
+            <TeamAgentPicker projectId={projectId} draft={draft} disabled={adding} onPick={addAgent} />
           )}
           {problem !== undefined && draft.name !== '' && (
             <Typography variant="bodySmall" color="text.secondary" data-testid="agent-team-edit-problem">
@@ -214,41 +211,5 @@ function MemberList({ draft, onChange }: { readonly draft: TeamDraft; readonly o
         );
       })}
     </List>
-  );
-}
-
-function AgentPicker({
-  projectId,
-  draft,
-  disabled,
-  onPick,
-}: {
-  readonly projectId: string;
-  readonly draft: TeamDraft;
-  readonly disabled: boolean;
-  readonly onPick: (agent: Application) => void;
-}): ReactNode {
-  const query = useListApplications(projectId, { agents_type: 'classic', limit: 100 }, { query: { enabled: projectId !== '' } });
-  const agents = unwrapList<Application>(query.data, 'listApplications(team picker)').filter(
-    (agent) => !hasMember(draft, Number(agent.id), Number(agent.project_id ?? projectId)),
-  );
-  return (
-    <TextField
-      select
-      label={t('features.agentTeams.edit.addAgent', 'Add an agent')}
-      value=""
-      disabled={disabled || agents.length === 0}
-      onChange={(event: ChangeEvent<HTMLInputElement>) => {
-        const agent = agents.find((candidate) => candidate.id === event.target.value);
-        if (agent !== undefined) onPick(agent);
-      }}
-      slotProps={{ htmlInput: { 'data-testid': 'agent-team-edit-add' } }}
-    >
-      {agents.map((agent) => (
-        <MenuItem key={agent.id} value={agent.id} data-testid={`agent-team-edit-add-${agent.id}`}>
-          {agent.name}
-        </MenuItem>
-      ))}
-    </TextField>
   );
 }

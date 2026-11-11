@@ -442,7 +442,7 @@ class ReportEphemeralAgentsRequestV1(_message.Message):
     def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., agents: _Optional[_Iterable[_Union[EphemeralAgentV1, _Mapping]]] = ...) -> None: ...
 
 class EphemeralAgentV1(_message.Message):
-    __slots__ = ("agent_id", "parent_call_id", "ordinal", "label", "display_name", "avatar", "profile_digest", "brief_digest", "brief_refs_json", "status", "steps", "input_tokens", "output_tokens", "error_code", "started_at_unix_millis", "finished_at_unix_millis")
+    __slots__ = ("agent_id", "parent_call_id", "ordinal", "label", "display_name", "avatar", "profile_digest", "brief_digest", "brief_refs_json", "status", "steps", "input_tokens", "output_tokens", "error_code", "started_at_unix_millis", "finished_at_unix_millis", "depth", "parent_agent_id")
     AGENT_ID_FIELD_NUMBER: _ClassVar[int]
     PARENT_CALL_ID_FIELD_NUMBER: _ClassVar[int]
     ORDINAL_FIELD_NUMBER: _ClassVar[int]
@@ -459,6 +459,8 @@ class EphemeralAgentV1(_message.Message):
     ERROR_CODE_FIELD_NUMBER: _ClassVar[int]
     STARTED_AT_UNIX_MILLIS_FIELD_NUMBER: _ClassVar[int]
     FINISHED_AT_UNIX_MILLIS_FIELD_NUMBER: _ClassVar[int]
+    DEPTH_FIELD_NUMBER: _ClassVar[int]
+    PARENT_AGENT_ID_FIELD_NUMBER: _ClassVar[int]
     agent_id: str
     parent_call_id: str
     ordinal: int
@@ -475,7 +477,9 @@ class EphemeralAgentV1(_message.Message):
     error_code: str
     started_at_unix_millis: int
     finished_at_unix_millis: int
-    def __init__(self, agent_id: _Optional[str] = ..., parent_call_id: _Optional[str] = ..., ordinal: _Optional[int] = ..., label: _Optional[str] = ..., display_name: _Optional[str] = ..., avatar: _Optional[str] = ..., profile_digest: _Optional[str] = ..., brief_digest: _Optional[str] = ..., brief_refs_json: _Optional[str] = ..., status: _Optional[str] = ..., steps: _Optional[int] = ..., input_tokens: _Optional[int] = ..., output_tokens: _Optional[int] = ..., error_code: _Optional[str] = ..., started_at_unix_millis: _Optional[int] = ..., finished_at_unix_millis: _Optional[int] = ...) -> None: ...
+    depth: int
+    parent_agent_id: str
+    def __init__(self, agent_id: _Optional[str] = ..., parent_call_id: _Optional[str] = ..., ordinal: _Optional[int] = ..., label: _Optional[str] = ..., display_name: _Optional[str] = ..., avatar: _Optional[str] = ..., profile_digest: _Optional[str] = ..., brief_digest: _Optional[str] = ..., brief_refs_json: _Optional[str] = ..., status: _Optional[str] = ..., steps: _Optional[int] = ..., input_tokens: _Optional[int] = ..., output_tokens: _Optional[int] = ..., error_code: _Optional[str] = ..., started_at_unix_millis: _Optional[int] = ..., finished_at_unix_millis: _Optional[int] = ..., depth: _Optional[int] = ..., parent_agent_id: _Optional[str] = ...) -> None: ...
 
 class ReportEphemeralAgentsResponseV1(_message.Message):
     __slots__ = ("rejection",)

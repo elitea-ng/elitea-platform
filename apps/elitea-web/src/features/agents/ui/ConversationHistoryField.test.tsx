@@ -51,10 +51,10 @@ describe('ConversationHistoryField', () => {
       <ApplicationAdvanceSettings
         stepLimit={25}
         onStepLimitChange={vi.fn()}
-        showOutputContract={{ contextHistory: 'refused' }}
+        showOutputContract
         contentControls={{
           citations: { value: null, onChange: vi.fn() },
-          contextHistory: { value: { history: 'since_joined', include_side_talk: 'party' }, onChange: vi.fn() },
+          contextHistory: { value: { history: 'since_joined', include_side_talk: 'party' }, onChange: vi.fn(), error: 'refused' },
         }}
       />,
     );

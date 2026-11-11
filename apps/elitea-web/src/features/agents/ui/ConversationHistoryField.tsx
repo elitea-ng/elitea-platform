@@ -6,6 +6,7 @@ import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 
 import { t } from '@/shared/i18n';
+import { contextHistoryLabel } from '@/shared/lib/contextHistory';
 import { InfoLabelWithTooltip } from '@/shared/ui/InfoLabelWithTooltip';
 
 import {
@@ -16,19 +17,6 @@ import {
   type ContextHistoryMode,
   type ContextSideTalk,
 } from '../lib/contextBlock';
-
-function historyLabel(mode: ContextHistoryMode): string {
-  switch (mode) {
-    case 'since_joined':
-      return t('features.agents.contextHistory.sinceJoined', 'Since it joined');
-    case 'addressed_only':
-      return t('features.agents.contextHistory.addressedOnly', 'Only messages addressed to it');
-    case 'none':
-      return t('features.agents.contextHistory.none', 'None (the current message only)');
-    case 'full':
-      return t('features.agents.contextHistory.full', 'Everything it may see');
-  }
-}
 
 /**
  * "Conversation history": what this agent sees of a conversation it shares
@@ -67,7 +55,7 @@ export function ConversationHistoryField({ value, onChange, disabled, error }: {
       >
         {CONTEXT_HISTORY_MODES.map((mode) => (
           <MenuItem key={mode} value={mode} data-testid={`agent-context-history-${mode}`}>
-            {historyLabel(mode)}
+            {contextHistoryLabel(mode)}
           </MenuItem>
         ))}
       </TextField>

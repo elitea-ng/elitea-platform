@@ -16,10 +16,10 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import type { AgentMemoryEntry, AgentMemoryUpdate } from '@/shared/api/generated/model';
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
-import { memoryErrorMessage } from '../lib/memoryFilters';
 import { useAgentMemoryWrites } from '../model/useAgentMemory';
 
 /** The server's bound (`agentmemory.MaxContentBytes`). */
@@ -93,7 +93,7 @@ function MemoryEditForm({
           onSaved?.(saved);
           onClose();
         },
-        onError: (cause) => setError(memoryErrorMessage(cause, t('features.agentMemory.edit.failed', 'The memory was not saved. Try again.'))),
+        onError: (cause) => setError(serverErrorMessage(cause, t('features.agentMemory.edit.failed', 'The memory was not saved. Try again.'))),
       },
     );
   };

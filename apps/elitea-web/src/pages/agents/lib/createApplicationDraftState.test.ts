@@ -55,6 +55,24 @@ describe('areExtraFieldsEqual', () => {
     expect(areExtraFieldsEqual({ ...BASE, llmSettings: settings }, { ...BASE, llmSettings: { ...settings } })).toBe(true);
   });
 
+  /*
+   * Issue 1894: the context block is compared field by field, as the edit
+   * page compares it. JSON.stringify read the same block, built in another key
+   * order or with `activity_notes` absent instead of off, as a change, so the
+   * create page's leave guard stayed armed after an undo.
+   */
+  it('does not see a change in a context block built in another key order, or with activity_notes absent', () => {
+    const a = { ...BASE, contextBlock: { history: 'none' as const, include_side_talk: 'none' as const, activity_notes: false } };
+    const b = { ...BASE, contextBlock: { include_side_talk: 'none' as const, history: 'none' as const } };
+    expect(areExtraFieldsEqual(a, b)).toBe(true);
+  });
+
+  it('sees a changed context block', () => {
+    const a = { ...BASE, contextBlock: { history: 'none' as const, include_side_talk: 'party' as const } };
+    expect(areExtraFieldsEqual(a, { ...a, contextBlock: { history: 'full', include_side_talk: 'party' } })).toBe(false);
+    expect(areExtraFieldsEqual(a, { ...a, contextBlock: null })).toBe(false);
+  });
+
   it('sees a change of temperature alone', () => {
     const a = { ...BASE, llmSettings: { model_name: 'qwen3.5', model_project_id: 9, max_tokens: -1, temperature: 0.6 } };
     const b = { ...BASE, llmSettings: { model_name: 'qwen3.5', model_project_id: 9, max_tokens: -1, temperature: 0.2 } };

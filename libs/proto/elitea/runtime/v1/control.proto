@@ -515,7 +515,14 @@ message EphemeralAgentV1 {
   int64 started_at_unix_millis = 15;
   // 0 while it runs.
   int64 finished_at_unix_millis = 16;
+  // 17 to 31 stay reserved: a reserved range is never narrowed.
   reserved 17 to 31;
+  // 1 for a child of the run's agent, 2 for a child a child started
+  // (agents.subagents_max_depth, #1872). 0 is read as 1 (an earlier worker).
+  uint32 depth = 32;
+  // The agent_id of the child that started this one, in the same report;
+  // empty at depth 1, required at depth 2.
+  string parent_agent_id = 33;
 }
 
 message ReportEphemeralAgentsResponseV1 {

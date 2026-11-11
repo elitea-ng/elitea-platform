@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -520,7 +519,7 @@ func (s *AgentMemory) ListMemory(ctx context.Context, projectID, applicationID i
   AND ($7 = '' OR content ILIKE '%' || $7 || '%')
   AND ($8 = '' OR written_by_kind = $8)
   AND ($9::timestamptz IS NULL OR created_at >= $9) AND ($10::timestamptz IS NULL OR created_at < $10)`
-	args := []any{applicationID, viewer.Manager, viewer.UserID, filter.Kind, filter.Status, filter.SubjectUserID, likeEscape(filter.Query),
+	args := []any{applicationID, viewer.Manager, viewer.UserID, filter.Kind, filter.Status, filter.SubjectUserID, escapeLike(filter.Query),
 		filter.Source, optionalTime(filter.CreatedAfter), optionalTime(filter.CreatedBefore)}
 	var total int
 	// The schema is spliced with + and never through a format string: the
@@ -591,11 +590,6 @@ ORDER BY u.id`, ids)
 		people = append(people, person)
 	}
 	return people, rows.Err()
-}
-
-func likeEscape(value string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return replacer.Replace(value)
 }
 
 // GetMemory reads one visible entry with its history.

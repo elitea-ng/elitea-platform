@@ -316,6 +316,35 @@ SELECT user_id FROM centry.notifications WHERE meta ->> 'chain_root_execution_id
 	}
 }
 
+// #1921: an idle compaction of a scheduled run never notifies, by its own
+// marker, even when its agent_idle_compactions row went with the source.
+func TestPostgresRunFinishedSkipsAMarkedIdleRun(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := t.Context()
+	repo, err := NewRunFinishedRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation := "4e5f6a7b-8c9d-4e0f-8a1b-2c3d4e5f6a7b"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.unattended_run_policies
+    (project_id, conversation_uuid, trigger_origin, version_id, owner_user_id, on_approval_required)
+VALUES (1, $1::uuid, 'schedule', 41, 4706, 'fail')`, conversation); err != nil {
+		t.Fatal(err)
+	}
+	idle := strings.Repeat("7", 32)
+	seedSettledAgentRun(t, pool, idle, "schedule", conversation, "not-a-uuid")
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET idle_compaction = true WHERE execution_id = $1`, idle); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordSettledRun(ctx, idle, executionapp.SettlementSucceeded); err != nil {
+		t.Fatal(err)
+	}
+	if rows := runFinishedRows(t, pool, idle); len(rows) != 0 {
+		t.Fatalf("idle rows = %+v", rows)
+	}
+}
+
 // seedSettledAgentRun writes the job and agent rows of a settled agent run
 // that is not a chain link.
 func seedSettledAgentRun(t *testing.T, pool *pgxpool.Pool, execution, origin, conversation, message string) {

@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { EliteaApiError } from '@/shared/api/generated/mutator';
-
-import { EMPTY_MEMORY_FILTERS, dayStart, filtersToParams, memoryErrorMessage } from './memoryFilters';
+import { EMPTY_MEMORY_FILTERS, dayStart, filtersToParams } from './memoryFilters';
 
 describe('filtersToParams', () => {
   it('sends only the limit when nothing is filtered', () => {
@@ -39,16 +37,5 @@ describe('dayStart', () => {
   it('refuses anything but a calendar day', () => {
     expect(dayStart('')).toBeUndefined();
     expect(dayStart('2026-11')).toBeUndefined();
-  });
-});
-
-describe('memoryErrorMessage', () => {
-  it("reads the server's own sentence", () => {
-    const error = new EliteaApiError({ kind: 'http', status: 403, url: '/x', body: { error: 'Only a manager may pin.', code: 'memory_change_forbidden' } });
-    expect(memoryErrorMessage(error, 'fallback')).toBe('Only a manager may pin.');
-  });
-
-  it('falls back for anything else', () => {
-    expect(memoryErrorMessage(new Error('boom'), 'fallback')).toBe('fallback');
   });
 });

@@ -1160,11 +1160,28 @@ impl PipelineDefinition {
     /// `pipeline_aliases`: the attachments Main froze as saved pipelines. An
     /// Agent node running one is a recovery frontier too (FU-249): its child
     /// resumes from its own checkpoint. An Agent node running a saved Agent is
-    /// not, since that Agent's effects have no such proof.
+    /// not here; [`Self::recovery_frontier_supported_with_agents`] admits one
+    /// only where the inspect step proves where it stopped (FU-323a).
     pub(crate) fn recovery_frontier_supported(
         &self,
         pending: &[String],
         pipeline_aliases: &BTreeSet<String>,
+    ) -> bool {
+        self.recovery_frontier_supported_with_agents(pending, pipeline_aliases, &BTreeSet::new())
+    }
+
+    /// [`Self::recovery_frontier_supported`], also admitting an Agent node no
+    /// fan-out owns whose attachment Main froze as a saved Agent
+    /// (`agent_aliases`, FU-323a): it resumes from that Agent's own model
+    /// checkpoint once the inspect step proves where it stopped
+    /// (`session.rs` `prove_agent_frontier`). Only a root reclaim of this
+    /// execution's own row passes any; every other caller passes none.
+    #[must_use]
+    pub(crate) fn recovery_frontier_supported_with_agents(
+        &self,
+        pending: &[String],
+        pipeline_aliases: &BTreeSet<String>,
+        agent_aliases: &BTreeSet<String>,
     ) -> bool {
         pending.iter().all(|id| {
             self.nodes.iter().any(|node| {
@@ -1172,7 +1189,8 @@ impl PipelineDefinition {
                     && !self.parallel_owned_nodes.contains(id)
                     && !self.map_owned_nodes.contains(id)
                     && (matches!(node, PipelineNodeDefinition::Application(agent)
-                        if pipeline_aliases.contains(agent.selection().alias()))
+                        if pipeline_aliases.contains(agent.selection().alias())
+                            || agent_aliases.contains(agent.selection().alias()))
                         || matches!(
                             node,
                             PipelineNodeDefinition::Llm(_)
@@ -1198,6 +1216,18 @@ impl PipelineDefinition {
         pending: &'a [String],
         pipeline_aliases: &BTreeSet<String>,
     ) -> Option<&'a str> {
+        self.saved_agent_frontier_node_with_agents(pending, pipeline_aliases, &BTreeSet::new())
+    }
+
+    /// [`Self::saved_agent_frontier_node`], skipping the nodes
+    /// [`Self::recovery_frontier_supported_with_agents`] admits for
+    /// `agent_aliases`: the refusal never names an admitted node.
+    pub(crate) fn saved_agent_frontier_node_with_agents<'a>(
+        &self,
+        pending: &'a [String],
+        pipeline_aliases: &BTreeSet<String>,
+        agent_aliases: &BTreeSet<String>,
+    ) -> Option<&'a str> {
         pending
             .iter()
             .find(|id| {
@@ -1206,7 +1236,8 @@ impl PipelineDefinition {
                     && self.nodes.iter().any(|node| {
                         node.id() == id.as_str()
                             && matches!(node, PipelineNodeDefinition::Application(agent)
-                                if !pipeline_aliases.contains(agent.selection().alias()))
+                                if !pipeline_aliases.contains(agent.selection().alias())
+                                    && !agent_aliases.contains(agent.selection().alias()))
                     })
             })
             .map(String::as_str)

@@ -33,6 +33,7 @@ import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/a
 import { server } from '@/test/setup';
 
 import { useChatBoxSend, type UseChatBoxSendResult, type UseChatBoxSendParams } from './useChatBoxSend';
+import { resolvedTarget } from './useChatBoxSend.floor';
 
 const BASE = '/api/v2';
 const EVENTS_URL = '/api/v2/executions/7/exec-1/events';
@@ -65,7 +66,7 @@ function harness(overrides: Partial<UseChatBoxSendParams> = {}, createWithLifecy
       projectId: 7,
       projectIdString: '7',
       isAgentsPage: true,
-      target: PIPELINE_PARTICIPANT,
+      target: resolvedTarget(PIPELINE_PARTICIPANT),
       participants: [PIPELINE_PARTICIPANT],
       onAgentEvent: (frame) => agentEvents.push(frame),
       ...overrides,
@@ -135,7 +136,7 @@ describe('useChatBoxSend — the flow editor’s run-event feed', () => {
     );
     const overrides = {
       isAgentsPage: false,
-      target: { id: 2, entity_name: 'dummy' },
+      target: resolvedTarget({ id: 2, entity_name: 'dummy' }),
       participants: [{ id: 2, entity_name: 'dummy' }],
       userId: '5',
       llmSettings: selectedSettings,

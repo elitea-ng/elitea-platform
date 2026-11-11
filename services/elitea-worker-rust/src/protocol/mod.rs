@@ -5,6 +5,7 @@ pub mod delegation;
 pub mod egress;
 pub(crate) mod ephemeral_agents;
 mod error;
+pub(crate) mod execution_registry;
 pub mod node_event;
 pub mod output;
 pub mod preamble;

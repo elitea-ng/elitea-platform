@@ -7,10 +7,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { AgentMemoryEntry, SocialAuthorProfile } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { triggerBlobDownload } from '@/shared/lib/download';
 
-import { EMPTY_MEMORY_FILTERS, MEMORY_PAGE_SIZE, memoryErrorMessage, type MemoryFilters } from '../lib/memoryFilters';
+import { EMPTY_MEMORY_FILTERS, MEMORY_PAGE_SIZE, type MemoryFilters } from '../lib/memoryFilters';
 import type { MemoryRowAction } from '../ui/MemoryEntryRow';
 import { readAllAgentMemory, useAgentMemoryList, useAgentMemoryWrites } from './useAgentMemory';
 
@@ -72,7 +73,7 @@ export function useMemoryPanel(projectId: string, applicationId: number) {
   }, []);
 
   const fail = useCallback(
-    (fallback: string) => (error: unknown) => setNotice({ severity: 'error', message: memoryErrorMessage(error, fallback) }),
+    (fallback: string) => (error: unknown) => setNotice({ severity: 'error', message: serverErrorMessage(error, fallback) }),
     [],
   );
 

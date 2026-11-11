@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { matchingAgents } from '../ChatBoxPopups';
 import { floorTarget } from '../ChatBoxFloorTarget';
 import { resolveTargetParticipant } from './useChatBoxSend.helpers';
+import { resolvedTarget } from './useChatBoxSend.floor';
 import { agentCandidates, agentMentionRanges, agentOfCandidate, conversationAgents, isMultiAgent } from './useChatBoxAgentMentions';
 
 const PARTICIPANTS = [
@@ -52,12 +53,16 @@ describe('floorTarget', () => {
 
   it('names the lead when the floor has one', () => {
     const meta = { floor: { policy: 'lead', lead_participant_id: 13 } };
-    expect(floorTarget({ ...input, meta, target: PARTICIPANTS[1] })).toEqual({ agent: { participantId: 13, name: 'CI Doctor' }, isLead: true });
+    expect(floorTarget({ ...input, meta, target: resolvedTarget(PARTICIPANTS[1]) })).toEqual({ agent: { participantId: 13, name: 'CI Doctor' }, isLead: true });
   });
 
   it('otherwise names the selected or sticky agent', () => {
-    expect(floorTarget({ ...input, meta: {}, target: PARTICIPANTS[1] })?.agent.name).toBe('Mira');
-    expect(floorTarget({ ...input, meta: {}, target: resolveTargetParticipant(undefined, PARTICIPANTS, '13') })?.agent.name).toBe('CI Doctor');
+    expect(floorTarget({ ...input, meta: {}, target: resolvedTarget(PARTICIPANTS[1]) })?.agent.name).toBe('Mira');
+    expect(floorTarget({ ...input, meta: {}, target: resolvedTarget(resolveTargetParticipant(undefined, PARTICIPANTS, '13')) })?.agent.name).toBe('CI Doctor');
+  });
+
+  it('names no one for a target row with no positive id (issue 1859)', () => {
+    expect(floorTarget({ ...input, meta: {}, target: resolvedTarget({ id: 0, entity_name: 'application' }) })).toBeUndefined();
   });
 
   it('names no one when nothing decides it, or with a single agent', () => {

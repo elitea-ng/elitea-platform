@@ -94,8 +94,4 @@ LIMIT $%[3]d`, candidateSortKey, strings.Join(conditions, " AND "), len(args))
 	return candidates, keys, nil
 }
 
-func escapeLike(value string) string {
-	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
-}
-
 var _ conversations.ParticipantCandidateStore = (*ParticipantCandidatesRepo)(nil)

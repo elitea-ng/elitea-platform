@@ -24,6 +24,7 @@ import type { Participant } from '@/entities/participant';
 import { useActiveParticipantDetails } from '@/features/chat-participants';
 
 import { toParticipant } from '../ChatBox.helpers';
+import type { ResolvedTarget } from './useChatBoxSend.floor';
 
 /** `version_details.meta.internal_tools` off a raw participant-details object, or `undefined` when it is absent/not a list of names. */
 function readInternalTools(raw: Record<string, unknown> | undefined): readonly string[] | undefined {
@@ -61,7 +62,7 @@ export function shouldDisableParticipantAttachments(
 
 export interface UseChatBoxAttachmentsGateParams {
   /** The participant the send goes to (`useResolvedTarget`), so the gate follows the same target the send does. */
-  readonly target: unknown;
+  readonly target: ResolvedTarget;
   /** The agent/pipeline EDITOR surface computes this gate from its own (unsaved) form state — this hook stands down there. */
   readonly isAgentsPage: boolean | undefined;
 }
@@ -73,7 +74,7 @@ export interface ChatBoxAttachmentsGate {
 }
 
 export function useChatBoxAttachmentsGate({ target: resolved, isAgentsPage }: UseChatBoxAttachmentsGateParams): ChatBoxAttachmentsGate {
-  const target = isAgentsPage ? undefined : resolved;
+  const target = isAgentsPage ? undefined : resolved.participant;
   const gated = isVersionedEntity(target);
   // `null` when the target is not a versioned entity: the details hook throws
   // `assertNever` for a toolkit/MCP/user row, and there is nothing to gate on

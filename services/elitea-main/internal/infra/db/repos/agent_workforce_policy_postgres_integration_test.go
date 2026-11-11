@@ -103,8 +103,12 @@ func seedPolicyBase(t *testing.T, pool *pgxpool.Pool) {
 	wfExec(t, pool, `ALTER TABLE p_1.applications ADD COLUMN IF NOT EXISTS icon varchar,
     ADD COLUMN IF NOT EXISTS meta jsonb NOT NULL DEFAULT '{}'::jsonb,
     ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT (now() AT TIME ZONE 'UTC'),
-    ADD COLUMN IF NOT EXISTS updated_at timestamp`)
-	wfExec(t, pool, `ALTER TABLE p_1.application_versions ADD COLUMN IF NOT EXISTS soul jsonb`)
+    ADD COLUMN IF NOT EXISTS updated_at timestamp,
+    ADD COLUMN IF NOT EXISTS uuid uuid DEFAULT gen_random_uuid()`)
+	// The hire writes through the create route's path (#1877), which writes
+	// the avatar pack column too.
+	wfExec(t, pool, `ALTER TABLE p_1.application_versions ADD COLUMN IF NOT EXISTS soul jsonb,
+    ADD COLUMN IF NOT EXISTS avatar_pack jsonb`)
 	wfExec(t, pool, `ALTER TABLE p_1.application_versions ALTER COLUMN uuid SET DEFAULT gen_random_uuid()`)
 }
 

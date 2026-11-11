@@ -58,12 +58,12 @@ The platform administrator sets **Sub-Agent Depth** under **Configuration › Ag
 
 At depth 2 these rules apply:
 
-- **One budget.** All sub-agents of a run, at every level, share the run's limits: at most 12 started in a turn and at most 16 running at a time. One agent or sub-agent runs at most 4 sub-agents at a time.
+- **One budget.** All sub-agents of a run, at every level, share the run's limits: at most 12 started in a turn. One agent or sub-agent runs at most 4 sub-agents at a time.
 - **One delegation depth.** Each level counts one level of the run's delegation depth. When the maximum delegation depth is reached, a spawn is refused with `DELEGATION_DEPTH_EXCEEDED`.
 - **Tools only narrow.** A sub-agent's sub-agent gets only tools that its parent got. A `profile.tools` entry that its parent did not get refuses the call with `SUBAGENT_TOOL_NOT_GRANTED`. A tool that writes still needs the agent's `subagent_tools`.
 - **Own children only.** A sub-agent manages only the sub-agents it started.
 
-The record keeps each spawn with its own row. A sub-agent's ordinal counts across the run, so each spawn of a run has its own ordinal.
+The record keeps each spawn with its own row. A sub-agent's ordinal counts across the run, so each spawn of a run has its own ordinal. The row also keeps the spawn's depth (1 or 2) and, at depth 2, the id of the sub-agent that started it.
 
 ## The brief
 
@@ -137,7 +137,7 @@ If the run ends while a sub-agent still runs, the sub-agent's row shows **Stoppe
 
 The web app, the desktop app and the mobile app show the lane. The mobile app shows each sub-agent's tool calls and its final answer in the answer's tool card, under the sub-agent's name and **temporary**.
 
-A local turn's sub-agents in the desktop app have the same lane, with the profile's display name, but no **Temporary** badge or avatar ring: they run on your computer, not as cloud participants.
+A local turn's sub-agents in the desktop app have the same lane, with the profile's display name and, when the profile names an avatar, an avatar. They have no **Temporary** badge or dashed avatar ring: they run on your computer, not as cloud participants. The lane in the chat answer and the lane in the desktop transcript are the same control, so both show the steps and tokens of a sub-agent that has ended.
 
 ## The record
 
@@ -145,6 +145,7 @@ Each spawn of a cloud run writes one row to `elitea_runtime.ephemeral_agents`. T
 
 - the run, its project, its conversation and the agent that started the sub-agent;
 - the sub-agent's id, label, display name and avatar key;
+- its depth: 1 for a sub-agent of the run's agent, 2 for a sub-agent that another sub-agent started, with that sub-agent's id;
 - a digest of the profile, and a digest of the brief with the ids it named (message ids, attachment ids, memory entry ids and the number of facts);
 - the status, steps, tokens and error code, and when it started and ended.
 

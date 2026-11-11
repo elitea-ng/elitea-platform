@@ -215,17 +215,30 @@ func (g *GovernedCredentials) Freeze(ctx context.Context, request SubmitRequest)
 		// The admission transaction checks it binds no binding either.
 		return request.Input, freeze, nil
 	}
+	// An idle compaction (issue 1776) summarizes the source's session and
+	// calls no tool: it binds the agent identity (ADR-0039) but resolves no
+	// toolkit credential, so a grant revoked or made ambiguous since the
+	// source ran does not drop the summary (#1920).
+	idle := request.CurrentIdleCompactionTurn != nil
 	if freeze.DefinitionDigest != boundDigest {
 		// The binding pins another definition than the one this run
 		// executes: bind no agent identity, so every governed credential
 		// use of the run is denied. An operator re-pins the binding to the
-		// computed digest the admin API shows.
+		// computed digest the admin API shows. An idle compaction, a
+		// background job of a version edited after its source ran, writes
+		// no audit event: the next run of the version reports the mismatch.
+		if idle {
+			return request.Input, freeze, nil
+		}
 		if err := g.definitions.RecordDefinitionMismatch(ctx, tenant, bindingID, applicationID, versionID); err != nil {
 			return nil, nil, fmt.Errorf("governed credentials: audit the definition digest mismatch: %w", err)
 		}
 		return request.Input, freeze, nil
 	}
 	freeze.AgentBindingID = bindingID
+	if idle {
+		return request.Input, freeze, nil
+	}
 	var details map[string]json.RawMessage
 	if raw, ok := application["version_details"]; ok && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &details); err != nil {

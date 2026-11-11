@@ -16,6 +16,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import type { MessageContextView, MessageContextViewEntry } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { contextHistoryLabel } from '@/shared/lib/contextHistory';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { fetchMessageContextView, type ContextViewOutcome } from '../../api/contextViewApi';
@@ -25,21 +26,6 @@ export interface ContextViewInspectorProps {
   readonly projectId: string;
   readonly messageId: string;
   readonly onClose: () => void;
-}
-
-function historyText(mode: string): string {
-  switch (mode) {
-    case 'since_joined':
-      return t('features.chatMessages.contextView.history.sinceJoined', 'Since it joined');
-    case 'addressed_only':
-      return t('features.chatMessages.contextView.history.addressedOnly', 'Only messages addressed to it');
-    case 'none':
-      return t('features.chatMessages.contextView.history.none', 'None (the current message only)');
-    case 'full':
-      return t('features.chatMessages.contextView.history.full', 'Everything it may see');
-    default:
-      return mode;
-  }
 }
 
 function reasonText(reason: string): string {
@@ -116,11 +102,11 @@ function ViewBody({ view }: { readonly view: MessageContextView }): ReactNode {
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }} data-testid="context-view">
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
         <Row label={t('features.chatMessages.contextView.reader', 'Agent')} value={view.reader_name ?? String(view.reader_participant_id)} testId="context-view-reader" />
-        <Row label={t('features.chatMessages.contextView.mode', 'History')} value={historyText(view.history)} testId="context-view-mode" />
+        <Row label={t('features.chatMessages.contextView.mode', 'History')} value={contextHistoryLabel(view.history)} testId="context-view-mode" />
         {view.participant_history !== null && (
           <Row
             label={t('features.chatMessages.contextView.participantHistory', 'Set in this conversation')}
-            value={historyText(view.participant_history)}
+            value={contextHistoryLabel(view.participant_history)}
             testId="context-view-participant-history"
           />
         )}

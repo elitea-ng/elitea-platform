@@ -59,7 +59,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -112,44 +111,56 @@ const automatedJobMatch = originJobMatch + `
 // idleCompactionOrigin is the bucket of an idle compaction run (shared 0230,
 // ADR-0050 decision 9b2, issue 1776). The run keeps its source's
 // trigger_origin on execution_jobs (the approval, vector-claim and browser
-// policies read it there); the analytics reads tag it by its
-// agent_idle_compactions row instead, the way the breaker excludes it. No
-// person started it, so it leaves the active-user figures like an
-// unattended run, and its calls are reported in their own bucket.
+// policies read it there); the analytics reads tag it by its own
+// execution_jobs.idle_compaction marker (shared 0240, #1921), and by its
+// agent_idle_compactions row for a run admitted before the marker. No person
+// started it, so it leaves the active-user figures like an unattended run,
+// and its calls are reported in their own bucket.
 const idleCompactionOrigin = "idle_compaction"
 
-// idleRunJob is true for an execution_jobs row (alias origin_job) that is an
-// idle compaction run (index agent_idle_compactions_idle_execution).
-const idleRunJob = `EXISTS (
+// idleRunJob is true for an execution_jobs row (the given alias) that is an
+// idle compaction run. The agent_idle_compactions row CASCADE-deletes with
+// the source's job (shared 0230), so the run's own marker is what keeps a
+// call tagged once the source is pruned (#1921); the row still tags a run a
+// replica admitted before it wrote the marker.
+func idleRunJob(sources originSources, alias string) string {
+	row := `EXISTS (
           SELECT 1 FROM elitea_runtime.agent_idle_compactions AS idle_row
-          WHERE idle_row.idle_execution_id = origin_job.execution_id)`
+          WHERE idle_row.idle_execution_id = ` + alias + `.execution_id)`
+	if !sources.idleMarker {
+		return row
+	}
+	return `(` + alias + `.idle_compaction OR ` + row + `)`
+}
 
 // automatedJobCondition is automatedJobMatch, and with idle (the idle
 // compaction table is present) also an idle compaction run of any origin.
-func automatedJobCondition(idle bool) string {
-	if !idle {
+func automatedJobCondition(sources originSources) string {
+	if !sources.idle {
 		return automatedJobMatch
 	}
 	return originJobMatch + `
-      AND (origin_job.trigger_origin IN ` + automatedOrigins + ` OR ` + idleRunJob + `)`
+      AND (origin_job.trigger_origin IN ` + automatedOrigins + ` OR ` + idleRunJob(sources, "origin_job") + `)`
 }
 
 // automatedCall is true for a request-log row (alias l) made from an execution
 // an unattended trigger started (or, with idle, an idle compaction run).
 // EXISTS rather than a join: execution_jobs is keyed (execution_id,
 // generation), and a join on the id would multiply rows.
-func automatedCall(idle bool) string {
+func automatedCall(sources originSources) string {
 	return `(l.execution_id IS NOT NULL AND EXISTS (
     SELECT 1 FROM elitea_runtime.execution_jobs AS origin_job
-    WHERE ` + automatedJobCondition(idle) + `))`
+    WHERE ` + automatedJobCondition(sources) + `))`
 }
 
 // originSources is what the trigger-origin reads can tell apart on this
 // database: trigger_origin (shared 0140) and idle compaction runs (shared
-// 0230, read only together with trigger_origin).
+// 0230, read only together with trigger_origin), with the runs' own marker
+// (shared 0240, read only together with the table).
 type originSources struct {
-	origins bool
-	idle    bool
+	origins    bool
+	idle       bool
+	idleMarker bool
 }
 
 // humanCallFilter is the predicate fragment that keeps only the calls a
@@ -159,7 +170,7 @@ func humanCallFilter(sources originSources) string {
 	if !sources.origins {
 		return ""
 	}
-	return "\n  AND NOT " + automatedCall(sources.idle)
+	return "\n  AND NOT " + automatedCall(sources)
 }
 
 // readOriginSources probes trigger_origin and the idle compaction table.
@@ -171,10 +182,14 @@ func readOriginSources(ctx context.Context, q analyticsQuerier) (originSources, 
 		return originSources{}, err
 	}
 	idle, err := checkRelations(ctx, q, "elitea_runtime.agent_idle_compactions")
+	if err != nil || !idle {
+		return originSources{origins: true}, err
+	}
+	marker, err := columnPresent(ctx, q, "elitea_runtime", "execution_jobs", "idle_compaction")
 	if err != nil {
 		return originSources{}, err
 	}
-	return originSources{origins: true, idle: idle}, nil
+	return originSources{origins: true, idle: true, idleMarker: marker}, nil
 }
 
 // triggerOriginReadable probes for the column shared 0140 adds. It is asked
@@ -446,8 +461,7 @@ LIMIT `+strconv.Itoa(errorCodeRowsLimit), args...)
 // likePrefix escapes a prefix for `LIKE … ESCAPE '\'`. An id may hold `_`,
 // which LIKE reads as "any character".
 func likePrefix(prefix string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return replacer.Replace(prefix) + "%"
+	return escapeLike(prefix) + "%"
 }
 
 // lifetimeOnLog bounds the log rows (alias l) by a run's lifetime: $3 is
@@ -598,8 +612,7 @@ func executionHeader(ctx context.Context, q analyticsQuerier, id int64, executio
 	}
 	if sources.idle {
 		// An idle compaction run reads as one (issue 1776).
-		origin = `CASE WHEN EXISTS (SELECT 1 FROM elitea_runtime.agent_idle_compactions AS idle_row
-                         WHERE idle_row.idle_execution_id = j.execution_id)
+		origin = `CASE WHEN ` + idleRunJob(sources, "j") + `
             THEN '` + idleCompactionOrigin + `' ELSE j.trigger_origin END`
 	}
 	result := analytics.ExecutionAnalytics{ExecutionID: executionID}
@@ -912,7 +925,7 @@ func automatedActivity(ctx context.Context, q analyticsQuerier, id int64, params
 	if sources.idle {
 		// An idle compaction run is its own bucket, whatever its source's
 		// origin was, so a call is in exactly one bucket.
-		origin = `CASE WHEN ` + idleRunJob + ` THEN '` + idleCompactionOrigin + `' ELSE origin_job.trigger_origin END`
+		origin = `CASE WHEN ` + idleRunJob(sources, "origin_job") + ` THEN '` + idleCompactionOrigin + `' ELSE origin_job.trigger_origin END`
 	}
 	prices, err := checkRelations(ctx, q, "gateway.gateway_models")
 	if err != nil {
@@ -932,7 +945,7 @@ WITH attempts AS (
     CROSS JOIN LATERAL (
         SELECT `+origin+` AS trigger_origin
         FROM elitea_runtime.execution_jobs AS origin_job
-        WHERE `+automatedJobCondition(sources.idle)+`
+        WHERE `+automatedJobCondition(sources)+`
         ORDER BY origin_job.generation
         LIMIT 1
     ) AS origin`+rateJoin+`

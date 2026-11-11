@@ -22,11 +22,13 @@ import type { Theme } from '@mui/material/styles';
 import { FLOOR_POLICY, floorOf, type AddressableAgent } from '@elitea/client-core/conversation';
 import { t } from '@/shared/i18n';
 
+import type { ResolvedTarget } from './hooks/useChatBoxSend.floor';
+
 export interface FloorTargetInput {
   readonly agents: readonly AddressableAgent[];
   readonly meta: unknown;
   /** The participant an unaddressed message goes to without a lead (`useResolvedTarget`). */
-  readonly target: unknown;
+  readonly target: ResolvedTarget | undefined;
 }
 
 export interface FloorTarget {
@@ -42,8 +44,8 @@ export function floorTarget({ agents, meta, target: resolved }: FloorTargetInput
     const lead = agents.find((agent) => agent.participantId === floor.leadParticipantId);
     if (lead !== undefined) return { agent: lead, isLead: true };
   }
-  const id = Number((resolved as { readonly id?: unknown } | null | undefined)?.id);
-  const agent = agents.find((candidate) => candidate.participantId === id);
+  const id = resolved?.participantId;
+  const agent = id === undefined ? undefined : agents.find((candidate) => candidate.participantId === id);
   return agent === undefined ? undefined : { agent, isLead: false };
 }
 

@@ -2546,8 +2546,14 @@ type EphemeralAgentV1 struct {
 	StartedAtUnixMillis int64  `protobuf:"varint,15,opt,name=started_at_unix_millis,json=startedAtUnixMillis,proto3" json:"started_at_unix_millis,omitempty"`
 	// 0 while it runs.
 	FinishedAtUnixMillis int64 `protobuf:"varint,16,opt,name=finished_at_unix_millis,json=finishedAtUnixMillis,proto3" json:"finished_at_unix_millis,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// 1 for a child of the run's agent, 2 for a child a child started
+	// (agents.subagents_max_depth, #1872). 0 is read as 1 (an earlier worker).
+	Depth uint32 `protobuf:"varint,32,opt,name=depth,proto3" json:"depth,omitempty"`
+	// The agent_id of the child that started this one, in the same report;
+	// empty at depth 1, required at depth 2.
+	ParentAgentId string `protobuf:"bytes,33,opt,name=parent_agent_id,json=parentAgentId,proto3" json:"parent_agent_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EphemeralAgentV1) Reset() {
@@ -2690,6 +2696,20 @@ func (x *EphemeralAgentV1) GetFinishedAtUnixMillis() int64 {
 		return x.FinishedAtUnixMillis
 	}
 	return 0
+}
+
+func (x *EphemeralAgentV1) GetDepth() uint32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
+}
+
+func (x *EphemeralAgentV1) GetParentAgentId() string {
+	if x != nil {
+		return x.ParentAgentId
+	}
+	return ""
 }
 
 type ReportEphemeralAgentsResponseV1 struct {
@@ -2891,7 +2911,7 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\x1eReportEphemeralAgentsRequestV1\x12B\n" +
 	"\bidentity\x18\x01 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
 	"\x05fence\x18\x02 \x01(\v2#.elitea.runtime.v1.ExecutionFenceV1R\x05fence\x12;\n" +
-	"\x06agents\x18\x03 \x03(\v2#.elitea.runtime.v1.EphemeralAgentV1R\x06agentsJ\x04\b\x04\x10\x10\"\xb7\x04\n" +
+	"\x06agents\x18\x03 \x03(\v2#.elitea.runtime.v1.EphemeralAgentV1R\x06agentsJ\x04\b\x04\x10\x10\"\xf5\x04\n" +
 	"\x10EphemeralAgentV1\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12$\n" +
 	"\x0eparent_call_id\x18\x02 \x01(\tR\fparentCallId\x12\x18\n" +
@@ -2910,7 +2930,9 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\n" +
 	"error_code\x18\x0e \x01(\tR\terrorCode\x123\n" +
 	"\x16started_at_unix_millis\x18\x0f \x01(\x03R\x13startedAtUnixMillis\x125\n" +
-	"\x17finished_at_unix_millis\x18\x10 \x01(\x03R\x14finishedAtUnixMillisJ\x04\b\x11\x10 \"h\n" +
+	"\x17finished_at_unix_millis\x18\x10 \x01(\x03R\x14finishedAtUnixMillis\x12\x14\n" +
+	"\x05depth\x18  \x01(\rR\x05depth\x12&\n" +
+	"\x0fparent_agent_id\x18! \x01(\tR\rparentAgentIdJ\x04\b\x11\x10 \"h\n" +
 	"\x1fReportEphemeralAgentsResponseV1\x12?\n" +
 	"\trejection\x18\x01 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x02\x10\v*\xd8\x04\n" +
 	"\x12ClaimDispositionV1\x12$\n" +

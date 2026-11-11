@@ -218,3 +218,25 @@ fn an_auto_recalled_memory_entry_may_be_named() {
         Err(BRIEF_MEMORY_NOT_RECALLED)
     );
 }
+
+// #1832: the plan's view arrives normalized and is kept without a second
+// copy; a raw text is still normalized, so an excerpt across a line break
+// matches.
+#[test]
+fn a_normalized_history_text_is_kept_as_it_is() {
+    let text = "We ship on Friday.".to_owned();
+    let pointer = text.as_ptr();
+    let kept = super::normalized(text);
+    assert_eq!(kept.as_ptr(), pointer);
+    assert_eq!(super::normalized(" a\n\nb  c ".to_owned()), "a b c");
+    let raw = BriefView::new(
+        vec![(
+            "m-1".to_owned(),
+            MESSAGE_1.to_owned(),
+            "line one\n\nline   two".to_owned(),
+        )],
+        &[],
+        None,
+    );
+    assert!(raw.check(&excerpt("m-1", "one line two")).is_ok());
+}

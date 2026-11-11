@@ -31,6 +31,7 @@ func (r ephemeralAgentRecorder) RecordEphemeralAgents(ctx context.Context, fence
 			ProfileDigest: agent.ProfileDigest, BriefDigest: agent.BriefDigest, BriefRefs: agent.BriefRefs,
 			Status: agent.Status, Steps: agent.Steps, InputTokens: agent.InputTokens, OutputTokens: agent.OutputTokens,
 			ErrorCode: agent.ErrorCode, StartedAt: agent.StartedAt, FinishedAt: agent.FinishedAt,
+			Depth: agent.Depth, ParentAgentID: agent.ParentAgentID,
 		})
 	}
 	return r.store.Record(ctx, fence.ExecutionID, fence.CommandID, fence.Generation, rows)

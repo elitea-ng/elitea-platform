@@ -154,6 +154,78 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "pipeline.recovery.agent_receipt_mismatch",
+      "sentence": "A checkpoint reclaim found a call receipt for a root Agent node that is not this pipeline's own call of its saved Agent, so the run ended typed and nothing was repeated.",
+      "action": "Report it with the support reference: the stored receipt names another occurrence, step or Agent, which only a changed or tampered row produces.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.recovery.agent_step_paused",
+      "sentence": "A checkpoint reclaim found a root Agent node's saved Agent paused for a decision outside a continuation, so the run ended typed and nothing was repeated.",
+      "action": "Nothing to repair on the platform; the user answers the card again by starting the run again.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.recovery.agent_step_invalid",
+      "sentence": "A checkpoint reclaim could not validate the model checkpoint or answer receipt of a root Agent node's saved Agent, so the run ended typed and nothing was repeated.",
+      "action": "Report it with the support reference: the Agent's stored step does not belong to this execution, generation and definition, or it cannot be decoded.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.recovery.agent_step_foreign_execution",
+      "sentence": "A checkpoint reclaim found a root Agent node's saved-Agent model checkpoint written by another execution, so the run ended typed and nothing was repeated.",
+      "action": "Report it with the support reference: a model scope is derived from its own execution, so another execution's checkpoint there means a changed row.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.recovery.agent_step_session_without_checkpoint",
+      "sentence": "A checkpoint reclaim found a root Agent node's saved-Agent session with events but no model checkpoint, so the run ended typed and nothing was repeated.",
+      "action": "Report it with the support reference: every stored model step writes its checkpoint with it, so its absence means a changed row.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.recovery.agent_step_may_have_started",
+      "sentence": "A checkpoint reclaim found that a root Agent node's saved Agent was inside a tool call that may have started, so the run ended typed and the call was not repeated.",
+      "action": "Nothing to repair on the platform; the user checks the target system for that call's effect, then starts the run again.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.recovery.agent_definition_changed",
+      "sentence": "A checkpoint reclaim found that the saved Agent a root Agent node runs is no longer the definition its stopped step started with, so the run ended typed and the changed Agent did not run.",
+      "action": "Nothing to repair on the platform; the saved Agent's version was edited during the run, so the user starts the run again with the current version.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.recovery.agent_definition_unproven",
+      "sentence": "A checkpoint reclaim could not prove which saved Agent version a root Agent node's stopped step started with, so the run ended typed and nothing was repeated.",
+      "action": "Nothing to repair on the platform; the step was started by an older Worker or Main gave no definition digest, so the version could not be proven and the user starts the run again.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.recovery.inspect_transient",
+      "sentence": "A checkpoint reclaim could not read its checkpoint because PostgreSQL was briefly unavailable, so the delivery was kept and is reclaimed again until the run's deadline.",
+      "action": "Nothing when it is rare; if it repeats, check PostgreSQL connectivity and lock waits, since suppressed counts the reclaims kept since the last line.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "pipeline.recovery.tool_pipeline_definition_changed",
       "sentence": "A Map item or Parallel branch was interrupted inside a saved pipeline its Agent called, and that pipeline was edited before the run resumed, so the call was not continued and nothing in it ran again.",
       "action": "Nothing to repair on the platform; the user checks what the interrupted call completed and starts the run again on the edited pipeline.",

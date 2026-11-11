@@ -547,3 +547,41 @@ VALUES (1, gen_random_uuid(), 7, $1, 1, now() - interval '5 minutes', 300, now()
 		t.Fatalf("window = %v (%v); want only the agent's own run", copied, rows.Err())
 	}
 }
+
+// #1921: an idle compaction run whose agent_idle_compactions row is gone
+// (the source's job was pruned) is still left out, by its own marker.
+func TestAgentBreaker_AMarkedIdleRunIsNotInTheWindowWithoutItsRow(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
+	ctx := t.Context()
+	store := newBreakerTestStore(t, pool)
+	store.settleGrace = breaker.IngestSettleGrace
+
+	const own, idle = "0123456789abcdef0123456789abcd03", "0123456789abcdef0123456789abcd04"
+	seedEndedAgentRun(t, pool, own, 1, 33, "SUCCEEDED")
+	seedEndedAgentRun(t, pool, idle, 1, 33, "FAILED")
+	if _, err := pool.Exec(ctx, `
+UPDATE elitea_runtime.execution_jobs SET settled_at = clock_timestamp() - interval '1 minute',
+    idle_compaction = (execution_id = $2)
+WHERE execution_id IN ($1, $2)`, own, idle); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.IngestRuns(ctx, breaker.IngestLookback); err != nil {
+		t.Fatal(err)
+	}
+	var copied []string
+	rows, err := pool.Query(ctx, `SELECT execution_id FROM elitea_runtime.agent_breaker_runs WHERE application_id = 33 ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		copied = append(copied, id)
+	}
+	if rows.Err() != nil || len(copied) != 1 || copied[0] != own {
+		t.Fatalf("window = %v (%v); want only the agent's own run", copied, rows.Err())
+	}
+}

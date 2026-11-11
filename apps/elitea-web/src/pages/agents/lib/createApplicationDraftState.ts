@@ -2,7 +2,7 @@ import { areAgentLlmSettingsEqual, type AgentLlmSettings } from '@/shared/api/ag
 import type { OutputContract } from '@/shared/api/generated/model';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { areOutputContractsEqual, readOutputContract } from '@/shared/ui/OutputContractField';
-import { contextBlockForSave, readContextBlock, type ContextBlock } from '@/features/agents';
+import { areContextBlocksEqual, contextBlockForSave, readContextBlock, type ContextBlock } from '@/features/agents';
 
 /**
  * The draft state `pages/agents/CreateApplication.tsx` holds outside its RHF
@@ -64,7 +64,7 @@ export interface CreateAgentFormExtraFields {
  */
 /** `meta.citations` and `meta.context`, out of `areExtraFieldsEqual` for the complexity budget. */
 function areMetaControlsEqual(a: CreateAgentFormExtraFields, b: CreateAgentFormExtraFields): boolean {
-  return (a.citations ?? null) === (b.citations ?? null) && JSON.stringify(a.contextBlock ?? null) === JSON.stringify(b.contextBlock ?? null);
+  return (a.citations ?? null) === (b.citations ?? null) && areContextBlocksEqual(a.contextBlock ?? null, b.contextBlock ?? null);
 }
 
 /**

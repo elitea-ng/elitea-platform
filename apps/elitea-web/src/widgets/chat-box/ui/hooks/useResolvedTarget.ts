@@ -7,23 +7,27 @@
  * (`ChatBoxFloorTarget`) all need it. Each used to re-derive it from the
  * active participant, the roster and a hand-threaded sticky id, so dropping
  * the sticky id from one consumer let the send and the gate disagree on the
- * target with no test failing. They now take the resolved participant.
+ * target with no test failing. They now take the resolved participant, typed
+ * with its id read once (`ResolvedTarget`, issue 1859).
  */
 import { useMemo } from 'react';
 
 import { resolveTargetParticipant, stickyAgentParticipantId } from './useChatBoxSend.helpers';
+import { resolvedTarget, type ResolvedTarget } from './useChatBoxSend.floor';
+
+export type { ResolvedTarget } from './useChatBoxSend.floor';
 
 export function useResolvedTarget(
   activeParticipant: unknown,
   participants: readonly unknown[] | undefined,
   messages: readonly { readonly participantId?: string | undefined }[] | undefined,
-): unknown {
+): ResolvedTarget {
   // With several agents and none picked, the agent the history last addressed. A pick wins, so the
   // history (a new array on every streamed frame) is not scanned then.
   const picked = activeParticipant !== undefined && activeParticipant !== null;
   const stickyParticipantId = useMemo(() => (picked ? undefined : stickyAgentParticipantId(messages, participants)), [picked, messages, participants]);
   return useMemo(
-    () => resolveTargetParticipant(activeParticipant, participants, stickyParticipantId),
+    () => resolvedTarget(resolveTargetParticipant(activeParticipant, participants, stickyParticipantId)),
     [activeParticipant, participants, stickyParticipantId],
   );
 }

@@ -66,6 +66,24 @@ const (
 	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
 	// A node's settings block in this pipeline is invalid, so the Worker refused to compile the pipeline.
 	PipelineNodeSettingsInvalid Code = "pipeline.node_settings.invalid"
+	// A checkpoint reclaim found that the saved Agent a root Agent node runs is no longer the definition its stopped step started with, so the run ended typed and the changed Agent did not run.
+	PipelineRecoveryAgentDefinitionChanged Code = "pipeline.recovery.agent_definition_changed"
+	// A checkpoint reclaim could not prove which saved Agent version a root Agent node's stopped step started with, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentDefinitionUnproven Code = "pipeline.recovery.agent_definition_unproven"
+	// A checkpoint reclaim found a call receipt for a root Agent node that is not this pipeline's own call of its saved Agent, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentReceiptMismatch Code = "pipeline.recovery.agent_receipt_mismatch"
+	// A checkpoint reclaim found a root Agent node's saved-Agent model checkpoint written by another execution, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentStepForeignExecution Code = "pipeline.recovery.agent_step_foreign_execution"
+	// A checkpoint reclaim could not validate the model checkpoint or answer receipt of a root Agent node's saved Agent, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentStepInvalid Code = "pipeline.recovery.agent_step_invalid"
+	// A checkpoint reclaim found that a root Agent node's saved Agent was inside a tool call that may have started, so the run ended typed and the call was not repeated.
+	PipelineRecoveryAgentStepMayHaveStarted Code = "pipeline.recovery.agent_step_may_have_started"
+	// A checkpoint reclaim found a root Agent node's saved Agent paused for a decision outside a continuation, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentStepPaused Code = "pipeline.recovery.agent_step_paused"
+	// A checkpoint reclaim found a root Agent node's saved-Agent session with events but no model checkpoint, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentStepSessionWithoutCheckpoint Code = "pipeline.recovery.agent_step_session_without_checkpoint"
+	// A checkpoint reclaim could not read its checkpoint because PostgreSQL was briefly unavailable, so the delivery was kept and is reclaimed again until the run's deadline.
+	PipelineRecoveryInspectTransient Code = "pipeline.recovery.inspect_transient"
 	// A checkpoint reclaim met a root Agent node running a saved Agent, which cannot resume yet, so the run ended typed and nothing after that node ran.
 	PipelineRecoverySavedAgentFrontier Code = "pipeline.recovery.saved_agent_frontier"
 	// A Map item or Parallel branch was interrupted inside a saved pipeline its Agent called, and that pipeline was edited before the run resumed, so the call was not continued and nothing in it ran again.

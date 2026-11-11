@@ -17,6 +17,7 @@ import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
 
 import { useChatBoxSend, type UseChatBoxSendResult } from './useChatBoxSend';
+import { resolvedTarget } from './useChatBoxSend.floor';
 
 const BASE = '/api/v2';
 const CONVERSATION = '00000000-0000-4000-8000-0000000000ff';
@@ -64,7 +65,7 @@ it.each([
     const send = useChatBoxSend({
       deps: { createConversation: () => Promise.resolve(undefined), uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }) },
       setChatHistory: setHistory, conversationUuid: CONVERSATION, projectId: 7, projectIdString: '7',
-      isAgentsPage: true, target: PARTICIPANT, participants: [PARTICIPANT],
+      isAgentsPage: true, target: resolvedTarget(PARTICIPANT), participants: [PARTICIPANT],
       onAgentEvent: frame => canvas.onRcvAgentEvent(frame as unknown as RunSocketEvent),
     });
     live = { send, canvas, nodes, history };

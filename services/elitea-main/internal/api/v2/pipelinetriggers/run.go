@@ -199,27 +199,39 @@ SELECT version.application_id, version.id, COALESCE(application.name, version.na
 // FAIL CLOSED. No resolver means no decision, and no decision must not mean
 // "allowed" for the one capability here that spends money and drives tools.
 func (h *Handler) authorizeRunIdentity(ctx context.Context, projectID, userID int64) error {
-	if h.permissions == nil {
+	allowed, err := HoldsRunPermission(ctx, h.permissions, projectID, userID)
+	if err != nil || !allowed {
 		return ErrRunForbidden
 	}
-	resolution, err := h.permissions.ResolvePermissions(
-		ctx,
-		auth.User{
-			ID:     strconv.FormatInt(userID, 10),
-			UserID: strconv.FormatInt(userID, 10),
-		},
-		RunPermissionMode,
-		strconv.FormatInt(projectID, 10),
-	)
+	return nil
+}
+
+// ErrNoRunPermissionResolver is HoldsRunPermission's answer without a
+// resolver: no decision, never a refusal.
+var ErrNoRunPermissionResolver = errors.New("pipeline triggers: no permission resolver")
+
+// HoldsRunPermission resolves whether userID holds RunPermission in projectID,
+// in RunPermissionMode. It is the one run-identity check: a trigger, a
+// schedule fire and an agent heartbeat act (#1868) all call it, so they
+// cannot drift apart. No resolver is no decision, as a resolver error is:
+// both are returned as errors, and each caller decides what no decision
+// means (a trigger refuses, a heartbeat act fails).
+func HoldsRunPermission(ctx context.Context, permissions auth.PermissionResolver, projectID, userID int64) (bool, error) {
+	if permissions == nil {
+		return false, ErrNoRunPermissionResolver
+	}
+	id := strconv.FormatInt(userID, 10)
+	resolution, err := permissions.ResolvePermissions(ctx, auth.User{ID: id, UserID: id},
+		RunPermissionMode, strconv.FormatInt(projectID, 10))
 	if err != nil {
-		return ErrRunForbidden
+		return false, err
 	}
 	for _, permission := range resolution.Permissions {
 		if permission == RunPermission {
-			return nil
+			return true, nil
 		}
 	}
-	return ErrRunForbidden
+	return false, nil
 }
 
 // authorizeRun checks the run identity, and for a governed run writes the

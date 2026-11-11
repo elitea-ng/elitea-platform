@@ -15,11 +15,11 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
 import type { AgentTeam, CreatedConversation } from '@/shared/api/generated/model';
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 
-import { teamErrorMessage } from '../lib/teamDraft';
 import { useAgentTeamList, useAgentTeamWrites, useTeamAbilities } from '../model/useAgentTeams';
 import { TeamEditDialog } from './TeamEditDialog';
 import { TeamRow } from './TeamRow';
@@ -73,7 +73,7 @@ function TeamsList({
     setStartError(undefined);
     writes.start.mutate(team.id, {
       onSuccess: (conversation) => onStarted(conversation),
-      onError: (cause) => setStartError(teamErrorMessage(cause, t('features.agentTeams.startFailed', 'The conversation was not started. Try again.'))),
+      onError: (cause) => setStartError(serverErrorMessage(cause, t('features.agentTeams.startFailed', 'The conversation was not started. Try again.'))),
     });
   };
 
@@ -82,11 +82,11 @@ function TeamsList({
     setDeleteError(undefined);
     writes.remove.mutate(deleting.id, {
       onSuccess: () => setDeleting(undefined),
-      onError: (cause) => setDeleteError(teamErrorMessage(cause, t('features.agentTeams.deleteFailed', 'The team was not deleted. Try again.'))),
+      onError: (cause) => setDeleteError(serverErrorMessage(cause, t('features.agentTeams.deleteFailed', 'The team was not deleted. Try again.'))),
     });
   };
 
-  const teams = list.data?.rows ?? [];
+  const teams = list.rows;
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }} data-testid="agent-teams-panel">
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
@@ -101,7 +101,7 @@ function TeamsList({
       </Box>
       {startError !== undefined && <Alert testId="agent-teams-start-error">{startError}</Alert>}
       {list.isError && (
-        <Alert testId="agent-teams-load-error">{teamErrorMessage(list.error, t('features.agentTeams.loadFailed', 'The teams could not be loaded.'))}</Alert>
+        <Alert testId="agent-teams-load-error">{serverErrorMessage(list.error, t('features.agentTeams.loadFailed', 'The teams could not be loaded.'))}</Alert>
       )}
       {list.isSuccess && teams.length === 0 && (
         <Typography variant="bodyMedium" color="text.secondary" data-testid="agent-teams-empty">
@@ -118,6 +118,16 @@ function TeamsList({
           onDelete={abilities.canDelete ? () => { setDeleteError(undefined); setDeleting(team); } : undefined}
         />
       ))}
+      {list.hasMore && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <Typography variant="bodySmall" color="text.secondary" data-testid="agent-teams-count">
+            {t('features.agentTeams.shownOf', 'Showing {{shown}} of {{total}} teams', { shown: teams.length, total: list.total })}
+          </Typography>
+          <BaseBtn variant="outlined" disabled={list.loadingMore} onClick={list.loadMore} data-testid="agent-teams-more">
+            {t('features.agentTeams.loadMore', 'Show more')}
+          </BaseBtn>
+        </Box>
+      )}
       <TeamEditDialog projectId={projectId} open={editing !== undefined} team={editing?.team} onClose={() => setEditing(undefined)} />
       <DeleteEntityModal
         open={deleting !== undefined}
