@@ -3,7 +3,9 @@
 - **What changed.**
   - Main now sends a binding of every setting a context view depends on (its mode, side talk, and the join time
     under `since_joined`) as `ContextViewV1.binding` (field 4). The Worker binds the agent's durable session to it,
-    so a change of side talk or join time under the same mode is no longer missed (#1902).
+    so a change of side talk or join time under the same mode is no longer missed (#1902). A session bound before
+    this release stays bound to its mode and records the settings on its next turn, so the upgrade itself re-seeds
+    nothing.
   - A session bound to another view, or seeded before the view was recorded, is kept and only rebound when it
     provably holds what the new view holds: every history event in it is in the view, in order, with no gap before
     its recent turns. Its tool results, compaction summary and prompt cache stay. Otherwise it is started again from

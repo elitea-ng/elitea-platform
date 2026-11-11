@@ -13,8 +13,10 @@ SELECT conversation.id AS conversation_id,
        COALESCE(target_mapping.entity_settings ->> 'context_history', '')::text AS participant_context_history,
        -- #1902: when the reader joined, as after_joined reads it. Part of
        -- the view's binding: an agent re-added later sees less under
-       -- since_joined, and its durable session must be re-seeded.
-       target_mapping.created_at::text AS participant_joined_at,
+       -- since_joined, and its durable session must be re-seeded. The
+       -- column is a zoneless timestamp; to_char fixes its text against the
+       -- connection's DateStyle, so every replica hashes the same binding.
+       to_char(target_mapping.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US') AS participant_joined_at,
        COALESCE(conversation.meta -> 'internal_tools', '[]'::jsonb)::text AS internal_tools_json,
        -- BEGIN shared application_version_details_json projection
        -- ADR-0050 decision 1a: `soul` joins the object only when the version
@@ -1229,7 +1231,7 @@ SELECT conversation.id AS conversation_id,
        COALESCE(current_history.chat_history, '[]'::jsonb)::text AS chat_history_json,
        COALESCE(current_history.chat_history_refs, '[]'::jsonb)::text AS chat_history_refs_json,
        -- #1902: when the reader joined (see ResolveCurrentApplicationTurn).
-       target_mapping.created_at::text AS participant_joined_at
+       to_char(target_mapping.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US') AS participant_joined_at
 FROM chat_conversations AS conversation
 JOIN chat_participant_mapping AS author_mapping
   ON author_mapping.conversation_id = conversation.id

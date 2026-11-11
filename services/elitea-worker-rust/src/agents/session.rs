@@ -3357,7 +3357,7 @@ async fn resolve_pipeline_start(
                 &plan.user_id,
                 &plan.session_id,
                 &plan.chat_history_refs,
-                plan.chat_history.len(),
+                &plan.chat_history,
                 plan.definition_digest,
                 &binding,
                 async || delete_pipeline_frontier(state, plan).await,
@@ -3941,7 +3941,7 @@ where
             &user_id,
             &session_id,
             &chat_history_refs,
-            chat_history.len(),
+            &chat_history,
             definition_digest,
             &binding,
             async || Ok(()),
@@ -4683,29 +4683,20 @@ async fn restore_or_create_session(
     user_id: &UserId,
     session_id: &SessionId,
 ) -> Result<(Box<dyn adk_rust::session::Session>, bool), NativeAgentAssemblyError> {
-    let user_id = user_id.to_string();
-    let session_id = session_id.to_string();
     match sessions
         .get(GetRequest {
             app_name: APP_NAME.to_owned(),
-            user_id: user_id.clone(),
-            session_id: session_id.clone(),
+            user_id: user_id.to_string(),
+            session_id: session_id.to_string(),
             num_recent_events: None,
             after: None,
         })
         .await
     {
         Ok(session) => Ok((session, false)),
-        Err(error) if error.code == "session.not_found" => sessions
-            .create(CreateRequest {
-                app_name: APP_NAME.to_owned(),
-                user_id,
-                session_id: Some(session_id),
-                state: HashMap::new(),
-            })
-            .await
-            .map(|session| (session, true))
-            .map_err(|_| dependency_unavailable()),
+        Err(error) if error.code == "session.not_found" => {
+            Ok((create_session(sessions, user_id, session_id).await?, true))
+        }
         Err(_) => Err(dependency_unavailable()),
     }
 }
@@ -4791,7 +4782,7 @@ async fn open_history_session(
     user_id: &UserId,
     session_id: &SessionId,
     refs: &[super::request::ChatHistoryRef],
-    history_len: usize,
+    history: &[Content],
     definition_digest: [u8; 32],
     binding: &HistoryBinding,
     restart: impl AsyncFnOnce() -> Result<(), NativeAgentAssemblyError>,
@@ -4805,13 +4796,7 @@ async fn open_history_session(
             rebound: false,
         });
     }
-    match history_decision(
-        session.as_ref(),
-        binding,
-        refs,
-        history_len,
-        definition_digest,
-    ) {
+    match history_decision(session.as_ref(), binding, refs, history, definition_digest) {
         HistoryDecision::Keep => Ok(HistorySession {
             session,
             created,
@@ -4951,7 +4936,7 @@ fn history_decision(
     session: &dyn adk_rust::session::Session,
     binding: &HistoryBinding,
     refs: &[super::request::ChatHistoryRef],
-    history_len: usize,
+    history: &[Content],
     definition_digest: [u8; 32],
 ) -> HistoryDecision {
     let Some(view) = binding.view.as_deref().filter(|_| binding.fresh) else {
@@ -4959,18 +4944,19 @@ fn history_decision(
     };
     let marker = session.state().get(HISTORY_RECONCILED_KEY);
     let field = |key: &str| marker.as_ref().and_then(|marker| marker.get(key).cloned());
+    // A marker from before `settings` (#1902) is bound to its mode alone, as
+    // it was; `record_history_binding` then records this turn's settings.
     let bound = field("view").as_ref().and_then(Value::as_str) == Some(view)
-        && binding.settings.as_deref().is_none_or(|settings| {
-            field("settings").as_ref().and_then(Value::as_str) == Some(settings)
-        });
+        && match (binding.settings.as_deref(), field("settings")) {
+            (Some(settings), Some(recorded)) => recorded.as_str() == Some(settings),
+            _ => true,
+        };
     if binding.tagging && field("tagged").as_ref().and_then(Value::as_bool) != Some(true) {
         return HistoryDecision::Reseed;
     }
     if bound {
         HistoryDecision::Keep
-    } else if refs.len() == history_len
-        && session_holds_only_view(session, marker.as_ref(), refs, definition_digest)
-    {
+    } else if session_holds_only_view(session, marker.as_ref(), refs, history, definition_digest) {
         HistoryDecision::Rebind
     } else {
         HistoryDecision::Reseed
@@ -4990,15 +4976,23 @@ fn history_decision(
 ///   would otherwise append older messages after recent turns. Newer ones
 ///   are appended by the reconciliation, in order.
 ///
-/// The reader's own turns are not history events: the session holds them
-/// under every view, as it always has.
+/// - the reader's own live turns are exactly the view's own exchanges not
+///   held as history events: as many questions in the session as the view
+///   names, so a view that drops the reader's own exchanges (`none`, a later
+///   join, side talk off) or a session that lost some (a re-seed under a
+///   narrower view) is never rebound. A live turn names no message, so the
+///   check counts its questions; anything it cannot read as one (a resumed
+///   tool result) makes the counts differ, and the session is re-seeded.
 fn session_holds_only_view(
     session: &dyn adk_rust::session::Session,
     marker: Option<&Value>,
     refs: &[super::request::ChatHistoryRef],
+    history: &[Content],
     definition_digest: [u8; 32],
 ) -> bool {
-    if marker.is_some_and(|marker| !covered_messages(marker).is_empty()) {
+    if refs.len() != history.len()
+        || marker.is_some_and(|marker| !covered_messages(marker).is_empty())
+    {
         return false;
     }
     let positions = refs
@@ -5013,11 +5007,13 @@ fn session_holds_only_view(
         .collect::<HashMap<_, _>>();
     let mut present = BTreeSet::new();
     let mut last = None;
+    let mut live_questions = 0_usize;
     for event in session.events().all() {
         if event.id.starts_with("fh-") {
             return false;
         }
         if !event.id.starts_with("hm-") {
+            live_questions += usize::from(live_question(&event));
             continue;
         }
         let Some(&index) = positions.get(event.id.as_str()) else {
@@ -5029,6 +5025,17 @@ fn session_holds_only_view(
         last = Some(index);
         present.insert(index);
     }
+    let own_questions = refs
+        .iter()
+        .zip(history)
+        .enumerate()
+        .filter(|(index, (reference, content))| {
+            reference.readers_own && content.role == "user" && !present.contains(index)
+        })
+        .count();
+    if live_questions != own_questions {
+        return false;
+    }
     let frontier = last.max(refs.iter().rposition(|reference| reference.readers_own));
     frontier.is_none_or(|frontier| {
         refs[..=frontier]
@@ -5038,8 +5045,23 @@ fn session_holds_only_view(
     })
 }
 
+/// A question the reader was asked in one of its own turns: a user event of
+/// text only, never a seeded history event or a resumed tool result.
+fn live_question(event: &Event) -> bool {
+    event.author == "user"
+        && event.llm_response.content.as_ref().is_some_and(|content| {
+            content.role == "user"
+                && !content.parts.is_empty()
+                && content
+                    .parts
+                    .iter()
+                    .all(|part| matches!(part, adk_rust::Part::Text { .. }))
+        })
+}
+
 /// After a restored session's turn: record that a turn without ids made it
-/// hold an untagged message. Written only on that change, so a turn that
+/// hold an untagged message, or (#1902) this turn's view settings on a
+/// marker from before them. Written only on that change, so a turn that
 /// changes nothing appends nothing.
 async fn record_history_binding(
     sessions: &dyn SessionService,
@@ -5047,27 +5069,40 @@ async fn record_history_binding(
     session: &dyn adk_rust::session::Session,
     binding: &HistoryBinding,
 ) -> Result<(), NativeAgentAssemblyError> {
-    if binding.view.is_none() || binding.tagged {
+    if binding.view.is_none() {
         return Ok(());
     }
     let Some(marker) = session.state().get(HISTORY_RECONCILED_KEY) else {
         return Ok(());
     };
-    if marker.get("tagged").and_then(Value::as_bool) != Some(true) {
+    let was_tagged = marker.get("tagged").and_then(Value::as_bool) == Some(true);
+    let view = marker
+        .get("view")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    // #1902: a fresh turn bound to a marker from before settings (its mode
+    // matched) records them, so a later change of side talk or join time is
+    // seen. Only a fresh turn: its view is the one the session now holds.
+    let adopted = binding
+        .settings
+        .clone()
+        .filter(|_| binding.fresh && view == binding.view && marker.get("settings").is_none());
+    let untagged_now = was_tagged && !binding.tagged;
+    if !untagged_now && adopted.is_none() {
         return Ok(());
     }
     // The session stays bound to the view it was seeded under: a turn that
     // does not re-seed (a continuation, a resume) never records its own
     // view, or a narrowed mode would read as already applied.
     let recorded = HistoryBinding {
-        view: marker
-            .get("view")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        settings: marker
-            .get("settings")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        view,
+        settings: adopted.or_else(|| {
+            marker
+                .get("settings")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        }),
+        tagged: was_tagged && binding.tagged,
         ..binding.clone()
     };
     let covered = covered_messages(&marker);
@@ -6038,7 +6073,21 @@ mod history_binding_tests {
         binding: &HistoryBinding,
         refs: &[ChatHistoryRef],
     ) -> HistoryDecision {
-        history_decision(session, binding, refs, refs.len(), [0; 32])
+        history_decision(session, binding, refs, &history_of(refs), [0; 32])
+    }
+
+    /// The history `refs` name: the reader's own entries are its answers.
+    fn history_of(refs: &[ChatHistoryRef]) -> Vec<Content> {
+        refs.iter()
+            .map(|reference| {
+                Content::new(if reference.readers_own {
+                    "model"
+                } else {
+                    "user"
+                })
+                .with_text(&reference.message_id)
+            })
+            .collect()
     }
 
     fn reference(n: u32, readers_own: bool) -> ChatHistoryRef {
@@ -6210,9 +6259,65 @@ mod history_binding_tests {
         let old = InMemorySessionService::new();
         let session = seeded(&old, &[&kickoff], None).await;
         assert_eq!(
-            decide(session.as_ref(), &settled("full", "s1"), &[kickoff]),
+            decide(session.as_ref(), &settled("full", "s1"), &[kickoff.clone()]),
+            HistoryDecision::Keep,
+            "a marker from before settings is bound to its mode"
+        );
+        // ...and records this turn's settings, so the next change is seen.
+        let identity = session.try_identity().expect("identity");
+        record_history_binding(&old, &identity, session.as_ref(), &settled("full", "s1"))
+            .await
+            .expect("adopted");
+        let session = restored(&old).await;
+        let marker = session.state().get(HISTORY_RECONCILED_KEY).expect("marker");
+        assert_eq!(marker["settings"], "s1", "{marker}");
+        assert_eq!(marker["view"], "full", "{marker}");
+        assert_eq!(
+            decide(session.as_ref(), &settled("full", "s2"), &[kickoff]),
+            HistoryDecision::Rebind
+        );
+    }
+
+    /// Review of #1905: the reader's own live turns are checked too. A view
+    /// that drops them, or a session that lost them, is re-seeded.
+    #[tokio::test]
+    async fn the_readers_own_turns_must_match_the_view() {
+        let view = [reference(5, true), reference(6, true)];
+        let history = [
+            Content::new("user").with_text("own question"),
+            Content::new("model").with_text("own answer"),
+        ];
+        let fresh = binding("none", true, false, false);
+        // The session holds one live exchange.
+        let sessions = InMemorySessionService::new();
+        let session = seeded(&sessions, &[], None).await;
+        let identity = session.try_identity().expect("identity");
+        append_history_event(
+            &sessions,
+            &identity,
+            "live-question".to_owned(),
+            Content::new("user").with_text("own question"),
+        )
+        .await
+        .expect("live turn");
+        let session = restored(&sessions).await;
+        assert_eq!(
+            history_decision(session.as_ref(), &fresh, &view, &history, [0; 32]),
             HistoryDecision::Rebind,
-            "a session bound before settings is not kept, but provably holds the view"
+            "the view holds exactly the session's own exchange"
+        );
+        assert_eq!(
+            history_decision(session.as_ref(), &fresh, &[], &[], [0; 32]),
+            HistoryDecision::Reseed,
+            "`none` drops the reader's earlier exchanges"
+        );
+        // A session holding none of them, under a view that has one.
+        let empty = InMemorySessionService::new();
+        let session = seeded(&empty, &[], None).await;
+        assert_eq!(
+            history_decision(session.as_ref(), &fresh, &view, &history, [0; 32]),
+            HistoryDecision::Reseed,
+            "a widened view's own exchanges are missing from the session"
         );
     }
 
@@ -6261,7 +6366,13 @@ mod history_binding_tests {
         let sessions = InMemorySessionService::new();
         let session = seeded(&sessions, &[&one], None).await;
         assert_eq!(
-            history_decision(session.as_ref(), &fresh, &view[..1], 2, [0; 32]),
+            history_decision(
+                session.as_ref(),
+                &fresh,
+                &view[..1],
+                &history_of(&view),
+                [0; 32]
+            ),
             HistoryDecision::Reseed,
             "history without a reference for every entry is never proven"
         );

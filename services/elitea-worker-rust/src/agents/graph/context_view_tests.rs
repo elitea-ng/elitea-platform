@@ -510,6 +510,15 @@ fn an_interpolated_view_keeps_its_newest_messages() {
     assert!(!kept.is_empty() && kept.len() < history.len());
     assert_eq!(kept.last(), history.last(), "the newest is kept");
     assert_eq!(kept, history[history.len() - kept.len()..]);
+    // A placeholder after the view is measured too.
+    let state = adk_rust::graph::State::from([
+        ("chat_history".to_owned(), json!(history)),
+        ("input".to_owned(), json!("b".repeat(10 * 1024))),
+    ]);
+    let rendered = super::llm::render_fstring("{chat_history}\n\nTask: {input}", &state)
+        .expect("bounded beside a later placeholder");
+    assert!(rendered.len() <= 64 * 1024, "{}", rendered.len());
+    assert!(rendered.ends_with(&"b".repeat(10 * 1024)));
     // A view that fits renders exactly as before.
     let small = adk_rust::graph::State::from([("chat_history".to_owned(), json!(history[..2]))]);
     assert_eq!(

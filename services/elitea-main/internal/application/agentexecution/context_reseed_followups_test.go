@@ -87,6 +87,28 @@ func TestContinuationCarriesTheContinuedRunsView(t *testing.T) {
 	if clone := admission.CurrentContinueTurn.Clone(); clone.ContextView == record {
 		t.Fatal("Clone must copy the view record")
 	}
+
+	// A pipeline resumes from its checkpoint with the view it started with:
+	// its start's record stays, nothing is re-recorded.
+	pipeline := reseedFollowupTarget()
+	pipeline.VersionDetails = json.RawMessage(`{
+  "id":41,"application_id":31,"agent_type":"pipeline","instructions":"entry_point: a",
+  "llm_settings":{"model_name":"test","model_project_id":7,"openai_compatible":false},
+  "meta":{"context":{"history":"since_joined"}},"tools":[]
+}`)
+	resolver.target = pipeline
+	service, admissions = reseedFollowupService(t, resolver)
+	if _, err := service.ContinueCurrentAgent(context.Background(), CurrentContinuationRequest{
+		ProjectID: 7, ActorUserID: 11,
+		ConversationUUID:  "8bc66e50-46c4-4e2c-94ec-daec6c596ac0",
+		ResponseMessageID: "30e0913e-10d4-43db-b8d0-c7b79480935a",
+		ThreadID:          "thread-current-1", Action: "approve",
+	}); err != nil {
+		t.Fatalf("pipeline ContinueCurrentAgent() error = %v", err)
+	}
+	if record := admissions.requests[0].CurrentContinueTurn.ContextView; record != nil {
+		t.Fatalf("a resumed pipeline re-recorded its view: %+v", record)
+	}
 }
 
 // Issue 1903: a regeneration names the question its own turn wrote, so the

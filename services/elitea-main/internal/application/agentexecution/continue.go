@@ -839,7 +839,13 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		}
 		turn.ApplicationID = resolved.ApplicationID
 		turn.ApplicationVersionID = resolved.ApplicationVersionID
-		turn.ContextView = newContextViewRecord(target.TargetParticipantID, resolved.ParticipantContextHistory, view, input)
+		// #1892: an agent's continued run reconciles the conversation as it
+		// stands now, so its answer's view is this one. A pipeline resumes
+		// from its checkpoint with the view it started with (the worker never
+		// re-seeds it), so its start's record stays the true one.
+		if !currentApplicationInstructionsAreAGraph(resolved.VersionDetails) {
+			turn.ContextView = newContextViewRecord(target.TargetParticipantID, resolved.ParticipantContextHistory, view, input)
+		}
 		capabilityID = executiondomain.AgentApplicationCapability
 	case CurrentRegenerationAdhoc:
 		settings, settingsErr := continuationAdhocSettings(policy)
