@@ -876,7 +876,9 @@ WHERE execution_id = $1 AND generation = $2`,
 	// A turn of an agent participant ends that agent's idle compaction in
 	// this conversation (ADR-0050 decision 9b2): its QUEUED check, or its
 	// running idle run, which is asked to stop. A peer's or a person's turn
-	// never reaches here with this participant.
+	// never reaches here with this participant. Every agent turn names its
+	// participant (each Validate requires TargetParticipantID; issue 1776
+	// item 2), so no turn of an agent admits without one.
 	if participantID := admission.ParticipantID(); participantID > 0 && participantID <= math.MaxInt32 && currentProjectID > 0 {
 		if err := cancelParticipantIdleCompactions(ctx, pgxExecutor{queryer: tx}, currentProjectID,
 			admission.Binding.ClientStreamID, participantID); err != nil {
@@ -1815,6 +1817,10 @@ func agentApplicationVersionID(admission agentexecutionapp.Admission) int64 {
 		return admission.CurrentRegenerateTurn.ApplicationVersionID
 	case admission.CurrentContinueTurn != nil:
 		return admission.CurrentContinueTurn.ApplicationVersionID
+	case admission.CurrentIdleCompactionTurn != nil:
+		// The source's version, so the idle run binds the source's agent
+		// identity (ADR-0039, issue 1776).
+		return admission.CurrentIdleCompactionTurn.ApplicationVersionID
 	}
 	return 0
 }

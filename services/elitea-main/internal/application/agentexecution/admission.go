@@ -475,7 +475,7 @@ func validateAgentTurns(request SubmitRequest, generation string) error {
 		if request.CurrentTurn != nil || request.CurrentAdhocTurn != nil || request.CurrentRegenerateTurn != nil ||
 			request.CurrentContinueTurn != nil || request.CurrentFanoutWakeTurn != nil ||
 			request.HandoffCompletion != nil || request.CloudThread || request.RunPolicy != nil ||
-			request.Unattended != nil || request.Release != nil || turn.Validate() != nil ||
+			request.Unattended != nil || !sameReleaseRun(request.Release, turn.Release) || turn.Validate() != nil ||
 			request.IdempotencyKey != IdleCompactionIdempotencyKey(turn.SourceExecutionID) ||
 			turn.ResponseMessageID != request.ClientMessageID || turn.ConversationUUID != request.ClientStreamID ||
 			turn.ExecutionGeneration != generation || request.SIOEvent != "chat_continue_predict" ||

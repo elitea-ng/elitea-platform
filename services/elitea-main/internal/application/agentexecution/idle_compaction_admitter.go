@@ -172,7 +172,10 @@ func (a *IdleCompactionAdmitter) admit(ctx context.Context, target IdleCompactio
 		SIOEvent:                  "chat_continue_predict",
 		Input:                     input,
 		CurrentIdleCompactionTurn: turn.Clone(),
-		TriggerOrigin:             target.TriggerOrigin,
+		// The source's release, so the binding version, the recorded
+		// release and the governed definition digest are the source's.
+		Release:       turn.Release.Clone(),
+		TriggerOrigin: target.TriggerOrigin,
 	})
 }
 

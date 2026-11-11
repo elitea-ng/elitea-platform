@@ -168,6 +168,19 @@ var ErrNotInConversation = errors.New("an addressed agent is not in the conversa
 // addressees (empty: no address), agents the conversation's agent
 // participants. A lead that is no longer an agent of the conversation is
 // ignored, so a removed lead never strands a message.
+//
+// # A composer pick is not an address (issue 1804)
+//
+// ADR-0050 decision 7c: addressing is `addressed_to`, which the composer's
+// `#Agent` and `@Agent` chips fill. The start body's participant_id is the
+// composer's target, and a client sends the same field for a pick and for
+// the sticky target, so Main cannot tell the two apart. Under `lead` the
+// lead therefore answers an unaddressed message whatever participant_id
+// names; under `addressed` participant_id is the sticky target. Only under
+// an address does participant_id order the turns: it answers first when it
+// is one of the addressees. A client that lets a person pick an agent over
+// the lead sends the pick as an address (the web app's "To:" inserts
+// @Name), not as participant_id alone.
 func Route(settings Settings, participant int64, addressed []int64, agents []int64) ([]int64, error) {
 	isAgent := make(map[int64]bool, len(agents))
 	for _, id := range agents {
