@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import type { Tag } from '@/entities/tag';
-import { contextBlockForSave, readContextBlock, type ContextBlock } from '@/features/agents';
+import { areContextBlocksEqual, contextBlockForSave, readContextBlock, type ContextBlock } from '@/features/agents';
 import {
   areAgentLlmSettingsEqual,
   toAgentLlmSettings,
@@ -186,11 +186,6 @@ function contentControlPatch(path: string, value: unknown): Partial<EditApplicat
   if (path === 'version_details.meta.citations') return { citations: citationsOf(value) };
   if (path === 'version_details.meta.context') return { contextBlock: contextBlockForSave(readContextBlock(value)) };
   return undefined;
-}
-
-function areContextBlocksEqual(a: ContextBlock | null, b: ContextBlock | null): boolean {
-  if (a === null || b === null) return a === b;
-  return a.history === b.history && a.include_side_talk === b.include_side_talk && (a.activity_notes ?? false) === (b.activity_notes ?? false);
 }
 
 /** The ADR-0043 fields (the output contract and the citation setting) and the ADR-0050 soul. */

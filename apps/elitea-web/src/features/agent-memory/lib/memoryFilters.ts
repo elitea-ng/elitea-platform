@@ -59,24 +59,6 @@ export function filtersToParams(filters: MemoryFilters, offset: number, limit: n
   };
 }
 
-/**
- * The server's own sentence for a refusal, when it sent one (`{error, code}`
- * from `agentmemory/handler.go`'s writeError), else `fallback`. Rebuilt here
- * rather than imported: `no-sideways-features` keeps each feature's helpers
- * its own (`settings/lib/memory/longTermMemoryHelpers.ts` has the same one).
- */
-export function memoryErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof EliteaApiError && error.failure.kind === 'http') {
-    const { body } = error.failure;
-    if (typeof body === 'object' && body !== null) {
-      const detail = (body as Record<string, unknown>)['error'];
-      if (typeof detail === 'string' && detail !== '') return detail;
-    }
-    if (typeof body === 'string' && body !== '') return body;
-  }
-  return fallback;
-}
-
 /** The route answered 404: the entry is gone, or it is not one this caller may see. */
 export function isMemoryNotFound(error: unknown): boolean {
   return error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 404;

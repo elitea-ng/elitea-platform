@@ -185,6 +185,27 @@ describe('AgentEditor', () => {
     await waitFor(() => expect(sentMeta).toMatchObject({ output_contract: { type: 'format', format: 'json' } }));
   });
 
+  // Issue 1895: the chat editor column passed only `showOutputContract`, so a
+  // 422 context_block_invalid on create never reached the field.
+  it('shows a context_block_invalid refusal of the create on the Conversation history field', async () => {
+    server.use(
+      http.post('*/elitea_core/applications/prompt_lib/:projectId', () =>
+        HttpResponse.json({ error: 'meta.context.history must be one of full, since_joined, addressed_only, none', code: 'context_block_invalid' }, { status: 422 }),
+      ),
+    );
+    renderEditor({ isCreateMode: true, onAgentCreated: vi.fn() });
+
+    await screen.findByTestId('agent-context-history');
+    expect(screen.queryByTestId('agent-context-history-error')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('agent-name-input'), { target: { value: 'History Agent' } });
+    fireEvent.blur(screen.getByTestId('agent-name-input'));
+    fireEvent.change(screen.getByTestId('agent-description-input'), { target: { value: 'desc' } });
+    await waitFor(() => expect(screen.getByTestId('agent-save-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('agent-save-button'));
+
+    expect(await screen.findByTestId('agent-context-history-error')).toHaveTextContent('meta.context.history must be one of');
+  });
+
   it('edit-mode Save is disabled without an injected onSaveVersion', async () => {
     renderEditor({ agent: { id: 1, entity_meta: { id: 1 }, name: 'My Agent' } });
     await waitFor(() => expect(screen.getByTestId('agent-save-button')).toBeDisabled());

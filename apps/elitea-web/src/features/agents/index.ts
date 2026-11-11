@@ -213,7 +213,7 @@ export { ApplicationEditorNotes } from './ui/ApplicationEditorNotes';
  */
 export { applicationWriteHooks } from './model/applicationWriteHooks';
 export { applicationServerErrorMessage, contextBlockRefusal } from './lib/errorMessage';
-export { contextBlockForSave, readContextBlock } from './lib/contextBlock';
+export { areContextBlocksEqual, contextBlockForSave, readContextBlock } from './lib/contextBlock';
 export type { ContextBlock } from './lib/contextBlock';
 export { applicationValidationHooks } from './model/applicationValidationHooks';
 export { useApplicationChatSwitchVersion } from './model/useApplicationChatSwitchVersion';

@@ -23,6 +23,70 @@ pub(crate) use parallel_authority::PipelineGraphReceiptAuthority;
 
 pub(crate) const GRAPH_CALL_RECEIPTS_METADATA_KEY: &str = "elitea.pipeline.graph-calls.v1";
 pub(crate) const GRAPH_CALL_REVISION_METADATA_KEY: &str = "elitea.pipeline.graph-call-revision.v1";
+/// The original start's stamp of the saved Agent's definition digest (hex).
+pub(crate) const SAVED_AGENT_DEFINITION_METADATA_KEY: &str =
+    "elitea.pipeline.saved-agent-definition.v1";
+
+pub(crate) fn definition_stamp(digest: [u8; 32]) -> String {
+    super::scoped_applications::hex_digest(&digest)
+}
+
+impl PipelineGraphCallReceipt {
+    /// The saved Agent definition digest the call was started with, when the
+    /// receipt was stamped with a well-formed one.
+    pub(crate) fn agent_definition(&self) -> Option<[u8; 32]> {
+        let stamp = self
+            .original_start
+            .provider_metadata
+            .get(SAVED_AGENT_DEFINITION_METADATA_KEY)?;
+        parse_definition_stamp(stamp)
+    }
+}
+
+/// A definition stamp's digest: exactly 64 lowercase hex digits, the form
+/// [`definition_stamp`] writes; anything else (a sign, uppercase) proves nothing.
+fn parse_definition_stamp(stamp: &str) -> Option<[u8; 32]> {
+    let nibble = |digit: u8| match digit {
+        b'0'..=b'9' => Some(digit - b'0'),
+        b'a'..=b'f' => Some(digit - b'a' + 10),
+        _ => None,
+    };
+    let bytes = stamp.as_bytes();
+    if bytes.len() != 64 {
+        return None;
+    }
+    let mut digest = [0_u8; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = (nibble(bytes[index * 2])? << 4) | nibble(bytes[index * 2 + 1])?;
+    }
+    Some(digest)
+}
+
+#[cfg(test)]
+mod definition_stamp_tests {
+    use super::{definition_stamp, parse_definition_stamp};
+
+    /// Delta review 5: only the stamp's own form, 64 lowercase hex digits.
+    #[test]
+    fn a_definition_stamp_round_trips_and_refuses_any_other_form() {
+        let digest = [0xab_u8; 32];
+        assert_eq!(
+            parse_definition_stamp(&definition_stamp(digest)),
+            Some(digest)
+        );
+        let lower = definition_stamp([0x0f; 32]);
+        for refused in [
+            lower.to_uppercase(),
+            format!("+f{}", &lower[2..]),
+            format!("{}g", &lower[..63]),
+            lower[..62].to_owned(),
+            format!("{lower}00"),
+            String::new(),
+        ] {
+            assert_eq!(parse_definition_stamp(&refused), None, "{refused}");
+        }
+    }
+}
 /// Written by `elitea_agent_runtime::graph::turn_checkpointer::TurnCheckpointer` on every append.
 const TURN_EXECUTION_METADATA_KEY: &str = "elitea.pipeline.execution.v1";
 const REVISION_SCHEMA: &str = "elitea.pipeline.graph-call-revision.v1";
@@ -349,6 +413,31 @@ pub(crate) async fn prepare_graph_call(
     author: &str,
     branch: &str,
 ) -> Result<(PipelineGraphCallReceipt, bool), GraphError> {
+    prepare_graph_call_stamped(
+        checkpointer,
+        gate,
+        context,
+        activation,
+        (tool_name, arguments),
+        (invocation_id, author, branch),
+        None,
+    )
+    .await
+}
+
+/// [`prepare_graph_call`], stamping a new receipt's original start with the
+/// digest Main gave of the saved Agent the call runs (FU-323a review (b)), so
+/// a reclaim can prove the Agent it re-enters is the one the step started
+/// with. An existing receipt is returned as it was recorded.
+pub(crate) async fn prepare_graph_call_stamped(
+    checkpointer: &dyn Checkpointer,
+    gate: &Mutex<()>,
+    context: &NodeContext,
+    activation: PipelineApplicationActivation,
+    (tool_name, arguments): (&str, &Value),
+    (invocation_id, author, branch): (&str, &str, &str),
+    agent_definition: Option<[u8; 32]>,
+) -> Result<(PipelineGraphCallReceipt, bool), GraphError> {
     let _guard = gate.lock().await;
     let checkpoint = checkpointer
         .load(&context.config.thread_id)
@@ -394,6 +483,12 @@ pub(crate) async fn prepare_graph_call(
     activation
         .stamp_with_branch(&mut original_start, branch.to_owned())
         .map_err(|_| receipt_error())?;
+    if let Some(digest) = agent_definition {
+        original_start.provider_metadata.insert(
+            SAVED_AGENT_DEFINITION_METADATA_KEY.to_owned(),
+            definition_stamp(digest),
+        );
+    }
     let receipt = PipelineGraphCallReceipt {
         schema: RECEIPTS_SCHEMA.to_owned(),
         activation,

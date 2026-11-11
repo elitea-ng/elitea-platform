@@ -7,7 +7,6 @@
  * one without is `addressed`, the two policies of the conversation floor.
  */
 import type { AgentTeam, AgentTeamMember, AgentTeamWrite, ApplicationVersionSummary } from '@/shared/api/generated/model';
-import { EliteaApiError } from '@/shared/api/generated/mutator';
 
 export const MAX_TEAM_MEMBERS = 16;
 export const MAX_TEAM_NAME = 128;
@@ -87,14 +86,3 @@ export function defaultVersionOf(versions: readonly ApplicationVersionSummary[])
   return Number.isInteger(id) && id > 0 ? id : undefined;
 }
 
-/** The server's own sentence for a refusal, else `fallback`. */
-export function teamErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof EliteaApiError && error.failure.kind === 'http') {
-    const { body } = error.failure;
-    if (typeof body === 'object' && body !== null) {
-      const detail = (body as Record<string, unknown>)['error'];
-      if (typeof detail === 'string' && detail !== '') return detail;
-    }
-  }
-  return fallback;
-}

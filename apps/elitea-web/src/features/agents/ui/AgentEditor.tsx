@@ -19,6 +19,7 @@ import {
   type AgentEditorAgentLike,
 } from '../lib/agentEditorViewState';
 import { useAgentEditorCreate } from '../lib/useAgentEditorCreate';
+import { contextBlockRefusal } from '../lib/errorMessage';
 import { useHasPermission } from '../lib/useHasPermission';
 import { useValidateAgentVersion } from '../lib/useValidateAgentVersion';
 import { CreateAgentForm } from './CreateAgentForm';
@@ -257,7 +258,7 @@ function AgentEditorBody({ state, onAttachmentToolChange, onAssociationWarning, 
           values={create.values}
           onFieldChange={create.onFieldChange}
           disabled={create.isCreating}
-          showOutputContract
+          metaControls={{ contextHistoryError: contextBlockRefusal(create.error) }}
           generateAgentButtonSlot={
             <GenerateAgentButton
               onAgentCreated={handleAgentCreated}

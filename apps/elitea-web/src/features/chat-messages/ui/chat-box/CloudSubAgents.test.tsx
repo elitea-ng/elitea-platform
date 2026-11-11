@@ -43,6 +43,12 @@ describe('cloud sub-agents under a chat answer (client contract 1.48)', () => {
     expect(result.querySelector('b')).toBeNull();
   });
 
+  // Issue 1924: the chat answer draws the shared lane, so it shows what the workspace lane shows.
+  it("shows a settled child's steps and tokens, as the workspace lane does", () => {
+    renderWithTheme(<ApplicationAnswer answer={answer([lane({ status: 'completed', steps: 3, inputTokens: 100, outputTokens: 20 })])} messageId="m" />);
+    expect(screen.getByTestId('cloud-subagent')).toHaveTextContent('3 steps · 120 tokens');
+  });
+
   it('an answer without sub-agents shows none', () => {
     renderWithTheme(<ApplicationAnswer answer={answer([])} messageId="m" />);
     expect(screen.queryByTestId('cloud-subagents')).toBeNull();

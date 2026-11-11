@@ -29,30 +29,8 @@ import Alert from '@mui/material/Alert';
 import { t } from '@/shared/i18n';
 import type { MemoryEntryWriteRequest } from '@/shared/api/generated/model';
 import { createMemory } from '@/shared/api/generated/chat/chat';
-import { EliteaApiError } from '@/shared/api/generated/mutator';
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { MenuRow, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
-
-/**
- * The SERVER's own explanation, when it sent one. Duplicated from
- * `features/settings/lib/memory/longTermMemoryHelpers.ts`'s
- * `memoryServerErrorMessage` rather than imported: `no-sideways-features`
- * exempts `features/chat-messages` as an importer (dependency-cruiser.cjs's
- * own `pathNot`), but this codebase's established answer even where the
- * gate would allow it is a dozen duplicated lines over a cross-feature
- * reach — see `webhookHelpers.ts`'s identical helper and its own comment.
- */
-function memoryServerErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof EliteaApiError && error.failure.kind === 'http') {
-    const { body } = error.failure;
-    if (typeof body === 'string' && body !== '') return body;
-    if (typeof body === 'object' && body !== null) {
-      const record = body as Record<string, unknown>;
-      const detail = record['error'] ?? record['message'];
-      if (typeof detail === 'string' && detail !== '') return detail;
-    }
-  }
-  return fallback;
-}
 
 export interface RememberMemoryParams {
   readonly projectId: string;
@@ -97,7 +75,7 @@ export function useRememberMemory({ projectId, content, conversationId }: Rememb
           setTimeout(() => setJustSaved(false), SAVED_STATE_MS);
         },
         onError: (error) => {
-          setErrorMessage(memoryServerErrorMessage(error, t('chat.rememberThis.error', 'Failed to save this as a memory')));
+          setErrorMessage(serverErrorMessage(error, t('chat.rememberThis.error', 'Failed to save this as a memory')));
         },
       },
     );

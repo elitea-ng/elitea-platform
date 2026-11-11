@@ -23,7 +23,6 @@ import {
   buildStartBody,
   creationMeta,
   internalToolsSaveFailure,
-  positiveParticipantId,
   resolveSendLlmSettings,
   resolveSendModelName,
   resolveStartContract,
@@ -31,7 +30,7 @@ import {
   type SendDeps,
   type UploadAttachmentsOutcome,
 } from "./useChatBoxSend.helpers";
-import { addressedIdsOf, startParticipantId, targetForAddressed } from "./useChatBoxSend.floor";
+import { addressedIdsOf, NO_TARGET, startParticipantId, targetForAddressed, type ResolvedTarget } from "./useChatBoxSend.floor";
 
 /** @public Params for `useChatBoxSend`. */
 export interface UseChatBoxSendParams {
@@ -70,8 +69,8 @@ export interface UseChatBoxSendParams {
   readonly isAgentsPage?: boolean | undefined;
   /** The signed-in user, for the ad-hoc turn's `user` participant. */
   readonly userId?: string | undefined;
-  /** The participant an unaddressed message goes to, resolved once by `useResolvedTarget` (ADR-0050 D7c). */
-  readonly target?: unknown;
+  /** The participant an unaddressed message goes to, resolved once by `useResolvedTarget` (ADR-0050 D7c, issue 1859). */
+  readonly target?: ResolvedTarget | undefined;
   readonly participants?: readonly unknown[] | undefined;
   readonly userName?: string | undefined;
   readonly userAvatar?: string | undefined;
@@ -152,10 +151,10 @@ export function useChatBoxSend(
     [params.llmSettings, params.model, params.configuredModelProjectId],
   );
   // The composer's target and the roster an address picks from (one dependency for the start callback's budget).
-  const { target } = params;
+  const { target = NO_TARGET } = params;
   const routing = useMemo(() => ({ target, participants: params.participants }), [target, params.participants]);
   // The participant the last turn went to: its answer keeps that identity, even when the message addressed another agent or the history moves the target mid-turn.
-  const [turn, setTurn] = useState<{ readonly conversationUuid: string; readonly target: unknown }>();
+  const [turn, setTurn] = useState<{ readonly conversationUuid: string; readonly target: ResolvedTarget }>();
   const answerer = turn !== undefined && turn.conversationUuid === params.conversationUuid ? turn.target : target;
   const onContextChanged = contextManagementApi.useRefreshStatus();
   const transport = useChatStreamTransport({
@@ -192,15 +191,13 @@ export function useChatBoxSend(
       // agent participant.
       const sendTarget = targetForAddressed(routing.target, routing.participants, addressedIdsOf(payload["addressedTo"])); // ADR-0050 7c
       const isApplicationTurn =
-        resolveStartContract(sendTarget) === conversationApi.contracts.application;
+        resolveStartContract(sendTarget.participant) === conversationApi.contracts.application;
       if (
-        (sendTarget as { readonly entity_name?: unknown } | null | undefined)
+        (sendTarget.participant as { readonly entity_name?: unknown } | null | undefined)
           ?.entity_name === "user"
       )
         return requireTestTransport(NO_STREAM_TRANSPORT);
-      const targetParticipantId = positiveParticipantId(
-        (sendTarget as { readonly id?: unknown } | null | undefined)?.id,
-      );
+      const targetParticipantId = sendTarget.participantId;
       const grant = unattended?.();
       const bodyParams = {
         mcpTokens: await getExecutionTokens(projectIdString),
@@ -219,7 +216,7 @@ export function useChatBoxSend(
       if (body === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
       setTurn({ conversationUuid, target: sendTarget });
       const start = (startBody: Record<string, unknown>) =>
-        startDetailed({ projectId, conversationUuid, contract: resolveStartContract(sendTarget), body: startBody });
+        startDetailed({ projectId, conversationUuid, contract: resolveStartContract(sendTarget.participant), body: startBody });
       const outcome = await start(body);
       // ADR-0045: "Run to completion" is on by default, but an administrator
       // can turn grants off. Then the control hides for this page load. A
@@ -278,7 +275,7 @@ export function useChatBoxSend(
       // The agent the question went to answers again, not the composer's target now (Main refuses another).
       const answeredBy = targetForAddressed(routing.target, routing.participants, addressedIdsOf([input.participantId]));
       const isApplicationTurn =
-        resolveStartContract(answeredBy) === conversationApi.contracts.application;
+        resolveStartContract(answeredBy.participant) === conversationApi.contracts.application;
       const body = buildRegenerateBody({
         mcpTokens: await getExecutionTokens(projectIdString),
         conversationUuid: params.conversationUuid,
@@ -288,9 +285,7 @@ export function useChatBoxSend(
         question: input.question,
         ...modelRequest,
         isApplicationTurn,
-        participantId: positiveParticipantId(
-          (answeredBy as { readonly id?: unknown } | null | undefined)?.id,
-        ),
+        participantId: answeredBy.participantId,
         ...(input.updatedItems !== undefined
           ? { updatedItems: input.updatedItems }
           : {}),

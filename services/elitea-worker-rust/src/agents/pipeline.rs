@@ -116,6 +116,9 @@ struct PipelineApplicationRuntime<'a> {
     /// effectful direct nodes run behind a journal too (FU-248). `None` where
     /// the run has no root journal owner (a pipeline served as an agent's tool).
     node_recovery: Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// FU-323a: the root Agent-node re-entries this claim's inspect step
+    /// proved; `None` outside a checkpoint recovery and below the root.
+    root_reentry: Option<Arc<scoped_runtime::RootAgentReentry>>,
 }
 
 /// Frozen, fully admitted application pipeline definition.
@@ -606,6 +609,7 @@ impl PipelineNativeAgentAssembler {
         conversation_thread_id: String,
         conversation_id: String,
         node_recovery: Option<Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>>,
+        root_reentry: Option<Arc<scoped_runtime::RootAgentReentry>>,
     ) -> Result<PipelineRuntimeBindings, NativeAgentAssemblyError> {
         let has_llm_nodes = profile.definition().has_llm_nodes();
         let has_direct_tool_nodes = profile.definition().has_direct_tool_nodes();
@@ -853,6 +857,7 @@ impl PipelineNativeAgentAssembler {
                     conversation_thread_id,
                     materialization: materialization.clone(),
                     node_recovery: node_recovery.clone(),
+                    root_reentry: root_reentry.clone(),
                 },
             );
         let (application_resolver, application_runtime, application_scopes) = match continuation {
@@ -1102,11 +1107,20 @@ impl PipelineNativeAgentAssembler {
                         projection.presentation_catalog(),
                     )?;
                 }
+                let definition = fingerprint.map(|fingerprint| fingerprint.definition_digest());
+                // FU-323a review (b): a proven re-entry continues the saved
+                // Agent its step started with, never an edited one. Main
+                // recomputes the digest from the version's current content.
+                if let Some(reentry) = &runtime.root_reentry {
+                    reentry.require_unchanged_agent(node, definition)?;
+                }
                 let scope = scopes.bind_application(
                     "",
                     node,
                     Arc::new(projection),
                     runtime.node_events.clone(),
+                    runtime.root_reentry.clone(),
+                    definition,
                 )?;
                 NativePipelineApplicationParticipant::ScopedAgent {
                     tool,
@@ -1242,10 +1256,16 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             &policy,
             session.paused_writer(),
         )?;
-        let pipeline_aliases = frozen_pipeline_aliases(&toolsets);
+        let frozen = super::session::PreAssemblyRecoveryLevel {
+            pipelines: frozen_pipeline_aliases(&toolsets),
+            agents: frozen_agent_aliases(&toolsets),
+        };
+        // D-6 (C2): only this reclaim inspect retains a transient failure,
+        // of the activation as of the reads.
         self.state
             .open(session, lease, &plan, profile.definition())
-            .await?
+            .await
+            .map_err(super::session::reclaim_inspect_failure)?
             .inspect_checkpoint(
                 &plan,
                 profile.definition(),
@@ -1253,10 +1273,11 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
                     super::runtime::PipelineNativeStart::FanoutWake(wake) => Some(wake),
                     _ => None,
                 },
-                &pipeline_aliases,
+                &frozen,
             )
             .await
-            .map(|(evidence, _)| evidence)
+            .map(|(evidence, _, _)| evidence)
+            .map_err(super::session::reclaim_inspect_failure)
     }
 
     async fn assemble_checkpoint(
@@ -1444,6 +1465,7 @@ impl PipelineNativeAgentAssembler {
                 )
                 .await?;
             let mut wake_rerun = false;
+            let mut root_reentry = None;
             let evidence = if let Some(authority) = node_recovery {
                 let visit = state
                     .inspect_node_recovery(&plan, profile.definition(), authority.receipt())
@@ -1458,7 +1480,7 @@ impl PipelineNativeAgentAssembler {
                 }
                 Some(visit.into_checkpoint())
             } else if recovery {
-                let (evidence, frontier) = state
+                let (evidence, frontier, proofs) = state
                     .inspect_checkpoint(
                         &plan,
                         profile.definition(),
@@ -1468,10 +1490,15 @@ impl PipelineNativeAgentAssembler {
                         },
                         &RootRecoveryLevel {
                             aliases: frozen_pipeline_aliases(&toolsets),
+                            agents: frozen_agent_aliases(&toolsets),
                             children: &composition.children,
                         },
                     )
                     .await?;
+                // FU-323a: a root Agent node re-enters only the started call
+                // this inspect proved, bound into the evidence Main grants.
+                root_reentry =
+                    scoped_runtime::RootAgentReentry::from_proofs(&proofs, plan.execution_ids());
                 // A lost wake, or a lost continuation (FU-269), runs again as
                 // itself; any other frontier resumes from the checkpoint.
                 wake_rerun = matches!(
@@ -1536,6 +1563,7 @@ impl PipelineNativeAgentAssembler {
                     plan.session_id().to_owned(),
                     plan.conversation_id().to_owned(),
                     state.node_recovery_authority(),
+                    root_reentry,
                 )
                 .await?;
             node_runtimes.nodes = node_runtimes.nodes.with_context_view(context_view);
@@ -2187,12 +2215,18 @@ impl Toolset for StrictNodeToolset {
 /// pipelines the root's Agent nodes run (PM-2).
 struct RootRecoveryLevel<'a> {
     aliases: BTreeSet<String>,
+    /// FU-323a: the saved Agents Main froze, by alias.
+    agents: super::session::FrozenAgents,
     children: &'a BTreeMap<String, Arc<composition::AdmittedSavedPipeline>>,
 }
 
 impl super::session::FrozenRecoveryLevel for RootRecoveryLevel<'_> {
     fn admitted_aliases(&self) -> BTreeSet<String> {
         self.aliases.clone()
+    }
+
+    fn admitted_agents(&self) -> super::session::FrozenAgents {
+        self.agents.clone()
     }
 
     fn child(
@@ -2207,6 +2241,21 @@ impl super::session::FrozenRecoveryLevel for RootRecoveryLevel<'_> {
         }
         super::session::FrozenRecoveryLevel::child(self.children, alias)
     }
+}
+
+/// The attachments Main froze as saved Agents (`agent_type == "agent"`, as
+/// `bind_scoped_agent` requires), with the frozen application version: a root
+/// Agent node running one may be a recovery frontier (FU-323a).
+fn frozen_agent_aliases(toolsets: &AdmittedToolSnapshot<'_>) -> super::session::FrozenAgents {
+    toolsets
+        .iter()
+        .filter(|reference| reference.application_agent_type() == Some("agent"))
+        .filter_map(|reference| {
+            reference
+                .application_identity()
+                .map(|identity| (reference.toolkit_name().to_owned(), identity))
+        })
+        .collect()
 }
 
 fn frozen_pipeline_aliases(toolsets: &AdmittedToolSnapshot<'_>) -> BTreeSet<String> {
@@ -2232,7 +2281,9 @@ fn frozen_pipeline_aliases(toolsets: &AdmittedToolSnapshot<'_>) -> BTreeSet<Stri
 // Every owner is an explicit authority boundary — the claim, the project
 // scope, the model facade, the tool policy and the child's own identity —
 // and bundling them would hide which of them the admission below checks.
-#[allow(clippy::too_many_arguments)]
+// One ordered admission (FU-291's durable tool thread, FU-323a's runtime
+// fields) is kept together.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) async fn materialize_saved_pipeline_tool(
     platform: &PlatformClient,
     runtime_context: &ClaimBoundRuntimeContextAuthority,
@@ -2264,6 +2315,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
         conversation_thread_id,
         materialization,
         node_recovery: None,
+        root_reentry: None,
     };
     let (definition, bound, definition_sha256) = match admit_saved_pipeline_child(
         platform,
@@ -2716,6 +2768,8 @@ fn bind_admitted_saved_pipeline<'a>(
                     node,
                     Arc::new(projection),
                     runtime.node_events.clone(),
+                    None,
+                    None,
                 )?;
                 descendant_guards.insert("ordinary child continuation");
                 NativePipelineApplicationParticipant::ScopedAgent {

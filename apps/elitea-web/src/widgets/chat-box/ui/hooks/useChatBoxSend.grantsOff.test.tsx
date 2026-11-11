@@ -11,6 +11,7 @@ import { server } from '@/test/setup';
 
 import type { StreamStartOutcome } from './useChatBoxHandlers.helpers';
 import { useChatBoxSend, type UseChatBoxSendResult } from './useChatBoxSend';
+import { resolvedTarget } from './useChatBoxSend.floor';
 
 const BASE = '/api/v2';
 const CONVERSATION = '00000000-0000-4000-8000-0000000000ee';
@@ -50,7 +51,7 @@ function mount(grant: Record<string, unknown>): () => UseChatBoxSendResult | und
     live = useChatBoxSend({
       deps: { createConversation: () => Promise.resolve(undefined), uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }) },
       setChatHistory: () => undefined, conversationUuid: CONVERSATION, projectId: 7, projectIdString: '7',
-      target: PARTICIPANT, participants: [PARTICIPANT],
+      target: resolvedTarget(PARTICIPANT), participants: [PARTICIPANT],
       unattended: () => grant,
     });
     return null;
@@ -77,7 +78,7 @@ it('sends the message again without the grant once when grants are off, and hide
     live = useChatBoxSend({
       deps: { createConversation: () => Promise.resolve(undefined), uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }) },
       setChatHistory: () => undefined, conversationUuid: CONVERSATION, projectId: 7, projectIdString: '7',
-      target: PARTICIPANT, participants: [PARTICIPANT],
+      target: resolvedTarget(PARTICIPANT), participants: [PARTICIPANT],
       unattended: () => GRANT,
     });
     return null;

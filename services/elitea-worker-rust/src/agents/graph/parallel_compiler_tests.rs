@@ -56,6 +56,12 @@ fn fixed_parallel_owns_distinct_declared_agents_and_excludes_parent_frontiers() 
         !definition
             .recovery_frontier_supported(&["workerA".into()], &std::collections::BTreeSet::new())
     );
+    // FU-323a: a fan-out owned Agent node is never admitted by an agent alias.
+    assert!(!definition.recovery_frontier_supported_with_agents(
+        &["workerA".into()],
+        &std::collections::BTreeSet::new(),
+        &std::collections::BTreeSet::from(["Research Agent".to_owned()])
+    ));
     // Decisions arrive per interrupt from Main, never through parent state.
     assert!(
         !definition

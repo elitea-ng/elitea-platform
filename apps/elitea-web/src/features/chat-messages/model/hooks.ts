@@ -7,7 +7,7 @@
  * `useStopStreaming`, `useCtrlEnterKeyEventsHandler`, and six
  * `useChatXxxSocket` variants) that determines each message's real-time
  * `isLoading`/`isStreaming`/`task_id`/`references`/`hitlInterrupt` state as
- * agent events stream in off the socket. `usePrevious`/`useDebounce`/
+ * agent events stream in off the socket. `usePrevious`/
  * `useOutsideClick` below are unrelated, self-contained utilities with no
  * dependency on that pipeline.
  *
@@ -25,7 +25,7 @@
  * fix round, and does not belong under a false "ported from hooks.js"
  * label.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 
 /** `usePrevious` — returns the previous value of a prop/state. */
 export function usePrevious<T>(value: T): T | undefined {
@@ -36,23 +36,6 @@ export function usePrevious<T>(value: T): T | undefined {
   }, [value]);
 
   return ref.current;
-}
-
-/** `useDebounce` — debounces a value with the given delay. */
-export function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedValue(value);
-    }, delay);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [value, delay]);
-
-  return debouncedValue;
 }
 
 /** `useOutsideClick` — detects clicks outside a ref'd element. */

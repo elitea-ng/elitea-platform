@@ -335,7 +335,7 @@ export function CreateApplication(): ReactNode {
             values={agentDraftValues}
             onFieldChange={handleAgentFieldChange}
             disabled={isCreating}
-            showOutputContract={{ contextHistory: contextBlockRefusal(createDraftError) }}
+            metaControls={{ contextHistoryError: contextBlockRefusal(createDraftError) }}
             modelSettingsSlot={
               <AgentModelSettings
                 projectId={projectId}

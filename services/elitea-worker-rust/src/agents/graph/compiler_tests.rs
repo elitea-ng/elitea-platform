@@ -973,6 +973,49 @@ fn a_saved_agent_frontier_node_is_named_only_for_a_saved_agent() {
     );
 }
 
+/// FU-323a U1: an Agent node no fan-out owns is a frontier for a saved Agent
+/// only when its alias is among the agent aliases the root reclaim admits;
+/// a fan-out-owned Agent node, an unknown node, an alias frozen as neither
+/// kind, a HITL node and a Printer node stay refused, and the refusal never
+/// names an admitted node.
+#[test]
+fn a_saved_agent_node_is_a_frontier_only_for_an_admitted_agent_alias() {
+    use std::collections::BTreeSet;
+    let definition = PipelineDefinition::from_yaml(
+        "state:\n  answer: str\n  messages: list\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: inner\n    input_mapping:\n      task: {type: fixed, value: 'go'}\n    output: [answer]\n    transition: END\n",
+    )
+    .expect("one Agent node");
+    let pending = ["delegate".to_owned()];
+    let none = BTreeSet::new();
+    let agents = BTreeSet::from(["inner".to_owned()]);
+    let other = BTreeSet::from(["other".to_owned()]);
+    assert!(definition.recovery_frontier_supported_with_agents(&pending, &none, &agents));
+    assert!(!definition.recovery_frontier_supported_with_agents(&pending, &none, &none));
+    assert!(!definition.recovery_frontier_supported_with_agents(&pending, &other, &other));
+    assert!(!definition.recovery_frontier_supported_with_agents(
+        &["missing".to_owned()],
+        &none,
+        &agents
+    ));
+    assert_eq!(
+        definition.saved_agent_frontier_node_with_agents(&pending, &none, &agents),
+        None
+    );
+    assert_eq!(
+        definition.saved_agent_frontier_node_with_agents(&pending, &none, &none),
+        Some("delegate")
+    );
+    // HITL and Printer nodes are never admitted by an agent alias.
+    for yaml in [
+        "entry_point: a\nnodes:\n  - id: a\n    type: hitl\n    user_message: {type: fixed, value: ok}\n    routes:\n      approve: END\n",
+        "state:\n  answer: str\nentry_point: show\nnodes:\n  - id: show\n    type: printer\n    input_mapping:\n      printer: {type: fixed, value: 'hi'}\n    transition: END\n",
+    ] {
+        let definition = PipelineDefinition::from_yaml(yaml).expect("a one-node fixture");
+        let id = definition.entry_point().to_owned();
+        assert!(!definition.recovery_frontier_supported_with_agents(&[id], &none, &agents));
+    }
+}
+
 /// FU-249: an Agent node is a model-checkpoint recovery frontier only when the
 /// attachment it runs was frozen as a saved pipeline (its child resumes from
 /// its own checkpoint); an Agent node running a saved Agent is not.

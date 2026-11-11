@@ -79,13 +79,6 @@
   "workspace.tool.succeeded": "Succeeded",
   "workspace.tool.failed": "Failed",
   "workspace.tool.truncated": "(output truncated)",
-  "workspace.subagent.title": "Sub-agent {{n}}",
-  "workspace.subagent.usage": "{{steps}} steps · {{tokens}} tokens",
-  "workspace.subagent.running": "Running",
-  "workspace.subagent.completed": "Done",
-  "workspace.subagent.failed": "Failed",
-  "workspace.subagent.budgetExhausted": "Out of budget",
-  "workspace.subagent.cancelled": "Stopped",
   "workspace.agentsMdApplied": "AGENTS.md applied",
   "workspace.cancel": "Cancel",
   "workspace.commitFailed.retry": "Retry",
@@ -1161,6 +1154,5 @@
   "workspace.floor.superseded": "A newer message took the floor: the other agents this message addressed do not answer it.",
   "workspace.cloudLead.unnamed": "the lead",
   "workspace.cloudLead.text": "To: {{name}} (lead). A message that names no agent goes to {{name}}, which runs in the cloud and gets only the text: no @ files, images, skills, / commands or /compact.",
-  "workspace.cloudLead.address": "To use them, address a local agent, for example @{{local}}.",
-  "workspace.subagent.temporary": "Temporary"
+  "workspace.cloudLead.address": "To use them, address a local agent, for example @{{local}}."
 }

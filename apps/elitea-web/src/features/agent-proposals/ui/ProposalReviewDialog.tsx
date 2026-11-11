@@ -24,6 +24,7 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { AgentProposal } from '@/shared/api/generated/model';
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { triggerBlobDownload } from '@/shared/lib/download';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
@@ -32,7 +33,7 @@ import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { agentsMarkdownOf, fileStemOf, reviewDraftOf, soulMarkdownOf, type ReviewDraft } from '../lib/proposalDraft';
-import { AgentMadeError, proposalErrorMessage } from '../lib/proposalErrors';
+import { AgentMadeError } from '../lib/proposalErrors';
 import { useProposalDecisions, type CreatedAgent } from '../model/useAgentProposals';
 import { ProposalToolList } from './ProposalToolList';
 
@@ -92,14 +93,14 @@ function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: Proposa
           if (cause instanceof AgentMadeError) {
             setMadeId(cause.applicationId);
             setError(
-              proposalErrorMessage(
+              serverErrorMessage(
                 cause.cause,
                 t('features.agentProposals.review.recordFailed', 'The agent was created, but the proposal was not updated. Try again to finish.'),
               ),
             );
             return;
           }
-          setError(proposalErrorMessage(cause, t('features.agentProposals.review.createFailed', 'The agent was not created. Try again.')));
+          setError(serverErrorMessage(cause, t('features.agentProposals.review.createFailed', 'The agent was not created. Try again.')));
         },
       },
     );
@@ -109,7 +110,7 @@ function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: Proposa
     setError(undefined);
     dismiss.mutate(proposal.id, {
       onSuccess: onClose,
-      onError: (cause) => setError(proposalErrorMessage(cause, t('features.agentProposals.review.dismissFailed', 'The proposal was not dismissed. Try again.'))),
+      onError: (cause) => setError(serverErrorMessage(cause, t('features.agentProposals.review.dismissFailed', 'The proposal was not dismissed. Try again.'))),
     });
   };
 

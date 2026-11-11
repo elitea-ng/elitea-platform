@@ -24,19 +24,13 @@
  * them, and a person who read it would try the same thing again.
  */
 import { EliteaApiError } from '@/shared/api/generated/mutator';
+import { serverErrorSentence } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
-
-/** The `{error: "..."}` envelope every refusal in this API uses (pkg/apierr). */
-function serverMessage(body: unknown): string | undefined {
-  if (typeof body !== 'object' || body === null) return undefined;
-  const message = (body as Record<string, unknown>)['error'];
-  return typeof message === 'string' && message !== '' ? message : undefined;
-}
 
 function evaluationErrorMessage(error: unknown, fallback: string): string | undefined {
   if (error === null || error === undefined) return undefined;
   if (error instanceof EliteaApiError && error.failure.kind === 'http') {
-    return serverMessage(error.failure.body) ?? fallback;
+    return serverErrorSentence(error.failure.body) ?? fallback;
   }
   // A network failure or an abort has no server body to recover, and its own
   // message ("network error — …") is the most specific thing there is.

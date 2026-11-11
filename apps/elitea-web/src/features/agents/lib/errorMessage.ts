@@ -1,4 +1,5 @@
 import { EliteaApiError } from '@/shared/api/generated/mutator';
+import { serverErrorSentence } from '@/shared/api/serverErrorMessage';
 
 /**
  * Renders a TanStack Query `error` (an `EliteaApiError`, per
@@ -69,10 +70,8 @@ export function applicationErrorMessageOrFallback(error: unknown, fallback: stri
  * endpoint's refusal — "Unpublish first. Cannot delete a published
  * version." — reaches the user only through this function.
  *
- * The same extraction `features/settings/api/ai-configuration/api.ts`'s
- * `modelConfigurationErrorMessage` already does for the model routes.
- * Rebuilt here rather than imported: `no-sideways-features`/R-L3 forbid
- * reaching into another feature's internals.
+ * The body is read by the shared `serverErrorSentence`
+ * (`shared/api/serverErrorMessage.ts`, issue 1848), as every feature does.
  *
  * `applicationErrorMessage` keeps its contract unchanged; every existing
  * caller still gets exactly what it got.
@@ -82,18 +81,9 @@ export function applicationServerErrorMessage(error: unknown, fallback: string):
     /* `fallback`, never `error.message`: for an `EliteaApiError` that message
        is always the `eliteaFetch: <status> from <url>` diagnostic. A refusal
        the server did not explain is better reported in the app's own words. */
-    return error.failure.kind === 'http' ? (serverBodyMessage(error.failure.body) ?? fallback) : fallback;
+    return error.failure.kind === 'http' ? (serverErrorSentence(error.failure.body) ?? fallback) : fallback;
   }
   return applicationErrorMessageOrFallback(error, fallback);
-}
-
-/** The flat `{"error": "…"}` (or `{"message": "…"}`) body the Go handlers answer a refusal with. `undefined` when the body says nothing readable. */
-function serverBodyMessage(body: unknown): string | undefined {
-  if (typeof body === 'string' && body !== '') return body;
-  if (typeof body !== 'object' || body === null) return undefined;
-  const record = body as Record<string, unknown>;
-  const detail = record['error'] ?? record['message'];
-  return typeof detail === 'string' && detail !== '' ? detail : undefined;
 }
 
 /** The `code` of the server's refusal of a bad `meta.context` block (ADR-0050 decision 9). */
@@ -110,5 +100,5 @@ export function contextBlockRefusal(error: unknown): string | undefined {
   if (typeof body !== 'object' || body === null || (body as Record<string, unknown>)['code'] !== CONTEXT_BLOCK_INVALID) {
     return undefined;
   }
-  return serverBodyMessage(body);
+  return serverErrorSentence(body);
 }

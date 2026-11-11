@@ -5,6 +5,7 @@
  * tool rows and text, `subagent_finished` settles it (again, after a
  * `send_input` continued it).
  */
+import type { SubAgentStartedPayload } from '@/shared/desktop/subAgentIpc';
 import type { AgentEvent, SubAgentStatus } from '@/shared/desktop/workspaceIpc';
 
 import type { TranscriptItem } from './transcriptItem';
@@ -20,6 +21,15 @@ export interface SubAgentLane {
   displayName?: string;
   /** The spawn profile's avatar key (display only). */
   avatar?: string;
+  /**
+   * The spawn's profile and brief by digest, and what the brief named
+   * (`subagent_started`, #1827): kept on the lane so the recorded turn (the
+   * thread history) carries them as the live one did. Never the soul, a quote
+   * or a fact.
+   */
+  profileDigest?: string;
+  briefDigest?: string;
+  briefRefs?: NonNullable<SubAgentStartedPayload['brief_refs']>;
   /** A cloud child (ADR-0050 decision 4): the lane says it is a temporary participant. */
   temporary?: boolean;
   status: SubAgentStatus;
@@ -57,6 +67,7 @@ function withLane<V extends LaneView>(view: V, agentId: string, change: (lane: S
 
 function onStarted<V extends LaneView>(view: V, event: EventOf<'subagent_started'>): V {
   const { agent_id: agentId, parent_call_id: parentCallId, ordinal, label, display_name: displayName, avatar } = event.payload;
+  const { profile_digest: profileDigest, brief_digest: briefDigest, brief_refs: briefRefs } = event.payload;
   const lanes = view.subAgents ?? [];
   if (lanes.some((lane) => lane.agentId === agentId)) return view;
   // The spawn's profile (#1827): the same name and avatar key a cloud lane carries.
@@ -69,6 +80,9 @@ function onStarted<V extends LaneView>(view: V, event: EventOf<'subagent_started
     ...(label === undefined ? {} : { label }),
     ...(displayName === undefined ? {} : { displayName }),
     ...(avatar === undefined ? {} : { avatar }),
+    ...(profileDigest === undefined ? {} : { profileDigest }),
+    ...(briefDigest === undefined ? {} : { briefDigest }),
+    ...(briefRefs === undefined ? {} : { briefRefs }),
   };
   return { ...view, subAgents: [...lanes, lane] };
 }

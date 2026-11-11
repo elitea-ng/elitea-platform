@@ -29,6 +29,7 @@ import Paper from '@mui/material/Paper';
 import Snackbar from '@mui/material/Snackbar';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { DrawerPageHeader } from '@/shared/ui/settings/DrawerPageHeader';
@@ -44,7 +45,7 @@ import {
 import { webhooksFeature } from '@/features/settings';
 import type { WebhookFormValues, WebhookViewRow } from '@/features/settings';
 
-const { useWebhookPermissions, generateWebhookSecret, webhookServerErrorMessage, WebhookFormDialog, WebhookSecretDialog, WebhooksTable } =
+const { useWebhookPermissions, generateWebhookSecret, WebhookFormDialog, WebhookSecretDialog, WebhooksTable } =
   webhooksFeature;
 
 const EMPTY_WEBHOOKS: Webhook[] = [];
@@ -135,7 +136,7 @@ export const WebhooksContent = memo(function WebhooksContent() {
           {
             onSuccess: () => setFormOpen(false),
             onError: (error) => {
-              const message = webhookServerErrorMessage(
+              const message = serverErrorMessage(
                 error,
                 t('entities.webhook.error.updateFailed', 'Failed to update the webhook'),
               );
@@ -153,7 +154,7 @@ export const WebhooksContent = memo(function WebhooksContent() {
           setRevealSecret(secret);
         },
         onError: (error) => {
-          const message = webhookServerErrorMessage(
+          const message = serverErrorMessage(
             error,
             t('entities.webhook.error.createFailed', 'Failed to create the webhook'),
           );

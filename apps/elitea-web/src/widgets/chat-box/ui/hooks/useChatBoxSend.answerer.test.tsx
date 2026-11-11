@@ -24,6 +24,7 @@ import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
 
 import { useChatBoxSend, type UseChatBoxSendResult } from './useChatBoxSend';
+import { resolvedTarget } from './useChatBoxSend.floor';
 
 const BASE = '/api/v2';
 const CONVERSATION = '00000000-0000-4000-8000-000000001625';
@@ -71,7 +72,7 @@ function mount(): void {
       deps: { createConversation: () => Promise.resolve(undefined), uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }) },
       setChatHistory: (update) => setHistory(update),
       conversationUuid: CONVERSATION, projectId: 7, projectIdString: '7',
-      target: AGENT_B, participants: [AGENT_A, AGENT_B],
+      target: resolvedTarget(AGENT_B), participants: [AGENT_A, AGENT_B],
     });
     return null;
   }

@@ -7029,7 +7029,9 @@ worker:
     cooldownSeconds: 300
 
   # The worker drains on SIGTERM for limits.shutdown_timeout_millis (30s):
-  # in-flight turns finish or are handed back. Kubernetes' default grace
+  # in-flight turns that finish in time settle; one still running is dropped
+  # with no ack and reclaimed after the claim lease (it resumes only where
+  # recovery is on). Kubernetes' default grace
   # period is ALSO 30s, so it used to SIGKILL the drain at its own deadline.
   # The render refuses less than shutdown_timeout_millis / 1000 + 15.
   terminationGracePeriodSeconds: 45
