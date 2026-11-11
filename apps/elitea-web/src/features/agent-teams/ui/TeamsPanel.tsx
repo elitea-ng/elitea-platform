@@ -15,11 +15,11 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
 import type { AgentTeam, CreatedConversation } from '@/shared/api/generated/model';
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 
-import { teamErrorMessage } from '../lib/teamDraft';
 import { useAgentTeamList, useAgentTeamWrites, useTeamAbilities } from '../model/useAgentTeams';
 import { TeamEditDialog } from './TeamEditDialog';
 import { TeamRow } from './TeamRow';
@@ -73,7 +73,7 @@ function TeamsList({
     setStartError(undefined);
     writes.start.mutate(team.id, {
       onSuccess: (conversation) => onStarted(conversation),
-      onError: (cause) => setStartError(teamErrorMessage(cause, t('features.agentTeams.startFailed', 'The conversation was not started. Try again.'))),
+      onError: (cause) => setStartError(serverErrorMessage(cause, t('features.agentTeams.startFailed', 'The conversation was not started. Try again.'))),
     });
   };
 
@@ -82,7 +82,7 @@ function TeamsList({
     setDeleteError(undefined);
     writes.remove.mutate(deleting.id, {
       onSuccess: () => setDeleting(undefined),
-      onError: (cause) => setDeleteError(teamErrorMessage(cause, t('features.agentTeams.deleteFailed', 'The team was not deleted. Try again.'))),
+      onError: (cause) => setDeleteError(serverErrorMessage(cause, t('features.agentTeams.deleteFailed', 'The team was not deleted. Try again.'))),
     });
   };
 
@@ -101,7 +101,7 @@ function TeamsList({
       </Box>
       {startError !== undefined && <Alert testId="agent-teams-start-error">{startError}</Alert>}
       {list.isError && (
-        <Alert testId="agent-teams-load-error">{teamErrorMessage(list.error, t('features.agentTeams.loadFailed', 'The teams could not be loaded.'))}</Alert>
+        <Alert testId="agent-teams-load-error">{serverErrorMessage(list.error, t('features.agentTeams.loadFailed', 'The teams could not be loaded.'))}</Alert>
       )}
       {list.isSuccess && teams.length === 0 && (
         <Typography variant="bodyMedium" color="text.secondary" data-testid="agent-teams-empty">

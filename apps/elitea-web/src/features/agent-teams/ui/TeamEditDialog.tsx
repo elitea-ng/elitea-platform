@@ -27,6 +27,7 @@ import StarBorderIcon from '@mui/icons-material/StarBorder';
 import { useListApplications } from '@/shared/api/generated/applications/applications';
 import type { AgentTeam, Application } from '@/shared/api/generated/model';
 import { unwrapList } from '@/shared/api/unwrap';
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
@@ -37,7 +38,6 @@ import {
   draftOf,
   draftProblem,
   hasMember,
-  teamErrorMessage,
   withMember,
   withoutMember,
   writeOf,
@@ -92,7 +92,7 @@ function TeamEditForm({ projectId, team, onClose, onSaved }: Omit<TeamEditDialog
         onSaved?.(saved);
         onClose();
       },
-      onError: (cause: unknown) => setError(teamErrorMessage(cause, t('features.agentTeams.edit.failed', 'The team was not saved. Try again.'))),
+      onError: (cause: unknown) => setError(serverErrorMessage(cause, t('features.agentTeams.edit.failed', 'The team was not saved. Try again.'))),
     };
     if (team === undefined) create.mutate(body, handlers);
     else update.mutate({ teamId: team.id, team: body }, handlers);
@@ -112,7 +112,7 @@ function TeamEditForm({ projectId, team, onClose, onSaved }: Omit<TeamEditDialog
         }
         setDraft((current) => withMember(current, { application_id: applicationId, project_id: memberProject, version_id: versionId, name: agent.name }));
       })
-      .catch((cause: unknown) => setError(teamErrorMessage(cause, t('features.agentTeams.edit.addFailed', 'The agent could not be added. Try again.'))))
+      .catch((cause: unknown) => setError(serverErrorMessage(cause, t('features.agentTeams.edit.addFailed', 'The agent could not be added. Try again.'))))
       .finally(() => setAdding(false));
   };
 

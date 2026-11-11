@@ -27,12 +27,13 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { useMutation, useQuery } from '@tanstack/react-query';
 
 import type { AgentMemoryEntry } from '@/shared/api/generated/model';
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { copyMemoryInto, fetchCopyableMemory, forkAgentInto } from '../api/agentProposalsApi';
-import { AgentMadeError, proposalErrorMessage } from '../lib/proposalErrors';
+import { AgentMadeError } from '../lib/proposalErrors';
 
 export interface CopyTargetProject {
   readonly id: string;
@@ -137,11 +138,11 @@ function CopyToProjectDialog({
         onError: (cause) =>
           setError(
             cause instanceof AgentMadeError
-              ? proposalErrorMessage(
+              ? serverErrorMessage(
                   cause.cause,
                   t('features.agentProposals.copy.memoryFailed', 'The agent was copied, but its memory was not. Try again to copy the memory.'),
                 )
-              : proposalErrorMessage(cause, t('features.agentProposals.copy.failed', 'The agent was not copied. Try again.')),
+              : serverErrorMessage(cause, t('features.agentProposals.copy.failed', 'The agent was not copied. Try again.')),
           ),
       },
     );
