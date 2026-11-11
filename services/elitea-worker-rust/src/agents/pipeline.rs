@@ -1704,6 +1704,13 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
         Some(Arc::new(self.rebind_branch_journals(&journals)))
     }
 
+    fn for_tool_pipelines(
+        &self,
+        admission: Arc<dyn super::graph::tool_pipeline_threads::ToolPipelineAdmission>,
+    ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+        Some(Arc::new(self.rebind_tool_pipelines(&admission)))
+    }
+
     fn for_parallel_events(
         &self,
         events: PipelineNodeEventSender,

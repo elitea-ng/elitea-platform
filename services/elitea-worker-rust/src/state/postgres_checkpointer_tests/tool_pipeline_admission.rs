@@ -5,8 +5,7 @@ use super::*;
 use crate::agents::application_pipeline::PipelineToolCallLineage;
 use crate::agents::graph::ParallelChildCheckpoint;
 use crate::agents::graph::tool_pipeline_threads::{
-    MAX_TOOL_PIPELINE_THREADS_PER_MEMBER, ToolPipelineAdmission, is_tool_pipeline_limit,
-    tool_pipeline_thread,
+    MAX_TOOL_PIPELINE_THREADS_PER_MEMBER, is_tool_pipeline_limit, tool_pipeline_thread,
 };
 
 async fn database() -> IsolatedPostgres {

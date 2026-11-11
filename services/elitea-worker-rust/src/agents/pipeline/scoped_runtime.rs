@@ -140,6 +140,10 @@ pub(crate) struct PipelineApplicationNodeRuntime {
     /// A fan-out member's own application channel: its child run, nested saved
     /// applications included, sends there (T-2A3).
     member_events: Option<crate::agents::application_tools::ApplicationEventSender>,
+    /// FU-291: a fan-out member's fenced admission of the nested threads of
+    /// the saved pipelines its Agent calls as tools, lent around its run.
+    tool_pipelines:
+        Option<Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>>,
 }
 
 impl PipelineApplicationNodeRuntime {
@@ -158,6 +162,25 @@ impl PipelineApplicationNodeRuntime {
             prepare_gate,
             visible_starts: Arc::default(),
             member_events: None,
+            tool_pipelines: None,
+        }
+    }
+
+    /// The same runtime, its Agent's pipeline tools run durably under this
+    /// member family's admission (FU-291).
+    pub(crate) fn with_tool_pipelines(
+        &self,
+        admission: Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>,
+    ) -> Self {
+        Self {
+            scope: self.scope.clone(),
+            node_name: self.node_name.clone(),
+            applications: Arc::clone(&self.applications),
+            events: self.events.clone(),
+            prepare_gate: Arc::clone(&self.prepare_gate),
+            visible_starts: Arc::clone(&self.visible_starts),
+            member_events: self.member_events.clone(),
+            tool_pipelines: Some(admission),
         }
     }
 
@@ -171,6 +194,7 @@ impl PipelineApplicationNodeRuntime {
             prepare_gate: Arc::clone(&self.prepare_gate),
             visible_starts: Arc::default(),
             member_events: self.member_events.clone(),
+            tool_pipelines: self.tool_pipelines.clone(),
         }
     }
 
@@ -191,6 +215,7 @@ impl PipelineApplicationNodeRuntime {
             prepare_gate: Arc::clone(&self.prepare_gate),
             visible_starts: Arc::default(),
             member_events: Some(member_events),
+            tool_pipelines: self.tool_pipelines.clone(),
         }
     }
 
@@ -314,11 +339,30 @@ impl PipelineApplicationNodeRuntime {
         let mut receiver = receiver_owner.take().await.map_err(|_| failure())?;
         let tool = Arc::clone(tool);
         let member_events = self.member_events.clone();
+        // FU-291: the member's Agent runs its pipeline tools on nested threads
+        // its own family admits, `A` being this activation's own thread.
+        let tool_pipelines = self.tool_pipelines.clone().map(|admission| {
+            crate::agents::application_tools::MemberToolPipelines {
+                admission,
+                agent_thread: receipt.activation().thread_id().to_owned(),
+            }
+        });
         let mut terminal = None;
         let result = self
             .run_child_draining(
                 async move {
                     let child = tool.execute(tool_context, arguments);
+                    let child = async move {
+                        match tool_pipelines {
+                            Some(member) => {
+                                crate::agents::application_tools::with_member_tool_pipelines(
+                                    member, child,
+                                )
+                                .await
+                            }
+                            None => child.await,
+                        }
+                    };
                     match member_events {
                         Some(sender) => {
                             crate::agents::application_tools::with_member_events(sender, child)

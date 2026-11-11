@@ -301,6 +301,9 @@ pub(crate) struct PipelineNodeRuntimes {
     /// The run's journals lent to a saved child for its direct tool nodes only
     /// (FU-248). Its Code nodes keep their own recovery rules.
     direct_tool_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// FU-291 D-6: a durable nested pipeline's visit, seeded into its first
+    /// frontier so its direct nodes journal as a saved child's do.
+    tool_visit: Option<String>,
     saved_child_scope_provider: Option<
         Arc<dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider>,
     >,
@@ -489,6 +492,19 @@ impl PipelineNodeRuntimes {
         self
     }
 
+    /// FU-291 D-6: a durable nested pipeline (a fan-out member's Agent called
+    /// it as a tool) journals its direct tool nodes on its own nested thread,
+    /// under `visit`, through that thread's fenced writer.
+    pub(crate) fn with_tool_journals(
+        mut self,
+        journals: Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>,
+        visit: String,
+    ) -> Self {
+        self.direct_tool_recovery = Some(journals);
+        self.tool_visit = Some(visit);
+        self
+    }
+
     /// A fan-out member's saved child, and every saved pipeline beneath it,
     /// journal their direct tool nodes through the member's branch family
     /// (FU-248 at the first level, FU-264 below it): this level's journals
@@ -532,6 +548,7 @@ impl PipelineNodeRuntimes {
             code: None,
             node_recovery: None,
             direct_tool_recovery: None,
+            tool_visit: None,
             saved_child_scope_provider: None,
             saved_code_owner: None,
             saved_code_member: None,
@@ -1677,7 +1694,16 @@ impl PipelineDefinition {
                 node_checkpointer,
                 state_schema,
                 InitialState {
-                    defaults: self.state_defaults.clone(),
+                    defaults: {
+                        let mut defaults = self.state_defaults.clone();
+                        if let Some(visit) = &runtimes.tool_visit {
+                            defaults.insert(
+                                APPLICATION_VISIT_STATE_KEY.to_owned(),
+                                serde_json::Value::String(visit.clone()),
+                            );
+                        }
+                        defaults
+                    },
                     reducers: Arc::clone(&self.state_reducers),
                     context_view: runtimes.context_view.clone(),
                     declares_messages: self.state.contains_key("messages"),
@@ -2115,6 +2141,14 @@ impl PipelineDefinition {
                     .map(|outputs| (node.id().to_owned(), outputs))
             })
             .collect()
+    }
+
+    /// FU-291 C3: the text a finished run of this pipeline answers, from its
+    /// final state: exactly what the completion event of the uninterrupted
+    /// run carried.
+    pub(crate) fn completed_text(&self, state: &State) -> String {
+        select_pipeline_result(state, &self.result_policy())
+            .unwrap_or_else(|| super::agent::PIPELINE_COMPLETED_CONTENT.to_owned())
     }
 
     /// Collect result candidates separately from graph control flow.

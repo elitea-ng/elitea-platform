@@ -320,6 +320,36 @@ pub(super) fn current_member_events() -> Option<ApplicationEventSender> {
     MEMBER_EVENT_SENDER.try_with(Clone::clone).ok()
 }
 
+/// FU-291: one fan-out member's authority over the nested threads of the
+/// saved pipelines its Agent calls as tools. The pipeline tool is one object
+/// shared by every member and its tool context names none, so the member's
+/// fenced family and its Agent's own thread (the activation receipt's) travel
+/// beside its child run, like its event channel.
+#[derive(Clone)]
+pub(crate) struct MemberToolPipelines {
+    pub(crate) admission:
+        Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>,
+    /// The member Agent node's thread: `A` of every nested thread it admits.
+    pub(crate) agent_thread: String,
+}
+
+tokio::task_local! {
+    static MEMBER_TOOL_PIPELINES: MemberToolPipelines;
+}
+
+/// Run `work` as one fan-out member whose Agent's pipeline tools are durable.
+pub(crate) async fn with_member_tool_pipelines<F: Future>(
+    member: MemberToolPipelines,
+    work: F,
+) -> F::Output {
+    MEMBER_TOOL_PIPELINES.scope(member, work).await
+}
+
+/// The running member's nested pipeline authority, if any.
+pub(crate) fn current_member_tool_pipelines() -> Option<MemberToolPipelines> {
+    MEMBER_TOOL_PIPELINES.try_with(Clone::clone).ok()
+}
+
 pub(super) enum ApplicationEventSignal {
     ContainerEvent(Box<Event>),
     GraphDescendant {
@@ -3685,10 +3715,11 @@ impl ApplicationAssemblyState<'_> {
             delegated_authorization: delegated_authorization.clone(),
             internal_tools,
             parallel_applications,
-            model_scopes: self
-                .model_scopes
-                .as_ref()
-                .map(|scopes| scopes.with_application_tools(child_tools.agent_tool_names())),
+            model_scopes: self.model_scopes.as_ref().map(|scopes| {
+                scopes
+                    .with_application_tools(child_tools.agent_tool_names())
+                    .with_pipeline_tools(child_tools.pipeline_tool_names())
+            }),
             egress: Arc::clone(self.policy.egress()),
             run_caps: Arc::clone(self.policy.run_caps()),
             preamble: Arc::clone(self.policy.content_controls().preamble()),

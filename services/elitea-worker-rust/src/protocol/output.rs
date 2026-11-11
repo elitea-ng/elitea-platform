@@ -837,6 +837,11 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         Some("pipeline.input_invalid") => RuntimeFailureKind::PipelineInputInvalid,
         Some("pipeline.input_limit") => RuntimeFailureKind::PipelineInputLimit,
         Some("pipeline.tool_unavailable") => RuntimeFailureKind::PipelineToolUnavailable,
+        // FU-291 C5: a durable nested pipeline thread's store was transiently
+        // unavailable: a retryable dependency failure, never a refusal.
+        Some(crate::agents::application_pipeline::TOOL_THREAD_UNAVAILABLE_CODE) => {
+            RuntimeFailureKind::DependencyUnavailable
+        }
         Some("pipeline.tool_failed") => RuntimeFailureKind::PipelineToolFailed,
         Some(FANOUT_MEMBER_FAILED_UPSTREAM_CODE) => RuntimeFailureKind::FanoutMemberFailed,
         Some("pipeline.result_invalid") => RuntimeFailureKind::PipelineResultInvalid,

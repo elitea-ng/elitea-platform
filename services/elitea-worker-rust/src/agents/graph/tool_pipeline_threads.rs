@@ -277,6 +277,37 @@ pub(crate) fn durable_tool_thread_lineage(
         .map_err(|_| scope_error("the nested thread receipt is invalid"))
 }
 
+/// The browser projector's admission of a durable nested pipeline's event:
+/// the receipt's lineage is exactly the projected call (batch, ordinal, call
+/// id, name, arguments) and it re-derives the thread the event names. `None`
+/// without a receipt.
+pub(crate) fn durable_thread_for_projected_call(
+    event: &Event,
+    batch: &str,
+    ordinal: usize,
+    call: &str,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<Option<String>, GraphError> {
+    let Some(lineage) = durable_tool_thread_lineage(event)? else {
+        return Ok(None);
+    };
+    let Some((thread, _)) = proved_durable_tool_thread(event)? else {
+        return Ok(None);
+    };
+    if lineage.parent_call_id() != call
+        || !event
+            .provider_metadata
+            .contains_key(DESCENDANT_CHECKPOINT_THREAD_KEY)
+        || !lineage
+            .matches_projection(batch, ordinal, name, args)
+            .map_err(|_| scope_error("the call lineage is invalid"))?
+    {
+        return Err(scope_error("the nested thread receipt names another call"));
+    }
+    Ok(Some(thread))
+}
+
 #[cfg(test)]
 #[path = "tool_pipeline_threads_tests.rs"]
 pub(crate) mod tests;

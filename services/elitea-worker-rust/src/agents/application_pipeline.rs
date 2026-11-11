@@ -402,6 +402,9 @@ impl PipelineToolCallLineage {
         }
         Ok(())
     }
+    pub(crate) fn parent_call_id(&self) -> &str {
+        &self.parent_call_id
+    }
     pub(crate) fn matches_projection(
         &self,
         batch: &str,
@@ -1128,6 +1131,56 @@ struct ChildIdentity<'call> {
     invocation_id: &'call str,
     branch: &'call str,
     thread_id: &'call str,
+    /// FU-291: the call runs on a durable nested thread of a fan-out member.
+    durable: Option<&'call DurableToolCall>,
+}
+
+/// What proves a durable nested pipeline's thread on each event it sends (C1).
+struct DurableToolCall {
+    agent_thread: String,
+    lineage: PipelineToolCallLineage,
+}
+
+/// The upstream code of a transient failure to admit or read a durable nested
+/// thread: a retryable dependency failure, never a refusal (C5).
+pub(crate) const TOOL_THREAD_UNAVAILABLE_CODE: &str = "pipeline.tool_thread_unavailable";
+
+/// In-process attempts at a transient admission or read before answering
+/// the Agent a retryable failure.
+const DURABLE_DEPENDENCY_ATTEMPTS: u32 = 3;
+
+fn is_transient_checkpoint_error(error: &adk_rust::graph::GraphError) -> bool {
+    matches!(error, adk_rust::graph::GraphError::CheckpointError(message)
+        if message.starts_with("checkpoint.storage_unavailable")
+            || message.starts_with("checkpoint.storage_failure"))
+}
+
+fn tool_thread_unavailable() -> adk_rust::AdkError {
+    adk_rust::AdkError::new(
+        adk_rust::ErrorComponent::Agent,
+        adk_rust::ErrorCategory::Unavailable,
+        TOOL_THREAD_UNAVAILABLE_CODE,
+        "the saved pipeline's durable thread is temporarily unavailable",
+    )
+}
+
+/// D3: the member's nested pipeline bound, answered to the model as a tool
+/// error naming the limit.
+fn tool_thread_limit_result(tool_name: &str) -> Value {
+    let message = format!(
+        "The pipeline '{tool_name}' was not run: a Map item or Parallel branch runs at most {} saved pipeline calls.",
+        super::graph::tool_pipeline_threads::MAX_TOOL_PIPELINE_THREADS_PER_MEMBER
+    );
+    json!({
+        "error": message,
+        "failure": {
+            "code": super::graph::tool_pipeline_threads::TOOL_PIPELINE_LIMIT_CODE,
+            "message": message,
+            "recoverable": true,
+            "retryable": false,
+            "recovery_action": "revise_task",
+        }
+    })
 }
 
 /// One saved pipeline exposed to the parent model as a `task` tool.
@@ -1342,12 +1395,159 @@ impl ApplicationPipelineTool {
             .map_err(|_| child_execution_error())
     }
 
+    /// Whether this pipeline holds anything a durable nested thread cannot
+    /// carry: a static pause, a scoped ordinary descendant or a composed child
+    /// pipeline. D-7 refuses those before the run; this is the runtime guard.
+    fn durable_unsupported(&self) -> bool {
+        self.definition.has_static_interrupts()
+            || self
+                .runtimes
+                .composition_definitions()
+                .is_some_and(|definitions| !definitions.is_empty())
+            || self
+                .runtimes
+                .application_scopes()
+                .is_some_and(super::pipeline::scoped_applications::PipelineApplicationScopeRegistry::has_ordinary_applications)
+    }
+
+    /// FU-291 D-3/D-4: one call by a fan-out member's Agent, on the nested
+    /// thread the member's own family admits for the captured call lineage,
+    /// durable before the nested graph's first effect. A completed thread
+    /// answers its stored result and is never re-entered or written (C3); a
+    /// pending one re-enters at its frontier; none starts fresh.
+    async fn invoke_durable(
+        &self,
+        ctx: Arc<dyn ToolContext>,
+        arguments: Value,
+        member: super::application_tools::MemberToolPipelines,
+    ) -> adk_rust::Result<Value> {
+        let task = application_task(&arguments)
+            .map_err(|_| tool_input_error())?
+            .to_owned();
+        if self.durable_unsupported() {
+            return Err(child_execution_error());
+        }
+        let lineage = self
+            .resume
+            .as_ref()
+            .ok_or_else(child_execution_error)?
+            .pipeline_call_lineage(
+                ctx.invocation_id(),
+                ctx.function_call_id(),
+                &self.name,
+                &arguments,
+            )
+            .await
+            .map_err(|_| child_execution_error())?;
+        let mut attempt = 0;
+        let (admitted, latest) = loop {
+            attempt += 1;
+            let read = async {
+                let admitted = member
+                    .admission
+                    .admit_tool_pipeline(&member.agent_thread, &lineage)
+                    .await?;
+                let latest = admitted.writer.load(&admitted.thread_id).await?;
+                Ok::<_, adk_rust::graph::GraphError>((admitted, latest))
+            }
+            .await;
+            match read {
+                Ok(read) => break read,
+                Err(error)
+                    if super::graph::tool_pipeline_threads::is_tool_pipeline_limit(&error) =>
+                {
+                    tracing::warn!(
+                        event = "nested_pipeline_thread_limit",
+                        function_call_id = %ctx.function_call_id(),
+                        "a fan-out member reached its nested pipeline call bound"
+                    );
+                    return Ok(tool_thread_limit_result(&self.name));
+                }
+                Err(error)
+                    if is_transient_checkpoint_error(&error)
+                        && attempt < DURABLE_DEPENDENCY_ATTEMPTS =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(250 * u64::from(attempt)))
+                        .await;
+                }
+                Err(error) if is_transient_checkpoint_error(&error) => {
+                    tracing::warn!(
+                        event = "nested_pipeline_thread_unavailable",
+                        function_call_id = %ctx.function_call_id(),
+                        attempts = attempt,
+                        "the nested pipeline thread's store is unavailable; answered retryable"
+                    );
+                    return Err(tool_thread_unavailable());
+                }
+                Err(error) => {
+                    // Absent or denied: never retried, never widened.
+                    tracing::warn!(
+                        event = "nested_pipeline_thread_refused",
+                        function_call_id = %ctx.function_call_id(),
+                        error_code = %error_code(&error),
+                        "the nested pipeline thread was not admitted"
+                    );
+                    return Err(child_execution_error());
+                }
+            }
+        };
+        tracing::Span::current().record("resumed", latest.is_some());
+        if let Some(finished) = latest.as_ref().filter(|row| row.pending_nodes.is_empty()) {
+            // C3: receipt before repeat.
+            let text = self.definition.completed_text(&finished.state);
+            return Ok(json!({
+                "response": if text.is_empty() { "No response from pipeline".to_owned() } else { text }
+            }));
+        }
+        let checkpointer: Arc<dyn Checkpointer> = admitted.writer.clone();
+        let visit = durable_visit(&admitted.thread_id);
+        let runtimes = self
+            .runtimes
+            .clone()
+            .with_tool_journals(admitted.writer.clone(), visit);
+        let graph = self
+            .definition
+            .compile_with_runtime(&self.name, Arc::clone(&checkpointer), None, &runtimes)
+            .map_err(|_| child_execution_error())?;
+        let agent: Arc<dyn Agent> = Arc::new(EliteaGraphAgent::new(graph));
+        let invocation_id = format!("pipeline-child:{}", ctx.function_call_id());
+        let child_context = Arc::new(ApplicationToolInvocationContext::for_pipeline(
+            Arc::clone(&ctx),
+            Arc::clone(&agent),
+            Content::new("user").with_text(&task),
+            invocation_id.clone(),
+            admitted.thread_id.clone(),
+        ));
+        let branch = child_context.branch().to_owned();
+        let durable = DurableToolCall {
+            agent_thread: admitted.agent_thread.clone(),
+            lineage,
+        };
+        self.drain_child(
+            ctx.as_ref(),
+            agent,
+            child_context,
+            ChildIdentity {
+                invocation_id: &invocation_id,
+                branch: &branch,
+                thread_id: &admitted.thread_id,
+                durable: Some(&durable),
+            },
+            checkpointer.as_ref(),
+            &arguments,
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_lines)] // Keep exact family, lineage, hydration, and coordinator checks before graph effects.
     async fn invoke_child(
         &self,
         ctx: Arc<dyn ToolContext>,
         arguments: Value,
     ) -> adk_rust::Result<Value> {
+        if let Some(member) = super::application_tools::current_member_tool_pipelines() {
+            return self.invoke_durable(ctx, arguments, member).await;
+        }
         let task = application_task(&arguments)
             .map_err(|_| tool_input_error())?
             .to_owned();
@@ -1535,6 +1735,7 @@ impl ApplicationPipelineTool {
                 invocation_id: &invocation_id,
                 branch: &branch,
                 thread_id: &thread_id,
+                durable: None,
             },
             checkpointer.as_ref(),
             &original_arguments,
@@ -1555,6 +1756,7 @@ impl ApplicationPipelineTool {
             invocation_id,
             branch,
             thread_id,
+            durable,
         } = child;
         let mut node_events = self
             .node_events
@@ -1591,7 +1793,7 @@ impl ApplicationPipelineTool {
                     biased;
                     signal = node_events.recv(), if node_events_open => {
                         if let Some(event) = signal {
-                            self.forward(ctx, thread_id, arguments, event?).await?;
+                            self.forward(ctx, thread_id, durable, arguments, event?).await?;
                         } else {
                             node_events_open = false;
                         }
@@ -1601,7 +1803,7 @@ impl ApplicationPipelineTool {
                         // The graph may wrap an error after queuing its typed cause.
                         // Drain that cause before returning the generic graph error.
                         while let Some(queued) = node_events.try_recv() {
-                            self.forward(ctx, thread_id, arguments, queued?).await?;
+                            self.forward(ctx, thread_id, durable, arguments, queued?).await?;
                         }
                         let Some(next) = next else { break };
                         next?
@@ -1611,13 +1813,19 @@ impl ApplicationPipelineTool {
                 // every branch, so the parent would re-read the child's events as
                 // its own on the next turn (#990 review 1).
                 branch.clone_into(&mut event.branch);
+                if event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY) && durable.is_some()
+                {
+                    // D-7 admits no pause into a durable nested pipeline.
+                    return Err(child_execution_error());
+                }
                 if event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY) {
                     // #990 review 5: the node events this child already emitted
                     // belong to THIS call and are its visible progress; draining
                     // them before the pause returns is what keeps them from being
                     // dropped or replayed under a later call's identity.
                     while let Some(queued) = node_events.try_recv() {
-                        self.forward(ctx, thread_id, arguments, queued?).await?;
+                        self.forward(ctx, thread_id, durable, arguments, queued?)
+                            .await?;
                     }
                     return self
                         .pause(ctx, thread_id, event, checkpointer, arguments)
@@ -1635,10 +1843,12 @@ impl ApplicationPipelineTool {
                     result_text = event_text(&event);
                     continue;
                 }
-                self.forward(ctx, thread_id, arguments, event).await?;
+                self.forward(ctx, thread_id, durable, arguments, event)
+                    .await?;
             }
             while let Some(event) = node_events.try_recv() {
-                self.forward(ctx, thread_id, arguments, event?).await?;
+                self.forward(ctx, thread_id, durable, arguments, event?)
+                    .await?;
             }
             Ok(json!({
                 "response": result_text.unwrap_or_else(|| "No response from pipeline".to_owned())
@@ -1671,6 +1881,7 @@ impl ApplicationPipelineTool {
                 invocation_id,
                 branch: &branch,
                 thread_id,
+                durable: None,
             },
             checkpointer,
             arguments,
@@ -1895,7 +2106,7 @@ impl ApplicationPipelineTool {
         {
             return Err(child_execution_error());
         }
-        self.forward(ctx, thread_id, arguments, event).await?;
+        self.forward(ctx, thread_id, None, arguments, event).await?;
         Ok(nested_interrupt_result(&interrupt_ids))
     }
 
@@ -1903,6 +2114,7 @@ impl ApplicationPipelineTool {
         &self,
         ctx: &dyn ToolContext,
         thread_id: &str,
+        durable: Option<&DurableToolCall>,
         arguments: &Value,
         mut event: Event,
     ) -> adk_rust::Result<()> {
@@ -1911,7 +2123,16 @@ impl ApplicationPipelineTool {
             return Ok(());
         };
         event.llm_request = None;
-        if thread_id != self.checkpoint_thread_id(ctx.function_call_id()) {
+        if let Some(durable) = durable {
+            // C1: every event names its nested thread with the receipt the
+            // member's projector re-derives it from.
+            super::graph::tool_pipeline_threads::stamp_durable_tool_thread(
+                &mut event,
+                &durable.agent_thread,
+                &durable.lineage,
+            )
+            .map_err(|_| child_execution_error())?;
+        } else if thread_id != self.checkpoint_thread_id(ctx.function_call_id()) {
             let lineage = self
                 .resume
                 .as_ref()
@@ -1997,6 +2218,40 @@ impl ApplicationPipelineTool {
             })
             .await
             .map_err(|_| application_event_channel_error())
+    }
+}
+
+/// D-6: a durable nested pipeline's visit, a pure function of its thread.
+fn durable_visit(thread: &str) -> String {
+    let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+    digest.update(b"elitea.pipeline.tool-thread.visit.v1\0");
+    digest.update(thread.as_bytes());
+    let mut visit = String::with_capacity(64);
+    for byte in digest.finish().as_ref() {
+        let _ = std::fmt::Write::write_fmt(&mut visit, format_args!("{byte:02x}"));
+    }
+    visit
+}
+
+/// The stable code prefix of a graph error, for an operator log line.
+fn error_code(error: &adk_rust::graph::GraphError) -> &'static str {
+    match error {
+        adk_rust::graph::GraphError::CheckpointError(message)
+            if message.starts_with("checkpoint.writer_not_current") =>
+        {
+            "checkpoint.writer_not_current"
+        }
+        adk_rust::graph::GraphError::CheckpointError(message)
+            if message.starts_with("checkpoint.invalid_scope") =>
+        {
+            "checkpoint.invalid_scope"
+        }
+        adk_rust::graph::GraphError::CheckpointError(message)
+            if message.starts_with("pipeline.tool_thread_invalid") =>
+        {
+            "pipeline.tool_thread_invalid"
+        }
+        _ => "checkpoint.failed",
     }
 }
 

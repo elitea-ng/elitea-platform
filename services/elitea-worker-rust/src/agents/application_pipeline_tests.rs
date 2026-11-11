@@ -1705,3 +1705,283 @@ async fn a_full_parent_channel_never_strands_a_child_holding_the_root_writer() {
     );
     assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), FLOOD);
 }
+
+/// FU-291: the durable source of a fan-out member's pipeline tool calls.
+mod durable_member_calls {
+    use super::*;
+    use crate::agents::application_tools::{MemberToolPipelines, with_member_tool_pipelines};
+    use crate::agents::graph::node_recovery::NodeRecoveryPolicy;
+    use crate::agents::graph::node_recovery_runtime::{
+        NodeAttemptActivation, NodeAttemptJournal, NodeRecoveryFactory,
+    };
+    use crate::agents::graph::tool_pipeline_threads::{
+        AdmittedToolPipeline, TOOL_PIPELINE_LIMIT_CODE, ToolPipelineAdmission, ToolPipelineThreads,
+        proved_durable_tool_thread, tool_pipeline_thread,
+    };
+    use adk_rust::graph::{Checkpoint, Checkpointer, GraphError, MemoryCheckpointer};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const AGENT_THREAD: &str = "m1:member/agent";
+
+    /// The nested thread's store: counts every save.
+    struct Store {
+        inner: MemoryCheckpointer,
+        saves: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl Checkpointer for Store {
+        async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
+            self.saves.fetch_add(1, Ordering::SeqCst);
+            self.inner.save(checkpoint).await
+        }
+        async fn load(&self, thread: &str) -> Result<Option<Checkpoint>, GraphError> {
+            self.inner.load(thread).await
+        }
+        async fn load_by_id(&self, id: &str) -> Result<Option<Checkpoint>, GraphError> {
+            self.inner.load_by_id(id).await
+        }
+        async fn list(&self, thread: &str) -> Result<Vec<Checkpoint>, GraphError> {
+            self.inner.list(thread).await
+        }
+        async fn delete(&self, thread: &str) -> Result<(), GraphError> {
+            self.inner.delete(thread).await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl NodeRecoveryFactory for Store {
+        async fn open(
+            &self,
+            _: &NodeAttemptActivation,
+            _: &NodeRecoveryPolicy,
+        ) -> Result<NodeAttemptJournal, GraphError> {
+            Err(GraphError::CheckpointError("unused".to_owned()))
+        }
+    }
+
+    /// The member family stand-in: one store, every admission counted, the
+    /// first `transient` admissions failing as a held writer table does.
+    struct Admission {
+        threads: Arc<ToolPipelineThreads>,
+        store: Arc<Store>,
+        calls: AtomicUsize,
+        transient: AtomicUsize,
+        limit: bool,
+    }
+
+    fn admission(transient: usize, limit: bool) -> Arc<Admission> {
+        Arc::new(Admission {
+            threads: Arc::new(ToolPipelineThreads::new(2)),
+            store: Arc::new(Store {
+                inner: MemoryCheckpointer::new(),
+                saves: AtomicUsize::new(0),
+            }),
+            calls: AtomicUsize::new(0),
+            transient: AtomicUsize::new(transient),
+            limit,
+        })
+    }
+
+    #[async_trait::async_trait]
+    impl ToolPipelineAdmission for Admission {
+        fn tool_threads(&self) -> Arc<ToolPipelineThreads> {
+            Arc::clone(&self.threads)
+        }
+        async fn admit_tool_pipeline(
+            &self,
+            agent_thread: &str,
+            lineage: &crate::agents::application_pipeline::PipelineToolCallLineage,
+        ) -> Result<AdmittedToolPipeline, GraphError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self
+                .transient
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(GraphError::CheckpointError(
+                    "checkpoint.storage_unavailable: held".to_owned(),
+                ));
+            }
+            if self.limit {
+                return Err(GraphError::CheckpointError(format!(
+                    "{TOOL_PIPELINE_LIMIT_CODE}: bound"
+                )));
+            }
+            let thread_id = tool_pipeline_thread(agent_thread, lineage)?;
+            if let Some(admitted) = self.threads.admitted(&thread_id, agent_thread) {
+                return Ok(admitted);
+            }
+            let admitted = AdmittedToolPipeline {
+                thread_id,
+                agent_thread: agent_thread.to_owned(),
+                writer: self.store.clone(),
+            };
+            self.threads.register(admitted.clone())?;
+            Ok(admitted)
+        }
+    }
+
+    async fn call(harness: &Harness, admission: &Arc<Admission>) -> adk_rust::Result<Value> {
+        with_member_tool_pipelines(
+            MemberToolPipelines {
+                admission: admission.clone(),
+                agent_thread: AGENT_THREAD.to_owned(),
+            },
+            harness.tool.execute(context(), json!({"task": "ship it"})),
+        )
+        .await
+    }
+
+    fn nested_thread() -> String {
+        tool_pipeline_thread(
+            AGENT_THREAD,
+            &crate::agents::application_pipeline::PipelineToolCallLineage::from_call(
+                &root_call_event(),
+                0,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// D-3/D-4: inside a member the call runs on the nested thread its family
+    /// admitted for the captured lineage, and every event it sends names that
+    /// thread with the receipt the member's projector re-derives it from (C1).
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_member_call_runs_on_its_admitted_nested_thread_with_its_receipt() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let admission = admission(0, false);
+        let result = call(&harness, &admission).await.unwrap();
+        assert_eq!(result, json!({"response": "HANDLED ship it"}));
+        assert_eq!(admission.calls.load(Ordering::SeqCst), 1);
+        let thread = nested_thread();
+        let row = admission
+            .store
+            .load(&thread)
+            .await
+            .unwrap()
+            .expect("a durable row");
+        assert!(row.pending_nodes.is_empty(), "the nested run finished");
+        assert_eq!(row.thread_id, thread);
+        assert!(
+            admission.threads.admitted(&thread, AGENT_THREAD).is_some(),
+            "the call ran only after its thread was admitted"
+        );
+        // A State Modifier pipeline forwards nothing but its suppressed
+        // terminal; whatever a node does send carries the receipt.
+        for event in &persisted(&mut harness.events) {
+            assert_eq!(
+                event
+                    .provider_metadata
+                    .get(DESCENDANT_CHECKPOINT_THREAD_KEY),
+                Some(&thread)
+            );
+            let (derived, agent) = proved_durable_tool_thread(event).unwrap().unwrap();
+            assert_eq!(
+                (derived.as_str(), agent.as_str()),
+                (thread.as_str(), AGENT_THREAD)
+            );
+        }
+    }
+
+    /// C3: a completed nested thread answers its stored final output, byte for
+    /// byte the uninterrupted call's, and is never re-entered or written.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_completed_nested_thread_answers_its_stored_result_and_is_never_written() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let admission = admission(0, false);
+        let first = call(&harness, &admission).await.unwrap();
+        let saves = admission.store.saves.load(Ordering::SeqCst);
+        let rows = admission.store.list(&nested_thread()).await.unwrap().len();
+        persisted(&mut harness.events);
+
+        let again = call(&harness, &admission).await.unwrap();
+        assert_eq!(
+            serde_json::to_vec(&again).unwrap(),
+            serde_json::to_vec(&first).unwrap(),
+            "the stored result is the uninterrupted call's"
+        );
+        assert_eq!(
+            admission.store.saves.load(Ordering::SeqCst),
+            saves,
+            "no write"
+        );
+        assert_eq!(
+            admission.store.list(&nested_thread()).await.unwrap().len(),
+            rows
+        );
+        assert!(persisted(&mut harness.events).is_empty(), "nothing re-ran");
+    }
+
+    /// D3: past the member's bound the model reads a typed tool error and
+    /// nothing runs.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_member_past_its_nested_call_bound_reads_a_typed_tool_error() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let admission = admission(0, true);
+        let result = call(&harness, &admission).await.unwrap();
+        assert_eq!(result["failure"]["code"], TOOL_PIPELINE_LIMIT_CODE);
+        assert_eq!(result["failure"]["retryable"], false);
+        assert_eq!(admission.store.saves.load(Ordering::SeqCst), 0);
+        assert!(persisted(&mut harness.events).is_empty());
+    }
+
+    /// C2/D-3: a call whose lineage was never captured from its model event
+    /// admits nothing and runs nothing.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_call_without_its_captured_lineage_admits_and_runs_nothing() {
+        let harness = harness(PLAIN_PIPELINE);
+        let admission = admission(0, false);
+        assert!(call(&harness, &admission).await.is_err());
+        assert_eq!(admission.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(admission.store.saves.load(Ordering::SeqCst), 0);
+    }
+
+    /// C5: a transiently unavailable store is retried in process; past the
+    /// attempts it is a retryable dependency failure, never a refusal, and
+    /// nothing ran under the nested thread.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_transient_store_failure_is_retried_then_answered_retryable() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let recovering = admission(2, false);
+        assert_eq!(
+            call(&harness, &recovering).await.unwrap(),
+            json!({"response": "HANDLED ship it"})
+        );
+        assert_eq!(recovering.calls.load(Ordering::SeqCst), 3);
+        persisted(&mut harness.events);
+
+        let unavailable = admission(3, false);
+        let result = call(&harness, &unavailable).await.unwrap();
+        assert_eq!(unavailable.calls.load(Ordering::SeqCst), 3);
+        assert_eq!(result["failure"]["retryable"], true, "{result}");
+        assert_eq!(
+            result["failure"]["code"], "DEPENDENCY_UNAVAILABLE",
+            "{result}"
+        );
+        assert_eq!(unavailable.store.saves.load(Ordering::SeqCst), 0);
+    }
+}

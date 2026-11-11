@@ -635,6 +635,14 @@ impl ApplicationToolPresentationCatalog {
             .iter()
             .filter_map(|(name, entry)| (entry.agent_type == "agent").then_some(name.as_str()))
     }
+
+    /// The saved pipelines this Agent calls as tools (FU-291): durable, and so
+    /// replayable, only where a fan-out member lends its admission.
+    pub(super) fn pipeline_tool_names(&self) -> impl Iterator<Item = &str> {
+        self.by_tool_name
+            .iter()
+            .filter_map(|(name, entry)| (entry.agent_type == "pipeline").then_some(name.as_str()))
+    }
     pub(crate) fn insert(
         &mut self,
         tool_name: String,
@@ -1726,7 +1734,24 @@ impl AgentEventProjector {
             .application
             .clone()
             .ok_or_else(AgentEventProjectionError::invalid_state)?;
-        let checkpoint_thread_id =
+        // FU-291: a fan-out member's durable nested pipeline names its thread
+        // with a receipt for exactly this call (the member's projector proved
+        // the thread is its own and admitted).
+        let durable = super::graph::tool_pipeline_threads::durable_thread_for_projected_call(
+            event,
+            &active.original_batch_event_id,
+            active.sibling_ordinal.unwrap_or_default(),
+            parent_call_id,
+            &active.name,
+            &active.arguments,
+        )
+        .map_err(|_| AgentEventProjectionError::invalid_state())?;
+        let checkpoint_thread_id = if let Some(thread) = durable {
+            if application.agent_type != "pipeline" {
+                return Err(AgentEventProjectionError::invalid_state());
+            }
+            Some(thread)
+        } else {
             match super::application_pipeline::static_thread_for_projected_call(
                 event,
                 &self.context.thread_id,
@@ -1752,7 +1777,8 @@ impl AgentEventProjector {
                     &self.context.thread_id,
                     parent_call_id,
                 )?,
-            };
+            }
+        };
         if !self.descendants.contains_key(parent_call_id) {
             let nested_context = self.context.nested(
                 active.name.clone(),

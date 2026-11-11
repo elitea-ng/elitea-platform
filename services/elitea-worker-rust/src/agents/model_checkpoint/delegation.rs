@@ -60,7 +60,6 @@ impl ModelCheckpointWriter {
     }
 
     /// The pipeline tools this Agent runs on a durable thread (FU-291).
-    #[cfg_attr(not(test), allow(dead_code))] // The member binding wires it (FU-291 D-5).
     pub(in crate::agents) fn with_durable_pipeline_tools<'a>(
         mut self,
         names: impl Iterator<Item = &'a str>,

@@ -1573,6 +1573,10 @@ fn branch_journal_resolver(
         .node_recovery()
         .and_then(|journals| resolver.for_branch_journals(journals))
         .unwrap_or(resolver);
+    let resolver = execution
+        .tool_pipelines()
+        .and_then(|admission| resolver.for_tool_pipelines(admission))
+        .unwrap_or(resolver);
     crate::agents::pipeline::saved_code_child::SavedCodeFanoutMember::of(execution)
         .and_then(|member| resolver.for_saved_code_member(&member))
         .unwrap_or(resolver)

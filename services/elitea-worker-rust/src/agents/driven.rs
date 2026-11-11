@@ -89,6 +89,17 @@ impl<T: Send + 'static> Future for DrivenTask<T> {
                                 }
                                 None => work,
                             };
+                        // FU-291: and its nested pipeline authority.
+                        let work: BoxedWork<T> =
+                            match crate::agents::application_tools::current_member_tool_pipelines()
+                            {
+                                Some(member) => Box::pin(
+                                    crate::agents::application_tools::with_member_tool_pipelines(
+                                        member, work,
+                                    ),
+                                ),
+                                None => work,
+                            };
                         self.stage = Stage::Owned(tokio::spawn(work));
                     }
                 }
