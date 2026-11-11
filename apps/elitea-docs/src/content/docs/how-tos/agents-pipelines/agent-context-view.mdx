@@ -96,6 +96,10 @@ A session started before this check (and so possibly holding side talk it is no 
 
 When the agent can start sub-agents, a session holding messages without their short `[message m-…]` ids (from before the ids, or a regenerated question) is started again too, so every message a brief can quote is one the agent saw under its id.
 
+## Pipelines
+
+A pipeline that takes part in a conversation gets its view the same way. Its graph state holds the view as `chat_history`, set once when the run starts. See [Pipeline structure](/how-tos/pipelines/structure/#chat_history-the-conversation-so-far).
+
 ## How the worker checks it
 
 Main sends the view with a digest over its mode, its window, and the exact history and references. The worker recomputes the digest and refuses a turn whose history does not match it, so a view is never widened on the way.

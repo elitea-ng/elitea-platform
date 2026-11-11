@@ -856,6 +856,149 @@ fn current_text_history(history: &[Value]) -> Result<Vec<Content>, NativeAgentAs
 }
 
 fn current_text_history_message(value: &Value) -> Result<Content, NativeAgentAssemblyError> {
+    let entry = admitted_history_entry(value)?;
+    let mut content = Content::new(entry.role);
+    match entry.author {
+        // One envelope per message: the parts are one author's words.
+        Some((kind, name)) => {
+            content = content.with_text(elitea_agent_runtime::untrusted::message_envelope(
+                kind,
+                name,
+                &entry.texts.join("\n\n"),
+            ));
+        }
+        None => {
+            for text in entry.texts {
+                content = content.with_text(text);
+            }
+        }
+    }
+    Ok(content)
+}
+
+/// The additional-kwargs key that marks a graph-state message as seeded from
+/// the reader's context view (#1668), never written by a node of this run.
+pub(crate) const CONTEXT_VIEW_MARKER_KEY: &str = "elitea_context_view";
+
+/// The most a pipeline's seeded view carries, JSON-encoded (#1668). An LLM
+/// node bounds its whole prompt at 512 KiB and one text block at 64 KiB; an
+/// Agent node mapping into a saved child, and a Parallel Agent freezing its
+/// inputs, bound one mapped value at 240 KiB. The seed keeps the newest part
+/// of the view that fits under all of them, with room for the node's own task.
+const MAX_PIPELINE_VIEW_BYTES: usize = 200 * 1024;
+/// One seeded message's text: longer is cut (never dropped), so a block stays
+/// under an LLM node's 64 KiB with room for the author envelope.
+const MAX_PIPELINE_VIEW_MESSAGE_BYTES: usize = 60 * 1024;
+/// The most messages the view seeds. A node parses at most 1,024 messages
+/// and replays at most 1,024 contents, so the seed leaves the run's own
+/// question, node answers and tool turns room under those counts.
+const MAX_PIPELINE_VIEW_MESSAGES: usize = 256;
+/// What a cut message ends with.
+const PIPELINE_VIEW_TRUNCATION_MARKER: &str = "\n[... the rest of this message was truncated ...]";
+
+/// The first `budget` bytes of `texts`, cut on a char boundary, ending with
+/// the truncation marker when anything was cut.
+fn bounded_view_texts(texts: &[&str], budget: usize) -> Vec<String> {
+    let total = texts.iter().map(|text| text.len()).sum::<usize>();
+    if total <= budget {
+        return texts.iter().map(|text| (*text).to_owned()).collect();
+    }
+    let mut remaining = budget.saturating_sub(PIPELINE_VIEW_TRUNCATION_MARKER.len());
+    let mut kept: Vec<String> = Vec::new();
+    for text in texts {
+        if text.len() <= remaining {
+            remaining -= text.len();
+            kept.push((*text).to_owned());
+            continue;
+        }
+        let mut cut = remaining;
+        while cut > 0 && !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        kept.push(text[..cut].to_owned());
+        break;
+    }
+    if let Some(last) = kept.last_mut() {
+        last.push_str(PIPELINE_VIEW_TRUNCATION_MARKER);
+    }
+    kept
+}
+
+/// ADR-0050 decision 9 (#1668): the reader's view as graph-state messages,
+/// the shape a pipeline's `chat_history` and `messages` channels hold.
+///
+/// Each item has the role an LLM node reads (`user`, or `assistant` for the
+/// reader's own answers) and its text as blocks. A message by another agent,
+/// or by a person other than the asker, is a `user` message whose one block
+/// is the untrusted author envelope, exactly as an ordinary agent reads it
+/// (`current_text_history`); its `additional_kwargs` keep `elitea_author`.
+/// Every item carries [`CONTEXT_VIEW_MARKER_KEY`], so a result fallback never
+/// takes an earlier turn's answer for this run's. Entries are admitted by the
+/// same rules as the ordinary history; past the size or count bound the
+/// oldest drop, and one overlong message is cut, never dropped.
+pub(crate) fn pipeline_state_history(
+    history: &[Value],
+) -> Result<Vec<Value>, NativeAgentAssemblyError> {
+    if history.len() > MAX_CHAT_HISTORY_MESSAGES {
+        return Err(resource_exhausted_profile());
+    }
+    let mut items = Vec::with_capacity(history.len());
+    let mut total = 0_usize;
+    for value in history.iter().rev() {
+        let entry = admitted_history_entry(value)?;
+        let mut additional = Map::new();
+        additional.insert(CONTEXT_VIEW_MARKER_KEY.to_owned(), Value::Bool(true));
+        if items.len() == MAX_PIPELINE_VIEW_MESSAGES {
+            break;
+        }
+        let texts = match entry.author {
+            Some((kind, name)) => {
+                additional.insert(
+                    "elitea_author".to_owned(),
+                    serde_json::json!({"kind": kind.as_str(), "name": name}),
+                );
+                let joined = entry.texts.join("\n\n");
+                // The envelope wraps the cut text, so it always closes.
+                let inner = bounded_view_texts(
+                    &[joined.as_str()],
+                    MAX_PIPELINE_VIEW_MESSAGE_BYTES.saturating_sub(name.len() + 512),
+                );
+                vec![elitea_agent_runtime::untrusted::message_envelope(
+                    kind,
+                    name,
+                    &inner.concat(),
+                )]
+            }
+            None => bounded_view_texts(&entry.texts, MAX_PIPELINE_VIEW_MESSAGE_BYTES),
+        };
+        let blocks = texts
+            .into_iter()
+            .map(|text| serde_json::json!({"type": "text", "text": text}))
+            .collect::<Vec<_>>();
+        let item = serde_json::json!({
+            "role": if entry.role == "model" { "assistant" } else { "user" },
+            "content": blocks,
+            "additional_kwargs": additional,
+        });
+        total = total.saturating_add(item.to_string().len());
+        if total > MAX_PIPELINE_VIEW_BYTES {
+            break;
+        }
+        items.push(item);
+    }
+    items.reverse();
+    Ok(items)
+}
+
+/// One admitted `chat_history` entry: its model role, its author when
+/// someone other than the reader or the asker wrote it, and its text parts.
+struct HistoryEntry<'a> {
+    role: &'static str,
+    author: Option<(elitea_agent_runtime::untrusted::MessageAuthorKind, &'a str)>,
+    texts: Vec<&'a str>,
+}
+
+fn admitted_history_entry(value: &Value) -> Result<HistoryEntry<'_>, NativeAgentAssemblyError> {
     let message = value.as_object().ok_or_else(invalid_profile)?;
     let additional = message
         .get("additional_kwargs")
@@ -907,23 +1050,11 @@ fn current_text_history_message(value: &Value) -> Result<Content, NativeAgentAss
             .ok_or_else(invalid_profile)?;
         texts.push(text);
     }
-    let mut content = Content::new(role);
-    match author {
-        // One envelope per message: the parts are one author's words.
-        Some((kind, name)) => {
-            content = content.with_text(elitea_agent_runtime::untrusted::message_envelope(
-                kind,
-                name,
-                &texts.join("\n\n"),
-            ));
-        }
-        None => {
-            for text in texts {
-                content = content.with_text(text);
-            }
-        }
-    }
-    Ok(content)
+    Ok(HistoryEntry {
+        role,
+        author,
+        texts,
+    })
 }
 
 /// The `elitea_author` of a history message, when it names one; the only
