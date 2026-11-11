@@ -3295,9 +3295,12 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			// not an object imported an agent with no model, and answered 201.
 			llmJSON, llmErr := importedJSONObject(v, "llm_settings")
 			startersJSON, startersErr := importedJSONArray(v, "conversation_starters")
+			// Before meta is encoded: it rewrites meta.icon_meta to this
+			// project's copy of the still (#1853).
+			avatarPackJSON, avatarPackErr := h.carriedAvatarPack(ctx, v, projectID)
 			metaJSON, metaErr := importedJSONObject(v, "meta")
 			soulJSON, soulErr := importedSoul(v)
-			if columnErr := errors.Join(llmErr, startersErr, metaErr, soulErr); columnErr != nil {
+			if columnErr := errors.Join(llmErr, startersErr, metaErr, soulErr, avatarPackErr); columnErr != nil {
 				errorAgents = append(errorAgents, map[string]any{
 					"index": ae.entityIdx,
 					"name":  name,
@@ -3308,9 +3311,9 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 
 			var vID int
 			err = h.pool.QueryRow(ctx, fmt.Sprintf(`
-				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings, soul, created_at)
-				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb, $10::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, s),
-				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON, soulJSON).Scan(&vID)
+				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings, soul, avatar_pack, created_at)
+				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb, $10::jsonb, $11::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, s),
+				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON, soulJSON, avatarPackJSON).Scan(&vID)
 			if err != nil {
 				// Sibling of the tool-link defect below (#420). The bare
 				// `continue` dropped the version and told nobody. The insert
@@ -4153,6 +4156,18 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
+			// The avatar pack, with its files copied into this project and its
+			// URLs (and meta.icon_meta's) rewritten to them (#1853). Before
+			// meta is copied below, because it rewrites v["meta"] in place.
+			avatarPackJSON, err := h.carriedAvatarPack(ctx, v, projectID)
+			if err != nil {
+				errorAgents = append(errorAgents, map[string]any{
+					"index": entityIdx, "name": name,
+					"msg": "Fork function has been failed: unable to fork version " + vName + ": " + err.Error(),
+				})
+				continue
+			}
+
 			// Build meta with fork info
 			metaIn, hasMeta := v["meta"].(map[string]any)
 			if !hasMeta {
@@ -4205,9 +4220,9 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 			// every version failed answered 201 and produced an agent with no
 			// version at all.
 			if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
-				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings, soul, created_at)
-				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb, $10::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, s),
-				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON, soulJSON).Scan(&vID); err != nil {
+				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings, soul, avatar_pack, created_at)
+				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb, $10::jsonb, $11::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, s),
+				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON, soulJSON, avatarPackJSON).Scan(&vID); err != nil {
 				slog.ErrorContext(ctx, "fork: application version insert failed",
 					"schema", s, "application_id", appID, "version_name", vName, "error", err)
 				errorAgents = append(errorAgents, map[string]any{
@@ -4555,7 +4570,7 @@ func (h *Handler) ExportImportGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": exportReadFailed})
 		return
 	}
-	versions, err := h.exportedVersions(ctx, s, entityID, toolkitMap)
+	versions, err := h.exportedVersions(ctx, projectID, s, entityID, toolkitMap)
 	if err != nil {
 		slog.ErrorContext(ctx, "export: "+exportReadFailed,
 			"schema", s, "application_id", entityID, "read", "versions", "error", err)
