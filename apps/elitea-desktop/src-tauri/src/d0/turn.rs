@@ -658,9 +658,13 @@ async fn project_skills(
 }
 
 /// The turn runs what Main started (ADR-0050 decision 7f): the participant
-/// the host resolved, where Main says it runs. Main may route a person's
-/// message to another agent first; the UI then sends the message to that
-/// agent (the floor's first target) as the composer's target.
+/// the host resolved, where Main says it runs. The UI starts a message on
+/// the agent Main routes it to (the first addressee, else the thread's lead,
+/// else the composer's agent, ADR-0050 decision 7c); a start Main routes to
+/// another agent anyway (the lead changed since the UI read the thread) is
+/// refused here, before any agent runs, and the UI reads the thread again
+/// and sends the message to the routed agent. Never an agent Main did not
+/// route to.
 fn check_routed(
     request: &TurnRequest,
     answering: &AnsweringParticipant,
@@ -675,7 +679,7 @@ fn check_routed(
     {
         return Err(TurnError::new(
             "floor_routed_elsewhere",
-            "This message goes to another agent of the thread first. Send it to that agent, or address the agents you want.",
+            "This message goes to another agent of the thread (its lead, or an agent it names) first. Send it again, or address the agents you want.",
         ));
     }
     if started.runs_in_cloud() != request.cloud {

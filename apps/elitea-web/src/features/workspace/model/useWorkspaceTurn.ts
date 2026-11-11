@@ -67,8 +67,8 @@ export interface WorkspaceTurn {
   offersResume: (turnId: string, resumable: boolean) => boolean;
 }
 
-/** Reads a refused start (`code`, `message`); a request to send once instead, or undefined to keep the refusal. */
-type StartRetry = (refusal: { code: string; message: string }) => TurnStartRequest | undefined;
+/** Reads a refused start (`code`, `message`); a request to send once instead (it may first read the thread again), or undefined to keep the refusal. */
+type StartRetry = (refusal: { code: string; message: string }) => TurnStartRequest | undefined | Promise<TurnStartRequest | undefined>;
 
 const RESYNC_MS = 15_000;
 /** Past any seq the host sends: a `done` learnt from the status folds in last. */
@@ -117,8 +117,8 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
       setStarting(true);
       try {
         await ready.current;
-        const started = await ipc.startTurn(request).catch((error: unknown) => {
-          const again = retry?.(toWorkspaceIpcError(error));
+        const started = await ipc.startTurn(request).catch(async (error: unknown) => {
+          const again = await retry?.(toWorkspaceIpcError(error));
           if (again === undefined) throw error;
           return ipc.startTurn(again);
         });

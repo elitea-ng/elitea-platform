@@ -17,6 +17,27 @@ describe('floorFields (ADR-0050 decision 7f)', () => {
     expect(floorFields('fix it', [coder, reviewer])).toEqual({});
     expect(floorFields('mail me@Coderhouse', [coder, reviewer])).toEqual({});
   });
+
+  it('starts an unaddressed message on the lead, never addressed to the composer’s agent (decision 7c, #1917)', () => {
+    const lead = { floor: { policy: 'lead', lead_participant_id: 88 } };
+    // A composer pick is not an address: no `addressed_to`, and the turn runs as the lead (a cloud agent here).
+    expect(floorFields('fix the flaky test', [coder, reviewer], lead)).toEqual({ application_id: 6, version_id: 10, cloud_agent: true });
+    expect(floorFields('fix it', [coder, reviewer], { floor: { policy: 'lead', lead_participant_id: 77 } })).toEqual({ application_id: 5, version_id: 9 });
+    // An address beats the lead.
+    expect(floorFields('@Coder fix it', [coder, reviewer], lead)).toEqual({ addressed_to: [77], application_id: 5, version_id: 9 });
+    // A lead no longer in the thread, or the default policy: the composer's agent, as before.
+    expect(floorFields('fix it', [coder, reviewer], { floor: { policy: 'lead', lead_participant_id: 99 } })).toEqual({});
+    expect(floorFields('fix it', [coder, reviewer], { floor: { policy: 'addressed' } })).toEqual({});
+    // A thread of one agent has no floor.
+    expect(floorFields('fix it', [coder], lead)).toEqual({});
+  });
+
+  it('drops a cloud lead’s sticky modes from an unaddressed message (routedRequest)', () => {
+    const base = { workspace_id: 'w', project_id: 1, conversation_id: '42', application_id: 5, version_id: 9, prompt: 'fix it', plan_mode: true, mentions: [], skills: [] };
+    const routed = routedRequest({ ...base, ...floorFields('fix it', [coder, reviewer], { floor: { policy: 'lead', lead_participant_id: 88 } }) });
+    expect(routed).toMatchObject({ application_id: 6, cloud_agent: true, plan_mode: false });
+    expect(routed).not.toHaveProperty('addressed_to');
+  });
 });
 
 describe('companionParticipant', () => {
