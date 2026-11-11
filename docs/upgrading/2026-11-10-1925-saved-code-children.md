@@ -25,8 +25,14 @@
     capture of the saved pipeline and the run root's frozen definition, and fails closed. A refused visit writes the
     usual WARN line `code.registration_refused`, with `stage` naming the failed check, one of:
     `saved_child_scope`, `saved_child_parent`, `saved_child_thread`, `saved_child_root` (the run root's frozen source
-    could not be read), `saved_child_edge`, `saved_child_capture` or `saved_child_code`. A scope that does not decode
-    at all is refused at `source`.
+    is absent), `saved_child_edge`, `saved_child_capture` or `saved_child_code`. A scope that does not decode at all is
+    refused at `source`.
+  - **A database failure while Main reads a Code visit's source is retryable, never a refusal.** This holds on every
+    Code path: root Code, W3-2a fan-out children and saved children, for the visit and for the intent. Main answers it
+    `code.registration_failed` (retryable), with the stage of the read that failed (`saved_child_capture`,
+    `saved_child_root`, or `source` / `visit` on the other paths), and the Worker retries the same idempotent call.
+    Before, such a failure was answered `code.registration_refused` and the Code item ended
+    `pipeline.code_authorization_failed`. Only an absent row or a failed content check is still a refusal.
   - **With node recovery off** (the Helm default `agentNodeRecovery: false`), a saved pipeline with Code compiles and
     runs as before this change; its Code fails readably only if it is reached, as root Code does without recovery.
 - **Who is affected.**

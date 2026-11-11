@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
@@ -10,6 +11,7 @@ import (
 	code "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/codesandbox"
 	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -104,7 +106,14 @@ func (reader *CodeDefinitionSourceAdapter) readSavedCodeChildSource(ctx context.
 	// C5: one read of the capture: the frozen definition (its digest is
 	// recomputed) and, through the same row, the pre-redemption source.
 	var definition, sourceWire, sourceDefinition []byte
-	if tx.QueryRow(ctx, `SELECT d.definition_bytes,r.canonical_wire,s.definition_bytes FROM elitea_runtime.execution_saved_child_captures c JOIN elitea_runtime.execution_captured_definitions d USING(resource_project_id,application_id,version_id,definition_sha256) JOIN elitea_runtime.execution_definition_source_refs r ON r.source_id=c.source_id AND r.digest_sha256=c.source_digest_sha256 JOIN elitea_runtime.execution_captured_definitions s ON s.resource_project_id=r.resource_project_id AND s.application_id=r.application_id AND s.version_id=r.version_id AND s.definition_sha256=r.definition_sha256 WHERE c.execution_id=$1 AND c.generation=$2 AND c.application_id=$3 AND c.version_id=$4 AND c.definition_sha256=$5 AND c.root_input_sha256=$6 AND c.resource_project_id=$7 AND c.actor_id=$8 AND r.resource_project_id=c.resource_project_id AND r.actor_id=c.actor_id AND r.application_id=c.application_id AND r.version_id=c.version_id FOR SHARE OF c,d,r,s`, execution, int64(generation), int64(child.ApplicationID), int64(child.VersionID), child.DefinitionSHA256, scope.Digest(original.Payload), original.ProjectID, original.ActorID).Scan(&definition, &sourceWire, &sourceDefinition) != nil || len(definition) == 0 || len(definition) > scope.MaxDefinitionBytes || scope.FrozenDefinitionDigest(original.ProjectID, child.ApplicationID, child.VersionID, definition) != child.DefinitionSHA256 {
+	// R2: only an absent capture is a refusal; a failed read is a dependency
+	// failure, answered retryable with its stage.
+	if err := tx.QueryRow(ctx, `SELECT d.definition_bytes,r.canonical_wire,s.definition_bytes FROM elitea_runtime.execution_saved_child_captures c JOIN elitea_runtime.execution_captured_definitions d USING(resource_project_id,application_id,version_id,definition_sha256) JOIN elitea_runtime.execution_definition_source_refs r ON r.source_id=c.source_id AND r.digest_sha256=c.source_digest_sha256 JOIN elitea_runtime.execution_captured_definitions s ON s.resource_project_id=r.resource_project_id AND s.application_id=r.application_id AND s.version_id=r.version_id AND s.definition_sha256=r.definition_sha256 WHERE c.execution_id=$1 AND c.generation=$2 AND c.application_id=$3 AND c.version_id=$4 AND c.definition_sha256=$5 AND c.root_input_sha256=$6 AND c.resource_project_id=$7 AND c.actor_id=$8 AND r.resource_project_id=c.resource_project_id AND r.actor_id=c.actor_id AND r.application_id=c.application_id AND r.version_id=c.version_id FOR SHARE OF c,d,r,s`, execution, int64(generation), int64(child.ApplicationID), int64(child.VersionID), child.DefinitionSHA256, scope.Digest(original.Payload), original.ProjectID, original.ActorID).Scan(&definition, &sourceWire, &sourceDefinition); errors.Is(err, pgx.ErrNoRows) {
+		return scope.SourceDefinition{}, staged("saved_child_capture", code.ErrRejected)
+	} else if err != nil {
+		return scope.SourceDefinition{}, staged("saved_child_capture", err)
+	}
+	if len(definition) == 0 || len(definition) > scope.MaxDefinitionBytes || scope.FrozenDefinitionDigest(original.ProjectID, child.ApplicationID, child.VersionID, definition) != child.DefinitionSHA256 {
 		return scope.SourceDefinition{}, staged("saved_child_capture", code.ErrRejected)
 	}
 	var wire scope.SourceWire

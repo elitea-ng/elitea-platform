@@ -338,6 +338,40 @@ gap exists for W3-2a's direct Code children (FU-315). Alternatives, for the orch
    threads; Main never authorizes by thread. A Map's members share one worker application, so a wrong ordinal changes
    no authorization. For a Parallel, the application is still one that the root declares at the named ordinal.
 
+**#1925 review M1, dependency failures stay retryable (R2), 2026-11-11.** The saved-child path had reintroduced the
+collapse W3-2a's R2 removed: any failed read became a refusal. Fixed by one rule, applied on every Code path:
+
+- **Capture read** (`code_source_saved_child.go`, `saved_child_capture`): only `pgx.ErrNoRows` and the content checks
+  refuse; any other error is returned, staged.
+- **Root-source read** (`readCapturedRootSource`, `execution_source_definitions.go`): only `pgx.ErrNoRows` is
+  `ErrDenied`; any other error is returned. This read serves the root, W3-2a fan-out and saved-child paths, so a failed
+  root read is now retryable on all three (`saved_child_root` on the saved path, `source` on the others).
+- **`originalSource`** (`code_sandbox_intent.go`): an error is rewritten to `ErrRejected`, with its stage kept, only
+  when it is a refusal (`codeRefusal`: `ErrRejected`, `ErrContentUnauthorized`, `ErrContentRejected`,
+  `scope.ErrDenied`). Any other error is returned as is, so Main answers retryable `code.registration_failed` with the
+  stage. The pre-existing `err != nil || …` collapse below it now sees only content checks.
+- **`readVisit`**, the intent's and the Supervisor's re-read of the stored visit's declaration: the same rule.
+  Before, a failed source read during an intent was a refusal.
+
+The behaviour visible to operators changed: a database blip during a Code registration is now
+`code.registration_failed` and retried, where it was `code.registration_refused` and the item failed. Stated in the
+upgrade note.
+
+Tests, all failing first on real PostgreSQL through the production repository path:
+
+- `TestASavedChildSourceReadFailureIsRetryableNeverARefusalPostgres`:
+  - the captures table and then the source-refs table are held `ACCESS EXCLUSIVE` by another session until the call's
+    deadline;
+  - the visit is answered retryable with stage `saved_child_capture` (a root use) and then `saved_child_root` (a Map
+    member);
+  - the intent is answered retryable while the captures table is held;
+  - each continues once the table is released.
+- `TestRealRefusalsStayRefusalsAfterTheDependencyFailureSplitPostgres`:
+  - a W3-2a Map index outside the frozen count is still refused;
+  - a failed root read on the W3-2a fan-out path is now retryable.
+- The saved-child negatives (24 + 3 subtests) still refuse at their stages.
+- W3-2a's `TestATransientDatabaseFailureIsRetryableNeverARefusalPostgres` still passes.
+
 **Not fixed, by decision: Q2 over-admission.** The Q2 sum counts every Code node of a saved child once, including
 nodes on mutually exclusive Router branches, so the activation window can be larger than any single path needs. That
 is the orchestrator's Q2 decision (a conservative sum); the per-attempt check guards the other direction (B6).

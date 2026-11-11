@@ -457,3 +457,118 @@ func TestATakeoverReRegistersSavedChildCodeOnTheProductionPathPostgres(t *testin
 	}
 	waitNoAdvisoryLocks(t, s.w)
 }
+
+// holdTable keeps table locked ACCESS EXCLUSIVE by another session until the
+// returned release, as a failover or a statement timeout would fail a read.
+func (s *savedChildWorld) holdTable(t *testing.T, table string) func() {
+	t.Helper()
+	conn, err := s.w.pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := conn.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), `LOCK TABLE elitea_runtime.`+table+` IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		_ = tx.Rollback(context.Background())
+		conn.Release()
+	}
+}
+
+// #1925 M1 (R2 on the saved-child path): a read that fails for a database
+// reason, not because the row is absent, is a dependency failure Main answers
+// retryable (`code.registration_failed`), keeping its stage; it is never a
+// refusal. The same registration succeeds once the database is back.
+func TestASavedChildSourceReadFailureIsRetryableNeverARefusalPostgres(t *testing.T) {
+	s := newSavedChildWorld(t)
+	for _, tc := range []struct {
+		table, stage string
+		scope        func() map[string]any
+	}{
+		{"execution_saved_child_captures", "saved_child_capture", func() map[string]any { return s.rootScope("run_saved") }},
+		{"execution_definition_source_refs", "saved_child_root", func() map[string]any { return s.mapScope(1, 4) }},
+	} {
+		t.Run(tc.stage, func(t *testing.T) {
+			value := tc.scope()
+			request, _ := s.codeVisit(t, 400+len(tc.stage), value["child_thread_id"].(string), validateCode, marshalScope(t, value))
+			release := s.holdTable(t, tc.table)
+			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+			_, err := s.repo.RegisterOriginalCodeVisit(ctx, s.claim, request)
+			cancel()
+			release()
+			if err == nil || refusedRegistration(err) {
+				t.Fatalf("a failed %s read was %v, want a retryable dependency failure", tc.table, err)
+			}
+			if stage := registrationStage(err); stage != tc.stage {
+				t.Fatalf("the failure names stage %q (%v), want %q", stage, err, tc.stage)
+			}
+			if _, err := s.repo.RegisterOriginalCodeVisit(t.Context(), s.claim, request); err != nil {
+				t.Fatalf("the visit did not continue once the database was back: %v", err)
+			}
+		})
+	}
+	// The intent re-reads the source through its stored visit: the same rule.
+	visitRequest, prepared := s.codeVisit(t, 450, s.root+"/run_again", validateCode, marshalScope(t, s.rootScope("run_again")))
+	visit, err := s.repo.RegisterOriginalCodeVisit(t.Context(), s.claim, visitRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, _ := storage.OriginalSavedCodePolicy(savedChildInstructions, code.Digest([]byte(savedChildInstructions)), "validate")
+	declaration, _ := storage.MatchOriginalSavedCodeConfiguration(policy, savedChildCodeCfg)
+	metadata, err := storage.MatchCodePrepared(declaration, []byte(savedChildCodeCfg), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := code.IntentRequest{Schema: "elitea.sandbox.original-code-intent-request.v1", OriginalVisit: visit.OriginalVisit, DispatchActivation: fmt.Sprintf("%064x", 0xf000+451),
+		RequestDigest: metadata.Fingerprint, SupervisorAudience: realPathAudience, PreparedBase64URL: base64.RawURLEncoding.EncodeToString(prepared)}
+	release := s.holdTable(t, "execution_saved_child_captures")
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	_, err = s.repo.RegisterOriginalCodeIntent(ctx, s.claim, intent)
+	cancel()
+	release()
+	if err == nil || refusedRegistration(err) {
+		t.Fatalf("a failed capture read during the intent was %v, want a retryable dependency failure", err)
+	}
+	if _, err := s.repo.RegisterOriginalCodeIntent(t.Context(), s.claim, intent); err != nil {
+		t.Fatalf("the intent did not continue once the database was back: %v", err)
+	}
+	waitNoAdvisoryLocks(t, s.w)
+}
+
+// #1925 M1: real refusals are unchanged on the W3-2a fan-out path and on the
+// saved-child path: still refusals (Aborted, `code.registration_refused`).
+func TestRealRefusalsStayRefusalsAfterTheDependencyFailureSplitPostgres(t *testing.T) {
+	r := newRealPathWorld(t, effectsParent, effectsClaim2, 3)
+	request, _ := r.visit(t, 5, 4) // a Map index outside the frozen count
+	if _, err := r.repo.RegisterOriginalCodeVisit(t.Context(), r.claim, request); !refusedRegistration(err) {
+		t.Fatalf("an index outside the frozen count was %v, want a refusal", err)
+	}
+	// The W3-2a fan-out path's own root-source read failure is retryable too.
+	ok, _ := r.visit(t, 1, 4)
+	conn, err := r.w.pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := conn.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), `LOCK TABLE elitea_runtime.execution_definition_source_refs IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	_, err = r.repo.RegisterOriginalCodeVisit(ctx, r.claim, ok)
+	cancel()
+	_ = tx.Rollback(context.Background())
+	conn.Release()
+	if err == nil || refusedRegistration(err) {
+		t.Fatalf("a failed root-source read on the fan-out path was %v, want a retryable dependency failure", err)
+	}
+	if _, err := r.repo.RegisterOriginalCodeVisit(t.Context(), r.claim, ok); err != nil {
+		t.Fatalf("the fan-out visit did not continue once the database was back: %v", err)
+	}
+}
