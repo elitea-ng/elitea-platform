@@ -47,11 +47,11 @@ separate PR and is not in this one.
 | agent-runtime | `libs/rust/agent-runtime/src/graph/fanout/plan.rs:319` | `safe_message` crate-visible (reused, not copied) |
 | Worker | `src/agents/graph/node_settings_definition.rs` | compile admission (extract, declare `node_errors`, admit, digest) |
 | Worker | `src/agents/graph/node_settings_runtime.rs` | `SettingsNode<N>` run-time layer |
-| Worker | `src/agents/graph/compiler.rs:1035,1038,1084,1107,1857,1990,2771,3469,3732`; `:946` (C4), `:1755` (D3) | wiring |
-| Worker | `src/agents/session.rs:3128`, `src/agents/pipeline.rs:2835` | execution id plumbing |
+| Worker | `src/agents/graph/compiler.rs:1040,1043,1089,1856,1989,2770,3496,3558,3780`; `:950` (C4), `:1754` (D3) | wiring |
+| Worker | `src/agents/session.rs:3129`, `src/agents/pipeline.rs:2876` | execution id plumbing |
 | Worker | `src/agents/graph/application.rs:241`, `src/agents/runtime.rs` | `variable_keys()`, error classification |
 | faults | `libs/go/faults/registry/worker.json` (+ generated `codes_gen.go`, `docs/errors/README.md`) | 7 codes |
-| Main | `services/elitea-main/internal/domain/pipelinelimits/node_settings.go`, `limits.go:150,175` | save/start check |
+| Main | `services/elitea-main/internal/domain/pipelinelimits/node_settings.go`, `limits.go:138,175` | save/start check |
 | Main | `services/elitea-main/internal/runtimecontracts/schemas_test.go:28` | entry schema held to the strict lint |
 | Web | `apps/elitea-web/src/features/pipelines/lib/nodeSettings.helpers.ts` | contract mirror + admission issues |
 | Web | `.../lib/flow-editor/helpers/nodeErrorRoute.helpers.ts`; `useConnectNodes.ts`, `deletionOperations.helpers.ts`, `parsePipelineTraversal.helpers.ts`, `flowEditor.helpers.ts` | error handle edge (C6) |
@@ -89,20 +89,20 @@ No new dependency in any tree.
   node it is never checked (**C3**; Worker `a_user_node_errors_key_is_checked_only_when_a_node_continues`, vectors
   "node_errors as a string without a continuing node (C3)" and the two refused ones). Not globally reserved.
 - **D3:** a nested child that owns `node_errors` is exempt from the X3 typed-reducer refusal
-  (`compiler.rs:1755`); any other typed reducer in the child is still refused (Worker
+  (`compiler.rs:1754`); any other typed reducer in the child is still refused (Worker
   `a_child_that_owns_node_errors_compiles_nested_and_hides_its_list`).
 - **C4, both directions:**
   - a document that owns `node_errors` refuses an Agent node that maps `node_errors` in (`input_mapping`) or out
     (`output`) — Worker `node_settings_definition.rs:161`, Main `node_settings.go`, Web `nodeErrorsIssue`; vectors
     "node_errors out of a nested pipeline (C4)" and "node_errors into a nested pipeline (C4)";
-  - a child that owns `node_errors` removes it from its mappable variables (`compiler.rs:946`), so a parent mapping
+  - a child that owns `node_errors` removes it from its mappable variables (`compiler.rs:950`), so a parent mapping
     into it is refused typed by the existing `InvalidTask` check (`application.rs` resolve) and the child's entries
     are never mapped back out: the parent sees the child's result or typed failure only.
 
 ### Settings layer (deterministic families, §3.2)
 
 - `SettingsNode<N>` (`node_settings_runtime.rs`) wraps a State Modifier, Router, Split Out or Aggregate only when its
-  settings are non-default (`compiler.rs:1990` `bind_settled`). Every other node binds exactly as before.
+  settings are non-default (`compiler.rs:1989` `bind_settled`). Every other node binds exactly as before.
 - A body error is settled only when it is the node's own work failing (`settled_by_settings`,
   `node_settings_runtime.rs:40`): `NodeExecutionFailed`, or `Other` that is not a `pipeline.node_recovery.*`,
   `pipeline.node_errors.*`, `pipeline.node_settings.*` or `graph.*` code. Interrupts, checkpoint, recursion,
@@ -125,7 +125,7 @@ No new dependency in any tree.
   (`session.rs` `plan.execution_id`) and the claim-scoped context (`transport/runtime_context.rs:359`), and LLM nodes
   reach it through their factory (`pipeline.rs:1900`). **Smallest plumbing (done):** an
   `execution_id: Option<Arc<str>>` on `PipelineNodeRuntimes` (`compiler.rs` `with_execution_id`), set at the root
-  (`session.rs:3128`, `plan.execution_id`) and for saved children (`pipeline.rs:2835`, the claim context). Only the
+  (`session.rs:3129`, `plan.execution_id`) and for saved children (`pipeline.rs:2876`, the claim context). Only the
   settings layer reads it (support reference and operator line); without it (tests, debug compile) the thread id
   scopes the support reference. The execution id is stable across a claim takeover (the generation changes), so a
   replayed entry is byte-identical.
@@ -133,7 +133,7 @@ No new dependency in any tree.
   checkpointer gives a fresh turn only its own execution's frontier and a continuation the frontier an earlier
   execution left (`libs/rust/agent-runtime/src/graph/turn_checkpointer.rs:13-17`). So the set
   `__elitea_executed_once_v1 = {"nodes": {id: route|null}}` lives in graph state, overwrite channel, declared only
-  when some node runs once, reserved in the Worker (`compiler.rs:3469`) and the Web. Scope: a turn and its
+  when some node runs once, reserved in the Worker (`compiler.rs:3496`) and the Web. Scope: a turn and its
   continuations (a HITL resume is the same turn), a saved child's own visit (its own thread). ≤ 128 ids (= the node
   bound). The plan's `{execution_id, nodes}` shape was simplified to `{nodes}` for this reason (deviation 1).
 - A Router records the route of its first visit, so a skipped revisit takes it again; other families take their
@@ -143,7 +143,7 @@ No new dependency in any tree.
 
 - `settings_digest` covers only non-default blocks (by node id, length-prefixed, domain
   `elitea.pipeline.node-settings.v1`) and `bind_digest` is the identity for `None`
-  (`compiler.rs:1107`). An all-default block is the same document as no block (Worker
+  (`compiler.rs:3558`). An all-default block is the same document as no block (Worker
   `documents_without_settings_keep_their_digest`). The existing golden digest tests (state reducers, recovery,
   static pause) are unchanged and green.
 
@@ -173,7 +173,7 @@ No new dependency in any tree.
 | C1 timeouts vs deadlines | The deterministic families refuse `timeout_ms` (`timeout_not_allowed`), so no node timeout exists in PR A. The run deadline, deadline admission and `ElapsedLimit` are never continued: a `NodeTimedOut`, recursion, checkpoint or interrupt error propagates (`node_settings_runtime.rs:40`). Rule recorded for PR B: a node's own `timeout_ms` expiry is a node failure (`AttemptTimeout`, `node_recovery.rs:35,58`) that `continue`/`error_output`/retry apply to; a timeout with unknown effects goes to `Reconcile` (`node_recovery.rs:350-375`), never another try. | `node_settings.rs` `check_family`; vectors "timeout 1000 passes the bound" (refused `timeout_not_allowed`) | `only_a_body_failure_is_settled`, vectors |
 | C2 retry conditions | No family admits retry in PR A. Table below for PR B. | — | — |
 | C3 user `node_errors` | done | `node_settings_definition.rs:114`, `node_settings.go`, `nodeErrorsIssue` | Worker `a_user_node_errors_key_is_checked_only_when_a_node_continues`; 5 vectors; Main `TestNodeSettingsLeaveDocumentsWithoutBlocksAlone` |
-| C4 nested mapping both directions | done | `node_settings_definition.rs:161`, `compiler.rs:946` | Worker `a_continuing_parent_never_maps_node_errors_into_or_out_of_a_child`, `a_child_that_owns_node_errors_compiles_nested_and_hides_its_list`; 2 vectors |
+| C4 nested mapping both directions | done | `node_settings_definition.rs:161`, `compiler.rs:950` | Worker `a_continuing_parent_never_maps_node_errors_into_or_out_of_a_child`, `a_child_that_owns_node_errors_compiles_nested_and_hides_its_list`; 2 vectors |
 | C5 Router continue needs an explicit default | done, raw key in all three layers | `node_settings_definition.rs:87,202`, `node_settings.go:318`, `nodeSettings.helpers.ts` `NODE_CHECKS` | Worker `a_router_without_an_explicit_default_refuses_continue` (key absent, parser fills END); 3 vectors |
 | C6 error handle | done | `nodeErrorRoute.helpers.ts`, `useConnectNodes.ts`, `deletionOperations.helpers.ts` | Web `nodeErrorRoute.helpers.test.ts` (5 tests) |
 | C7 Main first | upgrade note `docs/upgrading/2026-11-11-0-node-settings-core.md` leads with it | — | — |
@@ -212,14 +212,28 @@ Failing-first evidence: `handoffs/point5-wave1-20261008/5b1/evidence/failing-fir
 
 ### 5a. Final counts
 
-Filled in at the end of the branch (after merging `origin/main` with #1937): see the PR description and the
-implementer's report.
+After merging `origin/main` at `9c8069fa0` (#1937 FU-291 had not merged yet; merge it when it lands):
+
+| Suite | Result |
+|---|---|
+| agent-runtime lib, `--all-features` | 1856 passed, 0 failed, 1 ignored (pre-existing) |
+| Worker lib, `--all-features`, PostgreSQL 18 (disposable container), CI env | 3248 passed, 0 failed, 134 ignored (all pre-existing; this branch adds no `#[ignore]`) |
+| Worker node settings | 23 of 23 (21 unit, 2 real PG: parent and child process) |
+| Worker clippy `--all-targets --all-features -D warnings`, fmt, `cargo doc --no-deps --all-features` with `RUSTDOCFLAGS=-D warnings` | clean |
+| agent-runtime clippy and rustdoc | clean |
+| Main `go vet`, `go test -race` (`pipelinelimits`, `runtimecontracts`) | ok |
+| faults gate `go test ./...` | every package ok |
+| Web `npm run test:unit` | 1950 files, 19115 passed, 6 expected fail, 1 skipped (pre-existing). One earlier run had one failure in `src/widgets/chat-box/ui/ChatBox.stickyTarget.test.tsx` (not touched here); it passed alone and in this full run. |
+| Web typecheck, lint, `i18n-backfill --check` | clean |
+
+The ignored-test guard script (`scripts/ci/check-worker-ignored-tests.mjs`) needs the `yaml` package, which is not
+installed at the repository root locally; checked instead by grep: no `#[ignore]` added.
 
 ## 6. Performance
 
 | Budget (PLAN §9) | Mechanism | Proof / measurement |
 |---|---|---|
-| No settings: zero new work, same digests, no new channel | non-default only: no wrapper (`compiler.rs:1990`), no `node_errors`/run-once channel (`compiler.rs:1857`, `node_settings_definition.rs:114`), identity digest (`node_settings.rs` `bind_digest`) | `documents_without_settings_keep_their_digest`; existing golden digest tests unchanged. The 128-node compile bench guard was **not** added (follow-up FU-5B1-A). |
+| No settings: zero new work, same digests, no new channel | non-default only: no wrapper (`compiler.rs:1989`), no `node_errors`/run-once channel (`compiler.rs:1856`, `node_settings_definition.rs:114`), identity digest (`node_settings.rs` `bind_digest`) | `documents_without_settings_keep_their_digest`; existing golden digest tests unchanged. The 128-node compile bench guard was **not** added (follow-up FU-5B1-A). |
 | Settled failure: 0 extra DB round trips | one node output in the step's own update | `a_continued_failure_writes_no_extra_checkpoint`: a continued failure writes as many checkpoints as the same run succeeding |
 | Wrapper overhead p99 ≤ 50 µs | entry built from ids, codes and the step number, no state serialisation | not measured (FU-5B1-A) |
 | Run once: ≤ 128 ids, 0 body work on a skip | `mark_executed_once` bound; skip returns an empty output | AR `the_run_once_set_holds_128_ids_and_refuses_the_129th`; Worker `a_run_once_node_runs_once_in_a_three_visit_loop` |

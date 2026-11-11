@@ -718,7 +718,10 @@ fn the_shared_admission_vectors_hold_in_the_worker() {
     for case in cases {
         let name = case["name"].as_str().expect("name");
         let yaml = case["yaml"].as_str().expect("yaml");
-        match (PipelineDefinition::from_yaml(yaml), case["refusal"].as_str()) {
+        match (
+            PipelineDefinition::from_yaml(yaml),
+            case["refusal"].as_str(),
+        ) {
             (Ok(_), None) => {}
             (Err(PipelineConfigurationError::NodeSettings { node, refusal }), Some(expected)) => {
                 assert_eq!(refusal.key(), expected, "{name}");
@@ -729,7 +732,9 @@ fn the_shared_admission_vectors_hold_in_the_worker() {
                 }
             }
             (Ok(_), Some(expected)) => panic!("{name}: admitted, expected {expected}"),
-            (Err(error), expected) => panic!("{name}: {error} ({}), expected {expected:?}", error.code()),
+            (Err(error), expected) => {
+                panic!("{name}: {error} ({}), expected {expected:?}", error.code())
+            }
         }
     }
 }

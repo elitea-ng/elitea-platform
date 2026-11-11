@@ -1036,8 +1036,7 @@ impl PipelineDefinition {
                 "the pipeline entry point is malformed",
             ));
         }
-        // Settings first: they record whether the node also declares
-        // `recovery:`/`failure_handler:`, which the recovery catalog strips.
+        // Settings first: they see `recovery:`, which the next extract strips.
         let raw_settings = settings_definition::RawSettingsCatalog::extract(&mut raw.nodes)?;
         let raw_recovery = recovery_definition::RawRecoveryCatalog::extract(&mut raw.nodes)?;
         let (state, state_defaults, state_declaration_order, state_reducers) =
@@ -1090,27 +1089,18 @@ impl PipelineDefinition {
         let settings = raw_settings.admit(&nodes, &state, &state_reducers, &recovery_owned)?;
         let interrupt_before = validate_static_interrupts(raw.interrupt_before, &node_ids)?;
         let interrupt_after = validate_static_interrupts(raw.interrupt_after, &node_ids)?;
-        let mut definition_digest = definition_digest(
-            &raw.entry_point,
-            &state,
-            &state_defaults,
-            &state_declaration_order,
-            &nodes,
+        let definition_digest = fold_policy_digests(
+            definition_digest(
+                &raw.entry_point,
+                &state,
+                &state_defaults,
+                &state_declaration_order,
+                &nodes,
+            ),
+            &state_reducers,
+            (&interrupt_before, &interrupt_after),
+            (&recovery, &settings),
         );
-        // Overwrite-only definitions keep existing definition bytes and checkpoint lineage.
-        if !state_reducers.is_empty() {
-            definition_digest = reducers_digest(definition_digest, &state_reducers);
-        }
-        // Empty policies keep existing definition bytes and checkpoint lineage.
-        if !interrupt_before.is_empty() || !interrupt_after.is_empty() {
-            definition_digest = super::static_pause::policy_digest(
-                definition_digest,
-                &interrupt_before,
-                &interrupt_after,
-            );
-        }
-        // Documents without non-default settings keep their digest bytes.
-        definition_digest = settings.bind_digest(recovery.bind_digest(definition_digest));
         Ok(Self {
             recovery,
             settings,
@@ -3560,6 +3550,27 @@ fn validate_static_interrupts(
         }
     }
     Ok(unique.into_iter().collect())
+}
+
+/// Folds the optional policies into a definition digest. Each one is folded
+/// only when present, so a document without it keeps its existing definition
+/// bytes and checkpoint lineage.
+fn fold_policy_digests(
+    mut definition: [u8; 32],
+    reducers: &BTreeMap<String, StateReducer>,
+    (before, after): (&[String], &[String]),
+    (recovery, settings): (
+        &recovery_definition::RecoveryCatalog,
+        &settings_definition::SettingsCatalog,
+    ),
+) -> [u8; 32] {
+    if !reducers.is_empty() {
+        definition = reducers_digest(definition, reducers);
+    }
+    if !before.is_empty() || !after.is_empty() {
+        definition = super::static_pause::policy_digest(definition, before, after);
+    }
+    settings.bind_digest(recovery.bind_digest(definition))
 }
 
 fn definition_digest(
