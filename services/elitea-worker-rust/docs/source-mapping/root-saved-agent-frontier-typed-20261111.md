@@ -93,8 +93,34 @@ Known gap: R is possible from the Agent's model checkpoint; FU-323 (HIGH, functi
 
 ## Real-browser evidence
 
-Not run for this side fix (the orchestrating session decides). A Worker kill inside a root saved-Agent node, then a
-reload, should show the new text with a support reference.
+One case, on a disposable stack (`rf1`) with the production profile (recovery and node recovery on). Chrome, the main
+chat, a reload.
+
+- **Images.** Main, Worker and Web `rf-8608b6c04`; the sandbox supervisor is `pm-778e5beb8`, which this PR doesn't touch.
+  The Worker binary was extracted from the image (`docker create` + `docker cp`) and contains the new fault code
+  `pipeline.recovery.saved_agent_frontier`, which exists only on this branch.
+- **Image equivalence after merging `main`.** The merge with `main` (W3-2b, #1925) changed no line of this PR's code.
+  For each of the 14 code files, the sorted changed lines of `git diff <main> HEAD` equal those of
+  `git diff 67cbe6c25 8608b6c04`. The images built from `8608b6c04` therefore carry exactly this PR's change.
+- **Fixtures, created in the UI.**
+  - A saved Agent `rf_step_agent` (agent 170).
+  - A pipeline "RF root saved agent" (171), whose Agent node `delegate` runs `rf_step_agent`. The Agent is attached
+    through TOOLS → Agent.
+  - Chat 887, with the prompt `start`.
+- **Kill.** `docker kill` of the Worker at 10:17:26Z, while `delegate` ran (execution
+  `ba6bab47b4e2712ae22ef9efef40f0a9`), then a restart.
+- **Result.**
+
+  | Check | Observed |
+  |---|---|
+  | Worker log | exactly one WARN `pipeline.recovery.saved_agent_frontier`, with `node_id` `delegate`, `generation` 1 and `support_ref` equal to the execution id; no line carries the Agent's task |
+  | Main | the message ends typed with `error_code` `RECOVERY_FRONTIER_UNSUPPORTED` and the new text |
+  | Leftovers | 0 code visits, 0 intents, 0 advisory locks |
+  | UI after reload | the new text, and "Details for support" shows `RECOVERY_FRONTIER_UNSUPPORTED` with Message ID `d920ceaf-966c-58ec-b6c9-8701cc10e921` |
+  | Support reference | "Copy error reference" copies the error code and the Message ID (read through a page-level stub, never the system clipboard). That message row (`chat_message_group`, chat 887) has `task_id` = `ba6bab47b4e2712ae22ef9efef40f0a9`, the WARN `support_ref`, so an operator goes from the user's reference to the one WARN line with a single lookup. |
+
+- **Observation, pre-existing and not caused by this PR.** The reloaded message showed "Thought for -1 h -1 min and
+  -1 sec": the thinking-duration label goes negative on a run that a reclaim ended. Registered as FU-327.
 
 ## Follow-ups
 
@@ -113,3 +139,4 @@ reload, should show the new text with a support reference.
     Admit nothing new.
 - **FU-323:** a root saved-Agent node as a recovery frontier (frontier gate, skip the child walk for a saved Agent,
   root re-entry through the model checkpoint, security review of the admission change).
+- **FU-327 (polish, Web):** the thinking-duration label goes negative ("-1 h -1 min") on a run that a reclaim ended. Pre-existing.
