@@ -405,6 +405,17 @@ impl PipelineToolCallLineage {
     pub(crate) fn parent_call_id(&self) -> &str {
         &self.parent_call_id
     }
+    /// The five fields a nested thread's identity is derived from, in order:
+    /// batch event id, ordinal, call id, tool name, arguments digest.
+    pub(crate) fn identity_fields(&self) -> (&str, usize, &str, &str, &str) {
+        (
+            &self.original_batch_event_id,
+            self.original_ordinal,
+            &self.parent_call_id,
+            &self.tool_name,
+            &self.arguments_digest,
+        )
+    }
     pub(crate) fn matches_projection(
         &self,
         batch: &str,
@@ -1429,7 +1440,10 @@ impl ApplicationPipelineTool {
     /// carry: a static pause, a scoped ordinary descendant or a composed child
     /// pipeline. D-7 refuses those before the run; this is the runtime guard.
     fn durable_unsupported(&self) -> bool {
-        self.definition.has_static_interrupts()
+        // Review N1: assembly refuses these too (D-7); the runtime guard holds
+        // on its own.
+        self.definition.durable_tool_refusal().is_some()
+            || self.definition.has_static_interrupts()
             || self
                 .runtimes
                 .composition_definitions()
@@ -1555,7 +1569,7 @@ impl ApplicationPipelineTool {
             }));
         }
         let checkpointer: Arc<dyn Checkpointer> = admitted.writer.clone();
-        let visit = durable_visit(&admitted.thread_id);
+        let visit = super::graph::tool_pipeline_threads::tool_pipeline_visit(&admitted.thread_id);
         let runtimes = self
             .runtimes
             .clone()
@@ -2288,18 +2302,6 @@ impl ApplicationPipelineTool {
             .await
             .map_err(|_| application_event_channel_error())
     }
-}
-
-/// D-6: a durable nested pipeline's visit, a pure function of its thread.
-fn durable_visit(thread: &str) -> String {
-    let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
-    digest.update(b"elitea.pipeline.tool-thread.visit.v1\0");
-    digest.update(thread.as_bytes());
-    let mut visit = String::with_capacity(64);
-    for byte in digest.finish().as_ref() {
-        let _ = std::fmt::Write::write_fmt(&mut visit, format_args!("{byte:02x}"));
-    }
-    visit
 }
 
 /// The stable code of a graph error, for an operator log line: the store's

@@ -1180,7 +1180,7 @@ const fanoutAgentCallsPipelineSafeMessage = "A Map item or Parallel branch runs 
 // tool a member cannot run durably yet (Code or an Agent node in it, or another
 // Agent between them), refused before the run (FU-291 D5). The older text above
 // stays admitted for frames an older Worker spooled.
-const fanoutAgentToolPipelineUnsupportedSafeMessage = "A Map item or Parallel branch runs an Agent whose saved pipeline tool holds a Code or Agent node, or that reaches a saved pipeline through another Agent, which cannot run there yet; remove that node, or attach the pipeline to the Agent directly."
+const fanoutAgentToolPipelineUnsupportedSafeMessage = "A Map item or Parallel branch calls a saved pipeline tool it cannot run yet: one with a Code or Agent node, or called via another Agent or a saved pipeline's Agent node; remove that node or call the pipeline from the member's own Agent."
 
 // A checkpoint reclaim met a root Agent node running a saved Agent, which is
 // not a recovery frontier (FU-323 makes it one): the Worker's registered text

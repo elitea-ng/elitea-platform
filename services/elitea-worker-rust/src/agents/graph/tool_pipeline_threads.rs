@@ -40,7 +40,7 @@ pub(crate) const MAX_TOOL_PIPELINE_THREAD_BYTES: usize = 480;
 /// The private receipt stamped on every event a durable nested pipeline sends.
 pub(crate) const DURABLE_TOOL_THREAD_METADATA_KEY: &str = "elitea.pipeline.durable-tool-thread.v1";
 const THREAD_DOMAIN: &[u8] = b"elitea.pipeline.tool-thread.v1\0";
-const THREAD_SEGMENT: &str = "/pt1:";
+pub(crate) const THREAD_SEGMENT: &str = "/pt1:";
 /// FU-291 review B: the member's ledger of its admitted nested threads,
 /// `<member>/pt1=ledger`. `=` is no graph-id byte and the name holds no
 /// `/pt1:`, so it is neither an admitted path nor a nested thread.
@@ -119,11 +119,23 @@ pub(crate) fn tool_pipeline_thread(
     lineage
         .validate()
         .map_err(|_| scope_error("the call lineage is invalid"))?;
-    let lineage =
-        serde_json::to_vec(lineage).map_err(|_| scope_error("the call lineage is invalid"))?;
+    // Review B1: an explicit, length-prefixed encoding of the five lineage
+    // fields, never a serializer's output, so a later lineage field or rename
+    // cannot change the thread of an in-flight call. Pinned by the golden test.
+    let (batch, ordinal, call, tool, arguments) = lineage.identity_fields();
+    let ordinal = u64::try_from(ordinal)
+        .map_err(|_| scope_error("the call lineage is invalid"))?
+        .to_be_bytes();
     let mut hash = digest::Context::new(&digest::SHA256);
     hash.update(THREAD_DOMAIN);
-    for field in [agent_thread.as_bytes(), lineage.as_slice()] {
+    for field in [
+        agent_thread.as_bytes(),
+        batch.as_bytes(),
+        ordinal.as_slice(),
+        call.as_bytes(),
+        tool.as_bytes(),
+        arguments.as_bytes(),
+    ] {
         let length =
             u64::try_from(field.len()).map_err(|_| scope_error("the identity is invalid"))?;
         hash.update(&length.to_be_bytes());
@@ -137,6 +149,19 @@ pub(crate) fn tool_pipeline_thread(
         return Err(scope_error("the nested thread exceeds its bound"));
     }
     Ok(thread)
+}
+
+/// D-6: a durable nested pipeline's visit, a pure function of its thread:
+/// its direct nodes' journal identity. Pinned by the golden test.
+pub(crate) fn tool_pipeline_visit(thread: &str) -> String {
+    let mut digest = digest::Context::new(&digest::SHA256);
+    digest.update(b"elitea.pipeline.tool-thread.visit.v1\0");
+    digest.update(thread.as_bytes());
+    let mut visit = String::with_capacity(64);
+    for byte in digest.finish().as_ref() {
+        let _ = std::fmt::Write::write_fmt(&mut visit, format_args!("{byte:02x}"));
+    }
+    visit
 }
 
 /// A nested pipeline's thread writer: its checkpoints and its node journals.

@@ -147,21 +147,18 @@ pub enum PostgresCheckpointError {
     },
 }
 
-/// One list defines each checkpoint error code and its retryability (review
-/// G): the error's code and retryability and the code table read back from a
-/// `GraphError` all come from it, and `PostgresCheckpointError::kind` maps
-/// every variant exhaustively.
+/// One list defines each checkpoint error kind and its retryability (review
+/// G): the enum, `ALL` and `retryable` all come from it. `as_str` below is an
+/// exhaustive match, so a new kind cannot go without its code, and
+/// `PostgresCheckpointError::kind` maps every error variant exhaustively. The
+/// codes stay literal in `as_str`, where the faults gate reads them.
 macro_rules! checkpoint_error_codes {
-    ($($kind:ident => $code:literal, $retryable:literal;)*) => {
+    ($($kind:ident: $retryable:literal;)*) => {
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         pub(crate) enum CheckpointErrorCode { $($kind),* }
 
         impl CheckpointErrorCode {
             pub(crate) const ALL: &'static [Self] = &[$(Self::$kind),*];
-
-            pub(crate) const fn as_str(self) -> &'static str {
-                match self { $(Self::$kind => $code),* }
-            }
 
             pub(crate) const fn retryable(self) -> bool {
                 match self { $(Self::$kind => $retryable),* }
@@ -171,14 +168,29 @@ macro_rules! checkpoint_error_codes {
 }
 
 checkpoint_error_codes! {
-    InvalidConfiguration => "checkpoint.invalid_configuration", false;
-    InvalidScope => "checkpoint.invalid_scope", false;
-    ResourceExhausted => "checkpoint.resource_exhausted", false;
-    WriterNotCurrent => "checkpoint.writer_not_current", false;
-    CheckpointConflict => "checkpoint.conflict", false;
-    CorruptStoredState => "checkpoint.corrupt_state", false;
-    StorageUnavailable => "checkpoint.storage_unavailable", true;
-    StorageFailure => "checkpoint.storage_failure", false;
+    InvalidConfiguration: false;
+    InvalidScope: false;
+    ResourceExhausted: false;
+    WriterNotCurrent: false;
+    CheckpointConflict: false;
+    CorruptStoredState: false;
+    StorageUnavailable: true;
+    StorageFailure: false;
+}
+
+impl CheckpointErrorCode {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidConfiguration => "checkpoint.invalid_configuration",
+            Self::InvalidScope => "checkpoint.invalid_scope",
+            Self::ResourceExhausted => "checkpoint.resource_exhausted",
+            Self::WriterNotCurrent => "checkpoint.writer_not_current",
+            Self::CheckpointConflict => "checkpoint.conflict",
+            Self::CorruptStoredState => "checkpoint.corrupt_state",
+            Self::StorageUnavailable => "checkpoint.storage_unavailable",
+            Self::StorageFailure => "checkpoint.storage_failure",
+        }
+    }
 }
 
 impl PostgresCheckpointError {

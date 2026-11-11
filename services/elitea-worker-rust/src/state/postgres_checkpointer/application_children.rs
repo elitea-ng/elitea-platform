@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use super::{CheckpointWriterAuthority, PostgresCheckpointError, PostgresCheckpointer};
 use crate::agents::application_pipeline::PipelineToolCallLineage;
 use crate::agents::graph::tool_pipeline_threads::{
-    AdmittedToolPipeline, MAX_TOOL_PIPELINE_THREADS_PER_MEMBER, TOOL_LEDGER_KEY,
+    AdmittedToolPipeline, MAX_TOOL_PIPELINE_THREADS_PER_MEMBER, THREAD_SEGMENT, TOOL_LEDGER_KEY,
     TOOL_LEDGER_SEGMENT, ToolPipelineAdmission, ToolPipelineThreads, tool_pipeline_thread,
 };
 use crate::agents::graph::{
@@ -463,7 +463,7 @@ fn ledger_threads(
     if threads.len() > MAX_TOOL_PIPELINE_THREADS_PER_MEMBER
         || threads
             .iter()
-            .any(|thread| !thread.starts_with(&prefix) || !thread.contains("/pt1:"))
+            .any(|thread| !thread.starts_with(&prefix) || !thread.contains(THREAD_SEGMENT))
     {
         return Err(PostgresCheckpointError::CorruptStoredState);
     }

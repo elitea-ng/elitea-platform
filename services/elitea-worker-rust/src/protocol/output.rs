@@ -1065,7 +1065,7 @@ pub(crate) const FANOUT_AGENT_CALLS_PIPELINE_MESSAGE: &str = "A Map item or Para
 
 /// The chat-visible text for
 /// [`RuntimeFailureKind::FanoutAgentToolPipelineUnsupported`] (FU-291 D5).
-pub(crate) const FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED_MESSAGE: &str = "A Map item or Parallel branch runs an Agent whose saved pipeline tool holds a Code or Agent node, or that reaches a saved pipeline through another Agent, which cannot run there yet; remove that node, or attach the pipeline to the Agent directly.";
+pub(crate) const FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED_MESSAGE: &str = "A Map item or Parallel branch calls a saved pipeline tool it cannot run yet: one with a Code or Agent node, or called via another Agent or a saved pipeline's Agent node; remove that node or call the pipeline from the member's own Agent.";
 
 /// The internal (never user-facing) detail every "may have started" refusal
 /// carries; the user sees [`RECOVERY_REFUSED_MESSAGE`].

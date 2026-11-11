@@ -114,7 +114,7 @@ const (
 	RuntimeExecutionInputLimit Code = "runtime.execution_input_limit"
 	// A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools.
 	RuntimeFanoutAgentCallsPipeline Code = "runtime.fanout_agent_calls_pipeline"
-	// A Map item or Parallel branch runs an Agent whose saved pipeline tool holds a Code or Agent node, or that reaches a saved pipeline through another Agent, which cannot run there yet; remove that node, or attach the pipeline to the Agent directly.
+	// A Map item or Parallel branch calls a saved pipeline tool it cannot run yet: one with a Code or Agent node, or called via another Agent or a saved pipeline's Agent node; remove that node or call the pipeline from the member's own Agent.
 	RuntimeFanoutAgentToolPipelineUnsupported Code = "runtime.fanout_agent_tool_pipeline_unsupported"
 	// The fan-out node could not start: too little time was left before the run's deadline for its items.
 	RuntimeFanoutDeadlineInsufficient Code = "runtime.fanout_deadline_insufficient"

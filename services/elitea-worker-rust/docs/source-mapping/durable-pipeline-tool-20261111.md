@@ -1,7 +1,7 @@
 # A fan-out member's saved Agent calls a saved pipeline, durably (FU-291), 2026-11-11
 
 Plan and review: `handoffs/point5-wave1-20261008/fu291/PLAN.md` and `REVIEW-PLAN.md` (C1–C7, and the D8 decision
-(C) + (B), which wins). Stacked on W3-2b (`feat/w3-2b-saved-code-children`, #1925). Paths: `W/` =
+(C) + (B), which wins). PR #1937, on `main` (contains W3-2b #1925 and the side fix #1933). Paths: `W/` =
 `services/elitea-worker-rust/src`, `M/` = `services/elitea-main/internal`.
 
 Decisions applied: D1 (b) narrowed by D8 (B) to **members only**; D2 (a) derivation + fenced writer row + stored call,
@@ -30,8 +30,10 @@ ends typed `RECOVERY_FRONTIER_UNSUPPORTED` (side PR #1933). That is F, not in sc
 
 ## Design as built
 
-- **Nested thread (D-2).** `NT = A + "/pt1:" + b64url(SHA256("elitea.pipeline.tool-thread.v1\0", len‖A,
-  len‖lineage))` (`W/agents/graph/tool_pipeline_threads.rs:76`). `A` is the member Agent node's own admitted path,
+- **Nested thread (D-2).** `NT = A + "/pt1:" + b64url(SHA256("elitea.pipeline.tool-thread.v1\0", len‖A, len‖batch,
+  len‖ordinal(u64 BE), len‖call id, len‖tool name, len‖arguments digest))`, with u64 big-endian lengths
+  (`tool_pipeline_thread`, `W/agents/graph/tool_pipeline_threads.rs`). This is an explicit field encoding, never a
+  serializer's output (review B1), and it is pinned by a golden test. `A` is the member Agent node's own admitted path,
   `<member thread>/<agent node>` (the activation receipt's thread and node, `W/agents/pipeline/scoped_runtime.rs:349`):
   the path the family admits for the node, on which a saved Agent writes no graph.
   - **Deviation from the plan.** The plan took `A` = the activation receipt's thread. That thread is the member's own
@@ -374,6 +376,42 @@ and `checkpoint_error_code` all read it.
 
 **H.** `ToolPipelineThreads::register` (`tool_pipeline_threads.rs:216`) is infallible. The bounds are checked against
 the ledger before the activation, so an activated writer is always registered and never orphaned.
+
+### PR #1937 review (head b763c15e0), 2026-11-11
+
+- **B1, the nested-thread identity is pinned.** `NT` used to hash `serde_json::to_vec(lineage)`. A later Worker that
+  added or renamed a lineage field would have derived another `NT` for an in-flight call during a rolling upgrade. It
+  would have admitted a fresh thread and missed the journal (the visit is derived from `NT`), so the nested effects
+  would run again.
+  - `NT` now hashes the five lineage fields in an explicit length-prefixed encoding (`PipelineToolCallLineage::identity_fields`).
+  - The visit moved next to it (`tool_pipeline_visit`).
+  - Golden test: `the_nested_thread_its_visit_and_the_ledger_name_are_pinned` asserts the literal `NT`
+    (`m1:member-a/agent/pt1:kKuUgqTrPr65kP02mK9-e6HLJsUm9ELh5tOlT3dWwp8`), the literal visit and the ledger name and
+    key. Its expected values were computed independently. It failed first on the serde encoding (it derived
+    `…/pt1:-uatE8dcr2CS0zO2xyw7e12Wr3t6pAYFPO5YMwmtOhE`).
+  - Changing any of these literals is a breaking identity change that needs a new domain version and a version-skew
+    story.
+  - The new encoding changes `NT` for rows written by this branch's own earlier builds. Nothing has shipped, so no
+    deployed thread is orphaned. The browser-evidence stack ran an earlier build of this branch.
+- **N1.** `durable_unsupported` also checks `durable_tool_refusal()` (Code or an Agent node), so the runtime guard
+  holds on its own, not only through assembly.
+- **N2, one precise text.** The `FanoutAgentToolPipelineUnsupported` text now covers every refused shape, including
+  the saved pipeline's Agent node. It is still one registered sentence (236 bytes): the registry, the Worker
+  constant, Main's allowlist constant, `go generate`, and `docs/errors/README.md`. The kind is new in this PR, so no
+  spooled frame carries the old text.
+  - A separate kind for `InSavedPipeline` would need another wire fallback and Main entry for the same refusal class.
+  - The operator line still names the precise cause (`fanout_agent_tool_pipeline_in_saved_pipeline`).
+- **N3.** The header names PR #1937 on `main`.
+- **N4.** `ledger_threads` uses `THREAD_SEGMENT`.
+- **Faults gate.** The gate reads codes from `fn code`/`fn as_str` bodies. Two earlier rounds had hidden the
+  checkpoint codes from it: G's macro, and finding 8's deletion of the last `code()` arm naming
+  `graph.fanout.agent_calls_saved_pipeline`. My verification printed only the last lines of `go test ./...`, so that
+  failure went unseen.
+  - Now `CheckpointErrorCode::as_str` is an explicit, exhaustive match with the literal codes (the macro still
+    defines the kinds, `ALL` and `retryable`).
+  - `graph.fanout.agent_calls_saved_pipeline` is deleted from `legacy-codes.txt`, since that list only shrinks; the
+    wire kind keeps its own code string.
+  - `go test` of `libs/go/faults` passes.
 
 ## Real-browser evidence
 

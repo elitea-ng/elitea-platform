@@ -267,3 +267,36 @@ fn a_receipt_re_derives_its_thread_and_refuses_another_name() {
         .insert(DURABLE_TOOL_THREAD_METADATA_KEY.to_owned(), "{}".to_owned());
     assert!(proved_durable_tool_thread(&malformed).is_err());
 }
+
+/// FU-291 review B1: the nested thread, its visit and the member ledger are
+/// durable identities. A Worker that derives a different value for an
+/// in-flight call admits a fresh thread, misses the journal (the visit) and
+/// repeats the nested effects. CHANGING ANY OF THESE LITERALS IS A BREAKING
+/// IDENTITY CHANGE: it needs a new domain version and a version-skew story.
+/// The encoding is explicit and length-prefixed (u64 big-endian lengths):
+/// domain, then `A`, batch event id, ordinal (u64 BE), call id, tool name,
+/// arguments digest. It never hashes a serializer's output.
+#[test]
+fn the_nested_thread_its_visit_and_the_ledger_name_are_pinned() {
+    let lineage = PipelineToolCallLineage::for_test(
+        "batch-1",
+        1,
+        "call-1",
+        "summarize",
+        &json!({"task": "summarize the topic"}),
+    );
+    let thread = tool_pipeline_thread("m1:member-a/agent", &lineage).unwrap();
+    assert_eq!(
+        thread,
+        "m1:member-a/agent/pt1:kKuUgqTrPr65kP02mK9-e6HLJsUm9ELh5tOlT3dWwp8"
+    );
+    assert_eq!(
+        tool_pipeline_visit(&thread),
+        "32c62c8b173ff60d90e6c1b660284858cf1cc4e9c3cf8c8395a49b6b71aa4bcd"
+    );
+    assert_eq!(
+        format!("m1:member-a{TOOL_LEDGER_SEGMENT}"),
+        "m1:member-a/pt1=ledger"
+    );
+    assert_eq!(TOOL_LEDGER_KEY, "elitea.pipeline.tool-threads.v1");
+}
