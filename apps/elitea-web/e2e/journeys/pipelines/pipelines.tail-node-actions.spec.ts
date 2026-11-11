@@ -41,7 +41,10 @@ test.afterEach(async ({ page }) => {
 });
 
 async function openEditor(page: Page, pipeline: CreatedPipeline): Promise<void> {
-  await page.goto(`${BASE_URL}/app/pipelines/latest/${pipeline.id}`);
+  // `domcontentloaded`: the canvas wait below is the readiness gate. `load` also
+  // waits on every subresource, which on a loaded webkit runner can outlast the
+  // whole 30s test budget before the editor is even checked.
+  await page.goto(`${BASE_URL}/app/pipelines/latest/${pipeline.id}`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('rf__wrapper')).toBeVisible({ timeout: 30_000 });
   await expect(page.locator(`.react-flow__node[data-id="${PIPELINE_STARTER_ENTRY_NODE_ID}"]`)).toBeVisible({
     timeout: 20_000,

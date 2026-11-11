@@ -152,10 +152,13 @@ test('J24: settings: analytics renders the live backend\'s own usage figures', a
   // ProjectSwitcher both resolve it from the project list now).
   await expect(page.getByText(`Project: ${DEFAULT_PROJECT_NAME}`, { exact: true })).toBeVisible({ timeout: 15_000 });
   // #6791: calendar-day presets — `Today` replaced the rolling `Last 24h`.
+  // Scoped to `main`: the sidebar's chat list has a `Today` date-group header
+  // button too, once any earlier test in the shard made a conversation today.
+  const body = page.getByRole('main');
   for (const preset of ['Today', 'Last 7d', 'Last 30d', 'Last 90d']) {
-    await expect(page.getByRole('button', { name: preset, exact: true })).toBeVisible();
+    await expect(body.getByRole('button', { name: preset, exact: true })).toBeVisible();
   }
-  await expect(page.getByRole('button', { name: 'Last 24h', exact: true })).toHaveCount(0);
+  await expect(body.getByRole('button', { name: 'Last 24h', exact: true })).toHaveCount(0);
   // The two `DateRangeField` MUI DateTimePickers (AnalyticsContainer.tsx:186-205)
   // render five segmented spinbuttons each (MM/DD/YYYY hh:mm) — ten in total.
   await expect(page.getByText('From:', { exact: true })).toBeVisible();
