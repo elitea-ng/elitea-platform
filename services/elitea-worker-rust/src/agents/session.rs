@@ -2282,9 +2282,25 @@ impl PipelineStateServices {
                 frontier,
             ));
         }
-        if !definition
-            .recovery_frontier_supported(&checkpoint.pending_nodes, &frozen.admitted_aliases())
-        {
+        let aliases = frozen.admitted_aliases();
+        if !definition.recovery_frontier_supported(&checkpoint.pending_nodes, &aliases) {
+            // A root Agent node running a saved Agent is not a frontier
+            // (FU-323 makes it one): refused typed and registered, ids only.
+            if let Some(node) =
+                definition.saved_agent_frontier_node(&checkpoint.pending_nodes, &aliases)
+            {
+                let code = elitea_faults::codes::PIPELINE_RECOVERY_SAVED_AGENT_FRONTIER;
+                elitea_faults::fault!(
+                    tracing::Level::WARN,
+                    code = code,
+                    event = "pipeline_recovery_frontier_refused",
+                    execution_id = %plan.execution_id,
+                    generation = plan.generation,
+                    node_id = node,
+                    support_ref = %plan.execution_id
+                );
+                return Err(invalid_configuration().with_cause(code.as_str(), None));
+            }
             return Err(invalid_configuration());
         }
         // FU-249: an Agent node on the frontier resumes its saved child pipeline

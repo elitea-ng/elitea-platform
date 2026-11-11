@@ -138,6 +138,14 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "pipeline.recovery.saved_agent_frontier",
+      "sentence": "A checkpoint reclaim met a root Agent node running a saved Agent, which cannot resume yet, so the run ended typed and nothing after that node ran.",
+      "action": "Nothing to repair on the platform; the user checks what the Agent completed and starts the run again.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "pipeline.code.main_retrying",
       "sentence": "Main answered a Code visit or intent call with a retryable failure, so the Worker sends the same idempotent call again until the attempt's deadline.",
       "action": "Nothing when it is rare; main_code names Main's registered cause when Main gave one (for example code.registration_contended), otherwise reason says how the call failed.",

@@ -15,6 +15,9 @@ mod governed_direct;
 pub mod invocation_admission;
 mod invocation_supervisor;
 mod native_agent_lifecycle;
+/// The terminal a refused assembly maps to, for the reclaim proofs.
+#[cfg(test)]
+pub(crate) use native_agent_lifecycle::assembly_failure;
 mod node_recovery;
 pub mod output_delivery;
 pub(crate) mod production;

@@ -1919,7 +1919,7 @@ fn stream_failure(error: &crate::agents::runtime::NativeAgentRuntimeError) -> Ru
     }
 }
 
-pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
+pub(crate) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
     // FU-244: a composition bound violation keeps its own readable terminal whatever coarse
     // code the bound reported (a cycle is InvalidConfiguration, a depth ResourceExhausted).
     if crate::agents::application_tools::is_composition_bound(error) {
@@ -1927,6 +1927,13 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
     }
     if crate::agents::application_tools::is_composition_size(error) {
         return RuntimeFailureKind::ApplicationCompositionTooLarge;
+    }
+    // A root Agent node running a saved Agent is not a recovery frontier: the
+    // inspect step logged its fault line; the run ends with its own text.
+    if error.cause().is_some_and(|cause| {
+        cause.code() == elitea_faults::codes::PIPELINE_RECOVERY_SAVED_AGENT_FRONTIER.as_str()
+    }) {
+        return RuntimeFailureKind::RecoveryFrontierAgentStep;
     }
     // PM-2: a stored frontier the recovery walk refuses ends readable and
     // typed; its distinct cause stays in the Worker's log.

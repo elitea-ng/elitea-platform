@@ -946,6 +946,31 @@ async fn direct_code_dispatch_observes_its_durable_initial_frontier() {
     );
 }
 
+/// The refusal names a pending Agent node running a saved Agent and nothing
+/// else: not one running a frozen saved pipeline, not a node it does not hold.
+#[test]
+fn a_saved_agent_frontier_node_is_named_only_for_a_saved_agent() {
+    let definition = PipelineDefinition::from_yaml(
+        "state:\n  answer: str\n  messages: list\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: inner\n    input_mapping:\n      task: {type: fixed, value: 'go'}\n    output: [answer]\n    transition: END\n",
+    )
+    .expect("one Agent node");
+    let pending = ["delegate".to_owned()];
+    let none = std::collections::BTreeSet::new();
+    let frozen = std::collections::BTreeSet::from(["inner".to_owned()]);
+    assert_eq!(
+        definition.saved_agent_frontier_node(&pending, &none),
+        Some("delegate")
+    );
+    assert_eq!(
+        definition.saved_agent_frontier_node(&pending, &frozen),
+        None
+    );
+    assert_eq!(
+        definition.saved_agent_frontier_node(&["missing".to_owned()], &none),
+        None
+    );
+}
+
 /// FU-249: an Agent node is a model-checkpoint recovery frontier only when the
 /// attachment it runs was frozen as a saved pipeline (its child resumes from
 /// its own checkpoint); an Agent node running a saved Agent is not.
