@@ -90,13 +90,19 @@ function FloorStopped({ stopped }: { stopped: TurnView['floorStopped'] }): React
   );
 }
 
-/** Above a turn of a message addressed to several agents: which agent answers, and that a cloud agent works without the workspace. */
+/**
+ * Above a turn of a thread with several agents: which agent answers, and that a cloud agent works without the
+ * workspace. When the thread routed the message to another agent than the composer's (its lead answers a message that
+ * names no one, ADR-0050 decision 7c), the line says the thread sent it there.
+ */
 export function AnsweringAgent({ agent }: { agent: TurnView['agent'] }): React.JSX.Element | null {
   if (agent === undefined) return null;
   const where = agent.executor === 'cloud' ? t('workspace.floor.cloud', 'in the cloud, conversation text only') : t('workspace.floor.local', 'on this computer');
   return (
-    <Typography variant="bodySmall" component="div" data-testid="turn-agent" data-executor={agent.executor} sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
-      {t('workspace.floor.agent', '{{name}} · {{where}}', { name: agent.name, where })}
+    <Typography variant="bodySmall" component="div" data-testid="turn-agent" data-executor={agent.executor} data-followed={agent.followed ? 'true' : undefined} sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
+      {agent.followed
+        ? t('workspace.floor.followed', '{{name}} answers: the thread routed this message to it · {{where}}', { name: agent.name, where })
+        : t('workspace.floor.agent', '{{name}} · {{where}}', { name: agent.name, where })}
     </Typography>
   );
 }

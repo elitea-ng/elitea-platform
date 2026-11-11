@@ -26,6 +26,8 @@ interface TurnAgentView {
   position: number;
   /** How many agents answer the message. */
   targets: number;
+  /** Main routed the message to this agent rather than the composer's (the lead of the thread, say). */
+  followed: boolean;
 }
 
 /** The part of a turn's view that the chain sets. */
@@ -99,7 +101,7 @@ export function waitsForNextTurn(view: ChainView & { done?: { continuing?: true 
 }
 
 function agentOf(floor: TurnFloorStatus): TurnAgentView {
-  return { name: floor.agent_name, participantId: floor.participant_id, executor: floor.executor, position: floor.position, targets: floor.targets };
+  return { name: floor.agent_name, participantId: floor.participant_id, executor: floor.executor, position: floor.position, targets: floor.targets, followed: floor.followed === true };
 }
 
 /** The unattended fields of a `status` event, when it has them. */

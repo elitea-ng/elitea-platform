@@ -23,8 +23,16 @@ Write **@Name** in your message for each agent it is for, for example:
 
 - The agents you name answer **one after another, in the order your message names them**. The second agent starts once the first agent's answer is saved, and it sees that answer.
 - Each answer shows which agent gave it and where it ran: **Coder · on this computer**, **Reviewer · in the cloud, conversation text only**.
-- A message that names no agent goes to the agent in the composer's chip: picking it there addresses it, as **To:** does in a web chat, so it answers even when the conversation has a lead.
 - A name only counts as a whole word: `me@Coderhouse` addresses no one.
+
+## A message that names no agent
+
+The agent in the composer's chip is not an address. A message that names no agent goes where the conversation sends it:
+
+- **The conversation has a lead.** The lead answers, whichever agent the composer's chip shows. The answer says so: **Reviewer answers: the thread routed this message to it · in the cloud, conversation text only**. To have another agent answer, name it with **@Name**.
+- **No lead.** The agent in the composer's chip answers.
+
+When the lead runs in the cloud and the composer's agent runs on this computer, the lead's turn takes none of the composer's modes: no plan mode, Bypass, model choice or **Run to completion**.
 
 The composer stays busy until the last addressed agent has answered. If you send a new message before then, the agents still waiting for the earlier message do not answer it: the thread says **A newer message took the floor**.
 

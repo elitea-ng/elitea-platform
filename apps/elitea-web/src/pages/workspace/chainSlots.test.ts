@@ -18,7 +18,7 @@ describe('turnSlots', () => {
   });
 
   it('gives a later agent of a message addressed to several no prompt of its own (ADR-0050 decision 7f)', () => {
-    const agent = (position: number, name: string) => ({ name, participantId: 70 + position, executor: 'local' as const, position, targets: 2 });
+    const agent = (position: number, name: string) => ({ name, participantId: 70 + position, executor: 'local' as const, position, targets: 2, followed: false });
     const slots = turnSlots([
       { turnId: 'a', view: { agent: agent(0, 'Coder'), continuedTo: { nextTurnId: 'b', index: 1, kind: 'floor', agentName: 'Reviewer' } } },
       // Known from the turn before it, before its own status arrived.

@@ -68,7 +68,43 @@ function playFloor(emit: (event: AgentEvent) => void, first: string): void {
   emit({ ...b(4), kind: 'status', payload: { phase: 'done' } });
 }
 
-/** What `__harness` gains: the adds' bodies, and `playFloor()` on the next turn id. */
-export function floorHarness(emit: (event: AgentEvent) => void, turnId: () => string): { participantPosts: AddedRow[][]; playFloor: () => void } {
-  return { participantPosts: PARTICIPANT_POSTS, playFloor: () => playFloor(emit, turnId()) };
+const AGENT_NAMES: Record<number, { name: string; executor: 'local' | 'cloud' }> = { 77: { name: 'Coder', executor: 'local' }, 88: { name: 'Reviewer', executor: 'cloud' } };
+
+/**
+ * A message of a thread whose lead is `lead` (`meta.floor.policy: lead`), as Main routes it and the host follows it
+ * (ADR-0050 decision 7c, #1917): `addressed` (the start's `addressed_to`) answers on the first agent it names; an
+ * unaddressed message goes to the lead, which the host starts in place of the composer's agent (`floor.followed`).
+ */
+function playRouted(emit: (event: AgentEvent) => void, turn: string, addressed: readonly number[], composer: number, lead: number): void {
+  const participant = addressed[0] ?? lead;
+  const agent = AGENT_NAMES[participant] ?? { name: 'Agent', executor: 'local' as const };
+  const followed = addressed.length === 0 && participant !== composer;
+  const at = (seq: number) => ({ turn_id: turn, seq });
+  const floor = { position: 0, targets: Math.max(1, addressed.length), participant_id: participant, agent_name: agent.name, executor: agent.executor, ...(followed ? { followed: true as const } : {}) };
+  emit({ ...at(1), kind: 'status', payload: { phase: 'running', floor } });
+  emit({ ...at(2), kind: 'text_delta', payload: { text: `${agent.name} here: on it.` } });
+  emit({ ...at(3), kind: 'done', payload: { committed: false, conversation_id: '77', message_ids: [], changed_files: 0 } });
+  emit({ ...at(4), kind: 'status', payload: { phase: 'done' } });
+}
+
+/** The participant id of the composer's agent of a start (Coder 77, Reviewer 88). */
+const composerOf = (applicationId: unknown): number => (applicationId === 6 ? 88 : 77);
+
+/**
+ * What `__harness` gains: the adds' bodies, `playFloor()` on the next turn id, and `playRouted(lead)` (the last start,
+ * routed in a thread whose lead is the participant `lead`).
+ */
+export function floorHarness(
+  emit: (event: AgentEvent) => void,
+  turnId: () => string,
+  lastStart: () => { addressed_to?: number[] | undefined; application_id: number } | undefined,
+): { participantPosts: AddedRow[][]; playFloor: () => void; playRouted: (lead: number) => void } {
+  return {
+    participantPosts: PARTICIPANT_POSTS,
+    playFloor: () => playFloor(emit, turnId()),
+    playRouted: (lead) => {
+      const start = lastStart();
+      playRouted(emit, turnId(), start?.addressed_to ?? [], composerOf(start?.application_id), lead);
+    },
+  };
 }
