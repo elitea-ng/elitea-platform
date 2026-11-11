@@ -56,6 +56,8 @@ const (
 	PipelineCodeSupervisorBusy Code = "pipeline.code.supervisor_busy"
 	// A Code item of a Map or Parallel was interrupted after it may have started and no owner proof showed its effect, so it ended typed and was not run again.
 	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
+	// A checkpoint reclaim met a root Agent node running a saved Agent, which cannot resume yet, so the run ended typed and nothing after that node ran.
+	PipelineRecoverySavedAgentFrontier Code = "pipeline.recovery.saved_agent_frontier"
 	// A background runner failed its pass and will try again.
 	RunnerCycleFailed Code = "runner.cycle_failed"
 	// A background runner stopped on a dependency failure and is being restarted.
@@ -162,6 +164,8 @@ const (
 	RuntimePipelineToolFailed Code = "runtime.pipeline_tool_failed"
 	// The pipeline stopped because its selected tool cannot run. Check the toolkit binding, permissions, and supported operation. Share the support reference with your administrator.
 	RuntimePipelineToolUnavailable Code = "runtime.pipeline_tool_unavailable"
+	// This run stopped during an Agent step that cannot continue after a restart, so nothing after that step ran and nothing was repeated; check what the Agent completed, then start the run again.
+	RuntimeRecoveryFrontierAgentStep Code = "runtime.recovery_frontier_agent_step"
 	// This run stopped at a point where it cannot be safely continued. Nothing was repeated. Start it again, and share the support reference with your administrator if it happens again.
 	RuntimeRecoveryFrontierUnsupported Code = "runtime.recovery_frontier_unsupported"
 	// An approved tool call may have started before the run stopped, and its result was not recorded. It was not repeated. Check the target system before retrying, and share the support reference with your administrator.

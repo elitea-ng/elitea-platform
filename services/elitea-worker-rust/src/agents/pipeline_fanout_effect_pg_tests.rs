@@ -6626,3 +6626,6 @@ async fn postgres_a_parallel_of_code_branches_starts_each_branch_through_assembl
     assert!(!error.contains("invalid_scope"), "{error}");
     db.pool.close().await;
 }
+
+#[path = "root_saved_agent_frontier_pg_tests.rs"]
+mod root_saved_agent_frontier;
