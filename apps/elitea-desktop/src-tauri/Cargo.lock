@@ -1682,6 +1682,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "unicode-general-category",
+ "uuid",
  "zeroize",
  "zip",
 ]

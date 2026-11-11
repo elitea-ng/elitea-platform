@@ -51,6 +51,7 @@ export interface ThreadAgent {
   participantId: number;
   applicationId: number;
   name: string;
+  /** The version the participant is pinned to; 0 for an unpinned one (it runs its agent's default version, #1926). */
   versionId: number;
   cloud: boolean;
 }
@@ -64,15 +65,30 @@ interface DetailParticipant {
   readonly meta?: { readonly [key: string]: unknown };
 }
 
+/** A participant's pinned version: 0 when unpinned (no `version_id`, or null, #1926); `undefined` when unreadable. */
+function pinnedVersionOf(participant: DetailParticipant): number | undefined {
+  const pin = participant.entity_settings?.['version_id'];
+  const versionId = pin === undefined || pin === null ? 0 : Number(pin);
+  return Number.isSafeInteger(versionId) && versionId >= 0 ? versionId : undefined;
+}
+
+const positiveId = (n: number): boolean => Number.isSafeInteger(n) && n > 0;
+
+/** The name a participant shows: its own, else its agent's; `''` for none. */
+function participantNameOf(participant: DetailParticipant): string {
+  const named = [participant.meta?.['name'], participant.entity_meta?.name].find((name): name is string => typeof name === 'string' && name.trim() !== '');
+  return named?.trim() ?? '';
+}
+
 /** The agent participants of a conversation's detail (a thread reopened later: its agents are not in the composer's state). */
 export function threadAgentsOf(participants: readonly DetailParticipant[] | undefined): ThreadAgent[] {
   return (participants ?? []).flatMap((participant): ThreadAgent[] => {
     const participantId = Number(participant.id);
     const applicationId = Number(participant.entity_meta?.id);
-    const versionId = Number(participant.entity_settings?.['version_id']);
-    if (participant.entity_name !== 'application' || ![participantId, applicationId, versionId].every((n) => Number.isSafeInteger(n) && n > 0)) return [];
-    const named = [participant.meta?.['name'], participant.entity_meta?.name].find((name): name is string => typeof name === 'string' && name.trim() !== '');
-    return [{ participantId, applicationId, name: named?.trim() ?? '', versionId, cloud: participant.entity_settings?.['executor'] === 'cloud' }];
+    // An unpinned participant is an agent of the thread too: version 0.
+    const versionId = pinnedVersionOf(participant);
+    if (participant.entity_name !== 'application' || !positiveId(participantId) || !positiveId(applicationId) || versionId === undefined) return [];
+    return [{ participantId, applicationId, name: participantNameOf(participant), versionId, cloud: participant.entity_settings?.['executor'] === 'cloud' }];
   });
 }
 

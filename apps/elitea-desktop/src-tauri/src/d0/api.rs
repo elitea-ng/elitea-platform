@@ -552,6 +552,7 @@ impl PlatformApi {
         conversation_id: &str,
         application_id: i64,
         version_id: i64,
+        participant_id: Option<i64>,
     ) -> Result<AnsweringParticipant, ApiError> {
         let detail: Value = self
             .send(
@@ -566,7 +567,14 @@ impl PlatformApi {
             .await?
             .into_ok()?;
         let conversation_uuid = conversation_uuid(&detail)?;
-        let id = participant_for(&detail, application_id, version_id)?;
+        // The participant the turn named, when it is one of this agent
+        // version (#1927); else the agent's participant by its version.
+        let id = match participant_id
+            .filter(|id| named_participant(&detail, application_id, version_id, *id))
+        {
+            Some(id) => id,
+            None => participant_for(&detail, application_id, version_id)?,
+        };
         Ok(AnsweringParticipant {
             id,
             application_id,
@@ -615,12 +623,14 @@ impl PlatformApi {
 
     /// The agent participant `participant_id` of the conversation, with the
     /// agent and version it answers on (ADR-0050 decision 7f): a later turn
-    /// of a routed message runs it.
+    /// of a routed message runs it. A participant pinned to no version runs
+    /// its agent's default version (#1926), read from the agent.
     ///
     /// # Errors
     ///
-    /// The conversation cannot be read, or holds no agent participant
-    /// `participant_id` pinned to a version (`agent_not_in_conversation`).
+    /// The conversation or the agent cannot be read, the conversation holds
+    /// no agent participant `participant_id`, or an unpinned one's agent has
+    /// no version (`agent_not_in_conversation`).
     pub async fn floor_target(
         &self,
         project_id: i64,
@@ -639,7 +649,32 @@ impl PlatformApi {
             )
             .await?
             .into_ok()?;
-        floor_target_in(&detail, participant_id)
+        let (target, pinned) = floor_target_in(&detail, participant_id)?;
+        if pinned {
+            return Ok(target);
+        }
+        let application: Value = self
+            .send(
+                Method::GET,
+                &format!(
+                    "/api/v2/elitea_core/application/prompt_lib/{project_id}/{}",
+                    target.application_id
+                ),
+                None,
+                &[],
+            )
+            .await?
+            .into_ok()?;
+        let version_id = default_version_of(&application).ok_or_else(|| {
+            ApiError::local(
+                "agent_not_in_conversation",
+                "the next agent of this message has no version to run",
+            )
+        })?;
+        Ok(FloorTarget {
+            version_id,
+            ..target
+        })
     }
 
     /// The conversation's newest `limit` message groups, oldest first
@@ -1170,7 +1205,10 @@ fn agent_count(detail: &Value) -> usize {
         .count()
 }
 
-fn floor_target_in(detail: &Value, participant_id: i64) -> Result<FloorTarget, ApiError> {
+/// The agent participant `participant_id` of the conversation, and whether
+/// it is pinned to a version. An unpinned one (no `version_id`, or `null`)
+/// answers with `version_id` 0: its agent's default version is read next.
+fn floor_target_in(detail: &Value, participant_id: i64) -> Result<(FloorTarget, bool), ApiError> {
     participants_of(detail)
         .iter()
         .filter(|participant| {
@@ -1182,23 +1220,60 @@ fn floor_target_in(detail: &Value, participant_id: i64) -> Result<FloorTarget, A
                 .get("entity_meta")
                 .and_then(|meta| meta.get("id"))
                 .and_then(Value::as_i64)?;
-            let version_id = participant
+            let pin = participant
                 .get("entity_settings")
                 .and_then(|settings| settings.get("version_id"))
-                .and_then(Value::as_i64)?;
-            Some(FloorTarget {
-                participant_id,
-                application_id,
-                version_id,
-                cloud: executor_of(detail, participant_id) == Some(EXECUTOR_CLOUD),
-            })
+                .filter(|value| !value.is_null());
+            // A pin this client cannot read is not a version to run.
+            let version_id = match pin {
+                Some(pin) => Some(pin.as_i64()?),
+                None => None,
+            };
+            Some((
+                FloorTarget {
+                    participant_id,
+                    application_id,
+                    version_id: version_id.unwrap_or(0),
+                    cloud: executor_of(detail, participant_id) == Some(EXECUTOR_CLOUD),
+                },
+                version_id.is_some(),
+            ))
         })
         .ok_or_else(|| {
             ApiError::local(
                 "agent_not_in_conversation",
-                "the next agent of this message is not an agent of the conversation pinned to a version",
+                "the next agent of this message is not an agent of the conversation",
             )
         })
+}
+
+/// An agent's default version, as its detail (`GET application`) names it:
+/// the version marked `is_default`, else `meta.default_version_id`, else
+/// the one named `base`, else its first (the web app's
+/// `selectDefaultVersion`, #1926).
+fn default_version_of(application: &Value) -> Option<i64> {
+    let versions = application.get("versions").and_then(Value::as_array)?;
+    let id_of = |version: &Value| number_of(version.get("id")).filter(|id| *id > 0);
+    let meta_default = number_of(
+        application
+            .get("meta")
+            .and_then(|meta| meta.get("default_version_id")),
+    );
+    versions
+        .iter()
+        .find(|version| version.get("is_default") == Some(&Value::Bool(true)))
+        .and_then(id_of)
+        .or_else(|| {
+            meta_default
+                .and_then(|wanted| versions.iter().filter_map(id_of).find(|id| *id == wanted))
+        })
+        .or_else(|| {
+            versions
+                .iter()
+                .find(|version| version.get("name").and_then(Value::as_str) == Some("base"))
+                .and_then(id_of)
+        })
+        .or_else(|| versions.iter().find_map(id_of))
 }
 
 fn conversation_uuid(detail: &Value) -> Result<String, ApiError> {
@@ -1235,6 +1310,30 @@ fn author_id(author: &Value) -> Result<i64, ApiError> {
             "invalid_response",
             "the platform did not say who is signed in",
         )
+    })
+}
+
+/// Whether `participant_id` is an agent participant of the conversation on
+/// `application_id` that answers on `version_id`: pinned to it, or unpinned.
+fn named_participant(
+    detail: &Value,
+    application_id: i64,
+    version_id: i64,
+    participant_id: i64,
+) -> bool {
+    participants_of(detail).iter().any(|participant| {
+        participant.get("id").and_then(Value::as_i64) == Some(participant_id)
+            && participant.get("entity_name").and_then(Value::as_str) == Some("application")
+            && participant
+                .get("entity_meta")
+                .and_then(|meta| meta.get("id"))
+                .and_then(Value::as_i64)
+                == Some(application_id)
+            && participant
+                .get("entity_settings")
+                .and_then(|settings| settings.get("version_id"))
+                .filter(|value| !value.is_null())
+                .is_none_or(|pinned| pinned.as_i64() == Some(version_id))
     })
 }
 
@@ -1436,6 +1535,63 @@ mod tests {
         let error = participant_for(&detail, 5, 9).unwrap_err();
         assert_eq!(error.code, "agent_version_mismatch");
         assert!(error.message.contains("versions 7, 8"), "{}", error.message);
+    }
+
+    /// Two participants of one agent version, or an unpinned one listed
+    /// first: the participant the turn names answers (#1927), only when it
+    /// is one of that agent version.
+    #[test]
+    fn a_named_participant_of_the_agent_version_answers() {
+        let detail = json!({"participants": [
+            {"id": 1, "entity_name": "user", "entity_meta": {"id": 7}},
+            {"id": 2, "entity_name": "application", "entity_meta": {"id": 5}},
+            {"id": 3, "entity_name": "application", "entity_meta": {"id": 5}, "entity_settings": {"version_id": 9}},
+            {"id": 4, "entity_name": "application", "entity_meta": {"id": 5}, "entity_settings": {"version_id": 9}},
+            {"id": 5, "entity_name": "application", "entity_meta": {"id": 6}, "entity_settings": {"version_id": 9}}
+        ]});
+        assert_eq!(participant_for(&detail, 5, 9), Ok(3));
+        assert!(named_participant(&detail, 5, 9, 4));
+        assert!(named_participant(&detail, 5, 9, 2));
+        // Another agent, another version, or no agent at all.
+        assert!(!named_participant(&detail, 5, 9, 5));
+        assert!(!named_participant(&detail, 5, 10, 4));
+        assert!(!named_participant(&detail, 5, 9, 1));
+        assert!(!named_participant(&detail, 5, 9, 99));
+    }
+
+    /// A later agent pinned to no version runs its agent's default version
+    /// (#1926); a pin this client cannot read is not one.
+    #[test]
+    fn an_unpinned_next_agent_runs_its_default_version() {
+        let detail = json!({"participants": [
+            {"id": 2, "entity_name": "application", "entity_meta": {"id": 5}, "entity_settings": {"version_id": 9}},
+            {"id": 3, "entity_name": "application", "entity_meta": {"id": 6}, "entity_settings": {"executor": "cloud"}},
+            {"id": 4, "entity_name": "application", "entity_meta": {"id": 7}, "entity_settings": {"version_id": "x"}}
+        ]});
+        let (pinned, is_pinned) = floor_target_in(&detail, 2).unwrap();
+        assert!(is_pinned);
+        assert_eq!((pinned.application_id, pinned.version_id), (5, 9));
+        let (unpinned, is_pinned) = floor_target_in(&detail, 3).unwrap();
+        assert!(!is_pinned && unpinned.cloud);
+        assert_eq!(unpinned.application_id, 6);
+        assert!(floor_target_in(&detail, 4).is_err());
+        assert!(floor_target_in(&detail, 99).is_err());
+
+        let versions = json!([
+            {"id": 10, "name": "base"},
+            {"id": 11, "name": "v2"},
+            {"id": "12", "name": "v3"}
+        ]);
+        let marked = json!({"versions": [{"id": 10, "name": "base"}, {"id": 11, "name": "v2", "is_default": true}]});
+        assert_eq!(default_version_of(&marked), Some(11));
+        let meta = json!({"meta": {"default_version_id": "12"}, "versions": versions});
+        assert_eq!(default_version_of(&meta), Some(12));
+        assert_eq!(default_version_of(&json!({"versions": versions})), Some(10));
+        assert_eq!(
+            default_version_of(&json!({"versions": [{"id": 13, "name": "v1"}]})),
+            Some(13)
+        );
+        assert_eq!(default_version_of(&json!({"versions": []})), None);
     }
 
     #[test]

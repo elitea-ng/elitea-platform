@@ -12,7 +12,9 @@
 //!   same on every turn (the session stores them) and a re-seed gives the
 //!   same line. The text after the line is neutralized, so no message can
 //!   show another message's id; the person's steering messages are too
-//!   (`super::steering`). The agent's own answers carry no id.
+//!   (`super::steering`). The agent's own answers carry no id. A spawn's
+//!   record (`brief_refs.message_ids`) names each quoted message by its
+//!   chat message uuid, as a cloud spawn's does (#1908).
 //! * **Excerpts** are checked against the model's last request (the turn's
 //!   [`super::model::RequestCapture`]): the quote must be part of the text
 //!   after a message's id line, as the model read it (each run of
@@ -25,13 +27,15 @@
 //!   memory tools search the person's memories), so no entry was recalled.
 //! * **Facts** pass.
 
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use adk_core::{Content, Part};
-use elitea_agent_runtime::subagents::message_ref::{
-    message_ref, neutralize, normalize_whitespace, tag,
-};
+// The runtime's, so every host names a message and parses its id line one
+// way (#1909).
+use elitea_agent_runtime::subagents::message_ref::{neutralize, normalize_whitespace, tag};
+pub use elitea_agent_runtime::subagents::message_ref::{short_message_ref, strip_tag};
 use elitea_agent_runtime::subagents::profile::{
     BRIEF_ATTACHMENT_NOT_READABLE, BRIEF_EXCERPT_NOT_VISIBLE, BRIEF_MEMORY_NOT_RECALLED,
 };
@@ -43,15 +47,68 @@ use super::attachments::Attachment;
 /// The domain of [`attachment_id`]'s hash.
 const ATTACHMENT_ID_DOMAIN: &[u8] = b"elitea.desktop.attachment-id.v1\0";
 
-/// The short id of the message `message_id`, over its canonical uuid form
-/// (the cloud worker's `short_message_ref`), so the same message has the
-/// same id on the desktop and in the cloud.
-#[must_use]
-pub fn short_message_ref(message_id: &str) -> String {
-    match uuid::Uuid::try_parse(message_id) {
-        Ok(id) => message_ref(&id.hyphenated().to_string()),
-        Err(_) => message_ref(&message_id.to_ascii_lowercase()),
+/// At most this many short ids [`MessageIds`] remembers; past it, the
+/// oldest is forgotten first (a brief quoting it then keeps its short id, as
+/// before #1908), never the messages shown last.
+const MAX_KNOWN_MESSAGES: usize = 16 * 1024;
+
+/// The chat message each short id this process showed a model stands for
+/// (#1908): filled by [`tagged`] (a seeded message by its group's uuid, this
+/// turn's message by its `question_id`), read by [`BriefView::check`], so a
+/// spawn's record names the chat message, as a cloud spawn's does. A short
+/// id is a hash of its message id: two messages share one only by a 40-bit
+/// collision, and then the one shown last is named; a message
+/// shown before the app started (a session reopened from its store) has
+/// none, and its record keeps the short id.
+struct MessageIds;
+
+/// The short ids [`MessageIds`] holds, and the order they were first shown.
+#[derive(Default)]
+struct KnownMessages {
+    by_short: HashMap<String, String>,
+    order: VecDeque<String>,
+}
+
+impl KnownMessages {
+    fn remember(&mut self, short: &str, message_id: String, cap: usize) {
+        if let Some(kept) = self.by_short.get_mut(short) {
+            *kept = message_id;
+            return;
+        }
+        while self.order.len() >= cap {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.by_short.remove(&oldest);
+        }
+        self.order.push_back(short.to_owned());
+        self.by_short.insert(short.to_owned(), message_id);
     }
+}
+
+impl MessageIds {
+    fn known() -> &'static Mutex<KnownMessages> {
+        static KNOWN: OnceLock<Mutex<KnownMessages>> = OnceLock::new();
+        KNOWN.get_or_init(|| Mutex::new(KnownMessages::default()))
+    }
+
+    fn remember(short: &str, message_id: &str) {
+        let Ok(mut known) = Self::known().lock() else {
+            return;
+        };
+        known.remember(short, canonical_message_id(message_id), MAX_KNOWN_MESSAGES);
+    }
+
+    fn message_of(short: &str) -> Option<String> {
+        Self::known().lock().ok()?.by_short.get(short).cloned()
+    }
+}
+
+/// The chat message id as the record keeps it: the canonical uuid form (the
+/// one the short id is over), else the id as it is.
+fn canonical_message_id(message_id: &str) -> String {
+    uuid::Uuid::try_parse(message_id)
+        .map_or_else(|_| message_id.to_owned(), |id| id.hyphenated().to_string())
 }
 
 /// `text` as the model reads a message it may quote: the id line of
@@ -63,7 +120,9 @@ pub fn tagged(message_id: &str, text: &str) -> String {
     if message_id.is_empty() {
         return neutral.into_owned();
     }
-    let mut out = tag(&short_message_ref(message_id));
+    let short = short_message_ref(message_id);
+    MessageIds::remember(&short, message_id);
+    let mut out = tag(&short);
     out.push_str(&neutral);
     out
 }
@@ -97,19 +156,6 @@ fn quotable(content: &Content) -> Option<(String, String)> {
     })?;
     let (short, text) = strip_tag(first)?;
     Some((short.to_owned(), normalize_whitespace(text)))
-}
-
-/// `text` split at its `[message m-…]` line: the short id and the text
-/// after the line; `None` when it does not open with one.
-#[must_use]
-pub fn strip_tag(text: &str) -> Option<(&str, &str)> {
-    let short = text.strip_prefix("[message ")?.get(..12)?;
-    let valid = short.starts_with("m-") && short[2..].bytes().all(|b| b.is_ascii_hexdigit());
-    if !valid {
-        return None;
-    }
-    let rest = text.strip_prefix(tag(short).as_str())?;
-    Some((short, rest))
 }
 
 /// `text` without the `[message m-…]` line it may open with (a message as
@@ -246,11 +292,25 @@ impl BriefView {
         if !brief.memory_entries.is_empty() {
             return Err(BRIEF_MEMORY_NOT_RECALLED);
         }
+        // The record names each quoted message by its chat message id, as a
+        // cloud spawn's does (#1908); one this process never showed keeps
+        // its short id.
+        let mut message_ids: Vec<(String, String)> = Vec::new();
+        for excerpt in &brief.excerpts {
+            if message_ids
+                .iter()
+                .any(|(short, _)| *short == excerpt.message_id)
+            {
+                continue;
+            }
+            if let Some(message) = MessageIds::message_of(&excerpt.message_id) {
+                message_ids.push((excerpt.message_id.clone(), message));
+            }
+        }
         Ok(CheckedBrief {
             attachments,
             memory_entries: Vec::new(),
-            // The lane's record keeps the short ids.
-            message_ids: Vec::new(),
+            message_ids,
         })
     }
 }

@@ -145,6 +145,13 @@ pub struct AgentExecutionPayload {
     /// under another mode is re-seeded from this view. `None`: an input from
     /// before the view.
     pub context_view_history: Option<String>,
+    /// The binding of this reader's context view (#1902): Main's digest of
+    /// every setting that decides which messages are eligible (the mode,
+    /// `include_side_talk`, the join time under `since_joined`). The durable
+    /// session is bound to it as well as to the mode, so a setting that
+    /// narrows the view without changing the mode re-seeds it. `None`: an
+    /// input from before `ContextViewV1.binding`; the mode alone binds.
+    pub context_view_binding: Option<String>,
     /// The agent memory entries Main recalled into the instructions (#1826),
     /// in the order shown, each by id with its stored content: a
     /// `spawn_agent` brief may name these in `memory_entries`. Empty: none

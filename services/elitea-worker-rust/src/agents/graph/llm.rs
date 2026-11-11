@@ -2107,6 +2107,27 @@ fn fstring_keys(template: &str) -> Vec<&str> {
 }
 
 pub(super) fn render_fstring(template: &str, state: &State) -> Result<String, LlmExecutionError> {
+    // #1916: the context view can be far larger than a rendered input.
+    // Interpolated, it keeps its newest messages that fit beside everything
+    // else the template renders: measured first with the view as `[]`.
+    // A `chat_history` that is not a list renders as any other value.
+    let (skeleton, uses) = render_fstring_counted(template, state, "[]")?;
+    let Some(Value::Array(history)) = state.get("chat_history").filter(|_| uses > 0) else {
+        return Ok(skeleton);
+    };
+    let budget = MAX_RENDERED_INPUT_BYTES.saturating_sub(skeleton.len() - 2 * uses) / uses;
+    let fitting = newest_json_fitting(history, budget)?;
+    render_fstring_counted(template, state, &fitting).map(|(rendered, _)| rendered)
+}
+
+/// Render `template`, with `{chat_history}` (when it is a list) as
+/// `history`, and count how often it was.
+fn render_fstring_counted(
+    template: &str,
+    state: &State,
+    history: &str,
+) -> Result<(String, usize), LlmExecutionError> {
+    let mut uses = 0_usize;
     let mut rendered = String::with_capacity(template.len());
     let mut cursor = 0;
     while let Some(relative_open) = template[cursor..].find('{') {
@@ -2124,7 +2145,10 @@ pub(super) fn render_fstring(template: &str, state: &State) -> Result<String, Ll
                 .bytes()
                 .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
         {
-            if let Some(value) = state.get(key) {
+            if let ("chat_history", Some(Value::Array(_))) = (key, state.get(key)) {
+                uses += 1;
+                rendered.push_str(history);
+            } else if let Some(value) = state.get(key) {
                 let value = normalize_mapping_value(value)?;
                 rendered.push_str(&value);
             } else {
@@ -2145,7 +2169,28 @@ pub(super) fn render_fstring(template: &str, state: &State) -> Result<String, Ll
     if rendered.len() > MAX_RENDERED_INPUT_BYTES {
         return Err(LlmExecutionError::ResourceExhausted);
     }
-    Ok(rendered)
+    Ok((rendered, uses))
+}
+
+/// The newest items of `items` whose compact JSON array fits in `budget`
+/// bytes, oldest first; the same bytes as `serde_json::to_string` when all
+/// fit, `[]` when none does.
+fn newest_json_fitting(items: &[Value], budget: usize) -> Result<String, LlmExecutionError> {
+    let mut kept = Vec::new();
+    // The brackets.
+    let mut used = 2_usize;
+    for item in items.iter().rev() {
+        let encoded =
+            serde_json::to_string(item).map_err(|_| LlmExecutionError::InvalidInputMapping)?;
+        let cost = encoded.len() + usize::from(!kept.is_empty());
+        if used + cost > budget {
+            break;
+        }
+        used += cost;
+        kept.push(encoded);
+    }
+    kept.reverse();
+    Ok(format!("[{}]", kept.join(",")))
 }
 
 pub(super) fn normalize_mapping_value(value: &Value) -> Result<String, LlmExecutionError> {

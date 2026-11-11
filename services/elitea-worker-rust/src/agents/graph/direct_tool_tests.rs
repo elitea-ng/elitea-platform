@@ -1190,6 +1190,7 @@ fn tool_resume_payload(
         current_message_id: None,
         subagent_policy: None,
         context_view_history: None,
+        context_view_binding: None,
         recalled_memory: Vec::new(),
     }
 }

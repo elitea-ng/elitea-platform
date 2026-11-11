@@ -38,10 +38,41 @@ pub fn message_ref(message_id: &str) -> String {
     reference
 }
 
+/// The short id of the chat message `message_id` (#1909): the
+/// [`message_ref`] of its canonical uuid form (lowercase, hyphenated), or of
+/// the id lowercased when it is no uuid. Every host names a message by this,
+/// so the same message has the same id on the desktop and in the cloud.
+#[must_use]
+pub fn short_message_ref(message_id: &str) -> String {
+    match uuid::Uuid::try_parse(message_id) {
+        Ok(id) => message_ref(&id.hyphenated().to_string()),
+        Err(_) => message_ref(&message_id.to_ascii_lowercase()),
+    }
+}
+
 /// The line shown before a message: `[message m-…]` and a newline.
 #[must_use]
 pub fn tag(reference: &str) -> String {
     format!("[{TAG_WORD} {reference}]\n")
+}
+
+/// `text` split at the reference line it opens with (#1909): the short id
+/// and the text after the line; `None` when it does not open with one. The
+/// one parser of the line every host uses.
+#[must_use]
+pub fn strip_tag(text: &str) -> Option<(&str, &str)> {
+    let reference = text
+        .strip_prefix('[')?
+        .strip_prefix(TAG_WORD)?
+        .strip_prefix(' ')?
+        .get(..2 + 2 * MESSAGE_REF_BYTES)?;
+    let valid =
+        reference.starts_with("m-") && reference[2..].bytes().all(|byte| byte.is_ascii_hexdigit());
+    if !valid {
+        return None;
+    }
+    let rest = text.strip_prefix(tag(reference).as_str())?;
+    Some((reference, rest))
 }
 
 /// `text` with every bracket that opens `message` (any case) written as
@@ -122,6 +153,41 @@ mod tests {
             neutralize("[\u{00A0}message a] [\u{200B}message b] \u{FF3B}message c] ［x"),
             "&#91;\u{00A0}message a] &#91;\u{200B}message b] &#91;message c] ［x"
         );
+    }
+
+    #[test]
+    fn a_message_has_one_short_id_whatever_form_its_uuid_takes() {
+        let canonical = short_message_ref("6f1d1c2e-0000-4000-8000-0000000000ab");
+        assert_eq!(
+            canonical,
+            message_ref("6f1d1c2e-0000-4000-8000-0000000000ab")
+        );
+        for form in [
+            "6F1D1C2E-0000-4000-8000-0000000000AB",
+            "6f1d1c2e0000400080000000000000ab",
+            "{6f1d1c2e-0000-4000-8000-0000000000ab}",
+        ] {
+            assert_eq!(short_message_ref(form), canonical, "{form}");
+        }
+        // Not a uuid: the id lowercased.
+        assert_eq!(short_message_ref("Q1"), message_ref("q1"));
+    }
+
+    #[test]
+    fn the_reference_line_is_parsed_one_way() {
+        let reference = short_message_ref("6f1d1c2e-0000-4000-8000-0000000000ab");
+        let text = format!("{}hi", tag(&reference));
+        assert_eq!(strip_tag(&text), Some((reference.as_str(), "hi")));
+        for text in [
+            "hi",
+            "[message m-0123]\nhi",
+            "[message x-0123456789]\nhi",
+            "[message m-012345678g]\nhi",
+            "[message m-0123456789] hi",
+            "[Message m-0123456789]\nhi",
+        ] {
+            assert_eq!(strip_tag(text), None, "{text}");
+        }
     }
 
     #[test]

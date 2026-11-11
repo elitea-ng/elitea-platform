@@ -289,6 +289,10 @@ pub(crate) struct PipelineDefinition {
     definition_digest: [u8; 32],
     interrupt_before: Vec<String>,
     interrupt_after: Vec<String>,
+    /// The definition names `chat_history` somewhere (#1913). Only a node
+    /// naming it can read the context view there; without one the view is
+    /// seeded once, at the head of `messages`.
+    names_chat_history: bool,
 }
 
 /// Invocation-owned dependencies for executable pipeline node families.
@@ -993,6 +997,7 @@ impl PipelineDefinition {
             ));
         }
         let normalized = normalize_graph_identifiers(&mut document)?;
+        let names_chat_history = yaml_names(&document, "chat_history");
         let raw = serde_yaml_ng::from_value::<RawPipelineDefinition>(document)
             .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
         if normalized.legacy > 0 || normalized.numeric > 0 {
@@ -1004,6 +1009,7 @@ impl PipelineDefinition {
             );
         }
         let mut definition = Self::from_raw(raw)?;
+        definition.names_chat_history = names_chat_history;
         let mut yaml_pin = [0_u8; 32];
         yaml_pin.copy_from_slice(digest::digest(&digest::SHA256, yaml.as_bytes()).as_ref());
         for node in &mut definition.nodes {
@@ -1119,6 +1125,8 @@ impl PipelineDefinition {
             definition_digest,
             interrupt_before,
             interrupt_after,
+            // Unknown here: seed both copies, as before #1913.
+            names_chat_history: true,
         })
     }
 
@@ -1731,6 +1739,7 @@ impl PipelineDefinition {
                     reducers: Arc::clone(&self.state_reducers),
                     context_view: runtimes.context_view.clone(),
                     declares_messages: self.state.contains_key("messages"),
+                    names_chat_history: self.names_chat_history,
                 },
                 self.entry_point.clone(),
             );
@@ -2831,6 +2840,8 @@ struct InitialState {
     context_view: Option<Arc<Vec<serde_json::Value>>>,
     /// The pipeline declares `messages` in its own state.
     declares_messages: bool,
+    /// Some node can read `chat_history` (#1913).
+    names_chat_history: bool,
 }
 
 impl InitialState {
@@ -2839,20 +2850,29 @@ impl InitialState {
     /// the head of `messages` before this turn's question. It runs only where
     /// the first frontier is built, so a resumed or recovered run, whose
     /// checkpoint already holds its state, is never seeded again.
+    ///
+    /// #1913: every checkpoint re-serializes what is seeded here, so the view
+    /// is stored twice only when both copies can be read: `chat_history` only
+    /// when the definition names it, `messages` only when the pipeline does
+    /// not declare its own.
     fn seed_context_view(&self, state: &mut State) {
         let Some(view) = self.context_view.as_deref() else {
             return;
         };
-        state.insert("chat_history".to_owned(), json!(view));
-        if self.declares_messages {
-            return;
-        }
         // Without a question (a wake) `messages` stays unset: an LLM node
         // reading it takes its last entry as the task.
-        if let Some(serde_json::Value::Array(question)) = state.get_mut("messages") {
+        let head = (!self.declares_messages)
+            .then(|| state.get_mut("messages"))
+            .flatten()
+            .and_then(serde_json::Value::as_array_mut);
+        let seeded_head = head.is_some();
+        if let Some(question) = head {
             let mut messages = view.clone();
             messages.append(question);
             *question = messages;
+        }
+        if self.names_chat_history || !seeded_head {
+            state.insert("chat_history".to_owned(), json!(view));
         }
     }
 }
@@ -2863,7 +2883,24 @@ fn seeded_context_message(message: &serde_json::Value) -> bool {
     message
         .get("additional_kwargs")
         .and_then(|additional| additional.get(crate::agents::assembly::CONTEXT_VIEW_MARKER_KEY))
-        .is_some_and(|marker| marker == &serde_json::Value::Bool(true))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+}
+
+/// Whether any key or string of a pipeline document contains `needle`, after
+/// YAML unescaping, so a node that names a channel is never missed.
+fn yaml_names(value: &serde_yaml_ng::Value, needle: &str) -> bool {
+    match value {
+        serde_yaml_ng::Value::String(text) => text.contains(needle),
+        serde_yaml_ng::Value::Sequence(items) => items.iter().any(|item| yaml_names(item, needle)),
+        serde_yaml_ng::Value::Mapping(map) => map
+            .iter()
+            .any(|(key, value)| yaml_names(key, needle) || yaml_names(value, needle)),
+        serde_yaml_ng::Value::Tagged(tagged) => yaml_names(&tagged.value, needle),
+        serde_yaml_ng::Value::Null
+        | serde_yaml_ng::Value::Bool(_)
+        | serde_yaml_ng::Value::Number(_) => false,
+    }
 }
 
 fn invocation_state(

@@ -50,6 +50,8 @@ pub struct ParticipantKey {
     pub conversation: String,
     pub application_id: i64,
     pub version_id: i64,
+    /// The participant the turn named (`TurnRequest::participant_id`).
+    pub participant_id: Option<i64>,
 }
 
 /// A model's context limits, as one session read them from the catalogue
@@ -125,6 +127,27 @@ impl TurnCaches {
         locked(&self.participants).get(key).cloned()
     }
 
+    /// The participant kept for `key`, else, for a turn that names its
+    /// participant, the one the prewarm kept for the version (no
+    /// participant named) when it is that participant: a prewarmed
+    /// several-agent thread's first send still hits the cache.
+    #[must_use]
+    pub fn named_participant(&self, key: &ParticipantKey) -> Option<AnsweringParticipant> {
+        let participants = locked(&self.participants);
+        if let Some(kept) = participants.get(key) {
+            return Some(kept.clone());
+        }
+        let named = key.participant_id?;
+        let unnamed = ParticipantKey {
+            participant_id: None,
+            ..key.clone()
+        };
+        participants
+            .get(&unnamed)
+            .filter(|kept| kept.id == named)
+            .cloned()
+    }
+
     pub fn keep_participant(&self, key: ParticipantKey, answering: &AnsweringParticipant) {
         bounded_insert(&mut locked(&self.participants), key, answering.clone());
     }
@@ -183,5 +206,60 @@ mod tests {
         caches.keep_version(version("a"), &resolved(), Some("\"x\""));
         caches.clear();
         assert!(caches.version(&version("a")).is_none());
+    }
+
+    fn participant_key(participant_id: Option<i64>) -> ParticipantKey {
+        ParticipantKey {
+            identity: "a".into(),
+            project_id: 1,
+            conversation: "c".into(),
+            application_id: 5,
+            version_id: 9,
+            participant_id,
+        }
+    }
+
+    fn answering(id: i64) -> AnsweringParticipant {
+        AnsweringParticipant {
+            id,
+            application_id: 5,
+            conversation_uuid: "c".into(),
+            numeric_id: None,
+            message_count: None,
+            agents: 2,
+            cloud: false,
+            answer_only: false,
+        }
+    }
+
+    #[test]
+    fn a_named_turn_hits_the_prewarmed_participant_only_when_it_is_that_one() {
+        let caches = TurnCaches::default();
+        caches.keep_participant(participant_key(None), &answering(77));
+        assert_eq!(
+            caches
+                .named_participant(&participant_key(Some(77)))
+                .map(|p| p.id),
+            Some(77)
+        );
+        assert!(
+            caches
+                .named_participant(&participant_key(Some(88)))
+                .is_none(),
+            "another participant of the version"
+        );
+        caches.keep_participant(participant_key(Some(88)), &answering(88));
+        assert_eq!(
+            caches
+                .named_participant(&participant_key(Some(88)))
+                .map(|p| p.id),
+            Some(88)
+        );
+        assert_eq!(
+            caches
+                .named_participant(&participant_key(None))
+                .map(|p| p.id),
+            Some(77)
+        );
     }
 }

@@ -180,8 +180,9 @@ func readerViewSettings(version map[string]any, participantMode string) contextv
 }
 
 // contextViewInput is the input's ContextViewV1 for history and refs as
-// they go on the wire.
-func contextViewInput(settings contextview.Settings, limits *runtimev1.ModelContextLimitsV1, history []byte, refs []*runtimev1.ChatHistoryRefV1) *runtimev1.ContextViewV1 {
+// they go on the wire. joinedAt is when the reader joined (issue 1902), for
+// the binding.
+func contextViewInput(settings contextview.Settings, joinedAt string, limits *runtimev1.ModelContextLimitsV1, history []byte, refs []*runtimev1.ChatHistoryRefV1) *runtimev1.ContextViewV1 {
 	window := limits.GetContextWindowTokens()
 	digestRefs := make([]contextview.Ref, 0, len(refs))
 	for _, ref := range refs {
@@ -191,5 +192,6 @@ func contextViewInput(settings contextview.Settings, limits *runtimev1.ModelCont
 		History:      string(settings.History),
 		WindowTokens: window,
 		Digest:       contextview.Digest(settings.History, window, history, digestRefs),
+		Binding:      settings.Binding(joinedAt),
 	}
 }

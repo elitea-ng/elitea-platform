@@ -896,7 +896,7 @@ fn admit_native_start(
         .map_err(|error| direct_hitl_admission_error(&error))
 }
 
-fn has_continuation(request: &AgentExecutionRequest) -> bool {
+pub(super) fn has_continuation(request: &AgentExecutionRequest) -> bool {
     let payload = &request.payload;
     payload.should_continue
         || payload.hitl_resume

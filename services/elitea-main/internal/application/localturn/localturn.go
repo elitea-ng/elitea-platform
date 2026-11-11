@@ -206,6 +206,53 @@ type StartRecord struct {
 	FloorTargets []int64
 	// FloorTurn is set on a later turn of a routed message.
 	FloorTurn *FloorTurnRef
+
+	// route and recall are the start's admission (issue 1888), run by the
+	// store inside its transaction through Admit: nil leaves ParticipantID,
+	// FloorTargets and MemoriesUsed as given.
+	route  func(ConversationFloor) (floorPlan, error)
+	recall func(context.Context) (int, error)
+	// logger records why the floor could not be read (the answer is a bare
+	// ErrUnavailable).
+	logger *slog.Logger
+}
+
+// Routes reports whether the start is routed by the conversation's floor:
+// the store then reads the floor inside its transaction for Admit.
+func (record StartRecord) Routes() bool { return record.route != nil }
+
+// Admit runs the start's admission, in order, inside the store's
+// transaction (issue 1888): the routing of the message on the floor `read`
+// answers (read only when Routes), then the memory recall, so a refused
+// routing costs no recall and the routing is decided on what the start's
+// transaction reads. It answers the record with the participant that
+// answers, the routed order and the recall's count set.
+func (record StartRecord) Admit(ctx context.Context, read func() (ConversationFloor, error)) (StartRecord, error) {
+	if record.route != nil {
+		floor, err := read()
+		if err != nil {
+			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalid) {
+				return StartRecord{}, err
+			}
+			if record.logger != nil {
+				record.logger.ErrorContext(ctx, "local turn: floor unreadable", "err", err)
+			}
+			return StartRecord{}, fmt.Errorf("local turn: floor unreadable: %w", errors.Join(err, ErrUnavailable))
+		}
+		plan, err := record.route(floor)
+		if err != nil {
+			return StartRecord{}, err
+		}
+		record.ParticipantID, record.FloorTargets = plan.participant, plan.targets
+	}
+	if record.recall != nil {
+		count, err := record.recall(ctx)
+		if err != nil {
+			return StartRecord{}, err
+		}
+		record.MemoriesUsed = count
+	}
+	return record, nil
 }
 
 // StartedTurn is the stored execution after a start (new or replayed).
@@ -349,8 +396,8 @@ type Service struct {
 	logger   *slog.Logger
 	// unattended reads the grant settings (WithUnattended).
 	unattended UnattendedSettingsReader
-	// floor reads the conversation's floor (WithFloor); nil: no routing.
-	floor FloorReader
+	// routes: a start is routed by the conversation's floor (WithFloor).
+	routes bool
 }
 
 // NewService builds the use case. Every dependency is required: a start
@@ -407,31 +454,50 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 			return StartOutcome{}, err
 		}
 	}
-	// Recall FIRST and always fresh: the store writes nothing to the
-	// conversation at start, so the user's previous turn is still the one the
-	// reservation rule compares against (MemoriesRepo.ResolveCurrentMemoryRecall).
-	recall, err := s.memories.ResolveCurrentMemoryRecall(
-		ctx, request.ProjectID, request.ActorUserID, strings.TrimSpace(request.UserInput))
-	if err != nil {
-		s.logger.ErrorContext(ctx, "local turn: memory recall failed", "err", err)
-		return StartOutcome{}, ErrUnavailable
-	}
-	plan, err := s.planFloor(ctx, request)
-	if err != nil {
-		return StartOutcome{}, err
+	if !s.routes && (len(request.AddressedTo) > 0 || request.FloorTurn != nil) {
+		// A client that addresses agents is told the deployment cannot
+		// route, rather than having its address dropped.
+		return StartOutcome{}, ErrAddressee
 	}
 	id, err := s.newID()
 	if err != nil || !ValidExecutionID(id) {
 		return StartOutcome{}, fmt.Errorf("local turn: mint execution id: %w", errors.Join(err, ErrUnavailable))
 	}
-	turn, err := s.store.StartLocalTurn(ctx, StartRecord{
+	// The routing, then the recall, inside the start's transaction (issue
+	// 1888, StartRecord.Admit): a refused routing pays for no recall. The
+	// recall is always fresh: the store writes nothing to the conversation
+	// at start, so the user's previous turn is still the one the
+	// reservation rule compares against (MemoriesRepo.ResolveCurrentMemoryRecall).
+	plan := floorPlan{participant: request.ParticipantID}
+	var recall agentexecutionapp.CurrentMemoryRecall
+	record := StartRecord{
 		ExecutionID: id, ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 		TokenID: request.TokenID, NativeClientID: request.NativeClientID,
 		ConversationUUID: request.ConversationUUID, QuestionID: request.QuestionID,
 		ResponseMessageID: ResponseMessageID(request.QuestionID),
-		ParticipantID:     plan.participant, MemoriesUsed: recall.Count, TTL: DeadlineTTL,
-		Grant: grant, FloorTargets: plan.targets, FloorTurn: request.FloorTurn,
-	})
+		ParticipantID:     request.ParticipantID, TTL: DeadlineTTL,
+		Grant: grant, FloorTurn: request.FloorTurn, logger: s.logger,
+		recall: func(ctx context.Context) (int, error) {
+			resolved, err := s.memories.ResolveCurrentMemoryRecall(
+				ctx, request.ProjectID, request.ActorUserID, strings.TrimSpace(request.UserInput))
+			if err != nil {
+				s.logger.ErrorContext(ctx, "local turn: memory recall failed", "err", err)
+				return 0, ErrUnavailable
+			}
+			recall = resolved
+			return resolved.Count, nil
+		},
+	}
+	if s.routes {
+		record.route = func(floor ConversationFloor) (floorPlan, error) {
+			routed, err := routeFloor(request, floor)
+			if err == nil {
+				plan = routed
+			}
+			return routed, err
+		}
+	}
+	turn, err := s.store.StartLocalTurn(ctx, record)
 	if err != nil {
 		return StartOutcome{}, err
 	}
