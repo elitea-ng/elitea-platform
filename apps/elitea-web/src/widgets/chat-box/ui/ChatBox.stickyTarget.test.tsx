@@ -91,6 +91,11 @@ beforeEach(() => {
       return HttpResponse.json({ execution_id: 'exec-1625', response_message_id: RESPONSE_ID, execution_generation: GENERATION, events_url: EVENTS_URL });
     }),
     http.get('*/configurations/models/2', () => HttpResponse.json({ items: [{ name: 'fixture-model', project_id: '2', default: true }], default_model_name: 'fixture-model' })),
+    // FU-345: the deployment's attachment types, pinned. Unpinned, the global
+    // generated mock answers with random categories, each one present or not;
+    // when none is, the deployment "accepts no attachment types" and the
+    // Attach row stays off whatever the agent allows (about one run in four).
+    http.get('*/elitea_core/index_types/prompt_lib/2', () => HttpResponse.json({ items: [], total: 0, document_types: { pdf: 'application/pdf' } })),
     http.get('*/configurations/tts_voices/*', () => HttpResponse.json({ items: [] })),
     http.get('*/elitea_core/message_traces/prompt_lib/2/:id', () => HttpResponse.json({ rows: [], limit: 50, offset: 0, has_more: false })),
     http.get('*/elitea_core/message_feedback/prompt_lib/2/:id', () => HttpResponse.json({ likes: 0, dislikes: 0 })),
