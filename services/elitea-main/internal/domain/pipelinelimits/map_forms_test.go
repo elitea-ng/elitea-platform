@@ -34,11 +34,11 @@ func mapRefusal(t *testing.T, name string, err error) *apierr.APIError {
 	return api
 }
 
-// A Map worker that is not a State Modifier, Agent or LLM node (Code and a
-// direct Router wait for Wave 3) is refused at save and at start, naming the
-// Map, its worker and the worker's type.
+// A Map worker that is not a State Modifier, Agent, LLM or Code node (W3-2
+// admits Code; a direct Router stays refused) is refused at save and at
+// start, naming the Map, its worker and the worker's type.
 func TestCheckRefusesAMapWorkerOfAnUnsupportedForm(t *testing.T) {
-	for _, workerType := range []string{"code", "router", "printer", "hitl", "parallel"} {
+	for _, workerType := range []string{"router", "printer", "hitl", "parallel"} {
 		doc := mapOver(workerType, "    reduction: ordered_collection\n")
 		for name, err := range map[string]error{
 			"save":  pipelinelimits.Check(doc),

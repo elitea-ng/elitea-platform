@@ -4,7 +4,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::saved_child_http::SavedChildScopeRef;
+use super::saved_child_http::{CodeVisitScope, SavedChildScopeRef};
 use crate::agents::graph::http_action::HttpActionError;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -48,7 +48,7 @@ pub(crate) trait SavedChildScopeProvider: Send + Sync {
         thread_id: &str,
         node_id: &str,
         purpose: SavedChildPurpose,
-    ) -> Result<SavedChildScopeRef, HttpActionError>;
+    ) -> Result<CodeVisitScope, HttpActionError>;
 }
 
 #[cfg(test)]
@@ -63,7 +63,7 @@ mod tests {
             _thread: &str,
             _node: &str,
             _purpose: SavedChildPurpose,
-        ) -> Result<SavedChildScopeRef, HttpActionError> {
+        ) -> Result<CodeVisitScope, HttpActionError> {
             Err(HttpActionError::PolicyDenied)
         }
     }

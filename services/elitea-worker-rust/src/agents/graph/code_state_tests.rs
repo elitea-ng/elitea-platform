@@ -191,3 +191,68 @@ fn deeply_nested_checkpoint_input_fails_before_recursive_serialization() {
         Err(CodeStateError::SizeLimit)
     );
 }
+
+/// W3-2: a Map Code worker reads its item, whatever JSON it is, and can never
+/// write it back.
+#[test]
+fn a_map_item_channel_is_read_as_any_json_and_never_written() {
+    let boundary = CodeStateBoundary::new(&BTreeMap::from([
+        (
+            "entity".into(),
+            super::code_state::MAP_ITEM_INPUT_KIND.to_owned(),
+        ),
+        ("item_index".into(), "int".into()),
+        ("item_result".into(), "str".into()),
+    ]))
+    .expect("an item channel is admitted for Code input");
+    for item in [json!("a"), json!({"k": [1, 2]}), json!(3), json!(null)] {
+        let state = State::from([
+            ("entity".into(), item.clone()),
+            ("item_index".into(), json!(0)),
+        ]);
+        let bytes = boundary
+            .input_json(&state, &["entity".into(), "item_index".into()])
+            .expect("any item JSON is input");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&bytes).unwrap(),
+            json!({"entity": item, "item_index": 0})
+        );
+    }
+    for structured in [false, true] {
+        assert!(matches!(
+            boundary.validate_updates(
+                br#"{"entity":"overwritten"}"#,
+                &["entity".into()],
+                structured
+            ),
+            Err(CodeStateError::InvalidValue)
+        ));
+    }
+}
+
+/// D3: a Map item read by Code is bounded like any Code input: nesting of
+/// exactly 128 values is admitted, 129 is refused; the field count bound
+/// holds for the item's object too.
+#[test]
+fn a_map_item_is_bounded_by_the_code_input_depth_and_field_limits() {
+    let boundary = CodeStateBoundary::new(&BTreeMap::from([(
+        "entity".into(),
+        super::code_state::MAP_ITEM_INPUT_KIND.to_owned(),
+    )]))
+    .unwrap();
+    let nested = |values: usize| {
+        let mut value = json!(0);
+        for _ in 1..values {
+            value = json!([value]);
+        }
+        value
+    };
+    for (values, admitted) in [(128, true), (129, false)] {
+        let state = State::from([("entity".into(), nested(values))]);
+        let result = boundary.input_json(&state, &["entity".into()]);
+        assert_eq!(result.is_ok(), admitted, "{values} nested values");
+        if !admitted {
+            assert_eq!(result.unwrap_err(), CodeStateError::SizeLimit);
+        }
+    }
+}

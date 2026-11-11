@@ -26,6 +26,30 @@
       "owner": "elitea-main"
     },
     {
+      "code": "code.registration_failed",
+      "sentence": "Main could not complete a Code visit or intent registration because a dependency failed, so it answered it as retryable.",
+      "action": "Read stage and cause; check Main's database if it repeats. The Worker tries the same registration again.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-main"
+    },
+    {
+      "code": "code.registration_refused",
+      "sentence": "Main refused a Code visit or intent registration: a claim, permission, source, configuration, input or record check failed closed.",
+      "action": "Read stage: claim means the Worker's claim, lease or the actor's permission; the others mean the Worker's request did not match the run's frozen pipeline. Report the support reference if the run was healthy.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-main"
+    },
+    {
+      "code": "code.registration_contended",
+      "sentence": "A Code visit or intent registration kept conflicting with concurrent registrations of the same run after its bounded retries, so Main answered it as retryable.",
+      "action": "Nothing when it is rare; the Worker tries again. If one run repeats it, report the support reference.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-main"
+    },
+    {
       "code": "dependency.database_unavailable",
       "sentence": "Main lost its database; requests that need it fail and Workers get retryable answers until it is back.",
       "action": "Check PostgreSQL and PgBouncer; Main resumes on its own when the database answers again.",
