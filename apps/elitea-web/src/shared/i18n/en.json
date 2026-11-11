@@ -4964,6 +4964,14 @@
   "shared.ui.queuedMessages.edit": "Edit",
   "shared.ui.queuedMessages.remove": "Remove",
   "shared.ui.queuedMessages.sendNow": "Send now",
+  "shared.ui.subAgentLane.budgetExhausted": "Out of budget",
+  "shared.ui.subAgentLane.cancelled": "Stopped",
+  "shared.ui.subAgentLane.completed": "Done",
+  "shared.ui.subAgentLane.failed": "Failed",
+  "shared.ui.subAgentLane.running": "Running",
+  "shared.ui.subAgentLane.temporary": "Temporary",
+  "shared.ui.subAgentLane.title": "Sub-agent {{n}}",
+  "shared.ui.subAgentLane.usage": "{{steps}} steps · {{tokens}} tokens",
   "pages.admin.nav.retention": "Data retention",
   "pages.admin.retention.cancel": "Cancel",
   "pages.admin.retention.class.adminAudit": "Admin audit trail",
@@ -6171,12 +6179,5 @@
   "widgets.chatBox.shareHistory.now": "Now",
   "widgets.chatBox.shareHistory.start": "The start",
   "widgets.chatBox.shareHistory.title": "Share history from",
-  "features.chatMessages.contextView.compactionLabel": "Context",
-  "features.chatMessages.subAgents.budgetExhausted": "Out of budget",
-  "features.chatMessages.subAgents.cancelled": "Stopped",
-  "features.chatMessages.subAgents.completed": "Done",
-  "features.chatMessages.subAgents.failed": "Failed",
-  "features.chatMessages.subAgents.running": "Running",
-  "features.chatMessages.subAgents.temporary": "Temporary",
-  "features.chatMessages.subAgents.title": "Sub-agent {{n}}"
+  "features.chatMessages.contextView.compactionLabel": "Context"
 }
