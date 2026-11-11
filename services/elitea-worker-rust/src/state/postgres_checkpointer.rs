@@ -147,27 +147,96 @@ pub enum PostgresCheckpointError {
     },
 }
 
-impl PostgresCheckpointError {
-    /// Stable, low-cardinality code for tracing and terminal classification.
-    #[must_use]
-    pub const fn code(&self) -> &'static str {
+/// One list defines each checkpoint error kind and its retryability (review
+/// G): the enum, `ALL` and `retryable` all come from it. `as_str` below is an
+/// exhaustive match, so a new kind cannot go without its code, and
+/// `PostgresCheckpointError::kind` maps every error variant exhaustively. The
+/// codes stay literal in `as_str`, where the faults gate reads them.
+macro_rules! checkpoint_error_codes {
+    ($($kind:ident: $retryable:literal;)*) => {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub(crate) enum CheckpointErrorCode { $($kind),* }
+
+        impl CheckpointErrorCode {
+            pub(crate) const ALL: &'static [Self] = &[$(Self::$kind),*];
+
+            pub(crate) const fn retryable(self) -> bool {
+                match self { $(Self::$kind => $retryable),* }
+            }
+        }
+    };
+}
+
+checkpoint_error_codes! {
+    InvalidConfiguration: false;
+    InvalidScope: false;
+    ResourceExhausted: false;
+    WriterNotCurrent: false;
+    CheckpointConflict: false;
+    CorruptStoredState: false;
+    StorageUnavailable: true;
+    StorageFailure: false;
+}
+
+impl CheckpointErrorCode {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::InvalidConfiguration(_) => "checkpoint.invalid_configuration",
-            Self::InvalidScope(_) => "checkpoint.invalid_scope",
-            Self::ResourceExhausted(_) => "checkpoint.resource_exhausted",
+            Self::InvalidConfiguration => "checkpoint.invalid_configuration",
+            Self::InvalidScope => "checkpoint.invalid_scope",
+            Self::ResourceExhausted => "checkpoint.resource_exhausted",
             Self::WriterNotCurrent => "checkpoint.writer_not_current",
             Self::CheckpointConflict => "checkpoint.conflict",
             Self::CorruptStoredState => "checkpoint.corrupt_state",
-            Self::StorageUnavailable { .. } => "checkpoint.storage_unavailable",
-            Self::StorageFailure { .. } => "checkpoint.storage_failure",
+            Self::StorageUnavailable => "checkpoint.storage_unavailable",
+            Self::StorageFailure => "checkpoint.storage_failure",
         }
+    }
+}
+
+impl PostgresCheckpointError {
+    /// This error's entry in the one code list.
+    #[must_use]
+    pub(crate) const fn kind(&self) -> CheckpointErrorCode {
+        match self {
+            Self::InvalidConfiguration(_) => CheckpointErrorCode::InvalidConfiguration,
+            Self::InvalidScope(_) => CheckpointErrorCode::InvalidScope,
+            Self::ResourceExhausted(_) => CheckpointErrorCode::ResourceExhausted,
+            Self::WriterNotCurrent => CheckpointErrorCode::WriterNotCurrent,
+            Self::CheckpointConflict => CheckpointErrorCode::CheckpointConflict,
+            Self::CorruptStoredState => CheckpointErrorCode::CorruptStoredState,
+            Self::StorageUnavailable { .. } => CheckpointErrorCode::StorageUnavailable,
+            Self::StorageFailure { .. } => CheckpointErrorCode::StorageFailure,
+        }
+    }
+
+    /// Stable, low-cardinality code for tracing and terminal classification.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        self.kind().as_str()
     }
 
     /// Whether replay under the same immutable command can reasonably succeed.
     #[must_use]
     pub const fn retryable(&self) -> bool {
-        matches!(self, Self::StorageUnavailable { .. })
+        self.kind().retryable()
     }
+}
+
+/// The canonical code and retryability of a checkpoint failure that a
+/// `GraphError` carries (`From<PostgresCheckpointError>` writes `"{code}: …"`).
+#[must_use]
+pub(crate) fn checkpoint_error_code(error: &GraphError) -> Option<(&'static str, bool)> {
+    let GraphError::CheckpointError(message) = error else {
+        return None;
+    };
+    CheckpointErrorCode::ALL
+        .iter()
+        .map(|kind| (kind.as_str(), kind.retryable()))
+        .find(|(code, _)| {
+            message
+                .strip_prefix(code)
+                .is_some_and(|rest| rest.starts_with(':'))
+        })
 }
 
 impl From<PostgresCheckpointError> for GraphError {
@@ -2030,6 +2099,43 @@ mod tests {
                 .expect("canonical first map"),
             serialize_map_json(&reverse, MAX_DATABASE_PAYLOAD_BYTES)
                 .expect("canonical reverse map")
+        );
+    }
+
+    /// FU-291 review 1/G: the one code list is exactly each error's code and
+    /// retryability, and `checkpoint_error_code` reads it back from the
+    /// `GraphError` the boundary returns, never a prefix of another code.
+    #[test]
+    fn the_code_table_is_each_errors_code_and_retryability() {
+        let errors = [
+            PostgresCheckpointError::InvalidConfiguration("x"),
+            PostgresCheckpointError::InvalidScope("x"),
+            PostgresCheckpointError::ResourceExhausted("x"),
+            PostgresCheckpointError::WriterNotCurrent,
+            PostgresCheckpointError::CheckpointConflict,
+            PostgresCheckpointError::CorruptStoredState,
+            PostgresCheckpointError::StorageUnavailable {
+                source: sqlx::Error::PoolTimedOut,
+            },
+            PostgresCheckpointError::StorageFailure {
+                source: sqlx::Error::RowNotFound,
+            },
+        ];
+        assert_eq!(errors.len(), CheckpointErrorCode::ALL.len());
+        for (error, kind) in errors.into_iter().zip(CheckpointErrorCode::ALL) {
+            assert_eq!(error.kind(), *kind);
+            let expected = (kind.as_str(), kind.retryable());
+            assert_eq!((error.code(), error.retryable()), expected);
+            assert_eq!(
+                checkpoint_error_code(&GraphError::from(error)),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            checkpoint_error_code(&GraphError::CheckpointError(
+                "checkpoint.storage_unavailable_more: x".to_owned()
+            )),
+            None
         );
     }
 

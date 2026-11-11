@@ -80,3 +80,28 @@ func TestFanoutAgentCallsPipelineShowsItsReadableText(t *testing.T) {
 		t.Fatalf("unregistered worker text admitted: %+v", policy)
 	}
 }
+
+// FU-291 D5: a member whose Agent reaches a saved pipeline tool it cannot run
+// durably yet is refused before the run with its own readable text, and only
+// that text; the older text stays admitted for spooled frames.
+func TestFanoutAgentToolPipelineUnsupportedShowsItsReadableText(t *testing.T) {
+	if len(fanoutAgentToolPipelineUnsupportedSafeMessage) > outputapp.MaxRuntimeFailureSafeMessageBytes {
+		t.Fatalf("text is %d bytes, over the frame bound", len(fanoutAgentToolPipelineUnsupportedSafeMessage))
+	}
+	code := runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY
+	payload := &runtimev1.RuntimeErrorV1{Code: code, SafeMessage: fanoutAgentToolPipelineUnsupportedSafeMessage}
+	policy, ok := runtimeFailurePolicyForError(payload)
+	if !ok || policy.Code != "PIPELINE_NODE_TYPE_NOT_AVAILABLE" || policy.SafeMessage != fanoutAgentToolPipelineUnsupportedSafeMessage || policy.Retryable {
+		t.Fatalf("agent-tool-pipeline policy: %+v", policy)
+	}
+	payload.SafeMessage += " untrusted detail"
+	policy, _ = runtimeFailurePolicyForError(payload)
+	if policy.SafeMessage == payload.GetSafeMessage() {
+		t.Fatalf("unregistered worker text admitted: %+v", policy)
+	}
+	payload.SafeMessage = fanoutAgentToolPipelineUnsupportedSafeMessage
+	payload.Code = runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL
+	if policy, _ = runtimeFailurePolicyForError(payload); policy.SafeMessage == fanoutAgentToolPipelineUnsupportedSafeMessage {
+		t.Fatalf("the text was admitted under the wrong code: %+v", policy)
+	}
+}

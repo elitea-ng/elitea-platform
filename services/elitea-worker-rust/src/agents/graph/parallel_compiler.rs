@@ -580,9 +580,10 @@ impl PipelineDefinition {
     }
 }
 
-/// FU-291: a member whose saved Agent calls a saved pipeline is refused by
-/// name before the run starts (Map and Parallel alike); the pipeline used
-/// directly as the worker or branch is not affected.
+/// FU-291 D-7: a member whose saved Agent calls a saved pipeline runs it on a
+/// durable nested thread, except a pipeline that holds Code or an Agent node,
+/// or one reached through another Agent: that member is refused by name, with
+/// its cause, before the run starts (Map and Parallel alike).
 fn reject_agent_calling_pipeline(
     owned: &BTreeMap<String, OwnedBranch>,
     runtimes: &PipelineNodeRuntimes,
@@ -592,11 +593,12 @@ fn reject_agent_calling_pipeline(
     };
     for branch in owned.values() {
         if let OwnedBranch::Agent(node) = branch
-            && resolver.agent_calls_saved_pipeline(node.id(), node.selection().alias())
+            && let Some(cause) =
+                resolver.agent_tool_pipeline_refusal(node.id(), node.selection().alias())
         {
             return Err(PipelineConfigurationError::FanoutChildUnsupported {
                 node: format!("{}/{}", node.id(), node.selection().alias()),
-                refusal: FanoutChildRefusal::AgentCallsPipeline,
+                refusal: FanoutChildRefusal::AgentToolPipeline(cause),
             });
         }
     }
@@ -1572,6 +1574,10 @@ fn branch_journal_resolver(
     let resolver = execution
         .node_recovery()
         .and_then(|journals| resolver.for_branch_journals(journals))
+        .unwrap_or(resolver);
+    let resolver = execution
+        .tool_pipelines()
+        .and_then(|admission| resolver.for_tool_pipelines(admission))
         .unwrap_or(resolver);
     crate::agents::pipeline::saved_code_child::SavedCodeFanoutMember::of(execution)
         .and_then(|member| resolver.for_saved_code_member(&member))

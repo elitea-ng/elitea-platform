@@ -6,8 +6,15 @@ use std::sync::Arc;
 use adk_rust::graph::checkpoint::RetentionPolicy;
 use adk_rust::graph::{Checkpoint, Checkpointer, GraphError};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use super::{CheckpointWriterAuthority, PostgresCheckpointError, PostgresCheckpointer};
+use crate::agents::application_pipeline::PipelineToolCallLineage;
+use crate::agents::graph::tool_pipeline_threads::{
+    AdmittedToolPipeline, MAX_TOOL_PIPELINE_THREADS_PER_MEMBER, THREAD_SEGMENT, TOOL_LEDGER_KEY,
+    TOOL_LEDGER_KEY_UNSTAMPED, TOOL_LEDGER_SEGMENT, ToolPipelineAdmission, ToolPipelineThreads,
+    tool_pipeline_thread,
+};
 use crate::agents::graph::{
     ParallelActivation, ParallelBranchDefinition, ParallelCheckpointAppender,
     ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
@@ -15,8 +22,15 @@ use crate::agents::graph::{
 };
 
 pub(crate) struct ApplicationCheckpointers {
+    /// The family's own root: the run root or one fan-out member's thread.
+    root_thread: String,
     threads: BTreeMap<String, PostgresCheckpointer>,
     branch_paths: ApplicationBranchCatalog,
+    /// FU-291: the nested pipeline threads this family's Agents admitted. The
+    /// one set the member's event projector reads (C1).
+    tool_threads: Arc<ToolPipelineThreads>,
+    /// The member's ledger writer, activated on the first admission (review B).
+    tool_ledger: tokio::sync::OnceCell<PostgresCheckpointer>,
 }
 
 /// Exact descendant families derived only from the admitted application paths.
@@ -172,15 +186,25 @@ fn admitted_application_paths(paths: &[String]) -> Result<BTreeSet<&str>, Postgr
 }
 
 impl ApplicationCheckpointers {
+    /// `writers` holds the family's root first (`application_family`).
     fn assemble(
         writers: impl IntoIterator<Item = PostgresCheckpointer>,
         branch_paths: ApplicationBranchCatalog,
     ) -> Self {
+        let mut root_thread = None;
+        let threads = writers
+            .into_iter()
+            .map(|writer| {
+                let thread = writer.scope.authority.thread_id.clone();
+                root_thread.get_or_insert_with(|| thread.clone());
+                (thread, writer)
+            })
+            .collect::<BTreeMap<_, _>>();
         Self {
-            threads: writers
-                .into_iter()
-                .map(|writer| (writer.scope.authority.thread_id.clone(), writer))
-                .collect(),
+            root_thread: root_thread.unwrap_or_default(),
+            tool_threads: Arc::new(ToolPipelineThreads::new(threads.len())),
+            tool_ledger: tokio::sync::OnceCell::new(),
+            threads,
             branch_paths,
         }
     }
@@ -326,7 +350,8 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
             thread_id,
             checkpointer: child.clone(),
             admitted_threads,
-            node_recovery: Some(child),
+            node_recovery: Some(child.clone()),
+            tool_pipelines: Some(child),
         })
     }
 
@@ -391,7 +416,8 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
                         thread_id,
                         checkpointer: child.clone(),
                         admitted_threads,
-                        node_recovery: Some(child),
+                        node_recovery: Some(child.clone()),
+                        tool_pipelines: Some(child),
                     },
                     latest,
                 }
@@ -418,9 +444,277 @@ impl crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory for Applic
     }
 }
 
+/// One admitted nested thread of a member ledger row (FU-338): its name and
+/// Main's definition digest of its saved pipeline, stamped at its first
+/// admission as 64 lowercase hex digits, or `null` when that had none.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LedgerEntry {
+    thread: String,
+    definition_sha256: Option<String>,
+}
+
+/// One admitted nested thread and its stamp, as read back.
+type LedgerStamp = (String, Option<[u8; 32]>);
+
+fn encode_digest(digest: &[u8; 32]) -> String {
+    use std::fmt::Write as _;
+    digest
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
+}
+
+fn decode_digest(hex: &str) -> Option<[u8; 32]> {
+    let bytes = hex.as_bytes();
+    if bytes.len() != 64 {
+        return None;
+    }
+    let nibble = |byte: u8| match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    };
+    let mut digest = [0_u8; 32];
+    for (slot, pair) in digest.iter_mut().zip(bytes.as_chunks::<2>().0) {
+        *slot = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+    }
+    Some(digest)
+}
+
+/// The admitted nested threads a member ledger row holds, with their stamps:
+/// each one of this member's, at most the per-member bound, each stamp a
+/// digest or `null`. Anything else, an unstamped (FU-291) row included, is
+/// corrupt.
+fn ledger_entries(
+    member: &str,
+    latest: Option<&Checkpoint>,
+) -> Result<Vec<LedgerStamp>, PostgresCheckpointError> {
+    let Some(latest) = latest else {
+        return Ok(Vec::new());
+    };
+    if latest.state.contains_key(TOOL_LEDGER_KEY_UNSTAMPED) {
+        return Err(PostgresCheckpointError::CorruptStoredState);
+    }
+    let entries: Vec<LedgerEntry> = latest
+        .state
+        .get(TOOL_LEDGER_KEY)
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| PostgresCheckpointError::CorruptStoredState)?
+        .unwrap_or_default();
+    let prefix = format!("{member}/");
+    if entries.len() > MAX_TOOL_PIPELINE_THREADS_PER_MEMBER {
+        return Err(PostgresCheckpointError::CorruptStoredState);
+    }
+    entries
+        .into_iter()
+        .map(|entry| {
+            let stamp = entry
+                .definition_sha256
+                .as_deref()
+                .map(|hex| decode_digest(hex).ok_or(PostgresCheckpointError::CorruptStoredState))
+                .transpose()?;
+            if !entry.thread.starts_with(&prefix) || !entry.thread.contains(THREAD_SEGMENT) {
+                return Err(PostgresCheckpointError::CorruptStoredState);
+            }
+            Ok((entry.thread, stamp))
+        })
+        .collect()
+}
+
+impl ApplicationCheckpointers {
+    /// FU-291 review B: the member's admitted nested threads live in one
+    /// ledger thread (`<member>/pt1=ledger`), read by its exact thread (the
+    /// `thread_order` index) and appended only after its latest row, under
+    /// the ledger writer's row lock (`append_after`). Two admissions of one
+    /// member, from any process or family object, serialize there: the bound
+    /// holds across takeovers and races. `thread` already in the ledger
+    /// re-admits; past the bound the admission is refused typed.
+    ///
+    /// FU-338: a new entry carries `definition_sha256`, durable before the
+    /// thread's writer exists; the stamp returned is the one the ledger holds
+    /// for `thread`, a re-admission's never replaced.
+    async fn reserve_in_ledger(
+        &self,
+        thread: &str,
+        definition_sha256: Option<[u8; 32]>,
+    ) -> Result<Option<[u8; 32]>, GraphError> {
+        let ledger_thread = format!("{}{TOOL_LEDGER_SEGMENT}", self.root_thread);
+        let ledger = self
+            .tool_ledger
+            .get_or_try_init(|| async {
+                let root = self.for_thread(&self.root_thread)?;
+                root.activate_fanout_child(ledger_thread.clone()).await
+            })
+            .await?;
+        // Each conflict means another admission appended; at most the bound
+        // can, so this ends.
+        for _ in 0..=MAX_TOOL_PIPELINE_THREADS_PER_MEMBER + 1 {
+            let latest = ledger.load(&ledger_thread).await?;
+            let entries = ledger_entries(&self.root_thread, latest.as_ref())?;
+            if let Some((_, stamp)) = entries.iter().find(|(admitted, _)| admitted == thread) {
+                return Ok(*stamp);
+            }
+            self.tool_threads.check_room_for(entries.len())?;
+            let mut entries = entries
+                .into_iter()
+                .map(|(thread, stamp)| LedgerEntry {
+                    thread,
+                    definition_sha256: stamp.as_ref().map(encode_digest),
+                })
+                .collect::<Vec<_>>();
+            entries.push(LedgerEntry {
+                thread: thread.to_owned(),
+                definition_sha256: definition_sha256.as_ref().map(encode_digest),
+            });
+            let candidate = Checkpoint::new(
+                &ledger_thread,
+                std::collections::HashMap::from([(
+                    TOOL_LEDGER_KEY.to_owned(),
+                    serde_json::to_value(&entries)
+                        .map_err(|_| PostgresCheckpointError::CorruptStoredState)?,
+                )]),
+                latest.as_ref().map_or(0, |row| row.step + 1),
+                Vec::new(),
+            );
+            match ParallelCheckpointAppender::append_after(ledger, latest.as_ref(), &candidate)
+                .await
+            {
+                Ok(_) => return Ok(definition_sha256),
+                Err(error)
+                    if crate::state::checkpoint_error_code(&error)
+                        .is_some_and(|(code, _)| code == "checkpoint.conflict") => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(PostgresCheckpointError::CheckpointConflict.into())
+    }
+}
+
+#[async_trait]
+impl ToolPipelineAdmission for ApplicationCheckpointers {
+    fn tool_threads(&self) -> Arc<ToolPipelineThreads> {
+        Arc::clone(&self.tool_threads)
+    }
+
+    /// D-3: the Agent thread is one of this family's own threads (never its
+    /// root), the nested thread is derived from it and the captured lineage,
+    /// and its writer is activated under the Agent writer's exact claim and
+    /// fence before it is registered. Re-admission in this process returns the
+    /// registered writer; after a takeover the same derivation re-activates it.
+    async fn admit_tool_pipeline(
+        &self,
+        agent_thread: &str,
+        lineage: &PipelineToolCallLineage,
+        definition_sha256: Option<[u8; 32]>,
+    ) -> Result<AdmittedToolPipeline, GraphError> {
+        let agent = self
+            .threads
+            .get(agent_thread)
+            .filter(|_| agent_thread != self.root_thread)
+            .ok_or(PostgresCheckpointError::InvalidScope(
+                "the nested pipeline's Agent thread is not admitted in this family",
+            ))?;
+        let thread_id = tool_pipeline_thread(agent_thread, lineage)?;
+        if self.threads.contains_key(&thread_id) {
+            return Err(PostgresCheckpointError::InvalidScope(
+                "the nested pipeline thread collides with an admitted thread",
+            )
+            .into());
+        }
+        let _admission = self.tool_threads.admission().await;
+        if let Some(admitted) = self.tool_threads.admitted(&thread_id, agent_thread) {
+            return Ok(admitted);
+        }
+        let stamp = self
+            .reserve_in_ledger(&thread_id, definition_sha256)
+            .await?;
+        // The slot and its stamp are durable before the writer: a crash in
+        // between leaves a reserved thread the same call re-admits, never an
+        // unledgered or unstamped row.
+        let writer = agent.activate_fanout_child(thread_id.clone()).await?;
+        let admitted = AdmittedToolPipeline {
+            thread_id,
+            agent_thread: agent_thread.to_owned(),
+            writer: Arc::new(writer),
+            definition_sha256: stamp,
+        };
+        self.tool_threads.register(admitted.clone());
+        Ok(admitted)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ApplicationBranchCatalog, admitted_application_paths};
+
+    /// FU-338: a ledger row reads back each admitted thread with its stamp;
+    /// a malformed stamp, a foreign thread or a row in the unstamped FU-291
+    /// format is corrupt, never read as "no stamp".
+    #[test]
+    fn a_ledger_row_reads_back_its_stamps_and_refuses_anything_else() {
+        use super::{
+            Checkpoint, PostgresCheckpointError, TOOL_LEDGER_KEY, TOOL_LEDGER_KEY_UNSTAMPED,
+            decode_digest, encode_digest, ledger_entries,
+        };
+        let row = |key: &str, value: serde_json::Value| {
+            Checkpoint::new(
+                "m1/pt1=ledger",
+                std::collections::HashMap::from([(key.to_owned(), value)]),
+                0,
+                Vec::new(),
+            )
+        };
+        let digest = [0x5d; 32];
+        assert_eq!(encode_digest(&digest), "5d".repeat(32));
+        assert_eq!(decode_digest(&encode_digest(&digest)), Some(digest));
+        let stamped = row(
+            TOOL_LEDGER_KEY,
+            serde_json::json!([
+                {"thread": "m1/agent/pt1:a", "definition_sha256": "5d".repeat(32)},
+                {"thread": "m1/agent/pt1:b", "definition_sha256": null},
+            ]),
+        );
+        assert_eq!(
+            ledger_entries("m1", Some(&stamped)).unwrap(),
+            [
+                ("m1/agent/pt1:a".to_owned(), Some(digest)),
+                ("m1/agent/pt1:b".to_owned(), None),
+            ]
+        );
+        for corrupt in [
+            row(
+                TOOL_LEDGER_KEY,
+                serde_json::json!([{"thread": "m1/agent/pt1:a", "definition_sha256": "5D".repeat(32)}]),
+            ),
+            row(
+                TOOL_LEDGER_KEY,
+                serde_json::json!([{"thread": "m1/agent/pt1:a", "definition_sha256": "5d"}]),
+            ),
+            row(
+                TOOL_LEDGER_KEY,
+                serde_json::json!([{"thread": "m2/agent/pt1:a", "definition_sha256": null}]),
+            ),
+            row(
+                TOOL_LEDGER_KEY,
+                serde_json::json!([{"thread": "m1/agent/pt1:a", "definition_sha256": null, "x": 1}]),
+            ),
+            row(TOOL_LEDGER_KEY, serde_json::json!(["m1/agent/pt1:a"])),
+            row(
+                TOOL_LEDGER_KEY_UNSTAMPED,
+                serde_json::json!(["m1/agent/pt1:a"]),
+            ),
+        ] {
+            assert!(matches!(
+                ledger_entries("m1", Some(&corrupt)),
+                Err(PostgresCheckpointError::CorruptStoredState)
+            ));
+        }
+    }
 
     #[test]
     fn branch_catalog_selects_only_exact_admitted_parent_and_owned_node() {

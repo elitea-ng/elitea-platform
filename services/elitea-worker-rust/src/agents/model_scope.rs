@@ -128,6 +128,10 @@ pub(super) struct ModelScopeSessions {
     /// A fan-out child: an interrupted read-only batch is replayed (D2).
     read_only_replay: bool,
     application_tools: Arc<HashSet<String>>,
+    /// FU-291: the saved pipelines this Agent calls as tools. Replayable
+    /// (`durable_delegation_pending`) only inside a fan-out member that lends
+    /// its nested thread admission; elsewhere they run as before.
+    pipeline_tools: Arc<HashSet<String>>,
     /// The root session's identity, where nested approved calls journal their dispatch.
     root_identity: Option<AdkIdentity>,
     /// The invocation's stop after a failed dispatch record.
@@ -150,6 +154,7 @@ impl ModelScopeSessions {
             recover_pending_models: false,
             read_only_replay: false,
             application_tools: Arc::default(),
+            pipeline_tools: Arc::default(),
             root_identity: None,
             dispatch_abort: super::dispatch_journal::DispatchAbort::default(),
         }
@@ -212,6 +217,12 @@ impl ModelScopeSessions {
     pub(super) fn with_application_tools<'a>(&self, names: impl Iterator<Item = &'a str>) -> Self {
         let mut scopes = self.clone();
         scopes.application_tools = Arc::new(names.map(str::to_owned).collect());
+        scopes
+    }
+
+    pub(super) fn with_pipeline_tools<'a>(&self, names: impl Iterator<Item = &'a str>) -> Self {
+        let mut scopes = self.clone();
+        scopes.pipeline_tools = Arc::new(names.map(str::to_owned).collect());
         scopes
     }
 
@@ -453,6 +464,15 @@ impl ScopedModelCheckpoint {
                     self.storage.definition_digest,
                 )
                 .with_application_tools(self.storage.application_tools.iter().map(String::as_str))
+                .with_durable_pipeline_tools({
+                    let durable = crate::agents::application_tools::current_member_tool_pipelines()
+                        .is_some_and(|member| member.admission.is_some());
+                    self.storage
+                        .pipeline_tools
+                        .iter()
+                        .map(String::as_str)
+                        .filter(move |_| durable)
+                })
                 .with_read_only_tools(self.read_only_tools.clone())
                 .with_request_budget(self.budget.clone())
                 .with_context_events(self.context_events.clone())

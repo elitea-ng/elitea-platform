@@ -102,6 +102,7 @@ mod pipeline_result;
 mod pipeline_result_graph_tests;
 #[cfg(test)]
 mod pipeline_yaml_budget_tests;
+pub(crate) mod tool_pipeline_threads;
 use elitea_agent_runtime::graph::printer;
 #[cfg(test)]
 mod printer_tests;

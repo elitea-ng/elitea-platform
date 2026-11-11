@@ -34,6 +34,8 @@ const (
 	DependencyDatabaseUnavailable Code = "dependency.database_unavailable"
 	// Main lost NATS; admitted runs wait in the outbox and claimed runs continue.
 	DependencyNatsUnavailable Code = "dependency.nats_unavailable"
+	// A Map item or Parallel branch runs a saved Agent whose saved pipeline tool holds a Code or Agent node, or is reached through another Agent, so the pipeline was refused before it started.
+	GraphFanoutAgentToolPipelineUnsupported Code = "graph.fanout.agent_tool_pipeline_unsupported"
 	// A Map item or Parallel branch failed; this line names its own code, its fixed sentence and a safe cause chain, so the fan-out failure can be traced to one item.
 	GraphFanoutChildFailed Code = "graph.fanout.child_failed"
 	// A Map or Parallel whose worker or branch is a Code node sits inside a saved child pipeline, so the pipeline was refused before it started: fan-out Code runs only in the started pipeline for now.
@@ -58,6 +60,10 @@ const (
 	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
 	// A checkpoint reclaim met a root Agent node running a saved Agent, which cannot resume yet, so the run ended typed and nothing after that node ran.
 	PipelineRecoverySavedAgentFrontier Code = "pipeline.recovery.saved_agent_frontier"
+	// A Map item or Parallel branch was interrupted inside a saved pipeline its Agent called, and that pipeline was edited before the run resumed, so the call was not continued and nothing in it ran again.
+	PipelineRecoveryToolPipelineDefinitionChanged Code = "pipeline.recovery.tool_pipeline_definition_changed"
+	// A saved pipeline called by an Agent in a Map item or Parallel branch had no recorded version digest, so it could not be proven unchanged and was not run.
+	PipelineRecoveryToolPipelineDefinitionUnproven Code = "pipeline.recovery.tool_pipeline_definition_unproven"
 	// A Code node sits in a saved pipeline that another saved pipeline runs, so the pipeline was refused before it started: Code runs only in a saved pipeline the started pipeline runs directly, for now.
 	PipelineSavedCodeNested Code = "pipeline.saved_code.nested"
 	// A conversation an older Worker paused continues on the unscoped resolver, where a saved pipeline's Code run as a Map worker or Parallel branch has no owner scope, so the pipeline was refused before it started.
@@ -112,6 +118,8 @@ const (
 	RuntimeExecutionInputLimit Code = "runtime.execution_input_limit"
 	// A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools.
 	RuntimeFanoutAgentCallsPipeline Code = "runtime.fanout_agent_calls_pipeline"
+	// A Map item or Parallel branch calls a saved pipeline tool it cannot run yet: one with a Code or Agent node, or called via another Agent or a saved pipeline's Agent node; remove that node or call the pipeline from the member's own Agent.
+	RuntimeFanoutAgentToolPipelineUnsupported Code = "runtime.fanout_agent_tool_pipeline_unsupported"
 	// The fan-out node could not start: too little time was left before the run's deadline for its items.
 	RuntimeFanoutDeadlineInsufficient Code = "runtime.fanout_deadline_insufficient"
 	// The pipeline stopped because a Map item or Parallel branch failed (On Error is Stop, or every item failed). The other items finished first; later nodes did not run. Open Execution details to see the failed item.

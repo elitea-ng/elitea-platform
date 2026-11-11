@@ -26,6 +26,20 @@ enum Phase {
     OutputFailed,
     ToolMayHaveStarted,
     DelegationPending,
+    /// A batch holding a durable pipeline-tool call (FU-291 C4). Only a Worker
+    /// that binds the call to its durable thread may replay it; an older
+    /// Worker's strict decode refuses this unknown phase, so it never re-runs
+    /// the pipeline on a memory checkpointer.
+    DurableDelegationPending,
+}
+
+impl Phase {
+    const fn delegates(self) -> bool {
+        matches!(
+            self,
+            Self::DelegationPending | Self::DurableDelegationPending
+        )
+    }
 }
 
 #[derive(Deserialize)]
@@ -47,6 +61,11 @@ struct Checkpoint {
     /// them again.
     #[serde(default)]
     steering_ids: Vec<String>,
+    /// FU-291 C2: the id of the model event that first carried a durable
+    /// pipeline batch. Replay re-emits the batch under it, so the call's
+    /// lineage, and with it the nested thread, is the same after a crash.
+    #[serde(default)]
+    batch_event_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -151,10 +170,15 @@ pub(super) struct ModelCheckpointWriter {
     context_events: Option<super::graph::PipelineNodeEventSender>,
     context_measurement: Arc<Mutex<Option<super::context_budget::RequestContextUsage>>>,
     application_tools: Arc<HashSet<String>>,
+    /// Pipeline tools this writer's Agent runs on a durable thread (FU-291):
+    /// replayable, and recorded under [`Phase::DurableDelegationPending`].
+    durable_pipeline_tools: Arc<HashSet<String>>,
     /// A fan-out child's read-only tools, recorded as its toolsets resolve:
     /// a batch of only these (and saved Agents) is replayed, not refused.
     read_only_tools: Option<ReadOnlyTools>,
     replay_delegation: Option<Arc<Mutex<Option<adk_rust::Content>>>>,
+    /// The original model event of a replayed durable pipeline batch (C2).
+    replay_batch: Option<String>,
     output_continuation: Arc<Mutex<Option<output::OutputContinuation>>>,
     steering: Option<Arc<dyn crate::state::TurnSteering>>,
 }
@@ -182,8 +206,10 @@ impl ModelCheckpointWriter {
             context_events: None,
             context_measurement: Arc::default(),
             application_tools: Arc::default(),
+            durable_pipeline_tools: Arc::default(),
             read_only_tools: None,
             replay_delegation: None,
+            replay_batch: None,
             output_continuation: Arc::default(),
             steering: None,
         }
@@ -199,6 +225,7 @@ impl ModelCheckpointWriter {
     /// Agent keeps its own receipts; a read-only tool has no effect to repeat.
     fn replayable(&self, name: &str) -> bool {
         self.application_tools.contains(name)
+            || self.durable_pipeline_tools.contains(name)
             || self
                 .read_only_tools
                 .as_ref()
@@ -349,6 +376,7 @@ impl ModelCheckpointWriter {
             Phase::ModelPending
                 | Phase::ContextPending
                 | Phase::DelegationPending
+                | Phase::DurableDelegationPending
                 | Phase::OutputFailed
         ) || matches!(checkpoint.phase, Phase::ContextPending) && !allow_context_preparation
         {
@@ -365,7 +393,7 @@ impl ModelCheckpointWriter {
                     && event.actions.state_delta.get(CHECKPOINT_KEY) == Some(&value)
             })
             .ok_or_else(invalid_checkpoint)?;
-        if !matches!(checkpoint.phase, Phase::DelegationPending)
+        if !checkpoint.phase.delegates()
             && events[marker + 1..].iter().any(|event| {
                 event.invocation_id == checkpoint.invocation_id
                     && !event.llm_response.partial
@@ -387,11 +415,15 @@ impl ModelCheckpointWriter {
         if model.request.contents.is_empty() {
             return Err(invalid_checkpoint());
         }
-        if matches!(checkpoint.phase, Phase::DelegationPending) {
+        if checkpoint.phase.delegates() {
             let content = checkpoint.delegation.ok_or_else(invalid_checkpoint)?;
             delegation::validate_calls(&content, |name| model.tools.contains_key(name))?;
+            // A durable pipeline call replays only where this Worker binds it
+            // to its durable thread; never through a memory checkpointer.
+            self.replay_batch =
+                self.durable_replay_batch(checkpoint.phase, &content, checkpoint.batch_event_id)?;
             self.replay_delegation = Some(Arc::new(Mutex::new(Some(content))));
-        } else if checkpoint.delegation.is_some() {
+        } else if checkpoint.delegation.is_some() || checkpoint.batch_event_id.is_some() {
             return Err(invalid_checkpoint());
         }
         if matches!(checkpoint.phase, Phase::OutputFailed)
@@ -404,7 +436,7 @@ impl ModelCheckpointWriter {
         }
         if let Some(output) = checkpoint.output_continuation {
             output.validate()?;
-            if matches!(checkpoint.phase, Phase::DelegationPending) {
+            if checkpoint.phase.delegates() {
                 return Err(invalid_checkpoint());
             }
             self.output_continuation = Arc::new(Mutex::new(Some(output)));
@@ -541,7 +573,8 @@ impl ModelCheckpointWriter {
         }
         if let Some(content) = self.pending_delegation()? {
             delegation::validate_calls(&content, |name| self.replayable(name))?;
-            self.persist_delegation(identity, invocation_id, &request, &content)
+            let batch = self.replay_batch.clone();
+            self.persist_delegation(identity, invocation_id, &request, &content, batch)
                 .await?;
             return Ok(BeforeModelResult::Continue(request));
         }
