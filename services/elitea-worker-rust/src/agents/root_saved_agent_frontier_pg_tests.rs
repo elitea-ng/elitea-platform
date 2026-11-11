@@ -327,7 +327,10 @@ async fn postgres_a_root_saved_agent_node_lost_mid_model_resumes_from_its_model_
                     .len(),
                 1
             );
-            assert!(tool_boundaries(&db.pool, "claim-1").await.is_empty());
+            assert_eq!(
+                tool_boundaries(&db.pool, "claim-1").await,
+                Vec::<String>::new()
+            );
             let (_, pending, _) = latest_root(&db.pool).await;
             assert_eq!(pending, r#"["delegate"]"#);
             lost = line(crate::transport::openai_compatible_facade::EXIT_REQUEST_LINE);
@@ -492,8 +495,22 @@ async fn scenario(
     let outcome = stdout
         .lines()
         .find_map(|line| line.split_once(SCENARIO_LINE).map(|(_, value)| value))
-        .map(|value| serde_json::from_str(value).expect("scenario outcome JSON"))
-        .unwrap_or_else(|| panic!("{mode}: the last phase reports its outcome: {stdout}"));
+        .map_or_else(
+            || {
+                // A process that ended at its crash point reports nothing.
+                assert_eq!(
+                    phases.last().and_then(|(_, code)| *code),
+                    Some(CRASH_EXIT_CODE),
+                    "{mode}: the last phase reports its outcome: {stdout}"
+                );
+                ScenarioOutcome {
+                    outcome: "crashed".to_owned(),
+                    model_calls: 0,
+                    tool_calls: 0,
+                }
+            },
+            |value| serde_json::from_str(value).expect("scenario outcome JSON"),
+        );
     (outcome, stdout)
 }
 
@@ -792,6 +809,125 @@ async fn postgres_a_root_agent_step_changed_after_its_grant_is_refused() {
     db.pool.close().await;
 }
 
+/// T9 (C2): a lock held on the root checkpoint writer row, then on the
+/// Agent's model-scope writer row, makes each inspect read fail transiently
+/// (`lock_timeout`): retained, not a refusal. Once released, the same reclaim
+/// resumes the node with one model call.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_transient_read_failure_at_a_root_agent_inspect_is_retained() {
+    let Some(db) = scenario_db().await else {
+        return;
+    };
+    let (outcome, _) = scenario(
+        &db.pool,
+        &db.database_name,
+        "transient",
+        CRASH_THEN_RECOVER,
+        "",
+    )
+    .await;
+    assert_eq!(outcome.outcome, "retained root, retained scope, ok");
+    assert_eq!(outcome.model_calls, 1);
+    db.pool.close().await;
+}
+
+/// The Agent's model scope removed (its session, events and writer row): the
+/// state of a Worker lost after the call receipt, before the Agent's first
+/// model step was persisted (T2b). Built from a later crash by deleting what
+/// the lost process wrote after that point; stated as a database fixture.
+const DROP_MODEL_SCOPE: &str = "DELETE FROM elitea_runtime.agent_session_events \
+       WHERE session_id LIKE 'elitea-model-%'; \
+     DELETE FROM elitea_runtime.agent_sessions WHERE session_id LIKE 'elitea-model-%'; \
+     DELETE FROM elitea_runtime.agent_session_writers WHERE session_id LIKE 'elitea-model-%'";
+
+/// [`DROP_MODEL_SCOPE`] and every root receipt revision: a Worker lost after
+/// the frontier was saved, before the node prepared its call (T2).
+const DROP_RECEIPT_AND_MODEL_SCOPE: &str = "DELETE FROM elitea_runtime.agent_session_events \
+       WHERE session_id LIKE 'elitea-model-%'; \
+     DELETE FROM elitea_runtime.agent_sessions WHERE session_id LIKE 'elitea-model-%'; \
+     DELETE FROM elitea_runtime.agent_session_writers WHERE session_id LIKE 'elitea-model-%'; \
+     DELETE FROM elitea_runtime.agent_graph_checkpoints \
+       WHERE thread_id NOT LIKE '%/%' AND metadata LIKE '%elitea.pipeline.graph-calls.v1%'";
+
+/// T2 / T2b: lost before the receipt, or after it but before the Agent's
+/// first model step: the node runs its Agent fresh, once (one model call), and
+/// the frontier advances. Nothing had been sent, so nothing repeats.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_root_saved_agent_lost_before_its_first_model_step_runs_once() {
+    for (case, rewind, receipt) in [
+        ("before the receipt", DROP_RECEIPT_AND_MODEL_SCOPE, false),
+        ("before the first model step", DROP_MODEL_SCOPE, true),
+    ] {
+        let Some(db) = scenario_db().await else {
+            return;
+        };
+        let (crashed, _) = scenario(
+            &db.pool,
+            &db.database_name,
+            "fresh",
+            &[("crash", Some(CRASH_EXIT_CODE))],
+            "",
+        )
+        .await;
+        assert_eq!(crashed.outcome, "crashed");
+        sqlx::raw_sql(rewind)
+            .execute(&db.pool)
+            .await
+            .expect("rewind the lost process's writes");
+        let (_, pending, metadata) = latest_root(&db.pool).await;
+        assert_eq!(pending, r#"["delegate"]"#, "{case}");
+        assert_eq!(
+            metadata.get("elitea.pipeline.graph-calls.v1").is_some(),
+            receipt,
+            "{case}"
+        );
+        let (outcome, _) = scenario(
+            &db.pool,
+            &db.database_name,
+            "fresh",
+            &[("recover", Some(0))],
+            "",
+        )
+        .await;
+        assert_eq!(outcome.outcome, "ok", "{case}");
+        assert_eq!(outcome.model_calls, 1, "{case}");
+        let (state, pending, _) = latest_root(&db.pool).await;
+        assert_eq!(pending, "[]", "{case}");
+        assert_eq!(state["answer"], "resumed answer", "{case}: {state}");
+        db.pool.close().await;
+    }
+}
+
+/// Budget: the proof's cost on a reclaim. Twenty pre-assembly inspects with a
+/// restorable Agent step (receipt check, one model-scope open and one read)
+/// against twenty with no receipt (no scope read), on one database; the
+/// child prints p50/p99 for the mapping.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_the_root_agent_proof_cost_is_measured() {
+    let Some(db) = scenario_db().await else {
+        return;
+    };
+    let (outcome, stdout) = scenario(
+        &db.pool,
+        &db.database_name,
+        "budget",
+        CRASH_THEN_RECOVER,
+        "",
+    )
+    .await;
+    assert_eq!(outcome.outcome, "measured");
+    assert_eq!(outcome.model_calls, 0);
+    let line = stdout
+        .lines()
+        .find_map(|line| {
+            line.split_once("ROOT_AGENT_PROOF_BUDGET ")
+                .map(|(_, value)| value)
+        })
+        .expect("the budget line");
+    eprintln!("ROOT_AGENT_PROOF_BUDGET {line}");
+    db.pool.close().await;
+}
+
 fn report(outcome: &str, captured: &CapturedModelRequests, tool_calls: usize) {
     println!(
         "{SCENARIO_LINE}{}",
@@ -827,6 +963,8 @@ fn scenario_assembler(
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::too_many_lines)] // One child per process, one arm per crash window.
 async fn postgres_root_saved_agent_scenario_child() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
     let Ok(database) = std::env::var(DATABASE_ENV) else {
         return;
     };
@@ -836,8 +974,6 @@ async fn postgres_root_saved_agent_scenario_child() {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_')
     );
-    use tracing_subscriber::layer::SubscriberExt as _;
-    use tracing_subscriber::util::SubscriberInitExt as _;
     tracing_subscriber::registry()
         .with(
             crate::diagnostics::log_layer(Some("info"), std::io::stdout).expect("operator stream"),
@@ -964,6 +1100,97 @@ async fn postgres_root_saved_agent_scenario_child() {
             );
             assert_eq!(rows().await, before, "claim 2 wrote nothing");
             report("fenced", &captured, 0);
+        }
+        "transient" => {
+            let (assembler, captured) = scenario_assembler(
+                &pool,
+                &mode,
+                vec![TestModelGatewayOutcome::Response(pipeline_text_response(
+                    "resumed answer",
+                ))],
+                pipeline_connector(),
+            );
+            let mut seen = Vec::new();
+            for (name, lock) in [
+                (
+                    "root",
+                    "SELECT 1 FROM elitea_runtime.agent_graph_checkpoint_writers \
+                     WHERE thread_id NOT LIKE '%/%' FOR UPDATE",
+                ),
+                (
+                    "scope",
+                    "SELECT 1 FROM elitea_runtime.agent_session_writers \
+                     WHERE session_id LIKE 'elitea-model-%' FOR UPDATE",
+                ),
+            ] {
+                let mut holder = pool.begin().await.expect("lock holder");
+                let locked = sqlx::query(lock)
+                    .fetch_all(&mut *holder)
+                    .await
+                    .expect("hold the writer row");
+                assert_eq!(locked.len(), 1, "{name}: one row held");
+                let error = crate::agents::runtime::NativeAgentAssembler::inspect_checkpoint(
+                    &assembler,
+                    &request,
+                    &AuthorizedNativeCommandBinding::fixture_for_execution(EXECUTION),
+                    test_session_authority_for_reclaim(EXECUTION, GENERATION, 2),
+                    Arc::new(TestStateWriterLease::current()),
+                )
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{name}: the held row blocks the inspect read"));
+                assert!(
+                    crate::agents::session::is_transient_inspect_failure(&error),
+                    "{name}: {error} {:?}",
+                    error
+                        .cause()
+                        .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+                );
+                holder.rollback().await.expect("release the row");
+                seen.push(format!("retained {name}"));
+            }
+            let outcome = match recovered(&assembler, &request, EXECUTION, 2).await {
+                Ok(invocation) => match run_to_end(invocation).await {
+                    Ok(_) => "ok".to_owned(),
+                    Err(error) => format!("run: {error}"),
+                },
+                Err(error) => error,
+            };
+            seen.push(outcome);
+            report(&seen.join(", "), &captured, 0);
+        }
+        "budget" => {
+            let (assembler, captured) =
+                scenario_assembler(&pool, &mode, Vec::new(), pipeline_connector());
+            let measure = || async {
+                let mut times = Vec::new();
+                for _ in 0..20 {
+                    let started = std::time::Instant::now();
+                    crate::agents::runtime::NativeAgentAssembler::inspect_checkpoint(
+                        &assembler,
+                        &request,
+                        &AuthorizedNativeCommandBinding::fixture_for_execution(EXECUTION),
+                        test_session_authority_for_reclaim(EXECUTION, GENERATION, 2),
+                        Arc::new(TestStateWriterLease::current()),
+                    )
+                    .await
+                    .expect("the reclaim inspects");
+                    times.push(started.elapsed().as_micros());
+                }
+                times.sort_unstable();
+                (times[9], times[19])
+            };
+            let with_proof = measure().await;
+            sqlx::raw_sql(DROP_RECEIPT_AND_MODEL_SCOPE)
+                .execute(&pool)
+                .await
+                .expect("drop the receipt and the scope");
+            let without = measure().await;
+            println!(
+                "ROOT_AGENT_PROOF_BUDGET restorable p50={}us p99={}us; no receipt p50={}us p99={}us",
+                with_proof.0, with_proof.1, without.0, without.1
+            );
+            report("measured", &captured, 0);
         }
         "changed_after_grant" => {
             let (assembler, captured) = scenario_assembler(

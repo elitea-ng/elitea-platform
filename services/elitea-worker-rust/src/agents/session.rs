@@ -5419,8 +5419,11 @@ fn session_activation_error(error: &PostgresSessionError) -> NativeAgentAssembly
         PostgresSessionError::CorruptStoredState | PostgresSessionError::EventConflict => {
             NativeAgentAssemblyErrorCode::InvalidResult
         }
-        PostgresSessionError::StorageUnavailable { .. }
-        | PostgresSessionError::StorageFailure { .. } => {
+        PostgresSessionError::StorageUnavailable { .. } => {
+            // D-6 (C2): a reclaim's inspect keeps the delivery on this one.
+            return agent_frontier::storage_failure(error.code());
+        }
+        PostgresSessionError::StorageFailure { .. } => {
             NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
     };
@@ -5442,8 +5445,11 @@ fn checkpoint_activation_error(error: &PostgresCheckpointError) -> NativeAgentAs
         | PostgresCheckpointError::CorruptStoredState => {
             NativeAgentAssemblyErrorCode::InvalidResult
         }
-        PostgresCheckpointError::StorageUnavailable { .. }
-        | PostgresCheckpointError::StorageFailure { .. } => {
+        PostgresCheckpointError::StorageUnavailable { .. } => {
+            // D-6 (C2): a reclaim's inspect keeps the delivery on this one.
+            return agent_frontier::storage_failure(error.code());
+        }
+        PostgresCheckpointError::StorageFailure { .. } => {
             NativeAgentAssemblyErrorCode::DependencyUnavailable
         }
     };

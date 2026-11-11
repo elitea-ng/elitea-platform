@@ -888,20 +888,21 @@ impl AgentDeliveryProcessOutcome {
                 // FU-323a C2 (FU-299 C3): a delivery kept again and again
                 // (a reclaim retained on each redelivery) writes one line per
                 // result code per window, with the count kept quiet since.
-                match RETAINED_LINES.admit(code, std::time::Instant::now()) {
-                    Some(suppressed) => elitea_faults::fault!(
+                if let Some(suppressed) = RETAINED_LINES.admit(code, std::time::Instant::now()) {
+                    elitea_faults::fault!(
                         tracing::Level::WARN,
                         code = elitea_faults::codes::AGENT_DELIVERY_RETAINED_NO_ACK,
                         event = "agent_delivery_retained_no_ack",
                         result_code = code,
                         retryable,
                         suppressed
-                    ),
-                    None => tracing::debug!(
+                    );
+                } else {
+                    tracing::debug!(
                         event = "agent_delivery_retained_no_ack",
                         result_code = code,
                         retryable,
-                    ),
+                    );
                 }
             }
         }

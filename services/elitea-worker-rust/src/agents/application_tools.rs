@@ -5836,11 +5836,11 @@ fn recovering_child_agent(
     agent: Arc<LazyNestedAgent>,
     ctx: &dyn ToolContext,
 ) -> adk_rust::Result<Arc<LazyNestedAgent>> {
-    let call = pipeline_child_call(ctx);
-    if !call.node {
-        return Ok(agent);
-    }
-    let recovering = call.recover_started || call.root_recovery;
+    let recovering = match pipeline_child_call(ctx) {
+        PipelineChildCall::Unscoped => return Ok(agent),
+        PipelineChildCall::Node | PipelineChildCall::Fanout => false,
+        PipelineChildCall::FanoutRecovery | PipelineChildCall::RootRecovery => true,
+    };
     let mut agent = agent.as_ref().clone();
     let scopes = agent.model_scopes.take();
     if recovering && scopes.is_none() {
@@ -5858,29 +5858,38 @@ fn recovering_child_agent(
 }
 
 /// What the validated marker says about this Agent-node call.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct PipelineChildCall {
-    /// A pipeline Agent node runs this call (the marker is present).
-    node: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PipelineChildCall {
+    /// No pipeline Agent node runs this call (no marker).
+    Unscoped,
+    /// A pipeline Agent node's call.
+    Node,
     /// A fixed Parallel member's call.
-    fanout: bool,
+    Fanout,
     /// A fixed Parallel member re-running a call an earlier claim started.
-    recover_started: bool,
+    FanoutRecovery,
     /// A root Agent node re-entering its proven started call (FU-323a).
-    root_recovery: bool,
+    RootRecovery,
 }
 
 fn pipeline_child_call(ctx: &dyn ToolContext) -> PipelineChildCall {
     let actions = ctx.actions();
-    let marker = actions
+    let Some(marker) = actions
         .state_delta
-        .get(PIPELINE_APPLICATION_NODE_METADATA_KEY);
-    let flag = |key: &str| marker.and_then(|marker| marker.get(key)) == Some(&Value::Bool(true));
-    PipelineChildCall {
-        node: marker.is_some(),
-        fanout: flag("fanout"),
-        recover_started: flag("recover_started"),
-        root_recovery: flag("root_recovery"),
+        .get(PIPELINE_APPLICATION_NODE_METADATA_KEY)
+    else {
+        return PipelineChildCall::Unscoped;
+    };
+    let flag = |key: &str| marker.get(key) == Some(&Value::Bool(true));
+    match (
+        flag("fanout"),
+        flag("recover_started"),
+        flag("root_recovery"),
+    ) {
+        (true, true, _) => PipelineChildCall::FanoutRecovery,
+        (true, false, _) => PipelineChildCall::Fanout,
+        (false, _, true) => PipelineChildCall::RootRecovery,
+        (false, _, false) => PipelineChildCall::Node,
     }
 }
 
@@ -6270,7 +6279,10 @@ fn fanout_member_pause(
     event: &mut Event,
     sensitive: &SensitiveToolCatalog,
 ) -> adk_rust::Result<Option<Value>> {
-    if !pipeline_child_call(ctx).fanout {
+    if !matches!(
+        pipeline_child_call(ctx),
+        PipelineChildCall::Fanout | PipelineChildCall::FanoutRecovery
+    ) {
         return Ok(None);
     }
     let card = super::events::fanout_member_card(event, sensitive).map_err(|_| {
