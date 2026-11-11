@@ -315,7 +315,7 @@ names instead of retrying. A rule imported from a repository leaves the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "auto" \| "off" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[], bypass_approvals?: boolean, unattended?: UnattendedGrant, addressed_to?: number[], cloud_agent?: boolean}` (**Unattended turns**, **Several agents in a thread**, below) (`reasoning_effort` `"none"`, from an older client or a kept choice, is read as `"off"`) | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "auto" \| "off" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[], bypass_approvals?: boolean, unattended?: UnattendedGrant, addressed_to?: number[], participant_id?: number, cloud_agent?: boolean}` (**Unattended turns**, **Several agents in a thread**, below) (`reasoning_effort` `"none"`, from an older client or a kept choice, is read as `"off"`) | `{turn_id, execution_id}` |
 | `attachment_add` | `{workspace_id, path}` | `{token, name, mime, bytes, width, height, thumbnail}` — attaches the image file at the **absolute** `path` (a `files_dropped` path, or a picked file) to the workspace's next turn ("Image input", below). Blocking work runs off the async workers. Rejects `path_denied`, `not_found`, `image_too_large`, `invalid_request` (not PNG/JPEG/WebP/GIF, a relative path, a link, not a regular file), `workspace_unknown`, `local_work_disabled`, `not_signed_in`. |
 | `attachment_add_bytes` | `{workspace_id, mime, data, name?}` | The same answer for a pasted image: `data` is base64, at most 10 MiB decoded; `mime` is what the clipboard said and is ignored (the type is sniffed from the bytes); `name` defaults to `pasted-image`. Rejects `image_too_large`, `invalid_request`, `workspace_unknown`, `local_work_disabled`. |
 | `attachment_remove` | `{workspace_id, token}` | `null`. Forgets an image the person took off the composer (an unknown token is not an error). |
@@ -735,7 +735,9 @@ every child (`subagent_finished` `cancelled`); none outlives the turn.
 (always), `display_name` and `avatar` (when the profile names them; the
 display name is the `label` when none is given), and `brief_digest` and
 `brief_refs` (`{message_ids, attachments, memory_entries, facts}`; a
-non-empty brief only). It never carries the soul, a quote or a fact. A
+non-empty brief only). `message_ids` are the quoted messages' chat message
+uuids (the `question_id` of the turn, the group's uuid), not the short
+`m-…` ids the model saw (#1908). It never carries the soul, a quote or a fact. A
 brief is checked against what the agent saw. An excerpt must quote a
 message of the model's last request, by the id on its `[message m-…]`
 line. The person's message carries that line (the id of the turn's
@@ -855,15 +857,28 @@ so a lead thread's chain stays on its agent.
 
 - **The UI starts the message on the routed agent** (#1917). The UI reads
   the thread (its agents and `meta.floor`) and starts a message on the
-  agent Main will route it to, with that agent's `application_id`,
-  `version_id` and `cloud_agent`: the first agent the message names, else
-  the thread's lead (`meta.floor.policy: lead`), else the composer's agent.
+  agent Main will route it to, with that agent's `participant_id`,
+  `application_id`, `version_id` and `cloud_agent`: the first agent the
+  message names, else the thread's lead (`meta.floor.policy: lead`), else
+  the composer's agent (client-core `firstAnswerer`, #1932). The host
+  answers on that participant when it is one of `application_id` on
+  `version_id` (or unpinned), not on another participant of the same
+  version (#1927). An unpinned agent (no `version_id` in its mapping) runs
+  its agent's default version, which the UI reads before the start (#1926).
+  The UI keeps the thread's agents and lead for 30 seconds per thread, and
+  reads them again after a send that added agents (#1928). Above the
+  composer it names a cloud lead, which gets only the message's text, and a
+  local agent to address instead (#1929).
   A cloud lead's turn takes none of the composer's sticky modes (plan mode,
   bypass, model choice, "Run to completion" grant). The host refuses, before
   any agent runs, a start Main routed to another agent anyway (the lead
   changed after the UI read the thread): `floor_routed_elsewhere`. The UI
   then reads the thread again and sends the message once more, on the agent
-  it now routes to. The host never runs an agent Main did not route to. A
+  it now routes to; a retry's own refusal (a reroute, or a grant the
+  platform turned off) is handled the same way, at most twice (#1931). Main
+  routes the message inside the start's transaction, before it recalls
+  memories for the turn (#1888). The host never runs an agent Main did not
+  route to. A
   start whose agent runs elsewhere than `cloud_agent` said is refused with
   `agent_executor_changed`.
 
@@ -872,11 +887,16 @@ so a lead thread's chain stays on its agent.
   position}`. Once the commit lands, the host starts that agent's turn
   itself (`floor_turn {question_id, position}`, user text "The person's
   message above is addressed to you as well. Answer it."), one at a time,
+  on the participant Main named (`participant_id`) and, for an unpinned
+  one, on its agent's default version (#1926, #1927),
   and the finished turn sends `turn_continued` with `kind: "floor"`,
   `participant_id`, `agent_name` and `executor`. When it does not start
   (a newer message superseded it, `floor_turn_superseded`; Main refused it,
-  `floor_turn_refused`; or the commit did not land, `commit_failed`), the
-  finished turn sends `floor_stopped {code, message}` instead. A turn's
+  `floor_turn_refused`; or the commit did not land, `commit_failed`, also
+  when the commit job panicked, #1886), the finished turn sends
+  `floor_stopped {code, message}` instead. A later agent's `done` names the
+  person's message in `message_ids[0]` (the first turn's `question_id`),
+  not a question of its own (#1887). A turn's
   `status` `running` carries `floor {position, targets, participant_id,
   agent_name, executor}`. A later agent's turn is never unattended; an
   unattended turn's chain does not follow the floor.
@@ -888,7 +908,8 @@ so a lead thread's chain stays on its agent.
   name, oldest dropped first to stay under 120 KiB) and the turn's prompt as
   a child turn of the agent's own version (`startLocalChildTurn`), never the
   workspace, its files or the thread's tools, and commits the answer (Main
-  marks it `executed_by: cloud`). A cloud agent's turn refuses `plan_mode`,
+  marks it `executed_by: cloud`; at most 512 KiB of the answer, and one
+  cut there ends with a note that says so, #1889). A cloud agent's turn refuses `plan_mode`,
   `unattended`, `compact`, `model`, `command`, `mentions`, `skills` and
   `images` before any request (`cloud_agent_text_only`).
 - **Sessions.** With two or more agents in the thread, each agent keeps a
