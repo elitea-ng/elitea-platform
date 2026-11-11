@@ -357,9 +357,14 @@ Traced read-only on `origin/main` `2b72df86e`: the timeline gets its rows only a
 `parseRunsByEvent.helpers.ts:82`). No Worker, shared-runtime or Main code on main emits `agent_on_transitional_edge`
 (no occurrence in `services/elitea-worker-rust`, `libs/rust` or `services/elitea-main`), and State Modifier and Router
 emit no LLM or tool event, so such a run has no timeline row on main either. PR A does not touch that data path (no
-diff to `parseRunsByEvent.*` or `useRunEvent.ts`); it only reads the rows in `RunStateDialog.tsx`. Not fixed here;
-D12 is proven in the browser with a pipeline that also holds an LLM node (orchestrator ruling), and the gap gets its
-own follow-up. Details in §17.
+diff to `parseRunsByEvent.*` or `useRunEvent.ts`); it only reads the rows (`continuedFailureSteps`,
+`apps/elitea-web/src/features/pipelines/ui/state/runStateValues.ts`, used in `RunStateDialog.tsx`). So no PR A family
+(State Modifier, Router, Split Out, Aggregate) ever gets a timeline step of its own, and `continuedFailureSteps` has
+no step to mark. **W3 = pre-existing, registered as FU-351; not fixed in PR A.** Browser on p5b1, pipeline 184 (a
+failing State Modifier with `continue`, then an LLM node): the timeline shows only the LLM step, and the LLM's answer
+("1 error was recorded.") proves `node_errors` reached it. **D12 ("Failed · continued") is therefore proven by unit
+tests only in PR A** (`runStateValues.test.ts`); there is no reachable browser proof until FU-351, or a PR B Code step
+if Code emits a tool-start frame. Details in §17.
 
 ## 15. CI hygiene (fix round 1)
 
