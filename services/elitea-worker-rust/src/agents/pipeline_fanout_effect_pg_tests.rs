@@ -7120,6 +7120,9 @@ const TOOL_PIPELINE_TEST: &str =
     "agents::pipeline_tests::fanout_effect_pg_tests::postgres_member_pipeline_tool_child";
 /// `map` (one Map item) or `parallel` (two Parallel branches).
 const TOOL_PIPELINE_SHAPE_ENV: &str = "ELITEA_FU291_PG_SHAPE";
+/// `nested_llm`: killed inside the nested LLM node (T1a/T1c); `completed`:
+/// killed after the nested pipeline finished, before the Agent answered (T1f).
+const TOOL_PIPELINE_MODE_ENV: &str = "ELITEA_FU291_PG_MODE";
 const NESTED_SYSTEM: &str = "Answer the topic you are given.";
 
 fn tool_pipeline_topics(shape: &str) -> Vec<String> {
@@ -7153,6 +7156,7 @@ async fn postgres_member_pipeline_tool_child() {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_')
     );
     let shape = std::env::var(TOOL_PIPELINE_SHAPE_ENV).expect("shape");
+    let completed = std::env::var(TOOL_PIPELINE_MODE_ENV).expect("mode") == "completed";
     let topics = tool_pipeline_topics(&shape);
     let pool = connect(&database).await;
     let mut request = request("continue");
@@ -7179,6 +7183,12 @@ async fn postgres_member_pipeline_tool_child() {
                 marker,
                 response: nested_agent_call_response(&format!("call_item_{index}"), topic),
             });
+            if completed {
+                outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+                    marker,
+                    response: pipeline_text_response(&format!("nested answer for {topic}")),
+                });
+            }
             outcomes.push(TestModelGatewayOutcome::ResponseForRequestAfter {
                 marker,
                 gate: Arc::clone(&held),
@@ -7187,15 +7197,20 @@ async fn postgres_member_pipeline_tool_child() {
         }
         let watcher = pool.clone();
         let members = i64::try_from(topics.len()).expect("members");
+        let frontier = if completed {
+            // The nested run finished; the Agent's report request is held.
+            "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+             WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text = '[]'"
+        } else {
+            "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+             WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'"
+        };
         tokio::spawn(async move {
             loop {
-                let durable = sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
-                     WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'",
-                )
-                .fetch_one(&watcher)
-                .await
-                .unwrap_or_default();
+                let durable = sqlx::query_scalar::<_, i64>(frontier)
+                    .fetch_one(&watcher)
+                    .await
+                    .unwrap_or_default();
                 if durable >= members {
                     std::process::exit(CRASH_EXIT_CODE);
                 }
@@ -7222,10 +7237,12 @@ async fn postgres_member_pipeline_tool_child() {
     let mut outcomes = Vec::new();
     for topic in &topics {
         let marker: &'static str = Box::leak(topic.clone().into_boxed_str());
-        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
-            marker,
-            response: pipeline_text_response(&format!("nested answer for {topic}")),
-        });
+        if !completed {
+            outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+                marker,
+                response: pipeline_text_response(&format!("nested answer for {topic}")),
+            });
+        }
         outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
             marker,
             response: pipeline_text_response(&format!("outer answer for {topic}")),
@@ -7255,6 +7272,24 @@ async fn postgres_member_pipeline_tool_child() {
         .iter()
         .map(|request| String::from_utf8_lossy(&request.body).into_owned())
         .collect::<Vec<_>>();
+    if completed {
+        // C3 (T1f): the finished nested thread answers its stored result; its
+        // LLM node never runs again and the Agent reads exactly that result.
+        assert_eq!(bodies.len(), topics.len(), "recover: {bodies:?}");
+        for topic in &topics {
+            let mine = bodies
+                .iter()
+                .filter(|body| body.contains(topic.as_str()))
+                .collect::<Vec<_>>();
+            assert_eq!(mine.len(), 1, "recover: {topic}");
+            assert!(!mine[0].contains(NESTED_SYSTEM), "recover: no nested run");
+            assert!(
+                mine[0].contains(&format!("nested answer for {topic}")),
+                "recover: the Agent reads the stored result"
+            );
+        }
+        return;
+    }
     assert_eq!(bodies.len(), 2 * topics.len(), "recover: {bodies:?}");
     for topic in &topics {
         let mine = bodies
@@ -7275,7 +7310,7 @@ async fn postgres_member_pipeline_tool_child() {
 /// replays the stored call batch with no new model completion (C2), re-enters
 /// the same nested thread (no second writer, the same name), runs the nested
 /// node once more and lands one answer per member.
-async fn member_pipeline_tool_kill(url: &str, shape: &str) {
+async fn member_pipeline_tool_kill(url: &str, shape: &str, mode: &str) {
     let db = IsolatedPostgres::create(url).await;
     install_schema(&db.pool).await;
     sqlx::raw_sql(CHECKPOINT_MIGRATION)
@@ -7293,6 +7328,7 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str) {
             ])
             .env(DATABASE_ENV, &db.database_name)
             .env(TOOL_PIPELINE_SHAPE_ENV, shape)
+            .env(TOOL_PIPELINE_MODE_ENV, mode)
             .env(PHASE_ENV, phase);
         command
     };
@@ -7310,9 +7346,18 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str) {
         tool_pipeline_topics(shape).len(),
         "each killed call's nested thread was admitted before its first effect"
     );
-    let durable = sqlx::query_scalar::<_, i64>(
+    let durable = sqlx::query_scalar::<_, i64>(if mode == "completed" {
+        "SELECT count(DISTINCT thread_id) FROM elitea_runtime.agent_graph_checkpoints \
+         WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text = '[]'"
+    } else {
         "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
-         WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'",
+         WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'"
+    })
+    .fetch_one(&db.pool)
+    .await
+    .expect("nested rows");
+    let nested_rows = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints WHERE thread_id LIKE '%/pt1:%'",
     )
     .fetch_one(&db.pool)
     .await
@@ -7320,7 +7365,7 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str) {
     assert_eq!(
         usize::try_from(durable).expect("rows"),
         tool_pipeline_topics(shape).len(),
-        "each nested thread's frontier is durable, pending its LLM node"
+        "each nested thread's frontier is durable"
     );
     let output = run_phase("recover", phase("recover"));
     assert!(
@@ -7339,6 +7384,19 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str) {
         crashed, recovered,
         "the same nested threads before and after the kill"
     );
+    if mode == "completed" {
+        let after = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+             WHERE thread_id LIKE '%/pt1:%'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .expect("nested rows");
+        assert_eq!(
+            after, nested_rows,
+            "a completed nested thread is never written"
+        );
+    }
     let entries = joined(&db.pool).await.expect("joined entries");
     assert_eq!(
         entries.len(),
@@ -7357,7 +7415,29 @@ async fn postgres_a_map_item_killed_inside_its_pipeline_tool_resumes_on_the_same
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 kill proof");
         return;
     };
-    member_pipeline_tool_kill(&url, "map").await;
+    member_pipeline_tool_kill(&url, "map", "nested_llm").await;
+}
+
+/// FU-291 T1f/C3: killed after the nested pipeline finished, before the
+/// member's Agent answered: the reclaim returns the stored result, the nested
+/// pipeline never runs again and its thread is never written.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_map_item_killed_after_its_pipeline_tool_finished_reads_the_stored_result() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 kill proof");
+        return;
+    };
+    member_pipeline_tool_kill(&url, "map", "completed").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_parallel_branches_killed_after_their_pipeline_tools_finished_read_the_stored_results()
+ {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 kill proof");
+        return;
+    };
+    member_pipeline_tool_kill(&url, "parallel", "completed").await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -7367,5 +7447,5 @@ async fn postgres_parallel_branches_killed_inside_their_pipeline_tools_resume_on
         eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 kill proof");
         return;
     };
-    member_pipeline_tool_kill(&url, "parallel").await;
+    member_pipeline_tool_kill(&url, "parallel", "nested_llm").await;
 }
