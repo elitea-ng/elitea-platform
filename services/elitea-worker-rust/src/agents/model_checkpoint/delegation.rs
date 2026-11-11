@@ -11,6 +11,11 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+/// A stored durable batch's original model event id (C2).
+pub(super) fn valid_batch_event_id(batch: &str) -> bool {
+    !batch.is_empty() && batch.len() <= 512 && !batch.chars().any(char::is_control)
+}
+
 pub(super) fn validate_calls(
     content: &Content,
     admitted: impl Fn(&str) -> bool,
@@ -77,6 +82,7 @@ impl ModelCheckpointWriter {
             Some(pending) => Arc::new(DelegationReplayModel {
                 inner,
                 pending: pending.clone(),
+                batch: self.replay_batch.clone(),
             }),
             None => inner,
         }
@@ -160,12 +166,15 @@ impl ModelCheckpointWriter {
                     && event.actions.state_delta.get(CHECKPOINT_KEY) == Some(&value)
             })
             .ok_or_else(invalid_checkpoint)?;
-        let content = match checkpoint.phase {
-            Phase::DelegationPending | Phase::DurableDelegationPending => {
-                checkpoint.delegation.ok_or_else(invalid_checkpoint)?
-            }
+        let (content, batch) = match checkpoint.phase {
+            Phase::DelegationPending | Phase::DurableDelegationPending => (
+                checkpoint.delegation.ok_or_else(invalid_checkpoint)?,
+                checkpoint.batch_event_id,
+            ),
             Phase::ModelPending => {
-                let Some(content) = events[marker + 1..]
+                // C2: the batch's own model event names it for good; a replay
+                // after a crash re-emits it under this id.
+                let Some((content, batch)) = events[marker + 1..]
                     .iter()
                     .rev()
                     .find(|event| {
@@ -174,11 +183,17 @@ impl ModelCheckpointWriter {
                             && !event.llm_response.partial
                             && event.llm_response.content.is_some()
                     })
-                    .and_then(|event| event.llm_response.content.clone())
+                    .and_then(|event| {
+                        event
+                            .llm_response
+                            .content
+                            .clone()
+                            .map(|content| (content, Some(original_batch_id(event))))
+                    })
                 else {
                     return Err(invalid_checkpoint());
                 };
-                content
+                (content, batch)
             }
             _ => return Err(invalid_checkpoint()),
         };
@@ -195,34 +210,46 @@ impl ModelCheckpointWriter {
         }
         let mut model = checkpoint.model.ok_or_else(invalid_checkpoint)?;
         model.request.tools = model.tools;
-        self.persist_delegation(identity, ctx.invocation_id(), &model.request, &content)
-            .await?;
+        self.persist_delegation(
+            identity,
+            ctx.invocation_id(),
+            &model.request,
+            &content,
+            batch,
+        )
+        .await?;
         Ok(true)
     }
 
+    /// `batch` is the batch's original model event (C2); a durable pipeline
+    /// batch is never recorded without it.
     pub(super) async fn persist_delegation(
         &self,
         identity: AdkIdentity,
         invocation: &str,
         request: &LlmRequest,
         content: &Content,
+        batch: Option<String>,
     ) -> adk_rust::Result<()> {
-        let phase = if self.holds_durable_call(content) {
-            Phase::DurableDelegationPending
-        } else {
-            Phase::DelegationPending
-        };
+        let mut record = json!({
+            "version": 1, "execution_id": self.execution_id, "generation": self.generation,
+            "definition_digest": self.definition_digest, "invocation_id": invocation,
+            "phase": Phase::DelegationPending,
+            "model": {"request": request, "tools": request.tools}, "delegation": content,
+        });
+        if self.holds_durable_call(content) {
+            let batch = batch
+                .filter(|batch| valid_batch_event_id(batch))
+                .ok_or_else(invalid_checkpoint)?;
+            record["phase"] = json!(Phase::DurableDelegationPending);
+            record["batch_event_id"] = json!(batch);
+        }
         let mut event = Event::new(invocation);
         "elitea-recovery".clone_into(&mut event.author);
-        event.actions.state_delta.insert(
-            CHECKPOINT_KEY.into(),
-            json!({
-                "version": 1, "execution_id": self.execution_id, "generation": self.generation,
-                "definition_digest": self.definition_digest, "invocation_id": invocation,
-                "phase": phase,
-                "model": {"request": request, "tools": request.tools}, "delegation": content,
-            }),
-        );
+        event
+            .actions
+            .state_delta
+            .insert(CHECKPOINT_KEY.into(), record);
         self.sessions
             .append_event_for_identity(AppendEventRequest { identity, event })
             .await
@@ -232,6 +259,14 @@ impl ModelCheckpointWriter {
 struct DelegationReplayModel {
     inner: Arc<dyn Llm>,
     pending: Arc<Mutex<Option<Content>>>,
+    /// A durable pipeline batch is re-emitted under its original event (C2).
+    batch: Option<String>,
+}
+
+/// The id a batch event names its calls by: the original of a replayed batch.
+fn original_batch_id(event: &Event) -> String {
+    crate::agents::application_tools::original_application_batch_id(event)
+        .unwrap_or_else(|_| event.id.clone())
 }
 
 #[async_trait]
@@ -260,6 +295,9 @@ impl Llm for DelegationReplayModel {
                 content: Some(content),
                 turn_complete: true,
                 finish_reason: Some(adk_rust::FinishReason::Stop),
+                provider_metadata: self.batch.as_ref().map(|batch| {
+                    json!({crate::agents::application_tools::DURABLE_REPLAY_BATCH_KEY: batch})
+                }),
                 ..LlmResponse::default()
             };
             return Ok(Box::pin(adk_rust::futures::stream::once(async {

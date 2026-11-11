@@ -111,6 +111,9 @@ const NESTED_INTERRUPT_RESULT_KEY: &str = "__elitea_nested_interrupt_v1";
 /// interrupt ids (one card per id, `events::fanout_member_card`).
 pub(crate) const FANOUT_MEMBER_CARDS_KEY: &str = "__elitea_fanout_member_cards_v1";
 const APPLICATION_REPLAY_BATCH_KEY: &str = "elitea.application.replay_batch.v1";
+/// FU-291 C2: the original model event of a durable pipeline batch replayed
+/// after a crash, so its calls keep their lineage and nested threads.
+pub(super) const DURABLE_REPLAY_BATCH_KEY: &str = "elitea.application.durable_replay_batch.v1";
 /// The execution whose ROOT continuation emitted a replay batch. A key of its
 /// own beside the batch (whose schema is strict), so a Worker without it still
 /// reads the batch; only that execution's replacement may continue behind it
@@ -1867,7 +1870,19 @@ fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeA
 pub(super) fn original_application_batch_id(
     event: &Event,
 ) -> Result<String, NativeAgentAssemblyError> {
-    Ok(replay_batch(event)?.map_or_else(|| event.id.clone(), |batch| batch.event_id))
+    if let Some(batch) = replay_batch(event)? {
+        return Ok(batch.event_id);
+    }
+    let durable = replay_metadata::<String>(event, DURABLE_REPLAY_BATCH_KEY)?;
+    match durable {
+        Some(batch)
+            if batch.is_empty() || batch.len() > 512 || batch.chars().any(char::is_control) =>
+        {
+            Err(invalid_configuration())
+        }
+        Some(batch) => Ok(batch),
+        None => Ok(event.id.clone()),
+    }
 }
 
 pub(super) fn application_replay_ordinal(

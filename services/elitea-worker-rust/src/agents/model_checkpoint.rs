@@ -61,6 +61,11 @@ struct Checkpoint {
     /// them again.
     #[serde(default)]
     steering_ids: Vec<String>,
+    /// FU-291 C2: the id of the model event that first carried a durable
+    /// pipeline batch. Replay re-emits the batch under it, so the call's
+    /// lineage, and with it the nested thread, is the same after a crash.
+    #[serde(default)]
+    batch_event_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -172,6 +177,8 @@ pub(super) struct ModelCheckpointWriter {
     /// a batch of only these (and saved Agents) is replayed, not refused.
     read_only_tools: Option<ReadOnlyTools>,
     replay_delegation: Option<Arc<Mutex<Option<adk_rust::Content>>>>,
+    /// The original model event of a replayed durable pipeline batch (C2).
+    replay_batch: Option<String>,
     output_continuation: Arc<Mutex<Option<output::OutputContinuation>>>,
     steering: Option<Arc<dyn crate::state::TurnSteering>>,
 }
@@ -202,6 +209,7 @@ impl ModelCheckpointWriter {
             durable_pipeline_tools: Arc::default(),
             read_only_tools: None,
             replay_delegation: None,
+            replay_batch: None,
             output_continuation: Arc::default(),
             steering: None,
         }
@@ -412,13 +420,21 @@ impl ModelCheckpointWriter {
             delegation::validate_calls(&content, |name| model.tools.contains_key(name))?;
             // A durable pipeline call replays only where this Worker binds it
             // to its durable thread; never through a memory checkpointer.
-            if matches!(checkpoint.phase, Phase::DurableDelegationPending)
-                && !self.holds_durable_call(&content)
-            {
+            if matches!(checkpoint.phase, Phase::DurableDelegationPending) {
+                if !self.holds_durable_call(&content) {
+                    return Err(invalid_checkpoint());
+                }
+                self.replay_batch = Some(
+                    checkpoint
+                        .batch_event_id
+                        .filter(|batch| delegation::valid_batch_event_id(batch))
+                        .ok_or_else(invalid_checkpoint)?,
+                );
+            } else if checkpoint.batch_event_id.is_some() {
                 return Err(invalid_checkpoint());
             }
             self.replay_delegation = Some(Arc::new(Mutex::new(Some(content))));
-        } else if checkpoint.delegation.is_some() {
+        } else if checkpoint.delegation.is_some() || checkpoint.batch_event_id.is_some() {
             return Err(invalid_checkpoint());
         }
         if matches!(checkpoint.phase, Phase::OutputFailed)
@@ -568,7 +584,8 @@ impl ModelCheckpointWriter {
         }
         if let Some(content) = self.pending_delegation()? {
             delegation::validate_calls(&content, |name| self.replayable(name))?;
-            self.persist_delegation(identity, invocation_id, &request, &content)
+            let batch = self.replay_batch.clone();
+            self.persist_delegation(identity, invocation_id, &request, &content, batch)
                 .await?;
             return Ok(BeforeModelResult::Continue(request));
         }

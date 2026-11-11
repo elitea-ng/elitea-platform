@@ -659,7 +659,8 @@ async fn a_durable_delegation_record_without_its_durable_binding_is_refused() {
 /// typed failure, so an older Worker's restore refuses it
 /// (`agent_recovery.invalid_checkpoint`) before any model call or tool
 /// dispatch: it resumes nothing and never re-runs the pipeline. The same
-/// record with the pre-FU-291 phase decodes, so only the phase refuses it.
+/// record with the pre-FU-291 phase and without its batch id (C2) decodes, so
+/// only those two refuse it, each on its own.
 #[tokio::test]
 async fn an_older_worker_refuses_a_durable_delegation_record_typed() {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
@@ -668,6 +669,12 @@ async fn an_older_worker_refuses_a_durable_delegation_record_typed() {
         .with_durable_pipeline_tools(["saved_agent"].into_iter());
     let stored = interrupted_durable_batch(sessions, &writer, &probe).await;
     let mut record = stored.state().get(CHECKPOINT_KEY).unwrap();
+    assert!(serde_json::from_value::<pre_fu291::Checkpoint>(record.clone()).is_err());
+    let batch = record
+        .as_object_mut()
+        .unwrap()
+        .remove("batch_event_id")
+        .expect("a durable record names its batch");
     let error = serde_json::from_value::<pre_fu291::Checkpoint>(record.clone())
         .err()
         .expect("the older decode refuses the durable phase");
@@ -676,10 +683,72 @@ async fn an_older_worker_refuses_a_durable_delegation_record_typed() {
         "{error}"
     );
     record["phase"] = json!("delegation_pending");
-    assert!(serde_json::from_value::<pre_fu291::Checkpoint>(record).is_ok());
+    assert!(serde_json::from_value::<pre_fu291::Checkpoint>(record.clone()).is_ok());
+    record["batch_event_id"] = batch;
+    let error = serde_json::from_value::<pre_fu291::Checkpoint>(record)
+        .err()
+        .expect("the older decode refuses the batch id");
+    assert!(error.to_string().contains("batch_event_id"), "{error}");
     assert_eq!(
         probe.calls.load(Ordering::SeqCst),
         1,
         "only the original dispatch"
+    );
+}
+
+/// FU-291 C2: a durable pipeline batch replayed after a crash is re-emitted
+/// from the stored record, with no new model completion, under its original
+/// model event: every call keeps its lineage (batch, ordinal, call id, name,
+/// arguments), so the nested thread derived from it is the same.
+#[tokio::test]
+async fn a_replayed_durable_batch_keeps_its_original_event_and_call_lineage() {
+    use crate::agents::application_pipeline::PipelineToolCallLineage;
+    let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+    let probe = blocking_probe();
+    let writer = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 1, [1; 32])
+        .with_durable_pipeline_tools(["saved_agent"].into_iter());
+    let stored = interrupted_durable_batch(sessions.clone(), &writer, &probe).await;
+    let batches = |session: &dyn Session| {
+        session
+            .events()
+            .all()
+            .into_iter()
+            .filter(|event| !event.tool_calls().is_empty())
+            .collect::<Vec<_>>()
+    };
+    let original = batches(stored.as_ref());
+    assert_eq!(original.len(), 1);
+    assert_eq!(
+        stored.state().get(CHECKPOINT_KEY).unwrap()["batch_event_id"],
+        json!(original[0].id)
+    );
+    let restored = writer.restore(stored.as_ref()).unwrap();
+    probe.block.store(false, Ordering::SeqCst);
+    let mut events = runner(restored, probe.clone(), sessions.clone())
+        .run(
+            "user".try_into().unwrap(),
+            "parent".try_into().unwrap(),
+            Content::new("user").with_text("RECOVERY_INPUT"),
+        )
+        .await
+        .unwrap();
+    while let Some(event) = events.next().await {
+        event.unwrap();
+    }
+    assert_eq!(
+        probe.models.load(Ordering::SeqCst),
+        2,
+        "no new completion chose the call"
+    );
+    let replayed = batches(session(sessions.as_ref()).await.as_ref());
+    assert_eq!(replayed.len(), 2);
+    assert_ne!(replayed[1].id, original[0].id, "ADK mints a new event");
+    let lineage = |event: &Event| {
+        serde_json::to_value(PipelineToolCallLineage::from_call(event, 0).ok().unwrap()).unwrap()
+    };
+    assert_eq!(
+        lineage(&replayed[1]),
+        lineage(&original[0]),
+        "the replayed call keeps its lineage"
     );
 }
