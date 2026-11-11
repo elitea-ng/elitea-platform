@@ -103,6 +103,15 @@ func (r *LocalTurnsRepo) StartLocalTurn(ctx context.Context, record localturn.St
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// The routing and the recall (issue 1888): the floor is read in this
+	// transaction, the participant the routing names answers, and a
+	// refused routing pays for no recall.
+	record, err = record.Admit(ctx, func() (localturn.ConversationFloor, error) {
+		return readLocalTurnFloor(ctx, tx, schema, record.ActorUserID, record.ConversationUUID)
+	})
+	if err != nil {
+		return localturn.StartedTurn{}, err
+	}
 	target, err := resolveLocalTurnTarget(ctx, tx, schema, record.ConversationUUID, record.ActorUserID, record.ParticipantID)
 	if err != nil {
 		return localturn.StartedTurn{}, err

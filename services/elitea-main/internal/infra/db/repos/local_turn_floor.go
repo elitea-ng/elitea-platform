@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 
 	"github.com/jackc/pgx/v5"
 
@@ -17,23 +16,12 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/turntaking"
 )
 
-var _ localturn.FloorReader = (*LocalTurnsRepo)(nil)
-
-// LocalTurnFloor reads the conversation's floor and its agent participants
-// in participant order, for a caller that is a user participant of it. The
-// agents are the `application` participants the cloud floor counts
+// readLocalTurnFloor reads the conversation's floor and its agent
+// participants in participant order, for a caller that is a user
+// participant of it, inside the start's transaction (localturn.StartRecord.Admit).
+// The agents are the `application` participants the cloud floor counts
 // (readConversationFloor), with the executor of each mapping. A floor block
 // that does not parse is the default floor.
-func (r *LocalTurnsRepo) LocalTurnFloor(
-	ctx context.Context, projectID, actorUserID int64, conversationUUID string,
-) (localturn.ConversationFloor, error) {
-	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
-	if err != nil {
-		return localturn.ConversationFloor{}, localturn.ErrInvalid
-	}
-	return readLocalTurnFloor(ctx, r.pool, schema, actorUserID, conversationUUID)
-}
-
 func readLocalTurnFloor(
 	ctx context.Context, queryer floorQueryer, schema string, actorUserID int64, conversationUUID string,
 ) (localturn.ConversationFloor, error) {

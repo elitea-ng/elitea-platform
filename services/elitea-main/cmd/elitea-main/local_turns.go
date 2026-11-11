@@ -60,7 +60,7 @@ func composeLocalTurns(
 	service.WithUnattended(platformconfig.UnattendedSettingsSource{Pool: pool})
 	// Several agents in a desktop thread (ADR-0050 decision 7f): Main
 	// routes the message by the conversation's floor.
-	service.WithFloor(repo)
+	service.WithFloor()
 	route, err := localturnsapi.NewRoute(service, groupAuth, legacyrbac.NewPostgresResolver(pool))
 	if err != nil {
 		return nil, err

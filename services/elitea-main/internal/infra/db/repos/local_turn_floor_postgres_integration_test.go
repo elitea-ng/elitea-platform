@@ -56,7 +56,7 @@ VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`, conversationID, id, parti
 	coder, reviewer := ids["coder"], ids["reviewer"]
 
 	repo := NewLocalTurnsRepo(pool)
-	floor, err := repo.LocalTurnFloor(ctx, 1, user, conversationUUID)
+	floor, err := readLocalTurnFloor(ctx, pool, "p_1", user, conversationUUID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`, conversationID, id, parti
 		floor.Agents[1] != (localturn.FloorAgent{ParticipantID: reviewer, Name: "Reviewer", Executor: "cloud"}) {
 		t.Fatalf("floor agents = %+v", floor.Agents)
 	}
-	if _, err := repo.LocalTurnFloor(ctx, 1, user+1, conversationUUID); !errors.Is(err, localturn.ErrNotFound) {
+	if _, err := readLocalTurnFloor(ctx, pool, "p_1", user+1, conversationUUID); !errors.Is(err, localturn.ErrNotFound) {
 		t.Fatalf("a stranger's floor read = %v, want ErrNotFound", err)
 	}
 
@@ -77,7 +77,7 @@ VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`, conversationID, id, parti
 	if err != nil {
 		t.Fatal(err)
 	}
-	service.WithFloor(repo)
+	service.WithFloor()
 	credential := localturn.Credential{TokenID: "77", NativeClientID: "ai.elitea.desktop"}
 	request := func(question string, participant int64) localturn.StartRequest {
 		return localturn.StartRequest{
