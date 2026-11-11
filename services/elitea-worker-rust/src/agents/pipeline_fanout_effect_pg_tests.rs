@@ -4085,7 +4085,13 @@ async fn child_direct_scenario(url: &str, depth: &str, mode: &str, vars: bool) {
             .env(PHASE_ENV, phase);
         command
     };
+    if crash_mode(mode) == "completed" {
+        hold_tool_results(&db.pool, &db.database_name, true).await;
+    }
     let output = run_phase("crash", phase("crash"));
+    if crash_mode(mode) == "completed" {
+        hold_tool_results(&db.pool, &db.database_name, false).await;
+    }
     assert_eq!(
         output.status.code(),
         Some(CRASH_EXIT_CODE),
@@ -7302,14 +7308,54 @@ impl Tool for EnteringMcpTool {
     }
 }
 
+/// FU-349: orders "the nested thread finished" before "the member Agent
+/// recorded its result". In the crash phase of a `completed` mode, a trigger
+/// holds any session-event insert that carries a nested answer as a function
+/// response, so the Agent's write (and its next model request, saved after
+/// it) can never land before the watcher sees the finished thread and ends
+/// the process. The database checks for a lost client every 100 ms, so the
+/// held insert is rolled back when the process dies. Dropped before the
+/// recovery phase, whose own writes must land.
+async fn hold_tool_results(pool: &sqlx::PgPool, database: &str, hold: bool) {
+    assert!(
+        database.starts_with("elitea_rust_session_")
+            && database
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    );
+    let statements = if hold {
+        format!(
+            "ALTER DATABASE {database} SET client_connection_check_interval = '100ms';
+             CREATE FUNCTION elitea_runtime.fu349_hold_tool_result() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN
+               IF NEW.event_payload::text LIKE '%functionResponse%nested answer for%' THEN
+                 PERFORM pg_sleep(120);
+               END IF;
+               RETURN NEW;
+             END $$;
+             CREATE TRIGGER fu349_hold_tool_result BEFORE INSERT ON elitea_runtime.agent_session_events
+               FOR EACH ROW EXECUTE FUNCTION elitea_runtime.fu349_hold_tool_result();"
+        )
+    } else {
+        "DROP TRIGGER fu349_hold_tool_result ON elitea_runtime.agent_session_events;
+         DROP FUNCTION elitea_runtime.fu349_hold_tool_result();"
+            .to_owned()
+    };
+    sqlx::raw_sql(sqlx::AssertSqlSafe(statements))
+        .execute(pool)
+        .await
+        .expect("FU-349 tool-result hold");
+}
+
 /// The crash process's model outcomes and its death condition.
 fn crash_plan(
     mode: &str,
     shape: &str,
     topics: &[String],
-    pool: &sqlx::PgPool,
     members: usize,
 ) -> Vec<TestModelGatewayOutcome> {
+    /// The crash watcher could not read its frontier: the phase fails readably.
+    const WATCHER_FAILED_EXIT_CODE: i32 = 71;
     let held = Arc::new(tokio::sync::Notify::new());
     let mut outcomes = Vec::new();
     for topic in topics {
@@ -7348,7 +7394,8 @@ fn crash_plan(
     let frontier = match mode {
         // The tool kills the process itself, once every member is inside it.
         "llm_tool_effect" | "llm_tool_read" | "direct_started" => return outcomes,
-        // The nested run finished; the Agent's report request is held.
+        // The nested run finished. The member Agent cannot record the tool's
+        // result meanwhile: `hold_tool_results` blocks that write (FU-349).
         "completed" => {
             "SELECT count(DISTINCT thread_id) FROM elitea_runtime.agent_graph_checkpoints \
              WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text = '[]'"
@@ -7367,16 +7414,12 @@ fn crash_plan(
              WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'"
         }
     };
-    let _ = pool;
     let members = i64::try_from(members).expect("members");
-    // FU-349: the crash point is a race between this watcher and the member
-    // Agent, which saves its next model request (holding the nested result)
-    // right after its pipeline tool returns. A task on the crash process's
-    // current-thread runtime, polling every 20 ms, ran only when the run
-    // yielded and could see the finished thread after that save, so the
-    // reclaim replayed the saved request and never met the edited thread.
-    // The watcher now polls on its own OS thread, runtime and connection,
-    // every millisecond, independent of the run's scheduling.
+    // The crash point is a durable frontier the members reach while their
+    // next step is held (a nested model request, or the Agent's write of the
+    // tool result), so nothing races it. The watcher polls
+    // on its own thread, runtime and connection; a query error ends the
+    // process with its own code, never a busy loop.
     let database = std::env::var(DATABASE_ENV).expect("database");
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -7386,14 +7429,14 @@ fn crash_plan(
         runtime.block_on(async move {
             let watcher = connect(&database).await;
             loop {
-                let durable = sqlx::query_scalar::<_, i64>(frontier)
+                match sqlx::query_scalar::<_, i64>(frontier)
                     .fetch_one(&watcher)
                     .await
-                    .unwrap_or_default();
-                if durable >= members {
-                    std::process::exit(CRASH_EXIT_CODE);
+                {
+                    Ok(durable) if durable >= members => std::process::exit(CRASH_EXIT_CODE),
+                    Ok(_) => tokio::time::sleep(Duration::from_millis(5)).await,
+                    Err(_) => std::process::exit(WATCHER_FAILED_EXIT_CODE),
                 }
-                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         });
     });
@@ -7594,13 +7637,7 @@ async fn postgres_member_pipeline_tool_child() {
     let read_only = mode == "llm_tool_read";
     if std::env::var(PHASE_ENV).expect("phase") == "crash" {
         let mode = crash_mode(&mode);
-        let outcomes = crash_plan(
-            mode,
-            &shape,
-            &topics,
-            &pool,
-            tool_pipeline_in_flight(&shape),
-        );
+        let outcomes = crash_plan(mode, &shape, &topics, tool_pipeline_in_flight(&shape));
         let runtime = saved_runtime_on(
             outcomes,
             pipeline_delegating_agent(),

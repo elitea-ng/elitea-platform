@@ -265,17 +265,24 @@ impl SettingsCatalog {
             .any(|node| node.settings.uses_node_errors())
     }
 
+    /// Whether the settings own state channel `key`: `node_errors` when some
+    /// node continues on error. An owned channel is never a result candidate,
+    /// a mappable child variable, or a reason for the nested reducer refusal.
+    pub(crate) fn owns_key(&self, key: &str) -> bool {
+        key == NODE_ERRORS_KEY && self.uses_node_errors()
+    }
+
     /// Whether some admitted node runs once per turn: only then is the
     /// private run-once channel declared.
+    pub(crate) fn uses_execute_once(&self) -> bool {
+        self.nodes.values().any(|node| node.settings.execute_once)
+    }
+
     /// The error route of `id`, a successor like its transitions.
     pub(crate) fn error_transition(&self, id: &str) -> Option<&str> {
         self.nodes
             .get(id)
             .and_then(|node| node.settings.error_transition.as_deref())
-    }
-
-    pub(crate) fn uses_execute_once(&self) -> bool {
-        self.nodes.values().any(|node| node.settings.execute_once)
     }
 
     /// Fold the settings into the definition digest; a document without

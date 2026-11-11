@@ -337,6 +337,24 @@
       "yaml": "state:\n  out: str\nentry_point: 1\nnodes:\n  - id: 1\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {on_error: error_output, error_transition: 1}\n    transition: END\n",
       "refusal": "error_transition_target",
       "node": "1"
+    },
+    {
+      "name": "legacy labels: an error route to a legacy-labelled node",
+      "yaml": "state:\n  out: str\nentry_point: Shape A\nnodes:\n  - id: Shape A\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {on_error: error_output, error_transition: My Handler}\n    transition: END\n  - id: My Handler\n    type: state_modifier\n    template: y\n    output: [out]\n    transition: END\n",
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "legacy labels: an error route to itself",
+      "yaml": "state:\n  out: str\nentry_point: Shape A\nnodes:\n  - id: Shape A\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {on_error: error_output, error_transition: Shape A}\n    transition: END\n",
+      "refusal": "error_transition_target",
+      "node": "ShapeA"
+    },
+    {
+      "name": "legacy labels: a legacy-labelled Map worker",
+      "yaml": "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: map_entities, type: map, worker: Render Item, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: END}\n  - {id: Render Item, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}', settings: {on_error: continue}}\n",
+      "refusal": "fanout_owned",
+      "node": "RenderItem"
     }
   ]
 }

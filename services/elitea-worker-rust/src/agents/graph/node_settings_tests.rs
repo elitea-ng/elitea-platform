@@ -877,3 +877,36 @@ async fn the_support_reference_names_the_thread() {
     };
     assert_ne!(run("root-thread").await, run("root-thread/child").await);
 }
+
+// ---- delta review ---------------------------------------------------------
+
+/// C: a node whose error route ends the run is a terminal result candidate,
+/// like `transition: END`; the settings-owned list never is.
+#[test]
+fn the_result_policy_reads_the_error_route_and_never_the_owned_list() {
+    let routed = "state:\n  out: str\n  other: str\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {on_error: error_output, error_transition: END}\n    transition: b\n  - id: b\n    type: state_modifier\n    template: y\n    output: [other]\n    transition: END\n";
+    let policy = PipelineDefinition::from_yaml(routed)
+        .expect("routed")
+        .result_policy();
+    assert!(
+        policy.terminal_data_keys.iter().any(|key| key == "out"),
+        "{:?}",
+        policy.terminal_data_keys
+    );
+    let owned = "state:\n  out: str\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {on_error: continue}\n    transition: b\n  - id: b\n    type: state_modifier\n    template: '[]'\n    output: [node_errors]\n    transition: END\n";
+    let policy = PipelineDefinition::from_yaml(owned)
+        .expect("owned")
+        .result_policy();
+    assert!(
+        !policy
+            .terminal_data_keys
+            .iter()
+            .any(|key| key == "node_errors")
+    );
+    assert!(
+        !policy
+            .fallback_data_keys
+            .iter()
+            .any(|key| key == "node_errors")
+    );
+}

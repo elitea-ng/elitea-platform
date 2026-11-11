@@ -29,6 +29,11 @@ separate PR and is not in this one.
     `node_settings_runtime.rs` `mark_once`), not the default and not a fresh evaluation of the condition. A Router
     loop whose first visit chose to loop again therefore keeps looping until the step bound stops it
     (`a_run_once_router_takes_its_first_route_again`). Accepted by the orchestrator (fix round 1, decision 3).
+- **Always output data on success (accepted design, delta review).** n8n's "Always Output Data" emits an empty item
+  when a node produces none. Here, on a success the layer fills with a neutral value only an output the body wrote
+  as null; an output the body left out keeps its state and is never reset. On a loop revisit that means the value
+  from the previous visit stays (a State Modifier that writes only its first output never clears the others). On a
+  settled failure every declared output gets its neutral value.
 - **Wait minimum 100 ms (D10).** n8n allows 0. Unspaced retries amplified the FU-302 outage.
 - **Error output (D5).** The failure is one `node_errors` entry plus a `goto(error_transition)`; there is no
   `<node>.error` key and no second output payload. The handler reads `node_errors[-1]`. The legacy Code
@@ -352,7 +357,7 @@ the fixes; every listed test failed first). Merged `origin/main` `94862584d` (#1
   nested result), so the reclaim replayed that request and never met the edited thread. Fix (test only): the
   watcher polls on its own OS thread, runtime and connection every millisecond. Before 3/10 passed on this branch
   (main's baseline 2/6 failing); after 10/10 and 10/10; the whole `fanout_effect_pg_tests` module 109 passed.
-  Evidence `5b1/evidence/fu349-flake.txt`.
+  Evidence `5b1/evidence/fu349-flake.txt`. Made deterministic in the delta review (§16, D).
 - **FU-345** (`ChatBox.stickyTarget.test.tsx`, "sends to, attributes the answer to, and gates attachments...").
   Root cause: the Attach row is enabled by the agent's "Allow attachments" AND the deployment's attachment types
   (`useAllowedAttachmentTypes`, `GET /elitea_core/index_types/prompt_lib/2`). The test never pinned the second, so
@@ -377,3 +382,17 @@ Scanners (no lockfile or manifest differs from `origin/main`, so every finding i
 --all-features check advisories` fails on main's lockfiles alike (Worker 7 vulnerability + 4 unmaintained, libs/rust
 8 + 8); `govulncheck` reports 2 Go standard-library vulnerabilities of the local toolchain (go1.26.9); `npm audit`
 21 moderate. This branch adds none.
+
+## 16. Delta review (`541653d82..fb4119fb0`)
+
+Evidence: `5b1/evidence/round2-failing-first.txt`.
+
+| Item | Fix | Proof |
+|---|---|---|
+| A (i) | `continuedFailureSteps` counts each entry once (node, input step, support reference, handling) and attributes it to the nearest step at or before its first appearance whose node is the entry's own node: an `interrupt` marker or the next node's step never takes it | Web `attributes an entry to its own node even when an interrupt marker shows it first` (failed first) |
+| A (ii) | An entry whose node has no step at or before its first appearance (recorded before a resumed timeline began) is never attributed. Partial rebuttal: the previous code already attributed an older entry only to a step of its own node, so "every older entry goes to the first stateful step" held only for that node; the new test passes before and after. Residual, documented in the code: the timeline steps carry no checkpoint step, so a timeline that begins with a revisit of the very node whose failure predates it is marked; seeding from "the state before the first rebuilt step" is not possible (the dialog has none) and ignoring every entry of the first stateful step would drop a fresh run whose first node fails | Web `ignores entries recorded before a resumed timeline began` |
+| B | One rule in all three layers: the Worker's legacy-label rewrite (`normalize_legacy_label`) applies to the ids, Map workers, Parallel branch nodes and `error_transition` the settings check reads. Main `legacyGraphID` in `graphIDScalar` and branch nodes; Web `legacyGraphId` in `settingsView`. `graphIDScalar`'s comment now says so. The Web's own id rule still flags a legacy label separately, as before | 3 vectors ("legacy labels: ..."): Main and Web failed first, the Worker already passed |
+| C | `SettingsCatalog::owns_key` is the one predicate, used for the result terminal keys, the fallback keys, the mappable child variables and the nested reducer refusal; a node whose `error_transition` is END is a terminal result candidate like `transition: END` | `the_result_policy_reads_the_error_route_and_never_the_owned_list` (failed first) |
+| D | FU-349 made deterministic. A kill when the gateway receives the Agent's next request cannot work: that request is saved before it is sent (`model_checkpoint.rs` ModelPending), and with that kill point the edited test passed 0/10. Instead the parent installs, for the crash phase only, a trigger that holds the member Agent's write of the tool result (a session event with the nested answer as a function response; its next model request is saved after it), so the finished nested thread is always durable first and the result never is; `client_connection_check_interval` rolls the held insert back when the process dies. The watcher's query error ends the process with its own code (never a busy loop); the dead `let _ = pool;` is gone | edited 10/10 and 10/10; stored-result 10/10 and 10/10; module run in the gates |
+| E | `error_transition` moved below `uses_execute_once`'s doc; the stale `optionalInt` comment line deleted | — |
+| Finding 4 | Accepted as design: see §1 "Always output data on success" | — |

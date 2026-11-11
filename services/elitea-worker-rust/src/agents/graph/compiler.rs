@@ -987,10 +987,7 @@ impl PipelineDefinition {
             })
             // C4: a child that owns `node_errors` keeps its entries; a parent
             // can neither map into it nor read it back.
-            .filter(|(key, _)| {
-                !(key.as_str() == elitea_agent_runtime::graph::node_settings::NODE_ERRORS_KEY
-                    && self.settings.uses_node_errors())
-            })
+            .filter(|(key, _)| !self.settings.owns_key(key))
             .map(|(key, kind)| (key.clone(), kind.clone()))
             .collect()
     }
@@ -1806,10 +1803,11 @@ impl PipelineDefinition {
         // channel reducer, so typed channels would reduce twice (v1).
         // D3: the settings-owned `node_errors` channel is exempt. It is never
         // mapped in from (or out to) the parent (C4), so it never reduces twice.
-        if self.state_reducers.keys().any(|key| {
-            !(key == elitea_agent_runtime::graph::node_settings::NODE_ERRORS_KEY
-                && self.settings.uses_node_errors())
-        }) {
+        if self
+            .state_reducers
+            .keys()
+            .any(|key| !self.settings.owns_key(key))
+        {
             return Err(PipelineConfigurationError::Unsupported(
                 "typed state reducers are not supported in a nested pipeline",
             ));
@@ -2300,26 +2298,26 @@ impl PipelineDefinition {
                 | PipelineNodeDefinition::Printer(_)
                 | PipelineNodeDefinition::Router(_) => continue,
             };
-            if transition != Some("END") {
+            // 5b-1: a routed failure that ends the run ends it at this node.
+            if transition != Some("END") && self.settings.error_transition(node.id()) != Some("END")
+            {
                 continue;
             }
-            if let Some(key) = output_keys.iter().find(|key| key.as_str() != "messages")
+            if let Some(key) = output_keys
+                .iter()
+                .find(|key| key.as_str() != "messages" && !self.settings.owns_key(key))
                 && !internal_result_key(key)
                 && !keys.contains(key)
             {
                 keys.push(key.clone());
             }
         }
-        let settings_errors = self.settings.uses_node_errors();
         let fallback_keys = self
             .state_declaration_order
             .iter()
             .filter(|key| !internal_result_key(key))
             // 5b-1: the settings-owned failure list is never the final answer.
-            .filter(|key| {
-                !(settings_errors
-                    && key.as_str() == elitea_agent_runtime::graph::node_settings::NODE_ERRORS_KEY)
-            })
+            .filter(|key| !self.settings.owns_key(key))
             .cloned()
             .collect();
         PipelineResultPolicy {

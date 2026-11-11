@@ -75,3 +75,30 @@ describe('continuedFailureSteps (5b-1, D12; fix round 1, finding 10)', () => {
     expect(continuedFailureSteps([]).size).toBe(0);
   });
 });
+
+describe('continuedFailureSteps (delta review A)', () => {
+  const entry = (node: string, inputStep: number) => ({ node, handled: 'continue', input_step: inputStep, support_ref: `${node}-${String(inputStep)}` });
+
+  it('attributes an entry to its own node even when an interrupt marker shows it first', () => {
+    const timeline = [
+      { id: 'shape' },
+      { id: 'interrupt', state: { node_errors: [entry('shape', 1)] } },
+      { id: 'after', state: { node_errors: [entry('shape', 1)] } },
+    ];
+    expect([...continuedFailureSteps(timeline)]).toEqual([0]);
+  });
+
+  it('ignores entries recorded before a resumed timeline began', () => {
+    // Resumed after a HITL pause: the first rebuilt step already holds the
+    // entries of earlier visits, including one of `shape`, which fails again later.
+    const olderShape = entry('shape', 1);
+    const older = entry('earlier', 2);
+    const timeline = [
+      { id: 'review', state: { node_errors: [olderShape, older] } },
+      { id: 'shape', state: { node_errors: [olderShape, older] } },
+      { id: 'after', state: { node_errors: [olderShape, older] } },
+      { id: 'shape', state: { node_errors: [olderShape, older, entry('shape', 7)] } },
+    ];
+    expect([...continuedFailureSteps(timeline)]).toEqual([3]);
+  });
+});

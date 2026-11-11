@@ -138,6 +138,45 @@ export function parseNodeSettings(block: unknown): { settings?: NodeSettings; re
   return refused === undefined ? { settings } : { refusal: refused[1] };
 }
 
+/**
+ * The Worker's `normalize_legacy_label`: a value that is not a graph id (a
+ * legacy UI label such as `My Handler`) keeps only ASCII letters, digits,
+ * `_`, `-` and `.`, with `.` as `_`; a valid id, an empty value, one over 128
+ * bytes, or one that would become empty or too long is kept as written.
+ */
+export function legacyGraphId(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  if (GRAPH_ID.test(value) || value === '' || bytes.length > 128) return value;
+  let out = '';
+  for (const byte of bytes) {
+    const char = String.fromCharCode(byte);
+    if (char === '.') out += '_';
+    else if (/^[A-Za-z0-9_-]$/.test(char)) out += char;
+  }
+  return out === '' || out.length > 128 ? value : out;
+}
+
+const viewId = (value: unknown): unknown => (typeof value === 'string' ? legacyGraphId(value) : value);
+
+/** The ids the settings check reads, as the Worker normalizes them (legacy labels). */
+function settingsView(document: YamlPipelineDocument): YamlPipelineDocument {
+  const nodes = (document.nodes ?? []).map((node) => {
+    const settings = node[NODE_SETTINGS_KEY];
+    const branches = node['branches'];
+    const view: YamlPipelineNode = {
+      ...node,
+      id: legacyGraphId(node.id),
+      ...(node['worker'] === undefined ? {} : { worker: viewId(node['worker']) }),
+      ...(Array.isArray(branches) ? { branches: branches.map((branch: unknown) => (isRecord(branch) ? { ...branch, node: viewId(branch['node']) } : branch)) } : {}),
+      ...(isRecord(settings) && settings['error_transition'] !== undefined
+        ? { [NODE_SETTINGS_KEY]: { ...settings, error_transition: viewId(settings['error_transition']) } }
+        : {}),
+    };
+    return view;
+  });
+  return { ...document, nodes };
+}
+
 /** `Node <id>: <text>`, or the text alone for the document-level refusal. */
 export function nodeSettingsMessage(refusal: NodeSettingsRefusal, nodeId: string | undefined): string {
   const text = NodeSettingsRefusalTexts[refusal];
@@ -218,7 +257,8 @@ function fanoutOwnedNodes(nodes: readonly YamlPipelineNode[]): ReadonlySet<strin
  * mapping (C4), then each node by id. Like the compiler, the first refusal
  * stops the document; one issue keeps the three layers' messages identical.
  */
-export function graphNodeSettingsIssues(document: YamlPipelineDocument): readonly GraphAdmissionIssue[] {
+export function graphNodeSettingsIssues(rawDocument: YamlPipelineDocument): readonly GraphAdmissionIssue[] {
+  const document = settingsView(rawDocument);
   const nodes = document.nodes ?? [];
   const { blocks, refused } = parseBlocks(nodes);
   if (refused !== undefined) return [refused];

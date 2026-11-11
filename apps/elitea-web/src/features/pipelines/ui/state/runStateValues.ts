@@ -70,27 +70,48 @@ export function stepStateValues(
 
 /**
  * 5b-1 (D12): the timeline steps whose node's failure the run settled
- * through its settings. A step's own state holds `node_errors` as it was when
- * that visit finished, so the visit that appended an entry naming its own node
- * is the one marked: a node visited again without failing is not. The steps
- * carry no checkpoint step, so the append itself keys the visit. The dialog
- * marks those steps "Failed · continued" with the existing failed styling.
+ * through its settings, so the dialog can mark them "Failed · continued"
+ * with the existing failed styling.
+ *
+ * Each `node_errors` entry is counted once (by its node, input step, support
+ * reference and handling) at the first step whose state shows it, and is
+ * attributed to the nearest step AT OR BEFORE that position whose node is the
+ * entry's own node. So a marker step that shows the entry first (an
+ * `interrupt` after the failing node) or the next node's step never takes it,
+ * and an entry recorded before a resumed timeline began, whose node has no
+ * step at or before its first appearance, is never attributed. The steps
+ * carry no checkpoint step, so a timeline that begins with a revisit of the
+ * very node whose failure predates it cannot be told apart from that node
+ * failing there; it is marked.
  */
 export function continuedFailureSteps(timeline: readonly (RunStateStep & { readonly id?: string })[]): ReadonlySet<number> {
   const marked = new Set<number>();
-  let seen = 0;
+  const seen = new Set<string>();
   timeline.forEach((step, index) => {
     const entries = step.state?.['node_errors'];
     if (!Array.isArray(entries)) return;
-    const appended = entries.slice(seen);
-    seen = Math.max(seen, entries.length);
-    if (appended.some((entry: unknown) => isContinuedEntryOf(entry, step.id))) marked.add(index);
+    for (const entry of entries as readonly unknown[]) {
+      const continued = continuedEntry(entry);
+      if (continued === undefined || seen.has(continued.identity)) continue;
+      seen.add(continued.identity);
+      const owner = nearestStepOf(timeline, continued.node, index);
+      if (owner !== undefined) marked.add(owner);
+    }
   });
   return marked;
 }
 
-function isContinuedEntryOf(entry: unknown, node: string | undefined): boolean {
-  if (typeof entry !== 'object' || entry === null || node === undefined) return false;
-  const { node: owner, handled } = entry as { readonly node?: unknown; readonly handled?: unknown };
-  return owner === node && (handled === 'continue' || handled === 'error_output');
+function continuedEntry(entry: unknown): { readonly node: string; readonly identity: string } | undefined {
+  if (typeof entry !== 'object' || entry === null) return undefined;
+  const { node, handled, input_step: inputStep, error } = entry as Readonly<Record<string, unknown>>;
+  if (typeof node !== 'string' || (handled !== 'continue' && handled !== 'error_output')) return undefined;
+  const support = typeof error === 'object' && error !== null ? (error as Readonly<Record<string, unknown>>)['support_ref'] : undefined;
+  return { node, identity: JSON.stringify([node, inputStep, support, handled]) };
+}
+
+function nearestStepOf(timeline: readonly { readonly id?: string }[], node: string, from: number): number | undefined {
+  for (let index = from; index >= 0; index -= 1) {
+    if (timeline[index]?.id === node) return index;
+  }
+  return undefined;
 }

@@ -127,9 +127,9 @@ func TestNodeSettingsRefusalIsTypedAndBranchable(t *testing.T) {
 			t.Fatalf("message %q", api.Message)
 		}
 	}
-	// A node id that is not a graph id is never echoed.
+	// A legacy label is named as the Worker normalizes it, never as written.
 	odd := strings.Replace(doc, "id: a", "id: 'a b<script>'", 1)
-	if api := pipelinelimits.Refusal(pipelinelimits.Check(odd)); api == nil || strings.Contains(api.Message, "script") {
+	if api := pipelinelimits.Refusal(pipelinelimits.Check(odd)); api == nil || api.Message != "Node abscript: Max tries must be between 2 and 5." {
 		t.Fatalf("got %v", api)
 	}
 }

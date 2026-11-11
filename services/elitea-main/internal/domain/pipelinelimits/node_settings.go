@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -190,7 +191,6 @@ func boolScalar(node *yaml.Node) (bool, bool) {
 	return value, true
 }
 
-// optionalInt reads a non-negative integer scalar, or a YAML null as absent.
 // optionalInt reads an integer within +/-(2^53-1), whatever its sign, so an
 // out-of-range value is the bound's range refusal as in the Worker and the
 // Web; a YAML null is absent; any other value (a fraction, a wider integer)
@@ -209,14 +209,40 @@ func optionalInt(node *yaml.Node) (*int64, bool) {
 	return &value, true
 }
 
+// legacyGraphID mirrors the Worker's normalize_legacy_label: a value that is
+// not a graph id (a legacy UI label such as "My Handler") keeps only ASCII
+// letters, digits, '_', '-' and '.', with '.' as '_'; a valid id, an empty
+// value, a value over 128 bytes, or one that would become empty or too long
+// is kept as written.
+func legacyGraphID(value string) string {
+	if graphID.MatchString(value) || value == "" || len(value) > maxNamedBytes {
+		return value
+	}
+	var out strings.Builder
+	for i := 0; i < len(value); i++ {
+		switch b := value[i]; {
+		case b == '.':
+			out.WriteByte('_')
+		case b == '_' || b == '-' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z':
+			out.WriteByte(b)
+		}
+	}
+	if out.Len() == 0 || out.Len() > maxNamedBytes {
+		return value
+	}
+	return out.String()
+}
+
 // maxSafeInteger is the largest integer every layer reads exactly.
 const maxSafeInteger = 1<<53 - 1
 
-// graphIDScalar is a node id or route target as the Worker normalizes it: a
-// string, or an integer within +/-(2^53-1) as its decimal text.
+// graphIDScalar is a node id, worker or route target as the Worker's
+// normalize_graph_identifiers reads it: a string, rewritten when it is a
+// legacy label (legacyGraphID), or an integer within +/-(2^53-1) as its
+// decimal text.
 func graphIDScalar(node *yaml.Node) (string, bool) {
 	if value, ok := stringScalar(node); ok {
-		return value, true
+		return legacyGraphID(value), true
 	}
 	if node == nil || node.Kind != yaml.ScalarNode || node.ShortTag() != "!!int" {
 		return "", false
@@ -294,7 +320,7 @@ func checkNodeSettings(declared []map[string]*yaml.Node, state *yaml.Node) error
 		case "parallel":
 			if branches := fields["branches"]; branches != nil && branches.Kind == yaml.SequenceNode {
 				for _, branch := range branches.Content {
-					if target := branchNode(aliased(branch)); target != "" {
+					if target := legacyGraphID(branchNode(aliased(branch))); target != "" {
 						owned[target] = struct{}{}
 					}
 				}
