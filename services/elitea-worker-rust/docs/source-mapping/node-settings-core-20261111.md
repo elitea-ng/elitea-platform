@@ -349,6 +349,18 @@ the fixes; every listed test failed first). Merged `origin/main` `94862584d` (#1
 | 9 | confirmed: leaving error output left a stale error edge | `NodeSettings.tsx` removes the node's error-handle edges when the key goes | Web `removes the error output edge when On error leaves error output` |
 | 10 | confirmed: "Failed · continued" marked every visit | `continuedFailureSteps` marks the visit whose own state appended an entry naming its node. Keyed on the append, not `input_step`: the timeline steps carry no checkpoint step (`RunStateDialog.tsx` `RunStateTimelineStep`) | Web `marks only the visit whose own state appended the entry` |
 
+### W3 (browser pass): empty Run-details timeline for State Modifier/Router-only pipelines: pre-existing
+
+Traced read-only on `origin/main` `2b72df86e`: the timeline gets its rows only at
+`apps/elitea-web/src/features/pipelines/lib/flow-editor/helpers/parseRunsByEvent.agentHandlers.ts:35,90,133`
+(LLM and tool start events) and `parseRunsByEvent.edgeHandlers.ts:52,71` (`agent_on_transitional_edge`, dispatched at
+`parseRunsByEvent.helpers.ts:82`). No Worker, shared-runtime or Main code on main emits `agent_on_transitional_edge`
+(no occurrence in `services/elitea-worker-rust`, `libs/rust` or `services/elitea-main`), and State Modifier and Router
+emit no LLM or tool event, so such a run has no timeline row on main either. PR A does not touch that data path (no
+diff to `parseRunsByEvent.*` or `useRunEvent.ts`); it only reads the rows in `RunStateDialog.tsx`. Not fixed here;
+D12 is proven in the browser with a pipeline that also holds an LLM node (orchestrator ruling), and the gap gets its
+own follow-up. Details in §17.
+
 ## 15. CI hygiene (fix round 1)
 
 - **FU-349** (`postgres_a_map_item_whose_finished_pipeline_tool_was_edited_later_is_refused_typed`, from #1937).
@@ -412,3 +424,13 @@ Evidence: `5b1/evidence/round2-failing-first.txt`.
 
 Scanners: lockfiles equal `origin/main`; `cargo deny` (Worker 7 vulnerability + 4 unmaintained, libs/rust 8 + 8),
 `govulncheck` (2 Go standard-library, local go1.26.9) and `npm audit` (21 moderate) are all pre-existing.
+
+## 17. Browser pass on stack p5b1 (images `p5b1-1eb1b57e2`): Web fixes
+
+Evidence: `5b1/evidence/browser-w-failing-first.txt` (4 tests failed first).
+
+| | Root cause | Fix | Test |
+|---|---|---|---|
+| W1 the On error select showed "Stop pipeline" for a stored `on_error: error_output` | The panel read the block through the strict admission parser (`readNodeSettings` → `parseNodeSettings`); an incomplete block (`error_output` before its route is connected) is refused there, so the panel fell back to every default | `readNodeSettings` reads each field on its own (`nodeSettings.helpers.ts`); the refusal stays the admission issue's job | `NodeSettings.test.tsx` "displays On error for ..." (error output without a target, continue, an invalid block) and "shows the stored toggles even while the block is incomplete" |
+| W2 no error output handle | The same read: the handle is shown only for `on_error: error_output`, which the strict read hid while the route was missing, so the route could never be connected (C6). With a stored valid route the handle and its edge already rendered in tests (`StateModifierNode.test.tsx` "with a stored target" passed before the fix; `nodeErrorRoute.helpers.test.ts` "is drawn from the error handle") | as W1 | `StateModifierNode.test.tsx` "renders the error output handle without a target yet" / "with a stored target", "renders no error output handle for continue or stop"; connecting: `nodeErrorRoute.helpers.test.ts` (C6) |
+| W3 empty "Run 1 details" timeline for a State Modifier/Router-only pipeline | Pre-existing, not PR A. The run timeline gets its entries only from LLM and tool events and from `agent_on_transitional_edge` (`apps/elitea-web/src/features/pipelines/lib/flow-editor/helpers/parseRunsByEvent.helpers.ts:76-84`; entries pushed at `parseRunsByEvent.agentHandlers.ts:35,90,133` and `parseRunsByEvent.edgeHandlers.ts:52,71`). The Rust Worker emits no `agent_on_transitional_edge` at all (no occurrence in `services/elitea-worker-rust/src` or `libs/rust`), and the deterministic families emit no LLM or tool event, so such a run has no timeline step and no state to show. Populating it is a new protocol event, which 5b-1 does not add (D12) | — | — |

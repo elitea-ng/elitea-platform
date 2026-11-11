@@ -302,10 +302,29 @@ const NODE_CHECKS: readonly (readonly [(block: Block, context: NodeContext) => b
     'always_output_reducer'],
 ];
 
-/** The node's parsed settings for the panel; defaults when the block is absent or invalid. */
+/**
+ * The node's settings as the panel and the error handle show them: each field
+ * read on its own, so an incomplete or refused block (for example
+ * `on_error: error_output` before its route is connected) still shows what is
+ * stored; the refusal itself is the admission issue's job. A value of the
+ * wrong kind reads as that field's default.
+ */
 export function readNodeSettings(node: YamlPipelineNode | undefined): NodeSettings {
-  return parseNodeSettings(node?.[NODE_SETTINGS_KEY] ?? {}).settings
-    ?? { retry_on_fail: false, on_error: 'stop', always_output_data: false, execute_once: false };
+  const block = node?.[NODE_SETTINGS_KEY];
+  if (!isRecord(block)) return { retry_on_fail: false, on_error: 'stop', always_output_data: false, execute_once: false };
+  const count = (key: string): number | undefined => (isCount(block[key]) ? block[key] : undefined);
+  const onError = block['on_error'];
+  const route = block['error_transition'];
+  return {
+    retry_on_fail: block['retry_on_fail'] === true,
+    max_tries: count('max_tries'),
+    wait_between_tries_ms: count('wait_between_tries_ms'),
+    on_error: (NODE_ON_ERROR as readonly unknown[]).includes(onError) ? (onError as NodeOnError) : 'stop',
+    error_transition: typeof route === 'string' ? route : undefined,
+    always_output_data: block['always_output_data'] === true,
+    execute_once: block['execute_once'] === true,
+    timeout_ms: count('timeout_ms'),
+  };
 }
 
 /**

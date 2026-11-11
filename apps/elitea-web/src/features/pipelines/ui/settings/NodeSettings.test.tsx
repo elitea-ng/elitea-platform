@@ -74,3 +74,22 @@ describe('NodeSettings error route (fix round 1, finding 9)', () => {
     expect(edges.map((edge) => edge.id)).toEqual(['normal']);
   });
 });
+
+describe('NodeSettings shows the stored values (browser W1)', () => {
+  it.each([
+    ['error_output without a target', { on_error: 'error_output' }, 'Continue (using error output)'],
+    ['continue', { on_error: 'continue' }, 'Continue'],
+    ['an invalid block', { on_error: 'continue', error_transition: 'x' }, 'Continue'],
+  ])('displays On error for %s', async (_name, settings, label) => {
+    const { getByRole } = renderSettings(settings);
+    await userEvent.click(getByRole('button', { name: 'Settings' }));
+    expect(getByRole('combobox')).toHaveTextContent(label);
+  });
+
+  it('shows the stored toggles even while the block is incomplete', async () => {
+    const { getByRole } = renderSettings({ on_error: 'error_output', execute_once: true, always_output_data: true });
+    await userEvent.click(getByRole('button', { name: 'Settings' }));
+    expect(getByRole('switch', { name: 'Run once per execution' })).toBeChecked();
+    expect(getByRole('switch', { name: 'Always output data' })).toBeChecked();
+  });
+});
