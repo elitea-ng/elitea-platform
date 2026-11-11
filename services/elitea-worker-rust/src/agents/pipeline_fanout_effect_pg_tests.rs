@@ -6924,3 +6924,6 @@ async fn postgres_a_saved_child_lost_inside_a_later_code_attempt_is_recovered_by
     };
     saved_code_scenario(&url, "leaf").await;
 }
+
+#[path = "durable_pipeline_tool_pg_tests.rs"]
+mod durable_pipeline_tool;
