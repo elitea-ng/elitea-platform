@@ -318,8 +318,9 @@ message ContextViewV1 {
   // EMPTY: an input from before this field; the session is bound to
   // `history` alone. Workers are upgraded before Main, because a worker
   // from an earlier release refuses this tag.
-  string binding = 4;
-  reserved 5 to 15;
+  // (4 to 15 stay reserved: a reserved tag is never reused.)
+  string binding = 16;
+  reserved 4 to 15;
 }
 
 // One agent memory entry recalled into a turn (#1826).

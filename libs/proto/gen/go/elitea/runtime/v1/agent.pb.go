@@ -1198,7 +1198,8 @@ type ContextViewV1 struct {
 	// EMPTY: an input from before this field; the session is bound to
 	// `history` alone. Workers are upgraded before Main, because a worker
 	// from an earlier release refuses this tag.
-	Binding       string `protobuf:"bytes,4,opt,name=binding,proto3" json:"binding,omitempty"`
+	// (4 to 15 stay reserved: a reserved tag is never reused.)
+	Binding       string `protobuf:"bytes,16,opt,name=binding,proto3" json:"binding,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2472,7 +2473,7 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\ahistory\x18\x01 \x01(\tR\ahistory\x12#\n" +
 	"\rwindow_tokens\x18\x02 \x01(\rR\fwindowTokens\x12\x16\n" +
 	"\x06digest\x18\x03 \x01(\tR\x06digest\x12\x18\n" +
-	"\abinding\x18\x04 \x01(\tR\abindingJ\x04\b\x05\x10\x10\"R\n" +
+	"\abinding\x18\x10 \x01(\tR\abindingJ\x04\b\x04\x10\x10\"R\n" +
 	"\x15RecalledMemoryEntryV1\x12\x19\n" +
 	"\bentry_id\x18\x01 \x01(\tR\aentryId\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontentJ\x04\b\x03\x10\x10\"X\n" +

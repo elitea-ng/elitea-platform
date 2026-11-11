@@ -2,7 +2,7 @@
 
 - **What changed.**
   - Main now sends a binding of every setting a context view depends on (its mode, side talk, and the join time
-    under `since_joined`) as `ContextViewV1.binding` (field 4). The Worker binds the agent's durable session to it,
+    under `since_joined`) as `ContextViewV1.binding` (field 16). The Worker binds the agent's durable session to it,
     so a change of side talk or join time under the same mode is no longer missed (#1902). A session bound before
     this release stays bound to its mode and records the settings on its next turn, so the upgrade itself re-seeds
     nothing.
@@ -22,6 +22,6 @@
   - Pipeline authors who interpolate `{chat_history}` into a template: a long history is now cut to its newest
     messages there. Map `chat_history` as a variable to give the model all of it.
 - **What to do.**
-  - Roll out the Workers first, then Main. A Worker from an earlier release refuses a `ContextViewV1` with field 4
+  - Roll out the Workers first, then Main. A Worker from an earlier release refuses a `ContextViewV1` with field 16
     set. (It ignores `current_message_id` on a regeneration, so that half is harmless either way.)
   - Nothing else: sessions are rechecked on their next fresh turn, and no migration runs.
