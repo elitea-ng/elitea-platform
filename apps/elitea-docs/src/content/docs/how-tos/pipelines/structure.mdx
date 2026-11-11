@@ -39,10 +39,10 @@ When a pipeline answers in a conversation, its state holds the pipeline's own [v
 
   You don't declare it in `state`, and no node can write it.
 - **Labelled and untrusted.** A message from another agent, or from a person other than the one asking, reaches the model as a user message wrapped in an untrusted envelope that names its author. The model never takes a peer's words for its own answers or for instructions. The pipeline's own earlier answers are assistant messages.
-- **`messages` too, unless you declare it.** A pipeline that declares no `messages` state starts with the same history ahead of the current message in `messages`. A pipeline that declares `messages` keeps its own value and gets only the current message.
+- **`messages` too, unless you declare it.** A pipeline that declares no `messages` state starts with the same history ahead of the current message in `messages`. Every node that reads `messages` by default then sees the earlier turns too, including a Decision node choosing a branch. A pipeline that declares `messages` keeps its own value and gets only the current message.
 - **Set once per run.** The history is set when the run starts. A run that resumes after a pause, an approval or a recovery keeps the history it started with. Messages posted in between are not added.
 - **Never the answer.** `chat_history` is not shown as the pipeline's output. An earlier answer that is in the history is never taken for this run's result.
-- **Bounded.** A very long history keeps its newest messages that fit, about 256 KB of text. One message longer than about 60 KB ends the history at that point.
+- **Bounded.** A very long history keeps its newest messages that fit: at most 256 messages and about 200 KB. One message longer than about 60 KB is cut and ends with a truncation marker.
 
 A saved pipeline that runs as a node of another pipeline gets no `chat_history` of its own. Its parent passes in what the child should read.
 

@@ -247,20 +247,45 @@ fn an_oversized_view_keeps_its_newest_messages() {
         .map(|index| message(format!("{index}{}", "a".repeat(50 * 1024))))
         .collect::<Vec<_>>();
     let items = pipeline_state_history(&history).expect("bounded view");
-    assert_eq!(items.len(), 5);
+    // 200 KiB keeps the newest three: any mapped value stays under the
+    // 240 KiB an Agent node or a Parallel Agent admits.
+    assert_eq!(items.len(), 3);
     assert!(
         items[0]["content"][0]["text"]
             .as_str()
-            .is_some_and(|text| text.starts_with('3'))
+            .is_some_and(|text| text.starts_with('5'))
     );
-    // One message a node would refuse ends the view, oldest side first.
-    let too_long = vec![message("b".repeat(61 * 1024)), message("newest".to_owned())];
-    assert_eq!(
-        pipeline_state_history(&too_long)
-            .expect("bounded view")
-            .len(),
-        1
-    );
+    assert!(json!(items).to_string().len() < 240 * 1024);
+    // One message a node would refuse is cut, never dropped with the older
+    // ones behind it.
+    let too_long = vec![
+        message("older".to_owned()),
+        message("é".repeat(31 * 1024)),
+        message("newest".to_owned()),
+    ];
+    let items = pipeline_state_history(&too_long).expect("bounded view");
+    assert_eq!(items.len(), 3);
+    let cut = items[1]["content"][0]["text"].as_str().expect("cut text");
+    assert!(cut.len() <= 60 * 1024);
+    assert!(cut.ends_with("truncated ...]"));
+    // An overlong peer message stays one closed envelope.
+    let peer = vec![json!({
+        "role": "user",
+        "content": [{"type": "text", "text": "c".repeat(70 * 1024)}],
+        "additional_kwargs": {"elitea_author": {"kind": "agent", "name": "Other"}}
+    })];
+    let items = pipeline_state_history(&peer).expect("bounded view");
+    let wrapped = items[0]["content"][0]["text"].as_str().expect("envelope");
+    assert!(wrapped.len() < 64 * 1024);
+    assert!(wrapped.ends_with('>') && wrapped.contains("truncated ...]"));
+    // A long chat of short messages seeds at most 256 of them, the newest,
+    // leaving the run's own messages room under a node's 1,024.
+    let many = (0..300)
+        .map(|index| message(format!("m{index}")))
+        .collect::<Vec<_>>();
+    let items = pipeline_state_history(&many).expect("bounded view");
+    assert_eq!(items.len(), 256);
+    assert_eq!(items[0]["content"][0]["text"], "m44");
 }
 
 #[tokio::test]
