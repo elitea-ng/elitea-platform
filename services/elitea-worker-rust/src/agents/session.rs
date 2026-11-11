@@ -29,6 +29,9 @@ use adk_rust::{
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+// The short id of a message (#1831), over its canonical uuid form: the
+// runtime's, which the desktop uses too (#1909).
+use elitea_agent_runtime::subagents::message_ref::short_message_ref;
 use ring::digest;
 use serde_json::{Map, Value};
 use sqlx::PgPool;
@@ -182,17 +185,6 @@ fn writes_own_question(
         || payload.hitl_resume
         || output_continuation
         || pipeline_resume.is_some_and(|(should_continue, hitl)| should_continue || hitl))
-}
-
-/// The short id of the message `message_id` (#1831), over its canonical
-/// uuid form, so the question of this turn and the same message in a later
-/// turn's history always carry the same id.
-fn short_message_ref(message_id: &str) -> String {
-    use elitea_agent_runtime::subagents::message_ref::message_ref;
-    match uuid::Uuid::try_parse(message_id) {
-        Ok(id) => message_ref(&id.hyphenated().to_string()),
-        Err(_) => message_ref(&message_id.to_ascii_lowercase()),
-    }
 }
 
 /// #1831: neutralize every id-like line in the text of `content` and put

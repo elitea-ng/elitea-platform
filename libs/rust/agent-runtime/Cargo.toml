@@ -132,6 +132,9 @@ tokio = { version = "1.54.1", features = ["fs", "io-util", "macros", "net", "rt"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
 tokio-stream = { version = "0.1.19", features = ["net"] }
 tracing = "0.1.44"
+# `subagents::message_ref::short_message_ref` reads a chat message id's
+# canonical uuid form (#1909). Already locked through both hosts.
+uuid = { version = "1.29.0", default-features = false }
 zeroize = "1.9.1"
 # `get_report_by_id` and `create_excel_report` read Carrier's zip result
 # archives and `get_report_by_id` writes the errors-log zip. The same

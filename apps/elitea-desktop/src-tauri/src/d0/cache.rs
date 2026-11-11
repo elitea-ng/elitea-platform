@@ -50,6 +50,8 @@ pub struct ParticipantKey {
     pub conversation: String,
     pub application_id: i64,
     pub version_id: i64,
+    /// The participant the turn named (`TurnRequest::participant_id`).
+    pub participant_id: Option<i64>,
 }
 
 /// A model's context limits, as one session read them from the catalogue
