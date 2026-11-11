@@ -704,3 +704,32 @@ fn log_child() {
         .expect("continued");
     elitea_faults::logtest::child_ran();
 }
+
+/// The shared admission vectors: every layer admits or refuses each
+/// document with the same refusal, naming the same node.
+#[test]
+fn the_shared_admission_vectors_hold_in_the_worker() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../libs/proto/contracts/pipeline-node-settings-v1-vectors.json");
+    let vectors: Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("vectors")).expect("JSON");
+    let cases = vectors["cases"].as_array().expect("cases");
+    assert!(cases.len() >= 40);
+    for case in cases {
+        let name = case["name"].as_str().expect("name");
+        let yaml = case["yaml"].as_str().expect("yaml");
+        match (PipelineDefinition::from_yaml(yaml), case["refusal"].as_str()) {
+            (Ok(_), None) => {}
+            (Err(PipelineConfigurationError::NodeSettings { node, refusal }), Some(expected)) => {
+                assert_eq!(refusal.key(), expected, "{name}");
+                if let Some(expected_node) = case["node"].as_str() {
+                    assert_eq!(node, expected_node, "{name}");
+                } else {
+                    assert!(refusal.document_level(), "{name}");
+                }
+            }
+            (Ok(_), Some(expected)) => panic!("{name}: admitted, expected {expected}"),
+            (Err(error), expected) => panic!("{name}: {error} ({}), expected {expected:?}", error.code()),
+        }
+    }
+}

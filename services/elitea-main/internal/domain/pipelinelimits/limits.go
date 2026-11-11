@@ -79,7 +79,7 @@ func Refusal(err error) *apierr.APIError {
 		return nil
 	}
 	switch api.Code {
-	case CodeNodeTypeUnsupported, CodeToolkitNotAttached, CodeParallelBranchUnsupported, CodeMapFormUnsupported, outputcontract.Code:
+	case CodeNodeTypeUnsupported, CodeToolkitNotAttached, CodeParallelBranchUnsupported, CodeMapFormUnsupported, CodeNodeSettingsInvalid, outputcontract.Code:
 		return api
 	}
 	if errors.Is(err, ErrInstructionsTooLarge) || errors.Is(err, ErrTooManyNodes) || errors.Is(err, ErrExpansionTooLarge) {
@@ -135,6 +135,12 @@ func check(instructions string, attached *[]string) error {
 	if root.Kind != yaml.MappingNode {
 		return nil
 	}
+	var state *yaml.Node
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if aliased(root.Content[i]).Value == "state" {
+			state = aliased(root.Content[i+1])
+		}
+	}
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		if aliased(root.Content[i]).Value != "nodes" {
 			continue
@@ -164,6 +170,9 @@ func check(instructions string, attached *[]string) error {
 			return err
 		}
 		if err := checkMapForms(declared); err != nil {
+			return err
+		}
+		if err := checkNodeSettings(declared, state); err != nil {
 			return err
 		}
 	}
@@ -357,7 +366,9 @@ func nodeFields(node *yaml.Node) map[string]*yaml.Node {
 	fields := make(map[string]*yaml.Node, 4)
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		switch key := aliased(node.Content[i]).Value; key {
-		case "id", "type", "toolkit_name", "branches", "worker", "reduction", "join", "on_error":
+		case "id", "type", "toolkit_name", "branches", "worker", "reduction", "join", "on_error",
+			// Node settings (5b-1): the block and the raw facts it is checked against.
+			settingsKey, "default_output", "recovery", "failure_handler", "output", "input_mapping":
 			fields[key] = aliased(node.Content[i+1])
 		}
 	}
