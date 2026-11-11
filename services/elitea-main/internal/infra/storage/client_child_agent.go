@@ -27,6 +27,11 @@ type ChildAgentAuthorization struct {
 	// ApplicationID and VersionID are the nested agent to run in the cloud.
 	ApplicationID int64
 	VersionID     int64
+	// TurnIsCloudAgent: the live turn answers for a cloud agent of a
+	// desktop thread (ADR-0050 decision 7f, issue 1806). The desktop does
+	// not run that agent; it relays the turn to the cloud, so the child is
+	// the turn's OWN agent version and no other.
+	TurnIsCloudAgent bool
 }
 
 // ChildAgentGrant is what the authorization resolved about the child.
@@ -67,6 +72,12 @@ func (service *ClientApplicationVersionService) AuthorizeChildAgent(
 	if !parent.valid() || !child.valid() || request.ActorID <= 0 || request.ActorID > math.MaxInt32 {
 		return ChildAgentGrant{}, ErrChildAgentNotInAgent
 	}
+	if request.TurnIsCloudAgent {
+		if child != parent {
+			return ChildAgentGrant{}, ErrChildAgentNotInAgent
+		}
+		return service.childGrant(ctx, child)
+	}
 	record, err := service.readChildAgentVersion(ctx, parent)
 	if err != nil {
 		return ChildAgentGrant{}, err
@@ -85,6 +96,14 @@ func (service *ClientApplicationVersionService) AuthorizeChildAgent(
 	if !nested {
 		return ChildAgentGrant{}, ErrChildAgentNotInAgent
 	}
+	return service.childGrant(ctx, child)
+}
+
+// childGrant reads the child version's name and type; a pipeline is
+// ErrChildAgentPipeline.
+func (service *ClientApplicationVersionService) childGrant(
+	ctx context.Context, child ClientVersionIdentity,
+) (ChildAgentGrant, error) {
 	childRecord, err := service.readChildAgentVersion(ctx, child)
 	if err != nil {
 		return ChildAgentGrant{}, err

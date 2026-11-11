@@ -14,7 +14,20 @@ When several agents take part in one conversation, each one gets **its own view*
 
 ## Narrowing the view
 
-An agent's version can narrow what it sees with a `context` block in its meta:
+In the agent editor, open **Advanced** and set **Conversation history**. It has two choices:
+
+- **What it reads:**
+  - *Everything it may see*
+  - *Since it joined*
+  - *Only messages addressed to it*
+  - *None (the current message only)*
+- **Side talk:**
+  - *Side talk it is a party to*
+  - *No side talk*
+
+Leaving both at their first option stores no block. If the server refuses the block, its refusal shows under the field after **Save**.
+
+The editor writes a `context` block to the version's meta:
 
 ```yaml
 context:
@@ -27,7 +40,7 @@ context:
 | `full` (default) | Every visible message it may see. |
 | `since_joined` | What was said after it joined the conversation, and its own answers. |
 | `addressed_only` | Messages addressed to it, its own answers, and the messages those replied to. |
-| `none` | No other messages: only the current message and the agent's own earlier exchanges with the person asking, which its own session keeps. |
+| `none` | No other messages: only the current message and the agent's own exchanges with the person asking since the mode was set, which its own session keeps. |
 
 `include_side_talk: none` leaves out even the side talk the agent took part in.
 
@@ -35,11 +48,53 @@ A version without the block is `full` and `party`. A save with an invalid block 
 
 ## "Share history from: now"
 
-When you add an agent to a conversation that is already going, you can set the participant's `entity_settings.context_history` to `since_joined`. The agent then sees only what is said from that moment on, plus its own answers. This only narrows: an agent whose version already sees less keeps its own mode. Any value other than `since_joined` or `full` is refused with 422.
+When you add an agent from the **+** menu to a conversation that already has messages, the chat asks **Share history from**:
 
-## What the filter does not undo
+- **The start.** The agent uses its version's own mode.
+- **Now.** The agent sees only what is said from that moment on, plus its own answers.
 
-The view decides what is sent to the agent on each turn. The agent's own session keeps what it already received. If an agent's mode is narrowed later, or a conversation started before this release, the session can still hold messages it saw earlier. Start a new conversation when that matters.
+"Now" sets the participant's `entity_settings.context_history` to `since_joined`. The join time is the moment you add it. If you remove the agent and add it again with "Now", the join time moves to the new add. Adding it again with "The start" keeps the old join time.
+
+This only narrows. An agent whose version already sees less keeps its own mode. Any value other than `since_joined` or `full` is refused with 422.
+
+## "What the agent saw"
+
+To see what an agent was given for one answer, open the answer's **⋯** menu and choose **What the agent saw**. It is read-only and shows:
+
+- **The view's settings:**
+  - the agent;
+  - its history mode, and the mode set for it in this conversation, if any;
+  - side talk;
+  - the window in tokens;
+  - the view's digest.
+- **Context:** the last context measurement the runtime reported for the answer (`measured`, `compacting` or `compacted`, with the estimated, usable and trigger token counts).
+- **Messages it saw.** Each visible message the agent was given, by author, time and id.
+- **Messages it did not see.** Each visible message left out, with the reason:
+  - side talk it is not a party to;
+  - side talk is off for this agent;
+  - history is off for this agent;
+  - sent before it joined;
+  - not addressed to it.
+
+The inspector never shows a message's text. It never shows another agent's tool calls or thinking, and it never shows the view of another agent or person. Only an answer's own agent has a view, and the server answers 404 for anything else. You need the same access as for the conversation: the `models.chat.messages.details` permission and access to the conversation. Answers from before this release, and replies that are not an agent's, show "No view was recorded for this answer."
+
+The endpoint is `GET /api/v2/elitea_core/message_context_view/prompt_lib/{project_id}/{message_id}`. Its response is not cached.
+
+The inspector shows what Main sent on that turn. When the agent's mode has changed, the agent's own session is started again from that view, so the model holds no message the view left out. See below.
+
+## When the mode changes
+
+The agent's own session is bound to the mode it was started under. On the agent's first turn after its mode changes (a new version with another `context.history`, or "share history from: now" set on its participant), the worker starts the session again from the current view. The model then sees exactly that view and the agent's own turns from then on, in conversation order:
+
+- **Narrowed:** messages the new mode leaves out are gone from the session, not only from what is sent.
+- **Widened:** the older messages the new mode lets in appear where they were said, not after the recent turns.
+- **Nothing changed:** the session is kept and the model gets the same bytes as before, so the provider's prompt cache still matches.
+
+Starting again costs one turn without the prompt cache, and drops the session's own compaction summary; the agent's compaction summarises the new view again if it is longer than the model's window. Changing to `none` also drops the agent's earlier exchanges with the person asking, as `none` sends no earlier messages.
+
+A session started before this check (and so possibly holding side talk it is no party to) is started again once, on its first turn after the upgrade.
+
+When the agent can start sub-agents, a session holding messages without their short `[message m-…]` ids (from before the ids, or a regenerated question) is started again too, so every message a brief can quote is one the agent saw under its id.
 
 ## How the worker checks it
 

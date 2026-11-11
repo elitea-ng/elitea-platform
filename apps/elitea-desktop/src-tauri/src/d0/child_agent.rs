@@ -205,12 +205,51 @@ impl Lane {
     }
 }
 
+/// At most this much of a cloud agent's answer is relayed into a desktop
+/// thread (ADR-0050 decision 7f); the commit's own bound is 1 MiB.
+pub const RELAY_RESULT_BYTES: usize = 512 * 1024;
+
 /// Run one child call to its end, the person's decisions included.
 pub async fn call(
     context: &ChildAgentContext,
     spec: &ChildAgentSpec,
     call_id: &str,
     task: &str,
+) -> Value {
+    call_bounded(context, spec, call_id, task, MAX_RESULT_BYTES).await
+}
+
+/// Relay a turn of a desktop thread's CLOUD agent (ADR-0050 decision 7f):
+/// its own agent `spec`, run in the cloud as a child of the turn, given
+/// `input` (the conversation's text, never the workspace). Its answer, at
+/// most [`RELAY_RESULT_BYTES`], or the call's error result.
+///
+/// # Errors
+///
+/// The child did not complete: the error result (`code`, `message`).
+pub async fn relay(
+    context: &ChildAgentContext,
+    spec: &ChildAgentSpec,
+    call_id: &str,
+    input: &str,
+) -> Result<String, Value> {
+    let result = call_bounded(context, spec, call_id, input, RELAY_RESULT_BYTES).await;
+    if result.get("status").and_then(Value::as_str) == Some("ok") {
+        return Ok(result
+            .get("result")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned());
+    }
+    Err(result)
+}
+
+async fn call_bounded(
+    context: &ChildAgentContext,
+    spec: &ChildAgentSpec,
+    call_id: &str,
+    task: &str,
+    limit: usize,
 ) -> Value {
     let ordinal = context.started.fetch_add(1, Ordering::SeqCst);
     if ordinal >= MAX_CHILDREN_PER_TURN {
@@ -252,7 +291,7 @@ pub async fn call(
             return result;
         }
     };
-    let end = follow(context, spec, call_id, &started).await;
+    let end = follow(context, spec, call_id, &started, limit).await;
     if !end.settled {
         // The child may still run (its reads failed, or its state is one
         // this app does not know): stop it rather than leave it running
@@ -370,6 +409,7 @@ async fn follow(
     spec: &ChildAgentSpec,
     call_id: &str,
     started: &Started,
+    limit: usize,
 ) -> FollowEnd {
     let remote = &context.remote;
     let mut interval = context.poll.first;
@@ -442,7 +482,7 @@ async fn follow(
             // Answered already: the resume has not reached the read yet.
             "interrupted" if interrupt_id.is_some() && interrupt_id == answered.as_deref() => {}
             "completed" => {
-                return FollowEnd::settled("completed", completed(&state, started), usage);
+                return FollowEnd::settled("completed", completed(&state, started, limit), usage);
             }
             "failed" => {
                 let message = match text("error") {
@@ -533,14 +573,14 @@ async fn follow(
     }
 }
 
-/// The model's result of a completed child: its answer (at most
-/// `MAX_RESULT_BYTES`), the tools it called, and its conversation.
-fn completed(state: &Value, started: &Started) -> Value {
+/// The model's result of a completed child: its answer (at most `limit`
+/// bytes), the tools it called, and its conversation.
+fn completed(state: &Value, started: &Started, limit: usize) -> Value {
     let output = state
         .get("output")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let clipped = clip_bytes(output, MAX_RESULT_BYTES);
+    let clipped = clip_bytes(output, limit);
     let calls: Vec<Value> = state
         .get("tool_calls_summary")
         .and_then(Value::as_array)

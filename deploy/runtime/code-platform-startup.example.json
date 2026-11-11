@@ -51,6 +51,7 @@
         "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "policy_revision": "python-js-v1",
         "timeout_seconds": 60,
+        "code_slots": 4,
         "platform_client": {
           "target": "sandbox.internal:9446",
           "audience": "dns:code-shared",
@@ -68,6 +69,7 @@
         "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "policy_revision": "python-js-v1",
         "timeout_seconds": 60,
+        "code_slots": 4,
         "platform_client": {
           "target": "sandbox.internal:9446",
           "audience": "dns:code-shared",
@@ -85,6 +87,7 @@
         "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "policy_revision": "python-js-v1",
         "timeout_seconds": 60,
+        "code_slots": 4,
         "platform_client": {
           "target": "sandbox.internal:9446",
           "audience": "dns:code-shared",
@@ -102,6 +105,7 @@
         "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "policy_revision": "cargo-execute-v2",
         "timeout_seconds": 60,
+        "code_slots": 4,
         "platform_client": {
           "target": "sandbox.internal:9453",
           "audience": "dns:rust-broker",

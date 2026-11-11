@@ -21,6 +21,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/elitea-ng/elitea-platform/libs/go/faults"
+	"github.com/elitea-ng/elitea-platform/libs/go/faults/logx"
 	"github.com/nats-io/nats.go"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/observability"
@@ -161,7 +164,10 @@ func main() {
 		os.Exit(code)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	// The shared handler (FU-299): err keeps today's string; typed faults add
+	// code, action and cause; every line in a request carries its
+	// server-generated support_ref. The level stays Info, as before.
+	logger := logx.New(os.Stdout, logx.Options{Describe: describeForLog})
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -418,6 +424,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The agent circuit breaker (ADR-0041 decision 2, #1498): the
 	// main.agent_breaker routine, every minute, off the request path.
 	if err := startAgentBreaker(ctx, pool, executionSuspensions, safetyMetrics, logger); err != nil {
+		return err
+	}
+	// The daily agent scorecard (ADR-0050 decision 5h, #1616): the
+	// main.agent_scorecard routine, paused in maintenance.
+	if err := startAgentScorecard(ctx, pool, executionSuspensions, logger); err != nil {
+		return err
+	}
+	// The workforce policy pass (ADR-0050 decisions 5c and 5k, #1617): the
+	// main.agent_workforce_policy routine, paused in maintenance; a project
+	// with no policy (the default) is never touched.
+	if err := startAgentWorkforcePolicy(ctx, pool, executionSuspensions, logger); err != nil {
 		return err
 	}
 
@@ -1679,6 +1696,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose the cloud executor adapters: %w", err)
 	}
 	var runtimeRoot *runtimecomposition.Runtime
+	// One outage tracker per process (FU-299 C3): the readiness monitor
+	// reports a dependency lost here, and the runtime's background runners
+	// log their failures from that dependency at DEBUG meanwhile.
+	outages := faults.NewTransitions()
 	var productionRuntime *api.ProductionRuntimeRoutes
 
 	// The run brief and the goal check of unattended chains (ADR-0045
@@ -2186,6 +2207,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose the delegation assertion mint: %w", mintErr)
 		}
 		runtimeRoot, err = runtimecomposition.New(ctx, runtimeConfig, runtimecomposition.Dependencies{
+			Outages:                          outages,
 			DelegationAssertions:             delegationAssertions,
 			AdmissionPool:                    runtimePools.Admission,
 			CredentialProfile:                credentialAdmission,
@@ -2399,6 +2421,21 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				runtimeConfig.SchedulerInstanceID, logger,
 			); scheduleErr != nil {
 				return fmt.Errorf("compose pipeline schedule job: %w", scheduleErr)
+			}
+			// The heartbeat of proactive agents (ADR-0050 decision 2): the
+			// same scheduler, the same start use case, the owner's mandate
+			// and the kill switch. Its triage shares the run brief's
+			// completer, which the gateway composition sets below.
+			if runBriefCompleter != nil {
+				if heartbeatErr := startAgentHeartbeatRunner(ctx, agentHeartbeatDeps{
+					Pool: runtimePools.Admission, Start: publicRoutes.AgentStart, Mandates: governedTriggers.Runs,
+					Gate: executionSuspensions.gate, Completer: runBriefCompleter,
+					Models:      lowTierModels{catalog: runBriefCatalog, publicProjectID: currentConfigurationsConfig.PublicProjectID},
+					Permissions: legacyrbac.NewPostgresResolver(pool), InstanceID: runtimeConfig.SchedulerInstanceID,
+					Logger: logger,
+				}); heartbeatErr != nil {
+					return fmt.Errorf("compose agent heartbeat job: %w", heartbeatErr)
+				}
 			}
 			// The server's hand-off of leftover steering messages: it starts
 			// the next turn through the same use case as the chat composer.
@@ -3007,6 +3044,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if monitorErr != nil {
 		return monitorErr
 	}
+	readinessMonitor.WithOutages(outages)
 	// Logs each dependency's loss and recovery once per outage, also when
 	// nothing probes Main. It ends with run, before the deferred pool closes,
 	// so it never reads a pool Main closed on its way out as an outage.
@@ -3022,6 +3060,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		ExecutionSuspensions:          executionSuspensions.handler,
 		MandateAttachments:            governedTriggers.Attachments,
+		AgentHeartbeatMandates:        governedTriggers.Runs,
 		CredentialReferencesAdmin:     credentialReferencesHandler,
 		AgentAssertionWellKnown:       eliteaNative.WellKnown,
 		GovernedMCPInbound:            governedMCPComposed.Inbound,

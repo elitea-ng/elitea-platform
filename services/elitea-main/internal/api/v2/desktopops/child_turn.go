@@ -241,6 +241,9 @@ func (h *childTurnHandler) start(writer http.ResponseWriter, request *http.Reque
 		ProjectID: projectID, ActorID: actor,
 		TurnApplicationID: turn.ApplicationID, TurnVersionID: turn.VersionID,
 		ApplicationID: body.ApplicationID, VersionID: body.VersionID,
+		// A cloud agent of a desktop thread (ADR-0050 decision 7f): the
+		// turn's own pinned agent, relayed; never another one.
+		TurnIsCloudAgent: turn.Cloud,
 	})
 	if err != nil {
 		call.outcome = "refused"

@@ -64,6 +64,7 @@ pub mod context;
 pub mod definition;
 pub mod environment;
 pub mod events;
+pub mod floor;
 pub mod framing;
 pub mod goal;
 pub mod idle;
@@ -84,5 +85,5 @@ pub mod tools;
 pub mod turn;
 pub mod unattended;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) mod tests;

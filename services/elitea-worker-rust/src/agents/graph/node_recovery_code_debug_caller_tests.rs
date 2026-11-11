@@ -344,3 +344,169 @@ async fn workspace_activation_preserves_visit_debug_and_typed_preparation_refusa
         ));
     }
 }
+
+// ---- W3-1: deadline admission and Code slots on the journaled path ----
+
+const ADMISSION_YAML: &str = "entry_point: code\nstate:\n  count: int\n  value: int\n  private: str\nnodes:\n  - id: code\n    type: code\n    language: rust\n    code: 'pub fn main(){}'\n    dependencies: |\n      [dependencies]\n      itoa = '1'\n    input: [value]\n    output: [count]\n    debug: true\n    transition: END\n";
+
+/// The fixture profile's `timeout_seconds` (30) plus the observation margin.
+fn admission_required() -> std::time::Duration {
+    std::time::Duration::from_secs(30)
+        + elitea_agent_runtime::graph::fanout::admission::CODE_OBSERVATION_MARGIN
+}
+
+struct AdmissionRun {
+    stopped: Result<adk_rust::graph::NodeOutput, GraphError>,
+    calls: Arc<std::sync::Mutex<Calls>>,
+    history: Vec<crate::agents::graph::node_recovery::AttemptOutcome>,
+    failure_code: Option<&'static str>,
+}
+
+/// One Code visit on the real remote journaled path. `recovering` marks the
+/// attempt Started first: its dispatch journal never answers, so the earlier
+/// claim may have submitted (the C2 case).
+async fn admission_run(
+    execution_deadline: tokio::time::Instant,
+    slots: &elitea_agent_runtime::graph::fanout::admission::CodeSlots,
+    recovering: bool,
+) -> AdmissionRun {
+    let pipeline =
+        crate::agents::graph::compiler::PipelineDefinition::from_yaml(ADMISSION_YAML).unwrap();
+    let definition = pipeline.original_code_definition_fixture("code").unwrap();
+    let digest = definition.validated_digest();
+    let calls = Arc::new(std::sync::Mutex::new(Calls::default()));
+    let main_rpc = Arc::new(
+        crate::transport::InputContentClient::with_original_code_visit_fixture_rpc(
+            OriginalVisitRpc(calls.clone()),
+        ),
+    );
+    let runtime = CodeRuntimeFactory::original_visit_admission_fixture(
+        main_rpc,
+        Some(Arc::new(Sink(calls.clone()))),
+        execution_deadline,
+        slots,
+    );
+    let store = factory();
+    let context = ctx();
+    let policy = NodeRecoveryPolicy::default();
+    let activation = NodeAttemptActivation::from_context("code", digest, &context).unwrap();
+    let journal = store.open(&activation, &policy).await.unwrap();
+    if recovering {
+        let original = journal.load().await.unwrap();
+        journal
+            .append(&original, original.ledger.start_attempt(90).unwrap(), None)
+            .await
+            .unwrap();
+    }
+    let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
+    let body = Arc::new(
+        CodeNode::new(definition, types(), runtime)
+            .unwrap()
+            .with_events(Some(sender)),
+    );
+    let mut node =
+        RecoverableNode::new(body, digest, policy, store, None).with_legacy_first_attempt();
+    node.clock = Arc::new(Clock(AtomicU64::new(100)));
+    let stopped = tokio::time::timeout(std::time::Duration::from_secs(600), node.execute(&context))
+        .await
+        .expect("the attempt ends; one slot is never taken twice");
+    let history = journal
+        .load()
+        .await
+        .unwrap()
+        .ledger
+        .history()
+        .iter()
+        .map(|entry| entry.outcome)
+        .collect();
+    AdmissionRun {
+        stopped,
+        calls,
+        history,
+        failure_code: receiver.try_failure_code().await,
+    }
+}
+
+/// D4 on the journaled path: exactly `timeout + margin` left is admitted (the
+/// original visit and the debug export run, and the attempt stops later at
+/// preparation); one millisecond less is refused typed before the visit, the
+/// journal or any submission, and no slot stays held.
+#[tokio::test(start_paused = true)]
+async fn journaled_path_admits_exactly_required_and_refuses_one_ms_less() {
+    let slots = elitea_agent_runtime::graph::fanout::admission::CodeSlots::new(1);
+    let now = tokio::time::Instant::now();
+    let admitted = admission_run(now + admission_required(), &slots, false).await;
+    assert_eq!(admitted.calls.lock().unwrap().order, ["visits", "debug"]);
+    assert_ne!(
+        admitted.failure_code,
+        Some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
+    );
+    assert_eq!(slots.available(), 1);
+
+    let refused = admission_run(
+        now + admission_required() - std::time::Duration::from_millis(1),
+        &slots,
+        false,
+    )
+    .await;
+    assert!(refused.stopped.is_err(), "a refused attempt stops the node");
+    assert!(
+        refused.calls.lock().unwrap().order.is_empty(),
+        "no original visit, debug export, journal row or submission"
+    );
+    assert_eq!(
+        refused.failure_code,
+        Some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
+    );
+    assert_eq!(refused.history.len(), 1, "one attempt, never retried");
+    assert!(matches!(
+        refused.history[0],
+        crate::agents::graph::node_recovery::AttemptOutcome::Failed { .. }
+    ));
+    assert_eq!(slots.available(), 1, "a refusal holds nothing");
+}
+
+/// C2: an attempt that may already have started (recovered Started, its
+/// dispatch journal unreadable, so a submission is possible) is reconciled,
+/// never refused by deadline admission, even with far less than
+/// `timeout + margin` left: it takes its slot and continues to the visit.
+#[tokio::test(start_paused = true)]
+async fn a_started_attempt_recovered_with_too_little_time_is_reconciled_not_refused() {
+    let slots = elitea_agent_runtime::graph::fanout::admission::CodeSlots::new(1);
+    let run = admission_run(
+        tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        &slots,
+        true,
+    )
+    .await;
+    assert_eq!(run.calls.lock().unwrap().order, ["visits", "debug"]);
+    assert_ne!(
+        run.failure_code,
+        Some(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
+    );
+    assert!(
+        run.stopped.unwrap().interrupt.is_some(),
+        "a possibly started attempt goes to reconciliation"
+    );
+    assert_eq!(slots.available(), 1);
+}
+
+/// The deadlock regression: with `slots = 1` one attempt takes its one slot
+/// once and keeps it through preparation; it ends (here at the preparation
+/// step) instead of waiting on itself.
+#[tokio::test(start_paused = true)]
+async fn one_attempt_takes_one_slot_through_preparation() {
+    let slots = elitea_agent_runtime::graph::fanout::admission::CodeSlots::new(1);
+    let run = admission_run(
+        tokio::time::Instant::now() + std::time::Duration::from_secs(3600),
+        &slots,
+        false,
+    )
+    .await;
+    assert_eq!(run.calls.lock().unwrap().order, ["visits", "debug"]);
+    assert!(
+        run.stopped.is_err(),
+        "the fixture has no preparation backend"
+    );
+    assert_eq!(slots.available(), 1);
+}

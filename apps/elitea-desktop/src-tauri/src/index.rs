@@ -1555,7 +1555,7 @@ pub async fn index_remove(
         .await?)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use elitea_local_index::service::NoEvents;

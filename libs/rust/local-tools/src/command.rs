@@ -331,12 +331,8 @@ pub fn search_path() -> Vec<PathBuf> {
 /// `None` when it names nothing executable.
 #[must_use]
 pub fn resolve_program(program: &str, cwd: &Path, search: &[PathBuf]) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let executable = |path: &Path| {
-        path.metadata()
-            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-    };
-    let candidate = if program.contains('/') {
+    let executable = |path: &Path| crate::sys::is_executable(path);
+    let candidate = if crate::sys::has_dir_part(program) {
         let path = Path::new(program);
         let path = if path.is_absolute() {
             path.to_path_buf()
@@ -349,10 +345,10 @@ pub fn resolve_program(program: &str, cwd: &Path, search: &[PathBuf]) -> Option<
     } else {
         search
             .iter()
-            .map(|dir| dir.join(program))
+            .flat_map(|dir| crate::sys::program_candidates(dir, program))
             .find(|path| executable(path))?
     };
-    std::fs::canonicalize(candidate).ok()
+    crate::sys::canonicalize(candidate).ok()
 }
 
 /// A command rule: an argv prefix. Tokens after the first compare exactly
@@ -452,7 +448,7 @@ impl CommandPattern {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::{CommandPattern, CommandShape, analyse};
 

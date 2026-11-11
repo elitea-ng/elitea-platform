@@ -315,6 +315,7 @@ impl ProductionTransportBundle {
                     .with_platform_client(config, client, preparation, policy, compiled)
                     .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
             }
+            factory.log_code_slots();
             Some(Arc::new(if let Some(profile) = compiled_profile {
                 factory.with_compiled_snapshots(profile)
             } else {

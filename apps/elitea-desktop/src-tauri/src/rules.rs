@@ -140,7 +140,7 @@ fn io(error: &std::io::Error) -> HostError {
 }
 
 fn stamp_of(path: &Path) -> Option<FileStamp> {
-    use std::os::unix::fs::MetadataExt as _;
+    use elitea_local_tools::sys::os::MetadataExt as _;
     let meta = fs::symlink_metadata(path).ok()?;
     Some((
         meta.modified().ok()?,
@@ -226,12 +226,15 @@ pub fn sanitize_proposal(file: RuleFile) -> (RuleFile, Vec<String>) {
 /// Read a private file: `None` when absent; refused (with why) when it is a
 /// symlink, not a regular file, another user's, or open to group/others.
 fn read_private(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    use elitea_local_tools::sys::os::MetadataExt as _;
     use std::io::Read as _;
-    use std::os::unix::fs::MetadataExt as _;
     let file = match crate::credentials_file::open_no_follow(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) if error.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error()) => {
+        Err(error)
+            if error.raw_os_error()
+                == Some(elitea_local_tools::sys::io::Errno::LOOP.raw_os_error()) =>
+        {
             return Err("the rules file is a symlink; it was not used".to_owned());
         }
         Err(error) => return Err(format!("the rules file cannot be read: {error}")),
@@ -240,7 +243,7 @@ fn read_private(path: &Path) -> Result<Option<Vec<u8>>, String> {
     if !meta.is_file() {
         return Err("the rules file is not a regular file; it was not used".to_owned());
     }
-    if meta.uid() != rustix::process::geteuid().as_raw() {
+    if meta.uid() != elitea_local_tools::sys::process::geteuid().as_raw() {
         return Err("the rules file belongs to another user; it was not used".to_owned());
     }
     if meta.mode() & 0o077 != 0 {
@@ -670,7 +673,7 @@ impl RuleSink for WorkspaceRuleSink {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 

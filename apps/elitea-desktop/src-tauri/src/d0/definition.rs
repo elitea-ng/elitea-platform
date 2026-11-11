@@ -307,6 +307,32 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
     })
 }
 
+/// A CLOUD agent of a desktop thread (ADR-0050 decision 7f): it runs in the
+/// cloud as a child of the turn, never here, so D0's own refusals (secrets,
+/// pipelines, tool kinds) do not apply; the cloud admits it. Only its model
+/// is read, for the commit's `model_name`; an unreadable one is left empty.
+#[must_use]
+pub fn admit_cloud(resolved: &ResolvedVersion) -> Admitted {
+    let details = &resolved.version_details;
+    let model = model_settings(details).unwrap_or(ModelSettings {
+        model_name: String::new(),
+        max_tokens: None,
+        temperature: None,
+        reasoning_effort: None,
+        pinned: true,
+    });
+    Admitted {
+        instructions: String::new(),
+        edit_profile: EditProfile::select(&model.model_name, None),
+        model,
+        remote_tools: Vec::new(),
+        child_agents: Vec::new(),
+        step_limit: DEFAULT_STEP_LIMIT,
+        version_details: details.clone(),
+        model_chosen: false,
+    }
+}
+
 impl Admitted {
     /// The workspace's own step limit (its settings), which replaces the
     /// default: it is the person's choice on their own machine.

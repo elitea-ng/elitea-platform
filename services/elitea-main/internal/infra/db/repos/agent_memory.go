@@ -403,23 +403,29 @@ func (s *AgentMemory) append(ctx context.Context, tx pgx.Tx, projectID int64, ac
 
 // ResolveAgentMemoryRecall is the recall at turn start
 // (agentexecution.AgentMemoryRecallResolver).
-func (s *AgentMemory) ResolveAgentMemoryRecall(ctx context.Context, request agentexecutionapp.AgentMemoryRecallRequest) (string, error) {
+func (s *AgentMemory) ResolveAgentMemoryRecall(ctx context.Context, request agentexecutionapp.AgentMemoryRecallRequest) (agentexecutionapp.AgentMemoryRecall, error) {
 	if request.ProjectID <= 0 || request.ApplicationID <= 0 || uuid.Validate(request.ConversationUUID) != nil {
-		return "", nil
+		return agentexecutionapp.AgentMemoryRecall{}, nil
 	}
 	candidates, err := s.ActiveAgentMemory(ctx, request.ProjectID, request.ApplicationID)
 	if err != nil || len(candidates) == 0 {
-		return "", err
+		return agentexecutionapp.AgentMemoryRecall{}, err
 	}
 	people, err := s.conversationPeople(ctx, request.ProjectID, request.ConversationUUID)
 	if err != nil {
-		return "", err
+		return agentexecutionapp.AgentMemoryRecall{}, err
 	}
 	present := make(map[int64]bool, len(people))
 	for id := range people {
 		present[id] = true
 	}
-	return agentmemory.Render(agentmemory.Select(candidates, present, request.UserInput, request.Settings), people), nil
+	// #1826: an entry about a person is selected only while that person is
+	// present, so the ids the run input carries pass the same rule.
+	selected := agentmemory.Select(candidates, present, request.UserInput, request.Settings)
+	return agentexecutionapp.AgentMemoryRecall{
+		Text:    agentmemory.Render(selected, people),
+		Entries: agentmemory.RecalledEntries(selected),
+	}, nil
 }
 
 // AgentMemoryEntry is one entry as the Memory routes show it.

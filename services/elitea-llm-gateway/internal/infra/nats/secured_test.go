@@ -72,6 +72,23 @@ func TestSecuredGatewayRunsOnTheChartsPermissions(t *testing.T) {
 	if total, err := c.ReadRateLimit(ctx, rl); err != nil || total != 1 {
 		t.Fatalf("ReadRateLimit = %d, %v", total, err)
 	}
+	// The first write to the cooldown KV bucket creates its file store and
+	// can outlast OpTimeout on a slow runner, the same way the budget stream
+	// does above (seen in CI as "TryAlertCooldown first = false, nats:
+	// unavailable: context deadline exceeded"). Warm the bucket on its own
+	// key: a Create that timed out may still have landed, so retrying the
+	// asserted key could read back "exists". Only a deadline is retried.
+	var coolErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		_, coolErr = c.TryAlertCooldown(ctx, "warmup.cooldown")
+		if coolErr == nil || !strings.Contains(coolErr.Error(), context.DeadlineExceeded.Error()) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if coolErr != nil {
+		t.Fatalf("TryAlertCooldown warm-up: %v\nserver log:\n%s", coolErr, s.Log())
+	}
 	if fire, err := c.TryAlertCooldown(ctx, "project.42.soft"); err != nil || !fire {
 		t.Fatalf("TryAlertCooldown first = %v, %v", fire, err)
 	}

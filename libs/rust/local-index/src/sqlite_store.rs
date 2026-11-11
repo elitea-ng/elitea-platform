@@ -428,7 +428,7 @@ impl SqliteGraphStore {
         fs::create_private_dir(dir)?;
         // Canonical, so the no-follow open refuses a symlinked FILE, not a
         // symlink higher up (macOS's `/var` is one).
-        let dir = std::fs::canonicalize(dir)?;
+        let dir = elitea_local_tools::sys::canonicalize(dir)?;
         let path = dir.join(FILE_NAME);
         fs::create_private_file(&path)?;
         for sidecar in sidecars(&path) {

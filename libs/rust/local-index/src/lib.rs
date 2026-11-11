@@ -45,9 +45,6 @@
     )
 )]
 
-#[cfg(not(unix))]
-compile_error!("elitea-local-index supports macOS and Linux; Windows is ADR-0029 phase D3");
-
 pub mod chunks;
 pub mod dense;
 pub mod embed_caps;

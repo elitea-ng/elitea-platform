@@ -21,7 +21,7 @@ pub mod agent;
 pub mod rpc;
 pub mod types;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 use std::path::PathBuf;

@@ -137,10 +137,15 @@ it('sends to, attributes the answer to, and gates attachments on the agent the h
   // "To:" names B.
   expect(await screen.findByTestId('chat-floor-target')).toHaveTextContent('Agent B');
 
-  // The attachments gate read B's version (attachments on), never A's.
-  await waitFor(() => expect(applicationReads).toContain('144'));
+  // The attachments gate read B's version (attachments on), never A's. The
+  // version read, then the gate's re-render, run behind the whole ChatBox
+  // tree: on a loaded coverage shard that took longer than the default 5 s
+  // (CI run 42854760710), so these two waits get the 10 s ceiling the other
+  // whole-widget tests use. A gate that never opens still fails.
+  const versionRead = { timeout: 10_000 };
+  await waitFor(() => expect(applicationReads).toContain('144'), versionRead);
   await user.click(screen.getByTestId('plus-menu-button'));
-  await waitFor(() => expect(screen.getByTestId('plus-menu-attachments')).toHaveAttribute('aria-disabled', 'false'));
+  await waitFor(() => expect(screen.getByTestId('plus-menu-attachments')).toHaveAttribute('aria-disabled', 'false'), versionRead);
   expect(applicationReads).not.toContain('143');
   await user.keyboard('{Escape}');
 

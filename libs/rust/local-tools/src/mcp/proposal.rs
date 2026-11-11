@@ -169,11 +169,10 @@ pub fn read(workspace: &Workspace) -> Vec<Proposal> {
 /// The first executable `name` in the absolute `search` directories (the
 /// path as found, not resolved: a launcher that reads its own name keeps it).
 fn on_path(name: &str, search: &[PathBuf]) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt as _;
-    search.iter().map(|dir| dir.join(name)).find(|path| {
-        path.metadata()
-            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-    })
+    search
+        .iter()
+        .flat_map(|dir| crate::sys::program_candidates(dir, name))
+        .find(|path| crate::sys::is_executable(path))
 }
 
 /// The servers of `proposal` named in `accept`, as entries of the
@@ -221,7 +220,7 @@ pub fn accept(
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

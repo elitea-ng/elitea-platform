@@ -78,6 +78,8 @@ export interface ApplicationVersionDraft {
     readonly output_contract?: OutputContract | null | undefined;
     /** ADR-0043 decision 5 — `'required'` makes the agent cite. Absent is off. */
     readonly citations?: 'required' | null | undefined;
+    /** ADR-0050 decision 9 — the conversation history block (`features/agents`' `ContextBlock`). Absent is the default. */
+    readonly context?: Readonly<Record<string, unknown>> | null | undefined;
   };
   /**
    * The model this version runs on — see `shared/api/agentLlmSettings.ts`

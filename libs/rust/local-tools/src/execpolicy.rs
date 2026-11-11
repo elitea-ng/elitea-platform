@@ -747,7 +747,7 @@ fn civil_date(days: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::{Example, PatternToken, PrefixRule, RuleDecision, RuleSet, civil_date};
 

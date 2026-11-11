@@ -3390,6 +3390,16 @@
       "usedBy": ["features/chat-messages/api/interruptLedgerApi.ts"]
     },
     {
+      "id": "chat.getMessageContextView",
+      "method": "GET",
+      "path": "/elitea_core/message_context_view/prompt_lib/{projectId}/{messageId}",
+      "operationId": "getMessageContextView",
+      "source": "generated",
+      "responseSchema": "MessageContextView",
+      "fixture": null,
+      "usedBy": ["features/chat-messages/api/contextViewApi.ts"]
+    },
+    {
       "id": "chat.decideExecutionInterrupt",
       "method": "POST",
       "path": "/elitea_core/task/prompt_lib/{projectId}/{responseMessageId}/interrupts/{interruptKey}/decision",
@@ -3764,6 +3774,42 @@
       ]
     },
     {
+      "id": "agentHeartbeat.get",
+      "method": "GET",
+      "path": "/elitea_core/agent_heartbeat/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "getAgentHeartbeat",
+      "source": "generated",
+      "responseSchema": "AgentHeartbeatSettings",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-heartbeat"
+      ]
+    },
+    {
+      "id": "agentHeartbeat.save",
+      "method": "PUT",
+      "path": "/elitea_core/agent_heartbeat/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "saveAgentHeartbeat",
+      "source": "generated",
+      "responseSchema": "AgentHeartbeatSettings",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-heartbeat"
+      ]
+    },
+    {
+      "id": "agentHeartbeat.history",
+      "method": "GET",
+      "path": "/elitea_core/agent_heartbeats/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "listAgentHeartbeats",
+      "source": "generated",
+      "responseSchema": "AgentHeartbeatList",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-heartbeat"
+      ]
+    },
+    {
       "id": "agentProposals.list",
       "method": "GET",
       "path": "/elitea_core/agent_proposals/prompt_lib/{projectId}",
@@ -3930,6 +3976,222 @@
       "fixture": null,
       "usedBy": [
         "features/agent-teams"
+      ]
+    },
+    {
+      "id": "agentWorkforce.agent",
+      "method": "GET",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/agents/{applicationId}",
+      "operationId": "getAgentWorkforce",
+      "source": "generated",
+      "responseSchema": "AgentWorkforceAgent",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.scorecards",
+      "method": "GET",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/agents/{applicationId}/scorecards",
+      "operationId": "listAgentScorecards",
+      "source": "generated",
+      "responseSchema": "ListAgentScorecards200",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.impact",
+      "method": "GET",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/agents/{applicationId}/impact",
+      "operationId": "getAgentWorkforceImpact",
+      "source": "generated",
+      "responseSchema": "AgentWorkforceImpact",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.reinstate",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/agents/{applicationId}/reinstate",
+      "operationId": "reinstateAgent",
+      "source": "generated",
+      "responseSchema": "AgentWorkforceAgent",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.list",
+      "method": "GET",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/proposals",
+      "operationId": "listAgentWorkforceProposals",
+      "source": "generated",
+      "responseSchema": "ListAgentWorkforceProposals200",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.propose",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/proposals",
+      "operationId": "proposeAgentWorkforceStage",
+      "source": "generated",
+      "responseSchema": "AgentWorkforceProposal",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.approve",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/proposals/{proposalId}/approve",
+      "operationId": "approveAgentWorkforceProposal",
+      "source": "generated",
+      "responseSchema": "AgentWorkforceProposal",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.reject",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/proposals/{proposalId}/reject",
+      "operationId": "rejectAgentWorkforceProposal",
+      "source": "generated",
+      "responseSchema": "AgentWorkforceProposal",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.askOwner",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/proposals/{proposalId}/ask_owner",
+      "operationId": "askOwnerAgentWorkforceProposal",
+      "source": "generated",
+      "responseSchema": "AgentWorkforceProposal",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.comment",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/proposals/{proposalId}/comment",
+      "operationId": "commentAgentWorkforceProposal",
+      "source": "generated",
+      "responseSchema": "AgentWorkforceProposal",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.appeal",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/proposals/{proposalId}/appeal",
+      "operationId": "appealAgentWorkforceProposal",
+      "source": "generated",
+      "responseSchema": "AgentWorkforceProposal",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.decideAppeal",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/proposals/{proposalId}/appeal/decide",
+      "operationId": "decideAgentWorkforceAppeal",
+      "source": "generated",
+      "responseSchema": "AgentWorkforceProposal",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.policy",
+      "method": "GET",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/policy",
+      "operationId": "getAgentWorkforcePolicy",
+      "source": "generated",
+      "responseSchema": "AgentWorkforcePolicy",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.setPolicy",
+      "method": "PUT",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/policy",
+      "operationId": "setAgentWorkforcePolicy",
+      "source": "generated",
+      "responseSchema": "AgentWorkforcePolicy",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.automaticActions",
+      "method": "GET",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/automatic_actions",
+      "operationId": "listAgentAutomaticActions",
+      "source": "generated",
+      "responseSchema": "ListAgentAutomaticActions200",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.undoAutoHire",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/automatic_actions/{actionId}/undo",
+      "operationId": "undoAgentAutoHire",
+      "source": "generated",
+      "responseSchema": "AgentAutomaticAction",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.keepAutoHire",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/automatic_actions/{actionId}/keep",
+      "operationId": "keepAgentAutoHire",
+      "source": "generated",
+      "responseSchema": "AgentAutomaticAction",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
+      ]
+    },
+    {
+      "id": "agentWorkforce.objectAction",
+      "method": "POST",
+      "path": "/elitea_core/agent_workforce/prompt_lib/{projectId}/automatic_actions/{actionId}/object",
+      "operationId": "objectAgentAutomaticAction",
+      "source": "generated",
+      "responseSchema": "AgentAutomaticAction",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-workforce"
       ]
     }
   ]

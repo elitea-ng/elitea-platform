@@ -47,7 +47,7 @@ A brief may contain at most 20 entries of each kind. The agent can pass only wha
 | --- | --- | --- |
 | `excerpts` | `quote` is an exact part of the text of the message `message_id`, as the agent reads it. A run of spaces or line breaks counts as one space. | `BRIEF_EXCERPT_NOT_VISIBLE` |
 | `attachments` | The id is one of this turn's attachments. | `BRIEF_ATTACHMENT_NOT_READABLE` |
-| `memory_entries` | `recall` gave the agent this entry earlier in the same turn. | `BRIEF_MEMORY_NOT_RECALLED` |
+| `memory_entries` | The agent was given this entry in the same turn: at the start of the turn, or from `recall`. | `BRIEF_MEMORY_NOT_RECALLED` |
 | `facts` | None: each fact is the agent's own words, at most 500 characters. | |
 
 ### Message ids for excerpts
@@ -64,6 +64,20 @@ The agent can quote the person's messages, other participants' messages in its v
 The sub-agent record keeps the chat message id of each quoted message, not the short id.
 
 A regenerated answer, a continued turn, or an addressed agent answering a message another agent answered first has no id on its current message. Quote the current message on a new turn.
+
+### Memory entry ids
+
+An agent with [agent memory](/how-tos/agents-pipelines/agent-memory/) is given its most relevant notes at the start of a turn. Each note starts with its id:
+
+```text
+- [memory 42, preference, pinned] The team wants short reports.
+```
+
+The agent names a note by that number in `memory_entries`, or by an `entry_id` that `recall` returned in the same turn. The platform sends the sub-agent the note as it is stored, not the text the agent wrote in the call. The ids of the notes given at the start of the turn travel with the run, so the check does not depend on the prompt text. A note about a person is given only while that person is in the conversation, so the agent can pass it on only then.
+
+The id depends on the note only, so the notes have the same text on every turn and prompt caching still works. If a note's text or a person's name contains `[memory`, the agent sees `&#91;memory` there instead, so a note cannot fake the id of another note.
+
+A regenerated or continued answer is given no notes at the start of the turn. It can pass on only notes that `recall` returns. An agent that wakes when its sub-agents finish keeps the notes its turn started with. A note the agent deletes with `forget` can no longer be passed on in the same turn.
 
 A refusal is a tool result that the model reads. No sub-agent starts. The sub-agent gets the checked brief before its task, marked as information and not instructions. The brief counts against the sub-agent's token budget.
 
