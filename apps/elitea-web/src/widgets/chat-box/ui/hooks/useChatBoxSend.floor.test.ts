@@ -9,8 +9,8 @@ import { addressedTo } from '@elitea/client-core/conversation';
 import { ChatSendRequest } from '@/shared/api/generated/model/chatSendRequest.zod';
 
 import { buildDefaultMessagePayload } from './useChatBoxHandlers.helpers';
-import { addressedField, addressedIdsOf, targetForAddressed } from './useChatBoxSend.floor';
-import { buildStartBody } from './useChatBoxSend.helpers';
+import { addressedField, addressedIdsOf, NO_TARGET, resolvedTarget, targetForAddressed } from './useChatBoxSend.floor';
+import { buildChatStreamContext, buildStartBody } from './useChatBoxSend.helpers';
 
 const base = {
   conversationUuid: '3f8a3d4e-2b1c-4c5d-8e9f-0a1b2c3d4e5f',
@@ -62,16 +62,48 @@ describe('targetForAddressed', () => {
   const doctor = { id: '13', entity_name: 'application' };
   const participants = [mira, doctor];
 
+  const toDoctor = resolvedTarget(doctor);
+
   it('keeps the composer target when it is one of the addressees', () => {
-    expect(targetForAddressed(doctor, participants, [12, 13])).toBe(doctor);
+    expect(targetForAddressed(toDoctor, participants, [12, 13])).toBe(toDoctor);
   });
 
   it('sends to the first addressee when the target is not addressed', () => {
-    expect(targetForAddressed(doctor, participants, [12])).toBe(mira);
-    expect(targetForAddressed(undefined, participants, [13])).toBe(doctor);
+    expect(targetForAddressed(toDoctor, participants, [12])).toEqual({ participant: mira, participantId: 12 });
+    expect(targetForAddressed(NO_TARGET, participants, [13])).toEqual(toDoctor);
   });
 
   it('keeps the target when nothing is addressed', () => {
-    expect(targetForAddressed(doctor, participants, [])).toBe(doctor);
+    expect(targetForAddressed(toDoctor, participants, [])).toBe(toDoctor);
+  });
+});
+
+describe('resolvedTarget (issue 1859)', () => {
+  it('reads a positive id once, from a number or its decimal string', () => {
+    expect(resolvedTarget({ id: '13' }).participantId).toBe(13);
+    expect(resolvedTarget({ id: 13 }).participantId).toBe(13);
+  });
+
+  it('gives a zero, negative or non-numeric id no participant id, but keeps the row', () => {
+    for (const id of [0, '0', -4, 'abc', '', null, undefined, 1.5]) {
+      const row = { id, entity_name: 'application' };
+      expect(resolvedTarget(row)).toEqual({ participant: row, participantId: undefined });
+    }
+  });
+
+  it('is NO_TARGET for nothing', () => {
+    expect(resolvedTarget(undefined)).toBe(NO_TARGET);
+  });
+});
+
+describe('the stream identity reads the target id one way (issue 1859)', () => {
+  it('attributes the answer to the resolved id, as a string', () => {
+    expect(buildChatStreamContext({ target: resolvedTarget({ id: 13 }) }).participantId).toBe('13');
+    expect(buildChatStreamContext({ target: resolvedTarget({ id: '13' }) }).participantId).toBe('13');
+  });
+
+  it('attributes nothing to a row with no positive id, as the start body and "To:" do', () => {
+    expect(buildChatStreamContext({ target: resolvedTarget({ id: 0 }) })).not.toHaveProperty('participantId');
+    expect(buildChatStreamContext({ target: resolvedTarget({ id: 'abc' }) })).not.toHaveProperty('participantId');
   });
 });

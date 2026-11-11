@@ -28,6 +28,7 @@ import type { useChatBoxModelSelection } from './hooks/useChatBoxModelSelection'
 import type { useChatBoxParticipant } from './hooks/useChatBoxParticipant';
 import type { useChatBoxState } from './hooks/useChatBoxState';
 import type { ChatBoxUnattended } from './hooks/useChatBoxUnattended';
+import type { ResolvedTarget } from './hooks/useResolvedTarget';
 
 type NewChatInputHandle = ComponentRef<typeof NewChatInput>;
 
@@ -51,7 +52,7 @@ interface ChatBoxComposerProps {
     readonly messageCount: number;
   };
   readonly participant: Pick<ReturnType<typeof useChatBoxParticipant>, 'participantForEditor' | 'agentEditorParticipantDetails' | 'normalisedParticipants'> & {
-    readonly target: unknown;
+    readonly target: ResolvedTarget;
     readonly onChangeParticipant: (participant: unknown) => void;
     readonly onSelectVersion: (version: Parameters<NonNullable<ReturnType<typeof buildAgentEditorProps>['onSelectVersion']>>[0]) => Promise<unknown>;
     readonly entityActions: ReturnType<typeof useAddEntityParticipant>;
