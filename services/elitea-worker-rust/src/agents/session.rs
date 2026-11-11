@@ -1043,6 +1043,11 @@ pub(crate) struct OrdinaryNativeAgentPlan {
 }
 
 impl OrdinaryNativeAgentPlan {
+    /// The claimed execution and its generation (FU-323a refusal lines).
+    pub(super) fn execution_ids(&self) -> (&str, u64) {
+        (&self.execution_id, self.generation)
+    }
+
     /// FU-265: name the paused execution a continuation re-enters.
     pub(super) fn with_paused_writer(
         mut self,
@@ -1458,7 +1463,8 @@ impl NativeSessionBackend {
                 after: None,
             })
             .await
-            .map_err(|_| dependency_unavailable())?;
+            // Delta 4: classified as every store read, a transient one marked.
+            .map_err(|error| agent_frontier::store_failure(error.code))?;
         super::model_checkpoint::ModelCheckpointWriter::new(
             sessions,
             plan.execution_id.clone(),
@@ -2448,8 +2454,8 @@ fn recovery_evidence_digest<C: serde::Serialize>(
 #[path = "session_agent_frontier.rs"]
 mod agent_frontier;
 pub(crate) use agent_frontier::{
-    AgentFrontierProof, FrozenAgents, is_agent_frontier_cause, is_transient_inspect_failure,
-    reclaim_inspect_failure,
+    AgentFrontierProof, FrozenAgents, agent_frontier_refusal, is_agent_frontier_cause,
+    is_transient_inspect_failure, reclaim_inspect_failure,
 };
 
 /// FU-269: the pause a continuation's `continuing` record names (E3).
@@ -5409,32 +5415,29 @@ fn dependency_unavailable() -> NativeAgentAssemblyError {
 }
 
 fn session_activation_error(error: &PostgresSessionError) -> NativeAgentAssemblyError {
-    session_code_error(error.code())
-}
-
-/// A session failure by its stable code (`PostgresSessionError::code`, also
-/// the `AdkError` code a scope open returns): one classification for the root
-/// activation and the FU-323a proof's scope open (round 1 #1). A transient
-/// failure carries the internal storage cause only the reclaim inspect turns
-/// into a retained one (round 1 #5).
-fn session_code_error(code: &str) -> NativeAgentAssemblyError {
-    let kind = match code {
-        "session.invalid_configuration" => NativeAgentAssemblyErrorCode::InvalidConfiguration,
-        "session.invalid_scope" | "session.writer_not_current" => {
+    let code = match error {
+        PostgresSessionError::InvalidConfiguration => {
+            NativeAgentAssemblyErrorCode::InvalidConfiguration
+        }
+        PostgresSessionError::InvalidScope | PostgresSessionError::WriterNotCurrent => {
             NativeAgentAssemblyErrorCode::AuthorizationFailed
         }
-        "session.resource_exhausted" => NativeAgentAssemblyErrorCode::ResourceExhausted,
-        "session.corrupt_state" | "session.event_conflict" => {
+        PostgresSessionError::ResourceExhausted => NativeAgentAssemblyErrorCode::ResourceExhausted,
+        PostgresSessionError::CorruptStoredState | PostgresSessionError::EventConflict => {
             NativeAgentAssemblyErrorCode::InvalidResult
         }
-        _ => NativeAgentAssemblyErrorCode::DependencyUnavailable,
+        PostgresSessionError::StorageUnavailable { .. }
+        | PostgresSessionError::StorageFailure { .. } => {
+            NativeAgentAssemblyErrorCode::DependencyUnavailable
+        }
     };
-    let error =
-        NativeAgentAssemblyError::new(kind, "the claim-bound native agent session is unavailable");
-    if code == "session.storage_unavailable" {
-        error.with_cause(agent_frontier::STORAGE_UNAVAILABLE_CAUSE, None)
+    let failure =
+        NativeAgentAssemblyError::new(code, "the claim-bound native agent session is unavailable");
+    // Only the reclaim inspect turns this internal mark into a retained cause.
+    if matches!(error, PostgresSessionError::StorageUnavailable { .. }) {
+        failure.with_cause(agent_frontier::STORAGE_UNAVAILABLE_CAUSE, None)
     } else {
-        error
+        failure
     }
 }
 

@@ -1111,12 +1111,7 @@ impl PipelineNativeAgentAssembler {
                 // Agent its step started with, never an edited one. Main
                 // recomputes the digest from the version's current content.
                 if let Some(reentry) = &runtime.root_reentry {
-                    require_unchanged_agent(
-                        &reentry.definitions_for(node),
-                        definition,
-                        runtime.context.execution_id(),
-                        node,
-                    )?;
+                    reentry.require_unchanged_agent(node, definition)?;
                 }
                 let scope = scopes.bind_application(
                     "",
@@ -1460,7 +1455,8 @@ impl PipelineNativeAgentAssembler {
                     .await?;
                 // FU-323a: a root Agent node re-enters only the started call
                 // this inspect proved, bound into the evidence Main grants.
-                root_reentry = scoped_runtime::RootAgentReentry::from_proofs(&proofs);
+                root_reentry =
+                    scoped_runtime::RootAgentReentry::from_proofs(&proofs, plan.execution_ids());
                 // A lost wake, or a lost continuation (FU-269), runs again as
                 // itself; any other frontier resumes from the checkpoint.
                 wake_rerun = matches!(
@@ -2154,37 +2150,6 @@ impl super::session::FrozenRecoveryLevel for RootRecoveryLevel<'_> {
         }
         super::session::FrozenRecoveryLevel::child(self.children, alias)
     }
-}
-
-/// FU-323a review (b): every proven re-entry of `node` was stamped with the
-/// saved Agent definition `current` Main serves now. An unstamped receipt or a
-/// missing digest proves nothing, so it is refused too (fail closed).
-fn require_unchanged_agent(
-    started: &[Option<[u8; 32]>],
-    current: Option<[u8; 32]>,
-    execution_id: &str,
-    node: &str,
-) -> Result<(), NativeAgentAssemblyError> {
-    if started
-        .iter()
-        .all(|started| started.is_some() && *started == current)
-    {
-        return Ok(());
-    }
-    let code = elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_CHANGED;
-    elitea_faults::fault!(
-        tracing::Level::WARN,
-        code = code,
-        event = "pipeline_recovery_frontier_refused",
-        execution_id = execution_id,
-        node_id = node,
-        support_ref = execution_id
-    );
-    Err(NativeAgentAssemblyError::new(
-        NativeAgentAssemblyErrorCode::InvalidConfiguration,
-        "the saved agent changed since its step started",
-    )
-    .with_cause(code.as_str(), None))
 }
 
 /// The attachments Main froze as saved Agents (`agent_type == "agent"`, as

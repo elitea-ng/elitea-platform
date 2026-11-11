@@ -149,6 +149,12 @@ pub(crate) struct PipelineApplicationNodeRuntime {
     agent_definition: Option<[u8; 32]>,
 }
 
+/// A proven re-entry's `(node, step, call_id)`.
+type ReentryKey = (String, usize, String);
+/// The definition the call started with (if stamped), and whether the
+/// re-entry serves a stored answer.
+type ProvenReentry = (Option<[u8; 32]>, bool);
+
 /// FU-323a (C1): the root saved-Agent calls this claim's inspect step proved
 /// re-enterable, by `(node, step, call_id)`. Each is admitted at most once per
 /// assembly; a second visit within the claim takes today's refusal. A second
@@ -157,15 +163,19 @@ pub(crate) struct PipelineApplicationNodeRuntime {
 /// Main grants one digest per claim (`model_checkpoint_authority.go`).
 pub(crate) struct RootAgentReentry {
     /// Each proven re-entry, with the saved Agent definition its receipt was
-    /// stamped with (`None`: unstamped, which proves nothing).
-    proven: std::collections::BTreeMap<(String, usize, String), Option<[u8; 32]>>,
+    /// stamped with (`None`: unstamped, which proves nothing) and whether it
+    /// serves a stored answer (runs no model).
+    proven: std::collections::BTreeMap<ReentryKey, ProvenReentry>,
     taken: std::sync::Mutex<std::collections::BTreeSet<(String, usize, String)>>,
+    execution_id: String,
+    generation: u64,
 }
 
 impl RootAgentReentry {
     /// The re-entries `proofs` admit, or `None` when they admit none.
     pub(crate) fn from_proofs(
         proofs: &[crate::agents::session::AgentFrontierProof],
+        (execution_id, generation): (&str, u64),
     ) -> Option<Arc<Self>> {
         let proven = proofs
             .iter()
@@ -173,7 +183,7 @@ impl RootAgentReentry {
                 proof.reentry().map(|(node, step, call_id)| {
                     (
                         (node.to_owned(), step, call_id.to_owned()),
-                        proof.agent_definition(),
+                        (proof.agent_definition(), proof.serves_answer()),
                     )
                 })
             })
@@ -182,18 +192,40 @@ impl RootAgentReentry {
             Arc::new(Self {
                 proven,
                 taken: std::sync::Mutex::default(),
+                execution_id: execution_id.to_owned(),
+                generation,
             })
         })
     }
 
-    /// The saved Agent definitions the proven re-entries of `node` started
-    /// with; empty when none is proven for it.
-    pub(crate) fn definitions_for(&self, node: &str) -> Vec<Option<[u8; 32]>> {
-        self.proven
-            .iter()
-            .filter(|((proven, _, _), _)| proven == node)
-            .map(|(_, definition)| *definition)
-            .collect()
+    /// FU-323a review (b), delta 1: every proven re-entry of `node` that runs
+    /// the Agent again continues the definition its step started with,
+    /// `current` (Main's digest now). A re-entry serving a stored answer runs
+    /// nothing, so an edit cannot change it. A missing stamp or digest proves
+    /// nothing: refused as unproven, never as an edit.
+    pub(crate) fn require_unchanged_agent(
+        &self,
+        node: &str,
+        current: Option<[u8; 32]>,
+    ) -> Result<(), crate::agents::runtime::NativeAgentAssemblyError> {
+        for ((proven, _, _), (started, answered)) in &self.proven {
+            if proven != node || *answered {
+                continue;
+            }
+            let code = match (started, current) {
+                (Some(started), Some(current)) if *started == current => continue,
+                (Some(_), Some(_)) => {
+                    elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_CHANGED
+                }
+                _ => elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_UNPROVEN,
+            };
+            return Err(crate::agents::session::agent_frontier_refusal(
+                (&self.execution_id, self.generation),
+                node,
+                code,
+            ));
+        }
+        Ok(())
     }
 
     /// Admit the proven re-entry `(node, step, call_id)` once.

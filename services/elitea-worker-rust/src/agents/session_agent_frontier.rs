@@ -85,9 +85,15 @@ impl AgentFrontierProof {
         self.agent_definition
     }
 
+    /// Whether the re-entry serves the Agent's stored answer (runs no model).
+    pub(crate) const fn serves_answer(&self) -> bool {
+        matches!(self.class, AgentFrontierClass::Answered(_))
+    }
+
     /// The evidence of this proof Main's grant binds (`recovery.v3`): ids,
-    /// the started definition digest, the class and a checkpoint digest or
-    /// event id. No content.
+    /// the class and a checkpoint digest or event id. No content. The started
+    /// definition stamp is bound already: it is in the receipt the root row's
+    /// evidence carries.
     pub(crate) fn evidence(&self) -> Value {
         let (class, bound) = match &self.class {
             AgentFrontierClass::NotStarted => ("not_started", Value::Null),
@@ -100,7 +106,6 @@ impl AgentFrontierProof {
             "node": self.node,
             "alias": self.alias,
             "application": [self.application.0, self.application.1],
-            "agent_definition": self.agent_definition,
             "step": self.step,
             "call_id": self.call_id,
             "class": class,
@@ -129,15 +134,30 @@ impl AgentFrontierProof {
 
 /// The ids-only operator line of an Agent-frontier refusal.
 fn log_refusal(plan: &OrdinaryNativeAgentPlan, node: &str, code: elitea_faults::Code) {
+    log_refusal_for(plan.execution_ids(), node, code);
+}
+
+fn log_refusal_for((execution_id, generation): (&str, u64), node: &str, code: elitea_faults::Code) {
     elitea_faults::fault!(
         tracing::Level::WARN,
         code = code,
         event = "pipeline_recovery_frontier_refused",
-        execution_id = %plan.execution_id,
-        generation = plan.generation,
+        execution_id = execution_id,
+        generation = generation,
         node_id = node,
-        support_ref = %plan.execution_id
+        support_ref = execution_id
     );
+}
+
+/// A typed Agent-frontier refusal with its ids-only operator line, for the
+/// checks that run at assembly (the saved Agent's definition, delta 1c).
+pub(crate) fn agent_frontier_refusal(
+    ids: (&str, u64),
+    node: &str,
+    code: elitea_faults::Code,
+) -> NativeAgentAssemblyError {
+    log_refusal_for(ids, node, code);
+    invalid_configuration().with_cause(code.as_str(), None)
 }
 
 /// A typed Agent-frontier refusal with its operator line.
@@ -239,7 +259,7 @@ impl PipelineStateServices {
             .inspect_agent_scope(plan.session_identity()?, &child, agent_name, compacts)
             .await
             // Round 1 #1: classified exactly as the session's activation is.
-            .map_err(|error| super::session_code_error(error.code))?;
+            .map_err(|error| store_failure(error.code))?;
         Ok(match state {
             AgentScopeState::Absent => AgentFrontierClass::Fresh,
             AgentScopeState::Restorable(digest) => AgentFrontierClass::Restorable(digest),
@@ -287,6 +307,7 @@ pub(crate) fn is_agent_frontier_cause(code: &str) -> bool {
         elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_FOREIGN_EXECUTION,
         elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_SESSION_WITHOUT_CHECKPOINT,
         elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_CHANGED,
+        elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_UNPROVEN,
     ]
     .iter()
     .any(|cause| cause.as_str() == code)
@@ -298,25 +319,46 @@ pub(crate) fn is_agent_frontier_cause(code: &str) -> bool {
 /// turns it into the retained cause ([`reclaim_inspect_failure`], round 1 #5).
 pub(super) const STORAGE_UNAVAILABLE_CAUSE: &str = "agent_state.storage_unavailable";
 
-/// A storage failure of an inspect read: the terminal `DependencyUnavailable`
-/// it always was, marked transient when the store says so.
-pub(super) fn storage_failure(code: &str) -> NativeAgentAssemblyError {
+/// The one classifier of a store failure carried as a code string (a scope
+/// open's `AdkError`, a graph checkpoint read): a session code is classified
+/// exactly as `session_activation_error` classifies that session error (a
+/// writer loss or invalid scope is a lost writer); any other code is the
+/// terminal `DependencyUnavailable` it always was. A transient failure of
+/// either store carries [`STORAGE_UNAVAILABLE_CAUSE`].
+pub(super) fn store_failure(code: &str) -> NativeAgentAssemblyError {
+    let session = match code {
+        "session.invalid_configuration" => Some(NativeAgentAssemblyErrorCode::InvalidConfiguration),
+        "session.invalid_scope" | "session.writer_not_current" => {
+            Some(NativeAgentAssemblyErrorCode::AuthorizationFailed)
+        }
+        "session.resource_exhausted" => Some(NativeAgentAssemblyErrorCode::ResourceExhausted),
+        "session.corrupt_state" | "session.event_conflict" => {
+            Some(NativeAgentAssemblyErrorCode::InvalidResult)
+        }
+        "session.storage_unavailable" | "session.storage_failure" => {
+            Some(NativeAgentAssemblyErrorCode::DependencyUnavailable)
+        }
+        _ => None,
+    };
+    let failure = session.map_or_else(dependency_unavailable, |kind| {
+        NativeAgentAssemblyError::new(kind, "the claim-bound native agent session is unavailable")
+    });
     if matches!(
         code,
         "session.storage_unavailable" | "checkpoint.storage_unavailable"
     ) {
-        dependency_unavailable().with_cause(STORAGE_UNAVAILABLE_CAUSE, None)
+        failure.with_cause(STORAGE_UNAVAILABLE_CAUSE, None)
     } else {
-        dependency_unavailable()
+        failure
     }
 }
 
-/// [`storage_failure`] for a graph checkpoint read: the checkpointer puts its
+/// [`store_failure`] for a graph checkpoint read: the checkpointer puts its
 /// stable code first in the message (`postgres_checkpointer.rs`).
 pub(super) fn checkpoint_load_failure(error: &GraphError) -> NativeAgentAssemblyError {
     match error {
         GraphError::CheckpointError(message) => {
-            storage_failure(message.split(':').next().unwrap_or_default())
+            store_failure(message.split(':').next().unwrap_or_default())
         }
         _ => dependency_unavailable(),
     }
@@ -477,7 +519,8 @@ mod tests {
                 AgentFrontierClass::Completed,
             ),
         ];
-        let reentry = RootAgentReentry::from_proofs(&proofs).expect("one admitted re-entry");
+        let reentry = RootAgentReentry::from_proofs(&proofs, ("execution-1", 3))
+            .expect("one admitted re-entry");
         assert!(!reentry.take("delegate", 3, "call-1"), "another step");
         assert!(!reentry.take("delegate", 2, "call-9"), "another call");
         assert!(!reentry.take("third", 2, "call-3"), "a completed receipt");
@@ -491,21 +534,21 @@ mod tests {
             AgentFrontierClass::Answered("event-1".into()),
         ] {
             let proof = AgentFrontierProof::for_tests("delegate", 2, Some("call-1"), class);
-            assert!(RootAgentReentry::from_proofs(&[proof]).is_some());
+            assert!(RootAgentReentry::from_proofs(&[proof], ("execution-1", 3)).is_some());
         }
-        assert!(RootAgentReentry::from_proofs(&proofs[1..]).is_none());
-        assert!(RootAgentReentry::from_proofs(&[]).is_none());
+        assert!(RootAgentReentry::from_proofs(&proofs[1..], ("execution-1", 3)).is_none());
+        assert!(RootAgentReentry::from_proofs(&[], ("execution-1", 3)).is_none());
     }
 
     /// C2: only the stores' transient failure is retained; everything else
     /// stays the terminal it was.
     #[test]
     fn only_a_transient_storage_failure_is_retained() {
-        assert!(!is_transient_inspect_failure(&storage_failure(
+        assert!(!is_transient_inspect_failure(&store_failure(
             "session.storage_unavailable"
         )));
         assert!(is_transient_inspect_failure(&reclaim_inspect_failure(
-            storage_failure("session.storage_unavailable")
+            store_failure("session.storage_unavailable")
         )));
         for code in [
             "session.storage_failure",
@@ -514,12 +557,8 @@ mod tests {
             "session.writer_not_current",
             "checkpoint.corrupt_state",
         ] {
-            let error = reclaim_inspect_failure(storage_failure(code));
+            let error = reclaim_inspect_failure(store_failure(code));
             assert!(!is_transient_inspect_failure(&error), "{code}");
-            assert_eq!(
-                error.code(),
-                NativeAgentAssemblyErrorCode::DependencyUnavailable
-            );
         }
         assert!(is_transient_inspect_failure(&reclaim_inspect_failure(checkpoint_load_failure(
             &GraphError::CheckpointError(
@@ -598,6 +637,95 @@ mod tests {
         )));
     }
 
+    /// Delta 3: the string classifier and the activation's exhaustive match
+    /// agree on every session error.
+    #[test]
+    fn the_string_classifier_agrees_with_the_session_activation() {
+        use crate::state::PostgresSessionError as E;
+        for error in [
+            E::InvalidConfiguration,
+            E::InvalidScope,
+            E::ResourceExhausted,
+            E::WriterNotCurrent,
+            E::EventConflict,
+            E::CorruptStoredState,
+            E::StorageUnavailable {
+                source: sqlx::Error::PoolTimedOut,
+            },
+            E::StorageFailure {
+                source: sqlx::Error::RowNotFound,
+            },
+        ] {
+            let by_code = store_failure(error.code());
+            let by_variant = super::super::session_activation_error(&error);
+            assert_eq!(by_code.code(), by_variant.code(), "{}", error.code());
+            assert_eq!(
+                by_code.to_string(),
+                by_variant.to_string(),
+                "{}",
+                error.code()
+            );
+            assert_eq!(
+                by_code
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code),
+                by_variant
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code),
+                "{}",
+                error.code()
+            );
+        }
+    }
+
+    /// Delta 1: an Answered re-entry is never refused for an edit; a missing
+    /// stamp or digest is unproven, a different digest changed.
+    #[test]
+    fn the_definition_check_spares_answers_and_names_unproven_apart() {
+        use crate::agents::pipeline::scoped_runtime::RootAgentReentry;
+        let mut restorable = AgentFrontierProof::for_tests(
+            "delegate",
+            2,
+            Some("call-1"),
+            AgentFrontierClass::Restorable([1; 32]),
+        );
+        let started = restorable.agent_definition;
+        let cause = |proof: &AgentFrontierProof, current| {
+            RootAgentReentry::from_proofs(std::slice::from_ref(proof), ("execution-1", 3))
+                .expect("a re-entry")
+                .require_unchanged_agent("delegate", current)
+                .err()
+                .and_then(|error| {
+                    error
+                        .cause()
+                        .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+                })
+        };
+        assert_eq!(cause(&restorable, started), None);
+        assert_eq!(
+            cause(&restorable, Some([2; 32])),
+            Some(elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_CHANGED.as_str())
+        );
+        assert_eq!(
+            cause(&restorable, None),
+            Some(elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_UNPROVEN.as_str())
+        );
+        restorable.agent_definition = None;
+        assert_eq!(
+            cause(&restorable, Some([2; 32])),
+            Some(elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_UNPROVEN.as_str())
+        );
+        let mut answered = AgentFrontierProof::for_tests(
+            "delegate",
+            2,
+            Some("call-1"),
+            AgentFrontierClass::Answered("event-1".into()),
+        );
+        assert_eq!(cause(&answered, Some([2; 32])), None);
+        answered.agent_definition = None;
+        assert_eq!(cause(&answered, None), None);
+    }
+
     /// Round 1 #1: a scope open's writer loss or invalid scope is a lost
     /// writer, exactly as the session's activation classifies it.
     #[test]
@@ -632,14 +760,10 @@ mod tests {
                 NativeAgentAssemblyErrorCode::DependencyUnavailable,
             ),
         ] {
-            assert_eq!(
-                super::super::session_code_error(code).code(),
-                expected,
-                "{code}"
-            );
+            assert_eq!(store_failure(code).code(), expected, "{code}");
         }
         assert!(is_transient_inspect_failure(&reclaim_inspect_failure(
-            super::super::session_code_error("session.storage_unavailable")
+            store_failure("session.storage_unavailable")
         )));
     }
 
@@ -654,6 +778,7 @@ mod tests {
             elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_FOREIGN_EXECUTION,
             elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_SESSION_WITHOUT_CHECKPOINT,
             elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_CHANGED,
+            elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_UNPROVEN,
         ] {
             assert!(is_agent_frontier_cause(code.as_str()));
             assert_eq!(

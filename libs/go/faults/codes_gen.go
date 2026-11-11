@@ -58,6 +58,8 @@ const (
 	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
 	// A checkpoint reclaim found that the saved Agent a root Agent node runs is no longer the definition its stopped step started with, so the run ended typed and the changed Agent did not run.
 	PipelineRecoveryAgentDefinitionChanged Code = "pipeline.recovery.agent_definition_changed"
+	// A checkpoint reclaim could not prove which saved Agent version a root Agent node's stopped step started with, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentDefinitionUnproven Code = "pipeline.recovery.agent_definition_unproven"
 	// A checkpoint reclaim found a call receipt for a root Agent node that is not this pipeline's own call of its saved Agent, so the run ended typed and nothing was repeated.
 	PipelineRecoveryAgentReceiptMismatch Code = "pipeline.recovery.agent_receipt_mismatch"
 	// A checkpoint reclaim found a root Agent node's saved-Agent model checkpoint written by another execution, so the run ended typed and nothing was repeated.

@@ -202,6 +202,14 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "pipeline.recovery.agent_definition_unproven",
+      "sentence": "A checkpoint reclaim could not prove which saved Agent version a root Agent node's stopped step started with, so the run ended typed and nothing was repeated.",
+      "action": "Nothing to repair on the platform; the step was started by an older Worker or Main gave no definition digest, so the version could not be proven and the user starts the run again.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "pipeline.recovery.inspect_transient",
       "sentence": "A checkpoint reclaim could not read its checkpoint because PostgreSQL was briefly unavailable, so the delivery was kept and is reclaimed again until the run's deadline.",
       "action": "Nothing when it is rare; if it repeats, check PostgreSQL connectivity and lock waits, since suppressed counts the reclaims kept since the last line.",

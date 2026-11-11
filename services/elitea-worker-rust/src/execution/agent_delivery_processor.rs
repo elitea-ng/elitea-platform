@@ -139,7 +139,13 @@ where
 
     /// Drain every accepted native invocation after delivery processing ends.
     pub(super) async fn close(&self) -> Result<(), InvocationSupervisionError> {
-        self.coordinator.close().await
+        let closed = self.coordinator.close().await;
+        // No later outcome will roll the open windows: report them now.
+        report_retained_summaries(
+            &self.transient_retains,
+            std::time::Instant::now() + crate::diagnostics::cycle::CYCLE_LINE_EVERY,
+        );
+        closed
     }
 
     async fn process_owned(
@@ -872,13 +878,25 @@ impl AgentDeliveryProcessOutcome {
 
     /// Record the outcome on the delivery span. A retained delivery is one
     /// WARN line each, except a transient inspect failure (FU-323a C2): one
-    /// line per execution per window, findable by its `support_ref`, with the
-    /// count of that execution's retains kept quiet since; those go to DEBUG.
+    /// line per window for that result code, however many executions; when
+    /// the window runs out its summary (the count kept quiet, the distinct
+    /// executions and a bounded sample of their support references) is
+    /// written at the next recorded outcome and the window is evicted.
     fn record(
         self,
         transient_retains: &crate::diagnostics::cycle::CycleWindows,
         execution_id: &str,
     ) {
+        self.record_at(transient_retains, execution_id, std::time::Instant::now());
+    }
+
+    fn record_at(
+        self,
+        transient_retains: &crate::diagnostics::cycle::CycleWindows,
+        execution_id: &str,
+        now: std::time::Instant,
+    ) {
+        report_retained_summaries(transient_retains, now);
         match self {
             Self::DeadLettered { code, reason } => {
                 tracing::Span::current().record("outcome", "dead_lettered");
@@ -908,16 +926,13 @@ impl AgentDeliveryProcessOutcome {
                         result_code = code,
                         retryable
                     );
-                } else if let Some(suppressed) =
-                    transient_retains.admit(execution_id, std::time::Instant::now())
-                {
+                } else if transient_retains.admit(code, execution_id, now) {
                     elitea_faults::fault!(
                         tracing::Level::WARN,
                         code = elitea_faults::codes::AGENT_DELIVERY_RETAINED_NO_ACK,
                         event = "agent_delivery_retained_no_ack",
                         result_code = code,
-                        retryable,
-                        suppressed
+                        retryable
                     );
                 } else {
                     tracing::debug!(
@@ -928,6 +943,32 @@ impl AgentDeliveryProcessOutcome {
                 }
             }
         }
+    }
+}
+
+/// Write the summary of every retained-line window that ran out by `now`
+/// (FU-323a C2), outside any delivery's span: it speaks for its window's
+/// executions, named in `sample_support_refs`.
+fn report_retained_summaries(
+    windows: &crate::diagnostics::cycle::CycleWindows,
+    now: std::time::Instant,
+) {
+    let code = elitea_faults::codes::AGENT_DELIVERY_RETAINED_NO_ACK;
+    for summary in windows.flush_expired(now) {
+        tracing::event!(
+            parent: None,
+            tracing::Level::WARN,
+            code = code.as_str(),
+            action = code.action(),
+            event = "agent_delivery_retained_summary",
+            result_code = summary.class,
+            suppressed = summary.suppressed,
+            executions = summary.executions,
+            executions_capped = summary.executions_capped,
+            sample_support_refs = %summary.sample.join(","),
+            "{}",
+            code.sentence()
+        );
     }
 }
 
@@ -1048,7 +1089,7 @@ mod fault_line_tests {
     /// window, each findable by its `support_ref`, with that execution's
     /// suppressed count.
     #[test]
-    fn only_transient_inspect_retains_are_windowed_per_execution() {
+    fn only_transient_inspect_retains_are_windowed_with_a_summary() {
         let output = elitea_faults::logtest::run_child(
             "execution::agent_delivery_processor::fault_line_tests::retained_window_child",
             WINDOW_CHILD_ENV,
@@ -1068,14 +1109,31 @@ mod fault_line_tests {
             output.stdout
         );
         let transient = elitea_faults::codes::PIPELINE_RECOVERY_INSPECT_TRANSIENT.as_str();
-        assert_eq!(refs(transient), ["exec-a", "exec-b"], "{}", output.stdout);
+        // Delta review 2: one line per window for the code, however many
+        // executions; the window's executions are counted when it rolls.
+        let summaries = lines
+            .iter()
+            .filter(|line| line["event"] == "agent_delivery_retained_summary")
+            .collect::<Vec<_>>();
+        let retained = lines
+            .iter()
+            .filter(|line| {
+                line["event"] == "agent_delivery_retained_no_ack"
+                    && line["result_code"] == transient
+            })
+            .map(|line| line["support_ref"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(retained, ["exec-a"], "{}", output.stdout);
+        assert_eq!(summaries.len(), 1, "{}", output.stdout);
+        let summary = summaries[0];
+        assert_eq!(summary["level"], "WARN");
+        assert_eq!(summary["result_code"], transient);
+        assert_eq!(summary["suppressed"], 2);
+        assert_eq!(summary["executions"], 2);
+        assert_eq!(summary["sample_support_refs"], "exec-a,exec-b");
         assert!(
-            lines
-                .iter()
-                .filter(|line| line["result_code"] == transient)
-                .all(|line| line["level"] == "WARN" && line["suppressed"] == 0),
-            "{}",
-            output.stdout
+            summary.get("support_ref").is_none(),
+            "outside any delivery span"
         );
     }
 
@@ -1094,6 +1152,7 @@ mod fault_line_tests {
         let windows = crate::diagnostics::cycle::CycleWindows::new(
             crate::diagnostics::cycle::CYCLE_LINE_EVERY,
         );
+        let start = std::time::Instant::now();
         for (execution, code) in [
             ("exec-a", "agent_delivery.scripted_retry"),
             ("exec-a", "agent_delivery.scripted_retry"),
@@ -1111,9 +1170,19 @@ mod fault_line_tests {
                 retryable = tracing::field::Empty,
             );
             span.in_scope(|| {
-                AgentDeliveryProcessOutcome::retained(code, true).record(&windows, execution);
+                AgentDeliveryProcessOutcome::retained(code, true)
+                    .record_at(&windows, execution, start);
             });
         }
+        // The window runs out: its summary is written once, then evicted.
+        super::report_retained_summaries(
+            &windows,
+            start + crate::diagnostics::cycle::CYCLE_LINE_EVERY,
+        );
+        super::report_retained_summaries(
+            &windows,
+            start + crate::diagnostics::cycle::CYCLE_LINE_EVERY * 2,
+        );
         elitea_faults::logtest::child_ran();
     }
 

@@ -1,29 +1,70 @@
 //! Per-window operator lines for a failure that repeats (FU-299 C3, the Rust
-//! twin of `libs/go/faults/cycle.go`'s window): the first occurrence of a key
-//! in a window is written with the number of that key's occurrences not
-//! written since; the others are left to DEBUG.
+//! twin of `libs/go/faults/cycle.go`'s window), one window per class (a result
+//! code): the first occurrence in a window writes its line; the others are
+//! counted and left to DEBUG. When the window has run out, its summary (how
+//! many were kept quiet, how many distinct executions, a bounded sample of
+//! their support references) is reported once and the window is evicted.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// How often a key that keeps repeating writes its line.
+/// How long one window lasts.
 pub(crate) const CYCLE_LINE_EVERY: Duration = Duration::from_secs(60);
+/// The most classes tracked at once (a class is a result code, so few).
+pub(crate) const MAX_CYCLE_CLASSES: usize = 64;
+/// The support references a summary names.
+pub(crate) const MAX_SAMPLE_REFS: usize = 8;
+/// The distinct executions one window counts; past it the count is a floor.
+pub(crate) const MAX_COUNTED_EXECUTIONS: usize = 4_096;
 
-/// The most keys tracked at once. Past it, expired windows are dropped; a key
-/// that still finds no room writes its line untracked (never hidden).
-pub(crate) const MAX_CYCLE_KEYS: usize = 4_096;
+/// The summary of one window that ran out.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct CycleSummary {
+    pub(crate) class: &'static str,
+    /// Occurrences not written (all but the window's first).
+    pub(crate) suppressed: u64,
+    /// Distinct executions in the window, the first included.
+    pub(crate) executions: usize,
+    /// Whether `executions` reached [`MAX_COUNTED_EXECUTIONS`] (a floor).
+    pub(crate) executions_capped: bool,
+    /// Up to [`MAX_SAMPLE_REFS`] of those executions, in first-seen order.
+    pub(crate) sample: Vec<String>,
+}
 
-/// One window per key, owned by the component that reports (no process-wide
-/// registry).
+/// The windows, owned by the component that reports (no process-wide state).
 pub(crate) struct CycleWindows {
     every: Duration,
-    windows: Mutex<HashMap<String, Window>>,
+    windows: Mutex<HashMap<&'static str, Window>>,
 }
 
 struct Window {
-    last_written: Instant,
+    opened: Instant,
     suppressed: u64,
+    executions: BTreeSet<String>,
+    sample: Vec<String>,
+}
+
+impl Window {
+    fn count(&mut self, execution: &str) {
+        if self.executions.len() < MAX_COUNTED_EXECUTIONS
+            && self.executions.insert(execution.to_owned())
+            && self.sample.len() < MAX_SAMPLE_REFS
+        {
+            self.sample.push(execution.to_owned());
+        }
+    }
+
+    fn summary(&mut self, class: &'static str) -> CycleSummary {
+        let executions = std::mem::take(&mut self.executions);
+        CycleSummary {
+            class,
+            suppressed: self.suppressed,
+            executions_capped: executions.len() >= MAX_COUNTED_EXECUTIONS,
+            executions: executions.len(),
+            sample: std::mem::take(&mut self.sample),
+        }
+    }
 }
 
 impl CycleWindows {
@@ -34,39 +75,60 @@ impl CycleWindows {
         }
     }
 
-    /// `Some(suppressed)` when this occurrence of `key` at `now` writes its
-    /// line, `suppressed` being the occurrences of `key` not written since its
-    /// last line; `None` when it stays in the current window. A poisoned lock
-    /// or a full table writes the line (never hide a fault).
-    pub(crate) fn admit(&self, key: &str, now: Instant) -> Option<u64> {
+    /// Report and evict every window that ran out by `now`: a summary for each
+    /// that kept something quiet; the others are evicted without one.
+    pub(crate) fn flush_expired(&self, now: Instant) -> Vec<CycleSummary> {
         let Ok(mut windows) = self.windows.lock() else {
-            return Some(0);
+            return Vec::new();
         };
-        if let Some(window) = windows.get_mut(key) {
-            if now.saturating_duration_since(window.last_written) < self.every {
+        let mut summaries = Vec::new();
+        windows.retain(|class, window| {
+            if now.saturating_duration_since(window.opened) < self.every {
+                return true;
+            }
+            if window.suppressed > 0 {
+                summaries.push(window.summary(class));
+            }
+            false
+        });
+        summaries.sort_by_key(|summary| summary.class);
+        summaries
+    }
+
+    /// Whether this occurrence of `class` by `execution` at `now` writes its
+    /// line (it opens a window) or is counted quietly in the open one. A
+    /// poisoned lock or a full table writes the line (never hide a fault).
+    pub(crate) fn admit(&self, class: &'static str, execution: &str, now: Instant) -> bool {
+        let Ok(mut windows) = self.windows.lock() else {
+            return true;
+        };
+        if let Some(window) = windows.get_mut(class) {
+            if now.saturating_duration_since(window.opened) < self.every {
                 window.suppressed = window.suppressed.saturating_add(1);
-                return None;
+                window.count(execution);
+                return false;
             }
-            window.last_written = now;
-            return Some(std::mem::take(&mut window.suppressed));
+            // Ran out without a flush: the caller flushes first, so this only
+            // happens on a clock that moved backwards; start over.
+            windows.remove(class);
         }
-        if windows.len() >= MAX_CYCLE_KEYS {
-            let every = self.every;
-            windows.retain(|_, window| {
-                now.saturating_duration_since(window.last_written) < every || window.suppressed > 0
-            });
-            if windows.len() >= MAX_CYCLE_KEYS {
-                return Some(0);
-            }
+        if windows.len() >= MAX_CYCLE_CLASSES {
+            return true;
         }
-        windows.insert(
-            key.to_owned(),
-            Window {
-                last_written: now,
-                suppressed: 0,
-            },
-        );
-        Some(0)
+        let mut window = Window {
+            opened: now,
+            suppressed: 0,
+            executions: BTreeSet::new(),
+            sample: Vec::new(),
+        };
+        window.count(execution);
+        windows.insert(class, window);
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tracked(&self) -> usize {
+        self.windows.lock().map_or(0, |windows| windows.len())
     }
 }
 
@@ -75,36 +137,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn one_line_per_key_per_window_with_the_suppressed_count() {
+    fn many_executions_in_one_window_are_one_line_and_one_summary() {
         let windows = CycleWindows::new(CYCLE_LINE_EVERY);
         let start = Instant::now();
-        assert_eq!(windows.admit("a", start), Some(0));
-        assert_eq!(windows.admit("a", start + Duration::from_secs(1)), None);
-        assert_eq!(windows.admit("a", start + Duration::from_secs(59)), None);
-        // Another key has its own window.
-        assert_eq!(windows.admit("b", start + Duration::from_secs(2)), Some(0));
-        // The next window writes once, with the two kept quiet.
-        assert_eq!(windows.admit("a", start + CYCLE_LINE_EVERY), Some(2));
-        assert_eq!(
-            windows.admit("a", start + CYCLE_LINE_EVERY + Duration::from_secs(1)),
-            None
-        );
-        assert_eq!(windows.admit("a", start + CYCLE_LINE_EVERY * 2), Some(1));
+        assert!(windows.admit("transient", "exec-0", start));
+        for index in 1..20 {
+            let execution = format!("exec-{}", index % 12);
+            assert!(!windows.admit("transient", &execution, start + Duration::from_secs(index)));
+        }
+        // Inside the window nothing is flushed.
+        assert_eq!(windows.flush_expired(start + Duration::from_secs(59)), []);
+        let summaries = windows.flush_expired(start + CYCLE_LINE_EVERY);
+        assert_eq!(summaries.len(), 1);
+        let summary = &summaries[0];
+        assert_eq!(summary.class, "transient");
+        assert_eq!(summary.suppressed, 19);
+        assert_eq!(summary.executions, 12);
+        assert!(!summary.executions_capped);
+        assert_eq!(summary.sample.len(), MAX_SAMPLE_REFS);
+        assert_eq!(summary.sample[0], "exec-0");
+        // The expired window was evicted: the next occurrence opens a new one.
+        assert_eq!(windows.tracked(), 0);
+        assert!(windows.admit("transient", "exec-0", start + CYCLE_LINE_EVERY));
     }
 
     #[test]
-    fn a_full_table_drops_expired_windows_and_never_hides_a_line() {
+    fn an_expired_window_with_nothing_quiet_is_evicted_without_a_summary() {
         let windows = CycleWindows::new(CYCLE_LINE_EVERY);
         let start = Instant::now();
-        for key in 0..MAX_CYCLE_KEYS {
-            assert_eq!(windows.admit(&key.to_string(), start), Some(0));
+        assert!(windows.admit("transient", "exec-0", start));
+        assert_eq!(windows.flush_expired(start + CYCLE_LINE_EVERY), []);
+        assert_eq!(windows.tracked(), 0);
+    }
+
+    #[test]
+    fn the_table_never_stays_full() {
+        let windows = CycleWindows::new(CYCLE_LINE_EVERY);
+        let start = Instant::now();
+        let classes = (0..=MAX_CYCLE_CLASSES)
+            .map(|index| &*Box::leak(format!("class-{index}").into_boxed_str()))
+            .collect::<Vec<&'static str>>();
+        for class in &classes[..MAX_CYCLE_CLASSES] {
+            assert!(windows.admit(class, "exec", start));
+            assert!(!windows.admit(class, "exec", start));
         }
-        // Full, nothing expired: written untracked.
-        assert_eq!(windows.admit("late", start), Some(0));
-        assert_eq!(windows.admit("late", start), Some(0));
-        // A window later the expired keys are dropped and the new key tracked.
-        let later = start + CYCLE_LINE_EVERY;
-        assert_eq!(windows.admit("late", later), Some(0));
-        assert_eq!(windows.admit("late", later), None);
+        // Full: a new class is written untracked, never hidden.
+        let late = classes[MAX_CYCLE_CLASSES];
+        assert!(windows.admit(late, "exec", start));
+        assert!(windows.admit(late, "exec", start));
+        // Every window ran out: each is reported once and evicted.
+        assert_eq!(
+            windows.flush_expired(start + CYCLE_LINE_EVERY).len(),
+            MAX_CYCLE_CLASSES
+        );
+        assert_eq!(windows.tracked(), 0);
+        assert!(windows.admit(late, "exec", start + CYCLE_LINE_EVERY));
+        assert!(!windows.admit(late, "exec", start + CYCLE_LINE_EVERY));
     }
 }

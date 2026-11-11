@@ -548,17 +548,18 @@ const REWIND_TO_STARTED_RECEIPT: &str = "DELETE FROM elitea_runtime.agent_graph_
 /// answer is served from the Agent's completion receipt, with no model call.
 #[tokio::test(flavor = "current_thread")]
 async fn postgres_a_root_saved_agent_answered_before_its_receipt_completed_is_served() {
+    // `answered_edited` (delta review 1a): the saved Agent is edited before
+    // the reclaim; the stored answer runs nothing, so it is served all the same.
+    for mode in ["answered", "answered_edited"] {
+        answered_before_its_receipt_completed(mode).await;
+    }
+}
+
+async fn answered_before_its_receipt_completed(mode: &str) {
     let Some(db) = scenario_db().await else {
         return;
     };
-    let (outcome, _) = scenario(
-        &db.pool,
-        &db.database_name,
-        "answered",
-        &[("crash", Some(0))],
-        "",
-    )
-    .await;
+    let (outcome, _) = scenario(&db.pool, &db.database_name, mode, &[("crash", Some(0))], "").await;
     assert_eq!(outcome.outcome, "ok");
     sqlx::raw_sql(REWIND_TO_STARTED_RECEIPT)
         .execute(&db.pool)
@@ -576,7 +577,7 @@ async fn postgres_a_root_saved_agent_answered_before_its_receipt_completed_is_se
     let (outcome, _) = scenario(
         &db.pool,
         &db.database_name,
-        "answered",
+        mode,
         &[("recover", Some(0))],
         "",
     )
@@ -584,8 +585,11 @@ async fn postgres_a_root_saved_agent_answered_before_its_receipt_completed_is_se
     // C5 (round 1 #3): the answer served from the Agent's completion receipt
     // is not forwarded as a second copy of the Agent's message: only the
     // call's result and the pipeline's own answer carry it.
-    assert_eq!(outcome.outcome, ANSWERED_FRAMES);
-    assert_eq!(outcome.model_calls, 0, "served from the completion receipt");
+    assert_eq!(outcome.outcome, ANSWERED_FRAMES, "{mode}");
+    assert_eq!(
+        outcome.model_calls, 0,
+        "{mode}: served from the completion receipt"
+    );
     let (state, pending, _) = latest_root(&db.pool).await;
     assert_eq!(pending, "[]");
     assert_eq!(state["answer"], "answered once", "{state}");
@@ -847,11 +851,59 @@ async fn postgres_a_saved_agent_edited_between_the_kill_and_the_reclaim_is_refus
         outcome.outcome
     );
     assert_eq!(outcome.model_calls, 0, "the edited content never runs");
-    assert!(stdout.contains(code.as_str()), "the fault line");
+    let line = stdout
+        .lines()
+        .find(|line| line.contains(code.as_str()))
+        .expect("the fault line");
+    assert!(line.contains("\"generation\":3"), "{line}");
     assert!(
         !stdout.contains("EDITED"),
         "the edited content reached the log"
     );
+    db.pool.close().await;
+}
+
+/// Delta review 1b: a started receipt without the definition stamp (an older
+/// Worker started the call) cannot prove the Agent's version: refused typed
+/// with its own cause, never reported as an edited Agent, no model call.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_receipt_without_its_definition_stamp_is_refused_unproven() {
+    let Some(db) = scenario_db().await else {
+        return;
+    };
+    let key = r"elitea\.pipeline\.saved-agent-definition\.v1";
+    let (outcome, stdout) = scenario(
+        &db.pool,
+        &db.database_name,
+        "forged",
+        CRASH_THEN_RECOVER,
+        &format!(
+            "UPDATE elitea_runtime.agent_graph_checkpoints SET metadata = \
+             regexp_replace(regexp_replace(metadata, '\"{key}\":\"[0-9a-f]{{64}}\",', '', 'g'), \
+             ',\"{key}\":\"[0-9a-f]{{64}}\"', '', 'g') WHERE thread_id NOT LIKE '%/%'"
+        ),
+    )
+    .await;
+    let code = elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_UNPROVEN;
+    assert!(
+        outcome.outcome.contains(code.as_str()),
+        "{}",
+        outcome.outcome
+    );
+    assert!(
+        !outcome
+            .outcome
+            .contains(elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_CHANGED.as_str()),
+        "{}",
+        outcome.outcome
+    );
+    assert_eq!(outcome.model_calls, 0);
+    let lines = stdout
+        .lines()
+        .filter(|line| line.contains(code.as_str()) && line.contains("\"level\":\"WARN\""))
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1, "{stdout}");
+    assert!(lines[0].contains("\"generation\":3"), "{}", lines[0]);
     db.pool.close().await;
 }
 
@@ -1027,7 +1079,8 @@ fn scenario_assembler(
     };
     // The saved Agent's draft version edited between the kill and the
     // reclaim: Main serves the new content with its recomputed digest.
-    let edited = mode == "edited_agent" && std::env::var(PHASE_ENV).as_deref() != Ok("crash");
+    let edited = matches!(mode, "edited_agent" | "answered_edited")
+        && std::env::var(PHASE_ENV).as_deref() != Ok("crash");
     if edited {
         details["instructions"] = json!("EDITED: answer only in capitals.");
     }
@@ -1097,7 +1150,7 @@ async fn postgres_root_saved_agent_scenario_child() {
                 ],
                 pipeline_connector(),
             ),
-            "answered" => (
+            "answered" | "answered_edited" => (
                 vec![TestModelGatewayOutcome::Response(pipeline_text_response(
                     "answered once",
                 ))],
@@ -1115,8 +1168,8 @@ async fn postgres_root_saved_agent_scenario_child() {
             .unwrap_or_else(|error| panic!("crash: assemble the root pipeline: {error}"));
         let outcome = run_to_end(invocation).await;
         // Only `answered` runs to its end: the parent rewinds what follows.
-        assert_eq!(
-            mode, "answered",
+        assert!(
+            matches!(mode.as_str(), "answered" | "answered_edited"),
             "crash: outlived its crash point: {outcome:?}"
         );
         outcome.expect("answered: the run completes");
@@ -1365,7 +1418,7 @@ async fn postgres_root_saved_agent_scenario_child() {
             };
             report(&outcome, &captured, 0);
         }
-        "answered" => {
+        "answered" | "answered_edited" => {
             let (assembler, captured) =
                 scenario_assembler(&pool, &mode, Vec::new(), pipeline_connector());
             let mut invocation = recovered(&assembler, &request, EXECUTION, attempt)
