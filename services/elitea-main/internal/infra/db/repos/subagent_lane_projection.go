@@ -39,6 +39,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 )
@@ -453,6 +454,15 @@ DO UPDATE SET lane = EXCLUDED.lane, updated_at = EXCLUDED.updated_at`,
 // (#1872 nesting), keyed by the chat_message_group.id the caller already
 // has. A group with no lane rows is simply absent from the map — the
 // callers below treat that the same as an empty metadata.subagents_v1.
+//
+// A fresh-install tenant (the E2E stack's `/elitea-migrate` with no flags,
+// which runs Bootstrap and ApplyShared only — never the tenant history)
+// never applies tenant/0170 and so has no table here at all: every caller
+// of this function reaches it on EVERY transcript read, so the gap #599
+// named for a missing join table applies to a missing TABLE the same way.
+// 42P01 (undefined_table) and 3F000 (undefined_schema, a project whose
+// tenant schema does not exist yet) read as "no lanes", exactly as a
+// tenant that has the table but no rows for these groups.
 func subAgentLanesByGroup(ctx context.Context, queryer pgxQueryer, s string, groupIDs []int) (map[int][]subAgentLane, error) {
 	if len(groupIDs) == 0 {
 		return nil, nil
@@ -462,6 +472,10 @@ func subAgentLanesByGroup(ctx context.Context, queryer pgxQueryer, s string, gro
 		WHERE message_group_id = ANY($1)
 		ORDER BY message_group_id, ordinal`, s+".chat_message_subagent_lanes"), groupIDs)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && (pgErr.Code == "42P01" || pgErr.Code == "3F000") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("conversations: list sub-agent lanes: %w", err)
 	}
 	defer rows.Close()
