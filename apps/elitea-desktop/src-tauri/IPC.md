@@ -839,15 +839,33 @@ and never logged.
 A thread may hold several agent participants. `addressed_to` is the agent
 participants a message names ("@Name"), in the text's order (at most 16,
 no repeats; client-core `addressedTo`); the UI starts the turn on the first
-of them. The host sends it to `startLocalTurn`; a message that names no
-agent, in a thread of several, is sent addressed to the composer's agent
-(`[participant_id]`: the pick is an address, ADR-0050 decision 7c, so a lead
-conversation does not route past it). Main routes the message
-by the conversation's floor and answers the order (`floor: {question_id,
-position, targets, agents: {participant_id, name, executor}[]}`) and the
-answering agent's `executor`. The host refuses a start Main routed to
-another agent first (`floor_routed_elsewhere`) or whose agent runs elsewhere
-than `cloud_agent` said (`agent_executor_changed`).
+of them. The host sends it to `startLocalTurn` as it is: only the agents
+the message names address it. The composer's agent is the start's
+`participant_id`, the sticky target, and never an address (ADR-0050
+decision 7c, #1804, #1917): a message that names no agent goes out with no
+`addressed_to`. Main routes the message by the conversation's floor and
+answers the order (`floor: {question_id, position, targets, agents:
+{participant_id, name, executor}[]}`) and the answering agent's `executor`.
+Under `lead`, Main routes an unaddressed message to the lead, whichever
+agent the composer shows. A turn the host continues by itself (an
+unattended chain's next turn, a resumed chain, ADR-0045) is the same
+agent's work, not a new message: in a thread of several agents the host
+addresses it to the agent it continues (`addressed_to: [participant_id]`),
+so a lead thread's chain stays on its agent.
+
+- **The UI starts the message on the routed agent** (#1917). The UI reads
+  the thread (its agents and `meta.floor`) and starts a message on the
+  agent Main will route it to, with that agent's `application_id`,
+  `version_id` and `cloud_agent`: the first agent the message names, else
+  the thread's lead (`meta.floor.policy: lead`), else the composer's agent.
+  A cloud lead's turn takes none of the composer's sticky modes (plan mode,
+  bypass, model choice, "Run to completion" grant). The host refuses, before
+  any agent runs, a start Main routed to another agent anyway (the lead
+  changed after the UI read the thread): `floor_routed_elsewhere`. The UI
+  then reads the thread again and sends the message once more, on the agent
+  it now routes to. The host never runs an agent Main did not route to. A
+  start whose agent runs elsewhere than `cloud_agent` said is refused with
+  `agent_executor_changed`.
 
 - **The order.** When the message has a next agent, the turn's `done`
   carries `continuing: true` and `floor_next {participant_id, agent_name,
