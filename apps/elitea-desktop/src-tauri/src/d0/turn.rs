@@ -4655,6 +4655,15 @@ impl AgentHost {
         )
         .await?;
         turn_context.mark_ran();
+        // #1827: the message under its `[message m-…]` line, the images named.
+        // A floor turn's note and an unattended continuation's prompt are the
+        // host's, not a message of the conversation: no id, so no brief can
+        // quote them.
+        let question = super::brief::TurnQuestion::new(
+            quotable_question_id(request, &started.question_id),
+            &message,
+            images,
+        );
         // What changes every turn goes in a host message before the
         // person's (`TurnTail`): the system prompt stays the thread's.
         let tail = Arc::new(TurnTail {
@@ -4664,7 +4673,7 @@ impl AgentHost {
                 &started.memory_recall.text,
                 &nonce,
             ) + &hook_context,
-            anchor: message.clone(),
+            anchor: question.anchor(),
         });
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
@@ -4937,7 +4946,8 @@ impl AgentHost {
                     events.clone(),
                     recorder.clone(),
                 )
-                .with_checkouts(checkouts),
+                .with_checkouts(checkouts)
+                .with_brief_view(question.view()),
             ),
             // A child only reads, and never gets near the parent's processes
             // (`process_output`, `process_list` and `process_wait` read, but
@@ -5088,7 +5098,7 @@ impl AgentHost {
                 .as_ref()
                 .map_or(ContinuePolicy::Ask, |turn| turn.grant.step_policy()),
         );
-        let mut content = Content::new("user").with_text(message);
+        let mut content = question.content();
         for image in images {
             content = content.with_inline_data(image.picture.mime, image.picture.bytes.clone());
         }
@@ -6565,6 +6575,18 @@ fn model_failure(text: &str) -> TurnError {
 /// The commit's `user_message`: the prompt, and what the turn attached as
 /// a note (`images: [{name, mime, bytes}]`; the bytes themselves stay on
 /// this machine, the server ignores a key it does not know).
+/// The id the turn's message is shown under (#1827): `question_id` for the
+/// person's message, none (`""`) for the host's own text, a floor turn's
+/// note or an unattended continuation's prompt, which no brief may quote.
+pub(crate) fn quotable_question_id<'a>(request: &TurnRequest, question_id: &'a str) -> &'a str {
+    let host_written = request.floor_turn.is_some()
+        || request
+            .unattended
+            .as_ref()
+            .is_some_and(|turn| turn.chain_root_execution_id.is_some());
+    if host_written { "" } else { question_id }
+}
+
 fn user_message(prompt: &str, images: &[Arc<Attachment>]) -> Value {
     let mut message = json!({ "content": prompt });
     if !images.is_empty() {

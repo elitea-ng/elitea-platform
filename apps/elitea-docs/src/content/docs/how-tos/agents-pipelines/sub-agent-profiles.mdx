@@ -81,7 +81,18 @@ A regenerated or continued answer is given no notes at the start of the turn. It
 
 A refusal is a tool result that the model reads. No sub-agent starts. The sub-agent gets the checked brief before its task, marked as information and not instructions. The brief counts against the sub-agent's token budget.
 
-The desktop app accepts facts only for now. It refuses an excerpt, an attachment or a memory entry.
+### In the desktop app
+
+A sub-agent of a local turn in the desktop app takes the same `profile`: its display name is the lane's name in the transcript, its soul replaces the role text, and `model` can only be `inherit`. It still only reads, unless it has its own checkout (`isolation: "worktree"`). `profile.tools` can only narrow it to some of its read-only tools, because the desktop app has no `subagent_tools` grant. The desktop app checks a brief against what the agent saw:
+
+| Entry | What the desktop app accepts |
+| --- | --- |
+| `excerpts` | A quote of a message the agent read in its last model request. These messages carry a `[message m-…]` line: the person's messages, other participants' messages, and the current message. The id is the same as in a cloud run, and the same check applies. A message that compaction took out of the request cannot be quoted. |
+| `attachments` | An image attached to the current message. Each image is shown to the agent as `[Attachment att-…: "name"]` after the message. The sub-agent gets the image's name only, because it cannot view images. |
+| `memory_entries` | None: the desktop app has no `recall` tool, so it refuses every memory entry with `BRIEF_MEMORY_NOT_RECALLED`. Pass what you need as a fact. |
+| `facts` | Accepted. |
+
+The desktop app writes no `ephemeral_agents` row for a local sub-agent. The turn's thread history keeps the lane's start, with the display name, the avatar key and the profile and brief digests and references. Like the cloud record, it never keeps the soul, a quote or a fact. A cloud agent in a desktop thread runs in the cloud, so the cloud checks its briefs.
 
 ## The record
 

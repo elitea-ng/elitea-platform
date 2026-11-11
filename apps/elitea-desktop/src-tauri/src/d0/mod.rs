@@ -55,6 +55,7 @@
 pub mod api;
 pub mod approvals;
 pub mod attachments;
+pub mod brief;
 pub mod cache;
 pub mod catalogue;
 pub mod child_agent;
