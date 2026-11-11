@@ -10,10 +10,11 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import type { AgentTeam } from '@/shared/api/generated/model';
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
-import { MAX_TEAM_NAME, teamErrorMessage } from '../lib/teamDraft';
+import { MAX_TEAM_NAME } from '../lib/teamDraft';
 import { useAgentTeamWrites } from '../model/useAgentTeams';
 
 export interface SaveAsTeamDialogProps {
@@ -48,7 +49,7 @@ function SaveAsTeamForm({ projectId, conversationId, defaultName, onClose, onSav
           onSaved?.(team);
           onClose();
         },
-        onError: (cause) => setError(teamErrorMessage(cause, t('features.agentTeams.saveAs.failed', 'The team was not saved. Try again.'))),
+        onError: (cause) => setError(serverErrorMessage(cause, t('features.agentTeams.saveAs.failed', 'The team was not saved. Try again.'))),
       },
     );
   };

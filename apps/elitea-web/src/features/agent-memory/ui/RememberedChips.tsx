@@ -30,9 +30,10 @@ import Button from '@mui/material/Button';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 
-import { isMemoryNotFound, memoryErrorMessage } from '../lib/memoryFilters';
+import { isMemoryNotFound } from '../lib/memoryFilters';
 import { rememberActions, rememberedEntryOf, type RememberToolAction, type RememberedEntry } from '../lib/rememberedEntries';
 import { useAgentMemoryAbilities, useAgentMemoryEntry, useAgentMemoryWrites } from '../model/useAgentMemory';
 import { MemoryEditDialog } from './MemoryEditDialog';
@@ -146,14 +147,14 @@ function RememberedEntryChip({ entry, projectId, applicationId, agentName }: Rem
     setError(undefined);
     remove.mutate(entry.entryId, {
       onSuccess: () => setForgotten(true),
-      onError: (cause) => setError(memoryErrorMessage(cause, t('features.agentMemory.chip.forgetFailed', 'It was not forgotten. Try again.'))),
+      onError: (cause) => setError(serverErrorMessage(cause, t('features.agentMemory.chip.forgetFailed', 'It was not forgotten. Try again.'))),
     });
   };
   const approve = (): void => {
     setError(undefined);
     update.mutate(
       { entryId: entry.entryId, change: { status: 'active' } },
-      { onError: (cause) => setError(memoryErrorMessage(cause, t('features.agentMemory.chip.approveFailed', 'It was not approved. Try again.'))) },
+      { onError: (cause) => setError(serverErrorMessage(cause, t('features.agentMemory.chip.approveFailed', 'It was not approved. Try again.'))) },
     );
   };
 

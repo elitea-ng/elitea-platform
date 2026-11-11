@@ -13,6 +13,7 @@ import { useCallback, useMemo, useState } from 'react';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import type { MemoryEntry, MemoryEntryList, MemoryEntryWriteRequest } from '@/shared/api/generated/model';
 import {
@@ -27,7 +28,7 @@ import {
 import type { LongTermMemoryFormValues } from '../../ui/memory/LongTermMemoryFormDialog';
 import type { LongTermMemoryViewRow } from '../../ui/memory/LongTermMemoryTable';
 import { useLongTermMemoryPermissions } from './useLongTermMemoryPermissions';
-import { formatMemoryTags, memoryServerErrorMessage, parseMemoryTags } from './longTermMemoryHelpers';
+import { formatMemoryTags, parseMemoryTags } from './longTermMemoryHelpers';
 
 const EMPTY_MEMORIES: MemoryEntry[] = [];
 
@@ -110,7 +111,7 @@ export function useLongTermMemoryManagement(projectId: string) {
       setFormServerError(undefined);
       const body = writeBody(values.content, values.tags, editingEntry?.source_conversation_id ?? undefined, values.enabled);
       const handleError = (fallback: string) => (error: unknown) => {
-        const message = memoryServerErrorMessage(error, fallback);
+        const message = serverErrorMessage(error, fallback);
         setFormServerError(message);
         onError(message)();
       };
@@ -174,7 +175,7 @@ export function useLongTermMemoryManagement(projectId: string) {
         );
         invalidateList();
       } catch (error) {
-        onError(memoryServerErrorMessage(error, t('settings.longTermMemory.error.toggleAllFailed', 'Failed to update all memories')))();
+        onError(serverErrorMessage(error, t('settings.longTermMemory.error.toggleAllFailed', 'Failed to update all memories')))();
       } finally {
         setIsBulkToggling(false);
       }

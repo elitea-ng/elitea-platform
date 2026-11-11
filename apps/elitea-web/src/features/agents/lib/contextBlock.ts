@@ -4,8 +4,9 @@
  * server validates it on save (422 `context_block_invalid`).
  */
 
-/** `meta.context.history`. */
-export type ContextHistoryMode = 'full' | 'since_joined' | 'addressed_only' | 'none';
+import { CONTEXT_HISTORY_MODES, type ContextHistoryMode } from '@/shared/lib/contextHistory';
+
+export { CONTEXT_HISTORY_MODES, type ContextHistoryMode };
 /** `meta.context.include_side_talk`: side talk the agent is a party to, or none. */
 export type ContextSideTalk = 'party' | 'none';
 
@@ -15,8 +16,6 @@ export interface ContextBlock {
   readonly include_side_talk: ContextSideTalk;
   readonly activity_notes?: boolean;
 }
-
-export const CONTEXT_HISTORY_MODES: readonly ContextHistoryMode[] = ['full', 'since_joined', 'addressed_only', 'none'];
 
 function isHistoryMode(value: unknown): value is ContextHistoryMode {
   return typeof value === 'string' && (CONTEXT_HISTORY_MODES as readonly string[]).includes(value);
@@ -36,6 +35,15 @@ export function readContextBlock(raw: unknown): ContextBlock | null {
     include_side_talk: record['include_side_talk'] === 'none' ? 'none' : 'party',
     ...(typeof notes === 'boolean' ? { activity_notes: notes } : {}),
   };
+}
+
+/**
+ * Two blocks say the same thing (issue 1894): field by field, so key order and
+ * an absent `activity_notes` (read as off) never mark a draft dirty.
+ */
+export function areContextBlocksEqual(a: ContextBlock | null, b: ContextBlock | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.history === b.history && a.include_side_talk === b.include_side_talk && (a.activity_notes ?? false) === (b.activity_notes ?? false);
 }
 
 /** The block a save sends: `null` (clear the key) for the default, so an agent nobody changed keeps no block. */

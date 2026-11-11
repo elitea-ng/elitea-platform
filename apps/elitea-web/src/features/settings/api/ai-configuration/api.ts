@@ -25,7 +25,8 @@ import {
 } from '@tanstack/react-query';
 
 import type { ModelInfo } from '@/entities/credential';
-import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
+import { eliteaFetch } from '@/shared/api/generated/mutator';
+import { serverErrorOf } from '@/shared/api/serverErrorMessage';
 
 /**
  * `eliteaFetch` resolves to orval's `{data, status, headers}` envelope, never
@@ -75,15 +76,8 @@ export const EMPTY_MODELS_RESPONSE: ModelsApiResponse = {
  * prefer its `error`/`message` field and fall back to the generic message.
  */
 export function modelConfigurationErrorMessage(error: unknown): string {
-  if (error instanceof EliteaApiError && error.failure.kind === 'http') {
-    const { body } = error.failure;
-    if (typeof body === 'string' && body !== '') return body;
-    if (typeof body === 'object' && body !== null) {
-      const record = body as Record<string, unknown>;
-      const detail = record['error'] ?? record['message'];
-      if (typeof detail === 'string' && detail !== '') return detail;
-    }
-  }
+  const server = serverErrorOf(error);
+  if (server !== undefined) return server;
   if (error instanceof Error) return error.message;
   return String(error);
 }

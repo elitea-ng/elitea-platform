@@ -17,6 +17,29 @@ export function positiveParticipantId(raw: unknown): number | undefined {
 const positiveId = positiveParticipantId;
 
 /**
+ * The participant an unaddressed message goes to, with its id read ONCE
+ * (issue 1859): the send, the stream identity, the attachments gate and
+ * "To:" all read `participantId`, so a row whose id is `0` or not numeric
+ * has no id for every one of them alike.
+ */
+export interface ResolvedTarget {
+  /** The raw participant row (an agent, the conversation's model, a user, or unresolved). */
+  readonly participant: unknown;
+  /** Its positive integer id (`positiveParticipantId`); `undefined` without one. */
+  readonly participantId: number | undefined;
+}
+
+/** No target: nothing picked and nothing to resolve to. */
+export const NO_TARGET: ResolvedTarget = { participant: undefined, participantId: undefined };
+
+/** The `ResolvedTarget` of a participant row. */
+export function resolvedTarget(participant: unknown): ResolvedTarget {
+  if (participant === undefined) return NO_TARGET;
+  const id = typeof participant === 'object' && participant !== null && 'id' in participant ? participant.id : undefined;
+  return { participant, participantId: positiveId(id) };
+}
+
+/**
  * The addressed participant ids a composer payload carries (`addressedTo`):
  * positive integers, each once, at most `MAX_ADDRESSED`. Anything else is
  * dropped, as the start route would refuse the whole message for it.
@@ -59,10 +82,10 @@ export function startParticipantId(input: {
  * turn to that agent too, so the contract (`agent.execute.application.v1`)
  * and `participant_id` match the agent that answers.
  */
-export function targetForAddressed(target: unknown, participants: readonly unknown[] | undefined, addressed: readonly number[]): unknown {
+export function targetForAddressed(target: ResolvedTarget, participants: readonly unknown[] | undefined, addressed: readonly number[]): ResolvedTarget {
   const first = addressed[0];
   if (first === undefined) return target;
-  const targetId = positiveId((target as { readonly id?: unknown } | null | undefined)?.id);
-  if (targetId !== undefined && addressed.includes(targetId)) return target;
-  return (participants ?? []).find((participant) => positiveId((participant as { readonly id?: unknown } | null)?.id) === first) ?? target;
+  if (target.participantId !== undefined && addressed.includes(target.participantId)) return target;
+  const row = (participants ?? []).find((participant) => resolvedTarget(participant).participantId === first);
+  return row === undefined ? target : resolvedTarget(row);
 }

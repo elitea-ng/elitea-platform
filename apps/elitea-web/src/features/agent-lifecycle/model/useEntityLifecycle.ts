@@ -4,6 +4,7 @@ import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/r
 
 import { getGetApplicationQueryKey } from '@/shared/api/generated/applications/applications';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
+import { serverErrorSentence } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 
 import {
@@ -83,7 +84,7 @@ export function lifecycleErrorMessage(error: unknown): string {
   // never as text, so the author sees a sentence and not `release_gate_failed`.
   const refusal = readGovernanceRefusal(error);
   if (refusal !== undefined) return governanceRefusalMessage(refusal);
-  const serverMessage = readServerError(failure.body);
+  const serverMessage = serverErrorSentence(failure.body);
   switch (failure.status) {
     case 403:
       return (
@@ -108,12 +109,6 @@ function transportFailureMessage(kind: 'auth' | 'network' | 'aborted'): string {
     case 'aborted':
       return t('features.agentLifecycle.error.aborted', 'The action was cancelled.');
   }
-}
-
-function readServerError(payload: unknown): string | undefined {
-  if (typeof payload !== 'object' || payload === null) return undefined;
-  const value = (payload as Record<string, unknown>)['error'];
-  return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
 export function useEntityLifecycle(projectId: string | undefined, entityId: string | undefined): EntityLifecycle {

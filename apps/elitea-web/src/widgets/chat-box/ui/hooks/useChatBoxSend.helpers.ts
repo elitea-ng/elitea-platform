@@ -5,7 +5,7 @@ import type { ChatStreamContext } from '@/features/chat-messages';
 import { markGrantsTurnedOff } from '@/features/unattended';
 
 import type { StreamStartOutcome } from './useChatBoxHandlers.helpers';
-import { addressedField, positiveParticipantId } from './useChatBoxSend.floor';
+import { addressedField, type ResolvedTarget } from './useChatBoxSend.floor';
 
 // Derive these types through the public entity API; avoid a cross-slice deep import.
 type UploadAttachments = ReturnType<typeof useUploadAttachments>['uploadAttachments'];
@@ -31,7 +31,7 @@ export interface SendDeps {
  */
 export interface ChatStreamContextSource {
   /** The participant the turn goes to (`useResolvedTarget`); the answer is attributed to it. */
-  readonly target?: unknown;
+  readonly target?: ResolvedTarget | undefined;
   readonly participants?: readonly unknown[] | undefined;
   readonly userName?: string | undefined;
   readonly userAvatar?: string | undefined;
@@ -41,9 +41,7 @@ export interface ChatStreamContextSource {
 export function buildChatStreamContext(
   params: ChatStreamContextSource,
 ): ChatStreamContext {
-  const participantId = (
-    params.target as { id?: string | number } | undefined
-  )?.id;
+  const participantId = params.target?.participantId;
   return {
     ...(participantId !== undefined
       ? { participantId: String(participantId) }
@@ -131,8 +129,6 @@ function executionStepsLimit(
   const value = settings?.['steps_limit'];
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
-
-export { positiveParticipantId };
 
 /** ADR-0050 D7c sticky target: the newest history row whose `participantId` (its `sent_to_id`) names an agent or the conversation's model. */
 export function stickyAgentParticipantId(

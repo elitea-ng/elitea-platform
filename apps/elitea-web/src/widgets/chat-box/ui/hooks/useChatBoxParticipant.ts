@@ -15,6 +15,7 @@ import { useParticipantName } from '@/features/chat-messages';
 
 import { toParticipant, toParticipants } from '../ChatBox.helpers';
 import { useChatBoxAttachmentsGate } from './useChatBoxAttachmentsGate';
+import type { ResolvedTarget } from './useChatBoxSend.floor';
 
 interface AgentEditorParticipantDetails {
   readonly id?: string;
@@ -26,7 +27,7 @@ export interface UseChatBoxParticipantParams {
   readonly activeParticipant: unknown;
   readonly conversationParticipants: unknown[] | undefined;
   /** The participant the send goes to (`useResolvedTarget`), for the attachments gate. */
-  readonly target: unknown;
+  readonly target: ResolvedTarget;
   /** #905: the agent/pipeline EDITOR surface computes the attachments gate from its own (unsaved) form state — the gate below stands down there. */
   readonly isAgentsPage: boolean | undefined;
 }

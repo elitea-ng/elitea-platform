@@ -122,7 +122,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         values={editor.values}
         onFieldChange={editor.onFieldChange}
         disabled={isEditorDisabled}
-        showOutputContract={{ contextHistory: contextBlockRefusal(props.saveError) }}
+        metaControls={{ contextHistoryError: contextBlockRefusal(props.saveError) }}
         /* #345 — the tag control. It reaches the wire through
            `toVersionSaveBody`'s `tags`, which `UpdateVersion` now
            writes as association rows. */

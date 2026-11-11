@@ -36,7 +36,11 @@ describe('evaluationErrorMessage', () => {
     expect(datasetErrorMessage(httpError(500, null))).toBe('Failed to save the dataset.');
     expect(datasetErrorMessage(httpError(500, {}))).toBe('Failed to save the dataset.');
     expect(datasetErrorMessage(httpError(500, { error: '' }))).toBe('Failed to save the dataset.');
-    expect(runErrorMessage(httpError(500, 'not an object'))).toBe('Failed to start the run.');
+    expect(runErrorMessage(httpError(502, '<html>Bad Gateway</html>'))).toBe('Failed to start the run.');
+  });
+
+  it('reads a plain-text refusal as every other feature does (issue 1848)', () => {
+    expect(runErrorMessage(httpError(500, 'engine unavailable'))).toBe('engine unavailable');
   });
 
   /*

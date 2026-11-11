@@ -53,18 +53,11 @@ export interface ApplicationAdvanceSettingsProps {
    * prop of the same name). The stored value is opaque `meta` content, read here.
    */
   readonly outputContract?: unknown;
-  /** An object also carries the server's refusals of the meta controls on the last save. */
-  readonly showOutputContract?: boolean | ContentControlErrors | undefined;
+  readonly showOutputContract?: boolean | undefined;
   readonly onOutputContractChange?: ((next: OutputContract | null) => void) | undefined;
-  /** `meta.citations` and `meta.context`, shown with `showOutputContract`; one object for the 12-prop budget. */
+  /** `meta.citations` and `meta.context`, shown with `showOutputContract`, with the server's refusal of each; one object for the 12-prop budget. */
   readonly contentControls?: AdvanceContentControls | undefined;
   readonly sx?: SxProps<Theme> | undefined;
-}
-
-/** The server's refusals (on the last save) the version meta controls show on their field. */
-export interface ContentControlErrors {
-  /** 422 `context_block_invalid` (`contextBlockRefusal`). */
-  readonly contextHistory?: string | undefined;
 }
 
 /** The version meta controls only the pages that save the meta render. */
@@ -75,19 +68,23 @@ interface AdvanceContentControls {
    * ADR-0050 decision 9 — `meta.context` ("Conversation history"), its
    * setter and the server's refusal of it on the last save.
    */
-  readonly contextHistory: { readonly value: unknown; readonly onChange: (next: ContextBlock | null) => void };
+  readonly contextHistory: {
+    readonly value: unknown;
+    readonly onChange: (next: ContextBlock | null) => void;
+    /** 422 `context_block_invalid` on the last save (`contextBlockRefusal`), shown on the field. */
+    readonly error?: string | undefined;
+  };
 }
 
-function ContentControls({ controls, errors, disabled }: {
+function ContentControls({ controls, disabled }: {
   readonly controls: AdvanceContentControls;
-  readonly errors: ContentControlErrors | undefined;
   readonly disabled?: boolean | undefined;
 }): ReactNode {
   const { citations, contextHistory } = controls;
   return (
     <>
       <CitationsField value={citations.value} onChange={citations.onChange} disabled={disabled} />
-      <ConversationHistoryField value={contextHistory.value} onChange={contextHistory.onChange} error={errors?.contextHistory} disabled={disabled} />
+      <ConversationHistoryField value={contextHistory.value} onChange={contextHistory.onChange} error={contextHistory.error} disabled={disabled} />
     </>
   );
 }
@@ -139,8 +136,6 @@ export function ApplicationAdvanceSettings({
   contentControls,
   sx,
 }: ApplicationAdvanceSettingsProps): ReactNode {
-  const showContent = showOutputContract !== undefined && showOutputContract !== false;
-  const contentErrors = typeof showOutputContract === 'object' ? showOutputContract : undefined;
   const handleChange = useCallback(
     (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       onStepLimitChange(clampStepLimit(event.target.value));
@@ -191,7 +186,7 @@ export function ApplicationAdvanceSettings({
               htmlInput: { inputMode: 'numeric', pattern: '[0-9]*', min: MIN_STEP_LIMIT, max: MAX_STEP_LIMIT },
             }}
           />
-          {showContent && onOutputContractChange !== undefined && (
+          {showOutputContract === true && onOutputContractChange !== undefined && (
             <OutputContractField
               value={readOutputContract(outputContract)}
               onChange={onOutputContractChange}
@@ -199,8 +194,8 @@ export function ApplicationAdvanceSettings({
               testIdPrefix="agent-output-contract"
             />
           )}
-          {showContent && contentControls !== undefined && (
-            <ContentControls controls={contentControls} errors={contentErrors} disabled={disabled} />
+          {showOutputContract === true && contentControls !== undefined && (
+            <ContentControls controls={contentControls} disabled={disabled} />
           )}
           {showIgnoreProjectContext && (
             <Box sx={toggleRowSx}>

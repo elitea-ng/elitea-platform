@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 
-import { contextBlockForSave, readContextBlock } from './contextBlock';
+import { contextHistoryLabel } from '@/shared/lib/contextHistory';
+
+import { areContextBlocksEqual, contextBlockForSave, readContextBlock } from './contextBlock';
 import { contextBlockRefusal } from './errorMessage';
 
 describe('readContextBlock', () => {
@@ -39,6 +41,34 @@ describe('contextBlockForSave', () => {
 
   it('keeps a block that differs from the default only in side talk', () => {
     expect(contextBlockForSave({ history: 'full', include_side_talk: 'none' })).toEqual({ history: 'full', include_side_talk: 'none' });
+  });
+});
+
+describe('areContextBlocksEqual (issue 1894)', () => {
+  it('compares field by field: key order and an absent activity_notes do not matter', () => {
+    expect(areContextBlocksEqual({ history: 'none', include_side_talk: 'none' }, { include_side_talk: 'none', history: 'none', activity_notes: false })).toBe(true);
+    expect(areContextBlocksEqual(null, null)).toBe(true);
+  });
+
+  it('sees every field, and null against a block', () => {
+    const block = { history: 'none', include_side_talk: 'none' } as const;
+    expect(areContextBlocksEqual(block, { ...block, history: 'full' })).toBe(false);
+    expect(areContextBlocksEqual(block, { ...block, include_side_talk: 'party' })).toBe(false);
+    expect(areContextBlocksEqual(block, { ...block, activity_notes: true })).toBe(false);
+    expect(areContextBlocksEqual(block, null)).toBe(false);
+  });
+});
+
+describe('contextHistoryLabel (one label set for the editor and the inspector, issue 1894)', () => {
+  it('names each mode', () => {
+    expect(contextHistoryLabel('full')).toBe('Everything it may see');
+    expect(contextHistoryLabel('since_joined')).toBe('Since it joined');
+    expect(contextHistoryLabel('addressed_only')).toBe('Only messages addressed to it');
+    expect(contextHistoryLabel('none')).toBe('None (the current message only)');
+  });
+
+  it('shows a mode it does not know as itself', () => {
+    expect(contextHistoryLabel('future_mode')).toBe('future_mode');
   });
 });
 

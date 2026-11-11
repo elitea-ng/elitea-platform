@@ -14,6 +14,7 @@ import { combineSx } from '@/shared/ui/lib/combineSx';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
 import { useCreateAgentFormState } from '../model/useCreateAgentFormState';
+import { advanceMetaProps, type CreateAgentMetaControls } from './CreateAgentForm.meta';
 import type { AgentDraftValues, AgentFieldChange } from '../model/types';
 
 import {
@@ -31,7 +32,7 @@ import {
   rootContainerSx,
   welcomeMessageInputSx,
 } from './CreateAgentForm.styles';
-import { ApplicationAdvanceSettings, type ContentControlErrors } from './ApplicationAdvanceSettings';
+import { ApplicationAdvanceSettings } from './ApplicationAdvanceSettings';
 import { ApplicationVariables } from './ApplicationVariables';
 import { ConversationStartersEditor } from './ConversationStartersEditor';
 import { InstructionsInput } from './InstructionsInput';
@@ -246,8 +247,8 @@ export interface CreateAgentFormProps {
    * serves the feature.
    */
   readonly instructionsAiEditSlot?: ReactNode | undefined;
-  /** Shows the version meta controls; an object also carries the server's refusals of them (12-prop budget). */
-  readonly showOutputContract?: boolean | ContentControlErrors | undefined;
+  /** Shows the version meta controls (output contract, citations, conversation history) when given, with the server's refusals of them. */
+  readonly metaControls?: CreateAgentMetaControls | undefined;
   readonly sx?: SxProps<Theme> | undefined;
 }
 
@@ -274,7 +275,7 @@ export function CreateAgentForm({
   tagsSlot,
   modelSettingsSlot,
   instructionsAiEditSlot,
-  showOutputContract,
+  metaControls,
   sx,
 }: CreateAgentFormProps): ReactNode {
   const versionDetails = values.version_details;
@@ -383,11 +384,7 @@ export function CreateAgentForm({
           onStepLimitChange={state.onStepLimitChange}
           modelSettingsSlot={modelSettingsSlot}
           outputContract={state.outputContract} onOutputContractChange={state.onOutputContractChange}
-          showOutputContract={showOutputContract}
-          contentControls={{
-            citations: { value: state.citations, onChange: state.onCitationsChange },
-            contextHistory: { value: state.contextHistory, onChange: state.onContextHistoryChange },
-          }}
+          {...advanceMetaProps(state, metaControls)}
         />
       </Box>
     </Box>
