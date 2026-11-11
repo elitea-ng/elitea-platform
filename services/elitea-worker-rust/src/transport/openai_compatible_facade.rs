@@ -2137,6 +2137,10 @@ pub(crate) struct CapturedModelRequest {
 #[cfg(test)]
 pub(crate) type CapturedModelRequests = Arc<Mutex<Vec<CapturedModelRequest>>>;
 
+/// The stdout prefix of [`TestModelGatewayOutcome::ExitProcessPrintingRequest`].
+#[cfg(test)]
+pub(crate) const EXIT_REQUEST_LINE: &str = "LOST_MODEL_REQUEST ";
+
 #[cfg(test)]
 pub(crate) enum TestModelGatewayOutcome {
     Response(Response<Body>),
@@ -2169,6 +2173,10 @@ pub(crate) enum TestModelGatewayOutcome {
     /// End the test process at this model request: a Worker that dies after
     /// everything before the request is durable (process-replacement proofs).
     ExitProcess(i32),
+    /// [`Self::ExitProcess`], first printing the request body on one stdout
+    /// line after [`EXIT_REQUEST_LINE`]: a parent process compares the lost
+    /// request with the one a replacement Worker sends (FU-323 C4).
+    ExitProcessPrintingRequest(i32),
     /// Answer after a fixed model latency (concurrency measurements).
     Delayed {
         delay: std::time::Duration,
@@ -2274,6 +2282,10 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
                 Ok(response)
             }
             TestModelGatewayOutcome::ExitProcess(code) => std::process::exit(code),
+            TestModelGatewayOutcome::ExitProcessPrintingRequest(code) => {
+                println!("{EXIT_REQUEST_LINE}{}", String::from_utf8_lossy(&body));
+                std::process::exit(code)
+            }
             TestModelGatewayOutcome::Delayed { delay, response } => {
                 tokio::time::sleep(delay).await;
                 Ok(response)
