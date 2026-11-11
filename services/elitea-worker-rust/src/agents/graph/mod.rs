@@ -82,6 +82,11 @@ pub(crate) mod node_recovery_owner;
 pub(crate) mod node_recovery_receipt;
 pub(crate) mod node_recovery_runtime;
 #[cfg(test)]
+mod node_settings_pg_tests;
+mod node_settings_runtime;
+#[cfg(test)]
+mod node_settings_tests;
+#[cfg(test)]
 pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
     Gate, journaled_node, node_activation, pause_data, recovery_card, state as direct_tool_state,
     with_decision,

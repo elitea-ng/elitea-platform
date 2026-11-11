@@ -60,13 +60,20 @@ fn every_bound_holds_at_its_limit_and_refuses_one_past_it() {
         }
     }
     for (wait, ok) in [(99, false), (100, true), (300_000, true), (300_001, false)] {
-        let result = parse(&format!("{{retry_on_fail: true, wait_between_tries_ms: {wait}}}"));
+        let result = parse(&format!(
+            "{{retry_on_fail: true, wait_between_tries_ms: {wait}}}"
+        ));
         assert_eq!(result.is_ok(), ok, "wait {wait}");
         if !ok {
             assert_eq!(result, Err(NodeSettingsRefusal::WaitRange));
         }
     }
-    for (timeout, ok) in [(999, false), (1_000, true), (900_000, true), (900_001, false)] {
+    for (timeout, ok) in [
+        (999, false),
+        (1_000, true),
+        (900_000, true),
+        (900_001, false),
+    ] {
         let result = parse(&format!("{{timeout_ms: {timeout}}}"));
         assert_eq!(result.is_ok(), ok, "timeout {timeout}");
         if !ok {
@@ -131,7 +138,9 @@ fn deterministic_families_refuse_retry_and_timeout() {
             "{node_type}"
         );
     }
-    for node_type in ["code", "llm", "decision", "toolkit", "mcp", "agent", "parallel", "map"] {
+    for node_type in [
+        "code", "llm", "decision", "toolkit", "mcp", "agent", "parallel", "map",
+    ] {
         assert_eq!(
             admitted.check_family(SettingsFamily::of(node_type)),
             Err(NodeSettingsRefusal::FamilyNotYet),
@@ -156,12 +165,21 @@ fn the_constants_tables_and_texts_are_the_contracts() {
         ("max_node_tries", u64::from(MAX_NODE_TRIES)),
         ("min_wait_between_tries_ms", MIN_WAIT_BETWEEN_TRIES_MS),
         ("max_wait_between_tries_ms", MAX_WAIT_BETWEEN_TRIES_MS),
-        ("default_wait_between_tries_ms", DEFAULT_WAIT_BETWEEN_TRIES_MS),
+        (
+            "default_wait_between_tries_ms",
+            DEFAULT_WAIT_BETWEEN_TRIES_MS,
+        ),
         ("min_node_timeout_ms", MIN_NODE_TIMEOUT_MS),
         ("max_node_timeout_ms", MAX_NODE_TIMEOUT_MS),
         ("max_node_errors", MAX_NODE_ERRORS as u64),
-        ("max_node_error_entry_bytes", MAX_NODE_ERROR_ENTRY_BYTES as u64),
-        ("max_node_error_object_bytes", MAX_NODE_ERROR_OBJECT_BYTES as u64),
+        (
+            "max_node_error_entry_bytes",
+            MAX_NODE_ERROR_ENTRY_BYTES as u64,
+        ),
+        (
+            "max_node_error_object_bytes",
+            MAX_NODE_ERROR_OBJECT_BYTES as u64,
+        ),
         ("max_executed_once_nodes", MAX_EXECUTED_ONCE_NODES as u64),
     ] {
         assert_eq!(limits[key].as_u64(), Some(value), "{key}");
@@ -169,7 +187,10 @@ fn the_constants_tables_and_texts_are_the_contracts() {
     assert_eq!(contract["settings_key"], SETTINGS_KEY);
     assert_eq!(contract["node_errors_key"], NODE_ERRORS_KEY);
     assert_eq!(contract["executed_once_key"], EXECUTED_ONCE_KEY);
-    assert_eq!(contract["on_error"], json!(["stop", "continue", "error_output"]));
+    assert_eq!(
+        contract["on_error"],
+        json!(["stop", "continue", "error_output"])
+    );
     let refusals = contract["refusals"].as_object().expect("refusals");
     assert_eq!(refusals.len(), NodeSettingsRefusal::ALL.len());
     for refusal in NodeSettingsRefusal::ALL {
@@ -240,7 +261,11 @@ fn the_digest_is_stable_and_names_every_field() {
         "{on_error: error_output, error_transition: END}",
         "{execute_once: true}",
     ] {
-        assert_ne!(digest(&base), digest(&parse(changed).expect(changed)), "{changed}");
+        assert_ne!(
+            digest(&base),
+            digest(&parse(changed).expect(changed)),
+            "{changed}"
+        );
     }
     let renamed = settings_digest(&BTreeMap::from([("other".to_owned(), base.clone())]));
     assert_ne!(Some(digest(&base)), renamed);
@@ -282,7 +307,10 @@ fn the_entry_bounds_hold_at_the_limit_and_refuse_one_past_it() {
         value["node"] = json!("n".repeat(bytes - overhead));
         value
     };
-    assert_eq!(check_entry_bytes(&padded(MAX_NODE_ERROR_ENTRY_BYTES)), Ok(()));
+    assert_eq!(
+        check_entry_bytes(&padded(MAX_NODE_ERROR_ENTRY_BYTES)),
+        Ok(())
+    );
     assert_eq!(
         check_entry_bytes(&padded(MAX_NODE_ERROR_ENTRY_BYTES + 1)),
         Err(EntryRefused)
@@ -357,7 +385,10 @@ fn the_run_once_set_holds_128_ids_and_refuses_the_129th() {
     // Re-marking a known id never grows the set.
     assert!(mark_executed_once(set.as_ref(), "n0", None).is_ok());
     let routed = mark_executed_once(None, "route", Some("left")).expect("router");
-    assert_eq!(executed_once(Some(&routed), "route"), Some(Some("left".to_owned())));
+    assert_eq!(
+        executed_once(Some(&routed), "route"),
+        Some(Some("left".to_owned()))
+    );
     assert_eq!(executed_once(set.as_ref(), "n5"), Some(None));
     assert_eq!(executed_once(set.as_ref(), "absent"), None);
     assert_eq!(executed_once(None, "n5"), None);

@@ -122,6 +122,12 @@ impl RouteTargets {
             .chain(std::iter::once(self.default.target.as_str()))
     }
 
+    /// The default route: its target and its public label.
+    #[must_use]
+    pub fn default_route(&self) -> (&str, &str) {
+        (self.default.target.as_str(), self.default.label.as_str())
+    }
+
     pub fn labels(&self) -> impl Iterator<Item = &str> {
         self.routes.iter().map(|route| route.label.as_str())
     }
@@ -199,6 +205,13 @@ impl RouterNodeDefinition {
 
     pub fn route_targets(&self) -> impl Iterator<Item = &str> {
         self.routes.declared()
+    }
+
+    /// The default route (`default_output`, END when the YAML omits it):
+    /// its target and its public label.
+    #[must_use]
+    pub fn default_route(&self) -> (&str, &str) {
+        self.routes.default_route()
     }
 
     #[must_use]

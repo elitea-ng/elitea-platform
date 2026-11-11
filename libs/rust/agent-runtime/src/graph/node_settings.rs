@@ -210,9 +210,7 @@ impl NodeSettingsRefusal {
             Self::TimeoutRange => "Timeout must be between 1000 and 900000 ms.",
             Self::RetryFieldsNeedRetry => "Max tries and wait between tries need Retry on fail.",
             Self::ErrorTransitionRequired => "On error 'error output' needs an error transition.",
-            Self::ErrorTransitionUnexpected => {
-                "An error transition needs On error 'error output'."
-            }
+            Self::ErrorTransitionUnexpected => "An error transition needs On error 'error output'.",
             Self::ErrorTransitionTarget => {
                 "The error transition must name END or another node of this pipeline outside any Parallel or Map."
             }
@@ -335,10 +333,9 @@ impl NodeSettings {
         {
             return Err(NodeSettingsRefusal::MaxTriesRange);
         }
-        if raw
-            .wait_between_tries_ms
-            .is_some_and(|wait| !(MIN_WAIT_BETWEEN_TRIES_MS..=MAX_WAIT_BETWEEN_TRIES_MS).contains(&wait))
-        {
+        if raw.wait_between_tries_ms.is_some_and(|wait| {
+            !(MIN_WAIT_BETWEEN_TRIES_MS..=MAX_WAIT_BETWEEN_TRIES_MS).contains(&wait)
+        }) {
             return Err(NodeSettingsRefusal::WaitRange);
         }
         if raw
@@ -563,7 +560,10 @@ pub fn mark_executed_once(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    nodes.insert(node.to_owned(), route.map_or(Value::Null, |route| json!(route)));
+    nodes.insert(
+        node.to_owned(),
+        route.map_or(Value::Null, |route| json!(route)),
+    );
     if nodes.len() > MAX_EXECUTED_ONCE_NODES {
         return Err(ExecutedOnceFull);
     }

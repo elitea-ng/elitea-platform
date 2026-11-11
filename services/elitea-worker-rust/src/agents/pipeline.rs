@@ -2831,7 +2831,8 @@ async fn bind_saved_pipeline_runtimes(
     });
     let mut runtimes = PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, application)
         .with_delegated_servers(runtime.mcp_tokens)
-        .with_events(runtime.node_events.clone());
+        .with_events(runtime.node_events.clone())
+        .with_execution_id(runtime.context.execution_id());
     if let Some(code) = &runtime.code {
         runtimes = runtimes.with_code(code.clone());
     }
