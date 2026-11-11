@@ -140,6 +140,45 @@ pub(crate) struct PipelineApplicationNodeRuntime {
     /// A fan-out member's own application channel: its child run, nested saved
     /// applications included, sends there (T-2A3).
     member_events: Option<crate::agents::application_tools::ApplicationEventSender>,
+    /// FU-323a: the started calls this root occurrence may re-enter, as this
+    /// claim's inspect step proved them. `None` everywhere else.
+    root_reentry: Option<Arc<RootAgentReentry>>,
+}
+
+/// FU-323a (C1): the root saved-Agent calls this claim's inspect step proved
+/// re-enterable, by `(node, step, call_id)`. Each is admitted at most once per
+/// assembly; a second visit within the claim takes today's refusal. A second
+/// assembly in the same claim cannot issue a second restored model call
+/// either: the first one's checkpoint write changes the evidence digest, and
+/// Main grants one digest per claim (`model_checkpoint_authority.go`).
+pub(crate) struct RootAgentReentry {
+    proven: std::collections::BTreeSet<(String, usize, String)>,
+    taken: std::sync::Mutex<std::collections::BTreeSet<(String, usize, String)>>,
+}
+
+impl RootAgentReentry {
+    /// The re-entries `proofs` admit, or `None` when they admit none.
+    pub(crate) fn from_proofs(
+        proofs: &[crate::agents::session::AgentFrontierProof],
+    ) -> Option<Arc<Self>> {
+        let proven = proofs
+            .iter()
+            .filter_map(crate::agents::session::AgentFrontierProof::reentry)
+            .map(|(node, step, call_id)| (node.to_owned(), step, call_id.to_owned()))
+            .collect::<std::collections::BTreeSet<_>>();
+        (!proven.is_empty()).then(|| {
+            Arc::new(Self {
+                proven,
+                taken: std::sync::Mutex::default(),
+            })
+        })
+    }
+
+    /// Admit the proven re-entry `(node, step, call_id)` once.
+    pub(crate) fn take(&self, node: &str, step: usize, call_id: &str) -> bool {
+        let key = (node.to_owned(), step, call_id.to_owned());
+        self.proven.contains(&key) && self.taken.lock().is_ok_and(|mut taken| taken.insert(key))
+    }
 }
 
 impl PipelineApplicationNodeRuntime {
@@ -158,7 +197,15 @@ impl PipelineApplicationNodeRuntime {
             prepare_gate,
             visible_starts: Arc::default(),
             member_events: None,
+            root_reentry: None,
         }
+    }
+
+    /// FU-323a: the root occurrence's proven re-entries.
+    #[must_use]
+    pub(crate) fn with_root_reentry(mut self, reentry: Option<Arc<RootAgentReentry>>) -> Self {
+        self.root_reentry = reentry;
+        self
     }
 
     /// Rebind event transport without changing the saved scope or recovery owner.
@@ -171,6 +218,7 @@ impl PipelineApplicationNodeRuntime {
             prepare_gate: Arc::clone(&self.prepare_gate),
             visible_starts: Arc::default(),
             member_events: self.member_events.clone(),
+            root_reentry: None,
         }
     }
 
@@ -191,6 +239,7 @@ impl PipelineApplicationNodeRuntime {
             prepare_gate: Arc::clone(&self.prepare_gate),
             visible_starts: Arc::default(),
             member_events: Some(member_events),
+            root_reentry: None,
         }
     }
 
@@ -229,7 +278,7 @@ impl PipelineApplicationNodeRuntime {
         // D2 (T-2A §8): a fixed Parallel child an earlier claim started runs
         // again and resumes from its own model checkpoint; only a tool that
         // may have started without a receipt ends it "may have started".
-        let kind = match (fanout, receipt.outcome(), fresh) {
+        let mut kind = match (fanout, receipt.outcome(), fresh) {
             (false, ..) => ScopedCallKind::Node,
             (true, GraphCallOutcome::Started, false) => ScopedCallKind::FanoutChildRecovery,
             (true, ..) => ScopedCallKind::FanoutChild,
@@ -295,9 +344,22 @@ impl PipelineApplicationNodeRuntime {
                 }
             }
             GraphCallOutcome::Started if !fresh && !fanout => {
-                // An interrupted unpaused provider/tool has no graph-level replay authority.
-                // The child may have started an effect: it is never dispatched again.
-                return Err(may_have_started());
+                // FU-323a: only the started call this claim's inspect step
+                // proved (its Agent continues from its own model scope), once.
+                if self.root_reentry.as_ref().is_some_and(|reentry| {
+                    reentry.take(
+                        &self.node_name,
+                        context.step,
+                        receipt.activation().call_id(),
+                    )
+                }) {
+                    kind = ScopedCallKind::RootAgentRecovery;
+                } else {
+                    // An interrupted unpaused provider/tool has no graph-level
+                    // replay authority. The child may have started an effect:
+                    // it is never dispatched again.
+                    return Err(may_have_started());
+                }
             }
             GraphCallOutcome::Started => {}
         }

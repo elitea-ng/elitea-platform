@@ -1922,7 +1922,7 @@ impl PipelineStateServices {
             .await
             .map_err(|_| invalid_configuration())?;
         // A node recovery resumes this execution's own node attempt only.
-        let (evidence, _) = self
+        let (evidence, _, _) = self
             .inspect_checkpoint(plan, definition, None, &BTreeSet::new())
             .await?;
         let projector = definition
@@ -1993,7 +1993,7 @@ impl PipelineStateServices {
                 .checkpointer
                 .load(&thread)
                 .await
-                .map_err(|_| dependency_unavailable())?
+                .map_err(|error| agent_frontier::checkpoint_load_failure(&error))?
             else {
                 // FU-248: a child lost inside its first call has saved no row.
                 // Only a child that starts at a direct toolkit/MCP node may
@@ -2165,7 +2165,7 @@ impl PipelineStateServices {
             .checkpointer
             .load(plan.session_id.as_ref())
             .await
-            .map_err(|_| dependency_unavailable())?
+            .map_err(|error| agent_frontier::checkpoint_load_failure(&error))?
             .ok_or_else(|| child_refused(CONTINUATION_PAUSE_UNBOUND))?;
         let Some((session, pause)) = self
             .prove_continuation_row(plan, paused, &checkpoint)
@@ -2229,18 +2229,28 @@ impl PipelineStateServices {
         })
     }
 
+    #[allow(clippy::too_many_lines)] // One ordered proof: writer, frontier gate, then each frontier node.
     pub(super) async fn inspect_checkpoint(
         &self,
         plan: &OrdinaryNativeAgentPlan,
         definition: &PipelineDefinition,
         wake: Option<&super::graph::fanout_wake::FanoutWake>,
         frozen: &dyn FrozenRecoveryLevel,
-    ) -> Result<(ValidatedModelCheckpoint, RecoveryFrontier), NativeAgentAssemblyError> {
+    ) -> Result<
+        (
+            ValidatedModelCheckpoint,
+            RecoveryFrontier,
+            Vec<AgentFrontierProof>,
+        ),
+        NativeAgentAssemblyError,
+    > {
+        // D-6 (C2): a transient read failure keeps the delivery for the next
+        // reclaim; any other stays the terminal it was.
         let checkpoint = self
             .checkpointer
             .load(plan.session_id.as_ref())
             .await
-            .map_err(|_| dependency_unavailable())?
+            .map_err(|error| agent_frontier::checkpoint_load_failure(&error))?
             .ok_or_else(invalid_configuration)?;
         let writer = checkpoint.metadata.get("elitea.pipeline.execution.v1");
         let frontier = if writer == Some(&serde_json::json!([plan.execution_id, plan.generation])) {
@@ -2278,17 +2288,34 @@ impl PipelineStateServices {
         // the decision to that row, and no frontier is resumed blind.
         if frontier == RecoveryFrontier::ContinuationPause {
             return Ok((
-                recovery_evidence(plan, &checkpoint, Vec::<Value>::new())?,
+                recovery_evidence(plan, &checkpoint, Vec::<Value>::new(), &[])?,
                 frontier,
+                Vec::new(),
             ));
         }
         let aliases = frozen.admitted_aliases();
-        if !definition.recovery_frontier_supported(&checkpoint.pending_nodes, &aliases) {
-            // A root Agent node running a saved Agent is not a frontier
-            // (FU-323 makes it one): refused typed and registered, ids only.
-            if let Some(node) =
-                definition.saved_agent_frontier_node(&checkpoint.pending_nodes, &aliases)
-            {
+        // FU-323a: on this execution's own row, an Agent node running a saved
+        // Agent Main froze is a frontier too, proven below. Any other
+        // frontier (a wake's park) admits none.
+        let agents = if frontier == RecoveryFrontier::Own {
+            frozen.admitted_agents()
+        } else {
+            FrozenAgents::new()
+        };
+        let agent_aliases = agents.keys().cloned().collect::<BTreeSet<_>>();
+        if !definition.recovery_frontier_supported_with_agents(
+            &checkpoint.pending_nodes,
+            &aliases,
+            &agent_aliases,
+        ) {
+            // A root Agent node running a saved Agent no proof admits (a
+            // wake's park, or an alias Main did not freeze as an Agent):
+            // refused typed and registered, ids only.
+            if let Some(node) = definition.saved_agent_frontier_node_with_agents(
+                &checkpoint.pending_nodes,
+                &aliases,
+                &agent_aliases,
+            ) {
                 let code = elitea_faults::codes::PIPELINE_RECOVERY_SAVED_AGENT_FRONTIER;
                 elitea_faults::fault!(
                     tracing::Level::WARN,
@@ -2314,8 +2341,30 @@ impl PipelineStateServices {
         // composition), so the assembly-time walk checks every deeper level
         // against the frozen definitions and fails closed.
         let mut children = Vec::new();
+        let mut proofs = Vec::new();
         for node in definition.application_frontier_nodes(&checkpoint.pending_nodes) {
-            let level = application_alias(definition, node).and_then(|alias| frozen.child(alias));
+            let alias = application_alias(definition, node);
+            // FU-323a: an Agent node running a frozen saved Agent is proven
+            // from its call receipt and the Agent's own model scope, in both
+            // inspect calls alike (the evidence digest must be equal).
+            if let Some((alias, application)) = alias
+                .filter(|alias| !aliases.contains(*alias))
+                .and_then(|alias| agents.get_key_value(alias))
+            {
+                proofs.push(
+                    self.prove_agent_frontier(
+                        plan,
+                        definition,
+                        &checkpoint,
+                        node,
+                        alias,
+                        *application,
+                    )
+                    .await?,
+                );
+                continue;
+            }
+            let level = alias.and_then(|alias| frozen.child(alias));
             children.push(
                 self.walk_child_frontier(
                     format!("{}/{node}", checkpoint.thread_id),
@@ -2325,24 +2374,61 @@ impl PipelineStateServices {
                 .await?,
             );
         }
-        Ok((recovery_evidence(plan, &checkpoint, children)?, frontier))
+        Ok((
+            recovery_evidence(plan, &checkpoint, children, &proofs)?,
+            frontier,
+            proofs,
+        ))
     }
 }
 
 /// Bind all frontier data, including graph state, attempts and child receipts.
 /// Convert through Value to order map keys before hashing.
+/// FU-323a (D1 a): a frontier with a root saved-Agent node binds each node's
+/// proof (`recovery.v3`); without one the v1/v2 inputs, and so their digests,
+/// are unchanged.
 fn recovery_evidence<C: serde::Serialize>(
     plan: &OrdinaryNativeAgentPlan,
     checkpoint: &adk_rust::graph::Checkpoint,
     children: Vec<C>,
+    agents: &[AgentFrontierProof],
+) -> Result<ValidatedModelCheckpoint, NativeAgentAssemblyError> {
+    recovery_evidence_digest(
+        plan.execution_id.clone(),
+        plan.generation,
+        plan.definition_digest,
+        checkpoint,
+        children,
+        agents,
+    )
+}
+
+fn recovery_evidence_digest<C: serde::Serialize>(
+    execution_id: String,
+    generation: u64,
+    definition_digest: [u8; 32],
+    checkpoint: &adk_rust::graph::Checkpoint,
+    children: Vec<C>,
+    agents: &[AgentFrontierProof],
 ) -> Result<ValidatedModelCheckpoint, NativeAgentAssemblyError> {
     let value = serde_json::to_value(checkpoint).map_err(|_| invalid_configuration())?;
-    let bytes = if children.is_empty() {
-        serde_json::to_vec(&("elitea.pipeline.recovery.v1", plan.definition_digest, value))
+    let bytes = if !agents.is_empty() {
+        serde_json::to_vec(&(
+            "elitea.pipeline.recovery.v3",
+            definition_digest,
+            value,
+            children,
+            agents
+                .iter()
+                .map(AgentFrontierProof::evidence)
+                .collect::<Vec<_>>(),
+        ))
+    } else if children.is_empty() {
+        serde_json::to_vec(&("elitea.pipeline.recovery.v1", definition_digest, value))
     } else {
         serde_json::to_vec(&(
             "elitea.pipeline.recovery.v2",
-            plan.definition_digest,
+            definition_digest,
             value,
             children,
         ))
@@ -2350,8 +2436,8 @@ fn recovery_evidence<C: serde::Serialize>(
     .map_err(|_| invalid_configuration())?;
     let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
     Ok(ValidatedModelCheckpoint::from_graph(
-        plan.execution_id.clone(),
-        plan.generation,
+        execution_id,
+        generation,
         digest
             .as_ref()
             .try_into()
@@ -2398,6 +2484,11 @@ pub(crate) trait FrozenRecoveryLevel: Send + Sync {
     }
     /// The aliases of the saved pipelines Main froze at this level.
     fn admitted_aliases(&self) -> BTreeSet<String>;
+    /// The saved Agents Main froze at this level, by alias (FU-323a): only the
+    /// root level names any, so only a root Agent node may resume one.
+    fn admitted_agents(&self) -> FrozenAgents {
+        FrozenAgents::new()
+    }
     /// The frozen saved pipeline `alias` runs: its definition and its own level.
     fn child(&self, alias: &str) -> Option<(&PipelineDefinition, &dyn FrozenRecoveryLevel)>;
 }
@@ -2410,6 +2501,32 @@ impl FrozenRecoveryLevel for BTreeSet<String> {
 
     fn admitted_aliases(&self) -> BTreeSet<String> {
         self.clone()
+    }
+
+    fn child(&self, _alias: &str) -> Option<(&PipelineDefinition, &dyn FrozenRecoveryLevel)> {
+        None
+    }
+}
+
+/// The root level before assembly (FU-323a): the saved pipelines and saved
+/// Agents Main froze in the run's tool snapshot, with no frozen child
+/// definition to check.
+pub(crate) struct PreAssemblyRecoveryLevel {
+    pub(crate) pipelines: BTreeSet<String>,
+    pub(crate) agents: FrozenAgents,
+}
+
+impl FrozenRecoveryLevel for PreAssemblyRecoveryLevel {
+    fn validates(&self) -> bool {
+        false
+    }
+
+    fn admitted_aliases(&self) -> BTreeSet<String> {
+        self.pipelines.clone()
+    }
+
+    fn admitted_agents(&self) -> FrozenAgents {
+        self.agents.clone()
     }
 
     fn child(&self, _alias: &str) -> Option<(&PipelineDefinition, &dyn FrozenRecoveryLevel)> {
@@ -2441,6 +2558,12 @@ fn child_refused(cause: &'static str) -> NativeAgentAssemblyError {
 }
 
 /// Whether `code` is one of the recovery walk's refusals (PM-2).
+#[path = "session_agent_frontier.rs"]
+mod agent_frontier;
+pub(crate) use agent_frontier::{
+    AgentFrontierProof, FrozenAgents, is_agent_frontier_cause, is_transient_inspect_failure,
+};
+
 pub(crate) fn is_recovery_frontier_cause(code: &str) -> bool {
     [
         CHILD_MISSING,

@@ -1090,6 +1090,7 @@ impl PipelineApplicationScopeRegistry {
         node: &str,
         projection: std::sync::Arc<ApplicationRuntimeProjection>,
         events: crate::agents::graph::PipelineNodeEventSender,
+        root_reentry: Option<std::sync::Arc<super::scoped_runtime::RootAgentReentry>>,
     ) -> Result<
         std::sync::Arc<super::scoped_runtime::PipelineApplicationNodeRuntime>,
         NativeAgentAssemblyError,
@@ -1110,7 +1111,8 @@ impl PipelineApplicationScopeRegistry {
                 projection,
                 events,
                 runtime.prepare_gate.clone(),
-            ),
+            )
+            .with_root_reentry(root_reentry),
         ))
     }
 

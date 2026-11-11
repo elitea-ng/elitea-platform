@@ -4312,7 +4312,7 @@ fn configured_capabilities(snapshot: &AdmittedToolSnapshot<'_>) -> Vec<String> {
         .collect()
 }
 
-fn application_tool_name(identity: ApplicationIdentity) -> String {
+pub(crate) fn application_tool_name(identity: ApplicationIdentity) -> String {
     format!("elitea_agent_{}_v_{}", identity.0, identity.1)
 }
 
@@ -4866,7 +4866,7 @@ impl ApplicationAgentTool {
             Arc::new(agent)
         };
         let pipeline_container = pipeline_application_container(ctx.as_ref(), self.name())?;
-        let local_agent = fanout_child_agent(local_agent, ctx.as_ref())?;
+        let local_agent = recovering_child_agent(local_agent, ctx.as_ref())?;
         if pipeline_container {
             self.send_container_call(ctx.as_ref(), &arguments).await?;
         }
@@ -5806,7 +5806,10 @@ fn pipeline_application_container(
 }
 
 /// The pipeline's call marker names exactly this call; a fixed Parallel child
-/// adds `fanout`, and a re-run of a started one also `recover_started`.
+/// adds `fanout`, and a re-run of a started one also `recover_started`; a root
+/// Agent node's proven re-entry (FU-323a) adds `root_recovery`, never with
+/// `fanout`. The marker lives only in the in-process tool context
+/// (`graph/direct_tool.rs` `PipelineToolContext`): nothing persists it.
 fn pipeline_call_marker_valid(marker: &Value, call_id: &str, tool_name: &str) -> bool {
     let Some(object) = marker.as_object() else {
         return false;
@@ -5816,31 +5819,36 @@ fn pipeline_call_marker_valid(marker: &Value, call_id: &str, tool_name: &str) ->
         && object.get("tool_name").and_then(Value::as_str) == Some(tool_name)
         && object.iter().all(|(key, value)| {
             matches!(key.as_str(), "call_id" | "tool_name")
-                || (matches!(key.as_str(), "fanout" | "recover_started")
+                || (matches!(key.as_str(), "fanout" | "recover_started" | "root_recovery")
                     && value == &Value::Bool(true))
         })
         && (!object.contains_key("recover_started") || object.contains_key("fanout"))
+        && !(object.contains_key("root_recovery") && object.contains_key("fanout"))
 }
 
-/// D2 (T-2A §8): a fan-out child replays an interrupted read-only batch; a
-/// call an earlier claim started resumes from the child's own checkpoint.
-/// Without one it could only start over, so it is refused.
-fn fanout_child_agent(
+/// D2 (T-2A §8): an Agent node's child (a fixed Parallel member, or since
+/// FU-323a any pipeline Agent node) records its read-only tools, so an
+/// interrupted batch of only those is replayed, not refused. A call an earlier
+/// claim started (`recover_started` in a fan-out, `root_recovery` at the root)
+/// resumes from the child's own checkpoint; without one it could only start
+/// over, so it is refused.
+fn recovering_child_agent(
     agent: Arc<LazyNestedAgent>,
     ctx: &dyn ToolContext,
 ) -> adk_rust::Result<Arc<LazyNestedAgent>> {
-    let (fanout, recover_started) = fanout_child_call(ctx);
-    if !fanout {
+    let call = pipeline_child_call(ctx);
+    if !call.node {
         return Ok(agent);
     }
+    let recovering = call.recover_started || call.root_recovery;
     let mut agent = agent.as_ref().clone();
     let scopes = agent.model_scopes.take();
-    if recover_started && scopes.is_none() {
+    if recovering && scopes.is_none() {
         return Err(super::model_checkpoint::tool_may_have_started());
     }
     agent.model_scopes = scopes.map(|scopes| {
         let scopes = scopes.with_read_only_replay();
-        if recover_started {
+        if recovering {
             scopes.with_pending_model_recovery()
         } else {
             scopes
@@ -5849,18 +5857,47 @@ fn fanout_child_agent(
     Ok(Arc::new(agent))
 }
 
-/// A fixed Parallel child call (`fanout`), and whether it re-runs a call an
-/// earlier claim started (`recover_started`), from the validated marker.
-fn fanout_child_call(ctx: &dyn ToolContext) -> (bool, bool) {
+/// What the validated marker says about this Agent-node call.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PipelineChildCall {
+    /// A pipeline Agent node runs this call (the marker is present).
+    node: bool,
+    /// A fixed Parallel member's call.
+    fanout: bool,
+    /// A fixed Parallel member re-running a call an earlier claim started.
+    recover_started: bool,
+    /// A root Agent node re-entering its proven started call (FU-323a).
+    root_recovery: bool,
+}
+
+fn pipeline_child_call(ctx: &dyn ToolContext) -> PipelineChildCall {
     let actions = ctx.actions();
-    let flag = |key: &str| {
-        actions
-            .state_delta
-            .get(PIPELINE_APPLICATION_NODE_METADATA_KEY)
-            .and_then(|marker| marker.get(key))
-            == Some(&Value::Bool(true))
-    };
-    (flag("fanout"), flag("recover_started"))
+    let marker = actions
+        .state_delta
+        .get(PIPELINE_APPLICATION_NODE_METADATA_KEY);
+    let flag = |key: &str| marker.and_then(|marker| marker.get(key)) == Some(&Value::Bool(true));
+    PipelineChildCall {
+        node: marker.is_some(),
+        fanout: flag("fanout"),
+        recover_started: flag("recover_started"),
+        root_recovery: flag("root_recovery"),
+    }
+}
+
+/// The child session of agent `agent_name` called as `call_id` from session
+/// `parent_session`: stable across processes, so a replacement Worker opens the
+/// same child model scope (FU-323a reads it before assembly).
+pub(crate) fn child_instruction_session_id(
+    parent_session: &str,
+    call_id: &str,
+    agent_name: &str,
+) -> String {
+    format!(
+        "elitea-child-{}",
+        super::instruction_authority::content_digest(&format!(
+            "{parent_session}:{call_id}:{agent_name}"
+        ))
+    )
 }
 
 fn pipeline_application_event(ctx: &dyn ToolContext) -> Event {
@@ -5971,14 +6008,10 @@ impl ApplicationToolInvocationContext {
         // another Worker, so a per-process counter would hand out ids already persisted.
         let invocation_id = format!("elitea-child-{}", uuid::Uuid::new_v4());
         let branch = nested_application_branch(parent_ctx.branch());
-        let instruction_session_id = format!(
-            "elitea-child-{}",
-            super::instruction_authority::content_digest(&format!(
-                "{}:{}:{}",
-                parent_ctx.session_id(),
-                parent_ctx.function_call_id(),
-                agent.name()
-            ))
+        let instruction_session_id = child_instruction_session_id(
+            parent_ctx.session_id(),
+            parent_ctx.function_call_id(),
+            agent.name(),
         );
         let instruction_state = parent_ctx.session().map_or_else(HashMap::new, |session| {
             super::instruction_authority::state_for_child(
@@ -6237,7 +6270,7 @@ fn fanout_member_pause(
     event: &mut Event,
     sensitive: &SensitiveToolCatalog,
 ) -> adk_rust::Result<Option<Value>> {
-    if !fanout_child_call(ctx).0 {
+    if !pipeline_child_call(ctx).fanout {
         return Ok(None);
     }
     let card = super::events::fanout_member_card(event, sensitive).map_err(|_| {
@@ -6426,6 +6459,40 @@ mod tests {
         ));
         assert!(!valid(json!({"call_id": "call-2", "tool_name": "agent"})));
         assert!(!valid(json!({"call_id": "call-1"})));
+        // FU-323a U4: a root re-entry is valid only without `fanout`, and
+        // `recover_started` still needs `fanout`; five keys are refused.
+        assert!(valid(
+            json!({"call_id": "call-1", "tool_name": "agent", "root_recovery": true})
+        ));
+        assert!(!valid(json!({"call_id": "call-1", "tool_name": "agent",
+            "fanout": true, "root_recovery": true})));
+        assert!(!valid(json!({"call_id": "call-1", "tool_name": "agent",
+            "root_recovery": true, "recover_started": true})));
+        assert!(!valid(
+            json!({"call_id": "call-1", "tool_name": "agent", "root_recovery": false})
+        ));
+        assert!(!valid(json!({"call_id": "call-1", "tool_name": "agent",
+            "fanout": true, "recover_started": true, "root_recovery": true})));
+    }
+
+    /// FU-323a: the child session is the one derivation the running child and
+    /// the inspect step share, distinct per parent session, call and agent.
+    #[test]
+    fn the_child_session_is_derived_from_parent_call_and_agent() {
+        let id = child_instruction_session_id("root", "call-1", "elitea_agent_3_v_4");
+        assert!(id.starts_with("elitea-child-"));
+        assert_eq!(
+            id,
+            child_instruction_session_id("root", "call-1", "elitea_agent_3_v_4")
+        );
+        for other in [
+            child_instruction_session_id("other", "call-1", "elitea_agent_3_v_4"),
+            child_instruction_session_id("root", "call-2", "elitea_agent_3_v_4"),
+            child_instruction_session_id("root", "call-1", "elitea_agent_3_v_5"),
+        ] {
+            assert_ne!(id, other);
+        }
+        assert_eq!(application_tool_name((3, 4)), "elitea_agent_3_v_4");
     }
 
     // These fixtures exercise only the retained envelope's local integrity checks.

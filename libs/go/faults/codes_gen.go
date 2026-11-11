@@ -56,6 +56,20 @@ const (
 	PipelineCodeSupervisorBusy Code = "pipeline.code.supervisor_busy"
 	// A Code item of a Map or Parallel was interrupted after it may have started and no owner proof showed its effect, so it ended typed and was not run again.
 	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
+	// A checkpoint reclaim found a call receipt for a root Agent node that is not this pipeline's own call of its saved Agent, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentReceiptMismatch Code = "pipeline.recovery.agent_receipt_mismatch"
+	// A checkpoint reclaim found a root Agent node's saved-Agent model checkpoint written by another execution, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentStepForeignExecution Code = "pipeline.recovery.agent_step_foreign_execution"
+	// A checkpoint reclaim could not validate the model checkpoint or answer receipt of a root Agent node's saved Agent, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentStepInvalid Code = "pipeline.recovery.agent_step_invalid"
+	// A checkpoint reclaim found that a root Agent node's saved Agent was inside a tool call that may have started, so the run ended typed and the call was not repeated.
+	PipelineRecoveryAgentStepMayHaveStarted Code = "pipeline.recovery.agent_step_may_have_started"
+	// A checkpoint reclaim found a root Agent node's saved Agent paused for a decision outside a continuation, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentStepPaused Code = "pipeline.recovery.agent_step_paused"
+	// A checkpoint reclaim found a root Agent node's saved-Agent session with events but no model checkpoint, so the run ended typed and nothing was repeated.
+	PipelineRecoveryAgentStepSessionWithoutCheckpoint Code = "pipeline.recovery.agent_step_session_without_checkpoint"
+	// A checkpoint reclaim could not read its checkpoint because PostgreSQL was briefly unavailable, so the delivery was kept and is reclaimed again until the run's deadline.
+	PipelineRecoveryInspectTransient Code = "pipeline.recovery.inspect_transient"
 	// A checkpoint reclaim met a root Agent node running a saved Agent, which cannot resume yet, so the run ended typed and nothing after that node ran.
 	PipelineRecoverySavedAgentFrontier Code = "pipeline.recovery.saved_agent_frontier"
 	// A Code node sits in a saved pipeline that another saved pipeline runs, so the pipeline was refused before it started: Code runs only in a saved pipeline the started pipeline runs directly, for now.

@@ -1930,8 +1930,11 @@ pub(crate) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
     }
     // A root Agent node running a saved Agent is not a recovery frontier: the
     // inspect step logged its fault line; the run ends with its own text.
+    // FU-323a: an Agent step the inspect step cannot prove ends the same way;
+    // its distinct cause is in the operator's fault line.
     if error.cause().is_some_and(|cause| {
         cause.code() == elitea_faults::codes::PIPELINE_RECOVERY_SAVED_AGENT_FRONTIER.as_str()
+            || crate::agents::session::is_agent_frontier_cause(cause.code())
     }) {
         return RuntimeFailureKind::RecoveryFrontierAgentStep;
     }

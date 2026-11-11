@@ -885,17 +885,34 @@ impl AgentDeliveryProcessOutcome {
                 tracing::Span::current().record("outcome", "retained_no_ack");
                 tracing::Span::current().record("result_code", code);
                 tracing::Span::current().record("retryable", retryable);
-                elitea_faults::fault!(
-                    tracing::Level::WARN,
-                    code = elitea_faults::codes::AGENT_DELIVERY_RETAINED_NO_ACK,
-                    event = "agent_delivery_retained_no_ack",
-                    result_code = code,
-                    retryable
-                );
+                // FU-323a C2 (FU-299 C3): a delivery kept again and again
+                // (a reclaim retained on each redelivery) writes one line per
+                // result code per window, with the count kept quiet since.
+                match RETAINED_LINES.admit(code, std::time::Instant::now()) {
+                    Some(suppressed) => elitea_faults::fault!(
+                        tracing::Level::WARN,
+                        code = elitea_faults::codes::AGENT_DELIVERY_RETAINED_NO_ACK,
+                        event = "agent_delivery_retained_no_ack",
+                        result_code = code,
+                        retryable,
+                        suppressed
+                    ),
+                    None => tracing::debug!(
+                        event = "agent_delivery_retained_no_ack",
+                        result_code = code,
+                        retryable,
+                    ),
+                }
             }
         }
     }
 }
+
+/// The retained-delivery line's windows, one per result code (FU-299 C3).
+static RETAINED_LINES: std::sync::LazyLock<crate::diagnostics::cycle::CycleWindows> =
+    std::sync::LazyLock::new(|| {
+        crate::diagnostics::cycle::CycleWindows::new(crate::diagnostics::cycle::CYCLE_LINE_EVERY)
+    });
 
 pub(super) enum AgentDeliveryProcessError {
     Delivery(AgentDeliveryError),
@@ -1005,6 +1022,9 @@ mod fault_line_tests {
         assert_eq!(line["retryable"], true);
         assert_eq!(line["support_ref"], "exec-retained");
         assert_eq!(line["span"], "agent.delivery");
+        // FU-323a C2: the second retained delivery of the same code within
+        // the window writes no second line.
+        assert_eq!(line["suppressed"], 0);
     }
 
     #[test]
@@ -1027,6 +1047,7 @@ mod fault_line_tests {
             retryable = tracing::field::Empty,
         );
         span.in_scope(|| {
+            AgentDeliveryProcessOutcome::retained("agent_delivery.scripted_retry", true).record();
             AgentDeliveryProcessOutcome::retained("agent_delivery.scripted_retry", true).record();
         });
         elitea_faults::logtest::child_ran();
