@@ -466,11 +466,46 @@ The recovery walk refuses no shape this change admits:
   browser pass.
 - **Agent as tool.** An ordinary root Agent (not a pipeline) calling a saved pipeline as a tool still has no owner
   scope for that pipeline's Code, which fails closed as before (FU-319, registered).
-- **Real-browser evidence: pending (orchestrating session).** Cases:
-  - the ETL `silver_partition` Map, with one partition routed to the error output;
-  - a Worker kill and a Supervisor kill;
-  - main-chat reloads;
-  - the root case (an Agent node running the saved pipeline with Code).
+- **The browser pass did not route a partition to an error output.** The Router routes to `normalize` on every item,
+  because On Error routing (5b) is not in this slice.
+
+## Real-browser evidence
+
+**Stack.**
+- Disposable stack `w32e`, production profile (`verify-profile` 50 passed, 0 failed), real-model dump. Chrome.
+- Main-chat conversations; auto-continuation off; neutral messages (`start`).
+
+**Images.**
+- Main `w32b-e225360ed`, binary-checked for `readSavedCodeChildSource`.
+- Worker `w32b-e225360ed`, binary-checked for `pipeline.saved_code.nested`.
+- Web `w32a-36788446f`: W3-2b changes nothing under `apps/` or the contracts.
+
+**Fixtures**, built in the UI:
+- the saved pipeline `silver_partition` (pipeline 170): `validate` (Python, sleeps 4 s, returns 41) →
+  `route_quality` (Router) → `normalize` (TypeScript, +1);
+- **root case** (pipeline 171): an Agent node `run_saved` runs `silver_partition`, attached as a Pipeline tool;
+- **Map case** (pipeline 172): a Map over 4 partitions, concurrency 2, whose worker is an Agent node running
+  `silver_partition`.
+
+**Results.** Each kill was a `docker kill` plus start of the Worker or the Supervisor during `validate`.
+
+| Case | Execution | Killed | After the kill | WARN/ERROR | Visits / activations / intents | Locks left | After reload |
+|---|---|---|---|---|---|---|---|
+| Root, no kill (baseline) | (chat 887) | — | answered `42` | — | — | — | persists |
+| Root | `2e98b90f…0978` | Worker | completed | 0 | 2 / 2 / 2 | 0 | `42` persists |
+| Root | `46d7d0fc…4dea` | Supervisor | completed | 0 | 2 / 2 / 2 | 0 | `42` persists |
+| Map ×4 (`silver_partition`) | `8383e2d2…f95f` | Worker | 2 in flight at the kill; all 4 completed | 0 | 8 / 8 / 8 | 0 | ordered `count: 42` ×4 persists |
+| Map ×4 (`silver_partition`) | `ffa2e007…4b44` | Supervisor | 2 in flight at the kill; all 4 completed | 0 | 8 / 8 / 8 | 0 | ordered `count: 42` ×4 persists |
+
+- Every run resumed and completed with no re-dispatch: one visit and one intent per Code node per item.
+- The pre-existing gap (Code in a saved pipeline at the root, Q-b1) is closed in the browser.
+- **A fixture error of mine, not a defect:**
+  - the first root runs used a top-level Python `return 41`, which is not a valid Code result, and failed
+    `InvalidResult` with and without a kill;
+  - the fixture was corrected to end with the value `41` before the evidence above;
+  - those two failed runs remain visible in chat 887.
+- The overhead p99 showed no regression: each kill run settled in about 1–1.5 min, dominated by the 4 s Code sleeps
+  and the takeover lease. So FU-320 stays a follow-up.
 
 ## Follow-ups
 
