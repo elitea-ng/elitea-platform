@@ -47,19 +47,21 @@ impl ApplicationBranchCatalog {
         Self { by_parent }
     }
 
-    /// The family of one fan-out child. A Map item whose worker owns no
-    /// application subgraph (a State Modifier) has none: every node that
-    /// owns one (an Agent or an inline LLM worker) is admitted by path, so
-    /// a Map miss is exactly a path-free worker and is given no thread
-    /// (least authority). Any other miss is refused.
+    /// The family of one fan-out child. A child whose owned node runs no
+    /// application subgraph (`path_free`: a State Modifier or Code Map worker
+    /// or Parallel branch, W3-2) has none and is given no thread (least
+    /// authority). A child that owns one (an Agent, an inline LLM branch or
+    /// worker) must have been admitted by path at assembly
+    /// (`composition_paths`, PM-4); a miss is refused (R3), never widened.
     fn for_child(
         &self,
         activation: &ParallelActivation,
         node: &str,
+        path_free: bool,
     ) -> Result<&[String], GraphError> {
         match self.for_owned_node(&activation.root_thread_id, node) {
-            Err(_) if activation.map.is_some() => Ok(&[]),
-            result => result,
+            Err(_) if path_free => Ok(&[]),
+            found => found,
         }
     }
 
@@ -307,7 +309,11 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
         origin: &crate::agents::graph::ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError> {
         let parent = self.for_thread(&activation.root_thread_id)?;
-        let paths = self.branch_paths.for_child(activation, branch.node())?;
+        // A single-branch activation knows nothing of the owned node's kind:
+        // fail closed (R3).
+        let paths = self
+            .branch_paths
+            .for_child(activation, branch.node(), false)?;
         // The compiler admits the branch identity and frozen definition first.
         // The parent adapter adds its opaque claim scope to the hashed lineage.
         let child = parent
@@ -338,9 +344,11 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
         let mut sizes = Vec::with_capacity(children.len());
         let mut authorities = Vec::new();
         for request in children {
-            let paths = self
-                .branch_paths
-                .for_child(activation, request.branch.node())?;
+            let paths = self.branch_paths.for_child(
+                activation,
+                request.branch.node(),
+                request.path_free,
+            )?;
             let thread_id = parent.branch_thread_id(
                 activation,
                 request.branch,
@@ -449,6 +457,49 @@ mod tests {
             ("root", "nested/branch"),
         ] {
             assert!(catalog.for_owned_node(parent, node).is_err());
+        }
+    }
+
+    /// B1 (W3-2): a fan-out child whose owned node has no application path
+    /// (a Code or State Modifier node), in a Parallel as in a Map, gets an
+    /// empty family; an admitted node keeps exactly its own paths.
+    #[test]
+    fn a_path_free_child_gets_no_family_in_a_parallel_and_a_map() {
+        let paths = ["agent_branch", "agent_branch/leaf"].map(str::to_owned);
+        let admitted = admitted_application_paths(&paths).unwrap();
+        let catalog = ApplicationBranchCatalog::from_admitted_paths("root", &admitted);
+        let parallel = crate::agents::graph::ParallelActivation {
+            root_thread_id: "root".to_owned(),
+            node_id: "gather".to_owned(),
+            step: 1,
+            config_digest: [1; 32],
+            map: None,
+        };
+        let mut map_value = serde_json::to_value(&parallel).unwrap();
+        map_value["map"] =
+            serde_json::json!({"worker_digest": vec![2_u8; 32], "source_digest": vec![3_u8; 32]});
+        let map: crate::agents::graph::ParallelActivation =
+            serde_json::from_value(map_value).unwrap();
+        assert!(map.map.is_some());
+        for activation in [&parallel, &map] {
+            assert_eq!(
+                catalog.for_child(activation, "code_branch", true).unwrap(),
+                [] as [&str; 0]
+            );
+            assert_eq!(
+                catalog
+                    .for_child(activation, "agent_branch", false)
+                    .unwrap(),
+                ["agent_branch", "agent_branch/leaf"]
+            );
+            // R3: a child that owns an application subgraph (an Agent or an
+            // inline LLM branch) with no admitted family is refused, never
+            // given an empty one.
+            assert!(
+                catalog
+                    .for_child(activation, "unadmitted_agent", false)
+                    .is_err()
+            );
         }
     }
 

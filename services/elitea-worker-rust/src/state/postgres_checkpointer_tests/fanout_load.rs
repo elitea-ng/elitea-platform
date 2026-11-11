@@ -403,6 +403,7 @@ async fn batched_preparation_costs_two_transactions_and_refuses_a_superseded_cla
             branch,
             ordinal,
             input_digest,
+            path_free: false,
         })
         .collect::<Vec<_>>();
 
@@ -551,6 +552,7 @@ async fn application_families_prepare_in_two_transactions_and_keep_their_own_thr
             branch,
             ordinal,
             input_digest,
+            path_free: false,
         })
         .collect::<Vec<_>>();
     let before = counters.transactions();
@@ -989,6 +991,7 @@ async fn fanout_load_meets_the_postgres_budgets() {
             branch: &wide.branches()[ordinal % 16],
             ordinal,
             input_digest,
+            path_free: false,
         })
         .collect::<Vec<_>>();
     let children = writer

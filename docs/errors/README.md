@@ -49,6 +49,14 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 | `agent_progress.output_rejected` | Main refused this run's progress update, so the turn will be recovered from its last checkpoint. | Read the cause; if Main keeps refusing updates for new runs, check the Worker and Main versions. | operator | no | elitea-worker-rust |
 | `agent_progress.output_unavailable` | Main's output service did not answer a progress update, so the update is kept and sent again. | Check Main's runtime listener; the Worker reconnects on its own. | operator | yes | elitea-worker-rust |
 
+### code
+
+| Code | What happened | What to do | Who sees it | Retry | Raised by |
+|---|---|---|---|---|---|
+| `code.registration_contended` | A Code visit or intent registration kept conflicting with concurrent registrations of the same run after its bounded retries, so Main answered it as retryable. | Nothing when it is rare; the Worker tries again. If one run repeats it, report the support reference. | operator | yes | elitea-main |
+| `code.registration_failed` | Main could not complete a Code visit or intent registration because a dependency failed, so it answered it as retryable. | Read stage and cause; check Main's database if it repeats. The Worker tries the same registration again. | operator | yes | elitea-main |
+| `code.registration_refused` | Main refused a Code visit or intent registration: a claim, permission, source, configuration, input or record check failed closed. | Read stage: claim means the Worker's claim, lease or the actor's permission; the others mean the Worker's request did not match the run's frozen pipeline. Report the support reference if the run was healthy. | operator | no | elitea-main |
+
 ### dependency
 
 | Code | What happened | What to do | Who sees it | Retry | Raised by |
@@ -60,6 +68,8 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 
 | Code | What happened | What to do | Who sees it | Retry | Raised by |
 |---|---|---|---|---|---|
+| `graph.fanout.child_failed` | A Map item or Parallel branch failed; this line names its own code, its fixed sentence and a safe cause chain, so the fan-out failure can be traced to one item. | Find the item by item and item_ref (the support_ref of its failed join entry); member_code and cause say why it failed. | operator | n/a | elitea-worker-rust |
+| `graph.fanout.code_below_root` | A Map or Parallel whose worker or branch is a Code node sits inside a saved child pipeline, so the pipeline was refused before it started: fan-out Code runs only in the started pipeline for now. | Nothing on the platform; the author moves the Map or Parallel into the started pipeline, or runs the Code inside a child pipeline without a fan-out. | operator | no | elitea-worker-rust |
 | `graph.fanout.deadline_insufficient` | A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline. | Nothing on the platform; the user lowers the item count or raises the node's concurrency, or the run is given more time. | operator | no | elitea-worker-rust |
 
 ### internal
@@ -74,8 +84,11 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 | Code | What happened | What to do | Who sees it | Retry | Raised by |
 |---|---|---|---|---|---|
 | `pipeline.code.deadline_insufficient` | A Code attempt was refused before it started because the run's remaining time is shorter than the Code timeout plus the observation margin. | Nothing when the run was near its end; when cause is slot_wait, the Worker was full, so raise code_slots together with the Supervisor's concurrency. | operator | no | elitea-worker-rust |
+| `pipeline.code.main_retrying` | Main answered a Code visit or intent call with a retryable failure, so the Worker sends the same idempotent call again until the attempt's deadline. | Nothing when it is rare; main_code names Main's registered cause when Main gave one (for example code.registration_contended), otherwise reason says how the call failed. | operator | yes | elitea-worker-rust |
+| `pipeline.code.nested_slot` | A Code attempt that already held a Code slot asked for a second one, so it was refused at once instead of waiting for a slot it holds itself. | Report it with the support reference: a code path acquires a Code slot inside another Code attempt, which must not happen. | operator | no | elitea-worker-rust |
 | `pipeline.code.slot_waited` | A Code attempt waited more than a second for a slot because this Worker was already running as many Code attempts on that Supervisor as its code_slots allow. | Nothing when it is rare; if it repeats, raise code_slots together with the Supervisor's concurrency. | operator | n/a | elitea-worker-rust |
 | `pipeline.code.supervisor_busy` | The sandbox Supervisor answered busy to a Code attempt, so the attempt keeps its slot and retries with backoff until the Supervisor has room. | Nothing when it is rare; if it repeats, more Worker slots share the Supervisor than its concurrency allows, so lower code_slots or raise the concurrency. | operator | yes | elitea-worker-rust |
+| `pipeline.node_recovery.child_effect_unknown` | A Code item of a Map or Parallel was interrupted after it may have started and no owner proof showed its effect, so it ended typed and was not run again. | Find the item by its support_ref in the run's failed join entry and check the target system for its effect; the run's other items are unaffected. | operator | no | elitea-worker-rust |
 
 ### runner
 

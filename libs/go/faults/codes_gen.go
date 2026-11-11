@@ -24,10 +24,20 @@ const (
 	AgentProgressOutputRejected Code = "agent_progress.output_rejected"
 	// Main's output service did not answer a progress update, so the update is kept and sent again.
 	AgentProgressOutputUnavailable Code = "agent_progress.output_unavailable"
+	// A Code visit or intent registration kept conflicting with concurrent registrations of the same run after its bounded retries, so Main answered it as retryable.
+	CodeRegistrationContended Code = "code.registration_contended"
+	// Main could not complete a Code visit or intent registration because a dependency failed, so it answered it as retryable.
+	CodeRegistrationFailed Code = "code.registration_failed"
+	// Main refused a Code visit or intent registration: a claim, permission, source, configuration, input or record check failed closed.
+	CodeRegistrationRefused Code = "code.registration_refused"
 	// Main lost its database; requests that need it fail and Workers get retryable answers until it is back.
 	DependencyDatabaseUnavailable Code = "dependency.database_unavailable"
 	// Main lost NATS; admitted runs wait in the outbox and claimed runs continue.
 	DependencyNatsUnavailable Code = "dependency.nats_unavailable"
+	// A Map item or Parallel branch failed; this line names its own code, its fixed sentence and a safe cause chain, so the fan-out failure can be traced to one item.
+	GraphFanoutChildFailed Code = "graph.fanout.child_failed"
+	// A Map or Parallel whose worker or branch is a Code node sits inside a saved child pipeline, so the pipeline was refused before it started: fan-out Code runs only in the started pipeline for now.
+	GraphFanoutCodeBelowRoot Code = "graph.fanout.code_below_root"
 	// A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline.
 	GraphFanoutDeadlineInsufficient Code = "graph.fanout.deadline_insufficient"
 	// A component crashed on an unexpected condition; the request or task it was handling failed.
@@ -36,10 +46,16 @@ const (
 	InternalUnexpected Code = "internal.unexpected"
 	// A Code attempt was refused before it started because the run's remaining time is shorter than the Code timeout plus the observation margin.
 	PipelineCodeDeadlineInsufficient Code = "pipeline.code.deadline_insufficient"
+	// Main answered a Code visit or intent call with a retryable failure, so the Worker sends the same idempotent call again until the attempt's deadline.
+	PipelineCodeMainRetrying Code = "pipeline.code.main_retrying"
+	// A Code attempt that already held a Code slot asked for a second one, so it was refused at once instead of waiting for a slot it holds itself.
+	PipelineCodeNestedSlot Code = "pipeline.code.nested_slot"
 	// A Code attempt waited more than a second for a slot because this Worker was already running as many Code attempts on that Supervisor as its code_slots allow.
 	PipelineCodeSlotWaited Code = "pipeline.code.slot_waited"
 	// The sandbox Supervisor answered busy to a Code attempt, so the attempt keeps its slot and retries with backoff until the Supervisor has room.
 	PipelineCodeSupervisorBusy Code = "pipeline.code.supervisor_busy"
+	// A Code item of a Map or Parallel was interrupted after it may have started and no owner proof showed its effect, so it ended typed and was not run again.
+	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
 	// A background runner failed its pass and will try again.
 	RunnerCycleFailed Code = "runner.cycle_failed"
 	// A background runner stopped on a dependency failure and is being restarted.

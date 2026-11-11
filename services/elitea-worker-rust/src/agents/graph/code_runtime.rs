@@ -165,8 +165,28 @@ pub(in crate::agents) enum ToolCodeError {
     Untyped(String),
 }
 
+/// W3-2 (D3): the Code children of one fan-out activation, admitted against
+/// the run's deadline before the activation freezes.
+pub(crate) struct FanoutCodeAdmission<'a> {
+    pub(super) node_id: &'a str,
+    /// One entry per child that runs Code: the language and platform-client
+    /// flag of each of its Code nodes, each node once (Q2).
+    pub(super) children: Vec<Vec<(CodeLanguage, bool)>>,
+    pub(super) concurrency: u32,
+}
+
 #[async_trait]
 pub(in crate::agents) trait CodeSandboxRuntime: Send + Sync {
+    /// W3-2 (D3): admit a fan-out of Code children. The default runtime has
+    /// no slots or deadline to admit against.
+    fn admit_fanout(
+        &self,
+        _request: &FanoutCodeAdmission<'_>,
+    ) -> Result<(), elitea_agent_runtime::graph::fanout::admission::FanoutDeadlineInsufficient>
+    {
+        Ok(())
+    }
+
     /// Bind only the actual Main registered saved family at the compiler seam.
     /// Default runtimes cannot acquire scoped authority from a child definition.
     fn bind_saved_child_scope(
@@ -225,7 +245,13 @@ pub(super) struct CodeNode {
     boundary: CodeStateBoundary,
     runtime: Arc<dyn CodeSandboxRuntime>,
     events: Option<super::node_events::PipelineNodeEventSender>,
+    /// W3-2 (N1): a fan-out member reads the registered code its Code node
+    /// failed with, so the member failure names it.
+    failure_code: Option<CodeFailureSlot>,
 }
+
+/// The registered failure code a Code node reported, for its fan-out member.
+pub(super) type CodeFailureSlot = Arc<std::sync::Mutex<Option<&'static str>>>;
 
 impl CodeNode {
     pub(super) fn new(
@@ -243,14 +269,58 @@ impl CodeNode {
             boundary,
             runtime,
             events: None,
+            failure_code: None,
         })
     }
+
+    /// W3-2 (N1): record the registered failure code into `slot` as well.
+    pub(super) fn with_failure_slot(mut self, slot: CodeFailureSlot) -> Self {
+        self.failure_code = Some(slot);
+        self
+    }
+
+    fn record_failure(&self, code: &'static str) {
+        if let Some(slot) = &self.failure_code
+            && let Ok(mut slot) = slot.lock()
+        {
+            *slot = Some(code);
+        }
+    }
+
     pub(super) fn with_events(
         mut self,
         events: Option<super::node_events::PipelineNodeEventSender>,
     ) -> Self {
         self.events = events;
         self
+    }
+
+    /// The committed stop's operator line names its failure class (B2), a
+    /// finite enum: never source, inputs, outputs or owner text.
+    async fn report_stop(
+        &self,
+        context: &NodeContext,
+        authority: &NodeAttemptAuthority,
+        code: &'static str,
+        class: Option<NodeFailureClass>,
+    ) -> Result<(), GraphError> {
+        tracing::error!(
+            node_id = self.definition.id(),
+            graph_thread_id = context.config.thread_id,
+            activation_id = %crate::sandbox::code_recovery::hex(&authority.dispatch_activation()),
+            attempt = authority.attempt(),
+            error_code = code,
+            failure_class = class.map(|class| format!("{class:?}")),
+            "pipeline Code node stopped"
+        );
+        self.record_failure(code);
+        if let Some(events) = &self.events {
+            events
+                .send_execution_failure(code)
+                .await
+                .map_err(|_| code_error("The pipeline failure channel closed."))?;
+        }
+        Ok(())
     }
 }
 
@@ -265,6 +335,7 @@ impl Node for CodeNode {
         let result = self.execute_code(context, &mut typed).await;
         if let Err(error) = &result {
             let code = typed.unwrap_or("pipeline.code_failed");
+            self.record_failure(code);
             // A deadline refusal already wrote its one WARN fault line.
             if code != crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE {
                 tracing::error!(node_id = self.definition.id(), error_code = code, failure_reason = %error, "pipeline Code node failed");
@@ -473,21 +544,18 @@ impl NodeAttemptBody for CodeNode {
         authority: &NodeAttemptAuthority,
         code: &'static str,
     ) -> Result<(), GraphError> {
-        tracing::error!(
-            node_id = self.definition.id(),
-            graph_thread_id = context.config.thread_id,
-            activation_id = %crate::sandbox::code_recovery::hex(&authority.dispatch_activation()),
-            attempt = authority.attempt(),
-            error_code = code,
-            "pipeline Code node stopped"
-        );
-        if let Some(events) = &self.events {
-            events
-                .send_execution_failure(code)
-                .await
-                .map_err(|_| code_error("The pipeline failure channel closed."))?;
-        }
-        Ok(())
+        self.report_stop(context, authority, code, None).await
+    }
+
+    async fn report_terminal_failure_classified(
+        &self,
+        context: &NodeContext,
+        authority: &NodeAttemptAuthority,
+        code: &'static str,
+        class: NodeFailureClass,
+    ) -> Result<(), GraphError> {
+        self.report_stop(context, authority, code, Some(class))
+            .await
     }
 
     async fn report_restored_terminal_failure(
@@ -502,6 +570,7 @@ impl NodeAttemptBody for CodeNode {
                 error_code = code,
                 "persisted pipeline Code node failure restored"
             );
+            self.record_failure(code);
             if let Some(events) = &self.events {
                 events
                     .send_execution_failure(code)

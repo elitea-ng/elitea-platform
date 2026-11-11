@@ -197,6 +197,18 @@ pub(crate) trait NodeAttemptBody: Node {
         Ok(())
     }
 
+    /// As [`Self::report_terminal_failure`], also given the committed
+    /// failure's class (a finite, data-free enum) for the operator line (B2).
+    async fn report_terminal_failure_classified(
+        &self,
+        context: &NodeContext,
+        authority: &NodeAttemptAuthority,
+        code: &'static str,
+        _class: NodeFailureClass,
+    ) -> Result<(), GraphError> {
+        self.report_terminal_failure(context, authority, code).await
+    }
+
     /// Project a validated terminal class. Never execute, reconcile, or change authority.
     async fn report_restored_terminal_failure(
         &self,
@@ -1094,7 +1106,12 @@ impl RecoverableNode {
                     {
                         journal.ensure_current()?;
                         self.body
-                            .report_terminal_failure(context, &authority, code)
+                            .report_terminal_failure_classified(
+                                context,
+                                &authority,
+                                code,
+                                failure.failure.class,
+                            )
                             .await?;
                         return Err(recovery_error("pipeline.node_recovery.failed"));
                     }

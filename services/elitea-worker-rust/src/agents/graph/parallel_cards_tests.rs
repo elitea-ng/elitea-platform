@@ -267,6 +267,8 @@ impl Fixture {
                     runtimes,
                 })),
                 llm: None,
+                code: None,
+                code_recovery: false,
                 events: None,
                 root_session: None,
             }),

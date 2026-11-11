@@ -13,6 +13,11 @@ use super::compiler::{reserved_user_state_key, state_value_matches};
 use super::yaml::valid_output_key;
 
 const MAX_STATE_BYTES: usize = 512 * 1024;
+
+/// A Map item channel a Code worker reads (W3-2): any JSON value the frozen
+/// source holds, read-only. No update may write it (`state_value_matches`
+/// admits no value of this kind).
+pub(super) const MAP_ITEM_INPUT_KIND: &str = "__map_opaque_json";
 const MAX_STATE_KEYS: usize = 256;
 
 /// Construct only from compiler-owned declarations, never sandbox-provided metadata.
@@ -36,7 +41,7 @@ impl CodeStateBoundary {
                 || reserved_user_state_key(key)
                 || !matches!(
                     kind.as_str(),
-                    "str" | "int" | "float" | "bool" | "list" | "dict"
+                    "str" | "int" | "float" | "bool" | "list" | "dict" | MAP_ITEM_INPUT_KIND
                 )
             {
                 return Err(CodeStateError::InvalidSchema);
@@ -65,7 +70,7 @@ impl CodeStateBoundary {
             if (all || selected.contains(key))
                 && let Some(value) = state.get(key)
             {
-                if !state_value_matches(kind, value) {
+                if kind != MAP_ITEM_INPUT_KIND && !state_value_matches(kind, value) {
                     return Err(CodeStateError::InvalidValue);
                 }
                 validate_input_depth(value, 128, &mut remaining_values)?;

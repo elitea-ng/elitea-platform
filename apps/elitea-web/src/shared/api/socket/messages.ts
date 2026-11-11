@@ -755,6 +755,19 @@ const AgentStateMessageSchema = z.looseObject({
   response_metadata: responseMetadataSchema.optional(),
 });
 
+/**
+ * Client contract 1.48 (ADR-0050 decision 4): one step of a temporary
+ * sub-agent a cloud run started. `response_metadata.subagent_v1` is read by
+ * `@elitea/client-core/stream` `foldSubAgentEntry`, which bounds it.
+ */
+const AgentSubAgentMessageSchema = z.looseObject({
+  type: z.literal("agent_subagent"),
+  message_id: z.string().optional(),
+  stream_id: z.string().optional(),
+  execution_generation: z.string().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+});
+
 /** `z.discriminatedUnion('type', [...])` over every `FRAME_TYPE` variant (spec §5.5). */
 export const socketMessageSchema = z.discriminatedUnion('type', [
   AgentStartMessageSchema,
@@ -802,6 +815,7 @@ export const socketMessageSchema = z.discriminatedUnion('type', [
   AgentSwarmAgentResponseMessageSchema,
   AgentSwarmHandoffMessageSchema,
   AgentStateMessageSchema,
+  AgentSubAgentMessageSchema,
 ]);
 
 /** Not exported: no consumer needs the bare type name yet — SocketMessageParseResult (below, exported) already carries it structurally. Export when a Wave-2 consumer needs to name it directly. */

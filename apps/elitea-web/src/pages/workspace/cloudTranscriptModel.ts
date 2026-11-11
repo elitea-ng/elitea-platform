@@ -7,12 +7,16 @@
 import type { ChatMessage } from '@/features/chat-messages';
 import type { ComponentProps } from 'react';
 
+import type { CloudSubAgentLane } from '@elitea/client-core/stream';
+
 import type { TurnTranscript } from '@/features/workspace';
 import { forgeLinkLabel, forgeLinkOf, GIT_PUSH, OPEN_PULL_REQUEST } from '@/shared/lib/forgeLink';
 
 /** What the local transcript renders for one turn, and one entry of it. */
 type TurnView = ComponentProps<typeof TurnTranscript>['view'];
 type TranscriptItem = TurnView['items'][number];
+/** One sub-agent lane of a turn, as the local transcript draws it. */
+export type SubAgentLane = NonNullable<TurnView['subAgents']>[number];
 
 const SUMMARY_CHARS = 120;
 const RESULT_CHARS = 4000;
@@ -82,10 +86,68 @@ function toolItem(action: RawAction, index: number): TranscriptItem | undefined 
   };
 }
 
+/**
+ * A cloud answer's temporary sub-agents (client contract 1.48, ADR-0050
+ * decision 4) as the local lanes: under the `spawn_agent` row whose call id
+ * started them, with their profile name and a "temporary" badge.
+ */
+function laneOf(lane: CloudSubAgentLane): SubAgentLane {
+  const items: TranscriptItem[] = lane.items.map((item, index) =>
+    item.type === 'tool'
+      ? {
+          type: 'tool',
+          key: `c${item.callId}`,
+          callId: item.callId,
+          tool: item.tool === '' ? 'tool' : item.tool,
+          argsSummary: item.argsSummary ?? '',
+          remote: true,
+          ...(item.ok === undefined ? {} : { result: { ok: item.ok, summary: item.summary ?? '', truncated: false } }),
+        }
+      : { type: 'text', key: `t${lane.agentId}-${String(index)}`, text: item.text },
+  );
+  return {
+    agentId: lane.agentId,
+    parentCallId: lane.parentCallId,
+    ordinal: lane.ordinal,
+    status: lane.status,
+    items,
+    temporary: true,
+    ...(lane.label === undefined ? {} : { label: lane.label }),
+    ...(lane.displayName === undefined ? {} : { displayName: lane.displayName }),
+    ...(lane.avatar === undefined ? {} : { avatar: lane.avatar }),
+    ...(lane.steps === undefined ? {} : { steps: lane.steps }),
+    ...(lane.inputTokens === undefined ? {} : { inputTokens: lane.inputTokens }),
+    ...(lane.outputTokens === undefined ? {} : { outputTokens: lane.outputTokens }),
+    ...(lane.result === undefined ? {} : { result: lane.result }),
+    ...(lane.error === undefined ? {} : { error: lane.error }),
+  };
+}
+
+function lanesOfAnswer(message: ChatMessage): Pick<TurnView, 'subAgents'> {
+  const lanes = message.subAgents ?? [];
+  return lanes.length === 0 ? {} : { subAgents: lanes.map(laneOf) };
+}
+
+/**
+ * A `spawn_agent` row for each stored lane whose call has no tool row of its
+ * own. A reloaded answer keeps its lanes (`meta.subagents_v1`) but not its
+ * tool calls, and the transcript draws a lane only under its call's row.
+ */
+function spawnRowsOf(message: ChatMessage, tools: readonly TranscriptItem[]): TranscriptItem[] {
+  const known = new Set(tools.flatMap((item) => (item.type === 'tool' ? [item.callId] : [])));
+  const rows: TranscriptItem[] = [];
+  for (const lane of message.subAgents ?? []) {
+    if (known.has(lane.parentCallId)) continue;
+    known.add(lane.parentCallId);
+    rows.push({ type: 'tool', key: `c${lane.parentCallId}`, callId: lane.parentCallId, tool: 'spawn_agent', argsSummary: '', remote: true, result: { ok: true, summary: '', truncated: false } });
+  }
+  return rows;
+}
+
 /** What an assistant message shows: its tool steps, then its text, and its error. */
 export function turnViewOf(message: ChatMessage): TurnView {
   const tools = ((message.toolActions ?? []) as readonly RawAction[]).map(toolItem).filter((item): item is TranscriptItem => item !== undefined);
-  const items: TranscriptItem[] = [...tools, ...(message.content === '' ? [] : [{ type: 'text' as const, key: `t-${message.id}`, text: message.content }])];
+  const items: TranscriptItem[] = [...tools, ...spawnRowsOf(message, tools),...(message.content === '' ? [] : [{ type: 'text' as const, key: `t-${message.id}`, text: message.content }])];
   const running = message.isStreaming === true;
   // A turn paused on an approval is not "done": its card below says what it waits for.
   const paused = ((message.hitlInterrupts ?? []) as readonly { decided?: boolean }[]).some((card) => card.decided !== true) || message.hitlInterrupt !== undefined;
@@ -94,6 +156,7 @@ export function turnViewOf(message: ChatMessage): TurnView {
     phase: running ? 'running' : paused ? null : 'done',
     items,
     approvals: [],
+    ...lanesOfAnswer(message),
     ...(exception !== undefined && exception !== null && exception !== '' ? { error: { code: message.failureCode ?? 'error', message: typeof exception === 'string' ? exception : JSON.stringify(exception) } } : {}),
   };
 }

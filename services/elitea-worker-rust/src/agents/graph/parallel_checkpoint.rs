@@ -97,6 +97,10 @@ impl ParallelOccurrenceCheckpointer {
         Ok(())
     }
 
+    /// Freeze the occurrence, or return the one already frozen. `admit` runs
+    /// only before a first freeze (W3-2 D3): a refusal freezes, journals and
+    /// starts nothing, and an occurrence frozen before a restart is never
+    /// re-admitted (its children may have started).
     pub(super) async fn freeze(
         &self,
         activation: &ParallelActivation,
@@ -104,6 +108,7 @@ impl ParallelOccurrenceCheckpointer {
         branches: Vec<FrozenBranchInput>,
         origin: ParallelChildOrigin,
         child_threads: Vec<String>,
+        admit: impl FnOnce() -> Result<(), GraphError> + Send,
     ) -> Result<FrozenOccurrence, GraphError> {
         let expected = FrozenOccurrence {
             activation: activation.clone(),
@@ -131,6 +136,7 @@ impl ParallelOccurrenceCheckpointer {
             }
         }
         validate_lineage(&expected, activation)?;
+        admit()?;
         let mut checkpoint = match latest.as_ref() {
             Some(checkpoint) if checkpoint.step == context.step => checkpoint.clone(),
             _ => Checkpoint::new(
@@ -518,6 +524,9 @@ pub(crate) struct ParallelBranchExecution {
     /// The branch family's node journals (FU-248).
     node_recovery:
         Option<Arc<dyn crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// How many children the frozen occurrence holds (W3-2: a Code child's
+    /// owner scope names it); `0` when the caller did not set it.
+    family_size: usize,
 }
 
 impl ParallelBranchExecution {
@@ -541,7 +550,14 @@ impl ParallelBranchExecution {
             parent_event_scope,
             static_after_checkpoints: std::collections::BTreeMap::new(),
             node_recovery: None,
+            family_size: 0,
         }
+    }
+
+    /// The frozen occurrence's child count (W3-2).
+    pub(super) const fn with_family_size(mut self, family_size: usize) -> Self {
+        self.family_size = family_size;
+        self
     }
 
     /// The authored `after` pauses the resumed input continues.
@@ -577,6 +593,18 @@ impl ParallelBranchExecution {
 
     pub(crate) fn activation_root_thread_id(&self) -> &str {
         &self.activation.root_thread_id
+    }
+    /// The fan-out node this child belongs to.
+    pub(crate) fn activation_node_id(&self) -> &str {
+        &self.activation.node_id
+    }
+    /// Whether this child is a Map item (else a Parallel branch).
+    pub(crate) const fn is_map_item(&self) -> bool {
+        self.activation.map.is_some()
+    }
+    /// The frozen occurrence's child count; `0` when unknown.
+    pub(crate) const fn family_size(&self) -> usize {
+        self.family_size
     }
     pub(crate) fn branch_thread_id(&self) -> &str {
         &self.thread_id

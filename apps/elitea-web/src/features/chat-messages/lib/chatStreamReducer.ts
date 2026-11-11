@@ -67,6 +67,7 @@ import { reduceSwarmFrame } from './chatStreamSwarmFrames';
 import { reduceContextFrame } from './chatStreamContextFrames';
 import { reduceSummaryFrame } from './chatStreamSummaryFrames';
 import { reduceMessageSyncFrame } from './chatStreamMessageSyncFrames';
+import { reduceSubAgentFrame, settleSubAgents } from './chatStreamSubAgentFrames';
 import { isRootAnswerFrame, reduceFinalResultFrame } from './chatStreamFinalResult';
 
 import { participantApplicationId } from './answerAuthor';
@@ -119,6 +120,7 @@ export function applyChatStreamFrame(
     reduceContextFrame(history, frame, type, context, index) ??
     reduceSummaryFrame(history, frame, type, context, index) ??
     reduceMessageSyncFrame(history, frame, type, context) ??
+    reduceSubAgentFrame(history, frame, type, index) ??
     reduceFinalResultFrame(history, frame, context, index) ??
     // Not yet ported (see the module doc). Returning the input reference is the
     // point: an unported frame must be inert, never a partial write.
@@ -158,5 +160,7 @@ function settleTerminal(next: readonly ChatMessage[], frame: ChatStreamFrame): r
   const message = next[target];
   if (!message) return next;
   const toolActions = settleContextProgress(message.toolActions);
-  return toolActions === message.toolActions ? next : replaceAt(next, target, { toolActions });
+  const subAgents = settleSubAgents(message.subAgents);
+  if (toolActions === message.toolActions && subAgents === message.subAgents) return next;
+  return replaceAt(next, target, { toolActions, ...(subAgents === undefined ? {} : { subAgents }) });
 }

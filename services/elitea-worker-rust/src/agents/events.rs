@@ -7297,6 +7297,9 @@ mod code_debug;
 #[path = "events_run_steps.rs"]
 mod run_steps;
 
+#[path = "events_subagent_lane.rs"]
+mod subagent_lane_frames;
+
 #[path = "grounding_events.rs"]
 mod grounding_events;
 

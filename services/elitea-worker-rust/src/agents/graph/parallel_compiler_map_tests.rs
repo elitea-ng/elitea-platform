@@ -34,6 +34,8 @@ fn factory(items: usize) -> CompilerParallelBranches {
         state_types: BTreeMap::from([("item_result".to_owned(), "str".to_owned())]),
         resolver: None,
         llm: None,
+        code: None,
+        code_recovery: false,
         events: None,
         root_session: None,
         delegated_servers: Arc::default(),

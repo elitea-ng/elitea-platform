@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.47"
+  x-elitea-client-contract: "1.48"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3094,6 +3094,130 @@ components:
             message's `addressed_to`. Empty is everyone. Present with
             `participant_id`.
 
+    SubAgentLaneItem:
+      type: object
+      description: >-
+        Client contract 1.48. One of a sub-agent's own tool calls (`tool`) or
+        one of its texts (`text`). Untrusted text: render it as plain text.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [tool, text]
+        call_id: { type: string, description: 'The child''s own call id (`tool`).' }
+        tool: { type: string, maxLength: 120 }
+        args_summary:
+          type: string
+          maxLength: 240
+          description: The call's arguments as one short line, secrets masked.
+        ok:
+          type: boolean
+          description: Set once the call returned; false when it failed.
+        summary:
+          type: string
+          maxLength: 240
+          description: The first characters of the call's result or error.
+        text: { type: string, maxLength: 600 }
+
+    SubAgentLane:
+      type: object
+      description: >-
+        Client contract 1.48 (ADR-0050 decision 4). A temporary sub-agent a
+        cloud run started with `spawn_agent`, as the answer keeps it
+        (`metadata.subagents_v1`). Untrusted text: render it as plain text.
+      required: [agent_id, parent_call_id, ordinal, status, items]
+      properties:
+        agent_id: { type: string }
+        parent_call_id:
+          type: string
+          description: The `tool_run_id` of the `spawn_agent` call that started it.
+        ordinal: { type: integer, minimum: 1 }
+        label: { type: string, maxLength: 120 }
+        display_name:
+          type: string
+          maxLength: 120
+          description: The profile's display name; absent when the spawn named none.
+        avatar:
+          type: string
+          maxLength: 120
+          description: The profile's avatar key (`default:<name>`); display only.
+        status:
+          type: string
+          enum: [running, completed, failed, budget_exhausted, cancelled]
+          description: >-
+            `running` on a lane whose answer is still streaming; a settled
+            answer's children are settled (a child the run's end stopped is
+            `cancelled`).
+        items:
+          type: array
+          maxItems: 96
+          items:
+            $ref: '#/components/schemas/SubAgentLaneItem'
+        steps: { type: integer }
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        result:
+          type: string
+          maxLength: 2000
+          description: Its final text (or the text it had when it stopped).
+        error:
+          type: string
+          description: Why it stopped short (`subagent_failed`, `subagent_cancelled`, ...).
+
+    ClientFrameAgentSubAgent:
+      description: >-
+        Client contract 1.48 (ADR-0050 decision 4). One step of a temporary
+        sub-agent a cloud run started with `spawn_agent`:
+        `response_metadata.subagent_v1.kind` is `started` (with its
+        `parent_call_id`, `ordinal`, `label`, `display_name` and `avatar`),
+        `resumed`, `tool_start` (`call_id`, `tool`, `args_summary`),
+        `tool_end` (`call_id`, `ok`, `summary`), `text` or `finished`
+        (`status`, `steps`, tokens, `result`, `error`). Fold them into one
+        lane per `agent_id` under the `spawn_agent` row; the answer keeps the
+        same lanes as `metadata.subagents_v1`. A client that does not know
+        the frame ignores it. Not terminal. Untrusted text: render it as
+        plain text.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the lane entry
+                (services/elitea-worker-rust/src/agents/subagent_lane.rs).
+              required: [subagent_v1]
+              properties:
+                subagent_v1:
+                  type: object
+                  required: [kind, agent_id]
+                  properties:
+                    kind:
+                      type: string
+                      enum: [started, resumed, tool_start, tool_end, text, finished]
+                    agent_id: { type: string }
+                    parent_call_id: { type: string }
+                    ordinal: { type: integer }
+                    label: { type: string }
+                    display_name: { type: string }
+                    avatar: { type: string }
+                    call_id: { type: string }
+                    tool: { type: string }
+                    args_summary: { type: string }
+                    ok: { type: boolean }
+                    summary: { type: string }
+                    text: { type: string }
+                    status:
+                      type: string
+                      enum: [running, completed, failed, budget_exhausted, cancelled]
+                    steps: { type: integer }
+                    input_tokens: { type: integer }
+                    output_tokens: { type: integer }
+                    result: { type: string }
+                    error: { type: string }
+
     ClientFrameAgentState:
       description: >-
         Client contract 1.38: the participant moved to a new state. The
@@ -3911,6 +4035,18 @@ components:
                 otherwise.
             grounding:
               $ref: '#/components/schemas/GroundingIndicator'
+            subagents_v1:
+              type: array
+              maxItems: 24
+              items:
+                $ref: '#/components/schemas/SubAgentLane'
+              description: >-
+                Client contract 1.48 (ADR-0050 decision 4). On a cloud answer
+                whose agent started temporary sub-agents (`spawn_agent`): one
+                lane per child, as its `agent_subagent` frames left it. Show
+                each under the `spawn_agent` tool row whose call id is its
+                `parent_call_id`, with its display name and a "temporary"
+                badge. Absent when the answer started none.
         message_items:
           type: array
           description: Omitted, not empty, for a group with no attachments.
@@ -21113,6 +21249,7 @@ x-elitea-client-frames:
   mcp_authorization_required: '#/components/schemas/ClientFrameMcpAuthorizationRequired'
   agent_requires_confirmation: '#/components/schemas/ClientFrameRequiresConfirmation'
   agent_state: '#/components/schemas/ClientFrameAgentState'
+  agent_subagent: '#/components/schemas/ClientFrameAgentSubAgent'
 
 paths:
   /.well-known/elitea-client:

@@ -1,6 +1,6 @@
 ---
-title: "Sub-agent profiles and briefs"
-description: "Give a sub-agent a name and a role with spawn_agent's profile, pass it what you can see with a context brief, and find each spawn in the run's record."
+title: "Sub-agent profiles, briefs and lanes"
+description: "Give a sub-agent a name and a role with spawn_agent's profile, pass it what you can see with a context brief, watch it work in its lane, and find each spawn in the run's record."
 ---
 
 An agent with the `subagents` internal tool starts a sub-agent with `spawn_agent`. A sub-agent has its own fresh context: it sees only its task. Two optional arguments shape it:
@@ -93,6 +93,25 @@ A sub-agent of a local turn in the desktop app takes the same `profile`: its dis
 | `facts` | Accepted. |
 
 The desktop app writes no `ephemeral_agents` row for a local sub-agent. The turn's thread history keeps the lane's start, with the display name, the avatar key and the profile and brief digests and references. Like the cloud record, it never keeps the soul, a quote or a fact. A cloud agent in a desktop thread runs in the cloud, so the cloud checks its briefs.
+
+## Watch a sub-agent work
+
+In a cloud run, each sub-agent shows as a temporary participant under the `spawn_agent` call that started it. The row shows the sub-agent's `display_name` (or **Sub-agent 1**, **Sub-agent 2** and so on), a dashed avatar ring, a **Temporary** badge and its status: running, done, failed, out of budget or stopped. While the sub-agent runs, the row is open and shows its own tool calls, each with a short summary of its arguments and result, and its text. When it ends, the row folds. Open the row to see its final answer, its steps and its tokens.
+
+The row is the same after you reload the conversation. The answer keeps each sub-agent's lane, so the lane does not depend on the live stream.
+
+The lane is a summary, not a transcript:
+
+- The platform masks secret arguments (keys such as `api_key`, `token` and `password`) before it sends a tool call.
+- A tool call's arguments are one line of at most 160 characters. Its result is at most 240 characters, a text at most 600 characters and a final answer at most 2,000 characters.
+- One sub-agent run shows at most 48 tool calls and texts. A sub-agent that `send_input` continues runs again, and the lane keeps at most 96 in total.
+- Every text is the model's or a tool's output. The apps show it as plain text.
+
+If the run ends while a sub-agent still runs, the sub-agent's row shows **Stopped**.
+
+The web app, the desktop app and the mobile app show the lane. The mobile app shows each sub-agent's tool calls and its final answer in the answer's tool card, under the sub-agent's name and **temporary**.
+
+A local turn's sub-agents in the desktop app have the same lane, with the profile's display name, but no **Temporary** badge or avatar ring: they run on your computer, not as cloud participants.
 
 ## The record
 

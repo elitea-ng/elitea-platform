@@ -1436,3 +1436,6 @@ async fn a_map_stopped_by_a_failed_item_ends_the_run_with_readable_chat_text() {
     drop(node);
     assert_fanout_stop_reaches_the_chat_readably(&codes.await.expect("codes"));
 }
+
+#[path = "fanout_code_child_tests.rs"]
+mod code_child_tests;
