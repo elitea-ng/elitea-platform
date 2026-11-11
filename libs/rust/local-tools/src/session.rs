@@ -54,7 +54,7 @@ use crate::workspace::{Intent, Workspace, WsPath};
 
 mod hooks;
 mod processes;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod push_tests;
 
 pub use processes::{PROCESS_TOOLS, RUN_COMMAND_PROCESSES};
@@ -2371,7 +2371,7 @@ fn forbidden_by_rule(value: &Value, reason: &str) -> Option<ToolError> {
     };
     Some(ToolError::new(ErrorCode::Denied, message).with_details(details))
 }
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::path::Path;
 
@@ -2436,7 +2436,7 @@ mod tests {
     #[test]
     fn staged_paths_under_path_deny_are_found() {
         let dir = tempfile::tempdir().expect("dir");
-        let top = std::fs::canonicalize(dir.path()).expect("canonical");
+        let top = crate::sys::canonicalize(dir.path()).expect("canonical");
         std::fs::create_dir(top.join("ws")).expect("ws");
         let workspace =
             Workspace::open(&top.join("ws"), &[".env".to_owned(), "secrets".to_owned()])
@@ -2454,7 +2454,7 @@ mod tests {
     #[test]
     fn staged_paths_under_the_deny_list_match_case_insensitively() {
         let dir = tempfile::tempdir().expect("dir");
-        let top = std::fs::canonicalize(dir.path()).expect("canonical");
+        let top = crate::sys::canonicalize(dir.path()).expect("canonical");
         std::fs::create_dir(top.join("ws")).expect("ws");
         let workspace = Workspace::open(&top.join("ws"), &[]).expect("workspace");
         let denied = DenyList::new([top.join("home/.ssh")]);

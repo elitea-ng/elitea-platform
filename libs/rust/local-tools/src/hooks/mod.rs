@@ -52,6 +52,9 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+// tokio's `process_group` is Unix-only; Windows gets the stand-in.
+#[cfg(windows)]
+use crate::sys::os::CommandExt as _;
 
 use globset::{Glob, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
@@ -437,12 +440,7 @@ impl HookSet {
         let mut child = command
             .spawn()
             .map_err(|error| format!("it could not start: {}", error.kind()))?;
-        let mut group = GroupKill(
-            child
-                .id()
-                .and_then(|id| i32::try_from(id).ok())
-                .and_then(rustix::process::Pid::from_raw),
-        );
+        let mut group = GroupKill(crate::sys::process::Group::of_tokio(&child));
         let (Some(mut pipe_in), Some(out), Some(err)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
@@ -503,7 +501,7 @@ impl HookSet {
         let _ = self;
         let program = find_program(&hook.command[0])
             .ok_or_else(|| format!("`{}` is not an executable program", hook.command[0]))?;
-        let resolved = std::fs::canonicalize(&program).unwrap_or_else(|_| program.clone());
+        let resolved = crate::sys::canonicalize(&program).unwrap_or_else(|_| program.clone());
         if resolved.starts_with(env.workspace.root()) || program.starts_with(env.workspace.root()) {
             return Err("a hook's program cannot be inside the workspace".to_owned());
         }
@@ -742,31 +740,27 @@ fn stdin_json(env: &HookEnv<'_>, call: &HookCall<'_>, input: Option<&Value>) -> 
 /// entries (the path as found, not resolved: a launcher such as rustup's
 /// `cargo` reads its own name).
 fn find_program(name: &str) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt as _;
-    let executable = |path: &Path| {
-        path.metadata()
-            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-    };
-    if name.contains('/') {
+    let executable = |path: &Path| crate::sys::is_executable(path);
+    if crate::sys::has_dir_part(name) {
         let path = PathBuf::from(name);
         return (path.is_absolute() && executable(&path)).then_some(path);
     }
     crate::command::search_path()
         .into_iter()
-        .map(|dir| dir.join(name))
+        .flat_map(|dir| crate::sys::program_candidates(&dir, name))
         .find(|path| executable(path))
 }
 
 /// The hooks' temporary folder (`TMPDIR`), `0700` under the session's.
 fn hook_temp(shell: &ShellConfig) -> Result<PathBuf, String> {
-    use std::os::unix::fs::DirBuilderExt as _;
+    use crate::sys::os::DirBuilderExt as _;
     let temp = shell.temp_dir.join("hooks");
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(&temp)
         .map_err(|error| format!("its temporary folder cannot be created: {}", error.kind()))?;
-    std::fs::canonicalize(&temp)
+    crate::sys::canonicalize(&temp)
         .map_err(|error| format!("its temporary folder cannot be resolved: {}", error.kind()))
 }
 
@@ -834,12 +828,12 @@ async fn bounded<R: AsyncRead + Unpin>(mut reader: R, cap: usize) -> (Vec<u8>, b
 }
 
 /// Kills a hook's process group when dropped (the caller stopped waiting).
-struct GroupKill(Option<rustix::process::Pid>);
+struct GroupKill(Option<crate::sys::process::Group>);
 
 impl GroupKill {
     fn kill_now(&mut self) {
         if let Some(group) = self.0.take() {
-            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+            group.signal(crate::sys::process::Signal::KILL);
         }
     }
 }
@@ -965,5 +959,5 @@ pub fn check_schema(schema: &Value, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

@@ -154,6 +154,12 @@ plist = { version = "1.10", default-features = false }
 elitea-browser-driver-windows = { path = "browser-driver-windows" }
 elitea-browser-driver-dom = { path = "browser-driver-dom" }
 elitea-browser-session = { path = "../../../libs/rust/browser-session" }
+# The toast AUMID of the MSIX build (src/aumid.rs, #1828): the package
+# identity through WinRT (safe projections), and the toast the notification
+# plugin shows, under that id. Both lines are already in the tree through
+# tauri-plugin-notification.
+windows = { version = "0.62.2", features = ["ApplicationModel"] }
+tauri-winrt-notification = "0.8.1"
 
 # The pane's Linux driver (ADR-0048 decision 6, #1593): the shared page
 # script and WebDriver over WebKitGTK, in browser-driver-linux (safe Rust,

@@ -72,7 +72,7 @@ impl Fixture {
 
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().expect("dir");
-    let root = std::fs::canonicalize(dir.path())
+    let root = crate::sys::canonicalize(dir.path())
         .expect("canonical")
         .join("repo");
     std::fs::create_dir(&root).expect("repo");
@@ -161,7 +161,7 @@ async fn a_path_guard_sees_through_a_symlink() {
     let f = fixture();
     std::fs::create_dir_all(f.root.join("migrations")).expect("dir");
     std::fs::write(f.root.join("migrations/0001.sql"), "create table a;\n").expect("seed");
-    std::os::unix::fs::symlink("migrations/0001.sql", f.root.join("link.sql")).expect("link");
+    crate::sys::os::symlink("migrations/0001.sql", f.root.join("link.sql")).expect("link");
     let mut guard = pre(
         "no-migrations",
         &["write_file"],

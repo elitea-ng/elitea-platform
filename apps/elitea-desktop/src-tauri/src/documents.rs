@@ -33,7 +33,7 @@ fn beside(exe: &Path) -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

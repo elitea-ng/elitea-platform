@@ -442,7 +442,7 @@ pub async fn gather(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

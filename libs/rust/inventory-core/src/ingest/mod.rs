@@ -654,4 +654,24 @@ mod tests {
         assert_eq!(parsed, 1, "{results:?}");
         assert_eq!(results.len(), 20);
     }
+
+    /// The parse is keyed by the relative path on every OS, whatever the
+    /// root's separator: a key left absolute (`C:\…\src\m.py`) gave
+    /// citations no chunk covers, and the graph signal found nothing (#1828).
+    #[test]
+    fn parse_keys_are_the_relative_paths() {
+        let bytes = b"class A:\n    pass\n".as_slice();
+        let files = [("src/m.py", bytes)];
+        let never = || false;
+        let dir = std::env::temp_dir();
+        for root in [dir.as_path(), Path::new("/r"), Path::new("/r/")] {
+            let results = parse::parse_tree(root, &files, &never);
+            assert_eq!(
+                results.keys().collect::<Vec<_>>(),
+                ["src/m.py"],
+                "{}",
+                root.display()
+            );
+        }
+    }
 }
