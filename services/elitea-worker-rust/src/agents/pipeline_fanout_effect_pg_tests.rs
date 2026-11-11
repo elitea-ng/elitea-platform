@@ -7367,19 +7367,35 @@ fn crash_plan(
              WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'"
         }
     };
-    let watcher = pool.clone();
+    let _ = pool;
     let members = i64::try_from(members).expect("members");
-    tokio::spawn(async move {
-        loop {
-            let durable = sqlx::query_scalar::<_, i64>(frontier)
-                .fetch_one(&watcher)
-                .await
-                .unwrap_or_default();
-            if durable >= members {
-                std::process::exit(CRASH_EXIT_CODE);
+    // FU-349: the crash point is a race between this watcher and the member
+    // Agent, which saves its next model request (holding the nested result)
+    // right after its pipeline tool returns. A task on the crash process's
+    // current-thread runtime, polling every 20 ms, ran only when the run
+    // yielded and could see the finished thread after that save, so the
+    // reclaim replayed the saved request and never met the edited thread.
+    // The watcher now polls on its own OS thread, runtime and connection,
+    // every millisecond, independent of the run's scheduling.
+    let database = std::env::var(DATABASE_ENV).expect("database");
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("watcher runtime");
+        runtime.block_on(async move {
+            let watcher = connect(&database).await;
+            loop {
+                let durable = sqlx::query_scalar::<_, i64>(frontier)
+                    .fetch_one(&watcher)
+                    .await
+                    .unwrap_or_default();
+                if durable >= members {
+                    std::process::exit(CRASH_EXIT_CODE);
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        });
     });
     outcomes
 }
