@@ -396,3 +396,19 @@ Evidence: `5b1/evidence/round2-failing-first.txt`.
 | D | FU-349 made deterministic. A kill when the gateway receives the Agent's next request cannot work: that request is saved before it is sent (`model_checkpoint.rs` ModelPending), and with that kill point the edited test passed 0/10. Instead the parent installs, for the crash phase only, a trigger that holds the member Agent's write of the tool result (a session event with the nested answer as a function response; its next model request is saved after it), so the finished nested thread is always durable first and the result never is; `client_connection_check_interval` rolls the held insert back when the process dies. The watcher's query error ends the process with its own code (never a busy loop); the dead `let _ = pool;` is gone | edited 10/10 and 10/10; stored-result 10/10 and 10/10; module run in the gates |
 | E | `error_transition` moved below `uses_execute_once`'s doc; the stale `optionalInt` comment line deleted | — |
 | Finding 4 | Accepted as design: see §1 "Always output data on success" | — |
+
+### Counts on the merged head (`origin/main` `2b72df86e`: #1945 FU-323a and #1950)
+
+| Suite | Result |
+|---|---|
+| agent-runtime lib `--all-features`; clippy, fmt, rustdoc `-D warnings` | 1861 passed, 0 failed, 1 ignored (pre-existing); clean |
+| Worker lib `--all-features`, PostgreSQL 18, CI env; clippy, fmt, rustdoc `-D warnings` | 3357 passed, 0 failed, 147 ignored (all from main); clean |
+| FU-349 kill tests on this head | edited 10/10, stored result 10/10 |
+| Worker ignored-test guard | 147 ignored: 133 run by 10 CI invocations, 14 allowlisted, 0 run by nothing, 0 errors |
+| Main `go vet`, `go test -race` (`pipelinelimits`, `runtimecontracts`) | ok; 59 shared vectors |
+| faults gate | `faults` ok, `cmd/faultsgen` no test files, `grpcrecover`, `httperr`, `logx` ok (files regenerated after the merge) |
+| Web typecheck, lint, `i18n-backfill --check`, `npm run test:unit` | clean; 1953 files, 19161 passed, 6 expected fail, 1 skipped |
+| FU-345 test after #1950 | the `index_types` pin survived the merge; 20/20 |
+
+Scanners: lockfiles equal `origin/main`; `cargo deny` (Worker 7 vulnerability + 4 unmaintained, libs/rust 8 + 8),
+`govulncheck` (2 Go standard-library, local go1.26.9) and `npm audit` (21 moderate) are all pre-existing.
