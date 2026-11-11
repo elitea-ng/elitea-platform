@@ -147,6 +147,7 @@ fn an_unadmittable_subagent_model_is_dropped_not_the_turn() {
     assert_eq!(names, ["small"]);
 }
 
+#[allow(clippy::too_many_lines)] // One literal naming every payload field.
 pub(crate) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionRequest {
     let (llm, application) = match kind {
         AgentExecutionKind::Application => (

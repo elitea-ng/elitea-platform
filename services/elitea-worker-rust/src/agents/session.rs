@@ -4817,7 +4817,7 @@ async fn open_history_session(
         }
         HistoryDecision::Reseed => {
             restart().await?;
-            delete_present_session(sessions, &user_id.to_string(), &session_id.to_string()).await?;
+            delete_present_session(sessions, user_id.as_ref(), session_id.as_ref()).await?;
             Ok(HistorySession {
                 session: create_session(sessions, user_id, session_id).await?,
                 created: true,
@@ -6248,7 +6248,11 @@ mod history_binding_tests {
         );
         // Side talk turned off: the session holds a message the view drops.
         assert_eq!(
-            decide(session.as_ref(), &settled("full", "s2"), &[kickoff.clone()]),
+            decide(
+                session.as_ref(),
+                &settled("full", "s2"),
+                std::slice::from_ref(&kickoff)
+            ),
             HistoryDecision::Reseed
         );
         // A setting that changes nothing this session holds rebinds it.
@@ -6259,7 +6263,11 @@ mod history_binding_tests {
         let old = InMemorySessionService::new();
         let session = seeded(&old, &[&kickoff], None).await;
         assert_eq!(
-            decide(session.as_ref(), &settled("full", "s1"), &[kickoff.clone()]),
+            decide(
+                session.as_ref(),
+                &settled("full", "s1"),
+                std::slice::from_ref(&kickoff)
+            ),
             HistoryDecision::Keep,
             "a marker from before settings is bound to its mode"
         );
