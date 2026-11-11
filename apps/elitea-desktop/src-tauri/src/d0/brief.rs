@@ -27,7 +27,7 @@
 //!   memory tools search the person's memories), so no entry was recalled.
 //! * **Facts** pass.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -47,37 +47,60 @@ use super::attachments::Attachment;
 /// The domain of [`attachment_id`]'s hash.
 const ATTACHMENT_ID_DOMAIN: &[u8] = b"elitea.desktop.attachment-id.v1\0";
 
-/// At most this many short ids [`MessageIds`] remembers; past it, it starts
-/// over (a brief then keeps an older message's short id, as before #1908).
+/// At most this many short ids [`MessageIds`] remembers; past it, the
+/// oldest is forgotten first (a brief quoting it then keeps its short id, as
+/// before #1908), never the messages shown last.
 const MAX_KNOWN_MESSAGES: usize = 16 * 1024;
 
 /// The chat message each short id this process showed a model stands for
 /// (#1908): filled by [`tagged`] (a seeded message by its group's uuid, this
 /// turn's message by its `question_id`), read by [`BriefView::check`], so a
 /// spawn's record names the chat message, as a cloud spawn's does. A short
-/// id is a hash of its message id, so an entry is never wrong; a message
+/// id is a hash of its message id: two messages share one only by a 40-bit
+/// collision, and then the one shown last is named; a message
 /// shown before the app started (a session reopened from its store) has
 /// none, and its record keeps the short id.
 struct MessageIds;
 
+/// The short ids [`MessageIds`] holds, and the order they were first shown.
+#[derive(Default)]
+struct KnownMessages {
+    by_short: HashMap<String, String>,
+    order: VecDeque<String>,
+}
+
+impl KnownMessages {
+    fn remember(&mut self, short: &str, message_id: String, cap: usize) {
+        if let Some(kept) = self.by_short.get_mut(short) {
+            *kept = message_id;
+            return;
+        }
+        while self.order.len() >= cap {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.by_short.remove(&oldest);
+        }
+        self.order.push_back(short.to_owned());
+        self.by_short.insert(short.to_owned(), message_id);
+    }
+}
+
 impl MessageIds {
-    fn known() -> &'static Mutex<HashMap<String, String>> {
-        static KNOWN: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
-        KNOWN.get_or_init(|| Mutex::new(HashMap::new()))
+    fn known() -> &'static Mutex<KnownMessages> {
+        static KNOWN: OnceLock<Mutex<KnownMessages>> = OnceLock::new();
+        KNOWN.get_or_init(|| Mutex::new(KnownMessages::default()))
     }
 
     fn remember(short: &str, message_id: &str) {
         let Ok(mut known) = Self::known().lock() else {
             return;
         };
-        if known.len() >= MAX_KNOWN_MESSAGES && !known.contains_key(short) {
-            known.clear();
-        }
-        known.insert(short.to_owned(), canonical_message_id(message_id));
+        known.remember(short, canonical_message_id(message_id), MAX_KNOWN_MESSAGES);
     }
 
     fn message_of(short: &str) -> Option<String> {
-        Self::known().lock().ok()?.get(short).cloned()
+        Self::known().lock().ok()?.by_short.get(short).cloned()
     }
 }
 

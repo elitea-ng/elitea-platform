@@ -21,6 +21,7 @@ import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { addressedTo, firstAnswerer, floorOf } from '@elitea/client-core/conversation';
 
 import { conversationApi } from '@/entities/conversation';
+import { LATEST_VERSION_NAME } from '@/entities/version';
 import { getApplication } from '@/shared/api/generated/applications/applications';
 import { unwrapBody } from '@/shared/api/unwrap';
 import { isDesktopGrantsOff, markGrantsTurnedOff } from '@/features/unattended';
@@ -142,23 +143,28 @@ export function defaultVersionOf(detail: unknown): number {
   const picked =
     versions.find((version) => version.is_default === true && idOf(version) > 0) ??
     versions.find((version) => idOf(version) > 0 && idOf(version) === wanted) ??
-    versions.find((version) => version.name === 'base' && idOf(version) > 0) ??
+    versions.find((version) => version.name === LATEST_VERSION_NAME && idOf(version) > 0) ??
     versions.find((version) => idOf(version) > 0);
   return idOf(picked);
 }
 
+/** What a start sends of the floor: the fields that run the routed agent, or only the address (or nothing). */
+type StartFloor = FloorFields | Pick<TurnStartRequest, 'addressed_to'>;
+
 /**
  * The floor fields with a version to run: an unpinned agent (version 0) runs its agent's default version, read here
- * (#1926). Unreadable or versionless: no floor fields, so the composer's agent is started and the host says why Main
- * routes the message elsewhere.
+ * (#1926). Unreadable or versionless: the message keeps its address, so Main still routes it to the agents it names,
+ * and starts on the composer's agent; the host refuses that start (`floor_routed_elsewhere`) and says why.
  */
-async function withVersion(projectId: number, fields: FloorFields | Record<string, never>): Promise<FloorFields | Record<string, never>> {
+export async function withVersion(projectId: number, fields: FloorFields | Record<string, never>): Promise<StartFloor> {
   if (fields.version_id !== 0 || fields.application_id === undefined) return fields;
+  const floor = fields as FloorFields;
+  const addressOnly: StartFloor = floor.addressed_to === undefined ? {} : { addressed_to: floor.addressed_to };
   try {
-    const version = defaultVersionOf(unwrapBody(await getApplication(String(projectId), fields.application_id)));
-    return version > 0 ? { ...(fields as FloorFields), version_id: version } : {};
+    const version = defaultVersionOf(unwrapBody(await getApplication(String(projectId), floor.application_id)));
+    return version > 0 ? { ...floor, version_id: version } : addressOnly;
   } catch {
-    return {};
+    return addressOnly;
   }
 }
 
@@ -242,11 +248,13 @@ const ROUTED_ELSEWHERE = 'floor_routed_elsewhere';
  * when the thread cannot be read (the retry would only be refused again, #1931) or routes to the agent the refused
  * start was on.
  */
-async function rerouted(queryClient: QueryClient, refused: TurnStartRequest, projectId: number, conversationId: string, base: TurnStartRequest): Promise<TurnStartRequest | undefined> {
+export async function rerouted(queryClient: QueryClient, refused: TurnStartRequest, projectId: number, conversationId: string, base: TurnStartRequest): Promise<TurnStartRequest | undefined> {
   const floor = await readFloor(queryClient, projectId, conversationId, true);
   if (floor === undefined) return undefined;
   const again = routedRequest({ ...base, ...(await withVersion(projectId, floorFields(base.prompt, floor.agents, floor.meta))) });
-  const same = again.application_id === refused.application_id && again.version_id === refused.version_id && again.participant_id === refused.participant_id;
+  // A retry that names no participant answers on whichever one the version finds: no other agent than the refused one.
+  const participant = again.participant_id === undefined || again.participant_id === refused.participant_id;
+  const same = again.application_id === refused.application_id && again.version_id === refused.version_id && participant;
   return same ? undefined : again;
 }
 

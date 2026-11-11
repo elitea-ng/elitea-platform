@@ -105,8 +105,10 @@ func (r *LocalTurnsRepo) StartLocalTurn(ctx context.Context, record localturn.St
 
 	// The routing and the recall (issue 1888): the floor is read in this
 	// transaction, the participant the routing names answers, and a
-	// refused routing pays for no recall.
-	record, err = record.Admit(ctx, func() (localturn.ConversationFloor, error) {
+	// refused routing pays for no recall. The recall runs on this
+	// transaction's connection too (withStartTx): a start never holds one
+	// connection while it waits for a second.
+	record, err = record.Admit(withStartTx(ctx, tx), func() (localturn.ConversationFloor, error) {
 		return readLocalTurnFloor(ctx, tx, schema, record.ActorUserID, record.ConversationUUID)
 	})
 	if err != nil {
@@ -857,4 +859,26 @@ WHERE execution_id = $1 AND interrupt_id = $2 AND phase = 'pause'`, executionID,
 		return fmt.Errorf("local turn: record the approval: %w", err)
 	}
 	return nil
+}
+
+// startTxKey carries a local-turn start's transaction to the reads its
+// admission makes through other repos (the memory recall, issue 1888).
+type startTxKey struct{}
+
+// rowsQuerier is the subset of pgxpool.Pool / pgx.Tx a recall reads with.
+type rowsQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// withStartTx is ctx carrying the start's transaction.
+func withStartTx(ctx context.Context, tx pgx.Tx) context.Context {
+	return context.WithValue(ctx, startTxKey{}, tx)
+}
+
+// startQuerier is the start's transaction when ctx carries one, else pool.
+func startQuerier(ctx context.Context, pool rowsQuerier) rowsQuerier {
+	if tx, ok := ctx.Value(startTxKey{}).(pgx.Tx); ok && tx != nil {
+		return tx
+	}
+	return pool
 }

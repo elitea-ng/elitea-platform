@@ -212,6 +212,9 @@ type StartRecord struct {
 	// FloorTargets and MemoriesUsed as given.
 	route  func(ConversationFloor) (floorPlan, error)
 	recall func(context.Context) (int, error)
+	// logger records why the floor could not be read (the answer is a bare
+	// ErrUnavailable).
+	logger *slog.Logger
 }
 
 // Routes reports whether the start is routed by the conversation's floor:
@@ -230,6 +233,9 @@ func (record StartRecord) Admit(ctx context.Context, read func() (ConversationFl
 		if err != nil {
 			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalid) {
 				return StartRecord{}, err
+			}
+			if record.logger != nil {
+				record.logger.ErrorContext(ctx, "local turn: floor unreadable", "err", err)
 			}
 			return StartRecord{}, fmt.Errorf("local turn: floor unreadable: %w", errors.Join(err, ErrUnavailable))
 		}
@@ -470,7 +476,7 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 		ConversationUUID: request.ConversationUUID, QuestionID: request.QuestionID,
 		ResponseMessageID: ResponseMessageID(request.QuestionID),
 		ParticipantID:     request.ParticipantID, TTL: DeadlineTTL,
-		Grant: grant, FloorTurn: request.FloorTurn,
+		Grant: grant, FloorTurn: request.FloorTurn, logger: s.logger,
 		recall: func(ctx context.Context) (int, error) {
 			resolved, err := s.memories.ResolveCurrentMemoryRecall(
 				ctx, request.ProjectID, request.ActorUserID, strings.TrimSpace(request.UserInput))

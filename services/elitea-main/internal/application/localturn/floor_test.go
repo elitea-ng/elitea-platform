@@ -1,8 +1,10 @@
 package localturn
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -286,5 +288,25 @@ func TestStartWithoutAReadableFloor(t *testing.T) {
 	missing := &floorFakeReader{err: ErrNotFound}
 	if _, err := floorService(t, &floorFakeStore{}, missing).Start(context.Background(), plain); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing conversation: %v, want ErrNotFound", err)
+	}
+}
+
+// An unreadable floor is logged with its cause: the answer is a bare 503.
+func TestAnUnreadableFloorIsLogged(t *testing.T) {
+	var logs bytes.Buffer
+	store := &floorFakeStore{reader: &floorFakeReader{err: errors.New("db down")}}
+	service, err := NewService(store, commitFakePolicy{allowed: true}, commitFakeMemories{}, commitFakeAudit{},
+		func() (string, error) { return strings.Repeat("c", 32), nil }, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.WithFloor()
+	request := floorStart()
+	request.ParticipantID = 11
+	if _, err := service.Start(context.Background(), request); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unreadable floor: %v, want ErrUnavailable", err)
+	}
+	if !strings.Contains(logs.String(), "floor unreadable") || !strings.Contains(logs.String(), "db down") {
+		t.Fatalf("log = %q, want the floor's read error", logs.String())
 	}
 }

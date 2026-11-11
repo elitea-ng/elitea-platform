@@ -2716,7 +2716,7 @@ impl AgentHost {
                 .ok()
                 .map(|admitted| (cached, admitted))
         });
-        let cached_participant = self.caches.participant(&participant_key);
+        let cached_participant = self.caches.named_participant(&participant_key);
         // What is not cached is read now, the version and the conversation
         // together (neither depends on the other), with whose session this
         // is (cached after the session's first turn).
