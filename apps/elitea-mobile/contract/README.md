@@ -179,6 +179,20 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.49
+
+| Area | What |
+|---|---|
+| Avatar pack typed (#1881) | `persona.avatar_pack_v1` is an `AgentAvatarPackV1` object, so the generated type is the pack. `persona.avatar_pack` stays the string 1.38 reserved and is deprecated; a 1.49 server never sends it. The app reads `avatar_pack_v1`, then the object a 1.46 to 1.48 server sent as `avatar_pack` (`participantAvatarPack`), and validates either with `avatarPackOf`. |
+
+Issue 1864: the app plays a state's own file. An image or an animated WebP is drawn with expo-image, which
+animates WebP on both platforms; an MP4 or WebM loop plays muted and looping with expo-video, over its
+poster until its first frame, with no controls, never taking the audio session, and not keeping the screen
+on. Both modules need a new native build. Every file is still downloaded the SEC-3 way, now checked against
+the type its extension names, and written to `<caches>/agent-media/<digest of origin>/<sha256>.<ext>`
+(issue 1882): the view gets the file URI, a file already there is not downloaded again, and the folder is
+deleted with its workspace. Reduced motion still downloads and shows only the still, drawn without playing.
+
 ## Client contract 1.48
 
 | Area | What |

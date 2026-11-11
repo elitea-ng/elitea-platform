@@ -488,14 +488,22 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 				if items[i].Persona == nil {
 					items[i].Persona = map[string]any{}
 				}
-				items[i].Persona["avatar_pack"] = state.pack
+				// Client contract 1.49 (#1881): the object goes under its own
+				// key. `persona.avatar_pack` is the string contract 1.38
+				// reserved; 1.46 to 1.48 put the object there, which a strict
+				// codegen client could reject with the whole participant.
+				items[i].Persona[participantAvatarPackKey] = state.pack
 			}
 		}
 	}
 }
 
+// participantAvatarPackKey is the persona key the avatar pack is served
+// under (client contract 1.49).
+const participantAvatarPackKey = "avatar_pack_v1"
+
 // participantOwnsVersion is the avatar pack's guard (ADR-0050 decision 6).
-// The pack reaches the persona as `persona.avatar_pack`, read live rather
+// The pack reaches the persona as `persona.avatar_pack_v1`, read live rather
 // than snapshotted like the rest of the persona: a pack names
 // content-addressed media, so a new still shows from the next read, and the
 // client falls back to `entity_settings.icon_meta` without one. Version ids

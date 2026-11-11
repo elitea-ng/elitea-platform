@@ -241,7 +241,7 @@ func TestImportRefusesEmbeddedMediaThatIsNotItsName(t *testing.T) {
 		"entity": "agents", "name": "bad media", "description": "x",
 		"versions": []any{map[string]any{
 			"name": "latest", "agent_type": "openai",
-			"avatar_pack":                   avatarPack(still, still),
+			"avatar_pack":                  avatarPack(still, still),
 			agentmediaapi.EmbeddedMediaKey: map[string]any{fileOf(still): "aGVsbG8="},
 		}},
 	}}

@@ -45,7 +45,7 @@ const (
 	agentMediaOrphanSweepRevision   = "agent-media-orphan-sweep-r1"
 	// Daily, off the hour. Nothing about an orphan is urgent, and each tick
 	// reads every tenant's versions.
-	agentMediaOrphanSweepCadence        = "23 3 * * *"
+	agentMediaOrphanSweepCadence = "23 3 * * *"
 	// Under the scheduler's two-minute lease, which every job's timeout must
 	// be; the per-tick delete bound keeps a tick well inside it.
 	agentMediaOrphanSweepHandlerTimeout = 90 * time.Second

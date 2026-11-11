@@ -122,21 +122,25 @@ SELECT $1, participant.id, '{"version_id": 71}'::jsonb, now() AT TIME ZONE 'UTC'
 			local = participant
 		}
 	}
-	if _, ok := foreign.Persona["avatar_pack"]; ok {
+	if _, ok := foreign.Persona["avatar_pack_v1"]; ok {
 		t.Fatalf("another project's participant got this project's pack: %v", foreign.Persona)
 	}
-	if _, ok := otherApplication.Persona["avatar_pack"]; ok {
+	if _, ok := otherApplication.Persona["avatar_pack_v1"]; ok {
 		t.Fatalf("another application's participant got this version's pack: %v", otherApplication.Persona)
 	}
 	// One read answers both: the publication status beside the pack.
 	if local.Meta["version_status"] != "draft" {
 		t.Fatalf("meta.version_status = %v, want draft in the same read", local.Meta["version_status"])
 	}
-	got, _ := local.Persona["avatar_pack"].(map[string]any)
+	got, _ := local.Persona["avatar_pack_v1"].(map[string]any)
 	slots, _ := got["slots"].(map[string]any)
 	stillSlot, _ := slots["still"].(map[string]any)
 	if stillSlot["url"] != still {
-		t.Fatalf("persona.avatar_pack = %v", local.Persona)
+		t.Fatalf("persona.avatar_pack_v1 = %v", local.Persona)
+	}
+	// Contract 1.49 (#1881): the reserved string key never carries the object.
+	if _, ok := local.Persona["avatar_pack"]; ok {
+		t.Fatalf("the deprecated persona.avatar_pack was served: %v", local.Persona)
 	}
 
 	// Cleared: the next read carries no pack.
@@ -148,7 +152,7 @@ SELECT $1, participant.id, '{"version_id": 71}'::jsonb, now() AT TIME ZONE 'UTC'
 		t.Fatal(err)
 	}
 	for _, participant := range participants {
-		if _, ok := participant.Persona["avatar_pack"]; ok {
+		if _, ok := participant.Persona["avatar_pack_v1"]; ok {
 			t.Fatalf("a cleared pack still reached the persona: %v", participant.Persona)
 		}
 	}

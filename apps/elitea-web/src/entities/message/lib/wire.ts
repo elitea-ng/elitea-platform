@@ -67,7 +67,9 @@ export interface MessageParticipantWire {
     readonly display_name?: string;
     readonly pronouns?: string;
     readonly role?: string;
-    /** ADR-0050 decision 6: the version's avatar pack, when the server sends it; read through `avatarPackOf`. */
+    /** Client contract 1.49 (ADR-0050 decision 6, #1881): the version's avatar pack; read through `avatarPackOf`. */
+    readonly avatar_pack_v1?: unknown;
+    /** Deprecated: where a 1.46 to 1.48 server sent the pack; read only when `avatar_pack_v1` is absent. */
     readonly avatar_pack?: unknown;
   };
 }
