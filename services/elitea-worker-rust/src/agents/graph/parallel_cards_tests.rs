@@ -174,6 +174,7 @@ impl ParallelChildCheckpointerFactory for Shared {
             thread_id,
             checkpointer: self.0.clone(),
             node_recovery: None,
+            tool_pipelines: None,
         })
     }
 }

@@ -488,6 +488,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 						ChatHistory:               chatHistory,
 						ChatHistoryRefs:           historyRefs,
 						ParticipantContextHistory: row.ParticipantContextHistory,
+						ParticipantJoinedAt:       row.ParticipantJoinedAt,
 						InternalTools:             internalTools,
 					}
 					return nil
@@ -562,6 +563,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 					InternalTools:             internalTools,
 					Release:                   release,
 					ParticipantContextHistory: row.ParticipantContextHistory,
+					ParticipantJoinedAt:       row.ParticipantJoinedAt,
 				}
 				return nil
 			},
@@ -928,6 +930,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 					TargetParticipantID: int64(row.TargetParticipantID),
 					LLMSettings:         llmSettings, Instructions: row.Instructions,
 					Tools: tools, ChatHistory: chatHistory, ChatHistoryRefs: historyRefs, ConversationMeta: conversationMeta,
+					ParticipantJoinedAt: row.ParticipantJoinedAt,
 				}
 				return nil
 			},
@@ -1011,6 +1014,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentRegeneration(
 				ConversationUUID:    uuid.UUID(row.ConversationUuid.Bytes).String(),
 				TargetParticipantID: int64(row.TargetParticipantID),
 				QuestionID:          uuid.UUID(row.QuestionID.Bytes).String(), UserInput: row.UserInput,
+				QuestionIsOwn: row.QuestionIsOwn != nil && *row.QuestionIsOwn,
 			}
 			if err := target.Validate(); err != nil {
 				return agentexecutionapp.ErrUnsupportedCurrentAgentStart

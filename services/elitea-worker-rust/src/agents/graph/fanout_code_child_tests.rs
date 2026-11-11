@@ -200,6 +200,7 @@ impl ParallelChildCheckpointerFactory for BranchAuthority {
             thread_id,
             checkpointer: store,
             node_recovery: None,
+            tool_pipelines: None,
         })
     }
 }

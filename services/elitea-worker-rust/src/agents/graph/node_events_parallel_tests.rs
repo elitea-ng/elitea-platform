@@ -405,3 +405,95 @@ async fn a_member_failure_stays_in_its_branch_and_a_root_failure_ends_the_run() 
         Some("pipeline.tool_unavailable")
     );
 }
+
+/// A nested pipeline leaf of the member Agent on `agent_thread`, with its
+/// receipt and the thread it names.
+fn nested_leaf(
+    agent_thread: &str,
+    call: &crate::agents::application_pipeline::PipelineToolCallLineage,
+    named: &str,
+) -> Event {
+    let mut event = Event::new("nested-leaf");
+    event.provider_metadata.insert(
+        DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
+        "member-agent".to_owned(),
+    );
+    event
+        .provider_metadata
+        .insert(DESCENDANT_PARENT_CALL_KEY.to_owned(), "call-1".to_owned());
+    crate::agents::graph::tool_pipeline_threads::stamp_durable_tool_thread(
+        &mut event,
+        agent_thread,
+        call,
+    )
+    .unwrap();
+    event.provider_metadata.insert(
+        DESCENDANT_CHECKPOINT_THREAD_KEY.to_owned(),
+        named.to_owned(),
+    );
+    event
+}
+
+/// FU-291 C1: a member admits a nested pipeline thread only when the event's
+/// receipt re-derives it from an Agent thread of this member and its lineage,
+/// and that thread is registered in the set the member's checkpointer admits
+/// into. The root (no registry) is unchanged.
+#[test]
+fn a_nested_pipeline_thread_is_proved_by_its_receipt_and_the_member_registry() {
+    use crate::agents::graph::tool_pipeline_threads::tests::{admitted, lineage};
+    use crate::agents::graph::tool_pipeline_threads::{ToolPipelineThreads, tool_pipeline_thread};
+    let agent = "hashed-branch/owned";
+    let call = lineage("call-1", "summarize");
+    let thread = tool_pipeline_thread(agent, &call).unwrap();
+    let registry = Arc::new(ToolPipelineThreads::new(threads().len()));
+    let mut scope = binding(Some(parent()));
+    scope.tool_threads = Some(Arc::clone(&registry));
+    let (member, _) = sender(scope);
+    let project = |event: &mut Event| {
+        member.project_parallel_application_event(event, None, "root-invocation", None)
+    };
+
+    // A correct derivation whose writer is not active (nothing registered).
+    assert!(project(&mut nested_leaf(agent, &call, &thread)).is_err());
+
+    registry.register(admitted(agent, &call));
+    let mut proved = nested_leaf(agent, &call, &thread);
+    let original = json!(proved);
+    project(&mut proved).unwrap();
+    assert_eq!(json!(proved), original, "the nearest edge is kept as is");
+
+    // The string alone, with no receipt.
+    let mut bare = nested_leaf(agent, &call, &thread);
+    bare.provider_metadata
+        .remove(crate::agents::graph::tool_pipeline_threads::DURABLE_TOOL_THREAD_METADATA_KEY);
+    assert!(project(&mut bare).is_err());
+
+    // Another member's receipt: its own derivation names another thread, and
+    // naming this member's registered thread under it fails the derivation.
+    let other_agent = "other-branch/owned";
+    let other = tool_pipeline_thread(other_agent, &call).unwrap();
+    assert!(project(&mut nested_leaf(other_agent, &call, &other)).is_err());
+    assert!(project(&mut nested_leaf(other_agent, &call, &thread)).is_err());
+
+    // A registered thread under a receipt with a changed lineage.
+    let changed = lineage("call-1", "another task");
+    assert!(project(&mut nested_leaf(agent, &changed, &thread)).is_err());
+
+    // The member root is never an Agent thread.
+    let rooted = tool_pipeline_thread("hashed-branch", &call).unwrap();
+    registry.register(admitted("hashed-branch", &call));
+    assert!(project(&mut nested_leaf("hashed-branch", &call, &rooted)).is_err());
+
+    // Without a registry (no admission lent) nothing nested is admitted.
+    let (unlent, _) = sender(binding(Some(parent())));
+    assert!(
+        unlent
+            .project_parallel_application_event(
+                &mut nested_leaf(agent, &call, &thread),
+                None,
+                "root-invocation",
+                None
+            )
+            .is_err()
+    );
+}

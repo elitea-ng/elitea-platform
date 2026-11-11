@@ -284,6 +284,10 @@ pub(crate) struct PipelineDefinition {
     definition_digest: [u8; 32],
     interrupt_before: Vec<String>,
     interrupt_after: Vec<String>,
+    /// The definition names `chat_history` somewhere (#1913). Only a node
+    /// naming it can read the context view there; without one the view is
+    /// seeded once, at the head of `messages`.
+    names_chat_history: bool,
 }
 
 /// Invocation-owned dependencies for executable pipeline node families.
@@ -301,6 +305,9 @@ pub(crate) struct PipelineNodeRuntimes {
     /// The run's journals lent to a saved child for its direct tool nodes only
     /// (FU-248). Its Code nodes keep their own recovery rules.
     direct_tool_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// FU-291 D-6: a durable nested pipeline's visit, seeded into its first
+    /// frontier so its direct nodes journal as a saved child's do.
+    tool_visit: Option<Arc<String>>,
     saved_child_scope_provider: Option<
         Arc<dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider>,
     >,
@@ -427,6 +434,11 @@ impl PipelineNodeRuntimes {
         self
     }
 
+    /// The resolver of this pipeline's application nodes, if any.
+    pub(crate) fn application_resolver(&self) -> Option<&Arc<dyn PipelineApplicationResolver>> {
+        self.application.as_ref()
+    }
+
     pub(crate) fn application_scopes(
         &self,
     ) -> Option<&crate::agents::pipeline::scoped_applications::PipelineApplicationScopeRegistry>
@@ -489,6 +501,34 @@ impl PipelineNodeRuntimes {
         self
     }
 
+    /// FU-291 D-6: a durable nested pipeline (a fan-out member's Agent called
+    /// it as a tool) journals its direct tool nodes on its own nested thread,
+    /// under `visit`, through that thread's fenced writer.
+    pub(crate) fn with_tool_journals(
+        mut self,
+        journals: Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>,
+        visit: String,
+    ) -> Self {
+        self.direct_tool_recovery = Some(journals);
+        self.tool_visit = Some(Arc::new(visit));
+        self
+    }
+
+    /// FU-291 D2 in a durable nested pipeline: its LLM nodes resume their own
+    /// model step and replay a read-only call batch, as an inline fan-out LLM
+    /// branch does; a tool past its boundary is refused typed. Its events
+    /// still stream to the member.
+    pub(crate) fn with_member_llm_recovery(mut self) -> Self {
+        if let Some(llm) = self
+            .llm
+            .as_ref()
+            .and_then(|factory| factory.for_member_recovery())
+        {
+            self.llm = Some(llm);
+        }
+        self
+    }
+
     /// A fan-out member's saved child, and every saved pipeline beneath it,
     /// journal their direct tool nodes through the member's branch family
     /// (FU-248 at the first level, FU-264 below it): this level's journals
@@ -532,6 +572,7 @@ impl PipelineNodeRuntimes {
             code: None,
             node_recovery: None,
             direct_tool_recovery: None,
+            tool_visit: None,
             saved_child_scope_provider: None,
             saved_code_owner: None,
             saved_code_member: None,
@@ -972,6 +1013,7 @@ impl PipelineDefinition {
             ));
         }
         let normalized = normalize_graph_identifiers(&mut document)?;
+        let names_chat_history = yaml_names(&document, "chat_history");
         let raw = serde_yaml_ng::from_value::<RawPipelineDefinition>(document)
             .map_err(|source| PipelineConfigurationError::MalformedYaml { source })?;
         if normalized.legacy > 0 || normalized.numeric > 0 {
@@ -983,6 +1025,7 @@ impl PipelineDefinition {
             );
         }
         let mut definition = Self::from_raw(raw)?;
+        definition.names_chat_history = names_chat_history;
         let mut yaml_pin = [0_u8; 32];
         yaml_pin.copy_from_slice(digest::digest(&digest::SHA256, yaml.as_bytes()).as_ref());
         for node in &mut definition.nodes {
@@ -1092,6 +1135,8 @@ impl PipelineDefinition {
             definition_digest,
             interrupt_before,
             interrupt_after,
+            // Unknown here: seed both copies, as before #1913.
+            names_chat_history: true,
         })
     }
 
@@ -1731,10 +1776,20 @@ impl PipelineDefinition {
                 node_checkpointer,
                 state_schema,
                 InitialState {
-                    defaults: self.state_defaults.clone(),
+                    defaults: {
+                        let mut defaults = self.state_defaults.clone();
+                        if let Some(visit) = &runtimes.tool_visit {
+                            defaults.insert(
+                                APPLICATION_VISIT_STATE_KEY.to_owned(),
+                                serde_json::Value::String(visit.as_ref().clone()),
+                            );
+                        }
+                        defaults
+                    },
                     reducers: Arc::clone(&self.state_reducers),
                     context_view: runtimes.context_view.clone(),
                     declares_messages: self.state.contains_key("messages"),
+                    names_chat_history: self.names_chat_history,
                 },
                 self.entry_point.clone(),
             );
@@ -2169,6 +2224,26 @@ impl PipelineDefinition {
                     .map(|outputs| (node.id().to_owned(), outputs))
             })
             .collect()
+    }
+
+    /// FU-291 D-7: why a fan-out member cannot run this pipeline as its
+    /// Agent's tool on a durable nested thread yet.
+    pub(crate) fn durable_tool_refusal(&self) -> Option<ToolPipelineCause> {
+        if self.has_code_nodes() {
+            Some(ToolPipelineCause::Code)
+        } else if self.has_application_nodes() {
+            Some(ToolPipelineCause::Agent)
+        } else {
+            None
+        }
+    }
+
+    /// FU-291 C3: the text a finished run of this pipeline answers, from its
+    /// final state: exactly what the completion event of the uninterrupted
+    /// run carried.
+    pub(crate) fn completed_text(&self, state: &State) -> String {
+        select_pipeline_result(state, &self.result_policy())
+            .unwrap_or_else(|| super::agent::PIPELINE_COMPLETED_CONTENT.to_owned())
     }
 
     /// Collect result candidates separately from graph control flow.
@@ -2799,6 +2874,8 @@ struct InitialState {
     context_view: Option<Arc<Vec<serde_json::Value>>>,
     /// The pipeline declares `messages` in its own state.
     declares_messages: bool,
+    /// Some node can read `chat_history` (#1913).
+    names_chat_history: bool,
 }
 
 impl InitialState {
@@ -2807,20 +2884,29 @@ impl InitialState {
     /// the head of `messages` before this turn's question. It runs only where
     /// the first frontier is built, so a resumed or recovered run, whose
     /// checkpoint already holds its state, is never seeded again.
+    ///
+    /// #1913: every checkpoint re-serializes what is seeded here, so the view
+    /// is stored twice only when both copies can be read: `chat_history` only
+    /// when the definition names it, `messages` only when the pipeline does
+    /// not declare its own.
     fn seed_context_view(&self, state: &mut State) {
         let Some(view) = self.context_view.as_deref() else {
             return;
         };
-        state.insert("chat_history".to_owned(), json!(view));
-        if self.declares_messages {
-            return;
-        }
         // Without a question (a wake) `messages` stays unset: an LLM node
         // reading it takes its last entry as the task.
-        if let Some(serde_json::Value::Array(question)) = state.get_mut("messages") {
+        let head = (!self.declares_messages)
+            .then(|| state.get_mut("messages"))
+            .flatten()
+            .and_then(serde_json::Value::as_array_mut);
+        let seeded_head = head.is_some();
+        if let Some(question) = head {
             let mut messages = view.clone();
             messages.append(question);
             *question = messages;
+        }
+        if self.names_chat_history || !seeded_head {
+            state.insert("chat_history".to_owned(), json!(view));
         }
     }
 }
@@ -2831,7 +2917,24 @@ fn seeded_context_message(message: &serde_json::Value) -> bool {
     message
         .get("additional_kwargs")
         .and_then(|additional| additional.get(crate::agents::assembly::CONTEXT_VIEW_MARKER_KEY))
-        .is_some_and(|marker| marker == &serde_json::Value::Bool(true))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+}
+
+/// Whether any key or string of a pipeline document contains `needle`, after
+/// YAML unescaping, so a node that names a channel is never missed.
+fn yaml_names(value: &serde_yaml_ng::Value, needle: &str) -> bool {
+    match value {
+        serde_yaml_ng::Value::String(text) => text.contains(needle),
+        serde_yaml_ng::Value::Sequence(items) => items.iter().any(|item| yaml_names(item, needle)),
+        serde_yaml_ng::Value::Mapping(map) => map
+            .iter()
+            .any(|(key, value)| yaml_names(key, needle) || yaml_names(value, needle)),
+        serde_yaml_ng::Value::Tagged(tagged) => yaml_names(&tagged.value, needle),
+        serde_yaml_ng::Value::Null
+        | serde_yaml_ng::Value::Bool(_)
+        | serde_yaml_ng::Value::Number(_) => false,
+    }
 }
 
 fn invocation_state(
@@ -3706,12 +3809,26 @@ pub(crate) enum FanoutChildRefusal {
     /// A saved child pipeline contains a Parallel node, which binds its
     /// checkpoint authority to the started root only (FU-249).
     ContainsParallel,
-    /// The member's saved Agent calls a saved pipeline among its tools; that
-    /// pipeline's checkpoint threads are not admitted to the member (FU-291).
-    AgentCallsPipeline,
     /// A Code worker or branch of a Map or Parallel inside a saved child
     /// pipeline: its visit scope is the run root's only (R4, W3-2b; FU-317).
     CodeBelowRoot,
+    /// FU-291 D5/D-7: the member's saved Agent reaches a saved pipeline tool
+    /// a member cannot run durably yet.
+    AgentToolPipeline(ToolPipelineCause),
+}
+
+/// FU-291: why a member's saved Agent's pipeline tool cannot run durably yet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ToolPipelineCause {
+    /// A Code node in the pipeline (FU-319: Main needs its tool-lineage edge).
+    Code,
+    /// An Agent node in the pipeline (a scoped ordinary descendant).
+    Agent,
+    /// The pipeline is reached through another Agent (tier 2 or deeper).
+    NestedAgents,
+    /// The member runs a saved pipeline whose Agent node calls a saved
+    /// pipeline: that inner Agent is lent no nested thread admission.
+    InSavedPipeline,
 }
 
 impl FanoutChildRefusal {
@@ -3720,8 +3837,10 @@ impl FanoutChildRefusal {
         match self {
             Self::Kind | Self::Router => "graph.fanout.child_kind_unsupported",
             Self::ContainsParallel => "graph.fanout.parallel_in_child_pipeline",
-            Self::AgentCallsPipeline => "graph.fanout.agent_calls_saved_pipeline",
             Self::CodeBelowRoot => elitea_faults::codes::GRAPH_FANOUT_CODE_BELOW_ROOT.as_str(),
+            Self::AgentToolPipeline(_) => {
+                elitea_faults::codes::GRAPH_FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED.as_str()
+            }
         }
     }
 
@@ -3732,8 +3851,8 @@ impl FanoutChildRefusal {
             Self::Kind,
             Self::Router,
             Self::ContainsParallel,
-            Self::AgentCallsPipeline,
             Self::CodeBelowRoot,
+            Self::AgentToolPipeline(ToolPipelineCause::Code),
         ]
         .iter()
         .any(|refusal| refusal.code() == code)
@@ -3750,11 +3869,20 @@ impl std::fmt::Display for FanoutChildRefusal {
             Self::ContainsParallel => {
                 "a saved pipeline with a Parallel node runs only as the started pipeline"
             }
-            Self::AgentCallsPipeline => {
-                "an Agent that calls a saved pipeline cannot run as a Map item or Parallel branch yet"
-            }
             Self::CodeBelowRoot => {
                 "a Code worker or branch runs only in a Map or Parallel of the started pipeline, not inside a saved child pipeline yet"
+            }
+            Self::AgentToolPipeline(ToolPipelineCause::Code) => {
+                "the Agent's saved pipeline tool holds a Code node, which a Map item or Parallel branch cannot run yet"
+            }
+            Self::AgentToolPipeline(ToolPipelineCause::Agent) => {
+                "the Agent's saved pipeline tool holds an Agent node, which a Map item or Parallel branch cannot run yet"
+            }
+            Self::AgentToolPipeline(ToolPipelineCause::NestedAgents) => {
+                "the Agent reaches a saved pipeline through another Agent, which a Map item or Parallel branch cannot run yet"
+            }
+            Self::AgentToolPipeline(ToolPipelineCause::InSavedPipeline) => {
+                "an Agent node of the saved pipeline calls a saved pipeline, which a Map item or Parallel branch cannot run yet"
             }
         })
     }
@@ -3795,8 +3923,19 @@ impl PipelineConfigurationError {
                 FanoutChildRefusal::Kind => "fanout_child_kind",
                 FanoutChildRefusal::Router => "fanout_child_router",
                 FanoutChildRefusal::ContainsParallel => "parallel_in_child_pipeline",
-                FanoutChildRefusal::AgentCallsPipeline => "fanout_agent_calls_pipeline",
                 FanoutChildRefusal::CodeBelowRoot => "fanout_code_below_root",
+                FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::Code) => {
+                    "fanout_agent_tool_pipeline_code"
+                }
+                FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::Agent) => {
+                    "fanout_agent_tool_pipeline_agent"
+                }
+                FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::NestedAgents) => {
+                    "fanout_agent_tool_pipeline_nested_agents"
+                }
+                FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::InSavedPipeline) => {
+                    "fanout_agent_tool_pipeline_in_saved_pipeline"
+                }
             }),
         }
     }

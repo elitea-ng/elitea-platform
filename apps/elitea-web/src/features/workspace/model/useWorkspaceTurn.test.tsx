@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { WorkspaceIpcError, type AgentEvent, type TurnStartRequest } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 
-import { useWorkspaceTurn } from './useWorkspaceTurn';
+import { MAX_START_RETRIES, useWorkspaceTurn } from './useWorkspaceTurn';
 
 const REQUEST: TurnStartRequest = {
   workspace_id: 'w1',
@@ -253,6 +253,48 @@ describe('useWorkspaceTurn', () => {
       await result.current.start(REQUEST);
     });
     expect(result.current.startErrorCode).toBeNull();
+  });
+
+  it('sends each retry’s refusal through the retry again, at most twice (#1931)', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const startTurn = ipc.startTurn.bind(ipc);
+    const sent: string[] = [];
+    // Refused as routed elsewhere, then as grants off, then started.
+    const refusals = ['floor_routed_elsewhere', 'unattended_grants_off'];
+    ipc.startTurn = (request) => {
+      sent.push(request.prompt);
+      const code = refusals.shift();
+      return code === undefined ? startTurn(request) : Promise.reject(new WorkspaceIpcError(code, code));
+    };
+    const seen: [string, string][] = [];
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    let started: boolean | undefined;
+    await act(async () => {
+      started = await result.current.start(REQUEST, (refusal, refused) => {
+        seen.push([refusal.code, refused.prompt]);
+        return { ...refused, prompt: `${refused.prompt}+` };
+      });
+    });
+    expect(started).toBe(true);
+    expect(sent).toEqual([REQUEST.prompt, `${REQUEST.prompt}+`, `${REQUEST.prompt}++`]);
+    expect(seen).toEqual([
+      ['floor_routed_elsewhere', REQUEST.prompt],
+      ['unattended_grants_off', `${REQUEST.prompt}+`],
+    ]);
+
+    // Past the bound, the refusal shows.
+    ipc.startTurn = () => Promise.reject(new WorkspaceIpcError('floor_routed_elsewhere', 'elsewhere'));
+    let retries = 0;
+    await act(async () => {
+      started = await result.current.start(REQUEST, (_refusal, refused) => {
+        retries += 1;
+        return refused;
+      });
+    });
+    expect(started).toBe(false);
+    expect(retries).toBe(MAX_START_RETRIES);
+    expect(result.current.startErrorCode).toBe('floor_routed_elsewhere');
   });
 
   describe('retryCommit', () => {

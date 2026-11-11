@@ -627,3 +627,76 @@ func nestedVersionMaterializerForTest(t *testing.T) *CurrentConfigurationsMateri
 	require.NoError(t, err)
 	return materializer
 }
+
+// FU-338 B2: a fan-out member's durable pipeline tool stamps the
+// frozen_definition_sha256 of the saved pipeline version Main serves on this
+// route, and refuses a call without one. Through the production route, freeze
+// and materializer, a saved pipeline version always carries it: 64 lowercase
+// hex digits, the same for the same content, and different when only the
+// nodes, only llm_settings or only the tools changed.
+func TestNestedApplicationVersionServesASavedPipelineWithItsFullContentDigest(t *testing.T) {
+	t.Parallel()
+
+	const instructions = "state:\n  input: str\n  messages: list\n  answer: str\nentry_point: answer\nnodes:\n  - id: answer\n    type: llm\n    input: [input]\n    input_mapping:\n      system: {type: fixed, value: 'Answer the topic you are given.'}\n      task: {type: variable, value: input}\n    output: [answer]\n    transition: END\n"
+	pipeline := func(edit func(map[string]any)) json.RawMessage {
+		details := map[string]any{
+			"id": 6, "application_id": 5, "name": "helper-flow", "status": "all",
+			"agent_type": "pipeline", "instructions": instructions, "welcome_message": "",
+			"llm_settings":          map[string]any{"model_name": "model", "temperature": 0.2},
+			"meta":                  map[string]any{},
+			"conversation_starters": []any{}, "pipeline_settings": map[string]any{},
+			"author_id": 11, "tools": []any{}, "skills": []any{}, "tags": []any{}, "variables": []any{},
+		}
+		if edit != nil {
+			edit(details)
+		}
+		raw, err := json.Marshal(details)
+		require.NoError(t, err)
+		return raw
+	}
+	digestOf := func(details json.RawMessage) string {
+		t.Helper()
+		source := currentApplicationVersionSourceFunc(func(
+			_ context.Context, projectID, applicationID, versionID int64,
+		) (CurrentApplicationVersionRecord, error) {
+			require.EqualValues(t, 90106, projectID)
+			require.EqualValues(t, 5, applicationID)
+			require.EqualValues(t, 6, versionID)
+			return CurrentApplicationVersionRecord{ApplicationID: 5, VersionID: 6, VersionDetails: details}, nil
+		})
+		server := newNestedApplicationVersionTestServer(t, source, newNestedVersionFreezer(t))
+		response := serve(server, nestedApplicationVersionRequest(
+			t, &x509.Certificate{}, bytes.Repeat([]byte{4}, sha256.Size), 5, 6,
+		))
+		require.Equal(t, codes.OK, response.Code, string(response.Body))
+		var envelope map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(response.Body, &envelope))
+		require.Contains(t, envelope, "frozen_definition_sha256")
+		var value RuntimeApplicationVersionContext
+		require.NoError(t, json.Unmarshal(response.Body, &value))
+		require.Regexp(t, `^[0-9a-f]{64}$`, value.FrozenDefinitionSHA256)
+		var frozen map[string]any
+		require.NoError(t, json.Unmarshal(value.VersionDetails, &frozen))
+		require.Equal(t, "pipeline", frozen["agent_type"])
+		return value.FrozenDefinitionSHA256
+	}
+
+	base := digestOf(pipeline(nil))
+	require.Equal(t, base, digestOf(pipeline(nil)), "the same content, the same digest")
+	for name, edit := range map[string]func(map[string]any){
+		"nodes": func(details map[string]any) {
+			details["instructions"] = strings.Replace(instructions, "the topic you are given", "the edited topic", 1)
+		},
+		"llm_settings": func(details map[string]any) {
+			details["llm_settings"] = map[string]any{"model_name": "model", "temperature": 0.7}
+		},
+		"tools": func(details map[string]any) {
+			details["tools"] = []any{map[string]any{
+				"id": 92, "type": "pipeline", "name": "other-flow", "toolkit_name": "other-flow",
+				"agent_type": "pipeline", "settings": map[string]any{"application_id": 7, "application_version_id": 8},
+			}}
+		},
+	} {
+		require.NotEqual(t, base, digestOf(pipeline(edit)), name)
+	}
+}

@@ -180,11 +180,13 @@ message AgentExecutionInputV1 {
   // #1831 (ADR-0050 decision 9d): the chat message group uuid of this
   // turn's own question, which `user_input` holds, so the worker can show
   // the model its short id and accept a `spawn_agent` excerpt of it. Set
-  // only on a turn that writes its question: a fresh turn or an
-  // agent-to-agent turn. ABSENT: a regeneration, a continuation, a resume,
-  // or an addressed agent's turn that reuses the person's question (the
-  // question is in its history). Workers are upgraded before Main, because
-  // a worker from an earlier release refuses this tag.
+  // only on a turn that writes its question: a fresh turn, an
+  // agent-to-agent turn, or (#1903) a regeneration of a turn that wrote its
+  // own question, which asks it again. ABSENT: a continuation, a resume, a
+  // regeneration of an addressed agent's answer, or an addressed agent's
+  // turn that reuses the person's question (the question is in its
+  // history). Workers are upgraded before Main, because a worker from an
+  // earlier release refuses this tag.
   optional string current_message_id = 75;
   // #1826 (ADR-0050 decision 9d): the agent memory entries Main recalled
   // into this turn's instructions, in the order shown, at most 50. The
@@ -307,6 +309,17 @@ message ContextViewV1 {
   // (each variable-length field prefixed with its big-endian 64-bit
   // length). The worker refuses a view whose digest does not match.
   string digest = 3;
+  // #1902: lowercase hex SHA-256 over the domain
+  // `elitea.context-view-binding.v1`, the mode, `include_side_talk` and,
+  // under `since_joined`, when the reader joined (each prefixed with its
+  // big-endian 64-bit length): every setting that decides which messages
+  // are eligible. The reader's durable session is bound to it, so a setting
+  // that narrows the view without changing the mode still re-seeds it.
+  // EMPTY: an input from before this field; the session is bound to
+  // `history` alone. Workers are upgraded before Main, because a worker
+  // from an earlier release refuses this tag.
+  // (4 to 15 stay reserved: a reserved tag is never reused.)
+  string binding = 16;
   reserved 4 to 15;
 }
 

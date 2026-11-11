@@ -234,6 +234,14 @@ pub struct TurnRequest {
     /// decision 7f, contract 1.47): Main routes the message by the floor,
     /// and the host runs the routed agents one at a time.
     pub addressed_to: Vec<i64>,
+    /// The agent participant meant to answer (#1927): the one the UI named
+    /// (`threadAgentsOf`), or the next agent of a routed message. Used when
+    /// it is an agent participant of the conversation on `application_id`,
+    /// pinned to `version_id` or unpinned, so two participants of one agent
+    /// version (or an unpinned one listed first) do not resolve to another
+    /// participant. `None`, or one that is not: the agent's participant by
+    /// its version, as before.
+    pub participant_id: Option<i64>,
     /// A later agent's turn of a message Main routed: the host starts it
     /// itself after the previous agent's commit.
     pub floor_turn: Option<FloorTurn>,
@@ -596,6 +604,7 @@ async fn lookup_participant(
             conversation,
             request.application_id,
             request.version_id,
+            request.participant_id,
         )
         .await?)
 }
@@ -1098,6 +1107,10 @@ pub struct AgentHost {
     /// the previous turn's commit lands ([`unattended::CONTINUE_WAIT`];
     /// tests shorten it), in milliseconds.
     continue_wait_ms: std::sync::atomic::AtomicU64,
+    /// The next commit job panics before it commits (tests: the panicked
+    /// commit's path, #1886).
+    #[cfg(test)]
+    panic_next_commit: std::sync::atomic::AtomicBool,
     /// The running turns' count and the OS power assertion they hold
     /// (ADR-0045 decision 7, `crate::keep_awake`): from a turn's start until
     /// its commit settles.
@@ -1345,6 +1358,8 @@ impl AgentHost {
             continue_wait_ms: std::sync::atomic::AtomicU64::new(
                 u64::try_from(unattended::CONTINUE_WAIT.as_millis()).unwrap_or(u64::MAX),
             ),
+            #[cfg(test)]
+            panic_next_commit: std::sync::atomic::AtomicBool::new(false),
             awake: Arc::new(KeepAwake::default()),
             resume_wake: tokio::sync::Notify::new(),
             resume_offers: Mutex::new(std::collections::HashSet::new()),
@@ -1633,6 +1648,13 @@ impl AgentHost {
             u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
             std::sync::atomic::Ordering::SeqCst,
         );
+    }
+
+    /// Make the next commit job panic before it commits (tests).
+    #[cfg(test)]
+    pub(super) fn panic_next_commit(&self) {
+        self.panic_next_commit
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// How many attached images the host holds (tests).
@@ -2510,6 +2532,7 @@ impl AgentHost {
             conversation,
             application_id: request.application_id,
             version_id: request.version_id,
+            participant_id: None,
         });
         let turn = TurnRequest {
             workspace_id: String::new(),
@@ -2529,6 +2552,7 @@ impl AgentHost {
             images: Vec::new(),
             unattended: None,
             addressed_to: Vec::new(),
+            participant_id: None,
             floor_turn: None,
             cloud: false,
         };
@@ -2682,6 +2706,7 @@ impl AgentHost {
             conversation: conversation.clone(),
             application_id: request.application_id,
             version_id: request.version_id,
+            participant_id: request.participant_id,
         };
         // A cached version is admitted now and revalidated beside the start
         // (below); one that no longer admits (a skill picked from a newer
@@ -2691,7 +2716,7 @@ impl AgentHost {
                 .ok()
                 .map(|admitted| (cached, admitted))
         });
-        let cached_participant = self.caches.participant(&participant_key);
+        let cached_participant = self.caches.named_participant(&participant_key);
         // What is not cached is read now, the version and the conversation
         // together (neither depends on the other), with whose session this
         // is (cached after the session's first turn).
@@ -3420,7 +3445,12 @@ impl AgentHost {
             "commit": "pending",
             "execution_id": started.execution_id,
             "conversation_id": conversation_id,
-            "message_ids": [started.question_id, started.response_message_id],
+            // A later agent's turn answers the message's own question: Main
+            // writes none for the turn's (#1887).
+            "message_ids": [
+                floor::answered_question(&request, &started.question_id),
+                started.response_message_id
+            ],
             "changed_files": changes.len(),
         });
         // The host will start the chain's next turn: `done` says so, and the
@@ -3454,6 +3484,15 @@ impl AgentHost {
             done["handed_off"] = json!(true);
         }
         let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Whether the job reached the message's next agent (started it, or
+        // said it does not answer): a panicked job that did not still owes
+        // the UI its `floor_stopped` (#1886).
+        let floor_owed = floor_next.is_some();
+        // Likewise a chain step: a panicked job ends the run (the gate tells
+        // whether a next turn or the watchdog already answered it).
+        let chain_owed = chain_step.is_some() || goal_step.is_some();
+        let chain_settled = std::sync::atomic::AtomicBool::new(false);
+        let floor_settled = std::sync::atomic::AtomicBool::new(false);
         // The resume record (ADR-0045 decision 7): updated when the chain
         // goes on from this commit, deleted when the turn ends here.
         let resume_workspace = request.workspace_id.clone();
@@ -3467,6 +3506,13 @@ impl AgentHost {
             // Nothing of the commit is reported before the turn's `done`.
             let _ = after_done.await;
             let work = std::panic::AssertUnwindSafe(async {
+                #[cfg(test)]
+                assert!(
+                    !host
+                        .panic_next_commit
+                        .swap(false, std::sync::atomic::Ordering::SeqCst),
+                    "the test asked this commit job to panic"
+                );
                 // The goal check of a turn that would end the chain
                 // `completed` (ADR-0045 decision 11), before the commit:
                 // the commit carries the chain's outcome.
@@ -3572,6 +3618,7 @@ impl AgentHost {
                 } else {
                     host.forget_resume(&resume_workspace, events.turn_id());
                 }
+                chain_settled.store(true, std::sync::atomic::Ordering::SeqCst);
                 match (chain_step, continuation) {
                     (Some(ChainStep::Continue), Some(next)) if landed => {
                         host.watch_next_start(
@@ -3605,6 +3652,7 @@ impl AgentHost {
                 // The message's next agent, one at a time, after this
                 // commit (ADR-0050 decision 7f).
                 if let Some(next) = floor_next {
+                    floor_settled.store(true, std::sync::atomic::Ordering::SeqCst);
                     if landed {
                         tokio::spawn(host.clone().continue_floor(
                             next,
@@ -3612,11 +3660,7 @@ impl AgentHost {
                             awake.again(),
                         ));
                     } else {
-                        floor::stopped(
-                            &events,
-                            "commit_failed",
-                            "This answer could not be saved, so the other agents of the message do not answer.",
-                        );
+                        floor::commit_failed(&events);
                     }
                 }
             })
@@ -3635,6 +3679,23 @@ impl AgentHost {
                     &events,
                     &entry,
                 );
+                // A `done` that said the run or the message goes on is
+                // answered: the UI stops waiting for a next turn (#1886).
+                if floor_owed && !floor_settled.load(std::sync::atomic::Ordering::SeqCst) {
+                    floor::commit_failed(&events);
+                }
+                if chain_owed
+                    && !chain_settled.load(std::sync::atomic::Ordering::SeqCst)
+                    && !gate.swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    unattended::chain_ended(
+                        &events,
+                        ChainOutcome::Failed,
+                        None,
+                        Some("The turn could not be saved, so the unattended run stops."),
+                        None,
+                    );
+                }
             }
             // Released only now, landed or failed: a failed commit frees the
             // workspace once its retries are used up (`turn_commit_retry`
@@ -3830,6 +3891,8 @@ impl AgentHost {
             images: Vec::new(),
             unattended: None,
             addressed_to: Vec::new(),
+            // The participant Main named, never another one of its version.
+            participant_id: Some(next.participant_id),
             floor_turn: Some(FloorTurn {
                 question_id: next.question_id.clone(),
                 position: next.position,
@@ -6717,6 +6780,7 @@ fn execution_request(
             current_message_id: None,
             subagent_policy: None,
             context_view_history: None,
+            context_view_binding: None,
             recalled_memory: Vec::new(),
         },
     }

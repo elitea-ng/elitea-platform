@@ -147,6 +147,10 @@ pub(crate) struct PipelineApplicationNodeRuntime {
     /// The saved Agent's definition digest Main gave this run, stamped on the
     /// call's receipt (root Agent nodes; FU-323a review (b)).
     agent_definition: Option<[u8; 32]>,
+    /// FU-291: a fan-out member's fenced admission of the nested threads of
+    /// the saved pipelines its Agent calls as tools, lent around its run.
+    tool_pipelines:
+        Option<Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>>,
 }
 
 /// A proven re-entry's `(node, step, call_id)`.
@@ -253,6 +257,27 @@ impl PipelineApplicationNodeRuntime {
             member_events: None,
             root_reentry: None,
             agent_definition: None,
+            tool_pipelines: None,
+        }
+    }
+
+    /// The same runtime, its Agent's pipeline tools run durably under this
+    /// member family's admission (FU-291).
+    pub(crate) fn with_tool_pipelines(
+        &self,
+        admission: Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>,
+    ) -> Self {
+        Self {
+            scope: self.scope.clone(),
+            node_name: self.node_name.clone(),
+            applications: Arc::clone(&self.applications),
+            events: self.events.clone(),
+            prepare_gate: Arc::clone(&self.prepare_gate),
+            visible_starts: Arc::clone(&self.visible_starts),
+            member_events: self.member_events.clone(),
+            root_reentry: self.root_reentry.clone(),
+            agent_definition: self.agent_definition,
+            tool_pipelines: Some(admission),
         }
     }
 
@@ -281,6 +306,7 @@ impl PipelineApplicationNodeRuntime {
             member_events: self.member_events.clone(),
             root_reentry: None,
             agent_definition: self.agent_definition,
+            tool_pipelines: self.tool_pipelines.clone(),
         }
     }
 
@@ -303,6 +329,7 @@ impl PipelineApplicationNodeRuntime {
             member_events: Some(member_events),
             root_reentry: None,
             agent_definition: self.agent_definition,
+            tool_pipelines: self.tool_pipelines.clone(),
         }
     }
 
@@ -437,11 +464,39 @@ impl PipelineApplicationNodeRuntime {
         let mut receiver = receiver_owner.take().await.map_err(|_| failure())?;
         let tool = Arc::clone(tool);
         let member_events = self.member_events.clone();
+        // FU-291: the member's Agent runs its pipeline tools on nested threads
+        // its own family admits. `A` is this activation's own node thread: the
+        // Agent node's admitted path under the thread it runs on, which no
+        // graph writes (a saved Agent runs no subgraph there).
+        // Review 3: every fan-out member's Agent call carries it, so a member
+        // whose family lends no admission refuses its pipeline calls instead of
+        // running them in memory.
+        let tool_pipelines = (self.tool_pipelines.is_some() || fanout).then(|| {
+            crate::agents::application_tools::MemberToolPipelines {
+                admission: self.tool_pipelines.clone(),
+                agent_thread: format!(
+                    "{}/{}",
+                    receipt.activation().thread_id(),
+                    receipt.activation().node_name()
+                ),
+            }
+        });
         let mut terminal = None;
         let result = self
             .run_child_draining(
                 async move {
                     let child = tool.execute(tool_context, arguments);
+                    let child = async move {
+                        match tool_pipelines {
+                            Some(member) => {
+                                crate::agents::application_tools::with_member_tool_pipelines(
+                                    member, child,
+                                )
+                                .await
+                            }
+                            None => child.await,
+                        }
+                    };
                     match member_events {
                         Some(sender) => {
                             crate::agents::application_tools::with_member_events(sender, child)
@@ -915,6 +970,9 @@ impl ChildFailure {
             Self::Refused(REFUSED_LIMIT_PUBLIC_CODE)
         } else if code.starts_with("direct_hitl.") {
             Self::Refused(REFUSED_PUBLIC_CODE)
+        } else if code == crate::agents::application_tools::CALL_LINEAGE_LIMIT_CODE {
+            // FU-291: the node's call-lineage store is full: a typed limit.
+            Self::Refused(crate::agents::application_tools::CALL_LINEAGE_LIMIT_CODE)
         } else {
             Self::Child
         }
@@ -963,6 +1021,40 @@ mod tests {
     use adk_rust::graph::{Checkpoint, ExecutionConfig, MemoryCheckpointer, State};
     use adk_rust::{Content, FunctionResponseData};
     use serde_json::json;
+
+    /// FU-291 (orchestrator item 2): a member's Agent whose node's
+    /// call-lineage store is full ends its node typed with the registered
+    /// resource limit, never as a broken scope.
+    #[tokio::test]
+    async fn the_call_lineage_limit_ends_the_node_with_its_typed_resource_limit() {
+        use crate::protocol::output::{RuntimeFailureKind, model_failure};
+        let definition=PipelineDefinition::from_yaml("state: {answer: str}\nentry_point: child\nnodes:\n  - id: child\n    type: agent\n    tool: assistant\n    input_mapping: {task: {type: fixed, value: work}}\n    output: [answer]\n    transition: END\n").unwrap();
+        let scope = PipelineApplicationScope::new(String::new(), &definition, None).unwrap();
+        let (events, receiver) = pipeline_node_event_channel();
+        let runtime = PipelineApplicationNodeRuntime::new(
+            scope,
+            "child".to_owned(),
+            Arc::new(ApplicationRuntimeProjection::default()),
+            events,
+            Arc::new(Mutex::new(())),
+        );
+        let error = runtime
+            .child_failure(ChildFailure::from_child(
+                crate::agents::application_tools::CALL_LINEAGE_LIMIT_CODE,
+            ))
+            .await;
+        assert_eq!(
+            receiver
+                .try_failure_code()
+                .await
+                .map(|code| model_failure(Some(code))),
+            Some(RuntimeFailureKind::ResourceExhausted)
+        );
+        let GraphError::NodeExecutionFailed { node, .. } = error else {
+            panic!("a node failure");
+        };
+        assert_eq!(node, "child");
+    }
 
     /// Each typed refusal of a scoped Agent node's child ends the run with its
     /// registered public code; a broken scope or an untyped child failure sends

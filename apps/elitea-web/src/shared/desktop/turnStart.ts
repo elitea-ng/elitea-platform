@@ -52,6 +52,11 @@ export interface TurnStartRequest {
    * agent itself (`turn_continued` kind `floor`). Absent or empty: the composer's agent answers.
    */
   addressed_to?: number[] | undefined;
+  /**
+   * The agent participant meant to answer (#1927), in a thread of several agents: the host answers on it when it is a
+   * participant of `application_id` on `version_id` (or unpinned), not on another participant of the same version.
+   */
+  participant_id?: number | undefined;
   /** The answering agent is a cloud agent of the thread (participant `executor: cloud`): text only, never the workspace. */
   cloud_agent?: boolean | undefined;
 }

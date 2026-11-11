@@ -906,23 +906,10 @@ fn current_text_history(history: &[Value]) -> Result<Vec<Content>, NativeAgentAs
 
 fn current_text_history_message(value: &Value) -> Result<Content, NativeAgentAssemblyError> {
     let entry = admitted_history_entry(value)?;
-    let mut content = Content::new(entry.role);
-    match entry.author {
-        // One envelope per message: the parts are one author's words.
-        Some((kind, name)) => {
-            content = content.with_text(elitea_agent_runtime::untrusted::message_envelope(
-                kind,
-                name,
-                &entry.texts.join("\n\n"),
-            ));
-        }
-        None => {
-            for text in entry.texts {
-                content = content.with_text(text);
-            }
-        }
-    }
-    Ok(content)
+    Ok(entry
+        .model_texts(None)
+        .into_iter()
+        .fold(Content::new(entry.role), Content::with_text))
 }
 
 /// The additional-kwargs key that marks a graph-state message as seeded from
@@ -1000,27 +987,14 @@ pub(crate) fn pipeline_state_history(
         if items.len() == MAX_PIPELINE_VIEW_MESSAGES {
             break;
         }
-        let texts = match entry.author {
-            Some((kind, name)) => {
-                additional.insert(
-                    "elitea_author".to_owned(),
-                    serde_json::json!({"kind": kind.as_str(), "name": name}),
-                );
-                let joined = entry.texts.join("\n\n");
-                // The envelope wraps the cut text, so it always closes.
-                let inner = bounded_view_texts(
-                    &[joined.as_str()],
-                    MAX_PIPELINE_VIEW_MESSAGE_BYTES.saturating_sub(name.len() + 512),
-                );
-                vec![elitea_agent_runtime::untrusted::message_envelope(
-                    kind,
-                    name,
-                    &inner.concat(),
-                )]
-            }
-            None => bounded_view_texts(&entry.texts, MAX_PIPELINE_VIEW_MESSAGE_BYTES),
-        };
-        let blocks = texts
+        if let Some((kind, name)) = entry.author {
+            additional.insert(
+                "elitea_author".to_owned(),
+                serde_json::json!({"kind": kind.as_str(), "name": name}),
+            );
+        }
+        let blocks = entry
+            .model_texts(Some(MAX_PIPELINE_VIEW_MESSAGE_BYTES))
             .into_iter()
             .map(|text| serde_json::json!({"type": "text", "text": text}))
             .collect::<Vec<_>>();
@@ -1045,6 +1019,35 @@ struct HistoryEntry<'a> {
     role: &'static str,
     author: Option<(elitea_agent_runtime::untrusted::MessageAuthorKind, &'a str)>,
     texts: Vec<&'a str>,
+}
+
+impl HistoryEntry<'_> {
+    /// The text blocks the model reads for this entry, the one rule an agent's
+    /// history and a pipeline's view share (#1915): a message someone else
+    /// wrote is ONE untrusted envelope around all its parts (they are one
+    /// author's words); the asker's and the reader's own are their parts.
+    ///
+    /// With a `budget`, a longer message is cut, never dropped; the envelope
+    /// wraps the cut text, so it always closes.
+    fn model_texts(&self, budget: Option<usize>) -> Vec<String> {
+        let Some((kind, name)) = self.author else {
+            return match budget {
+                Some(budget) => bounded_view_texts(&self.texts, budget),
+                None => self.texts.iter().map(|text| (*text).to_owned()).collect(),
+            };
+        };
+        let joined = self.texts.join("\n\n");
+        let inner = match budget {
+            Some(budget) => {
+                bounded_view_texts(&[joined.as_str()], budget.saturating_sub(name.len() + 512))
+                    .concat()
+            }
+            None => joined,
+        };
+        vec![elitea_agent_runtime::untrusted::message_envelope(
+            kind, name, &inner,
+        )]
+    }
 }
 
 fn admitted_history_entry(value: &Value) -> Result<HistoryEntry<'_>, NativeAgentAssemblyError> {

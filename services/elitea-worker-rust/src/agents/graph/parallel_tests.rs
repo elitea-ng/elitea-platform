@@ -283,6 +283,7 @@ impl ParallelChildCheckpointerFactory for MemoryChildCheckpoints {
             thread_id,
             checkpointer,
             node_recovery: None,
+            tool_pipelines: None,
         })
     }
 }

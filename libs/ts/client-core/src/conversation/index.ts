@@ -49,6 +49,7 @@ export {
   FLOOR_POLICY,
   MAX_ADDRESSED,
   addressedTo,
+  firstAnswerer,
   floorOf,
   foldSideTalk,
   metaWithLead,

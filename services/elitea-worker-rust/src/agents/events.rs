@@ -176,6 +176,7 @@ pub(crate) fn strip_descendant_private_metadata(event: &mut Event) {
         PIPELINE_TOOL_BOUNDARY_METADATA_KEY,
         super::application_pipeline::BOUNDARY_LEDGER_KEY,
         super::application_pipeline::STATIC_TOOL_THREAD_METADATA_KEY,
+        super::graph::tool_pipeline_threads::DURABLE_TOOL_THREAD_METADATA_KEY,
         super::pipeline::scoped_applications::PIPELINE_APPLICATION_SCOPE_METADATA_KEY,
         super::pipeline::scoped_applications::PIPELINE_ROOT_PROJECTION_METADATA_KEY,
         super::pipeline::scoped_applications::ACTIVATION_CHAIN_KEY,
@@ -580,6 +581,9 @@ pub(crate) struct ApplicationToolGuardCatalogs {
     /// The delegation evidence of the child this tool calls (ADR-0044
     /// decision 3): its depth, effective grant digest and any refusal.
     delegation: Option<DelegationEvidence>,
+    /// FU-291: why a fan-out member cannot run this saved pipeline tool
+    /// durably, read from its definition when it was materialized.
+    tool_pipeline_refusal: Option<super::graph::compiler::ToolPipelineCause>,
 }
 
 impl ApplicationToolGuardCatalogs {
@@ -593,7 +597,17 @@ impl ApplicationToolGuardCatalogs {
             delegated_authorization,
             internal_tools,
             delegation: None,
+            tool_pipeline_refusal: None,
         }
+    }
+
+    /// FU-291: the cause a member cannot run this pipeline tool durably.
+    pub(crate) const fn with_tool_pipeline_refusal(
+        mut self,
+        refusal: Option<super::graph::compiler::ToolPipelineCause>,
+    ) -> Self {
+        self.tool_pipeline_refusal = refusal;
+        self
     }
 
     /// The child's delegation evidence, when it was delegated.
@@ -637,6 +651,14 @@ impl ApplicationToolPresentationCatalog {
         self.by_tool_name
             .iter()
             .filter_map(|(name, entry)| (entry.agent_type == "agent").then_some(name.as_str()))
+    }
+
+    /// The saved pipelines this Agent calls as tools (FU-291): durable, and so
+    /// replayable, only where a fan-out member lends its admission.
+    pub(super) fn pipeline_tool_names(&self) -> impl Iterator<Item = &str> {
+        self.by_tool_name
+            .iter()
+            .filter_map(|(name, entry)| (entry.agent_type == "pipeline").then_some(name.as_str()))
     }
     pub(crate) fn insert(
         &mut self,
@@ -696,6 +718,32 @@ impl ApplicationToolPresentationCatalog {
     #[must_use]
     pub(crate) fn contains_runtime_tool(&self, tool_name: &str) -> bool {
         self.by_tool_name.contains_key(tool_name)
+    }
+
+    /// FU-291 D-7: why a fan-out member cannot run this Agent's saved pipeline
+    /// tools durably: one holds Code or an Agent node, or one sits below
+    /// another Agent. `None` when every pipeline tool can.
+    /// `self` is a scoped Agent node's catalog: its saved Agent, whose own
+    /// tools are read.
+    #[must_use]
+    pub(crate) fn fanout_tool_pipeline_refusal(
+        &self,
+    ) -> Option<super::graph::compiler::ToolPipelineCause> {
+        self.by_tool_name
+            .values()
+            .find_map(|agent| agent.child_tools.direct_tool_pipeline_refusal())
+    }
+
+    fn direct_tool_pipeline_refusal(&self) -> Option<super::graph::compiler::ToolPipelineCause> {
+        self.by_tool_name
+            .values()
+            .find_map(|entry| match entry.agent_type.as_str() {
+                "pipeline" => entry.guards.tool_pipeline_refusal,
+                _ => entry
+                    .child_tools
+                    .has_pipeline_descendant()
+                    .then_some(super::graph::compiler::ToolPipelineCause::NestedAgents),
+            })
     }
 
     /// Whether a saved pipeline is among these tools or any nested tools.
@@ -1724,21 +1772,34 @@ impl AgentEventProjector {
         Ok(None)
     }
 
-    fn project_immediate_descendant(
-        &mut self,
+    /// The checkpoint thread of a pipeline child's first event: a durable
+    /// nested thread proved by its receipt (FU-291), a static tool thread, or
+    /// the derived descendant thread.
+    fn descendant_thread(
+        &self,
         event: &Event,
+        active: &ActiveToolCall,
+        application: &ApplicationToolPresentation,
         parent_call_id: &str,
-    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
-        let active = self
-            .active_tools
-            .get(parent_call_id)
-            .cloned()
-            .ok_or_else(AgentEventProjectionError::invalid_state)?;
-        let application = active
-            .application
-            .clone()
-            .ok_or_else(AgentEventProjectionError::invalid_state)?;
-        let checkpoint_thread_id =
+    ) -> Result<Option<String>, AgentEventProjectionError> {
+        // FU-291: a fan-out member's durable nested pipeline names its thread
+        // with a receipt for exactly this call (the member's projector proved
+        // the thread is its own and admitted).
+        let durable = super::graph::tool_pipeline_threads::durable_thread_for_projected_call(
+            event,
+            &active.original_batch_event_id,
+            active.sibling_ordinal.unwrap_or_default(),
+            parent_call_id,
+            &active.name,
+            &active.arguments,
+        )
+        .map_err(|_| AgentEventProjectionError::invalid_state())?;
+        Ok(if let Some(thread) = durable {
+            if application.agent_type != "pipeline" {
+                return Err(AgentEventProjectionError::invalid_state());
+            }
+            Some(thread)
+        } else {
             // FU-342: the writer's conversation thread, not the chat thread.
             match super::application_pipeline::static_thread_for_projected_call(
                 event,
@@ -1760,12 +1821,31 @@ impl AgentEventProjector {
                 Some(_) => return Err(AgentEventProjectionError::invalid_state()),
                 None => descendant_checkpoint_thread(
                     event,
-                    &application,
+                    application,
                     self.context.graph_checkpoint_thread_id.as_deref(),
                     &self.context.tool_thread_id,
                     parent_call_id,
                 )?,
-            };
+            }
+        })
+    }
+
+    fn project_immediate_descendant(
+        &mut self,
+        event: &Event,
+        parent_call_id: &str,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        let active = self
+            .active_tools
+            .get(parent_call_id)
+            .cloned()
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let application = active
+            .application
+            .clone()
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let checkpoint_thread_id =
+            self.descendant_thread(event, &active, &application, parent_call_id)?;
         if !self.descendants.contains_key(parent_call_id) {
             let nested_context = self.context.nested(
                 active.name.clone(),

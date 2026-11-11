@@ -1,0 +1,873 @@
+//! FU-291 D-3: a fan-out member admits the nested thread of a saved pipeline
+//! its Agent calls as a tool only through its own fenced family, before the
+//! nested graph's first effect. The thread name grants nothing.
+use super::*;
+use crate::agents::application_pipeline::PipelineToolCallLineage;
+use crate::agents::graph::ParallelChildCheckpoint;
+use crate::agents::graph::tool_pipeline_threads::{
+    MAX_TOOL_PIPELINE_THREADS_PER_MEMBER, TOOL_LEDGER_SEGMENT, is_tool_pipeline_limit,
+    tool_pipeline_thread,
+};
+
+async fn database() -> IsolatedPostgres {
+    let url = crate::test_pg::database_url_var(TEST_DATABASE_URL)
+        .expect("ELITEA_TEST_DATABASE_URL is required");
+    let database = IsolatedPostgres::create(&url).await;
+    install_test_schema(&database.pool).await;
+    database
+}
+
+async fn root(pool: PgPool, claim_attempt: u64) -> PostgresCheckpointer {
+    PostgresCheckpointer::activate(
+        pool,
+        writer(
+            "execution-1",
+            &format!("claim-{claim_attempt}"),
+            claim_attempt,
+            claim_attempt,
+            [0x41; 32],
+            [0x61; 32],
+        ),
+        CheckpointLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("activate the run root writer")
+}
+
+async fn writers(pool: &PgPool, thread_pattern: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoint_writers WHERE thread_id LIKE $1",
+    )
+    .bind(thread_pattern)
+    .fetch_one(pool)
+    .await
+    .expect("count checkpoint writers")
+}
+
+/// Main's frozen definition digest of the called pipeline (FU-338).
+const DEFINITION: [u8; 32] = [0x5d; 32];
+/// The same pipeline's digest after an edit.
+const EDITED: [u8; 32] = [0xed; 32];
+
+fn lineage(call: &str) -> PipelineToolCallLineage {
+    PipelineToolCallLineage::for_test(
+        "batch-1",
+        1,
+        call,
+        "summarize",
+        &json!({"task": "summarize the topic"}),
+    )
+}
+
+/// One Map-free Parallel member family whose owned node is `fetch_short`,
+/// under the claim of `root_family`.
+async fn member(root_family: &impl ParallelChildCheckpointerFactory) -> ParallelChildCheckpoint {
+    member_at(root_family, 4).await
+}
+
+/// The member of the Parallel occurrence at `step`: each step is another member.
+async fn member_at(
+    root_family: &impl ParallelChildCheckpointerFactory,
+    step: u64,
+) -> ParallelChildCheckpoint {
+    let parallel = ParallelNodeDefinition::from_yaml(
+        r"
+id: gather
+type: parallel
+branches:
+  - id: short
+    node: fetch_short
+  - id: long
+    node: fetch_long
+max_concurrency: 2
+wait: all
+error_policy: fail_after_drain
+output: [gathered]
+transition: END
+        ",
+    )
+    .expect("parallel fixture");
+    let activation = ParallelActivation {
+        root_thread_id: "thread-1".to_owned(),
+        node_id: parallel.id().to_owned(),
+        step,
+        config_digest: parallel.config_digest(),
+        map: None,
+    };
+    let origin = root_family
+        .child_origin(&activation)
+        .expect("parallel child origin");
+    root_family
+        .for_branch(
+            &activation,
+            &parallel.branches()[0],
+            0,
+            &[0x42; 32],
+            &origin,
+        )
+        .await
+        .expect("activate the member family")
+}
+
+/// The member admits its Agent's nested thread under its claim: one writer
+/// row, durable before anything runs on it, registered in the one set the
+/// member's projector reads. Re-admission returns the same writer and adds no
+/// row; the writer saves and loads the nested graph's checkpoints.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_member_admits_its_agent_nested_pipeline_thread_under_its_claim() {
+    let database = database().await;
+    let family = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member = member(&family).await;
+    let admission = member
+        .tool_pipelines
+        .clone()
+        .expect("the member is lent its admission");
+    let agent = format!("{}/fetch_short", member.thread_id);
+    let call = lineage("call-1");
+    let expected = tool_pipeline_thread(&agent, &call).unwrap();
+    assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 0);
+
+    let admitted = admission
+        .admit_tool_pipeline(&agent, &call, Some(DEFINITION))
+        .await
+        .expect("admit the nested thread");
+    assert_eq!(admitted.thread_id, expected);
+    assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 1);
+    assert!(
+        admission
+            .tool_threads()
+            .admitted(&expected, &agent)
+            .is_some(),
+        "the projector's set holds exactly what the checkpointer admitted"
+    );
+    let again = admission
+        .admit_tool_pipeline(&agent, &call, Some(DEFINITION))
+        .await
+        .unwrap();
+    assert_eq!(again.thread_id, expected);
+    assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 1);
+
+    let mut saved = Checkpoint::new(&expected, State::new(), 0, vec!["first".to_owned()]);
+    saved.checkpoint_id = "nested-1".to_owned();
+    admitted
+        .writer
+        .save(&saved)
+        .await
+        .expect("save on the nested thread");
+    assert_eq!(
+        admitted
+            .writer
+            .load(&expected)
+            .await
+            .unwrap()
+            .map(|row| row.pending_nodes),
+        Some(vec!["first".to_owned()])
+    );
+}
+
+/// Only an Agent thread of this member admits: not the member root, not a
+/// thread of the root family or another member, not a thread outside any
+/// family. A refusal writes no row and registers nothing.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_member_refuses_every_agent_thread_that_is_not_its_own() {
+    let database = database().await;
+    let family = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member = member(&family).await;
+    let admission = member.tool_pipelines.clone().unwrap();
+    let call = lineage("call-1");
+    for agent in [
+        member.thread_id.clone(),
+        "thread-1/fetch_short".to_owned(),
+        "thread-1".to_owned(),
+        format!("{}/unadmitted", member.thread_id),
+        "p1:another-member/fetch_short".to_owned(),
+    ] {
+        assert!(
+            admission
+                .admit_tool_pipeline(&agent, &call, Some(DEFINITION))
+                .await
+                .is_err(),
+            "{agent} admitted a nested thread"
+        );
+    }
+    assert_eq!(writers(&database.pool, "%/pt1:%").await, 0);
+    assert_eq!(admission.tool_threads().len(), 0);
+}
+
+/// D3 at the database: the member's 9th nested call is refused typed before
+/// any activation, so it leaves no writer row.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_member_activates_8_nested_threads_and_refuses_the_9th_without_a_row() {
+    let database = database().await;
+    let family = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member = member(&family).await;
+    let admission = member.tool_pipelines.clone().unwrap();
+    let agent = format!("{}/fetch_short", member.thread_id);
+    for call in 0..MAX_TOOL_PIPELINE_THREADS_PER_MEMBER {
+        admission
+            .admit_tool_pipeline(&agent, &lineage(&format!("call-{call}")), Some(DEFINITION))
+            .await
+            .expect("admit within the bound");
+    }
+    let Err(refused) = admission
+        .admit_tool_pipeline(&agent, &lineage("call-8"), Some(DEFINITION))
+        .await
+    else {
+        panic!("the 9th nested call was admitted");
+    };
+    assert!(is_tool_pipeline_limit(&refused), "{refused}");
+    assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 8);
+}
+
+/// A newer claim at the run root denies the older member's admission
+/// (`writer_not_current`, no row). The newer claim's member re-derives and
+/// re-activates the same nested thread; the older writer is fenced.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_takeover_re_admits_the_same_nested_thread_and_fences_the_older_claim() {
+    let database = database().await;
+    let family_1 = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member_1 = member(&family_1).await;
+    let admission_1 = member_1.tool_pipelines.clone().unwrap();
+    let agent = format!("{}/fetch_short", member_1.thread_id);
+    let older = admission_1
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(DEFINITION))
+        .await
+        .expect("claim 1 admits");
+
+    let family_2 = root(database.pool.clone(), 2)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("claim 2 takes the run");
+    let Err(denied) = admission_1
+        .admit_tool_pipeline(&agent, &lineage("call-2"), Some(DEFINITION))
+        .await
+    else {
+        panic!("a superseded claim admitted a nested thread");
+    };
+    assert!(
+        denied.to_string().contains("writer_not_current"),
+        "{denied}"
+    );
+
+    let member_2 = member(&family_2).await;
+    assert_eq!(
+        member_2.thread_id, member_1.thread_id,
+        "the member re-derives"
+    );
+    let newer = member_2
+        .tool_pipelines
+        .clone()
+        .unwrap()
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(EDITED))
+        .await
+        .expect("claim 2 re-admits");
+    assert_eq!(
+        newer.thread_id, older.thread_id,
+        "the nested thread re-derives"
+    );
+    // FU-338: the stamp is the first admission's, never the re-admission's.
+    assert_eq!(older.definition_sha256, Some(DEFINITION));
+    assert_eq!(newer.definition_sha256, Some(DEFINITION));
+    assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 1);
+    let mut stale = Checkpoint::new(&older.thread_id, State::new(), 0, Vec::new());
+    stale.checkpoint_id = "stale".to_owned();
+    let Err(fenced) = older.writer.save(&stale).await else {
+        panic!("the older claim's nested writer saved after the takeover");
+    };
+    assert!(
+        fenced.to_string().contains("writer_not_current"),
+        "{fenced}"
+    );
+}
+
+/// FU-338: each first admission stamps the called pipeline's definition
+/// digest in the member ledger, in the same append that reserves the slot and
+/// before the nested writer exists. A re-admission, in this process or after
+/// a takeover, reads that stamp back and never replaces it; an admission
+/// without a digest stamps `null`, read back as no stamp.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_first_admission_stamps_its_definition_before_its_writer_and_keeps_it() {
+    let database = database().await;
+    let family_1 = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member_1 = member(&family_1).await;
+    let admission_1 = member_1.tool_pipelines.clone().unwrap();
+    let agent = format!("{}/fetch_short", member_1.thread_id);
+    let stamped = admission_1
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(DEFINITION))
+        .await
+        .expect("admit a stamped call");
+    let unstamped = admission_1
+        .admit_tool_pipeline(&agent, &lineage("call-2"), None)
+        .await
+        .expect("admit a call without a digest");
+    assert_eq!(stamped.definition_sha256, Some(DEFINITION));
+    assert_eq!(unstamped.definition_sha256, None);
+    let again = admission_1
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(EDITED))
+        .await
+        .unwrap();
+    assert_eq!(again.definition_sha256, Some(DEFINITION), "in process");
+
+    let ledger: String = sqlx::query_scalar(
+        "SELECT state FROM elitea_runtime.agent_graph_checkpoints \
+         WHERE thread_id = $1 ORDER BY step DESC LIMIT 1",
+    )
+    .bind(format!("{}{TOOL_LEDGER_SEGMENT}", member_1.thread_id))
+    .fetch_one(&database.pool)
+    .await
+    .expect("the ledger row");
+    let ledger: serde_json::Value = serde_json::from_str(&ledger).expect("ledger state");
+    assert_eq!(
+        ledger["elitea.pipeline.tool-threads.v2"],
+        json!([
+            {"thread": stamped.thread_id, "definition_sha256": "5d".repeat(32)},
+            {"thread": unstamped.thread_id, "definition_sha256": null},
+        ]),
+        "the stamps are durable in the ledger: {ledger}"
+    );
+
+    let family_2 = root(database.pool.clone(), 2)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("claim 2 takes the run");
+    let admission_2 = member(&family_2).await.tool_pipelines.unwrap();
+    for (call, stamp) in [("call-1", Some(DEFINITION)), ("call-2", None)] {
+        let readmitted = admission_2
+            .admit_tool_pipeline(&agent, &lineage(call), Some(EDITED))
+            .await
+            .expect("claim 2 re-admits");
+        assert_eq!(
+            readmitted.definition_sha256, stamp,
+            "after takeover: {call}"
+        );
+    }
+}
+
+/// T6, C5: a writer table held locked during admission is a retryable
+/// dependency failure (`checkpoint.storage_unavailable`), never a refusal,
+/// and registers nothing; once released the same admission succeeds.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_locked_writer_table_answers_retryable_and_admits_once_released() {
+    let database = database().await;
+    let family = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member = member(&family).await;
+    let admission = member.tool_pipelines.clone().unwrap();
+    let agent = format!("{}/fetch_short", member.thread_id);
+    let mut holder = database.pool.begin().await.expect("begin holder");
+    sqlx::query(
+        "SELECT 1 FROM elitea_runtime.agent_graph_checkpoint_writers WHERE thread_id = 'thread-1' FOR UPDATE",
+    )
+    .fetch_one(&mut *holder)
+    .await
+    .expect("hold the run root writer row");
+    let Err(blocked) = admission
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(DEFINITION))
+        .await
+    else {
+        panic!("admission ran behind a held run root writer");
+    };
+    assert!(
+        blocked
+            .to_string()
+            .contains("checkpoint.storage_unavailable"),
+        "a held lock is a retryable dependency failure: {blocked}"
+    );
+    assert!(!is_tool_pipeline_limit(&blocked));
+    assert_eq!(admission.tool_threads().len(), 0);
+    holder.rollback().await.expect("release the holder");
+    admission
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(DEFINITION))
+        .await
+        .expect("the same admission succeeds once released");
+    assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 1);
+}
+
+/// C7 budget: the per-call cost a durable nested pipeline call adds over the
+/// same pipeline run at the root. The nested graph's own rows are the same
+/// a root run saves (same compiler, same checkpointer, one row per step), and
+/// its `durable_delegation_pending` record replaces the root's
+/// `tool_may_have_started` record one for one; what is new per call is the
+/// fenced admission (one activation transaction) and the latest-row read
+/// (C3). Each sample is a fresh call on a fresh member family, the minimum of
+/// `REPEATS` runs; the gate is p99 ≤ `CHILD_OVERHEAD_P99` (30 ms).
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn the_per_call_nested_admission_cost_is_within_the_child_overhead_budget() {
+    const SAMPLES: usize = 20;
+    const REPEATS: usize = 3;
+    let database = database().await;
+    let family = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let first = member(&family).await;
+    let mut agent = format!("{}/fetch_short", first.thread_id);
+    let mut admission = first.tool_pipelines.clone().unwrap();
+    let mut costs = Vec::new();
+    let mut call = 0_usize;
+    // One warm-up sample is discarded.
+    for sample in 0..=SAMPLES {
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..REPEATS {
+            // Another member every 8 calls keeps each within its durable D3 bound.
+            if call > 0 && call.is_multiple_of(MAX_TOOL_PIPELINE_THREADS_PER_MEMBER) {
+                let next = member_at(
+                    &family,
+                    4 + u64::try_from(call / MAX_TOOL_PIPELINE_THREADS_PER_MEMBER).expect("step"),
+                )
+                .await;
+                agent = format!("{}/fetch_short", next.thread_id);
+                admission = next.tool_pipelines.unwrap();
+            }
+            let lineage = lineage(&format!("call-{call}"));
+            call += 1;
+            let started = std::time::Instant::now();
+            let admitted = admission
+                .admit_tool_pipeline(&agent, &lineage, Some(DEFINITION))
+                .await
+                .expect("admit");
+            let latest = admitted
+                .writer
+                .load(&admitted.thread_id)
+                .await
+                .expect("read");
+            best = best.min(started.elapsed());
+            assert!(latest.is_none());
+        }
+        if sample > 0 {
+            costs.push(best.as_secs_f64() * 1e3);
+        }
+    }
+    costs.sort_by(f64::total_cmp);
+    let p = |percentile: usize| costs[(costs.len() * percentile).div_ceil(100).saturating_sub(1)];
+    let (p50, p99) = (p(50), p(99));
+    println!(
+        "FU-291-NESTED-CALL-OVERHEAD samples={SAMPLES} repeats={REPEATS} p50_ms={p50:.1} p99_ms={p99:.1}"
+    );
+    assert!(
+        p99 <= crate::agents::graph::fanout_budget::CHILD_OVERHEAD_P99.as_secs_f64() * 1e3,
+        "per-call nested admission p99 {p99:.1} ms"
+    );
+}
+
+/// FU-291 A = `<member thread>/<agent node>` (the activation's thread and
+/// node): the nested thread never collides with the member's own graph
+/// paths below that node. A member whose Agent node also owns application
+/// paths (`fetch_short/inner`) admits distinct nested threads under each, and
+/// leaves its graph writers alone. A member family that admitted a path equal
+/// to the derived nested thread refuses the admission, with no row.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_nested_thread_never_collides_with_the_members_own_graph_paths() {
+    let database = database().await;
+    let family = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_short/inner", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member_1 = member(&family).await;
+    let graph = member_1.admitted_threads.clone();
+    let agent = format!("{}/fetch_short", member_1.thread_id);
+    let inner = format!("{agent}/inner");
+    assert!(
+        graph.contains(&agent) && graph.contains(&inner),
+        "{graph:?}"
+    );
+    let admission = member_1.tool_pipelines.clone().unwrap();
+    let call = lineage("call-1");
+    let nested = admission
+        .admit_tool_pipeline(&agent, &call, Some(DEFINITION))
+        .await
+        .unwrap();
+    let below_inner = admission
+        .admit_tool_pipeline(&inner, &call, Some(DEFINITION))
+        .await
+        .unwrap();
+    for thread in [&nested.thread_id, &below_inner.thread_id] {
+        assert!(!graph.contains(thread), "{thread} is a graph path");
+    }
+    assert_ne!(nested.thread_id, below_inner.thread_id);
+    assert!(nested.thread_id.starts_with(&format!("{agent}/pt1:")));
+    assert_eq!(
+        writers(&database.pool, &inner).await,
+        1,
+        "the graph writer is untouched"
+    );
+
+    // The derived segment admitted as a graph path refuses the admission.
+    let segment = nested
+        .thread_id
+        .strip_prefix(&format!("{}/", member_1.thread_id))
+        .expect("below the member")
+        .to_owned();
+    let family_2 = root(database.pool.clone(), 2)
+        .await
+        .with_application_children(
+            ["fetch_short".to_owned(), segment, "fetch_long".to_owned()]
+                .iter()
+                .map(String::as_str),
+        )
+        .await
+        .expect("a family whose path equals the nested thread");
+    let member_2 = member(&family_2).await;
+    assert_eq!(
+        member_2.thread_id, member_1.thread_id,
+        "the member re-derives"
+    );
+    assert!(member_2.admitted_threads.contains(&nested.thread_id));
+    let rows = writers(&database.pool, "%/pt1:%").await;
+    let Err(refused) = member_2
+        .tool_pipelines
+        .clone()
+        .unwrap()
+        .admit_tool_pipeline(&agent, &call, Some(DEFINITION))
+        .await
+    else {
+        panic!("a nested thread that is an admitted graph path was admitted");
+    };
+    assert!(refused.to_string().contains("collides"), "{refused}");
+    assert_eq!(writers(&database.pool, "%/pt1:%").await, rows, "no row");
+}
+
+const BOUND_CHILD: &str =
+    "state::postgres_checkpointer_tests::tool_pipeline_admission::the_durable_bound_child";
+const BOUND_DATABASE_ENV: &str = "ELITEA_FU291_BOUND_DATABASE";
+const BOUND_PHASE_ENV: &str = "ELITEA_FU291_BOUND_PHASE";
+
+/// One process of [`a_refused_ninth_call_stays_refused_after_a_takeover`]:
+/// `first` (claim 1) admits 8 nested calls and is refused the 9th; `second`
+/// (claim 2, a fresh process: an empty in-memory registry) takes the run.
+/// A child process body, as the repo's other `*_child` tests: not ignored, so
+/// a bare `--ignored` run never lists it, and without its parent's
+/// environment it does nothing (review D).
+#[tokio::test]
+async fn the_durable_bound_child() {
+    let Ok(name) = std::env::var(BOUND_DATABASE_ENV) else {
+        return;
+    };
+    let url = crate::test_pg::database_url_var(TEST_DATABASE_URL).expect("database URL");
+    let pool = crate::test_pg::pool_options()
+        .max_connections(4)
+        .connect_with(
+            crate::test_pg::connect_options(&url)
+                .expect("parse database URL")
+                .database(&name),
+        )
+        .await
+        .expect("connect the isolated database");
+    let first = std::env::var(BOUND_PHASE_ENV).expect("phase") == "first";
+    let family = root(pool.clone(), if first { 1 } else { 2 })
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member = member(&family).await;
+    let admission = member.tool_pipelines.clone().unwrap();
+    let agent = format!("{}/fetch_short", member.thread_id);
+    if first {
+        for call in 0..MAX_TOOL_PIPELINE_THREADS_PER_MEMBER {
+            admission
+                .admit_tool_pipeline(&agent, &lineage(&format!("call-{call}")), Some(DEFINITION))
+                .await
+                .expect("admit within the bound");
+        }
+    } else {
+        // An admitted call re-derives and re-admits after the takeover.
+        admission
+            .admit_tool_pipeline(&agent, &lineage("call-3"), Some(DEFINITION))
+            .await
+            .expect("an admitted call re-admits");
+    }
+    let Err(refused) = admission
+        .admit_tool_pipeline(&agent, &lineage("call-8"), Some(DEFINITION))
+        .await
+    else {
+        panic!("the 9th call was admitted (first: {first})");
+    };
+    assert!(is_tool_pipeline_limit(&refused), "{refused}");
+}
+
+/// Review 2 (D3 durable): a member refused its 9th nested call keeps that
+/// answer after a process replacement and a takeover: the bound counts the
+/// member's durable nested writers, not the replacement's empty registry, so
+/// the same call is refused again and no row is added. An admitted call
+/// re-admits.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_refused_ninth_call_stays_refused_after_a_takeover() {
+    let database = database().await;
+    let run = |phase: &str| {
+        std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args(["--exact", BOUND_CHILD, "--nocapture", "--test-threads=1"])
+            .env(BOUND_DATABASE_ENV, &database.database_name)
+            .env(BOUND_PHASE_ENV, phase)
+            .output()
+            .expect("run the child process")
+    };
+    for phase in ["first", "second"] {
+        let output = run(phase);
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{phase}: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            writers(&database.pool, "%/pt1:%").await,
+            8,
+            "{phase}: the member holds exactly its 8 nested writers"
+        );
+    }
+}
+
+/// Review B: two admissions of one member, from two family objects (as two
+/// assemblies of one occurrence hold), race for its 8th nested slot: exactly
+/// one is admitted and the other is refused typed; the member holds 8 nested
+/// writers, never 9.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn two_admissions_racing_for_the_last_slot_admit_exactly_one() {
+    let database = database().await;
+    let family = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let first = member(&family).await;
+    let agent = format!("{}/fetch_short", first.thread_id);
+    let admission = first.tool_pipelines.clone().unwrap();
+    for call in 0..MAX_TOOL_PIPELINE_THREADS_PER_MEMBER - 1 {
+        admission
+            .admit_tool_pipeline(&agent, &lineage(&format!("call-{call}")), Some(DEFINITION))
+            .await
+            .expect("admit within the bound");
+    }
+    let left = member(&family).await.tool_pipelines.unwrap();
+    let right = member(&family).await.tool_pipelines.unwrap();
+    let (call_a, call_b) = (lineage("call-a"), lineage("call-b"));
+    let (a, b) = tokio::join!(
+        left.admit_tool_pipeline(&agent, &call_a, Some(DEFINITION)),
+        right.admit_tool_pipeline(&agent, &call_b, Some(DEFINITION)),
+    );
+    let outcomes = [a, b];
+    assert_eq!(
+        outcomes.iter().filter(|outcome| outcome.is_ok()).count(),
+        1,
+        "exactly one admitted"
+    );
+    let refused = outcomes
+        .iter()
+        .find_map(|outcome| outcome.as_ref().err())
+        .expect("one refused");
+    assert!(is_tool_pipeline_limit(refused), "{refused}");
+    assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 8);
+}
+
+/// Review B: the bound is read through an index, not a scan of every writer
+/// row of the definition. With other executions' rows seeded, the plan of the
+/// member ledger's latest-row read is bounded by `thread_id` equality in its
+/// index condition, while a prefix match on the writers' key can only filter.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+#[allow(clippy::too_many_lines)] // Seed, admit, then the two plans side by side.
+async fn the_bound_is_read_through_an_index_condition_on_one_thread() {
+    let database = database().await;
+    // Other executions' rows of the same definition: 38 runs, 5 rows each.
+    for execution in 2..40_u64 {
+        let other = PostgresCheckpointer::activate(
+            database.pool.clone(),
+            CheckpointWriterAuthority::new(
+                "tenant-1".to_owned(),
+                1,
+                1,
+                APPLICATION_CAPABILITY_ID,
+                [0x41; 32],
+                format!("thread-{execution}"),
+                format!("execution-{execution}"),
+                1,
+                format!("claim-{execution}"),
+                1,
+                1,
+                1_700_000_000_000_000,
+                "workload-1".to_owned(),
+                "producer-1".to_owned(),
+                [0x61; 32],
+            )
+            .expect("another execution's writer"),
+            CheckpointLimits::default(),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await
+        .expect("another execution's root");
+        for step in 0..5 {
+            other
+                .save(&Checkpoint::new(
+                    &format!("thread-{execution}"),
+                    State::new(),
+                    step,
+                    Vec::new(),
+                ))
+                .await
+                .expect("seed a row");
+        }
+    }
+    let family = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member = member(&family).await;
+    let agent = format!("{}/fetch_short", member.thread_id);
+    member
+        .tool_pipelines
+        .clone()
+        .unwrap()
+        .admit_tool_pipeline(&agent, &lineage("call-0"), Some(DEFINITION))
+        .await
+        .expect("admit");
+    let mut connection = database.pool.acquire().await.expect("connection");
+    sqlx::query("ANALYZE elitea_runtime.agent_graph_checkpoints")
+        .execute(&mut *connection)
+        .await
+        .expect("analyze");
+    sqlx::query("SET enable_seqscan = off")
+        .execute(&mut *connection)
+        .await
+        .expect("plan with the index where it can serve");
+    let ledger = format!("{}{TOOL_LEDGER_SEGMENT}", member.thread_id);
+    let ledger_plan = explain(
+        &mut connection,
+        &ledger,
+        "EXPLAIN SELECT checkpoint_id FROM elitea_runtime.agent_graph_checkpoints \
+         WHERE tenant_id = 'tenant-1' AND resource_project_id = 1 AND projection_project_id = 1 \
+           AND capability_id = 'agent.execute.application.v1' \
+           AND checkpoint_family = 'adk-graph.2.0.0.v1' \
+           AND definition_digest = decode(repeat('41', 32), 'hex') \
+           AND thread_id = $1 ORDER BY save_ordinal DESC LIMIT 1",
+    )
+    .await;
+    let index_cond = ledger_plan
+        .lines()
+        .find(|line| line.contains("Index Cond"))
+        .unwrap_or_default();
+    assert!(
+        ledger_plan.contains("Index Scan using agent_graph_checkpoints_thread_order_idx")
+            && index_cond.contains("thread_id ="),
+        "{ledger_plan}"
+    );
+    assert!(!ledger_plan.contains("Seq Scan"), "{ledger_plan}");
+    // The prefix count of the delta before this review could not be bounded
+    // by the key: `thread_id` stays a filter over every row of the definition.
+    let prefix_plan = explain(
+        &mut connection,
+        &ledger,
+        "EXPLAIN SELECT count(*) FROM elitea_runtime.agent_graph_checkpoint_writers \
+         WHERE tenant_id = 'tenant-1' AND resource_project_id = 1 AND projection_project_id = 1 \
+           AND capability_id = 'agent.execute.application.v1' \
+           AND checkpoint_family = 'adk-graph.2.0.0.v1' \
+           AND definition_digest = decode(repeat('41', 32), 'hex') \
+           AND starts_with(thread_id, $1) AND strpos(thread_id, '/pt1:') > 0",
+    )
+    .await;
+    let prefix_cond = prefix_plan
+        .lines()
+        .find(|line| line.contains("Index Cond"))
+        .unwrap_or_default();
+    assert!(!prefix_cond.contains("thread_id"), "{prefix_plan}");
+    println!("FU-291-LEDGER-PLAN\n{ledger_plan}\nFU-291-PREFIX-PLAN\n{prefix_plan}");
+}
+
+/// Review B: twelve family objects of one member admit twelve distinct calls
+/// at once: exactly 8 are admitted, 4 are refused typed, 8 nested writers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn twelve_concurrent_admissions_of_one_member_admit_exactly_eight() {
+    let database = database().await;
+    let family = Arc::new(
+        root(database.pool.clone(), 1)
+            .await
+            .with_application_children(["fetch_short", "fetch_long"].into_iter())
+            .await
+            .expect("activate the root family"),
+    );
+    let first = member(family.as_ref()).await;
+    let agent = format!("{}/fetch_short", first.thread_id);
+    let mut admissions = Vec::new();
+    for _ in 0..12 {
+        admissions.push(member(family.as_ref()).await.tool_pipelines.unwrap());
+    }
+    let start = Arc::new(tokio::sync::Barrier::new(12));
+    let tasks = admissions
+        .into_iter()
+        .enumerate()
+        .map(|(call, admission)| {
+            let start = Arc::clone(&start);
+            let agent = agent.clone();
+            tokio::spawn(async move {
+                start.wait().await;
+                admission
+                    .admit_tool_pipeline(
+                        &agent,
+                        &lineage(&format!("call-{call}")),
+                        Some(DEFINITION),
+                    )
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut admitted = 0;
+    let mut refused = 0;
+    for task in tasks {
+        match task.await.expect("admission task") {
+            Ok(()) => admitted += 1,
+            Err(error) if is_tool_pipeline_limit(&error) => refused += 1,
+            Err(error) => panic!("an untyped failure: {error}"),
+        }
+    }
+    assert_eq!((admitted, refused), (8, 4));
+    assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 8);
+}
+
+async fn explain(connection: &mut sqlx::PgConnection, thread: &str, sql: &'static str) -> String {
+    sqlx::query_scalar::<_, String>(sql)
+        .bind(thread.to_owned())
+        .fetch_all(&mut *connection)
+        .await
+        .expect("explain")
+        .join("\n")
+}

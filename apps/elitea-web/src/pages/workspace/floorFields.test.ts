@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import { companionParticipant, executorFixes, threadAgentsOf, type ThreadAgent } from './useEnsureConversation';
-import { floorFields, routedRequest } from './useSendPrompt';
+import { cloudLeadOf } from './CloudLeadNotice';
+import { defaultVersionOf, floorFields, routedRequest } from './useSendPrompt';
 
 const coder: ThreadAgent = { participantId: 77, applicationId: 5, name: 'Coder', versionId: 9, cloud: false };
 const reviewer: ThreadAgent = { participantId: 88, applicationId: 6, name: 'Reviewer', versionId: 10, cloud: true };
 
 describe('floorFields (ADR-0050 decision 7f)', () => {
   it('addresses the agents a message names, and starts on the first one named', () => {
-    expect(floorFields('@Reviewer then @Coder: check the diff', [coder, reviewer])).toEqual({ addressed_to: [88, 77], application_id: 6, version_id: 10, cloud_agent: true });
-    expect(floorFields('@Coder and @Reviewer', [coder, reviewer])).toEqual({ addressed_to: [77, 88], application_id: 5, version_id: 9 });
+    expect(floorFields('@Reviewer then @Coder: check the diff', [coder, reviewer])).toEqual({ addressed_to: [88, 77], application_id: 6, version_id: 10, participant_id: 88, cloud_agent: true });
+    expect(floorFields('@Coder and @Reviewer', [coder, reviewer])).toEqual({ addressed_to: [77, 88], application_id: 5, version_id: 9, participant_id: 77 });
   });
 
   it('changes nothing for a thread of one agent, or a message that names none', () => {
@@ -21,10 +22,10 @@ describe('floorFields (ADR-0050 decision 7f)', () => {
   it('starts an unaddressed message on the lead, never addressed to the composer’s agent (decision 7c, #1917)', () => {
     const lead = { floor: { policy: 'lead', lead_participant_id: 88 } };
     // A composer pick is not an address: no `addressed_to`, and the turn runs as the lead (a cloud agent here).
-    expect(floorFields('fix the flaky test', [coder, reviewer], lead)).toEqual({ application_id: 6, version_id: 10, cloud_agent: true });
-    expect(floorFields('fix it', [coder, reviewer], { floor: { policy: 'lead', lead_participant_id: 77 } })).toEqual({ application_id: 5, version_id: 9 });
+    expect(floorFields('fix the flaky test', [coder, reviewer], lead)).toEqual({ application_id: 6, version_id: 10, participant_id: 88, cloud_agent: true });
+    expect(floorFields('fix it', [coder, reviewer], { floor: { policy: 'lead', lead_participant_id: 77 } })).toEqual({ application_id: 5, version_id: 9, participant_id: 77 });
     // An address beats the lead.
-    expect(floorFields('@Coder fix it', [coder, reviewer], lead)).toEqual({ addressed_to: [77], application_id: 5, version_id: 9 });
+    expect(floorFields('@Coder fix it', [coder, reviewer], lead)).toEqual({ addressed_to: [77], application_id: 5, version_id: 9, participant_id: 77 });
     // A lead no longer in the thread, or the default policy: the composer's agent, as before.
     expect(floorFields('fix it', [coder, reviewer], { floor: { policy: 'lead', lead_participant_id: 99 } })).toEqual({});
     expect(floorFields('fix it', [coder, reviewer], { floor: { policy: 'addressed' } })).toEqual({});
@@ -85,12 +86,15 @@ describe('threadAgentsOf', () => {
       { id: 70, entity_name: 'user', entity_meta: { id: 1 } },
       { id: 77, entity_name: 'application', entity_meta: { id: 5, name: 'Coder' }, entity_settings: { version_id: 9 } },
       { id: 88, entity_name: 'application', entity_meta: { id: 6 }, entity_settings: { version_id: 10, executor: 'cloud' }, meta: { name: 'Reviewer' } },
-      // No version: not an agent a turn can start on.
-      { id: 99, entity_name: 'application', entity_meta: { id: 7, name: 'Broken' } },
+      // No version pin: an agent of the thread too, on its default version (#1926).
+      { id: 99, entity_name: 'application', entity_meta: { id: 7, name: 'Lead' } },
+      // A pin this client cannot read: not an agent a turn can start on.
+      { id: 100, entity_name: 'application', entity_meta: { id: 8, name: 'Broken' }, entity_settings: { version_id: 'x' } },
     ]);
     expect(agents).toEqual([
       { participantId: 77, applicationId: 5, name: 'Coder', versionId: 9, cloud: false },
       { participantId: 88, applicationId: 6, name: 'Reviewer', versionId: 10, cloud: true },
+      { participantId: 99, applicationId: 7, name: 'Lead', versionId: 0, cloud: false },
     ]);
     expect(threadAgentsOf(undefined)).toEqual([]);
   });
@@ -112,5 +116,43 @@ describe('executorFixes', () => {
 
   it('leaves a mapping that already says where the agent runs, and one the detail does not list', () => {
     expect(executorFixes(participants, [agent(77, false), agent(88, true), agent(99, true)])).toEqual([]);
+  });
+});
+
+describe('an unpinned agent (#1926)', () => {
+  const unpinned: ThreadAgent = { ...reviewer, versionId: 0 };
+
+  it('starts on the unpinned lead with version 0, for withVersion to resolve', () => {
+    expect(floorFields('fix it', [coder, unpinned], { floor: { policy: 'lead', lead_participant_id: 88 } })).toEqual({
+      application_id: 6,
+      version_id: 0,
+      participant_id: 88,
+      cloud_agent: true,
+    });
+  });
+
+  it('reads the default version as the host does: is_default, meta.default_version_id, base, first', () => {
+    expect(defaultVersionOf({ versions: [{ id: 3, name: 'base' }, { id: 4, name: 'v2', is_default: true }] })).toBe(4);
+    expect(defaultVersionOf({ meta: { default_version_id: 5 }, versions: [{ id: 3, name: 'base' }, { id: '5', name: 'v5' }] })).toBe(5);
+    expect(defaultVersionOf({ versions: [{ id: 2, name: 'draft' }, { id: 3, name: 'base' }] })).toBe(3);
+    expect(defaultVersionOf({ versions: [{ id: 0, name: 'base' }, { id: 7, name: 'x' }] })).toBe(7);
+    expect(defaultVersionOf({ versions: [] })).toBe(0);
+    expect(defaultVersionOf(undefined)).toBe(0);
+  });
+});
+
+describe('cloudLeadOf (#1929)', () => {
+  const lead = (id: number) => ({ floor: { policy: 'lead', lead_participant_id: id } });
+
+  it('names a cloud lead, and a local agent to address instead', () => {
+    expect(cloudLeadOf({ agents: [coder, reviewer], meta: lead(88) })).toEqual({ lead: reviewer, local: coder });
+    expect(cloudLeadOf({ agents: [reviewer, { ...reviewer, participantId: 99, cloud: true }], meta: lead(88) })).toEqual({ lead: reviewer, local: undefined });
+  });
+
+  it('says nothing for a local lead, no lead, one agent or an unread thread', () => {
+    expect(cloudLeadOf({ agents: [coder, reviewer], meta: lead(77) })).toBeUndefined();
+    expect(cloudLeadOf({ agents: [coder, reviewer], meta: { floor: { policy: 'addressed' } } })).toBeUndefined();
+    expect(cloudLeadOf({ agents: [reviewer], meta: lead(88) })).toBeUndefined();
+    expect(cloudLeadOf(undefined)).toBeUndefined();
   });
 });

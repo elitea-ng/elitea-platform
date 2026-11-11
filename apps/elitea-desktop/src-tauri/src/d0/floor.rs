@@ -282,10 +282,32 @@ pub fn next(
     })
 }
 
+/// The question a turn answers, as its `done` names it: the message's own
+/// (its first turn's `question_id`) on a later agent's turn, for which Main
+/// writes no question (#1887); else the turn's own.
+#[must_use]
+pub fn answered_question<'a>(request: &'a TurnRequest, question_id: &'a str) -> &'a str {
+    request
+        .floor_turn
+        .as_ref()
+        .map_or(question_id, |turn| turn.question_id.as_str())
+}
+
 /// `floor_stopped` on the previous turn: the message's next agent does not
 /// answer. `floor_turn_superseded` is a newer message, not a failure.
 pub fn stopped(events: &super::events::TurnEvents, code: &str, message: &str) {
     events.send("floor_stopped", json!({ "code": code, "message": message }));
+}
+
+/// `floor_stopped` (`commit_failed`): the previous answer was not saved (its
+/// commit failed or stopped unexpectedly), so the message's other agents do
+/// not answer.
+pub fn commit_failed(events: &super::events::TurnEvents) {
+    stopped(
+        events,
+        "commit_failed",
+        "This answer could not be saved, so the other agents of the message do not answer.",
+    );
 }
 
 /// The `floor` fields of a turn's `status` `running`: which agent of the
@@ -341,6 +363,7 @@ mod tests {
             images: Vec::new(),
             unattended,
             addressed_to: Vec::new(),
+            participant_id: None,
             floor_turn: None,
             cloud: false,
         }

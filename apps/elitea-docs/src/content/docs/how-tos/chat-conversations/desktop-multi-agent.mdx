@@ -13,7 +13,7 @@ A **Local work** thread in the Elitea desktop app can hold more than one agent. 
 3. The chip lists the agents you added: **Coder · base + Reviewer**. Choose the agent again in the same menu to take it out before you send.
 </Steps>
 
-The agents join the conversation when you send your next message. An agent joins on its first version.
+The agents join the conversation when you send your next message. An agent joins on its first version. An agent of a saved team that names no version answers on its agent's default version.
 
 ## Address a message
 
@@ -21,7 +21,7 @@ Write **@Name** in your message for each agent it is for, for example:
 
 > @Coder fix the flaky test, then @Reviewer check it
 
-- The agents you name answer **one after another, in the order your message names them**. The second agent starts once the first agent's answer is saved, and it sees that answer.
+- The agents you name answer **one after another, in the order your message names them**. The second agent starts once the first agent's answer is saved, and it sees that answer. If an answer cannot be saved, the agents after it do not answer, and the thread says why.
 - Each answer shows which agent gave it and where it ran: **Coder · on this computer**, **Reviewer · in the cloud, conversation text only**.
 - A name only counts as a whole word: `me@Coderhouse` addresses no one.
 
@@ -32,7 +32,9 @@ The agent in the composer's chip is not an address. A message that names no agen
 - **The conversation has a lead.** The lead answers, whichever agent the composer's chip shows, and the answer is marked with the lead's name, for example **Reviewer · in the cloud, conversation text only**. To have another agent answer, name it with **@Name**.
 - **No lead.** The agent in the composer's chip answers.
 
-When the lead runs in the cloud, its turn takes none of the composer's modes: no plan mode, Bypass, model choice or **Run to completion**.
+When the lead runs in the cloud, the composer says so above the message box: **To: Reviewer (lead)**, with a reminder that the lead gets only the text, and a local agent you can address instead, for example **@Coder**. Its turn takes none of the composer's modes: no plan mode, Bypass, model choice or **Run to completion**.
+
+If the lead changes while you write, the app sends your message to the new lead. It reads the thread's agents and lead again at most every 30 seconds, and right after you add an agent.
 
 The composer stays busy until the last addressed agent has answered. If you send a new message before then, the agents still waiting for the earlier message do not answer it: the thread says **A newer message took the floor**.
 
@@ -44,7 +46,7 @@ The composer stays busy until the last addressed agent has answered. If you send
 | What it sees | The conversation, the folder's files, its `AGENTS.md` and `SOUL.md`, the thread's tools | The conversation's text and your message only |
 | What it can do | Read and change files, run commands, use its tools (with your approvals) | Answer in text |
 
-An agent that runs in the cloud never gets your folder, its files, `AGENTS.md` or the thread's tools. Its answer is saved in the conversation, marked as answered in the cloud. A message to it cannot carry **@** files, images, skills, `/` commands, a model choice, plan mode or **Run to completion**: the app refuses them before anything is sent.
+An agent that runs in the cloud never gets your folder, its files, `AGENTS.md` or the thread's tools. Its answer is saved in the conversation, marked as answered in the cloud. A very long answer (over 512 KiB) is cut, and ends with a note that says it was cut. A message to it cannot carry **@** files, images, skills, `/` commands, a model choice, plan mode or **Run to completion**: the app refuses them before anything is sent.
 
 The agents of a thread each keep their own session: an agent reads the others' answers as theirs, never as its own.
 

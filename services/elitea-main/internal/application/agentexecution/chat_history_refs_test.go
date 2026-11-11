@@ -177,9 +177,10 @@ func TestReaderViewSettingsReadsTheVersionAndParticipant(t *testing.T) {
 	if got := readerViewSettings(nil, ""); got != contextview.Default {
 		t.Fatalf("no version: %+v", got)
 	}
-	input := contextViewInput(contextview.Default, &runtimev1.ModelContextLimitsV1{ContextWindowTokens: 8192}, []byte(`[]`), nil)
+	input := contextViewInput(contextview.Default, "2026-11-11 10:00:00", &runtimev1.ModelContextLimitsV1{ContextWindowTokens: 8192}, []byte(`[]`), nil)
 	if input.GetHistory() != "full" || input.GetWindowTokens() != 8192 ||
-		input.GetDigest() != contextview.Digest(contextview.HistoryFull, 8192, []byte(`[]`), nil) {
+		input.GetDigest() != contextview.Digest(contextview.HistoryFull, 8192, []byte(`[]`), nil) ||
+		input.GetBinding() != contextview.Default.Binding("") {
 		t.Fatalf("context view input: %v", input)
 	}
 }

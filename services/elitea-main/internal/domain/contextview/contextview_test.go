@@ -149,3 +149,29 @@ func TestExclusionNamesTheRuleThatDroppedTheMessage(t *testing.T) {
 // digestVector is Digest(since_joined, 8192, `[]`, no refs); the worker's
 // context_view test pins the same value.
 const digestVector = "98c87e67997f565a4d27a3a984ac5d8e9aa3353c0457a2222ac27566fd08b5dc"
+
+// Issue 1902: the binding moves with every setting that decides
+// eligibility, and only with those.
+func TestBindingCoversEveryEligibilitySetting(t *testing.T) {
+	const joined, rejoined = "2026-11-01 09:00:00", "2026-11-11 09:00:00"
+	base := Default.Binding(joined)
+	if len(base) != 64 {
+		t.Fatalf("binding %q", base)
+	}
+	if got := (Settings{History: HistoryFull, SideTalk: SideTalkNone}).Binding(joined); got == base {
+		t.Fatal("include_side_talk none must change the binding")
+	}
+	if got := (Settings{History: HistoryAddressedOnly, SideTalk: SideTalkParty}).Binding(joined); got == base {
+		t.Fatal("the mode must change the binding")
+	}
+	if got := (Settings{History: HistoryFull, SideTalk: SideTalkParty, ActivityNotes: true}).Binding(joined); got != base {
+		t.Fatal("activity_notes decides no eligibility")
+	}
+	if got := Default.Binding(rejoined); got != base {
+		t.Fatal("a full reader re-added later keeps its binding")
+	}
+	since := Settings{History: HistorySinceJoined, SideTalk: SideTalkParty}
+	if since.Binding(joined) == since.Binding(rejoined) {
+		t.Fatal("a since_joined reader re-added later must change the binding")
+	}
+}

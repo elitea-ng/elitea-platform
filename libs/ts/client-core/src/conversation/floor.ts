@@ -97,6 +97,20 @@ export function addressedTo(text: string, agents: readonly AddressableAgent[]): 
     .slice(0, MAX_ADDRESSED);
 }
 
+/**
+ * Who answers a message first, as Main routes it (`turntaking.Route`): the first agent it addresses, else the lead
+ * under policy `lead`, else `fallback` (the sticky or composer's target; 0 for none). Only the conversation's `agents`
+ * count: a lead no longer among them is no lead. The one copy of the rule the clients share (#1932). 0 when nobody
+ * answers yet (the person has to pick).
+ */
+export function firstAnswerer(addressed: readonly number[], floor: Floor, agents: readonly AddressableAgent[], fallback = 0): number {
+  const known = (id: number): boolean => id > 0 && agents.some((agent) => agent.participantId === id);
+  const first = addressed[0] ?? 0;
+  if (known(first)) return first;
+  if (floor.policy === FLOOR_POLICY.Lead && known(floor.leadParticipantId)) return floor.leadParticipantId;
+  return known(fallback) ? fallback : 0;
+}
+
 /** Where the text first mentions `name` outside the `taken` spans; -1 when it does not. */
 function firstMention(text: string, name: string, taken: readonly [number, number][]): number {
   let first = -1;

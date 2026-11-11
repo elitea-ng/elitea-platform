@@ -44,8 +44,9 @@ export interface WorkspaceTurn {
   startErrorCode: string | null;
   /**
    * Resolves `true` once the host started the turn; `false` when it refused (see `startError`). `retry` reads a
-   * refusal and can give one other request to send at once instead (for example, the same turn without a grant that
-   * the platform refused because grants are off).
+   * refusal (and the request refused) and can give another request to send at once instead (for example, the same turn
+   * without a grant that the platform refused because grants are off). A retry's own refusal goes through `retry`
+   * again, at most `MAX_START_RETRIES` times in all (#1931).
    */
   start(request: TurnStartRequest, retry?: StartRetry): Promise<boolean>;
   /** Continue a recorded turn that ran when the app stopped (ADR-0045 decision 7); resolves like `start`. */
@@ -67,8 +68,11 @@ export interface WorkspaceTurn {
   offersResume: (turnId: string, resumable: boolean) => boolean;
 }
 
-/** Reads a refused start (`code`, `message`); a request to send once instead (it may first read the thread again), or undefined to keep the refusal. */
-type StartRetry = (refusal: { code: string; message: string }) => TurnStartRequest | undefined | Promise<TurnStartRequest | undefined>;
+/** Reads a refused start (`code`, `message`) and the request refused; a request to send instead (it may first read the thread again), or undefined to keep the refusal. */
+type StartRetry = (refusal: { code: string; message: string }, refused: TurnStartRequest) => TurnStartRequest | undefined | Promise<TurnStartRequest | undefined>;
+
+/** The most requests a refused start is sent again as: a reroute and a grant dropped, in either order. */
+export const MAX_START_RETRIES = 2;
 
 const RESYNC_MS = 15_000;
 /** Past any seq the host sends: a `done` learnt from the status folds in last. */
@@ -117,11 +121,13 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
       setStarting(true);
       try {
         await ready.current;
-        const started = await ipc.startTurn(request).catch(async (error: unknown) => {
-          const again = await retry?.(toWorkspaceIpcError(error));
-          if (again === undefined) throw error;
-          return ipc.startTurn(again);
-        });
+        const attempt = (sent: TurnStartRequest, left: number): ReturnType<WorkspaceIpc['startTurn']> =>
+          ipc.startTurn(sent).catch(async (error: unknown) => {
+            const again = left > 0 ? await retry?.(toWorkspaceIpcError(error), sent) : undefined;
+            if (again === undefined) throw error;
+            return attempt(again, left - 1);
+          });
+        const started = await attempt(request, MAX_START_RETRIES);
         dispatch({ type: 'begin', turnId: started.turn_id });
         return true;
       } catch (error) {

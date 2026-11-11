@@ -212,14 +212,16 @@ class AgentFloorPeerV1(_message.Message):
     def __init__(self, participant_id: _Optional[int] = ..., name: _Optional[str] = ..., role: _Optional[str] = ...) -> None: ...
 
 class ContextViewV1(_message.Message):
-    __slots__ = ("history", "window_tokens", "digest")
+    __slots__ = ("history", "window_tokens", "digest", "binding")
     HISTORY_FIELD_NUMBER: _ClassVar[int]
     WINDOW_TOKENS_FIELD_NUMBER: _ClassVar[int]
     DIGEST_FIELD_NUMBER: _ClassVar[int]
+    BINDING_FIELD_NUMBER: _ClassVar[int]
     history: str
     window_tokens: int
     digest: str
-    def __init__(self, history: _Optional[str] = ..., window_tokens: _Optional[int] = ..., digest: _Optional[str] = ...) -> None: ...
+    binding: str
+    def __init__(self, history: _Optional[str] = ..., window_tokens: _Optional[int] = ..., digest: _Optional[str] = ..., binding: _Optional[str] = ...) -> None: ...
 
 class RecalledMemoryEntryV1(_message.Message):
     __slots__ = ("entry_id", "content")

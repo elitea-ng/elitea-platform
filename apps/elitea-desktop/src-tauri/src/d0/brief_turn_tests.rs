@@ -115,8 +115,21 @@ async fn a_brief_quoting_the_shown_message_reaches_a_profiled_child() {
     assert_eq!(lane["avatar"], "default:owl");
     assert_eq!(lane["profile_digest"].as_str().unwrap().len(), 64);
     assert_eq!(lane["brief_digest"].as_str().unwrap().len(), 64);
+    // The record names the chat message the model's id stands for, the
+    // turn's question, as a cloud spawn's does (#1908).
     let id = shown_id(&bodies[0]);
-    assert_eq!(lane["brief_refs"]["message_ids"], json!([id]));
+    let question = h
+        .server
+        .seen()
+        .into_iter()
+        .find(|req| req.path.contains("/local_turn/prompt_lib/"))
+        .map(|req| serde_json::from_str::<Value>(&req.body).unwrap()["question_id"].clone())
+        .unwrap();
+    assert_eq!(
+        crate::d0::brief::short_message_ref(question.as_str().unwrap()),
+        id
+    );
+    assert_eq!(lane["brief_refs"]["message_ids"], json!([question]));
     assert_eq!(lane["brief_refs"]["facts"], 1);
     // Never the soul, a quote or a fact.
     let text = lane.to_string();
@@ -173,6 +186,7 @@ fn the_hosts_own_turn_text_carries_no_message_id() {
     let person = request("w");
     assert_eq!(quotable_question_id(&person, "q-1"), "q-1");
     let floor = TurnRequest {
+        participant_id: None,
         floor_turn: Some(super::super::turn::FloorTurn {
             question_id: "q-0".into(),
             position: 1,

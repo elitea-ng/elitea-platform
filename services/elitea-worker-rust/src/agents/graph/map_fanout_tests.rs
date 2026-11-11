@@ -192,6 +192,7 @@ impl ParallelChildCheckpointerFactory for ItemChildren {
             thread_id,
             checkpointer: store,
             node_recovery: None,
+            tool_pipelines: None,
         })
     }
 }

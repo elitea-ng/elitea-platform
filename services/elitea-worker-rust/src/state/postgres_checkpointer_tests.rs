@@ -2633,3 +2633,4 @@ mod fanout_resume;
 mod graph_receipts;
 mod run_root_fencing;
 mod runtime_lost_journal;
+mod tool_pipeline_admission;

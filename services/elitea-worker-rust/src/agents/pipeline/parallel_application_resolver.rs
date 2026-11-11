@@ -88,6 +88,43 @@ impl NativePipelineApplicationResolver {
         }
     }
 
+    /// FU-291: the same participants, the member's own Agents running their
+    /// pipeline tools on nested threads this member family admits.
+    pub(super) fn rebind_tool_pipelines(
+        &self,
+        admission: &Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>,
+    ) -> Self {
+        let rebind = |participant: &NativePipelineApplicationParticipant| match participant {
+            NativePipelineApplicationParticipant::ScopedAgent {
+                tool,
+                scope,
+                fingerprint,
+                member,
+            } => NativePipelineApplicationParticipant::ScopedAgent {
+                tool: Arc::clone(tool),
+                scope: Arc::new(scope.with_tool_pipelines(Arc::clone(admission))),
+                fingerprint: *fingerprint,
+                member: member.clone(),
+            },
+            other => other.clone(),
+        };
+        Self {
+            call_owners: self.call_owners.clone(),
+            nodes: self
+                .nodes
+                .iter()
+                .map(|(node, (alias, participant))| {
+                    (node.clone(), (alias.clone(), rebind(participant)))
+                })
+                .collect(),
+            participants: self
+                .participants
+                .iter()
+                .map(|(alias, participant)| (alias.clone(), rebind(participant)))
+                .collect(),
+        }
+    }
+
     /// W3-2b: the same participants, their root-level saved pipelines run by
     /// one root fan-out member; their Code names that member in its scope.
     /// `None` (C6) when no participant has a saved Code owner: the resolver

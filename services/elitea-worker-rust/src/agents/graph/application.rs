@@ -378,12 +378,32 @@ pub(crate) trait PipelineApplicationResolver: Send + Sync {
         None
     }
 
-    /// Whether the saved Agent that `node` runs (by `alias`) calls a saved
-    /// pipeline among its tools, at any depth. Such an Agent cannot run as a
-    /// fan-out member yet (FU-291): its pipeline's checkpoint threads are not
-    /// among the member's admitted threads.
-    fn agent_calls_saved_pipeline(&self, _node: &str, _alias: &str) -> bool {
+    /// FU-291: the same frozen resolver whose saved Agents, run by one fan-out
+    /// member, call their saved pipeline tools on nested threads that
+    /// member's own family admits. `None` keeps this resolver.
+    fn for_tool_pipelines(
+        &self,
+        _admission: Arc<dyn super::tool_pipeline_threads::ToolPipelineAdmission>,
+    ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+        None
+    }
+
+    /// Whether an Agent node of this resolver (or of a saved pipeline below
+    /// it) runs a saved Agent with a saved pipeline among its tools (FU-291
+    /// review A).
+    fn holds_agent_pipeline_tool(&self) -> bool {
         false
+    }
+
+    /// Why the saved Agent that `node` runs (by `alias`) cannot run as a
+    /// fan-out member: a saved pipeline among its tools that a member cannot
+    /// run durably (FU-291 D-7). `None` when it can.
+    fn agent_tool_pipeline_refusal(
+        &self,
+        _node: &str,
+        _alias: &str,
+    ) -> Option<super::compiler::ToolPipelineCause> {
+        None
     }
 
     /// W3-2b: the same frozen resolver whose root-level saved pipelines run

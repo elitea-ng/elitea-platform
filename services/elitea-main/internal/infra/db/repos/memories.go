@@ -294,7 +294,8 @@ func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 		WHERE memory.user_id = $1::bigint AND memory.enabled = TRUE
 		ORDER BY memory.created_at DESC, memory.id DESC
 		LIMIT %[2]d`, s, currentMemoryRecallPoolSize)
-	rows, err := r.pool.Query(ctx, q, actorUserID, projectID)
+	// Inside a local-turn start, on its transaction (startQuerier, issue 1888).
+	rows, err := startQuerier(ctx, r.pool).Query(ctx, q, actorUserID, projectID)
 	if err != nil {
 		return agentexecutionapp.CurrentMemoryRecall{}, fmt.Errorf("memories: resolve recall: %w", err)
 	}

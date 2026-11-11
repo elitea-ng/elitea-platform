@@ -9,12 +9,21 @@
  * names no agent goes to the thread's lead when it has one, so the turn
  * starts on the lead; a start Main routes elsewhere anyway is refused by the
  * host before any agent runs, and is sent once more to the routed agent.
+ *
+ * The thread's agents and lead are read once and kept a short while per
+ * thread (`threadFloorQuery`, #1928), shared with the composer's "who
+ * answers" notice; a refusal that says they changed reads them again.
  */
 import { useRef, useState } from 'react';
 
-import { addressedTo, FLOOR_POLICY, floorOf } from '@elitea/client-core/conversation';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+
+import { addressedTo, firstAnswerer, floorOf } from '@elitea/client-core/conversation';
 
 import { conversationApi } from '@/entities/conversation';
+import { LATEST_VERSION_NAME } from '@/entities/version';
+import { getApplication } from '@/shared/api/generated/applications/applications';
+import { unwrapBody } from '@/shared/api/unwrap';
 import { isDesktopGrantsOff, markGrantsTurnedOff } from '@/features/unattended';
 import { describeWorkspaceError, type WorkspaceTurn } from '@/features/workspace';
 import type { TurnModelChoice } from '@/shared/desktop/turnModel';
@@ -94,34 +103,76 @@ function shownOf(images: SentImages | undefined): SentImages['shown'] {
   return images === undefined ? [] : images.shown;
 }
 
-/** The start fields that run the turn as `agent`. */
-function startedOn(agent: ThreadAgent): Pick<TurnStartRequest, 'cloud_agent' | 'application_id' | 'version_id'> {
-  return { application_id: agent.applicationId, version_id: agent.versionId, ...(agent.cloud ? { cloud_agent: true } : {}) };
+/** The start fields that run the turn as `agent`: its participant (#1927), application and version, and where it runs. */
+function startedOn(agent: ThreadAgent): Pick<TurnStartRequest, 'cloud_agent' | 'application_id' | 'version_id' | 'participant_id'> {
+  return { application_id: agent.applicationId, version_id: agent.versionId, participant_id: agent.participantId, ...(agent.cloud ? { cloud_agent: true } : {}) };
+}
+
+/** The fields `floorFields` sets: the address, and the agent the turn starts on. */
+export type FloorFields = Pick<TurnStartRequest, 'addressed_to' | 'cloud_agent' | 'application_id' | 'version_id' | 'participant_id'>;
+
+/**
+ * Who a message is for, in a thread of several agents, as Main routes it (client-core `firstAnswerer`, the one copy of
+ * `turntaking.Route` the clients share, #1932): the agents it names are its `addressed_to`, and the first of them answers
+ * first. A composer pick is not an address (ADR-0050 decision 7c, #1917): a message that names no agent carries no
+ * `addressed_to`, and in a thread with a lead (`meta.floor`) the lead answers it, so the turn starts on the lead. One
+ * agent, or no address and no lead: the composer's agent, as before. An unpinned agent's `version_id` is 0 here:
+ * `withVersion` reads its default version before the start (#1926).
+ */
+export function floorFields(prompt: string, agents: readonly ThreadAgent[], meta?: unknown): FloorFields | Record<string, never> {
+  if (agents.length < 2) return {};
+  const addressed = addressedTo(prompt, agents);
+  const first = agents.find((agent) => agent.participantId === firstAnswerer(addressed, floorOf(meta), agents));
+  if (first === undefined) return {};
+  return addressed.length > 0 ? { addressed_to: addressed, ...startedOn(first) } : startedOn(first);
 }
 
 /**
- * Who a message is for, in a thread of several agents, as Main routes it (`turntaking.Route`): the agents it names are
- * its `addressed_to`, and the first of them answers first. A composer pick is not an address (ADR-0050 decision 7c,
- * #1917): a message that names no agent carries no `addressed_to`, and in a thread with a lead (`meta.floor`) the lead
- * answers it, so the turn starts on the lead. One agent, or no address and no lead: the composer's agent, as before.
+ * An agent's default version, from its detail (`GET application`): the version marked `is_default`, else
+ * `meta.default_version_id`, else the one named `base`, else its first (`selectDefaultVersion`; the host reads a later
+ * unpinned agent's the same way). 0 when it has none.
  */
-export function floorFields(prompt: string, agents: readonly ThreadAgent[], meta?: unknown): Pick<TurnStartRequest, 'addressed_to' | 'cloud_agent' | 'application_id' | 'version_id'> | Record<string, never> {
-  if (agents.length < 2) return {};
-  const addressed = addressedTo(prompt, agents);
-  const first = agents.find((agent) => agent.participantId === addressed[0]);
-  if (first !== undefined) return { addressed_to: addressed, ...startedOn(first) };
-  const floor = floorOf(meta);
-  const lead = floor.policy === FLOOR_POLICY.Lead ? agents.find((agent) => agent.participantId === floor.leadParticipantId) : undefined;
-  return lead === undefined ? {} : startedOn(lead);
+export function defaultVersionOf(detail: unknown): number {
+  const record = (detail ?? {}) as { versions?: unknown; meta?: { default_version_id?: unknown } | null };
+  const versions = Array.isArray(record.versions) ? (record.versions as { id?: unknown; name?: unknown; is_default?: unknown }[]) : [];
+  const idOf = (version: { id?: unknown } | undefined): number => {
+    const id = Number(version?.id);
+    return Number.isSafeInteger(id) && id > 0 ? id : 0;
+  };
+  const wanted = Number(record.meta?.default_version_id);
+  const picked =
+    versions.find((version) => version.is_default === true && idOf(version) > 0) ??
+    versions.find((version) => idOf(version) > 0 && idOf(version) === wanted) ??
+    versions.find((version) => version.name === LATEST_VERSION_NAME && idOf(version) > 0) ??
+    versions.find((version) => idOf(version) > 0);
+  return idOf(picked);
+}
+
+/** What a start sends of the floor: the fields that run the routed agent, or only the address (or nothing). */
+type StartFloor = FloorFields | Pick<TurnStartRequest, 'addressed_to'>;
+
+/**
+ * The floor fields with a version to run: an unpinned agent (version 0) runs its agent's default version, read here
+ * (#1926). Unreadable or versionless: the message keeps its address, so Main still routes it to the agents it names,
+ * and starts on the composer's agent; the host refuses that start (`floor_routed_elsewhere`) and says why.
+ */
+export async function withVersion(projectId: number, fields: FloorFields | Record<string, never>): Promise<StartFloor> {
+  if (fields.version_id !== 0 || fields.application_id === undefined) return fields;
+  const floor = fields as FloorFields;
+  const addressOnly: StartFloor = floor.addressed_to === undefined ? {} : { addressed_to: floor.addressed_to };
+  try {
+    const version = defaultVersionOf(unwrapBody(await getApplication(String(projectId), floor.application_id)));
+    return version > 0 ? { ...floor, version_id: version } : addressOnly;
+  } catch {
+    return addressOnly;
+  }
 }
 
 /** The thread as Main routes a message in it: its agent participants and its `meta` (the lead, `meta.floor`). */
-interface ThreadFloor {
+export interface ThreadFloor {
   agents: ThreadAgent[];
   meta: unknown;
 }
-
-const NO_FLOOR: ThreadFloor = { agents: [], meta: undefined };
 
 /**
  * A message routed to several agents is not a "Run to completion" chain (the host follows the floor instead, one agent
@@ -146,29 +197,46 @@ function companionsOf(selection: AgentSelection, agentId: string): CompanionAgen
     .map((c) => ({ applicationId: Number(c.agentId), applicationName: c.name, versionId: c.versionId, agentType: c.agentType, cloud: c.cloud }));
 }
 
-/** The thread's agents and meta, read from the conversation; `NO_FLOOR` when it cannot be read. */
-async function readFloor(projectId: number, conversationId: string): Promise<ThreadFloor> {
+/** How long a thread's agents and lead are kept before a send reads them again (#1928). */
+export const THREAD_FLOOR_STALE_MS = 30_000;
+
+/** The query of a thread's floor: one per thread, shared by every send and the composer's notice. */
+export function threadFloorQuery(projectId: number, conversationId: string): { queryKey: readonly unknown[]; queryFn: () => Promise<ThreadFloor>; staleTime: number } {
+  return {
+    queryKey: ['workspace', 'threadFloor', projectId, conversationId] as const,
+    queryFn: async () => {
+      const detail = await conversationApi.details({ projectId, id: conversationId });
+      return { agents: threadAgentsOf(detail.participants), meta: detail.meta };
+    },
+    staleTime: THREAD_FLOOR_STALE_MS,
+  };
+}
+
+/**
+ * The thread's agents and meta, as kept (`fresh`: read again now, the kept copy is out of date); `undefined` when the
+ * thread cannot be read.
+ */
+async function readFloor(queryClient: QueryClient, projectId: number, conversationId: string, fresh: boolean): Promise<ThreadFloor | undefined> {
+  const query = threadFloorQuery(projectId, conversationId);
   try {
-    const detail = await conversationApi.details({ projectId, id: conversationId });
-    return { agents: threadAgentsOf(detail.participants), meta: detail.meta };
+    return await queryClient.query(fresh ? { ...query, staleTime: 0 } : query);
   } catch {
-    // The thread could not be read: the composer's agent answers, as in a thread of one (and the host refuses a start
-    // Main routes elsewhere, `floor_routed_elsewhere`).
-    return NO_FLOOR;
+    return undefined;
   }
 }
 
 /**
  * The thread a message is routed in. A conversation created by this send has no lead and only the agents it added. An
- * existing one is read (its agents and its lead may have changed since the composer opened it): a message that names
- * no agent there goes to the lead, when it has one.
+ * existing one is read (kept a short while, #1928; read again when this send added agents to it): a message that
+ * names no agent there goes to the lead, when it has one. Unreadable, the agents this send added still route an
+ * address, and the composer's agent answers otherwise (the host refuses a start Main routes elsewhere,
+ * `floor_routed_elsewhere`).
  */
-async function threadFloor(projectId: number, conversationId: string, existed: boolean, prompt: string, added: ThreadAgent[]): Promise<ThreadFloor> {
+async function threadFloor(queryClient: QueryClient, projectId: number, conversationId: string, existed: boolean, added: ThreadAgent[]): Promise<ThreadFloor> {
   if (!existed) return { agents: added, meta: undefined };
-  const read = await readFloor(projectId, conversationId);
-  if (read.agents.length > 0) return read;
-  // Unreadable: the agents this send added still route an address.
-  return { agents: /[@#]/.test(prompt) || added.length > 0 ? added : [], meta: undefined };
+  const read = await readFloor(queryClient, projectId, conversationId, added.length > 0);
+  if (read !== undefined && read.agents.length > 0) return read;
+  return { agents: added, meta: undefined };
 }
 
 /** The host's refusal of a start Main routed to another agent than the one it started on (`check_routed`). */
@@ -176,12 +244,36 @@ const ROUTED_ELSEWHERE = 'floor_routed_elsewhere';
 
 /**
  * A start Main routed elsewhere (the thread's lead changed since it was read): the same message once more, on the agent
- * Main routes it to as the thread now reads. `undefined` when that is the agent the refused start was on.
+ * Main routes it to as the thread now reads (read again, the kept copy is out of date). `undefined` (the refusal shows)
+ * when the thread cannot be read (the retry would only be refused again, #1931) or routes to the agent the refused
+ * start was on.
  */
-async function rerouted(request: TurnStartRequest, projectId: number, conversationId: string, base: TurnStartRequest): Promise<TurnStartRequest | undefined> {
-  const floor = await readFloor(projectId, conversationId);
-  const again = routedRequest({ ...base, ...floorFields(base.prompt, floor.agents, floor.meta) });
-  return again.application_id === request.application_id && again.version_id === request.version_id ? undefined : again;
+export async function rerouted(queryClient: QueryClient, refused: TurnStartRequest, projectId: number, conversationId: string, base: TurnStartRequest): Promise<TurnStartRequest | undefined> {
+  const floor = await readFloor(queryClient, projectId, conversationId, true);
+  if (floor === undefined) return undefined;
+  const again = routedRequest({ ...base, ...(await withVersion(projectId, floorFields(base.prompt, floor.agents, floor.meta))) });
+  // A retry that names no participant answers on whichever one the version finds: no other agent than the refused one.
+  const participant = again.participant_id === undefined || again.participant_id === refused.participant_id;
+  const same = again.application_id === refused.application_id && again.version_id === refused.version_id && participant;
+  return same ? undefined : again;
+}
+
+/**
+ * What a refused start is sent again as (`turn.start`'s retry, which may run more than once: each retry's refusal
+ * comes back here, #1931): on the agent Main routes it to, or without a grant the platform turned off. A grant
+ * dropped once stays dropped for a later reroute.
+ */
+function refusalChain(queryClient: QueryClient, projectId: number, conversationId: string, base: TurnStartRequest) {
+  let current = base;
+  return async (refusal: { code: string; message: string }, refused: TurnStartRequest): Promise<TurnStartRequest | undefined> => {
+    if (refusal.code === ROUTED_ELSEWHERE) return rerouted(queryClient, refused, projectId, conversationId, current);
+    const without = withoutRefusedGrant(refused, refusal);
+    if (without !== undefined) {
+      const { unattended: _refused, ...rest } = current;
+      current = rest;
+    }
+    return without;
+  };
 }
 
 /** The start request's `command`, only when the message runs one. */
@@ -198,6 +290,7 @@ export function useSendPrompt(
   onStarted?: (conversationId: string, prompt: string, images: SentImages['shown']) => void,
 ): SendPrompt {
   const ensureConversation = useEnsureConversation();
+  const queryClient = useQueryClient();
   const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   // Synchronous: a second click lands before React re-renders with `sending`.
@@ -233,7 +326,7 @@ export function useSendPrompt(
         companions: companionsOf(selection, agent.id),
       });
       const conversationId = ensured.id;
-      const floor = await threadFloor(projectId, conversationId, selection.conversationId !== '', prompt, ensured.agents);
+      const floor = await threadFloor(queryClient, projectId, conversationId, selection.conversationId !== '', ensured.agents);
       if (startsNew) pending.current = { key, id: conversationId, ready: true };
       const base: TurnStartRequest = {
         workspace_id: workspace.id,
@@ -250,12 +343,11 @@ export function useSendPrompt(
         ...commandField(command),
         ...imagesField(images),
       };
-      const request = routedRequest({ ...base, ...floorFields(prompt, floor.agents, floor.meta) });
+      const request = routedRequest({ ...base, ...(await withVersion(projectId, floorFields(prompt, floor.agents, floor.meta))) });
       // Main routed the message to another agent than the one it started on (the lead changed since the thread was
-      // read): once more, on the agent the thread now routes it to.
-      const started = await turn.start(request, (refusal) =>
-        refusal.code === ROUTED_ELSEWHERE ? rerouted(request, projectId, conversationId, base) : withoutRefusedGrant(request, refusal),
-      );
+      // read): once more, on the agent the thread now routes it to; a grant the platform turned off goes once more
+      // without it. Each retry's refusal runs through the same chain (#1931).
+      const started = await turn.start(request, refusalChain(queryClient, projectId, conversationId, base));
       // A refused start (its reason is the turn's startError) keeps the
       // prompt and the person's conversation choice as they were.
       if (!started) return false;

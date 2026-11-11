@@ -11,6 +11,12 @@ SELECT conversation.id AS conversation_id,
        -- ADR-0050 decision 9b: "share history from: now" on this
        -- participant (`since_joined`), else '' (the version decides).
        COALESCE(target_mapping.entity_settings ->> 'context_history', '')::text AS participant_context_history,
+       -- #1902: when the reader joined, as after_joined reads it. Part of
+       -- the view's binding: an agent re-added later sees less under
+       -- since_joined, and its durable session must be re-seeded. The
+       -- column is a zoneless timestamp; to_char fixes its text against the
+       -- connection's DateStyle, so every replica hashes the same binding.
+       to_char(target_mapping.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US') AS participant_joined_at,
        COALESCE(conversation.meta -> 'internal_tools', '[]'::jsonb)::text AS internal_tools_json,
        -- BEGIN shared application_version_details_json projection
        -- ADR-0050 decision 1a: `soul` joins the object only when the version
@@ -1223,7 +1229,9 @@ SELECT conversation.id AS conversation_id,
        COALESCE(conversation.meta, '{}'::jsonb)::text AS conversation_meta_json,
        COALESCE(current_tools.tools, '[]'::jsonb)::text AS tools_json,
        COALESCE(current_history.chat_history, '[]'::jsonb)::text AS chat_history_json,
-       COALESCE(current_history.chat_history_refs, '[]'::jsonb)::text AS chat_history_refs_json
+       COALESCE(current_history.chat_history_refs, '[]'::jsonb)::text AS chat_history_refs_json,
+       -- #1902: when the reader joined (see ResolveCurrentApplicationTurn).
+       to_char(target_mapping.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.US') AS participant_joined_at
 FROM chat_conversations AS conversation
 JOIN chat_participant_mapping AS author_mapping
   ON author_mapping.conversation_id = conversation.id
@@ -2028,7 +2036,17 @@ SELECT conversation.uuid AS conversation_uuid,
            WHEN 'application' THEN 'application'
            WHEN 'dummy' THEN 'adhoc'
        END::text AS regeneration_kind,
-       question_text.content::text AS user_input
+       question_text.content::text AS user_input,
+       -- #1903: this answer's own turn wrote its question, so no earlier
+       -- answer replies to it. A later addressed agent answers the person's
+       -- existing question instead, which is in its history already.
+       NOT EXISTS (
+           SELECT 1
+           FROM chat_message_group AS earlier_answer
+           WHERE earlier_answer.reply_to_id = question.id
+             AND earlier_answer.conversation_id = conversation.id
+             AND earlier_answer.id < response.id
+       )::boolean AS question_is_own
 FROM chat_message_group AS response
 JOIN chat_conversations AS conversation
   ON conversation.id = response.conversation_id

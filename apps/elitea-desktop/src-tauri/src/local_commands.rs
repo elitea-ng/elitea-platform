@@ -639,6 +639,7 @@ pub async fn agent_turn_start(
     bypass_approvals: Option<bool>,
     unattended: Option<Value>,
     addressed_to: Option<Vec<i64>>,
+    participant_id: Option<i64>,
     cloud_agent: Option<bool>,
 ) -> Result<TurnStarted, IpcError> {
     let bypass = bypass_approvals.unwrap_or(false);
@@ -708,6 +709,9 @@ pub async fn agent_turn_start(
             // The agents the person addressed (ADR-0050 decision 7f): Main
             // routes the message, the host runs the agents one at a time.
             addressed_to: addressed_to.unwrap_or_default(),
+            // The participant the UI meant (#1927): the host answers on it
+            // when it is one of this agent version.
+            participant_id: participant_id.filter(|id| *id > 0),
             floor_turn: None,
             // The agent's participant runs in the cloud: only the
             // conversation's text goes to it.

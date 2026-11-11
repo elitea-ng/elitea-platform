@@ -55,6 +55,7 @@ impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
             thread_id,
             checkpointer,
             node_recovery: None,
+            tool_pipelines: None,
         })
     }
 
@@ -96,6 +97,7 @@ impl ParallelChildCheckpointerFactory for PostgresCheckpointer {
                         thread_id,
                         checkpointer,
                         node_recovery: None,
+                        tool_pipelines: None,
                     },
                     latest,
                 }

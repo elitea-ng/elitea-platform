@@ -94,6 +94,9 @@ function playFloor(emit: (event: AgentEvent) => void, first: string): void {
 
 /** What `__harness` gains: the adds' bodies, `playFloor()` on the next turn id, and `setLead(id)` (the thread's lead from now on). */
 export function floorHarness(emit: (event: AgentEvent) => void, turnId: () => string): { participantPosts: AddedRow[][]; playFloor: () => void; setLead: (participantId: number) => void } {
+  // A new harness starts with no lead and no adds: nothing carries over from an earlier one in the same page (#1932).
+  LEAD = 0;
+  PARTICIPANT_POSTS.length = 0;
   return {
     participantPosts: PARTICIPANT_POSTS,
     playFloor: () => playFloor(emit, turnId()),

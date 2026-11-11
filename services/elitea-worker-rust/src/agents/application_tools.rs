@@ -111,6 +111,15 @@ const NESTED_INTERRUPT_RESULT_KEY: &str = "__elitea_nested_interrupt_v1";
 /// interrupt ids (one card per id, `events::fanout_member_card`).
 pub(crate) const FANOUT_MEMBER_CARDS_KEY: &str = "__elitea_fanout_member_cards_v1";
 const APPLICATION_REPLAY_BATCH_KEY: &str = "elitea.application.replay_batch.v1";
+/// FU-291 C2: the original model event of a durable pipeline batch replayed
+/// after a crash, so its calls keep their lineage and nested threads.
+pub(super) const DURABLE_REPLAY_BATCH_KEY: &str = "elitea.application.durable_replay_batch.v1";
+
+/// A durable pipeline batch's original model event id (C2): the one check the
+/// record, the replay key and the lineage share (review 9).
+pub(super) fn valid_batch_event_id(batch: &str) -> bool {
+    !batch.is_empty() && batch.len() <= 512 && !batch.chars().any(char::is_control)
+}
 /// The execution whose ROOT continuation emitted a replay batch. A key of its
 /// own beside the batch (whose schema is strict), so a Worker without it still
 /// reads the batch; only that execution's replacement may continue behind it
@@ -315,6 +324,38 @@ pub(super) async fn with_member_events<F: Future>(
 /// The running member's channel, carried onto a task that continues its work.
 pub(super) fn current_member_events() -> Option<ApplicationEventSender> {
     MEMBER_EVENT_SENDER.try_with(Clone::clone).ok()
+}
+
+/// FU-291: one fan-out member's authority over the nested threads of the
+/// saved pipelines its Agent calls as tools. The pipeline tool is one object
+/// shared by every member and its tool context names none, so the member's
+/// fenced family and its Agent's own thread (the activation receipt's) travel
+/// beside its child run, like its event channel.
+#[derive(Clone)]
+pub(crate) struct MemberToolPipelines {
+    /// The member family's admission; `None` in a member whose family lends
+    /// none, whose pipeline calls are refused (never run in memory).
+    pub(crate) admission:
+        Option<Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>>,
+    /// The member Agent node's thread: `A` of every nested thread it admits.
+    pub(crate) agent_thread: String,
+}
+
+tokio::task_local! {
+    static MEMBER_TOOL_PIPELINES: MemberToolPipelines;
+}
+
+/// Run `work` as one fan-out member whose Agent's pipeline tools are durable.
+pub(crate) async fn with_member_tool_pipelines<F: Future>(
+    member: MemberToolPipelines,
+    work: F,
+) -> F::Output {
+    MEMBER_TOOL_PIPELINES.scope(member, work).await
+}
+
+/// The running member's nested pipeline authority, if any.
+pub(crate) fn current_member_tool_pipelines() -> Option<MemberToolPipelines> {
+    MEMBER_TOOL_PIPELINES.try_with(Clone::clone).ok()
 }
 
 pub(super) enum ApplicationEventSignal {
@@ -578,7 +619,7 @@ impl ApplicationResumeCoordinator {
                     return Err(invalid_configuration());
                 }
             } else {
-                if state.call_lineage.len() >= 1024 {
+                if state.call_lineage.len() >= MAX_CALL_LINEAGE {
                     return Err(resource_exhausted());
                 }
                 state.call_lineage.insert(key, value);
@@ -1867,7 +1908,14 @@ fn replay_batch(event: &Event) -> Result<Option<ApplicationReplayBatch>, NativeA
 pub(super) fn original_application_batch_id(
     event: &Event,
 ) -> Result<String, NativeAgentAssemblyError> {
-    Ok(replay_batch(event)?.map_or_else(|| event.id.clone(), |batch| batch.event_id))
+    if let Some(batch) = replay_batch(event)? {
+        return Ok(batch.event_id);
+    }
+    match replay_metadata::<String>(event, DURABLE_REPLAY_BATCH_KEY)? {
+        Some(batch) if !valid_batch_event_id(&batch) => Err(invalid_configuration()),
+        Some(batch) => Ok(batch),
+        None => Ok(event.id.clone()),
+    }
 }
 
 pub(super) fn application_replay_ordinal(
@@ -3025,6 +3073,8 @@ pub(crate) struct MaterializedApplicationTool {
     pub(crate) tool: Arc<dyn Tool>,
     /// A saved Agent's per-invocation factory (T-2A3); `None` for a pipeline child.
     pub(crate) member: Option<ScopedAgentMember>,
+    /// FU-291: why a fan-out member cannot run this pipeline child durably.
+    tool_pipeline_refusal: Option<crate::agents::graph::compiler::ToolPipelineCause>,
 }
 
 impl MaterializedApplicationTool {
@@ -3036,6 +3086,7 @@ impl MaterializedApplicationTool {
             self.internal_tools,
         )
         .with_delegation(self.delegation.clone())
+        .with_tool_pipeline_refusal(self.tool_pipeline_refusal)
     }
 }
 
@@ -3297,7 +3348,7 @@ async fn materialize_pipeline_children(
             dependencies.materialization.clone(),
         )
         .await;
-        let (definition, runtimes, child_tools, delegation) = match built {
+        let (definition, runtimes, child_tools, delegation, definition_sha256) = match built {
             Ok(Ok(built)) => built,
             // ADR-0044 decision 3: offered, and its call answers the refusal.
             Ok(Err(refused)) => {
@@ -3341,6 +3392,8 @@ async fn materialize_pipeline_children(
                 continue;
             }
         };
+        // FU-291 D-7: what a fan-out member's durable nested thread cannot carry.
+        let tool_pipeline_refusal = definition.durable_tool_refusal();
         let name = application_tool_name(reference.identity);
         let tool = Arc::new(ApplicationPipelineTool::new(
             name,
@@ -3353,6 +3406,7 @@ async fn materialize_pipeline_children(
                 event_sender: dependencies.event_sender.clone(),
                 resume: dependencies.resume.clone(),
             },
+            definition_sha256,
         ));
         tools.push(MaterializedApplicationTool {
             alias: reference.alias,
@@ -3368,6 +3422,7 @@ async fn materialize_pipeline_children(
             delegation,
             tool,
             member: None,
+            tool_pipeline_refusal,
         });
     }
     Ok(MaterializedPipelineChildren { tools, skipped })
@@ -3458,6 +3513,7 @@ pub(crate) async fn materialize_application_tools(
             internal_tools: application.internal_tools,
             delegation: Some(application.delegation.clone()),
             member: Some(ScopedAgentMember(Arc::clone(&application), identity)),
+            tool_pipeline_refusal: None,
             tool: Arc::new(ApplicationAgentTool::new(
                 application,
                 identity,
@@ -3670,10 +3726,11 @@ impl ApplicationAssemblyState<'_> {
             delegated_authorization: delegated_authorization.clone(),
             internal_tools,
             parallel_applications,
-            model_scopes: self
-                .model_scopes
-                .as_ref()
-                .map(|scopes| scopes.with_application_tools(child_tools.agent_tool_names())),
+            model_scopes: self.model_scopes.as_ref().map(|scopes| {
+                scopes
+                    .with_application_tools(child_tools.agent_tool_names())
+                    .with_pipeline_tools(child_tools.pipeline_tool_names())
+            }),
             egress: Arc::clone(self.policy.egress()),
             run_caps: Arc::clone(self.policy.run_caps()),
             preamble: Arc::clone(self.policy.content_controls().preamble()),
@@ -4013,6 +4070,7 @@ fn refused_application_tool(
         internal_tools: InternalToolCatalog::default(),
         delegation: Some(refused.evidence.clone()),
         member: None,
+        tool_pipeline_refusal: None,
         tool: Arc::new(DelegationRefusedTool::new(
             refused.name.clone(),
             refused.description.clone(),
@@ -4045,6 +4103,7 @@ fn refused_pipeline_tool(
         internal_tools: InternalToolCatalog::default(),
         delegation: Some(refused.evidence),
         member: None,
+        tool_pipeline_refusal: None,
         tool: Arc::new(DelegationRefusedTool::new(
             application_tool_name(reference.identity),
             pipeline_tool_description(&reference.alias, reference.description.as_deref()),
@@ -5020,7 +5079,7 @@ impl ApplicationAgentTool {
                 coordinator
                     .observe_call_lineage(&event)
                     .await
-                    .map_err(|_| application_event_channel_error())?;
+                    .map_err(|error| lineage_observation_error(&error))?;
             }
             application_batch.observe_calls(&event, &self.application.child_tools)?;
             if event.llm_response.interrupted || event.actions.tool_confirmation.is_some() {
@@ -5470,7 +5529,7 @@ impl Agent for ApplicationEventStreamingAgent {
                                 return;
                             }
                             if let Some(coordinator)=&lineage
-                                && coordinator.observe_call_lineage(&event).await.is_err() {yield Err(application_event_channel_error());return;}
+                                && let Err(error) = coordinator.observe_call_lineage(&event).await {yield Err(lineage_observation_error(&error));return;}
 
                             if let Err(error) = application_batch.observe_calls(&event, &applications) {
                                 yield Err(error);
@@ -6258,6 +6317,31 @@ pub(super) fn tool_input_error() -> AdkError {
         "elitea_nested_agent.invalid_task",
         "the nested agent task is invalid",
     )
+}
+
+/// The calls one Agent node's coordinator records the lineage of, across its
+/// members' turns (FU-330 reshapes it; FU-291 keeps it).
+pub(crate) const MAX_CALL_LINEAGE: usize = 1024;
+
+/// FU-291: the upstream code of a call batch refused because its Agent
+/// node's call-lineage store is full: a typed resource limit, never a broken
+/// event channel.
+pub(crate) const CALL_LINEAGE_LIMIT_CODE: &str = "elitea_nested_agent.call_lineage_limit";
+
+/// The error an Agent's event stream ends with when it cannot record a call
+/// batch's lineage: past the bound, the typed limit; otherwise (a changed or
+/// malformed lineage) the event channel is broken.
+pub(super) fn lineage_observation_error(error: &NativeAgentAssemblyError) -> AdkError {
+    if error.code() == NativeAgentAssemblyErrorCode::ResourceExhausted {
+        AdkError::new(
+            ErrorComponent::Agent,
+            ErrorCategory::InvalidInput,
+            CALL_LINEAGE_LIMIT_CODE,
+            "the Agent node's call-lineage store reached its bound",
+        )
+    } else {
+        application_event_channel_error()
+    }
 }
 
 pub(super) fn application_event_channel_error() -> AdkError {
@@ -7232,6 +7316,78 @@ mod live_nested_events_tests {
 #[cfg(test)]
 mod pipeline_call_lineage_transport_tests {
     use super::*;
+
+    /// One model batch of a member's Agent with one call.
+    fn batch(index: usize) -> Event {
+        let mut event = Event::with_id(format!("batch-{index}"), format!("member-{index}"));
+        event.author = "member-agent".to_owned();
+        event.llm_response.content = Some(Content {
+            role: "model".to_owned(),
+            parts: vec![Part::FunctionCall {
+                name: "elitea_agent_5_v_6".to_owned(),
+                args: json!({"task": format!("topic {index}")}),
+                id: Some(format!("call-{index}")),
+                thought_signature: None,
+            }],
+        });
+        event
+    }
+
+    /// FU-291 (orchestrator item 2): the node's call-lineage store holds
+    /// `MAX_CALL_LINEAGE` calls; the next one is refused, and the refusal
+    /// reaches the run as a typed, registered resource limit (and a member
+    /// as a typed refused node), never as a broken event channel (Internal).
+    #[tokio::test]
+    async fn the_call_lineage_store_admits_1024_calls_and_refuses_the_1025th_typed() {
+        let coordinator = ApplicationResumeCoordinator::default();
+        for index in 0..MAX_CALL_LINEAGE {
+            coordinator
+                .observe_call_lineage(&batch(index))
+                .await
+                .unwrap_or_else(|_| panic!("call {index} is within the bound"));
+        }
+        // The same call observed again (a replay) is not a new entry.
+        coordinator.observe_call_lineage(&batch(0)).await.unwrap();
+        let Err(refused) = coordinator
+            .observe_call_lineage(&batch(MAX_CALL_LINEAGE))
+            .await
+        else {
+            panic!("the 1025th call was admitted");
+        };
+        let error = lineage_observation_error(&refused);
+        assert_eq!(error.code, CALL_LINEAGE_LIMIT_CODE);
+        let kind = crate::protocol::output::model_failure(Some(error.code));
+        assert_eq!(
+            kind,
+            crate::protocol::output::RuntimeFailureKind::ResourceExhausted
+        );
+        let (_, message, retryable) = crate::protocol::output::runtime_error_policy(kind);
+        assert_eq!(
+            message,
+            "The execution exceeded an approved resource limit."
+        );
+        assert!(!retryable);
+        // A nested Agent reports it to its parent model as a tool error.
+        let report = child_failure_report(&error, None, false).expect("a typed report");
+        assert_eq!(report["failure"]["retryable"], false);
+        // A changed lineage stays a broken channel, never the limit.
+        let mut changed = batch(1);
+        if let Some(Part::FunctionCall { args, .. }) = changed
+            .llm_response
+            .content
+            .as_mut()
+            .and_then(|content| content.parts.first_mut())
+        {
+            *args = json!({"task": "another topic"});
+        }
+        let Err(broken) = coordinator.observe_call_lineage(&changed).await else {
+            panic!("a changed lineage was admitted");
+        };
+        assert_eq!(
+            lineage_observation_error(&broken).code,
+            "elitea_nested_agent.event_channel_unavailable"
+        );
+    }
     #[test]
     fn same_bounded_replay_receipt_survives_descendant_transport_and_mismatches_fail_closed() {
         let batch = ApplicationReplayBatch {
