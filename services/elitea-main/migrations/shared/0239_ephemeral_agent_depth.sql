@@ -12,7 +12,7 @@
 --                     the same run); NULL at depth 1.
 --
 -- The worker reports both with ReportEphemeralAgents (EphemeralAgentV1
--- fields 17 and 18). No backfill: rows written before this release are
+-- fields 32 and 33). No backfill: rows written before this release are
 -- children of the run's agent (depth 1, no parent), which is all an earlier
 -- worker could start. No permission. Idempotent. No BEGIN/COMMIT: the
 -- ledgered runner wraps the file.

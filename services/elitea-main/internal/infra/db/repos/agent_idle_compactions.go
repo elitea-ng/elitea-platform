@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strconv"
 	"sync"
@@ -540,6 +541,14 @@ WHERE job.execution_id = $1 AND job.generation = $2
 	}
 	versionID, ok := idleSourceVersion(target.FrozenInput, application)
 	if !ok {
+		// Every admission path freezes application.version_id (start.go
+		// writes it; continuations and the governed freeze keep the frozen
+		// map), so this is a source written some other way. Say so: the
+		// row is skipped once and idle compaction stops for that agent
+		// (#1919).
+		slog.WarnContext(ctx, "idle compaction: the source's frozen application names no version of its agent; skipped",
+			"source_execution_id", row.sourceExecution, "project_id", row.projectID, "application_id", application,
+			"skip_code", agentexecutionapp.IdleCompactionSkipSourceInvalid)
 		return target, agentexecutionapp.IdleCompactionSkipSourceInvalid, nil
 	}
 	if releaseID != nil {
@@ -708,6 +717,14 @@ WHERE idempotency_key = $1 AND state = 'QUEUED'`,
 	}
 	if tag.RowsAffected() != 1 {
 		return agentexecutionapp.ErrIdleCompactionNotQueued
+	}
+	// The run's own durable marker (shared 0240, #1921): the row above
+	// CASCADE-deletes with the source's job, and the analytics must still
+	// read the run's calls as an idle compaction's after that.
+	if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.execution_jobs SET idle_compaction = true
+WHERE execution_id = $1 AND NOT idle_compaction`, executionID); err != nil {
+		return fmt.Errorf("mark the idle compaction run: %w", err)
 	}
 	return nil
 }
