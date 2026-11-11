@@ -290,7 +290,30 @@ On stock Helm (`agentModelCheckpointRecovery: false`, `agentNodeRecovery: false`
 
 ## Real-browser evidence
 
-Pending (orchestrating session).
+**Setup.**
+- **Stack:** a disposable stack `f323` with the production profile (recovery and node recovery on). verify-profile:
+  50 passed, 0 failed.
+- **Images:** Worker, Main and Web `fu323a-d01577bc8`, built from this branch's head, which is main `b6633e6e6` plus
+  FU-323a. The Worker binary was extracted and contains the branch-only `pipeline.recovery.agent_definition_unproven`,
+  `pipeline.recovery.agent_definition_changed` and `pipeline.recovery.inspect_transient`.
+- **Browser:** Chrome, main-chat conversations, each checked after a reload.
+
+**Fixtures.**
+- Pipelines and Agents were created through the app's own API from the signed-in page. Every tool attachment and
+  internal-tool toggle was made in the UI and checked in `entity_tool_mapping` / version `meta`.
+- The kill helper `docker kill`s the Worker a fixed delay after the run's Nth `agent_model_request_started`, restarts
+  it, and reports the claims, the model-request counts, WARN/ERROR lines and locks.
+
+| Case | Chat / execution | Result |
+|---|---|---|
+| 1. Root Agent node runs a saved Agent with no tools (long answer); Worker killed 3 s into the model call | 887 / `845c9fc75a59d3e6e19c6d603da1ec22` | **R.** Reclaim `AGENT_MODEL_CHECKPOINT`; exactly 1 model request after the kill (the restored call). One call, one response and one answer in the session events. The full answer persists after reload. 0 WARN/ERROR, 0 locks. |
+| 3. Agent → Agent: killed 3 s into the child Agent's model call | 888 / `b515f88c0e463ad14970661214a2c6a0` | **R.** Reclaim `AGENT_MODEL_CHECKPOINT`: the child call was restored, then the parent's final step ran (2 requests). The parent's answer persists after reload. Only the pre-existing FU-336 WARN. |
+| 5. Worker kill, then `docker restart` of Main 2 s into the restored model step | 890 / `f11a0280cc4a240117c7fa308ee32f39` | **R over two reclaims.** The Main restart cost claim 2 its lease (`claim_lease_control_failure`), the delivery was retained, and claim 3 (`AGENT_MODEL_CHECKPOINT`) completed. One answer persists after reload. The model call was paid twice (a cost, not a repeated effect; FU-302). Claim 2's lost stream logs ERROR `native_agent.event_failed` / `agent.legacy` although the run recovers: FU-340 (it should be one operator WARN). 0 locks. |
+| 2. Built-in tools (Attachments read-only, memory effectful) | 889 / `5985af576ad62b24e56676a6a40972a6` | **Not run, blocked by FU-335 (probable).** The saved Agent at the root Agent node was offered **0 tools** (`tool_count: 0`) although Attachments and memory are enabled on its version. The model then *claimed* in text to have listed attachments and saved a note; it did neither (0 memory entries). The tool-call recovery rows are proven by the real-PG tests. |
+| 6. Pipeline tool in flight under a root Agent node | 891 / `59ff027e125d8fd77d9dcff454ddb6c6` | **Not reached; pre-existing defect FU-342.** The fresh run fails before any kill: `agent_event.invalid_state` at the nested pipeline's first projected event. It fails identically on main `b6633e6e6` (`fu323/evidence/case6-on-main-b6633e6e6.txt`). The cause is a thread mismatch between `application_pipeline.rs:1283-1285` and `events.rs:6918-6920`. The typed refusal for a pipeline tool in flight is proven by the real-PG test. |
+| 4. Planned stop: `docker stop -t 45` (stands in for the compose `stop_grace_period: 45s` override) 3 s into a turn | 892 / `a95156abf9c9a20c819a920bdf810e96`; 895 / `c0e46d6c76330da2b48be98d1136039b` | **The drain completed the turn.** Both turns finished within the 30 s drain (12 s and 19 s). A turn that outlasts the drain could not be produced: a single very long stream (about 6000 words) fails by itself at about 23 s with no stop (chats 893 and 894: `failure_diagnostic` `disabled_or_rate_limited` under `agent.legacy`, FU-341). A drain that expires mid-turn is the same drop-then-reclaim path as a crash (SHUTDOWN-FACTS), proven by case 1 and the real-PG tests. Not run as a drain expiry. |
+
+No Supervisor kill: no Code is in scope. The negative "Thought for -1 h…" label after a failed run is FU-327.
 
 ## Deviations from the plan
 
@@ -328,6 +351,8 @@ Pending (orchestrating session).
   `W/state/postgres_session.rs:754-765`), not one SQL snapshot.
 
 ## Follow-ups
+
+- FU-334 (Main restart: a new model request sent while Main is down fails its node), FU-335 (delegation grant ceiling; 0 built-in tools for a saved Agent in a pipeline), FU-338/FU-339 (a draft edited between crash and reclaim), FU-340, FU-341, FU-342: registered from this PR's browser pass and reviews.
 
 - FU-323b (after FU-291 #1937): a saved-pipeline tool in flight under a root Agent node (derive `NT` under
   `A + "/" + node`).
