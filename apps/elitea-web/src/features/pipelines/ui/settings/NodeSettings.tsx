@@ -22,6 +22,7 @@ import { SingleSelect } from '@/shared/ui/SingleSelect';
 
 import { FlowEditorContext } from '../../lib/flow-editor/flowEditorContext';
 import * as FlowEditorHelpers from '../../lib/flow-editor/helpers/flowEditor.helpers';
+import { ERROR_OUTPUT_HANDLE } from '../../lib/flow-editor/helpers/nodeErrorRoute.helpers';
 import { NODE_ON_ERROR, NODE_SETTINGS_KEY, NodeSettingsFamilies, readNodeSettings, writeNodeSettings } from '../../lib/nodeSettings.helpers';
 
 export interface NodeSettingsProps {
@@ -80,6 +81,10 @@ export function NodeSettings({ id, type, disabled }: NodeSettingsProps): ReactNo
   const change = (key: string, value: unknown): void => {
     const next = writeNodeSettings(node[NODE_SETTINGS_KEY] as Readonly<Record<string, unknown>> | undefined, { [key]: value });
     FlowEditorHelpers.batchUpdateYamlNode(id, { [NODE_SETTINGS_KEY]: next }, context.yamlJsonObject, context.setYamlJsonObject);
+    // The error edge is `settings.error_transition`: it leaves with the key.
+    if (next?.['error_transition'] === undefined) {
+      context.setFlowEdges((edges) => edges.filter((edge) => !(edge.source === id && edge.sourceHandle === ERROR_OUTPUT_HANDLE)));
+    }
   };
   return (
     <Box sx={columnSx} className="nodrag nopan">

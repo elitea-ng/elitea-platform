@@ -52,7 +52,7 @@
     "error_transition_target": "The error transition must name END or another node of this pipeline outside any Parallel or Map.",
     "always_output_reducer": "Always output data cannot write an output that uses the sum_int or merge reducer.",
     "router_continue_needs_default": "On error 'continue' on a Router needs an explicit default output.",
-    "node_errors_type": "The state key node_errors must be a list with no reducer or the append reducer when a node continues on error.",
+    "node_errors_type": "When a node continues on error, a declared node_errors must be a list with reducer: append.",
     "node_errors_nested_mapping": "An Agent node cannot map node_errors into or out of a nested pipeline."
   }
 }

@@ -69,6 +69,13 @@ impl RawSettingsCatalog {
             let Some(raw) = map.remove(Value::String("settings".into())) else {
                 continue;
             };
+            // Decision 1: a block with no keys is no block, on every family.
+            if raw
+                .as_mapping()
+                .is_some_and(serde_yaml_ng::Mapping::is_empty)
+            {
+                continue;
+            }
             let id = map
                 .get(Value::String("id".into()))
                 .and_then(Value::as_str)
@@ -119,12 +126,10 @@ impl RawSettingsCatalog {
         if !self.uses_node_errors() {
             return Ok((state, defaults, declaration_order, reducers));
         }
+        // Decision 2: a user's own key must say `reducer: append` explicitly.
         match state.get(NODE_ERRORS_KEY).map(String::as_str) {
-            Some("list")
-                if matches!(
-                    reducers.get(NODE_ERRORS_KEY),
-                    None | Some(StateReducer::Append)
-                ) => {}
+            Some("list") if matches!(reducers.get(NODE_ERRORS_KEY), Some(StateReducer::Append)) => {
+            }
             Some(_) => {
                 return Err(refusal(
                     NODE_ERRORS_KEY,
@@ -262,6 +267,13 @@ impl SettingsCatalog {
 
     /// Whether some admitted node runs once per turn: only then is the
     /// private run-once channel declared.
+    /// The error route of `id`, a successor like its transitions.
+    pub(crate) fn error_transition(&self, id: &str) -> Option<&str> {
+        self.nodes
+            .get(id)
+            .and_then(|node| node.settings.error_transition.as_deref())
+    }
+
     pub(crate) fn uses_execute_once(&self) -> bool {
         self.nodes.values().any(|node| node.settings.execute_once)
     }

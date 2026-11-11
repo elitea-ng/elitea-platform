@@ -14,7 +14,7 @@ What changed:
   block.
 - A failure settled by `continue` or `error_output` is recorded as one entry in the `node_errors` state list, which
   is declared automatically when a node continues on error. A user's own `node_errors` key must then be a list with
-  no reducer or `append`.
+  `reducer: append`. An empty `settings: {}` is ignored on every node type.
 - Pipelines without `settings:` are unchanged: same definition digest, same checkpoints, same behaviour.
 
 Who is affected: authors who use the new Settings section in the pipeline editor. No configuration, Helm value or

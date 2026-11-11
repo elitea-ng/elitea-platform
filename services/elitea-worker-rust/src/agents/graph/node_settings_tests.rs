@@ -316,7 +316,7 @@ async fn the_node_errors_bound_holds_at_64_and_fails_typed_at_65() {
     let filled = |count: usize| {
         let entries: Vec<Value> = (0..count).map(|index| json!({"seed": index})).collect();
         format!(
-            "state:\n  node_errors: {{type: list, value: {}}}\n",
+            "state:\n  node_errors: {{type: list, value: {}, reducer: append}}\n",
             Value::Array(entries)
         )
     };
@@ -473,14 +473,15 @@ fn a_user_node_errors_key_is_checked_only_when_a_node_continues() {
             "{declared}"
         );
     }
-    // A list with no reducer, or append, is admitted.
-    for declared in [
-        "node_errors: list",
-        "node_errors: {type: list, reducer: append}",
-    ] {
-        let yaml = CONTINUE.replacen("state:\n", &format!("state:\n  {declared}\n"), 1);
-        assert!(PipelineDefinition::from_yaml(&yaml).is_ok(), "{declared}");
-    }
+    // A list with no reducer is refused too (decision 2); `append` is admitted.
+    let bare = CONTINUE.replacen("state:\n", "state:\n  node_errors: list\n", 1);
+    assert_eq!(refused(&bare).1, NodeSettingsRefusal::NodeErrorsType);
+    let appended = CONTINUE.replacen(
+        "state:\n",
+        "state:\n  node_errors: {type: list, reducer: append}\n",
+        1,
+    );
+    assert!(PipelineDefinition::from_yaml(&appended).is_ok());
     // Without any continuing node the same key is never refused.
     let plain = "state:\n  node_errors: str\n  out: str\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: x\n    input: [node_errors]\n    output: [out]\n    transition: END\n";
     assert!(PipelineDefinition::from_yaml(plain).is_ok());
@@ -737,4 +738,142 @@ fn the_shared_admission_vectors_hold_in_the_worker() {
             }
         }
     }
+}
+
+// ---- fix round 1 ----------------------------------------------------------
+
+/// Decision 1: an empty block is a no-op on every family; any key on a
+/// family that has no settings yet is refused, even at its default value.
+#[test]
+fn an_empty_block_is_a_no_op_on_every_family() {
+    let code = "state:\n  answer: int\nentry_point: run\nnodes:\n  - id: run\n    type: code\n    code: '7'\n    output: [answer]\n    transition: END\n";
+    let with_empty = code.replace(
+        "    transition: END\n",
+        "    settings: {}\n    transition: END\n",
+    );
+    assert_eq!(
+        PipelineDefinition::from_yaml(&with_empty)
+            .expect("an empty block is a no-op")
+            .definition_digest(),
+        PipelineDefinition::from_yaml(code)
+            .expect("plain")
+            .definition_digest()
+    );
+    let defaulted = code.replace(
+        "    transition: END\n",
+        "    settings: {on_error: stop}\n    transition: END\n",
+    );
+    assert_eq!(
+        refused(&defaulted),
+        ("run".to_owned(), NodeSettingsRefusal::FamilyNotYet)
+    );
+}
+
+/// Decision 2: a user-declared `node_errors` must say `reducer: append`
+/// once a node continues on error.
+#[test]
+fn a_user_node_errors_needs_an_explicit_append() {
+    let plain = CONTINUE.replacen("state:\n", "state:\n  node_errors: list\n", 1);
+    assert_eq!(refused(&plain).1, NodeSettingsRefusal::NodeErrorsType);
+    let appended = CONTINUE.replacen(
+        "state:\n",
+        "state:\n  node_errors: {type: list, reducer: append}\n",
+        1,
+    );
+    assert!(PipelineDefinition::from_yaml(&appended).is_ok());
+}
+
+/// Finding 1: a static pause after a node that routed its failure resumes
+/// into the error route (and END).
+#[test]
+fn a_pause_after_a_routed_failure_admits_the_error_route() {
+    let yaml = format!(
+        "interrupt_after: [shape]\n{}",
+        CONTINUE
+            .replace(
+                "settings: {on_error: continue, always_output_data: true}",
+                "settings: {on_error: error_output, error_transition: handler}",
+            )
+            .replace(
+                "    transition: END\n",
+                "    transition: END\n  - id: handler\n    type: state_modifier\n    template: x\n    output: [out]\n    transition: END\n",
+            )
+    );
+    let definition = PipelineDefinition::from_yaml(&yaml).expect("routed pause");
+    let catalog = definition.static_pause_catalog();
+    for pending in [vec!["handler".to_owned()], vec!["after".to_owned()]] {
+        let checkpoint = adk_rust::graph::Checkpoint::new("t", State::new(), 2, pending.clone());
+        assert!(
+            catalog.bind("after", "shape", &checkpoint).is_some(),
+            "{pending:?}"
+        );
+    }
+}
+
+/// Finding 2: on success, `always_output_data` fills only what the body wrote
+/// as null; it never overwrites another declared output's state.
+#[tokio::test]
+async fn always_output_data_never_overwrites_state_on_success() {
+    let yaml = "state:\n  value: str\n  out: str\n  keep: str\nentry_point: shape\nnodes:\n  - id: shape\n    type: state_modifier\n    template: '{{ value }}'\n    input: [value]\n    output: [out, keep]\n    settings: {always_output_data: true}\n    transition: END\n";
+    let result = invoke(
+        yaml,
+        state(&[("value", json!("v")), ("keep", json!("kept"))]),
+    )
+    .await
+    .expect("success");
+    assert_eq!(result["out"], json!("v"));
+    assert_eq!(result["keep"], json!("kept"));
+}
+
+/// Finding 5: the settings-owned `node_errors` is never the pipeline's
+/// fallback final answer.
+#[test]
+fn node_errors_is_not_a_result_fallback() {
+    let definition = PipelineDefinition::from_yaml(CONTINUE).expect("fixture");
+    assert!(
+        !definition
+            .result_policy()
+            .fallback_data_keys
+            .iter()
+            .any(|key| key == "node_errors")
+    );
+}
+
+/// Finding 6: an id that is not a graph id is never echoed in the refusal.
+#[test]
+fn a_malformed_id_is_never_echoed() {
+    let long = "n".repeat(200);
+    let yaml = format!(
+        "state:\n  out: str\nentry_point: {long}\nnodes:\n  - id: {long}\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {{bogus: 1}}\n    transition: END\n"
+    );
+    let message = PipelineDefinition::from_yaml(&yaml)
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_default();
+    assert!(!message.contains(&long), "{message}");
+}
+
+/// Finding 7: the support reference is scoped by the thread as well, so a
+/// parent and a saved child in one execution never share one.
+#[tokio::test]
+async fn the_support_reference_names_the_thread() {
+    let run = |thread: &'static str| async move {
+        PipelineDefinition::from_yaml(CONTINUE)
+            .expect("fixture")
+            .compile_with_runtime(
+                "pipeline-root",
+                Arc::new(MemoryCheckpointer::new()),
+                None,
+                &PipelineNodeRuntimes::default().with_execution_id("execution-1"),
+            )
+            .expect("graph")
+            .invoke(
+                state(&[("value", json!("x"))]),
+                ExecutionConfig::new(thread),
+            )
+            .await
+            .expect("run")["node_errors"][0]["error"]["support_ref"]
+            .clone()
+    };
+    assert_ne!(run("root-thread").await, run("root-thread/child").await);
 }

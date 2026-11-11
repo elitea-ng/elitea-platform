@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { continuedFailureNodes, isRunFinished, stepStateValues } from './runStateValues';
+import { continuedFailureSteps, isRunFinished, stepStateValues } from './runStateValues';
 
 /**
  * #6883: a pipeline whose last node is an agent. The agent's entry got no
@@ -60,15 +60,18 @@ describe('isRunFinished (#6883)', () => {
   });
 });
 
-describe('continuedFailureNodes (5b-1, D12)', () => {
-  it('names the nodes whose failure the newest state recorded as continued or routed', () => {
+describe('continuedFailureSteps (5b-1, D12; fix round 1, finding 10)', () => {
+  it('marks only the visit whose own state appended the entry', () => {
     const timeline = [
-      { state: { node_errors: [] } },
-      { state: { node_errors: [{ node: 'shape', handled: 'continue' }, { node: 'route', handled: 'error_output' }, { node: 'odd' }, 'junk'] } },
-      { state: {} },
+      { id: 'shape', state: { node_errors: [] } },
+      { id: 'route', state: { node_errors: [] } },
+      { id: 'shape', state: { node_errors: [{ node: 'shape', handled: 'continue' }] } },
+      { id: 'route', state: { node_errors: [{ node: 'shape', handled: 'continue' }, { node: 'route', handled: 'error_output' }] } },
+      { id: 'shape', state: { node_errors: [{ node: 'shape', handled: 'continue' }, { node: 'route', handled: 'error_output' }] } },
+      { id: 'END' },
     ];
-    expect([...continuedFailureNodes(timeline)].sort()).toEqual(['route', 'shape']);
-    expect(continuedFailureNodes([{ state: { out: 'x' } }]).size).toBe(0);
-    expect(continuedFailureNodes([]).size).toBe(0);
+    expect([...continuedFailureSteps(timeline)]).toEqual([2, 3]);
+    expect(continuedFailureSteps([{ id: 'a', state: { out: 'x' } }]).size).toBe(0);
+    expect(continuedFailureSteps([]).size).toBe(0);
   });
 });

@@ -209,7 +209,11 @@ async fn postgres_node_settings_child() {
             // thread, the node and the input step only.
             assert_eq!(
                 entries[0]["error"]["support_ref"],
-                Value::String(node_error_support_ref(SESSION, "shape", step))
+                Value::String(node_error_support_ref(
+                    &format!("\0{SESSION}"),
+                    "shape",
+                    step
+                ))
             );
             assert_eq!(last.state["count"], json!("1"));
         }

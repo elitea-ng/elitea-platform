@@ -237,9 +237,9 @@
       "node": null
     },
     {
-      "name": "a continuing node with node_errors as a list",
+      "name": "a continuing node with node_errors as a list without reducer: append (decision 2)",
       "yaml": "state:\n  out: str\n  total: {type: int, value: 0, reducer: sum_int}\n  node_errors: list\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {on_error: continue}\n    transition: b\n  - id: b\n    type: state_modifier\n    template: '1'\n    output: [total]\n    transition: END\n",
-      "refusal": null,
+      "refusal": "node_errors_type",
       "node": null
     },
     {
@@ -271,6 +271,72 @@
       "yaml": "state:\n  out: str\n  answer: str\nentry_point: shape\nnodes:\n  - id: shape\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {on_error: continue}\n    transition: delegate\n  - id: delegate\n    type: agent\n    tool: child\n    input_mapping: {task: {type: fixed, value: work}, node_errors: {type: variable, value: node_errors}}\n    output: [answer]\n    transition: END\n",
       "refusal": "node_errors_nested_mapping",
       "node": "delegate"
+    },
+    {
+      "name": "an empty block on a Code node is a no-op (decision 1)",
+      "yaml": "state:\n  answer: int\nentry_point: run\nnodes:\n  - id: run\n    type: code\n    code: '7'\n    output: [answer]\n    settings: {}\n    transition: END\n",
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "an empty block on a HITL node is a no-op (decision 1)",
+      "yaml": "state:\n  summary: {type: dict, value: {}}\nentry_point: review\nnodes:\n  - id: review\n    type: hitl\n    input: [summary]\n    user_message: {type: fixed, value: Review.}\n    routes: {approve: END, reject: END, edit: END}\n    edit_state_key: summary\n    settings: {}\n",
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "a default value on a Code node is refused (decision 1)",
+      "yaml": "state:\n  answer: int\nentry_point: run\nnodes:\n  - id: run\n    type: code\n    code: '7'\n    output: [answer]\n    settings: {on_error: stop}\n    transition: END\n",
+      "refusal": "family_not_yet",
+      "node": "run"
+    },
+    {
+      "name": "max_tries 70000",
+      "yaml": "state:\n  out: str\n  total: {type: int, value: 0, reducer: sum_int}\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {retry_on_fail: true, max_tries: 70000}\n    transition: b\n  - id: b\n    type: state_modifier\n    template: '1'\n    output: [total]\n    transition: END\n",
+      "refusal": "max_tries_range",
+      "node": "a"
+    },
+    {
+      "name": "max_tries -1",
+      "yaml": "state:\n  out: str\n  total: {type: int, value: 0, reducer: sum_int}\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {retry_on_fail: true, max_tries: -1}\n    transition: b\n  - id: b\n    type: state_modifier\n    template: '1'\n    output: [total]\n    transition: END\n",
+      "refusal": "max_tries_range",
+      "node": "a"
+    },
+    {
+      "name": "wait -1",
+      "yaml": "state:\n  out: str\n  total: {type: int, value: 0, reducer: sum_int}\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {retry_on_fail: true, wait_between_tries_ms: -1}\n    transition: b\n  - id: b\n    type: state_modifier\n    template: '1'\n    output: [total]\n    transition: END\n",
+      "refusal": "wait_range",
+      "node": "a"
+    },
+    {
+      "name": "timeout at the safe-integer limit",
+      "yaml": "state:\n  out: str\n  total: {type: int, value: 0, reducer: sum_int}\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {timeout_ms: 9007199254740991}\n    transition: b\n  - id: b\n    type: state_modifier\n    template: '1'\n    output: [total]\n    transition: END\n",
+      "refusal": "timeout_range",
+      "node": "a"
+    },
+    {
+      "name": "timeout beyond the safe-integer limit",
+      "yaml": "state:\n  out: str\n  total: {type: int, value: 0, reducer: sum_int}\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {timeout_ms: 9007199254740993}\n    transition: b\n  - id: b\n    type: state_modifier\n    template: '1'\n    output: [total]\n    transition: END\n",
+      "refusal": "malformed",
+      "node": "a"
+    },
+    {
+      "name": "a fractional max_tries",
+      "yaml": "state:\n  out: str\n  total: {type: int, value: 0, reducer: sum_int}\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {retry_on_fail: true, max_tries: 2.5}\n    transition: b\n  - id: b\n    type: state_modifier\n    template: '1'\n    output: [total]\n    transition: END\n",
+      "refusal": "malformed",
+      "node": "a"
+    },
+    {
+      "name": "numeric ids: an error route to a numeric node",
+      "yaml": "state:\n  out: str\nentry_point: 1\nnodes:\n  - id: 1\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {on_error: error_output, error_transition: 2}\n    transition: END\n  - id: 2\n    type: state_modifier\n    template: y\n    output: [out]\n    transition: END\n",
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "numeric ids: an error route to itself",
+      "yaml": "state:\n  out: str\nentry_point: 1\nnodes:\n  - id: 1\n    type: state_modifier\n    template: x\n    output: [out]\n    settings: {on_error: error_output, error_transition: 1}\n    transition: END\n",
+      "refusal": "error_transition_target",
+      "node": "1"
     }
   ]
 }

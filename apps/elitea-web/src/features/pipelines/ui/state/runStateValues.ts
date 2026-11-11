@@ -69,20 +69,28 @@ export function stepStateValues(
 }
 
 /**
- * 5b-1 (D12): the nodes whose failure the run settled through their settings
- * (`node_errors` entries in the newest state the timeline holds). The dialog
- * marks their steps "Failed · continued" with the existing failed styling;
- * there is no protocol event of its own.
+ * 5b-1 (D12): the timeline steps whose node's failure the run settled
+ * through its settings. A step's own state holds `node_errors` as it was when
+ * that visit finished, so the visit that appended an entry naming its own node
+ * is the one marked: a node visited again without failing is not. The steps
+ * carry no checkpoint step, so the append itself keys the visit. The dialog
+ * marks those steps "Failed · continued" with the existing failed styling.
  */
-export function continuedFailureNodes(timeline: readonly RunStateStep[]): ReadonlySet<string> {
-  for (let index = timeline.length - 1; index >= 0; index -= 1) {
-    const entries = timeline[index]?.state?.['node_errors'];
-    if (!Array.isArray(entries)) continue;
-    return new Set(entries.flatMap((entry: unknown) => {
-      if (typeof entry !== 'object' || entry === null) return [];
-      const { node, handled } = entry as { readonly node?: unknown; readonly handled?: unknown };
-      return typeof node === 'string' && (handled === 'continue' || handled === 'error_output') ? [node] : [];
-    }));
-  }
-  return new Set();
+export function continuedFailureSteps(timeline: readonly (RunStateStep & { readonly id?: string })[]): ReadonlySet<number> {
+  const marked = new Set<number>();
+  let seen = 0;
+  timeline.forEach((step, index) => {
+    const entries = step.state?.['node_errors'];
+    if (!Array.isArray(entries)) return;
+    const appended = entries.slice(seen);
+    seen = Math.max(seen, entries.length);
+    if (appended.some((entry: unknown) => isContinuedEntryOf(entry, step.id))) marked.add(index);
+  });
+  return marked;
+}
+
+function isContinuedEntryOf(entry: unknown, node: string | undefined): boolean {
+  if (typeof entry !== 'object' || entry === null || node === undefined) return false;
+  const { node: owner, handled } = entry as { readonly node?: unknown; readonly handled?: unknown };
+  return owner === node && (handled === 'continue' || handled === 'error_output');
 }

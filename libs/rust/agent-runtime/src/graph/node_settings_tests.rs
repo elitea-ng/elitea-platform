@@ -405,3 +405,53 @@ fn refusal_messages_name_the_node_only_when_node_level() {
         NodeSettingsRefusal::NodeErrorsType.text()
     );
 }
+
+/// Fix round 1, finding 8: any integer outside a bound is that bound's range
+/// refusal, whatever its width or sign, so every layer names the same one;
+/// a non-integer or an integer beyond 2^53 is malformed.
+#[test]
+fn out_of_range_integers_are_range_refusals_in_every_width() {
+    for (yaml, expected) in [
+        (
+            "{retry_on_fail: true, max_tries: 70000}",
+            NodeSettingsRefusal::MaxTriesRange,
+        ),
+        (
+            "{retry_on_fail: true, max_tries: -1}",
+            NodeSettingsRefusal::MaxTriesRange,
+        ),
+        (
+            "{retry_on_fail: true, wait_between_tries_ms: -1}",
+            NodeSettingsRefusal::WaitRange,
+        ),
+        ("{timeout_ms: -5}", NodeSettingsRefusal::TimeoutRange),
+        (
+            "{timeout_ms: 9007199254740991}",
+            NodeSettingsRefusal::TimeoutRange,
+        ),
+        (
+            "{retry_on_fail: true, max_tries: 2.5}",
+            NodeSettingsRefusal::Malformed,
+        ),
+        (
+            "{timeout_ms: 9007199254740993}",
+            NodeSettingsRefusal::Malformed,
+        ),
+    ] {
+        assert_eq!(parse(yaml), Err(expected), "{yaml}");
+    }
+}
+
+/// Fix round 1, finding 6: an id that is not a graph id is never echoed.
+#[test]
+fn an_invalid_id_is_named_a_pipeline_node() {
+    let long = "n".repeat(200);
+    assert_eq!(
+        NodeSettingsRefusal::Malformed.message(&long),
+        format!("A pipeline node: {}", NodeSettingsRefusal::Malformed.text())
+    );
+    assert_eq!(
+        NodeSettingsRefusal::Malformed.message("a b"),
+        format!("A pipeline node: {}", NodeSettingsRefusal::Malformed.text())
+    );
+}

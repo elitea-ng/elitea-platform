@@ -6,16 +6,18 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { buildFlowEditorContextValue } from '../../__tests__/testUtils';
 import { FlowEditorContext } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
+import { ERROR_OUTPUT_HANDLE } from '../../lib/flow-editor/helpers/nodeErrorRoute.helpers';
+import type { FlowEdge, SetFlowEdges } from '../../lib/flow-editor/reactFlowTypes';
 import { NodeSettings } from './NodeSettings';
 
-function renderSettings(settings: Record<string, unknown> | undefined, type = 'state_modifier') {
+function renderSettings(settings: Record<string, unknown> | undefined, type = 'state_modifier', setFlowEdges = vi.fn()) {
   const document: YamlPipelineDocument = {
     entry_point: 'a',
     nodes: [{ id: 'a', type, template: 'x', transition: 'END', ...(settings ? { settings } : {}) }],
   };
   const setYamlJsonObject = vi.fn();
   const rendered = renderWithTheme(
-    <FlowEditorContext.Provider value={buildFlowEditorContextValue({ yamlJsonObject: document, setYamlJsonObject })}>
+    <FlowEditorContext.Provider value={buildFlowEditorContextValue({ yamlJsonObject: document, setYamlJsonObject, setFlowEdges })}>
       <NodeSettings id="a" type={type} disabled={false} />
     </FlowEditorContext.Provider>,
   );
@@ -52,5 +54,23 @@ describe('NodeSettings', () => {
   it('renders nothing for a node type without settings yet', () => {
     const { queryByRole } = renderSettings(undefined, 'llm');
     expect(queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
+  });
+});
+
+describe('NodeSettings error route (fix round 1, finding 9)', () => {
+  it('removes the error output edge when On error leaves error output', async () => {
+    let edges: FlowEdge[] = [
+      { id: 'error', source: 'a', target: 'b', sourceHandle: ERROR_OUTPUT_HANDLE },
+      { id: 'normal', source: 'a', target: 'c' },
+    ];
+    const setFlowEdges = vi.fn<SetFlowEdges>((update) => {
+      edges = typeof update === 'function' ? update(edges) : update;
+    });
+    const { getByRole, findByRole, written } = renderSettings({ on_error: 'error_output', error_transition: 'b' }, 'state_modifier', setFlowEdges);
+    await userEvent.click(getByRole('button', { name: 'Settings' }));
+    await userEvent.click(getByRole('combobox'));
+    await userEvent.click(await findByRole('option', { name: 'Stop pipeline' }));
+    expect(Object.hasOwn(written(), 'settings')).toBe(false);
+    expect(edges.map((edge) => edge.id)).toEqual(['normal']);
   });
 });

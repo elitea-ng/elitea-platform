@@ -56,14 +56,14 @@ pub(crate) struct SettingsNode<N> {
     /// The Main execution this graph runs for: the support reference and
     /// the operator line name it. `None` outside a run (tests, debug compile):
     /// the thread then scopes the support reference.
-    execution_id: Option<Arc<str>>,
+    execution_id: Option<Arc<String>>,
 }
 
 impl<N: Node> SettingsNode<N> {
     pub(crate) fn new(
         inner: N,
         admitted: AdmittedNodeSettings,
-        execution_id: Option<Arc<str>>,
+        execution_id: Option<Arc<String>>,
     ) -> Self {
         Self {
             inner,
@@ -76,14 +76,18 @@ impl<N: Node> SettingsNode<N> {
         &self.admitted.settings
     }
 
-    /// Neutral values for declared outputs the update leaves absent or null.
+    /// Neutral values for the declared outputs the body wrote as null. A key
+    /// the body did not write keeps its state: on success nothing else is
+    /// overwritten.
     fn fill_outputs(&self, mut output: NodeOutput) -> NodeOutput {
         if !self.settings().always_output_data {
             return output;
         }
         for (key, kind) in &self.admitted.outputs {
-            if output.updates.get(key).is_none_or(Value::is_null) {
-                output.updates.insert(key.clone(), neutral_value(kind));
+            if let Some(value) = output.updates.get_mut(key)
+                && value.is_null()
+            {
+                *value = neutral_value(kind);
             }
         }
         output
@@ -123,12 +127,15 @@ impl<N: Node> SettingsNode<N> {
             return Err(GraphError::Other(code.as_str().to_owned()));
         }
         let step = u64::try_from(context.step).unwrap_or(u64::MAX);
-        let scope = self
-            .execution_id
-            .as_deref()
-            .unwrap_or(context.config.thread_id.as_str());
+        // The execution and the thread: a parent and a saved child of one
+        // execution never share a support reference.
+        let scope = format!(
+            "{}\0{}",
+            self.execution_id.as_ref().map_or("", |id| id.as_str()),
+            context.config.thread_id
+        );
         let failure = family_failure(self.admitted.family);
-        let support_ref = node_error_support_ref(scope, node, step);
+        let support_ref = node_error_support_ref(&scope, node, step);
         let entry = NodeErrorEntry {
             node,
             node_type: self.admitted.family.node_type(),
@@ -170,7 +177,7 @@ impl<N: Node> SettingsNode<N> {
             handled = on_error.handled().unwrap_or_default(),
             attempts = 1_u16,
             support_ref = %support_ref,
-            execution_id = self.execution_id.as_deref().unwrap_or_default()
+            execution_id = self.execution_id.as_ref().map_or("", |id| id.as_str())
         );
         // A Router records the route it took, so a skipped revisit takes it
         // again; other families take their declared transition.

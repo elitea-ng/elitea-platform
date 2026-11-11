@@ -53,7 +53,7 @@ import { t } from '@/shared/i18n';
 
 import { ProcessConnector, ProcessStepIcon, RunStatus, StateItemView, StateValueModal } from './RunStateDialog.parts';
 import { HeaderActions, StatusIndicatorRow } from './RunStateDialog.status';
-import { continuedFailureNodes, isRunFinished, stepStateValues } from './runStateValues';
+import { continuedFailureSteps, isRunFinished, stepStateValues } from './runStateValues';
 import {
   contentContainerSx,
   dialogContentSx,
@@ -116,7 +116,7 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
   const [selectedState, setSelectedState] = useState<SelectedStateValue | undefined>(undefined);
 
   const timeline = timelineOf(data);
-  const continued = continuedFailureNodes(timeline);
+  const continued = continuedFailureSteps(timeline);
   const variables = useMemo(() => Object.keys(state ?? { input: '', messages: [] }), [state]);
 
   const onSelect = useCallback((index: number) => setSelectedStep(index), []);
@@ -226,11 +226,11 @@ export function RunStateDialog(props: RunStateDialogProps): ReactNode {
                     <ProcessStepIcon
                       onSelect={onSelect}
                       index={index}
-                      tooltip={continued.has(step.id ?? '')
+                      tooltip={continued.has(index)
                         ? `${step.id ?? ''} · ${t('pipelines.flowEditor.state.failedContinued', 'Failed · continued')}`
                         : (step.id ?? '')}
                       active={index === selectedStep}
-                      isError={isError || continued.has(step.id ?? '')}
+                      isError={isError || continued.has(index)}
                     />
                     <Typography
                       sx={stepLabelSx}

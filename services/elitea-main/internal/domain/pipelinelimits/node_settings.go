@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 
@@ -55,7 +56,7 @@ var NodeSettingsRefusalTexts = map[string]string{
 	"error_transition_target":       "The error transition must name END or another node of this pipeline outside any Parallel or Map.",
 	"always_output_reducer":         "Always output data cannot write an output that uses the sum_int or merge reducer.",
 	"router_continue_needs_default": "On error 'continue' on a Router needs an explicit default output.",
-	"node_errors_type":              "The state key node_errors must be a list with no reducer or the append reducer when a node continues on error.",
+	"node_errors_type":              "When a node continues on error, a declared node_errors must be a list with reducer: append.",
 	"node_errors_nested_mapping":    "An Agent node cannot map node_errors into or out of a nested pipeline.",
 }
 
@@ -152,7 +153,7 @@ func parseNodeSettings(block *yaml.Node) (nodeSettings, string) {
 		case "error_transition":
 			if present(value) {
 				var target string
-				target, ok = stringScalar(value)
+				target, ok = graphIDScalar(value)
 				settings.errorTransition = &target
 			}
 		default:
@@ -190,6 +191,10 @@ func boolScalar(node *yaml.Node) (bool, bool) {
 }
 
 // optionalInt reads a non-negative integer scalar, or a YAML null as absent.
+// optionalInt reads an integer within +/-(2^53-1), whatever its sign, so an
+// out-of-range value is the bound's range refusal as in the Worker and the
+// Web; a YAML null is absent; any other value (a fraction, a wider integer)
+// is malformed.
 func optionalInt(node *yaml.Node) (*int64, bool) {
 	if !present(node) {
 		return nil, true
@@ -198,10 +203,29 @@ func optionalInt(node *yaml.Node) (*int64, bool) {
 		return nil, false
 	}
 	var value int64
-	if node.Decode(&value) != nil || value < 0 {
+	if node.Decode(&value) != nil || value > maxSafeInteger || value < -maxSafeInteger {
 		return nil, false
 	}
 	return &value, true
+}
+
+// maxSafeInteger is the largest integer every layer reads exactly.
+const maxSafeInteger = 1<<53 - 1
+
+// graphIDScalar is a node id or route target as the Worker normalizes it: a
+// string, or an integer within +/-(2^53-1) as its decimal text.
+func graphIDScalar(node *yaml.Node) (string, bool) {
+	if value, ok := stringScalar(node); ok {
+		return value, true
+	}
+	if node == nil || node.Kind != yaml.ScalarNode || node.ShortTag() != "!!int" {
+		return "", false
+	}
+	var value int64
+	if node.Decode(&value) != nil || value > maxSafeInteger || value < -maxSafeInteger {
+		return "", false
+	}
+	return strconv.FormatInt(value, 10), true
 }
 
 type declaredSettings struct {
@@ -221,10 +245,11 @@ func checkNodeSettings(declared []map[string]*yaml.Node, state *yaml.Node) error
 	usesNodeErrors := false
 	for _, fields := range declared {
 		block := fields[settingsKey]
-		if block == nil {
+		// Decision 1: a block with no keys is no block, on every family.
+		if block == nil || (block.Kind == yaml.MappingNode && len(block.Content) == 0) {
 			continue
 		}
-		id, _ := stringScalar(fields["id"])
+		id, _ := graphIDScalar(fields["id"])
 		settings, refused := parseNodeSettings(block)
 		if refused != "" {
 			return settingsRefusal(id, refused)
@@ -239,7 +264,8 @@ func checkNodeSettings(declared []map[string]*yaml.Node, state *yaml.Node) error
 	if usesNodeErrors {
 		if declaredType, found := stateType(state, NodeErrorsKey); found {
 			reducer := reducers[NodeErrorsKey]
-			if declaredType != "list" || (reducer != "" && reducer != "append") {
+			// Decision 2: a user's own key must say `reducer: append` explicitly.
+			if declaredType != "list" || reducer != "append" {
 				return settingsRefusal(nodeSettingsDocumentMarker, "node_errors_type")
 			}
 		}
@@ -248,7 +274,7 @@ func checkNodeSettings(declared []map[string]*yaml.Node, state *yaml.Node) error
 				continue
 			}
 			if mappingHasKey(fields["input_mapping"], NodeErrorsKey) || sequenceHas(fields["output"], NodeErrorsKey) {
-				id, _ := stringScalar(fields["id"])
+				id, _ := graphIDScalar(fields["id"])
 				return settingsRefusal(id, "node_errors_nested_mapping")
 			}
 		}
@@ -256,13 +282,13 @@ func checkNodeSettings(declared []map[string]*yaml.Node, state *yaml.Node) error
 	ids := map[string]struct{}{}
 	owned := map[string]struct{}{}
 	for _, fields := range declared {
-		if id, ok := stringScalar(fields["id"]); ok {
+		if id, ok := graphIDScalar(fields["id"]); ok {
 			ids[id] = struct{}{}
 		}
 		nodeType, _ := stringScalar(fields["type"])
 		switch nodeType {
 		case "map":
-			if worker, ok := stringScalar(fields["worker"]); ok {
+			if worker, ok := graphIDScalar(fields["worker"]); ok {
 				owned[worker] = struct{}{}
 			}
 		case "parallel":

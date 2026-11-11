@@ -91,8 +91,8 @@ impl OnNodeError {
 struct RawNodeSettings {
     #[serde(default)]
     retry_on_fail: bool,
-    max_tries: Option<u16>,
-    wait_between_tries_ms: Option<u64>,
+    max_tries: Option<serde_yaml_ng::Number>,
+    wait_between_tries_ms: Option<serde_yaml_ng::Number>,
     #[serde(default)]
     on_error: OnNodeError,
     error_transition: Option<String>,
@@ -100,7 +100,42 @@ struct RawNodeSettings {
     always_output_data: bool,
     #[serde(default)]
     execute_once: bool,
-    timeout_ms: Option<u64>,
+    timeout_ms: Option<serde_yaml_ng::Number>,
+}
+
+/// The largest integer every layer reads exactly (`Number.MAX_SAFE_INTEGER`).
+const MAX_SAFE_INTEGER: i64 = (1 << 53) - 1;
+
+/// A count field: an integer within +/-(2^53 - 1), whatever its sign, so an
+/// out-of-range value is the bound's range refusal in every layer; any other
+/// number (a fraction, a wider integer) is malformed.
+fn count(number: Option<&serde_yaml_ng::Number>) -> Result<Option<i64>, NodeSettingsRefusal> {
+    number
+        .map(|number| {
+            number
+                .as_i64()
+                .filter(|value| (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value))
+                .ok_or(NodeSettingsRefusal::Malformed)
+        })
+        .transpose()
+}
+
+/// `value` within `low..=high`, as the field's type, or the range refusal.
+fn bounded<T: TryFrom<i64>>(
+    value: Option<i64>,
+    low: i64,
+    high: i64,
+    refusal: NodeSettingsRefusal,
+) -> Result<Option<T>, NodeSettingsRefusal> {
+    value
+        .map(|value| {
+            (low..=high)
+                .contains(&value)
+                .then(|| T::try_from(value).ok())
+                .flatten()
+                .ok_or(refusal)
+        })
+        .transpose()
 }
 
 /// One node's admitted settings. Field order is the digest order.
@@ -221,7 +256,7 @@ impl NodeSettingsRefusal {
                 "On error 'continue' on a Router needs an explicit default output."
             }
             Self::NodeErrorsType => {
-                "The state key node_errors must be a list with no reducer or the append reducer when a node continues on error."
+                "When a node continues on error, a declared node_errors must be a list with reducer: append."
             }
             Self::NodeErrorsNestedMapping => {
                 "An Agent node cannot map node_errors into or out of a nested pipeline."
@@ -236,13 +271,16 @@ impl NodeSettingsRefusal {
     }
 
     /// The message a person reads: `Node <id>: <text>`, or the text alone
-    /// for a document-level refusal. `node` is a validated graph id.
+    /// for a document-level refusal. An id that is not a graph id is never
+    /// echoed: it reads `A pipeline node: <text>`, as in Main and the Web.
     #[must_use]
     pub fn message(self, node: &str) -> String {
         if self.document_level() {
             self.text().to_owned()
-        } else {
+        } else if valid_graph_id(node) {
             format!("Node {node}: {}", self.text())
+        } else {
+            format!("A pipeline node: {}", self.text())
         }
     }
 }
@@ -327,24 +365,28 @@ impl NodeSettings {
         }
         let raw: RawNodeSettings =
             serde_yaml_ng::from_value(value).map_err(|_| NodeSettingsRefusal::Malformed)?;
-        if raw
-            .max_tries
-            .is_some_and(|tries| !(MIN_NODE_TRIES..=MAX_NODE_TRIES).contains(&tries))
-        {
-            return Err(NodeSettingsRefusal::MaxTriesRange);
-        }
-        if raw.wait_between_tries_ms.is_some_and(|wait| {
-            !(MIN_WAIT_BETWEEN_TRIES_MS..=MAX_WAIT_BETWEEN_TRIES_MS).contains(&wait)
-        }) {
-            return Err(NodeSettingsRefusal::WaitRange);
-        }
-        if raw
-            .timeout_ms
-            .is_some_and(|timeout| !(MIN_NODE_TIMEOUT_MS..=MAX_NODE_TIMEOUT_MS).contains(&timeout))
-        {
-            return Err(NodeSettingsRefusal::TimeoutRange);
-        }
-        if !raw.retry_on_fail && (raw.max_tries.is_some() || raw.wait_between_tries_ms.is_some()) {
+        let tries = count(raw.max_tries.as_ref())?;
+        let wait = count(raw.wait_between_tries_ms.as_ref())?;
+        let timeout = count(raw.timeout_ms.as_ref())?;
+        let max_tries = bounded::<u16>(
+            tries,
+            i64::from(MIN_NODE_TRIES),
+            i64::from(MAX_NODE_TRIES),
+            NodeSettingsRefusal::MaxTriesRange,
+        )?;
+        let wait_between_tries_ms = bounded::<u64>(
+            wait,
+            MIN_WAIT_BETWEEN_TRIES_MS.cast_signed(),
+            MAX_WAIT_BETWEEN_TRIES_MS.cast_signed(),
+            NodeSettingsRefusal::WaitRange,
+        )?;
+        let timeout_ms = bounded::<u64>(
+            timeout,
+            MIN_NODE_TIMEOUT_MS.cast_signed(),
+            MAX_NODE_TIMEOUT_MS.cast_signed(),
+            NodeSettingsRefusal::TimeoutRange,
+        )?;
+        if !raw.retry_on_fail && (max_tries.is_some() || wait_between_tries_ms.is_some()) {
             return Err(NodeSettingsRefusal::RetryFieldsNeedRetry);
         }
         match (raw.on_error, raw.error_transition.as_deref()) {
@@ -361,13 +403,13 @@ impl NodeSettings {
         }
         Ok(Self {
             retry_on_fail: raw.retry_on_fail,
-            max_tries: raw.max_tries,
-            wait_between_tries_ms: raw.wait_between_tries_ms,
+            max_tries,
+            wait_between_tries_ms,
             on_error: raw.on_error,
             error_transition: raw.error_transition,
             always_output_data: raw.always_output_data,
             execute_once: raw.execute_once,
-            timeout_ms: raw.timeout_ms,
+            timeout_ms,
         })
     }
 

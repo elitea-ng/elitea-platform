@@ -22,8 +22,13 @@ separate PR and is not in this one.
 - **Execute once (D8).** n8n's "Execute Once" runs a node on the *first input item only*. A pipeline node does not
   iterate over items, so that meaning does not exist here. "Run once per execution" means: the node's body runs on
   its first visit in a turn; a later visit in the same turn runs no body, changes no state and takes its normal
-  transition (a Router takes the route its first visit took). The brief's "reuse the stored first result" is
-  replaced: no copy of the result is stored, outputs keep their current values.
+  transition. The brief's "reuse the stored first result" is replaced: no copy of the result is stored, outputs keep
+  their current values.
+  - **A Router replays its first route.** A Router has no output to keep; its result *is* its route. So a skipped
+    revisit takes the route its first visit took (recorded in the run-once set next to its id,
+    `node_settings_runtime.rs` `mark_once`), not the default and not a fresh evaluation of the condition. A Router
+    loop whose first visit chose to loop again therefore keeps looping until the step bound stops it
+    (`a_run_once_router_takes_its_first_route_again`). Accepted by the orchestrator (fix round 1, decision 3).
 - **Wait minimum 100 ms (D10).** n8n allows 0. Unspaced retries amplified the FU-302 outage.
 - **Error output (D5).** The failure is one `node_errors` entry plus a `goto(error_transition)`; there is no
   `<node>.error` key and no second output payload. The handler reads `node_errors[-1]`. The legacy Code
@@ -85,9 +90,11 @@ No new dependency in any tree.
 ### `node_errors` (D2, D3, C3, C4)
 
 - Declared only when some node has `on_error != stop` (`node_settings_definition.rs:114`): `list`, default `[]`,
-  reducer `append`. A user's own `node_errors` must then be `list` with no reducer or `append`; with no continuing
-  node it is never checked (**C3**; Worker `a_user_node_errors_key_is_checked_only_when_a_node_continues`, vectors
-  "node_errors as a string without a continuing node (C3)" and the two refused ones). Not globally reserved.
+  reducer `append`. A user's own `node_errors` must then declare `reducer: append` explicitly (fix round 1,
+  decision 2: a list without a reducer is refused with a text that names the fix); with no continuing node it is
+  never checked (**C3**; Worker `a_user_node_errors_key_is_checked_only_when_a_node_continues`,
+  `a_user_node_errors_needs_an_explicit_append`, vectors "node_errors as a string without a continuing node (C3)",
+  "... as a list without reducer: append (decision 2)" and the two refused ones). Not globally reserved.
 - **D3:** a nested child that owns `node_errors` is exempt from the X3 typed-reducer refusal
   (`compiler.rs:1754`); any other typed reducer in the child is still refused (Worker
   `a_child_that_owns_node_errors_compiles_nested_and_hides_its_list`).
@@ -233,9 +240,9 @@ installed at the repository root locally; checked instead by grep: no `#[ignore]
 
 | Budget (PLAN §9) | Mechanism | Proof / measurement |
 |---|---|---|
-| No settings: zero new work, same digests, no new channel | non-default only: no wrapper (`compiler.rs:1989`), no `node_errors`/run-once channel (`compiler.rs:1856`, `node_settings_definition.rs:114`), identity digest (`node_settings.rs` `bind_digest`) | `documents_without_settings_keep_their_digest`; existing golden digest tests unchanged. The 128-node compile bench guard was **not** added (follow-up FU-5B1-A). |
+| No settings: zero new work, same digests, no new channel | non-default only: no wrapper (`compiler.rs:1989`), no `node_errors`/run-once channel (`compiler.rs:1856`, `node_settings_definition.rs:114`), identity digest (`node_settings.rs` `bind_digest`) | `documents_without_settings_keep_their_digest`; existing golden digest tests unchanged. The 128-node compile bench guard was **not** added (follow-up FU-347). |
 | Settled failure: 0 extra DB round trips | one node output in the step's own update | `a_continued_failure_writes_no_extra_checkpoint`: a continued failure writes as many checkpoints as the same run succeeding |
-| Wrapper overhead p99 ≤ 50 µs | entry built from ids, codes and the step number, no state serialisation | not measured (FU-5B1-A) |
+| Wrapper overhead p99 ≤ 50 µs | entry built from ids, codes and the step number, no state serialisation | not measured (FU-347) |
 | Run once: ≤ 128 ids, 0 body work on a skip | `mark_executed_once` bound; skip returns an empty output | AR `the_run_once_set_holds_128_ids_and_refuses_the_129th`; Worker `a_run_once_node_runs_once_in_a_three_visit_loop` |
 | `node_errors` ≤ 64 entries × ≤ 1 KiB | `MAX_NODE_ERRORS`, `MAX_NODE_ERROR_ENTRY_BYTES` | `the_node_errors_bound_holds_at_64_and_fails_typed_at_65`; AR entry 1024/1025 |
 | Main: no extra parse, O(nodes) | `checkNodeSettings` in the existing single parse, one map lookup per node without a block | by construction (`limits.go:175`) |
@@ -284,6 +291,7 @@ Scanners (`cargo deny`, `govulncheck`, `npm audit`) are run by the orchestrating
 | Worker × `node_errors` full | F typed `pipeline.node_errors.exhausted` | `node_settings_runtime.rs:115` | `the_node_errors_bound_holds_at_64_and_fails_typed_at_65` |
 | Web × reload | R (settings and state from storage) | YAML round trip | `nodeErrorRoute.helpers.test.ts` round trip; browser pending |
 | Code rows (P10 retry, wait, timeout, owner recovery) | — | PR B | — |
+| Worker × settled failure inside a saved child pipeline (D15) | — | PR B (FU-348) | not claimed here: the compile and mapping rules are unit-tested only |
 
 ## 11. Browser evidence
 
@@ -302,7 +310,70 @@ All test fixtures are inline YAML or the shared vectors file; nothing was create
    commit 1.
 3. The Web settings section uses a text button and `Collapse` (no new visuals); it is placed after the node fields,
    not after `CommonInterruptSettings` (State Modifier, Router and the shaping nodes render none).
-4. Not done in PR A: the 128-node compile bench guard and the wrapper p99 measurement (FU-5B1-A); a real-PG test of
-   a settled failure inside a saved child (D15; the compile and mapping rules are unit-tested) (FU-5B1-B).
+4. Not done in PR A: the 128-node compile bench guard and the wrapper p99 measurement (FU-347); a real-PG test of
+   a settled failure inside a saved child (D15; the compile and mapping rules are unit-tested) (FU-348).
 5. Main reads Map/Parallel ownership from direct references (worker, branches); the Worker's ownership walk is the
    authority for exotic documents.
+
+## 14. Fix round 1 (orchestrator review of `a9fcc41e1`)
+
+Evidence: `handoffs/point5-wave1-20261008/5b1/evidence/round1-failing-first.txt` (tests and vectors written before
+the fixes; every listed test failed first). Merged `origin/main` `94862584d` (#1937) first.
+
+### Decisions
+
+| | Change | Where | Proof |
+|---|---|---|---|
+| 1 | An empty `settings: {}` is a no-op on every family (no wrapper, same digest); any key on a family without settings is refused `family_not_yet`, even at its default value | Worker `node_settings_definition.rs` `extract`; Main `checkNodeSettings`; Web `parseBlocks` | `an_empty_block_is_a_no_op_on_every_family`; vectors "an empty block on a Code node / HITL node is a no-op", "a default value on a Code node is refused" |
+| 2 | A user-declared `node_errors` needs `reducer: append` once a node continues; new text "When a node continues on error, a declared node_errors must be a list with reducer: append." | Worker `declare_node_errors`; Main; Web `nodeErrorsIssue`; contract | `a_user_node_errors_needs_an_explicit_append`; vector "... without reducer: append (decision 2)" |
+| 3 | Router replay of its first route documented next to "Run once per execution" | §1 | — |
+| 4 | FU-5B1-A → FU-347, FU-5B1-B → FU-348 (both land in PR B); D15 marked "PR B" in §10 | this file | — |
+
+### Code-review findings
+
+| # | Verdict | Fix | Failing-first test |
+|---|---|---|---|
+| 1 | confirmed: the static pause catalog's successors left out `error_transition` | `compiler.rs` `static_pause_catalog` adds the error route (and END) | `a_pause_after_a_routed_failure_admits_the_error_route` |
+| 2 | confirmed: on success `fill_outputs` overwrote a State Modifier's other declared outputs | fills only keys the body wrote as null (`node_settings_runtime.rs` `fill_outputs`) | `always_output_data_never_overwrites_state_on_success` |
+| 3 | confirmed: renaming a node did not update `settings.error_transition` | `NodeCardHeader.rename.ts` `errorRouteRename` | Web `renaming an error route target` |
+| 4 | confirmed: `error_transition` was not normalized (numeric ids) and Main read only string ids | Worker `normalize_settings_route`; Main `graphIDScalar`; Web `pipelineNodeIdentifiers` rule | vectors "numeric ids: an error route to a numeric node / to itself" |
+| 5 | confirmed: `node_errors` could be the fallback final answer | `compiler.rs` `result_policy` excludes it when settings own it | `node_errors_is_not_a_result_fallback` |
+| 6 | confirmed for the text builder: an id that is not a graph id was echoed | `NodeSettingsRefusal::message` reads "A pipeline node" for it, as Main and the Web | AR `an_invalid_id_is_named_a_pipeline_node`. The Worker end-to-end test `a_malformed_id_is_never_echoed` passed before the fix too (the over-long id is refused earlier), so it is a regression guard only |
+| 7 | confirmed: the support reference omitted the thread when an execution id was set | scope = execution id + thread (`node_settings_runtime.rs` `settle`) | `the_support_reference_names_the_thread` |
+| 8 | confirmed: number widths differed (u16/u64 vs int64 vs any) | every layer: an integer within +/-(2^53-1) gets the bound's range refusal (negative included), any other number is malformed (`node_settings.rs` `count`/`bounded`, Main `optionalInt`, Web `isCount`) | AR `out_of_range_integers_are_range_refusals_in_every_width`; 6 vectors |
+| 9 | confirmed: leaving error output left a stale error edge | `NodeSettings.tsx` removes the node's error-handle edges when the key goes | Web `removes the error output edge when On error leaves error output` |
+| 10 | confirmed: "Failed · continued" marked every visit | `continuedFailureSteps` marks the visit whose own state appended an entry naming its node. Keyed on the append, not `input_step`: the timeline steps carry no checkpoint step (`RunStateDialog.tsx` `RunStateTimelineStep`) | Web `marks only the visit whose own state appended the entry` |
+
+## 15. CI hygiene (fix round 1)
+
+- **FU-349** (`postgres_a_map_item_whose_finished_pipeline_tool_was_edited_later_is_refused_typed`, from #1937).
+  Cause: the crash watcher was a task on the crash process's current-thread runtime polling every 20 ms; it could
+  see the finished nested thread only after the member Agent had saved its next model request (which holds the
+  nested result), so the reclaim replayed that request and never met the edited thread. Fix (test only): the
+  watcher polls on its own OS thread, runtime and connection every millisecond. Before 3/10 passed on this branch
+  (main's baseline 2/6 failing); after 10/10 and 10/10; the whole `fanout_effect_pg_tests` module 109 passed.
+  Evidence `5b1/evidence/fu349-flake.txt`.
+- **FU-345** (`ChatBox.stickyTarget.test.tsx`, "sends to, attributes the answer to, and gates attachments...").
+  Root cause: the Attach row is enabled by the agent's "Allow attachments" AND the deployment's attachment types
+  (`useAllowedAttachmentTypes`, `GET /elitea_core/index_types/prompt_lib/2`). The test never pinned the second, so
+  the global generated MSW mock answered with faker data whose categories are each randomly present; when none
+  was, the deployment "accepts no attachment types" and the row stayed disabled whatever the agent allows (traced:
+  the agent gate had opened, the row read `noFileTypesAvailable = true`). Not a UI race; the component is
+  unchanged and the assertion stays strict. Fix: the test pins a deterministic answer. Before 15/20 local runs;
+  an empty answer pinned fails 3/3; after 20/20.
+
+### Counts after fix round 1 (branch merged with `origin/main` `94862584d`)
+
+| Suite | Result |
+|---|---|
+| agent-runtime lib `--all-features`; clippy, fmt, rustdoc `-D warnings` | 1860 passed, 0 failed, 1 ignored (pre-existing); clean |
+| Worker lib `--all-features`, PostgreSQL 18 (disposable container), CI env (receipts required, disposable guard); clippy, fmt, rustdoc `-D warnings` | 3310 passed, 0 failed, 147 ignored (all from main); clean. `node_settings*` 30 of 30 |
+| Worker ignored-test guard (`scripts/ci/check-worker-ignored-tests.mjs`, run from a scratch copy of `scripts/ci` with its own `npm ci`) | 147 ignored: 133 run by 10 CI invocations, 14 allowlisted, 0 run by nothing, 0 errors |
+| Main `go vet`, `go test -race` (`pipelinelimits`, `runtimecontracts`) | ok; 56 shared vectors |
+| faults gate `go test ./...` | `faults` ok, `cmd/faultsgen` no test files, `grpcrecover` ok, `httperr` ok, `logx` ok |
+| Web typecheck, lint, `i18n-backfill --check`, `npm run test:unit` | clean; 1950 files, 19128 passed, 6 expected fail, 1 skipped |
+
+Scanners (no lockfile or manifest differs from `origin/main`, so every finding is pre-existing): `cargo deny
+--all-features check advisories` fails on main's lockfiles alike (Worker 7 vulnerability + 4 unmaintained, libs/rust
+8 + 8); `govulncheck` reports 2 Go standard-library vulnerabilities of the local toolchain (go1.26.9); `npm audit`
+21 moderate. This branch adds none.

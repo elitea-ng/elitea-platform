@@ -64,7 +64,7 @@ export const NodeSettingsRefusalTexts = {
   error_transition_target: 'The error transition must name END or another node of this pipeline outside any Parallel or Map.',
   always_output_reducer: 'Always output data cannot write an output that uses the sum_int or merge reducer.',
   router_continue_needs_default: "On error 'continue' on a Router needs an explicit default output.",
-  node_errors_type: 'The state key node_errors must be a list with no reducer or the append reducer when a node continues on error.',
+  node_errors_type: 'When a node continues on error, a declared node_errors must be a list with reducer: append.',
   node_errors_nested_mapping: 'An Agent node cannot map node_errors into or out of a nested pipeline.',
 } as const;
 
@@ -86,7 +86,8 @@ const GRAPH_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
-const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 0;
+/** Any integer within +/-(2^53-1): out-of-range values are range refusals, as in the Worker and Main. */
+const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value);
 
 const BOOLEAN_KEYS = ['retry_on_fail', 'always_output_data', 'execute_once'];
 const COUNT_KEYS = ['max_tries', 'wait_between_tries_ms', 'timeout_ms'];
@@ -175,8 +176,10 @@ const issue = (nodeId: string | undefined, refusal: NodeSettingsRefusal, field =
 function parseBlocks(nodes: readonly YamlPipelineNode[]): { blocks: Block[]; refused?: GraphAdmissionIssue } {
   const blocks: Block[] = [];
   for (const node of nodes) {
-    if (node[NODE_SETTINGS_KEY] === undefined) continue;
-    const parsed = parseNodeSettings(node[NODE_SETTINGS_KEY]);
+    const block = node[NODE_SETTINGS_KEY];
+    // Decision 1: a block with no keys is no block, on every family.
+    if (block === undefined || (isRecord(block) && Object.keys(block).length === 0)) continue;
+    const parsed = parseNodeSettings(block);
     if (parsed.settings === undefined) return { blocks, refused: issue(node.id, parsed.refusal ?? 'malformed') };
     blocks.push({ node, settings: parsed.settings });
   }
@@ -191,7 +194,8 @@ const reducerIn = (document: YamlPipelineDocument) => (key: string): string | un
 /** C3 and C4: only a document whose nodes continue on error owns `node_errors`. */
 function nodeErrorsIssue(document: YamlPipelineDocument): GraphAdmissionIssue | undefined {
   const declared = stateSpec(document, NODE_ERRORS_KEY);
-  if (declared !== undefined && (declared.type !== 'list' || ![undefined, 'append'].includes(reducerIn(document)(NODE_ERRORS_KEY)))) {
+  // Decision 2: a user's own key must say `reducer: append` explicitly.
+  if (declared !== undefined && (declared.type !== 'list' || reducerIn(document)(NODE_ERRORS_KEY) !== 'append')) {
     return issue(undefined, 'node_errors_type', `state.${NODE_ERRORS_KEY}`);
   }
   const mapping = (document.nodes ?? []).find((node) => node.type === 'agent'

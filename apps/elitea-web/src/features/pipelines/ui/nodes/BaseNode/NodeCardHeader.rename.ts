@@ -81,7 +81,16 @@ export function renameYamlNode(node: YamlPipelineNode, name: string, inputtedNam
     ...(node.id === name ? { id: inputtedName } : {}),
     ...computeYamlNodeReferenceUpdate(node, name, inputtedName),
     ...graphExtensionReferenceUpdate(node, name, inputtedName),
+    ...errorRouteRename(node, name, inputtedName),
   };
+}
+
+/** 5b-1: a node's `settings.error_transition` names the renamed node too. */
+function errorRouteRename(node: YamlPipelineNode, name: string, inputtedName: string): Partial<YamlPipelineNode> {
+  const settings = node['settings'];
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return {};
+  const route = settings as Readonly<Record<string, unknown>>;
+  return route['error_transition'] === name ? { settings: { ...route, error_transition: inputtedName } } : {};
 }
 
 /** `NodeCardHeader.jsx:119-131` -- the yaml document's other name-bearing fields. */

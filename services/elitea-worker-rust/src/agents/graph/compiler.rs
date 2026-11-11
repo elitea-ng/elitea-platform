@@ -337,13 +337,14 @@ pub(crate) struct PipelineNodeRuntimes {
     context_view: Option<Arc<Vec<serde_json::Value>>>,
     /// The Main execution this graph runs for (5b-1): a settled node
     /// failure's support reference and operator line name it.
-    execution_id: Option<Arc<str>>,
+    // A thin pointer: the runtimes ride inside participant enums.
+    execution_id: Option<Arc<String>>,
 }
 
 impl PipelineNodeRuntimes {
     /// 5b-1: bind the run's Main execution id for node settings.
     pub(crate) fn with_execution_id(mut self, execution_id: &str) -> Self {
-        self.execution_id = Some(Arc::from(execution_id));
+        self.execution_id = Some(Arc::new(execution_id.to_owned()));
         self
     }
 
@@ -1384,7 +1385,7 @@ impl PipelineDefinition {
             &self.interrupt_before,
             &self.interrupt_after,
             self.nodes.iter().map(|node| {
-                let targets = match node {
+                let mut targets: Vec<String> = match node {
                     PipelineNodeDefinition::Printer(printer) => vec![printer.reset_node_id()],
                     _ => node
                         .route_targets()
@@ -1392,6 +1393,12 @@ impl PipelineDefinition {
                         .map(str::to_owned)
                         .collect(),
                 };
+                // 5b-1: a routed failure resumes into its error route (or END).
+                if let Some(target) = self.settings.error_transition(node.id())
+                    && !targets.iter().any(|known| known == target)
+                {
+                    targets.push(target.to_owned());
+                }
                 (
                     node.id().to_owned(),
                     node.config_digest(),
@@ -2271,7 +2278,7 @@ impl PipelineDefinition {
     ///
     /// `END` is only the ADK graph sink. The candidate belongs to the
     /// value-producing node whose explicit route targets that sink.
-    fn result_policy(&self) -> PipelineResultPolicy {
+    pub(super) fn result_policy(&self) -> PipelineResultPolicy {
         let mut keys = Vec::new();
         for node in &self.nodes {
             let (transition, output_keys) = match node {
@@ -2303,10 +2310,16 @@ impl PipelineDefinition {
                 keys.push(key.clone());
             }
         }
+        let settings_errors = self.settings.uses_node_errors();
         let fallback_keys = self
             .state_declaration_order
             .iter()
             .filter(|key| !internal_result_key(key))
+            // 5b-1: the settings-owned failure list is never the final answer.
+            .filter(|key| {
+                !(settings_errors
+                    && key.as_str() == elitea_agent_runtime::graph::node_settings::NODE_ERRORS_KEY)
+            })
             .cloned()
             .collect();
         PipelineResultPolicy {
@@ -2405,6 +2418,7 @@ fn normalize_graph_identifiers(
             &mut counts,
         )?;
         normalize_recovery_route(node, &mut counts)?;
+        normalize_settings_route(node, &mut counts)?;
         normalize_family_identifiers(node, &mut counts)?;
     }
     Ok(counts)
@@ -2503,6 +2517,29 @@ fn normalize_recovery_route(
         normalize_graph_identifier(route, PipelineIdentifierField::RecoveryRoute, false, counts)?;
     }
     Ok(())
+}
+
+/// 5b-1: `settings.error_transition` is a route target like `transition`,
+/// normalized the same way (Main and the Web normalize numeric ids too).
+fn normalize_settings_route(
+    node: &mut serde_yaml_ng::Mapping,
+    counts: &mut IdentifierNormalization,
+) -> Result<(), PipelineConfigurationError> {
+    let Some(serde_yaml_ng::Value::Mapping(settings)) = node.get_mut("settings") else {
+        return Ok(());
+    };
+    // Any other shape is left to the strict settings parser (malformed).
+    let normalizable = match settings.get("error_transition") {
+        Some(serde_yaml_ng::Value::String(_)) => true,
+        Some(serde_yaml_ng::Value::Number(number)) => safe_integer_identifier(number).is_some(),
+        _ => false,
+    };
+    match settings.get_mut("error_transition") {
+        Some(value) if normalizable => {
+            normalize_graph_identifier(value, PipelineIdentifierField::Transition, true, counts)
+        }
+        _ => Ok(()),
+    }
 }
 
 fn normalize_mapping_graph_identifier(
