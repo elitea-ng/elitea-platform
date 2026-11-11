@@ -18,7 +18,12 @@ describe('serverErrorMessage (issue 1848: one reader for every feature)', () => 
 
   it('reads a plain-text body, trimmed', () => {
     expect(serverErrorMessage(refusal('memory not found', 404), 'fallback')).toBe('memory not found');
-    expect(serverErrorMessage(refusal('404 page not found\n', 404), 'fallback')).toBe('404 page not found');
+  });
+
+  it("keeps the caller's sentence over a stock status line", () => {
+    expect(serverErrorMessage(refusal('404 page not found\n', 404), 'fallback')).toBe('fallback');
+    expect(serverErrorMessage(refusal('Forbidden\n', 403), 'fallback')).toBe('fallback');
+    expect(serverErrorMessage(refusal('Internal Server Error', 500), 'fallback')).toBe('fallback');
   });
 
   it('never shows markup (a proxy error page)', () => {

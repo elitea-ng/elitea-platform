@@ -46,6 +46,16 @@ function nextTeamOffset(pages: readonly AgentTeamList[]): number | undefined {
 }
 
 /**
+ * Every team the pages hold, once each. Paging is by offset over a list
+ * sorted by name, so a team created or deleted between pages shifts the
+ * window and a team can come back on the next page.
+ */
+function uniqueTeams(pages: readonly AgentTeamList[]): AgentTeam[] {
+  const seen = new Set<number>();
+  return pages.flatMap((page) => page.rows).filter((team) => (seen.has(team.id) ? false : (seen.add(team.id), true)));
+}
+
+/**
  * The project's teams, a page at a time (#1847): `rows` is every team loaded
  * so far, `total` the project's count, and `loadMore` fetches the next page.
  */
@@ -62,7 +72,7 @@ export function useAgentTeamList(projectId: string | undefined, query: string, e
   });
   const pages = list.data?.pages ?? [];
   return {
-    rows: pages.flatMap((page) => page.rows),
+    rows: uniqueTeams(pages),
     total: pages.at(-1)?.total ?? 0,
     isSuccess: list.isSuccess,
     isError: list.isError,

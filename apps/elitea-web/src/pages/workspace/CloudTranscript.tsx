@@ -65,11 +65,6 @@ function PromptCard({ chat }: { chat: CloudChat }): React.JSX.Element | null {
   );
 }
 
-/**
- * A temporary sub-agent's avatar: the dashed ring of an ephemeral participant
- * (ADR-0050 decision 7e). Its profile's avatar key names no image yet, so the
- * ring holds the brand mark.
- */
 export function CloudTranscript({ chat }: { chat: CloudChat }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   if (chat.loading && chat.history.length === 0) {

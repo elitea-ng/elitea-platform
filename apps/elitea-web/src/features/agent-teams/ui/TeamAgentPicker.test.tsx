@@ -35,7 +35,7 @@ describe('TeamAgentPicker', () => {
     );
     const onPick = vi.fn();
     renderWithQueryAndTheme(<TeamAgentPicker projectId="1" draft={draftOf(undefined)} disabled={false} onPick={onPick} />);
-    expect(await screen.findByText('Showing 2 of 250 agents. Type to narrow the list.')).toBeInTheDocument();
+    expect(await screen.findByText('More agents match. Type to narrow the list.')).toBeInTheDocument();
     await userEvent.type(screen.getByTestId('agent-team-edit-add'), 'Zed');
     await userEvent.click(await screen.findByTestId('agent-team-edit-add-250'));
     expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ id: '250', name: 'Zed' }));
@@ -51,5 +51,20 @@ describe('TeamAgentPicker', () => {
     expect(await screen.findByTestId('agent-team-edit-add-2')).toBeInTheDocument();
     expect(screen.queryByTestId('agent-team-edit-add-1')).not.toBeInTheDocument();
     expect(screen.queryByText(/Type to narrow the list/)).not.toBeInTheDocument();
+  });
+
+  it('lists two agents of the same name as two rows', async () => {
+    server.use(http.get(APPLICATIONS, () => HttpResponse.json({ rows: [agent(1, 'Reviewer'), agent(2, 'Reviewer')], total: 2 })));
+    renderWithQueryAndTheme(<TeamAgentPicker projectId="1" draft={draftOf(undefined)} disabled={false} onPick={vi.fn()} />);
+    await userEvent.click(screen.getByTestId('agent-team-edit-add'));
+    expect(await screen.findByTestId('agent-team-edit-add-1')).toHaveTextContent('Reviewer');
+    expect(screen.getByTestId('agent-team-edit-add-2')).toHaveTextContent('Reviewer');
+  });
+
+  it('asks for room for the members it leaves out', async () => {
+    const limits: (string | null)[] = [];
+    server.use(http.get(APPLICATIONS, ({ request }) => { limits.push(new URL(request.url).searchParams.get('limit')); return HttpResponse.json({ rows: [], total: 0 }); }));
+    renderWithQueryAndTheme(<TeamAgentPicker projectId="1" draft={draftOf(undefined)} disabled={false} onPick={vi.fn()} />);
+    await waitFor(() => expect(limits).toEqual(['66']));
   });
 });

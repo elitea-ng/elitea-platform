@@ -75,6 +75,23 @@ describe('TeamsPanel', () => {
     expect(offsets).toEqual(['0', '200']);
   });
 
+  it('shows a team the next page repeats once', async () => {
+    grant('models.teams.list');
+    const row = (id: number) => ({ ...TEAM_ROW, id, name: `Team ${id}` });
+    server.use(
+      http.get(TEAMS, ({ request }) => {
+        const offset = Number(new URL(request.url).searchParams.get('offset') ?? '0');
+        // A team created before the click shifts the window: team 200 comes back.
+        const rows = offset === 0 ? Array.from({ length: 200 }, (_, i) => row(i + 1)) : [row(200), row(201)];
+        return HttpResponse.json({ rows, total: 202 });
+      }),
+    );
+    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    await userEvent.click(await screen.findByTestId('agent-teams-more'));
+    expect(await screen.findByTestId('agent-team-name-201')).toBeInTheDocument();
+    expect(screen.getAllByTestId('agent-team-name-200')).toHaveLength(1);
+  });
+
   it('offers no more when every team is shown', async () => {
     grant('models.teams.list');
     server.use(http.get(TEAMS, () => HttpResponse.json({ rows: [TEAM_ROW], total: 1 })));

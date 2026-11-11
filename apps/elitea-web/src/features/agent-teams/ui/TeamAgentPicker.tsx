@@ -6,7 +6,7 @@
  * the first page of matches, and says so when there are more to narrow.
  */
 import type { ReactNode, SyntheticEvent } from 'react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
 import Autocomplete from '@mui/material/Autocomplete';
 import TextField from '@mui/material/TextField';
@@ -15,21 +15,16 @@ import { useListApplications } from '@/shared/api/generated/applications/applica
 import type { Application } from '@/shared/api/generated/model';
 import { unwrapListPage } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
+import { useDebounce } from '@/shared/lib/useDebounce';
 
-import { hasMember, type TeamDraft } from '../lib/teamDraft';
+import { MAX_TEAM_MEMBERS, hasMember, type TeamDraft } from '../lib/teamDraft';
 
-/** The matches one search shows. */
+/**
+ * The matches one search shows. The page asks for room for every member
+ * too, so leaving the team's own agents out still leaves this many.
+ */
 const PICKER_PAGE_SIZE = 50;
 const SEARCH_DELAY_MS = 250;
-
-function useSettled(value: string): string {
-  const [settled, setSettled] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setSettled(value), SEARCH_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [value]);
-  return settled;
-}
 
 export function TeamAgentPicker({
   projectId,
@@ -43,8 +38,8 @@ export function TeamAgentPicker({
   readonly onPick: (agent: Application) => void;
 }): ReactNode {
   const [input, setInput] = useState('');
-  const search = useSettled(input.trim());
-  const params = { agents_type: 'classic', limit: PICKER_PAGE_SIZE, ...(search === '' ? {} : { query: search }) };
+  const search = useDebounce(input.trim(), SEARCH_DELAY_MS);
+  const params = { agents_type: 'classic', limit: PICKER_PAGE_SIZE + MAX_TEAM_MEMBERS, ...(search === '' ? {} : { query: search }) };
   const list = useListApplications(projectId, params, { query: { enabled: projectId !== '' } });
   const { rows: matches, total } = unwrapListPage<Application>(list.data, 'listApplications(team picker)');
   const agents = matches.filter((agent) => !hasMember(draft, Number(agent.id), Number(agent.project_id ?? projectId)));
@@ -71,8 +66,10 @@ export function TeamAgentPicker({
       getOptionLabel={(agent) => agent.name}
       isOptionEqualToValue={(option, value) => option.id === value.id}
       noOptionsText={t('features.agentTeams.edit.noAgents', 'No agents match.')}
-      renderOption={({ key, ...props }, agent) => (
-        <li key={key} {...props} data-testid={`agent-team-edit-add-${agent.id}`}>
+      loadingText={t('features.agentTeams.edit.loadingAgents', 'Loading agents…')}
+      renderOption={({ key: _byName, ...props }, agent) => (
+        // MUI keys an option by its label; two agents may share a name.
+        <li key={agent.id} {...props} data-testid={`agent-team-edit-add-${agent.id}`}>
           {agent.name}
         </li>
       )}
@@ -81,7 +78,7 @@ export function TeamAgentPicker({
           {...inputParams}
           label={t('features.agentTeams.edit.addAgent', 'Add an agent')}
           placeholder={t('features.agentTeams.edit.searchAgents', 'Search the project\'s agents')}
-          helperText={more ? t('features.agentTeams.edit.moreAgents', 'Showing {{shown}} of {{total}} agents. Type to narrow the list.', { shown: matches.length, total }) : undefined}
+          helperText={more ? t('features.agentTeams.edit.moreAgents', 'More agents match. Type to narrow the list.') : undefined}
           slotProps={{
             ...inputParams.slotProps,
             htmlInput: { ...inputParams.slotProps.htmlInput, 'data-testid': 'agent-team-edit-add' },
