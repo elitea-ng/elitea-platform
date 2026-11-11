@@ -38,9 +38,18 @@ pub(crate) struct EphemeralAgentLedger {
     /// Each spawn's whole profile by agent id, for `propose_agent` (ADR-0050
     /// decision 5a): never reported, dropped with the ledger.
     profiles: Mutex<HashMap<String, (String, Profile)>>,
+    /// The children's live lane (#1823): what the run's event loop projects
+    /// as `agent_subagent` frames.
+    lane: crate::agents::subagent_lane::SubAgentLane,
 }
 
 impl EphemeralAgentLedger {
+    /// The children's live lane (#1823).
+    #[must_use]
+    pub(crate) const fn lane(&self) -> &crate::agents::subagent_lane::SubAgentLane {
+        &self.lane
+    }
+
     /// The child started: its row, running.
     pub(crate) fn started(&self, child: &ChildIdentity, now_unix_ms: i64) {
         let record = &child.record;
@@ -214,6 +223,24 @@ impl EphemeralAgentRegistry {
             },
         );
         ledger
+    }
+
+    /// The execution generation's ledger when its host made one (a run that
+    /// binds sub-agents makes it at assembly, before its stream starts).
+    #[must_use]
+    pub(crate) fn existing(
+        &self,
+        execution_id: &str,
+        generation: u64,
+    ) -> Option<Arc<EphemeralAgentLedger>> {
+        self.tracked
+            .lock()
+            .ok()?
+            .get(&ExecutionKey {
+                execution_id: execution_id.to_owned(),
+                generation,
+            })
+            .map(|entry| Arc::clone(&entry.ledger))
     }
 
     /// The command's spawns for the report before settlement; empty when it

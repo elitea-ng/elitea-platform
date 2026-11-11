@@ -1,6 +1,7 @@
 //! The git tools respect `path_deny`: `git_diff` never shows the content of
 //! a denied file, under any spelling of its name.
 
+#![cfg(unix)]
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;

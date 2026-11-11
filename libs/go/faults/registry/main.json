@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "code": "internal.panic",
+      "sentence": "A component crashed on an unexpected condition; the request or task it was handling failed.",
+      "action": "Report the support reference to the platform team; the log line holds the bounded stack.",
+      "audience": "both",
+      "retryable": "n/a",
+      "owner": "all"
+    },
+    {
+      "code": "internal.unexpected",
+      "sentence": "An unexpected error stopped this request.",
+      "action": "Try again; if it repeats, report the support reference to the platform team.",
+      "audience": "both",
+      "retryable": "n/a",
+      "owner": "all"
+    },
+    {
+      "code": "toolkit.settings_unresolved",
+      "sentence": "The toolkit's settings could not be resolved, so the request could not run.",
+      "action": "Check the toolkit's credentials and configuration, then reload the page.",
+      "audience": "both",
+      "retryable": "yes",
+      "owner": "elitea-main"
+    },
+    {
+      "code": "code.registration_failed",
+      "sentence": "Main could not complete a Code visit or intent registration because a dependency failed, so it answered it as retryable.",
+      "action": "Read stage and cause; check Main's database if it repeats. The Worker tries the same registration again.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-main"
+    },
+    {
+      "code": "code.registration_refused",
+      "sentence": "Main refused a Code visit or intent registration: a claim, permission, source, configuration, input or record check failed closed.",
+      "action": "Read stage: claim means the Worker's claim, lease or the actor's permission; the others mean the Worker's request did not match the run's frozen pipeline. Report the support reference if the run was healthy.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-main"
+    },
+    {
+      "code": "code.registration_contended",
+      "sentence": "A Code visit or intent registration kept conflicting with concurrent registrations of the same run after its bounded retries, so Main answered it as retryable.",
+      "action": "Nothing when it is rare; the Worker tries again. If one run repeats it, report the support reference.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-main"
+    },
+    {
+      "code": "dependency.database_unavailable",
+      "sentence": "Main lost its database; requests that need it fail and Workers get retryable answers until it is back.",
+      "action": "Check PostgreSQL and PgBouncer; Main resumes on its own when the database answers again.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-main"
+    },
+    {
+      "code": "dependency.nats_unavailable",
+      "sentence": "Main lost NATS; admitted runs wait in the outbox and claimed runs continue.",
+      "action": "Check the NATS server; Main reconnects on its own.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-main"
+    },
+    {
+      "code": "workload.session_store_unavailable",
+      "sentence": "A runtime server cannot read workload sessions, so Workers are answered retry until the database is back.",
+      "action": "Check PostgreSQL; Workers retry within their lease.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-main"
+    },
+    {
+      "code": "runner.cycle_failed",
+      "sentence": "A background runner failed its pass and will try again.",
+      "action": "Read the cause; while a dependency outage is already reported, these lines are at DEBUG.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-main"
+    },
+    {
+      "code": "runner.restarted",
+      "sentence": "A background runner stopped on a dependency failure and is being restarted.",
+      "action": "Nothing, unless it repeats after the dependency is back; then read the cause.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-main"
+    },
+    {
+      "code": "runner.stopped",
+      "sentence": "A background runner stopped for a reason that does not heal on its own, so Main is exiting.",
+      "action": "Read the cause and fix it; compose or Kubernetes restarts Main.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-main"
+    }
+  ]
+}

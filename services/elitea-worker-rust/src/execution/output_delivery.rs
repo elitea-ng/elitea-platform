@@ -28,7 +28,8 @@ use crate::protocol::elitea::runtime::v1::{ExecutionOutputFrameV1, NodeEventV1};
 use crate::protocol::node_event::encode_current_node_event_json;
 use crate::protocol::output::{
     AgentTerminalOutput, RuntimeFailureKind, ValidatedAgentOutputFrameKind,
-    build_agent_terminal_output_frame, failure_after_deadline, restored_terminal_failure_kind,
+    build_agent_terminal_output_frame, failure_after_deadline, refused_terminal_replacement,
+    restored_terminal_failure_kind,
 };
 use crate::spool::{
     EncryptedOutputSpool, ExecutionSpoolBinding, SpoolError, SpoolLimits, SpoolMasterKey,
@@ -491,6 +492,27 @@ impl AgentProgressPublishError {
             Self::Output(error) => reconnectable_output(error),
             Self::InvalidConfiguration(_) | Self::InvalidState(_) | Self::InvalidFrame(_) => false,
         }
+    }
+}
+
+/// FU-299: the registered code of each `code()` string, one to one
+/// (`progress_fault_codes_match_the_legacy_code_strings`).
+impl elitea_faults::Fault for AgentProgressPublishError {
+    fn fault_code(&self) -> elitea_faults::Code {
+        use elitea_faults::codes;
+        match self {
+            Self::InvalidConfiguration(_) => codes::AGENT_PROGRESS_INVALID_CONFIGURATION,
+            Self::InvalidState(_) | Self::InvalidFrame(_) => codes::AGENT_PROGRESS_INVALID_STATE,
+            Self::Preflight(error) => error.fault_code(),
+            Self::Output(error) if reconnectable_output(error) => {
+                codes::AGENT_PROGRESS_OUTPUT_UNAVAILABLE
+            }
+            Self::Output(_) => codes::AGENT_PROGRESS_OUTPUT_REJECTED,
+        }
+    }
+
+    fn fault_retryable(&self) -> Option<bool> {
+        Some(self.retryable())
     }
 }
 
@@ -1053,10 +1075,15 @@ impl<C: AgentProgressConnector> FreshAgentProgressPublisher<C> {
                 );
             }
             Err(error) => {
-                tracing::warn!(
+                // FU-299 fault line: the registry sentence as msg, plus code,
+                // action, retryable and the safe cause chain; event and
+                // error_code stay for the queries that read them.
+                elitea_faults::fault!(
+                    tracing::Level::WARN,
+                    error,
+                    renderers = crate::diagnostics::SAFE_CAUSES,
                     event = "agent_progress_publication_failed",
-                    error_code = error.code(),
-                    retryable = error.retryable(),
+                    error_code = error.code()
                 );
             }
         }
@@ -2341,14 +2368,17 @@ async fn replay_terminal_with_replacement<T: AgentTerminalReplay>(
                 // PROTOCOL_VIOLATION). The same bytes can never be accepted,
                 // so it is replaced once by a canonical failure; a refused
                 // canonical failure (or an undecidable lease) is returned.
+                // W3-1 (C3): a kind newer than that Main is replaced by the
+                // older kind it admits under the same wire code.
                 None if matches!(
                     error,
                     OutputGrpcError::Protocol(OutputProtocolError::FrameRefused)
-                ) && restored_terminal_failure_kind(&frame).is_none() =>
+                ) && refused_terminal_replacement(&frame).is_some() =>
                 {
                     match lease.check_now().await {
                         Ok(()) => failure_after_deadline(
-                            RuntimeFailureKind::Internal,
+                            refused_terminal_replacement(&frame)
+                                .unwrap_or(RuntimeFailureKind::Internal),
                             lease.now_unix_millis(),
                             verified.command().deadline_unix_millis,
                         ),
@@ -3282,6 +3312,36 @@ impl AgentOutputPreflightError {
                 ) | OutputGrpcError::Unavailable(_),
             ) | Self::Unavailable(_)
         )
+    }
+}
+
+/// FU-299: the registered code of each `code()` string, one to one.
+impl elitea_faults::Fault for AgentOutputPreflightError {
+    fn fault_code(&self) -> elitea_faults::Code {
+        use elitea_faults::codes;
+        match self {
+            Self::InvalidConfiguration(_)
+            | Self::Output(OutputGrpcError::InvalidConfiguration(_)) => {
+                codes::AGENT_OUTPUT_INVALID_CONFIGURATION
+            }
+            Self::InvalidDurableState(_)
+            | Self::Output(
+                OutputGrpcError::Protocol(_) | OutputGrpcError::Spool(SpoolError::InvalidInput(_)),
+            ) => codes::AGENT_OUTPUT_INVALID_DURABLE_STATE,
+            Self::Output(OutputGrpcError::Spool(SpoolError::ResourceExhausted(_))) => {
+                codes::AGENT_OUTPUT_RESOURCE_EXHAUSTED
+            }
+            Self::Output(OutputGrpcError::Spool(
+                SpoolError::OwnershipUnavailable(_) | SpoolError::Unavailable { .. },
+            )) => codes::AGENT_OUTPUT_SPOOL_UNAVAILABLE,
+            Self::Output(OutputGrpcError::Unavailable(_)) | Self::Unavailable(_) => {
+                codes::AGENT_OUTPUT_UNAVAILABLE
+            }
+        }
+    }
+
+    fn fault_retryable(&self) -> Option<bool> {
+        Some(self.retryable())
     }
 }
 

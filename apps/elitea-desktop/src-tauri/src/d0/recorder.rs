@@ -773,7 +773,7 @@ pub(crate) fn diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> FileCh
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

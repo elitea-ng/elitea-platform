@@ -63,17 +63,24 @@ pub(super) fn validate_map_ownership(
         let worker = nodes.iter().find(|node| node.id() == map.worker).ok_or(
             PipelineConfigurationError::Invalid("the Map worker does not name a declared node"),
         )?;
-        if !matches!(
-            worker,
+        match worker {
             PipelineNodeDefinition::StateModifier(_)
-                | PipelineNodeDefinition::Application(_)
-                | PipelineNodeDefinition::Llm(_)
-        ) {
+            | PipelineNodeDefinition::Application(_)
+            | PipelineNodeDefinition::Llm(_)
+            | PipelineNodeDefinition::Code(_) => {}
             // Readable and typed so Wave 3 can admit each kind on its own.
-            return Err(PipelineConfigurationError::FanoutChildUnsupported {
-                node: worker.id().to_owned(),
-                refusal: FanoutChildRefusal::Kind,
-            });
+            PipelineNodeDefinition::Router(_) => {
+                return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: worker.id().to_owned(),
+                    refusal: FanoutChildRefusal::Router,
+                });
+            }
+            _ => {
+                return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: worker.id().to_owned(),
+                    refusal: FanoutChildRefusal::Kind,
+                });
+            }
         }
         if !worker.route_targets().is_empty()
             || worker.id() == entry
@@ -106,7 +113,10 @@ pub(super) fn validate_map_ownership(
         }
         let mut child = state.clone();
         // These markers enable existing declaration checks only. They do not type actual items.
-        child.insert(map.item.clone(), "__map_opaque_json".to_owned());
+        child.insert(
+            map.item.clone(),
+            super::super::code_state::MAP_ITEM_INPUT_KIND.to_owned(),
+        );
         child.insert(map.index.clone(), "int".to_owned());
         validate_node_state(worker, &child)?;
         validate_worker_mappings(worker, &allowed, state)?;

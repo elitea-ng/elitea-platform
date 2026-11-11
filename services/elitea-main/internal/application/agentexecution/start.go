@@ -14,9 +14,11 @@ import (
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/turntaking"
 	"github.com/google/uuid"
 )
 
@@ -100,6 +102,9 @@ type CurrentApplicationTurn struct {
 	QuestionVisibility string
 	// QuestionCause is empty (derived from the author) or a turntaking cause.
 	QuestionCause string
+	// ContextView is the view the turn's input carries (issue 1669); the
+	// admission records it on the response. nil records nothing.
+	ContextView *ContextViewRecord
 }
 
 func (turn CurrentApplicationTurn) Validate() error {
@@ -127,6 +132,7 @@ func (turn *CurrentApplicationTurn) Clone() *CurrentApplicationTurn {
 	clone.QuestionMeta = bytes.Clone(turn.QuestionMeta)
 	clone.Attachments = cloneCurrentTurnAttachments(turn.Attachments)
 	clone.QuestionAddressedTo = append([]int64(nil), turn.QuestionAddressedTo...)
+	clone.ContextView = turn.ContextView.Clone()
 	return &clone
 }
 
@@ -246,6 +252,11 @@ type CurrentApplicationStartRequest struct {
 	// FloorTurn is set only when Main's floor hook starts a later agent
 	// turn of a human message (floor_hook.go); never from a request body.
 	FloorTurn *FloorTurn
+	// Heartbeat is set only when a proactive agent's heartbeat starts an
+	// act (ADR-0050 decision 2, internal/application/heartbeat); never from
+	// a request body. The turn binds only its unattended tools and its
+	// question carries cause heartbeat. It needs the schedule origin.
+	Heartbeat bool
 	// projectSkills is ProjectSkillIDs, read and frozen by the service for
 	// this one turn. Unexported so no caller can hand the service skill
 	// content of its own.
@@ -262,7 +273,9 @@ func (request CurrentApplicationStartRequest) Validate() error {
 		!validProjectSkillIDs(request.ProjectSkillIDs) || request.ReleaseID < 0 ||
 		!request.ThreadRun.valid(request.TriggerOrigin) ||
 		!validAddressedTo(request.AddressedTo) || !request.FloorTurn.valid() ||
-		(request.FloorTurn != nil && (len(request.AddressedTo) > 0 || request.Unattended != nil)) {
+		(request.FloorTurn != nil && (len(request.AddressedTo) > 0 || request.Unattended != nil)) ||
+		(request.Heartbeat && (request.TriggerOrigin != executiondomain.TriggerOriginSchedule ||
+			request.FloorTurn != nil || request.ThreadRun != nil || len(request.AddressedTo) > 0)) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -452,22 +465,30 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	// see projectcontext.go's header.
 	projectContextText := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
 	// #1607: the agent's own notes, after the person's memories.
-	agentMemoryText := service.resolveAgentMemoryText(
+	agentMemory := service.resolveAgentMemory(
 		ctx, request.ProjectID, target.ApplicationID, request.ConversationUUID,
 		currentMemoryRecallUserInputText(request.UserInput), target.VersionDetails,
 	)
+	if agentMemory.Text != "" {
+		// #1826: the other injected blocks share the instructions with the
+		// agent's notes, so none of them may show a `[memory N, ...]` mark.
+		memoryRecall.Text = agentmemory.Neutralize(memoryRecall.Text)
+		projectContextText = agentmemory.Neutralize(projectContextText)
+	}
 	modelRequest := request
 	modelRequest.UserInput = floorModelInput(request)
-	input, err := currentApplicationInput(
+	input, view, err := currentApplicationInputWithView(
 		modelRequest, target, toolkitGuardrails, attachments,
-		joinRecallText(memoryRecall.Text, agentMemoryText), projectContextText,
+		joinRecallText(memoryRecall.Text, agentMemory.Text), projectContextText,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
 	input.ContextSettings = contextSettings
-	input.Floor = floor.input(request.TargetParticipantID)
+	input.Floor = heartbeatFloor(floor.input(request.TargetParticipantID), request.Heartbeat)
 	input.CurrentMessageId = currentMessageID(request)
+	// #1826: the entries the instructions show, so a brief can name them.
+	input.RecalledMemory = recalledMemoryInput(agentMemory, input.GetApplication())
 	grant, chain, err := service.admitUnattended(ctx, unattendedTarget{
 		request: request.Unattended, continuation: request.UnattendedContinuation,
 		capabilityID: executiondomain.AgentApplicationCapability, input: input,
@@ -477,6 +498,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		triggerOrigin: request.TriggerOrigin, cloudWorkspace: target.CloudWorkspace,
 		start: &unattended.CloudStart{
 			Contract: CloudStartContractApplication, ParticipantID: request.TargetParticipantID,
+			Heartbeat: request.Heartbeat,
 		},
 	})
 	if err != nil {
@@ -496,8 +518,12 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		ResponseMessageID: responseMessageID, QuestionMeta: questionMeta,
 		UserInput: request.UserInput, AllowEmptyUserInput: request.AllowEmptyUserInput,
 		Attachments: attachments,
+		ContextView: newContextViewRecord(request.TargetParticipantID, target.ParticipantContextHistory, view, input),
 	}
 	applyFloorTurn(currentTurn, floor, request)
+	if request.Heartbeat {
+		currentTurn.QuestionCause = turntaking.CauseHeartbeat
+	}
 	projectID := strconv.FormatInt(request.ProjectID, 10)
 	actorID := strconv.FormatInt(request.ActorUserID, 10)
 	outcome, err := service.admissions.Submit(ctx, SubmitRequest{
@@ -561,13 +587,27 @@ func currentApplicationInput(
 	memoryText string,
 	projectContextText string,
 ) (*runtimev1.AgentExecutionInputV1, error) {
+	input, _, err := currentApplicationInputWithView(request, target, toolkitGuardrails, attachments, memoryText, projectContextText)
+	return input, err
+}
+
+// currentApplicationInputWithView also returns the reader's view, which the turn
+// records (issue 1669).
+func currentApplicationInputWithView(
+	request CurrentApplicationStartRequest,
+	target CurrentApplicationTarget,
+	toolkitGuardrails json.RawMessage,
+	attachments []CurrentTurnAttachment,
+	memoryText string,
+	projectContextText string,
+) (*runtimev1.AgentExecutionInputV1, ReaderView, error) {
 	skills, err := projectCurrentApplicationSkills(request.UserInput, target.VersionDetails, request.projectSkills)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	userInput, err := json.Marshal(skills.userInput)
 	if err != nil {
-		return nil, ErrInvalidCurrentAgentStart
+		return nil, ReaderView{}, ErrInvalidCurrentAgentStart
 	}
 	// #870: appended AFTER skill processing, onto version_details as it
 	// stands, so recalled memory text is never itself scanned for
@@ -587,9 +627,9 @@ func currentApplicationInput(
 		// unsupported-start identity and also carries the typed refusal, so
 		// the route can name it.
 		if pipelinelimits.Refusal(err) != nil {
-			return nil, unsupportedStartBecause("pipeline refused by start admission", err)
+			return nil, ReaderView{}, unsupportedStartBecause("pipeline refused by start admission", err)
 		}
-		return nil, ErrUnsupportedCurrentAgentStart
+		return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 	}
 	applicationFields := map[string]any{
 		"id":              target.ApplicationID,
@@ -599,48 +639,48 @@ func currentApplicationInput(
 	}
 	if target.OriginalSource != nil {
 		if target.OriginalSource.Validate() != nil {
-			return nil, ErrUnsupportedCurrentAgentStart
+			return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 		}
 		applicationFields["source_definition"] = target.OriginalSource
 	}
 	application, err := json.Marshal(applicationFields)
 	if err != nil {
-		return nil, ErrInvalidCurrentAgentStart
+		return nil, ReaderView{}, ErrInvalidCurrentAgentStart
 	}
 	// One decode serves both readers below. The projection already decoded
 	// this document once to build it; decoding it again per reader put three
 	// full UseNumber passes over the same bytes on every turn start.
 	version, err := decodeCurrentApplicationVersion(skills.versionDetails)
 	if err != nil {
-		return nil, ErrUnsupportedCurrentAgentStart
+		return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 	}
 	llm, err := currentApplicationRuntimeLLM(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	internalTools, err := currentRuntimeInternalTools(target.InternalTools)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	stepsLimit, err := currentApplicationStepsLimit(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	projectContext, err := currentFrozenProjectContext(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	modelContextLimits, err := currentFrozenModelContextLimits(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	modelReasoning, err := currentFrozenModelReasoning(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	summaryModel, err := currentFrozenSummaryModel(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	subagentPolicy, err := currentFrozenSubagentPolicy(version)
 	if err != nil {
@@ -652,7 +692,7 @@ func currentApplicationInput(
 		target.ChatHistory, target.ChatHistoryRefs,
 	)
 	if err != nil {
-		return nil, ErrUnsupportedCurrentAgentStart
+		return nil, ReaderView{}, ErrUnsupportedCurrentAgentStart
 	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
@@ -686,7 +726,7 @@ func currentApplicationInput(
 		input.StepsLimit = stepsLimit
 	}
 	input.ContextView = contextViewInput(view.Settings, modelContextLimits, input.ChatHistory, input.ChatHistoryRefs)
-	return input, nil
+	return input, view, nil
 }
 
 // currentApplicationStepsLimit lifts the authored step limit out of the frozen

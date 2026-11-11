@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/faults/logx"
 	"github.com/elitea-ng/elitea-platform/services/elitea-egress-proxy/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-egress-proxy/internal/config"
 	"github.com/elitea-ng/elitea-platform/services/elitea-egress-proxy/internal/proxy"
@@ -26,7 +27,9 @@ func main() {
 
 func run() int {
 	cfg, cfgErr := config.FromEnv(os.Getenv)
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	// The shared handler (FU-299): the same JSON lines and level as before,
+	// plus the cause chain, typed-fault fields and support_ref.
+	logger := slog.New(logx.Wrap(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}), nil))
 	slog.SetDefault(logger)
 	if cfgErr != nil {
 		logger.Error("egress_proxy.config_invalid", "error", cfgErr.Error())

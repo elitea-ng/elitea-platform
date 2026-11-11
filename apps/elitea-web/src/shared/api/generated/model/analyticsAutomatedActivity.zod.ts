@@ -46,7 +46,9 @@ export const AnalyticsAutomatedActivity = zod
   .object({
     trigger_origin: zod
       .string()
-      .describe("How the runs started. One of schedule, webhook or index."),
+      .describe(
+        "How the runs started. One of schedule, webhook, index or idle_compaction (an agent's idle compaction run, ADR-0050 decision 9b2).",
+      ),
     executions: zod.int(),
     users: zod.int().describe("The people the unattended runs executed as."),
     llm_calls: zod

@@ -224,6 +224,7 @@ const ICON_RENDERERS: Record<NotificationEventType, IconRenderer> = {
   reward_new_level: rewardNewLevelIcon,
   contributor_request_for_publish_approve: noIcon,
   run_finished: runFinishedIcon,
+  agent_heartbeat: successTips,
 };
 
 /**

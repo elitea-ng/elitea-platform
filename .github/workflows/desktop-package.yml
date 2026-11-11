@@ -135,10 +135,13 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # OFF UNTIL THE HOST BUILDS ON WINDOWS (#1828): local-tools and the host are Unix-only
-  # today (process groups, PTYs, the sandbox), so `tauri build` fails on windows-latest.
-  # #1828 sets the repository variable DESKTOP_WINDOWS_PACKAGE=true once it lands; the
-  # inputs (signing overlay, MSIX manifest) are tested now in windows-package.test.mjs.
+  # OFF UNTIL W2b.2 (#1699): the host and local-tools build and pass their tests on
+  # windows-latest since #1828 (ci-desktop.yml, `windows-host`). #1699 turns this job on
+  # (the repository variable DESKTOP_WINDOWS_PACKAGE=true) once `tauri build`, the
+  # sidecar and makeappx run green here; the inputs (signing overlay, MSIX manifest) are
+  # tested in windows-package.test.mjs. The MSI's Start Menu shortcut sets
+  # System.AppUserModel.ID to the brand's desktop identifier (Tauri's WiX template), the
+  # id the host's toasts use; the MSIX build reads `<PackageFamilyName>!App` (src/aumid.rs).
   #
   # An MSI (Tauri's WiX bundle: Intune, SCCM, `msiexec /i … /qn`) and an MSIX (makeappx:
   # the Store, Intune), the host, the sidecar, the MSI and the MSIX all signed with Azure

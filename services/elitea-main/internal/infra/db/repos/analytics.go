@@ -313,7 +313,7 @@ func (r *AnalyticsRepo) GetUsageSummary(ctx context.Context, params analytics.Qu
 
 	// Asked FIRST, for the reason agentExecutionColumn is: a statement that
 	// names an absent column fails at parse time and aborts this snapshot.
-	origins, err := triggerOriginReadable(ctx, tx)
+	origins, err := readOriginSources(ctx, tx)
 	if err != nil {
 		return analytics.UsageSummary{}, err
 	}
@@ -346,8 +346,8 @@ FROM gateway.llm_request_logs AS l` + completedCallWindow
 	if summary.TopUsers, err = userActivity(ctx, tx, id, params, topUsersLimit, human); err != nil {
 		return analytics.UsageSummary{}, err
 	}
-	if origins {
-		if summary.Automated, err = automatedActivity(ctx, tx, id, params); err != nil {
+	if origins.origins {
+		if summary.Automated, err = automatedActivity(ctx, tx, id, params, origins); err != nil {
 			return analytics.UsageSummary{}, err
 		}
 	}
@@ -386,7 +386,7 @@ func (r *AnalyticsRepo) GetUserActivity(ctx context.Context, params analytics.Qu
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	origins, err := triggerOriginReadable(ctx, tx)
+	origins, err := readOriginSources(ctx, tx)
 	if err != nil {
 		return nil, false, err
 	}

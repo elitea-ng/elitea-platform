@@ -186,7 +186,19 @@ message AgentExecutionInputV1 {
   // question is in its history). Workers are upgraded before Main, because
   // a worker from an earlier release refuses this tag.
   optional string current_message_id = 75;
-  // Field 76 is claimed by #1826.
+  // #1826 (ADR-0050 decision 9d): the agent memory entries Main recalled
+  // into this turn's instructions, in the order shown, at most 50. The
+  // instructions show each one with a `[memory N, ...]` mark, N its
+  // entry_id, so a `spawn_agent` brief can name it in
+  // `context.memory_entries`; the worker then passes the content stored
+  // here, never the model's text. Main recalls an entry about a person only
+  // while that person is in the conversation. EMPTY: no agent memory
+  // recalled, a pipeline, a regeneration or a continuation. An input
+  // derived from a frozen one (a fan-out wake) keeps it unchanged, since
+  // its frozen instructions still show the same entries. Workers are
+  // upgraded before Main, because a worker from an earlier release refuses
+  // this tag.
+  repeated RecalledMemoryEntryV1 recalled_memory = 76;
   // ADR-0050 decision 4 (#1824, #1825): how the run's sub-agents may nest
   // and which other models they may run on. Main freezes the models from
   // the authorized project catalogue when the agent can start sub-agents,
@@ -254,7 +266,8 @@ message AgentToolLimitV1 {
 // What the turn-taking engine tells the reader about the floor
 // (ADR-0050 decisions 7c and 7d).
 message AgentFloorV1 {
-  // What started this turn: human_message or agent_mention.
+  // What started this turn: human_message, agent_mention or heartbeat (a
+  // proactive agent's act, ADR-0050 decision 2).
   string cause = 1;
   // The other agents of the conversation the reader may hand the floor to,
   // at most 16. Empty: no hand_floor tool.
@@ -295,6 +308,15 @@ message ContextViewV1 {
   // length). The worker refuses a view whose digest does not match.
   string digest = 3;
   reserved 4 to 15;
+}
+
+// One agent memory entry recalled into a turn (#1826).
+message RecalledMemoryEntryV1 {
+  // The entry id, a positive decimal number, as the recall tool gives it.
+  string entry_id = 1;
+  // The entry's text as stored, at most 2048 bytes.
+  string content = 2;
+  reserved 3 to 15;
 }
 
 // Where one `chat_history` entry came from (ADR-0050 decision 9c).

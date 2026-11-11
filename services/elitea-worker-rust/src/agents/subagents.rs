@@ -26,9 +26,15 @@
 //! into the execution's sub-agent ledger, which the settlement path reports
 //! to Main (`ReportEphemeralAgents`).
 //!
-//! A child's own tool calls are not projected to the transcript on this
-//! host: the parent's `spawn_agent` and `wait_agent` calls and their results
-//! are. Children stop with the run (the toolset that owns them is dropped
+//! # The live lane (#1823)
+//!
+//! Each child's start (with its display name and avatar key), its own tool
+//! calls and results, its text and its end also go to the ledger's
+//! [`super::subagent_lane::SubAgentLane`], which the run's event loop
+//! projects as `agent_subagent` frames on the run's own output stream: the
+//! lane a client shows under the `spawn_agent` row. They are not trace steps
+//! of the parent: the parent's `spawn_agent` and `wait_agent` calls and
+//! their results are. Children stop with the run (the toolset that owns them is dropped
 //! with the agent), so a turn that pauses for a person and resumes under a
 //! new claim starts with none.
 //!
@@ -89,7 +95,9 @@ pub(crate) struct BriefView {
     pub(crate) history: Vec<QuotableMessage>,
     /// This turn's input attachments: id and display name.
     pub(crate) attachments: Vec<(String, String)>,
-    /// What `recall` returned this turn; `None` without agent memory.
+    /// The memory entries given this turn: what Main recalled into the
+    /// instructions (#1826) and what `recall` returned, less what `forget`
+    /// deleted; `None` without agent memory.
     pub(crate) recalled: Option<Arc<super::agent_memory_tools::RecalledEntries>>,
 }
 
@@ -282,15 +290,22 @@ impl SubAgentHost for WorkerSubAgents {
     fn started(&self, child: &ChildIdentity) {
         self.ledger
             .started(child, crate::protocol::run_steps::now_unix_ms());
+        self.ledger.lane().started(child);
     }
 
     fn resumed(&self, child: &ChildIdentity) {
         self.ledger.resumed(child);
+        self.ledger.lane().resumed(child);
+    }
+
+    fn event(&self, child: &ChildIdentity, event: &adk_rust::Event) {
+        self.ledger.lane().event(child, event);
     }
 
     fn finished(&self, child: &ChildIdentity, report: &ChildReport) {
         self.ledger
             .finished(child, report, crate::protocol::run_steps::now_unix_ms());
+        self.ledger.lane().finished(child, report);
     }
 }
 

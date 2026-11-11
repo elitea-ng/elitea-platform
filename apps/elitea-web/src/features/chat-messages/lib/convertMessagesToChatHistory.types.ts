@@ -1,4 +1,5 @@
 import type { MessageClass } from '@elitea/client-core/conversation';
+import type { CloudSubAgentLane } from '@elitea/client-core/stream';
 
 import type { GoalCheckView, RunBriefView } from '@/entities/run-brief';
 import type { NodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
@@ -22,6 +23,12 @@ export interface ChatMessage {
   readonly skippedCapabilities?: unknown;
   /** Persisted `meta.grounding` (ADR-0043 decision 5): the grounding indicator of a citing agent's answer. Live turns carry it in `responseMetadata`. */
   readonly grounding?: unknown;
+  /**
+   * Client contract 1.48 (ADR-0050 decision 4): the temporary sub-agents a
+   * cloud answer started, one lane each. Live turns fold `agent_subagent`
+   * frames into it; a reload reads `meta.subagents_v1`.
+   */
+  readonly subAgents?: readonly CloudSubAgentLane[] | undefined;
   readonly resultChunk?: unknown;
   readonly assembledResult?: string | undefined;
   readonly continuedResultPrefix?: string | undefined;

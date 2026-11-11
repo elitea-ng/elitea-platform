@@ -45,7 +45,7 @@ func idleTestTarget(t *testing.T, mutate func(*runtimev1.AgentExecutionInputV1))
 		Turn: CurrentIdleCompactionTurn{ProjectID: 1, ActorUserID: 8, ConversationUUID: "10000000-0000-4000-8000-000000000001",
 			ResponseMessageID: "10000000-0000-4000-8000-000000000002", ParticipantID: 5,
 			SourceExecutionID: strings.Repeat("b", 32), SourceGeneration: 1, ExecutionGeneration: wakeTestGeneration,
-			ThreadID: "thread-1", ApplicationID: 7},
+			ThreadID: "thread-1", ApplicationID: 7, ApplicationVersionID: 9},
 		TenantID: "1", ResourceProjectID: "1", ProjectionProjectID: "1", ActorID: "8",
 		CapabilityID: executiondomain.AgentApplicationCapability, FrozenInput: encoded, FrozenInputDigest: digest[:],
 		RequestStarted: idleTestStarted, CacheTTL: 5 * time.Minute,
@@ -313,6 +313,14 @@ func TestSubmitRefusesAMalformedIdleCompactionTurn(t *testing.T) {
 		"with a continue":  func(r *SubmitRequest) { r.CurrentContinueTurn = &CurrentContinueTurn{} },
 		"adhoc capability": func(r *SubmitRequest) { r.CapabilityID = executiondomain.AgentAdhocCapability },
 		"invalid turn":     func(r *SubmitRequest) { r.CurrentIdleCompactionTurn.SourceExecutionID = "nope" },
+		// Issue 1776: the version and the release are the source's.
+		"no version": func(r *SubmitRequest) { r.CurrentIdleCompactionTurn.ApplicationVersionID = 0 },
+		"another release": func(r *SubmitRequest) {
+			r.Release = &ReleaseRun{ID: 3, ApplicationVersionID: 9}
+		},
+		"release not on the turn": func(r *SubmitRequest) {
+			r.CurrentIdleCompactionTurn.Release = &ReleaseRun{ID: 3, ApplicationVersionID: 9}
+		},
 	} {
 		request := base
 		request.CurrentIdleCompactionTurn = base.CurrentIdleCompactionTurn.Clone()

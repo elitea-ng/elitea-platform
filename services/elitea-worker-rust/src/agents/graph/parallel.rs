@@ -256,6 +256,9 @@ pub(crate) struct ParallelChildRequest<'a> {
     pub(crate) branch: &'a ParallelBranchDefinition,
     pub(crate) ordinal: usize,
     pub(crate) input_digest: &'a [u8; 32],
+    /// The owned node runs no application subgraph (State Modifier, Code), so
+    /// an empty checkpoint family is its admitted family (R3).
+    pub(crate) path_free: bool,
 }
 
 /// An activated child writer and the latest checkpoint it held at activation.
@@ -384,6 +387,25 @@ pub(crate) trait ParallelCheckpointAuthority:
 pub(crate) trait ParallelBranchGraphFactory: Send + Sync {
     fn validate_branch(&self, branch: &ParallelBranchDefinition) -> Result<(), GraphError>;
 
+    /// Whether `branch`'s owned node runs an application subgraph (an Agent
+    /// or an inline LLM node) and so must have an admitted checkpoint family
+    /// (R3). Default: yes, fail closed.
+    fn requires_application_family(&self, _branch: &ParallelBranchDefinition) -> bool {
+        true
+    }
+
+    /// W3-2 (D3): admit a first activation of `branches` against the run's
+    /// deadline, before it freezes. Only Code children are counted. Default:
+    /// nothing to admit.
+    fn admit_activation(
+        &self,
+        _branches: &[ParallelBranchDefinition],
+        _concurrency: u32,
+        _node_id: &str,
+    ) -> Result<(), GraphError> {
+        Ok(())
+    }
+
     fn owned_definition_digest(
         &self,
         branch: &ParallelBranchDefinition,
@@ -498,6 +520,8 @@ pub(crate) struct PreparedParallelBranch {
     thread_id: String,
     admitted_threads: BTreeSet<String>,
     node_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// The frozen occurrence's child count (W3-2).
+    family_size: usize,
     /// What the branch's own checkpoint already proves; `None` must run.
     replay: Option<ParallelBranchOutcome>,
 }
@@ -513,6 +537,7 @@ impl PreparedParallelBranch {
             thread_id: self.thread_id.clone(),
             admitted_threads: self.admitted_threads.clone(),
             node_recovery: self.node_recovery.clone(),
+            family_size: self.family_size,
             replay: None,
         }
     }
@@ -605,6 +630,33 @@ pub(crate) struct AdkParallelBranchRuntime {
 }
 
 impl AdkParallelBranchRuntime {
+    /// B2 (FU-299): one operator line per failed child, so a fan-out failure
+    /// can be traced to the item that caused it. Only registered codes, the
+    /// code's fixed sentence, identifiers and [`safe_graph_cause`] are
+    /// written: never state, inputs, outputs or error text.
+    fn log_child_failure(
+        &self,
+        activation: &ParallelActivation,
+        item: &str,
+        child_thread: &str,
+        failure: &ChildFailure,
+        error: &GraphError,
+    ) {
+        let execution_id = self
+            .checkpoints
+            .child_origin(activation)
+            .map(|origin| origin.execution_id)
+            .unwrap_or_default();
+        write_child_failure_line(
+            &execution_id,
+            &activation.node_id,
+            item,
+            child_thread,
+            failure,
+            error,
+        );
+    }
+
     pub(crate) fn new(
         checkpoints: Arc<dyn ParallelChildCheckpointerFactory>,
         graphs: Arc<dyn ParallelBranchGraphFactory>,
@@ -677,9 +729,16 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
         }
         let inputs = self.project_inputs(activation, source, &branches, &context.state)?;
         let (origin, threads) = self.mint_lineage(activation, &branches, &inputs)?;
+        // W3-2 D3: the Code items must fit the run's deadline before anything
+        // is frozen; a restored occurrence is never re-admitted.
+        let node_id = activation.node_id.clone();
+        let concurrency = source.max_concurrency();
         let occurrence = self
             .parent
-            .freeze(activation, context, inputs, origin, threads)
+            .freeze(activation, context, inputs, origin, threads, || {
+                self.graphs
+                    .admit_activation(&branches, concurrency, &node_id)
+            })
             .await?;
         self.restore_branches(
             activation,
@@ -707,6 +766,7 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
             Arc::clone(&branch.store),
             branch.thread_id.clone(),
         ));
+        let (branch_key, child_thread) = (branch.branch.id().to_owned(), branch.thread_id.clone());
         let result = self
             .invoke_inner(activation, branch, Arc::clone(&checkpoint), context)
             .await;
@@ -723,8 +783,10 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
                     .flatten()
                     .filter(|saved| matches!(saved.receipt, Some(BranchReceipt::Failed { .. })))
                     .map(|saved| saved.checkpoint_id);
+                let failure = branch_failure_of(&error);
+                self.log_child_failure(activation, &branch_key, &child_thread, &failure, &error);
                 ParallelBranchOutcome::Failed {
-                    failure: branch_failure_of(&error),
+                    failure,
                     checkpoint_id,
                 }
             }
@@ -908,6 +970,7 @@ impl AdkParallelBranchRuntime {
                 branch,
                 ordinal: input.ordinal,
                 input_digest: &input.input_digest,
+                path_free: !self.graphs.requires_application_family(branch),
             })
             .collect::<Vec<_>>();
         // One batched activation and one batched receipt read for every child.
@@ -962,6 +1025,7 @@ impl AdkParallelBranchRuntime {
                 thread_id: child.thread_id,
                 admitted_threads: child.admitted_threads,
                 node_recovery: child.node_recovery,
+                family_size: inputs.len(),
                 replay,
             });
         }
@@ -990,6 +1054,7 @@ impl AdkParallelBranchRuntime {
                     .cloned(),
             )
             .with_node_recovery(branch.node_recovery.clone())
+            .with_family_size(branch.family_size)
             .with_static_after_checkpoints(
                 branch
                     .input
@@ -1988,10 +2053,7 @@ impl DurableParallelNode {
             ));
         }
         let mut activation = ParallelActivation::from_context(&self.source, context)?;
-        let prepared = self
-            .runtime
-            .prepare_source(&mut activation, &self.source, context)
-            .await?;
+        let prepared = self.prepare_reporting(&mut activation, context).await?;
         self.check_running(context)?;
         let stop = Arc::new(FanoutStop::default());
         let cancel_signal = Arc::new(AtomicBool::new(false));
@@ -2074,6 +2136,31 @@ impl DurableParallelNode {
                 ),
             )),
         }
+    }
+
+    /// Prepare (and on a first activation freeze) the children. A refusal
+    /// of W3-2 D3 ends the run with the registered fan-out deadline failure;
+    /// its one WARN fault line is already written.
+    async fn prepare_reporting(
+        &self,
+        activation: &mut ParallelActivation,
+        context: &NodeContext,
+    ) -> Result<Vec<PreparedParallelBranch>, GraphError> {
+        let prepared = self
+            .runtime
+            .prepare_source(activation, &self.source, context)
+            .await;
+        if let Err(error) = &prepared
+            && is_fanout_deadline_refusal(error)
+            && let Some(events) = &self.node_events
+        {
+            let _ = events
+                .send_execution_failure(
+                    crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE,
+                )
+                .await;
+        }
+        prepared
     }
 
     fn frames(
@@ -2374,6 +2461,12 @@ fn branch_failure(code: &str) -> ChildFailure {
                 "The branch's pipeline uses a tool that changes data directly, which a \
                  parallel branch cannot run yet. It did not run."
             }
+            crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE => {
+                "The Code item could not start: too little time was left before the run's deadline."
+            }
+            super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE => {
+                super::fanout_code_child::CHILD_EFFECT_UNKNOWN_MESSAGE
+            }
             _ => "The branch failed.",
         },
     )
@@ -2599,6 +2692,15 @@ fn graph_error_code(error: &GraphError) -> &'static str {
         if names(super::direct_tool::EFFECT_WRITER_UNAVAILABLE_CODE) {
             return BRANCH_TOOL_UNAVAILABLE_CODE;
         }
+        // N1 (W3-2): a Code child refused by its own per-attempt deadline
+        // check after the activation was admitted names that refusal.
+        if names(crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE) {
+            return crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE;
+        }
+        // D1: a Code child that may have started and has no owner proof.
+        if names(super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE) {
+            return super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE;
+        }
     }
     match error {
         GraphError::InvalidGraph(_) => "graph.invalid",
@@ -2644,6 +2746,86 @@ fn unwrap_node_failures(mut message: &str) -> &str {
     message
 }
 
+/// The one operator line of a failed fan-out child (B2, R7).
+pub(super) fn write_child_failure_line(
+    execution_id: &str,
+    node_id: &str,
+    item: &str,
+    child_thread: &str,
+    failure: &ChildFailure,
+    error: &GraphError,
+) {
+    let cause =
+        serde_json::to_string(&safe_graph_cause(error)).unwrap_or_else(|_| String::from("[]"));
+    elitea_faults::fault!(
+        tracing::Level::WARN,
+        code = elitea_faults::codes::GRAPH_FANOUT_CHILD_FAILED,
+        event = "fanout_child_failed",
+        member_code = failure.code.as_str(),
+        member_sentence = failure.message_safe.as_str(),
+        cause = cause.as_str(),
+        execution_id = execution_id,
+        support_ref = execution_id,
+        node_id = node_id,
+        item = item,
+        item_ref = elitea_agent_runtime::graph::fanout::plan::support_ref_for(child_thread)
+    );
+}
+
+/// A child failure's cause chain, safe by construction: the error's kind,
+/// each node id it passed through (pipeline identifiers, never values), and
+/// the innermost message's leading code only when the FU-299 registry knows
+/// it. Free text is never copied. Bounded like a FU-299 chain.
+pub(super) fn safe_graph_cause(error: &GraphError) -> Vec<String> {
+    let mut chain = vec![graph_error_code(error).to_owned()];
+    let mut message = match error {
+        GraphError::NodeExecutionFailed { node, message } => {
+            chain.push(format!("node {node}"));
+            message.as_str()
+        }
+        GraphError::CheckpointError(message) | GraphError::Other(message) => message.as_str(),
+        _ => "",
+    };
+    while let Some(rest) = message.strip_prefix("Node '")
+        && let Some((node, inner)) = rest.split_once("' execution failed: ")
+        && !node.contains('\'')
+        && chain.len() < elitea_faults::MAX_CAUSES - 1
+    {
+        let element = format!("node {node}");
+        if chain.last() != Some(&element) {
+            chain.push(element);
+        }
+        message = inner;
+    }
+    let message = message
+        .strip_prefix("Checkpoint error: ")
+        .unwrap_or(message);
+    if let Some(code) = leading_dotted_code(message)
+        && chain.first().map(String::as_str) != Some(code)
+    {
+        chain.push(code.to_owned());
+    }
+    chain.truncate(elitea_faults::MAX_CAUSES);
+    for element in &mut chain {
+        if element.len() > 128 {
+            let mut end = 128;
+            while !element.is_char_boundary(end) {
+                end -= 1;
+            }
+            element.truncate(end);
+        }
+    }
+    chain
+}
+
+/// The FU-299 registered code at the start of `message`, ended by `:` or the
+/// end of the text (R7). A dotted prefix the registry does not know (a host
+/// name such as `api.openai.com:`, a path) is never copied.
+fn leading_dotted_code(message: &str) -> Option<&'static str> {
+    let end = message.find(':').unwrap_or(message.len());
+    elitea_faults::Code::lookup(&message[..end]).map(elitea_faults::Code::as_str)
+}
+
 fn valid_failure_code(code: &str) -> bool {
     matches!(
         code,
@@ -2668,7 +2850,23 @@ fn valid_failure_code(code: &str) -> bool {
             | BRANCH_CREDENTIAL_UNAVAILABLE_CODE
             | BRANCH_AGENT_PAUSE_CODE
             | BRANCH_TOOL_UNAVAILABLE_CODE
+            | crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE
+            | super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE
     )
+}
+
+/// The activation refusal of W3-2 D3: the registered code and sentence.
+pub(super) fn fanout_deadline_refusal() -> GraphError {
+    parallel_error(
+        crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE,
+        crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_MESSAGE,
+    )
+}
+
+fn is_fanout_deadline_refusal(error: &GraphError) -> bool {
+    matches!(error, GraphError::NodeExecutionFailed { message, .. }
+        if message.strip_prefix(crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE)
+            .is_some_and(|rest| rest.starts_with(": ")))
 }
 
 pub(super) fn parallel_error(code: &str, message: &str) -> GraphError {

@@ -48,6 +48,29 @@ func TestAuthorizeChildAgentAcceptsOnlyTheTurnsOwnNestedAgents(t *testing.T) {
 	}
 }
 
+// ADR-0050 decision 7f (issue 1806): a turn that answers for a cloud agent
+// of a desktop thread relays that agent, and only that agent, to the cloud.
+func TestAuthorizeChildAgentRelaysOnlyACloudAgentsOwnVersion(t *testing.T) {
+	t.Parallel()
+	service := clientRemoteToolService(t, guardrails.Policy{})
+	own := ChildAgentAuthorization{
+		ProjectID: 90106, ActorID: 11, TurnApplicationID: 1, TurnVersionID: 2,
+		ApplicationID: 1, VersionID: 2, TurnIsCloudAgent: true,
+	}
+	_, err := service.AuthorizeChildAgent(t.Context(), own)
+	require.NoError(t, err)
+
+	nested := own
+	nested.ApplicationID, nested.VersionID = 3, 4
+	_, err = service.AuthorizeChildAgent(t.Context(), nested)
+	require.ErrorIs(t, err, ErrChildAgentNotInAgent, "a cloud agent's turn relays no nested agent")
+
+	local := own
+	local.TurnIsCloudAgent = false
+	_, err = service.AuthorizeChildAgent(t.Context(), local)
+	require.ErrorIs(t, err, ErrChildAgentNotInAgent, "a local turn does not run its own agent as a child")
+}
+
 // A pipeline never runs as the child of a local turn, even one the turn's
 // agent nests: the desktop refuses it, and so does the server.
 func TestAuthorizeChildAgentRefusesANestedPipeline(t *testing.T) {

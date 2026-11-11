@@ -3,13 +3,16 @@ import { routeTargetsOf } from './graphAdmission.nodeReads';
 import type { GraphAdmissionIssue } from './graphAdmission.types';
 import { fixedParallelWorkerReferences } from './graphExtensionReferenceRename.helpers';
 import { extensionStrings } from './graphExtensions.helpers';
+import { FANOUT_CHILD_FAMILIES, ROUTER_CHILD_TEXT } from './graphExtensions.types';
 import {
   extensionValidator, validExtensionChannel, validateDeclaredExtensionChannel, validateDistinctExtensionNames,
   validateExtensionEnum, validateExtensionInteger, validateExtensionList, validateExtensionObject, type ExtensionValidator,
 } from './graphExtensionValidation.helpers';
 
-/** The node types a Map item runs on the shared fan-out adapter (T-2A3). */
-export const MAP_WORKER_TYPES: readonly string[] = ['state_modifier', 'agent', 'llm'];
+/** The node types a Map item runs on the shared fan-out adapter (T-2A3, W3-2). */
+export const MAP_WORKER_TYPES: readonly string[] = FANOUT_CHILD_FAMILIES.mapWorker;
+/** The per-activation child bound (contract `max_children`, R9). */
+export const MAP_MAX_ITEMS = 64;
 const isMapWorker = (node: YamlPipelineNode): boolean => MAP_WORKER_TYPES.includes(node.type ?? '');
 
 /** Map On Error and Join (v2), as a fixed Parallel's. */
@@ -69,8 +72,12 @@ function mapWorkerBindings(document: YamlPipelineDocument, node: YamlPipelineNod
 }
 function mapWorkerIssues(document: YamlPipelineDocument, node: YamlPipelineNode, check: ExtensionValidator): void {
   const worker = (document.nodes ?? []).find((entry) => entry.id === node['worker']);
+  if (worker?.type === 'router' && worker.id !== node.id) {
+    check.issue('worker', `Node "${worker.id}" is a "router" node, but ${ROUTER_CHILD_TEXT}.`);
+    return;
+  }
   if (!worker || worker.id === node.id || !isMapWorker(worker)) {
-    check.issue('worker', 'Select one declared State Modifier, LLM node or verified saved Agent.');
+    check.issue('worker', 'Select one declared State Modifier, LLM node, Code node or verified saved Agent.');
     return;
   }
   mapWorkerTopology(document, worker, check);
@@ -109,7 +116,7 @@ function mapIssues(document: YamlPipelineDocument, node: YamlPipelineNode): read
     values.forEach((value, index) => validateDeclaredExtensionChannel(document, value, `${field}[${String(index)}]`, undefined, check));
     validateDistinctExtensionNames(values, field, check);
   }
-  validateExtensionInteger(node['max_items'], 'max_items', 64, check);
+  validateExtensionInteger(node['max_items'], 'max_items', MAP_MAX_ITEMS, check);
   validateExtensionInteger(node['max_concurrency'], 'max_concurrency', 8, check);
   if (node.transition !== undefined && node.transition !== null && typeof node.transition !== 'string') {
     check.issue('transition', 'Declare a node id, END, or null.');

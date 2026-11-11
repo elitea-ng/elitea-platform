@@ -148,6 +148,9 @@ func governedApplication(request SubmitRequest) (int64, int64) {
 		return request.CurrentRegenerateTurn.ApplicationID, request.CurrentRegenerateTurn.ApplicationVersionID
 	case request.CurrentContinueTurn != nil:
 		return request.CurrentContinueTurn.ApplicationID, request.CurrentContinueTurn.ApplicationVersionID
+	case request.CurrentIdleCompactionTurn != nil:
+		// An idle compaction runs the source's version (issue 1776).
+		return request.CurrentIdleCompactionTurn.ApplicationID, request.CurrentIdleCompactionTurn.ApplicationVersionID
 	}
 	return 0, 0
 }

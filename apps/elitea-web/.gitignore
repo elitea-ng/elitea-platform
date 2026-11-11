@@ -6,6 +6,7 @@ coverage/
 coverage-shards/
 coverage-scripts/
 test-results/
+test-results-desktop/
 
 # per-fixture-case configs generated (and normally cleaned) by
 # scripts/check-gates-selftest.mjs — never commit a crash leftover
@@ -15,6 +16,7 @@ test-results/
 .playwright-state/
 playwright-results/
 playwright-report/
+playwright-report-desktop/
 
 # A build artefact: the legacy DeepWiki reducer, sliced out of apps/deepwiki-ui
 # by scripts/deepwiki-oracle/extract-jsx-reducer.mjs. Regenerated on demand.

@@ -32,9 +32,9 @@ import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 
 import { lanesOf } from '../model/subAgentEvents';
 import { isTerminalPhase, type TranscriptItem, type TurnView } from '../model/turnReducer';
-import { ContinuedMarker, StopNotices } from './ChainNotices';
+import { AnsweringAgent, ContinuedMarker, StopNotices } from './ChainNotices';
 import { SteerMessage } from './SteerMessage';
-import { SubAgentLanes } from './SubAgentLanes';
+import { SubAgentLanes, type SubAgentAvatar } from './SubAgentLanes';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolProcessOutput } from './ToolProcessOutput';
 
@@ -210,6 +210,8 @@ export interface TurnTranscriptProps {
   onContinue?: () => void;
   /** The host started this turn by itself (an unattended chain), the n-th time: its marker shows first, in place of the person's prompt. */
   continuation?: number | undefined;
+  /** Each sub-agent lane's avatar (the cloud transcript's temporary participants); absent: none. */
+  subAgentAvatar?: SubAgentAvatar | undefined;
 }
 
 /**
@@ -268,11 +270,12 @@ function RetryNotice({ view }: { view: TurnView }): React.JSX.Element | null {
   );
 }
 
-export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, onRetryTurn, onContinue, continuation }: TurnTranscriptProps): React.JSX.Element {
+export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, onRetryTurn, onContinue, continuation, subAgentAvatar }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <ContinuedMarker index={continuation} resumed={view.resumed === true} />
+      <AnsweringAgent agent={view.agent} />
       <RunBriefCard value={view.runBrief} />
       {view.items.map((item) =>
         item.type === 'text' ? (
@@ -289,7 +292,7 @@ export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, o
         ) : (
           <Box key={item.key}>
             <ToolRow item={item} />
-            <SubAgentLanes lanes={lanesOf(view.subAgents, item.callId)} ToolRow={ToolRow} />
+            <SubAgentLanes lanes={lanesOf(view.subAgents, item.callId)} ToolRow={ToolRow} Avatar={subAgentAvatar} />
           </Box>
         ),
       )}

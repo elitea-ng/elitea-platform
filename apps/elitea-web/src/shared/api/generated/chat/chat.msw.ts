@@ -45,6 +45,7 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
+import { LocalTurnExecutor } from "../model";
 import type {
   AgentTeam,
   AgentTeamList,
@@ -72,6 +73,7 @@ import type {
   LocalTurnStarted,
   MemoryEntry,
   MemoryEntryList,
+  MessageContextView,
   MessageFeedbackSummary,
   MessageTraceListing,
   MessageTraceStepDetail,
@@ -1182,6 +1184,85 @@ export const getListConversationMessagesResponseMock = (
           },
           undefined,
         ]),
+        subagents_v1: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 24 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            agent_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            parent_call_id: faker.string.alpha({
+              length: { min: 10, max: 20 },
+            }),
+            ordinal: faker.number.int({ min: 1 }),
+            label: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 120 } }),
+              undefined,
+            ]),
+            display_name: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 120 } }),
+              undefined,
+            ]),
+            avatar: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 120 } }),
+              undefined,
+            ]),
+            status: faker.helpers.arrayElement([
+              "running",
+              "completed",
+              "failed",
+              "budget_exhausted",
+              "cancelled",
+            ] as const),
+            items: Array.from(
+              { length: faker.number.int({ min: 1, max: 96 }) },
+              (_, i) => i + 1,
+            ).map(() => ({
+              type: faker.helpers.arrayElement(["tool", "text"] as const),
+              call_id: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              tool: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 120 } }),
+                undefined,
+              ]),
+              args_summary: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 240 } }),
+                undefined,
+              ]),
+              ok: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+              summary: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 240 } }),
+                undefined,
+              ]),
+              text: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 600 } }),
+                undefined,
+              ]),
+            })),
+            steps: faker.helpers.arrayElement([faker.number.int(), undefined]),
+            input_tokens: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+            output_tokens: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+            result: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 2000 } }),
+              undefined,
+            ]),
+            error: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+          })),
+          undefined,
+        ]),
       },
       undefined,
     ]),
@@ -1305,6 +1386,29 @@ export const getStartLocalTurnResponseMock = (
   ]),
   computer_use: faker.helpers.arrayElement([
     { upload_screenshots: faker.datatype.boolean() },
+    undefined,
+  ]),
+  executor: faker.helpers.arrayElement([
+    faker.helpers.arrayElement(Object.values(LocalTurnExecutor)),
+    undefined,
+  ]),
+  floor: faker.helpers.arrayElement([
+    {
+      question_id: faker.string.uuid(),
+      position: faker.number.int({ min: 0 }),
+      targets: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.number.int()),
+      agents: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        participant_id: faker.number.int(),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        executor: faker.helpers.arrayElement(Object.values(LocalTurnExecutor)),
+      })),
+    },
     undefined,
   ]),
   ...overrideResponse,
@@ -2788,6 +2892,58 @@ export const getDeleteMessageFeedbackResponseMock = (
       null,
     ]),
     undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetMessageContextViewResponseMock = (
+  overrideResponse: Partial<Extract<MessageContextView, object>> = {},
+): MessageContextView => ({
+  message_id: faker.string.uuid(),
+  reader_participant_id: faker.number.int(),
+  reader_name: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  history: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  include_side_talk: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  participant_history: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  window_tokens: faker.number.int(),
+  digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  recorded_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  entries: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    message_id: faker.string.uuid(),
+    reason: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    author_name: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    author_kind: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    created_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+  })),
+  compaction: faker.helpers.arrayElement([
+    {
+      phase: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      estimated_input_tokens: faker.number.int(),
+      usable_input_tokens: faker.number.int(),
+      compaction_trigger_tokens: faker.number.int(),
+    },
+    null,
   ]),
   ...overrideResponse,
 });
@@ -4848,6 +5004,32 @@ export const getDeleteMessageFeedbackMockHandler = (
     options,
   );
 };
+
+export const getGetMessageContextViewMockHandler = (
+  overrideResponse?:
+    | MessageContextView
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MessageContextView> | MessageContextView),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/message_context_view/prompt_lib/:projectId/:messageId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetMessageContextViewResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getChatMock = () => [
   getGetSupportAssistantConfigMockHandler(),
   getListSupportConversationsMockHandler(),
@@ -4928,4 +5110,5 @@ export const getChatMock = () => [
   getGetMessageFeedbackMockHandler(),
   getSetMessageFeedbackMockHandler(),
   getDeleteMessageFeedbackMockHandler(),
+  getGetMessageContextViewMockHandler(),
 ];

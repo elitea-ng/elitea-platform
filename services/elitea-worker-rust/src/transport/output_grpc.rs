@@ -116,6 +116,15 @@ impl std::error::Error for OutputGrpcError {
     }
 }
 
+/// FU-299: data-free Display: `&'static str` messages, or the data-free
+/// Display of `OutputSessionError` and `SpoolError` (whose `io::Error` source
+/// is never formatted here; the chain renders it by kind).
+impl elitea_faults::SafeCause for OutputGrpcError {
+    fn safe_cause(&self) -> String {
+        format!("output: {self}")
+    }
+}
+
 impl From<OutputSessionError> for OutputGrpcError {
     fn from(value: OutputSessionError) -> Self {
         Self::Protocol(value)

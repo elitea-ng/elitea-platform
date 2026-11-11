@@ -8,9 +8,9 @@
 //! environment, and a wall-clock limit that kills the process group. A crash
 //! or a timeout is a tool error; the host keeps running.
 
+use crate::sys::os::CommandExt as _;
 use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -113,12 +113,10 @@ impl<'a> SidecarExtractor<'a> {
         let mut child = command.spawn().map_err(|error| {
             ExtractFailure::Failed(format!("cannot start the document extractor: {error}"))
         })?;
-        let group = i32::try_from(child.id())
-            .ok()
-            .and_then(rustix::process::Pid::from_raw);
+        let group = crate::sys::process::Group::of_child(&child);
         let kill_group = || {
-            if let Some(group) = group {
-                let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+            if let Some(group) = &group {
+                group.signal(crate::sys::process::Signal::KILL);
             }
         };
         let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {

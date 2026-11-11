@@ -81,6 +81,60 @@ func TestStartPassesTheTokenPrincipalAndAnswersTheRecall(t *testing.T) {
 	}
 }
 
+// ADR-0050 decision 7f (contract 1.47): the start passes the address and
+// the later turn to the use case, and answers the routed order and where
+// the agent runs.
+func TestStartPassesTheFloorAndAnswersTheRoutedOrder(t *testing.T) {
+	useCase := &floorUseCase{}
+	h := &handler{useCase: useCase}
+	response := serve(t, h.start, tokenUser(), startURL, StartPath,
+		`{"question_id":"11111111-2222-4333-8444-555555555555","user_input":"hi","participant_id":3,`+
+			`"addressed_to":[3,4],"floor_turn":{"question_id":"11111111-2222-4333-8444-666666666666","position":1}}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", response.Code, response.Body)
+	}
+	if len(useCase.started.AddressedTo) != 2 || useCase.started.AddressedTo[1] != 4 ||
+		useCase.started.FloorTurn == nil || useCase.started.FloorTurn.Position != 1 ||
+		useCase.started.FloorTurn.QuestionID != "11111111-2222-4333-8444-666666666666" {
+		t.Fatalf("start request = %+v", useCase.started)
+	}
+	var body struct {
+		Executor string `json:"executor"`
+		Floor    struct {
+			QuestionID string  `json:"question_id"`
+			Position   int     `json:"position"`
+			Targets    []int64 `json:"targets"`
+			Agents     []struct {
+				ParticipantID int64  `json:"participant_id"`
+				Name          string `json:"name"`
+				Executor      string `json:"executor"`
+			} `json:"agents"`
+		} `json:"floor"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Executor != "cloud" || body.Floor.Position != 1 || len(body.Floor.Targets) != 2 ||
+		len(body.Floor.Agents) != 2 || body.Floor.Agents[1].Executor != "cloud" || body.Floor.Agents[0].Name != "Coder" {
+		t.Fatalf("answer = %s", response.Body)
+	}
+}
+
+type floorUseCase struct{ fakeUseCase }
+
+func (f *floorUseCase) Start(ctx context.Context, request localturn.StartRequest) (localturn.StartOutcome, error) {
+	outcome, err := f.fakeUseCase.Start(ctx, request)
+	outcome.Executor = localturn.ExecutorCloud
+	outcome.Floor = &localturn.FloorStarted{
+		QuestionID: "11111111-2222-4333-8444-666666666666", Position: 1, Targets: []int64{3, 4},
+		Agents: []localturn.FloorAgent{
+			{ParticipantID: 3, Name: "Coder", Executor: localturn.ExecutorLocal},
+			{ParticipantID: 4, Name: "Reviewer", Executor: localturn.ExecutorCloud},
+		},
+	}
+	return outcome, err
+}
+
 func TestStartRefusesABrowserSession(t *testing.T) {
 	h := &handler{useCase: &fakeUseCase{}}
 	session := &auth.User{ID: "7", UserID: "7", AuthType: "session"}
@@ -105,6 +159,10 @@ func TestUseCaseErrorsMapToTypedAnswers(t *testing.T) {
 		{localturn.ErrExpired, http.StatusGone, "local_turn_expired"},
 		{localturn.ErrThreadExecutorIsCloud, http.StatusConflict, "thread_executor_is_cloud"},
 		{localturn.ErrUnavailable, http.StatusServiceUnavailable, "local_turn_unavailable"},
+		{localturn.ErrAgentTargetRequired, http.StatusUnprocessableEntity, "agent_target_required"},
+		{localturn.ErrAddressee, http.StatusUnprocessableEntity, "addressee_not_in_conversation"},
+		{localturn.ErrFloorTurn, http.StatusConflict, "floor_turn_refused"},
+		{localturn.ErrFloorSuperseded, http.StatusConflict, "floor_turn_superseded"},
 	} {
 		h := &handler{useCase: &fakeUseCase{startErr: tc.err, commitErr: tc.err}}
 		response := serve(t, h.start, tokenUser(), startURL, StartPath, `{}`)

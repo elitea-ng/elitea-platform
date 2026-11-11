@@ -98,8 +98,14 @@ fn runtime_log_safety_child() {
     if std::env::var(SAFETY_CHILD_ENV).is_err() {
         return;
     }
+    // Both production streams (FU-299): the JSON operator stream and the
+    // opt-in span timing lines, whose span close fields this test reads.
     tracing_subscriber::registry()
         .with(super::log_layer(Some("trace"), std::io::stdout).expect("production log layer"))
+        .with(
+            super::span_timing_layer(Some("trace"), Some("stderr"), std::io::stdout)
+                .expect("span timing layer"),
+        )
         .init();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

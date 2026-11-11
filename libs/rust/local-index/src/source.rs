@@ -86,7 +86,7 @@ pub fn stat_version(size: u64, mtime_ns: i64) -> String {
 }
 
 fn mtime_ns(meta: &std::fs::Metadata) -> i64 {
-    use std::os::unix::fs::MetadataExt as _;
+    use elitea_local_tools::sys::os::MetadataExt as _;
     meta.mtime()
         .saturating_mul(1_000_000_000)
         .saturating_add(meta.mtime_nsec())

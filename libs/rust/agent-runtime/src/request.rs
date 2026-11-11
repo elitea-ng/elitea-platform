@@ -138,6 +138,18 @@ pub struct AgentExecutionPayload {
     /// an input from before field 77; depth 1, and every sub-agent runs on
     /// its parent's model.
     pub subagent_policy: Option<SubAgentPolicy>,
+    /// The eligibility mode of this reader's context view (`full`,
+    /// `since_joined`, `addressed_only` or `none`; ADR-0050 decision 9,
+    /// #1609), checked against the history by the host's protocol. The
+    /// reader's durable session is bound to it (#1672): a session seeded
+    /// under another mode is re-seeded from this view. `None`: an input from
+    /// before the view.
+    pub context_view_history: Option<String>,
+    /// The agent memory entries Main recalled into the instructions (#1826),
+    /// in the order shown, each by id with its stored content: a
+    /// `spawn_agent` brief may name these in `memory_entries`. Empty: none
+    /// recalled, or an input from before field 76.
+    pub recalled_memory: Vec<RecalledMemoryEntry>,
 }
 
 /// The run's sub-agent policy (ADR-0050 decision 4).
@@ -148,6 +160,15 @@ pub struct SubAgentPolicy {
     /// The catalogue models other than the parent's that a sub-agent may
     /// name in `profile.model`, each in the summary model's shape.
     pub models: Vec<SummaryModelSnapshot>,
+}
+
+/// One agent memory entry Main recalled into a turn (#1826).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecalledMemoryEntry {
+    /// The entry id, a positive decimal number.
+    pub entry_id: String,
+    /// The entry's text as stored.
+    pub content: String,
 }
 
 /// The turn-taking floor this invocation holds (ADR-0050 decision 11).
@@ -166,6 +187,9 @@ pub struct AgentFloor {
 pub enum FloorCause {
     HumanMessage,
     AgentMention,
+    /// A run that a proactive agent's heartbeat started (ADR-0050 decision
+    /// 2). Nobody waits on it, so Main also sets `unattended_tools_only`.
+    Heartbeat,
 }
 
 /// One agent the floor can be handed to.

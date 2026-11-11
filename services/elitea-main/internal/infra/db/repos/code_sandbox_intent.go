@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math"
 	"strconv"
 	"time"
@@ -221,9 +222,9 @@ func (r *CodeIntentRepository) originalPolicy(ctx context.Context, tx sqlExecuto
 	}
 	var policy []byte
 	if bytes.Equal(bytes.TrimSpace(v.Scope), []byte("null")) {
-		policy, err = storage.OriginalRootSavedCodePolicy(instructions, v.YAML, v.Node)
+		policy, err = storage.SavedCodeDocumentFor(ctx, instructions).RootSavedCodePolicy(v.YAML, v.Node)
 	} else {
-		policy, err = storage.OriginalSavedCodePolicy(instructions, v.YAML, v.Node)
+		policy, err = storage.SavedCodeDocumentFor(ctx, instructions).SavedCodePolicy(v.YAML, v.Node)
 	}
 	if err != nil {
 		return nil, err
@@ -249,67 +250,92 @@ func (r *CodeIntentRepository) RegisterOriginalCodeVisit(ctx context.Context, cl
 		return code.VisitResponse{}, code.ErrRejected
 	}
 	var out code.VisitResponse
-	err = r.shared.WithinTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite}, func(tx sqlExecutor) error {
+	// R8: the frozen source is parsed once for the whole registration.
+	ctx = storage.WithSavedCodeDocuments(ctx)
+	err = withinCodeRegistrationTx(ctx, r.shared, func(tx sqlExecutor) error {
 		a, err := r.lockAccess(ctx, tx, claim, "RUNNING")
 		if err != nil {
-			return err
+			return staged("claim", err)
 		}
 		v := originalCodeVisitRecord{Schema: "elitea.sandbox.original-code-visit-record.v1", ExecutionID: claim.ExecutionID, Generation: claim.Generation, Tenant: a.tenant, Project: a.project, Projection: a.projection, Actor: a.actor, InputSHA256: code.Digest(a.input), Activation: request.ActivationID, Node: request.NodeID, Thread: request.GraphThread, Step: request.Step, Attempt: request.Attempt, NodeDigest: request.NodeDigest, YAML: request.OwningYAMLSHA256, Scope: bytes.Clone(request.SavedChildScope)}
 		// Resolve the capture-owner reference before saved-policy comparison. Runtime
 		// version_details is never substituted for pre-redemption source authority.
 		source, err := r.originalSource(ctx, tx, claim, a, v, "code_recovery")
 		if err != nil {
-			return err
+			return staged("source", err)
 		}
 		v.OwningSource = source.Reference
 		var policy []byte
 		if bytes.Equal(bytes.TrimSpace(v.Scope), []byte("null")) {
-			policy, err = storage.OriginalRootSavedCodePolicy(source.Instructions, v.YAML, v.Node)
+			policy, err = storage.SavedCodeDocumentFor(ctx, source.Instructions).RootSavedCodePolicy(v.YAML, v.Node)
 		} else {
-			policy, err = storage.OriginalSavedCodePolicy(source.Instructions, v.YAML, v.Node)
+			policy, err = storage.SavedCodeDocumentFor(ctx, source.Instructions).SavedCodePolicy(v.YAML, v.Node)
 		}
 		if err != nil {
-			return err
+			return staged("policy", err)
 		}
 		declaration, err := storage.MatchOriginalSavedCodeConfiguration(policy, string(configuration))
 		if err != nil || hex.EncodeToString(declaration.ConfigurationDigest[:]) != request.NodeDigest {
-			return code.ErrRejected
+			return staged("configuration", code.ErrRejected)
 		}
 		v.PlatformClient = declaration.PlatformClient
 		v.PreWorkspace, err = storage.MatchCodePrepared(declaration, configuration, prepared)
 		if err != nil {
-			return err
+			return staged("prepared", err)
 		}
-		inputPolicy, err := storage.OriginalSavedCodeInputPolicy(source.Instructions, v.YAML, v.Node)
+		inputPolicy, err := originalVisitInputPolicy(ctx, source.Instructions, v)
 		if err != nil {
-			return err
+			return staged("input_policy", err)
 		}
 		parsed, err := storage.ParseCodePreparedRequest(prepared)
 		if err != nil || inputPolicy.ValidateInput(parsed.Input) != nil {
-			return code.ErrRejected
+			return staged("input", code.ErrRejected)
 		}
 		ref, raw, err := codeVisitRef(v)
 		if err != nil {
-			return err
+			return staged("visit_record", err)
 		}
 		var otherVisits int64
 		err = tx.QueryRow(ctx, `SELECT count(*) FROM elitea_runtime.original_code_visits WHERE execution_id=$1 AND generation=$2 AND visit_id<>$3`, claim.ExecutionID, int64(claim.Generation), ref.VisitID).Scan(&otherVisits)
-		if err != nil || otherVisits >= 4096 {
-			return code.ErrRejected
+		if err != nil {
+			// R2: a failed read is a dependency failure, retryable.
+			return staged("visit_count", err)
+		}
+		if otherVisits >= 4096 {
+			return staged("visit_cap", code.ErrRejected)
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO elitea_runtime.original_code_visits(execution_id,generation,visit_id,visit_digest,activation_id,attempt,record_json,registered_claim_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`, claim.ExecutionID, int64(claim.Generation), ref.VisitID, ref.DigestSHA256, v.Activation, int16(v.Attempt), raw, claim.ClaimID)
 		if err != nil {
-			return err
+			return staged("visit_insert", err)
 		}
 		var saved, digest []byte
 		err = tx.QueryRow(ctx, `SELECT record_json,visit_digest FROM elitea_runtime.original_code_visits WHERE execution_id=$1 AND generation=$2 AND visit_id=$3 FOR UPDATE`, claim.ExecutionID, int64(claim.Generation), ref.VisitID).Scan(&saved, &digest)
-		if err != nil || !bytes.Equal(saved, raw) || !bytes.Equal(digest, []byte(ref.DigestSHA256)) {
-			return code.ErrRejected
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The row this insert met belongs to another visit of the same
+			// activation and attempt: a refusal, fail closed.
+			return staged("visit_read", code.ErrRejected)
+		}
+		if err != nil {
+			return staged("visit_read", err)
+		}
+		if !bytes.Equal(saved, raw) || !bytes.Equal(digest, []byte(ref.DigestSHA256)) {
+			return staged("visit_mismatch", code.ErrRejected)
 		}
 		out = code.VisitResponse{Schema: "elitea.sandbox.original-code-visit-response.v1", OriginalVisit: ref, ExecutionID: v.ExecutionID, OriginalGeneration: v.Generation, ActivationID: v.Activation, Attempt: v.Attempt, NodeDigest: v.NodeDigest, PreWorkspacePreparedSHA256: v.PreWorkspace.PreparedSHA256}
 		return nil
 	})
 	return out, err
+}
+
+// originalVisitInputPolicy is the saved input policy of the visit's Code node.
+// A Map item's Code worker also reads its item and index; the scope was
+// resolved against the run's root source in this same transaction.
+func originalVisitInputPolicy(ctx context.Context, instructions string, v originalCodeVisitRecord) (storage.SavedCodeInputPolicy, error) {
+	doc := storage.SavedCodeDocumentFor(ctx, instructions)
+	if child, ok := decodeFanoutCodeChildScope(v.Scope); ok && child.Kind == "map_item" {
+		return doc.MapItemCodeInputPolicy(v.YAML, v.Node, child.NodeID)
+	}
+	return doc.SavedCodeInputPolicy(v.YAML, v.Node)
 }
 func (r *CodeIntentRepository) readVisit(ctx context.Context, tx sqlExecutor, claim storage.ContentClaim, a codeAccess, ref code.OriginalVisitRef, purpose string) (originalCodeVisitRecord, storage.SavedCodeDeclaration, error) {
 	if !originalCodePurpose(purpose) || ref.Validate() != nil {
@@ -317,6 +343,11 @@ func (r *CodeIntentRepository) readVisit(ctx context.Context, tx sqlExecutor, cl
 	}
 	var raw, digest []byte
 	err := tx.QueryRow(ctx, `SELECT record_json,visit_digest FROM elitea_runtime.original_code_visits WHERE execution_id=$1 AND generation=$2 AND visit_id=$3 FOR UPDATE`, claim.ExecutionID, int64(claim.Generation), ref.VisitID).Scan(&raw, &digest)
+	// R2: an unknown visit is a refusal; a failed read is a dependency
+	// failure the caller answers retryable.
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return originalCodeVisitRecord{}, storage.SavedCodeDeclaration{}, err
+	}
 	if err != nil || code.Digest(raw) != ref.DigestSHA256 || !bytes.Equal(digest, []byte(ref.DigestSHA256)) {
 		return originalCodeVisitRecord{}, storage.SavedCodeDeclaration{}, code.ErrRejected
 	}
@@ -415,76 +446,86 @@ func (r *CodeIntentRepository) RegisterOriginalCodeIntent(ctx context.Context, c
 		return code.SignedGrant{}, code.ErrRejected
 	}
 	var claims code.IntentClaims
-	err = r.shared.WithinTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite}, func(tx sqlExecutor) error {
+	ctx = storage.WithSavedCodeDocuments(ctx)
+	err = withinCodeRegistrationTx(ctx, r.shared, func(tx sqlExecutor) error {
 		a, err := r.lockAccess(ctx, tx, claim, "RUNNING")
 		if err != nil {
-			return err
+			return staged("claim", err)
 		}
 		v, declaration, err := r.readVisit(ctx, tx, claim, a, request.OriginalVisit, "code_recovery")
 		if err != nil {
-			return code.ErrRejected
+			return staged("visit", err)
 		}
 		if err = matchOriginalCodeDispatch(declaration, v.Activation, v.Attempt, request.DispatchActivation); err != nil {
-			return err
+			return staged("dispatch", err)
 		}
 		metadata, err := storage.MatchFinalCodePrepared(declaration, v.PreWorkspace, prepared)
 		if err != nil {
-			return err
+			return staged("prepared", err)
 		}
 		parsed, err := storage.ParseCodePreparedRequest(prepared)
 		if err != nil || declaration.PlatformClient != (parsed.Broker != nil) {
-			return code.ErrRejected
+			return staged("prepared", code.ErrRejected)
 		}
 		original := originalVisitView(a, claim, request.OriginalVisit, v, declaration)
 		if parsed.Workspace != nil {
 			if r.workspace == nil {
-				return code.ErrRejected
+				return staged("workspace", code.ErrRejected)
 			}
 			if _, err = r.originalSource(ctx, tx, claim, a, v, "code_workspace"); err != nil {
-				return err
+				return staged("workspace", err)
 			}
 			if err = r.workspace.VerifyOriginalCodeWorkspace(ctx, codeIntentTransaction{tx}, claim, original, parsed); err != nil {
-				return err
+				return staged("workspace", err)
 			}
 		}
 		if parsed.Broker != nil {
 			if !declaration.PlatformClient || r.broker == nil {
-				return code.ErrRejected
+				return staged("broker", code.ErrRejected)
 			}
 			if _, err = r.originalSource(ctx, tx, claim, a, v, "platform_broker"); err != nil {
-				return err
+				return staged("broker", err)
 			}
 			if err = r.broker.VerifyOriginalCodeBroker(ctx, codeIntentTransaction{tx}, claim, original, parsed); err != nil {
-				return err
+				return staged("broker", err)
 			}
 		}
 
 		digest, selector, err := r.compiledDigest(ctx, a, v, request, prepared, metadata.Fingerprint)
-		if err != nil || digest != request.RequestDigest {
-			return code.ErrRejected
+		if err != nil {
+			return staged("request_digest", err)
+		}
+		if digest != request.RequestDigest {
+			return staged("request_digest", code.ErrRejected)
 		}
 		binding := code.Binding{Schema: "elitea.sandbox.whole-code-binding.v1", Purpose: "whole_code_execute", ExecutionID: v.ExecutionID, OriginalGeneration: v.Generation, ActivationID: v.Activation, NodeID: v.Node, GraphThread: v.Thread, Step: v.Step, Attempt: v.Attempt, DispatchActivation: request.DispatchActivation, JobKey: code.JobKey(v.ExecutionID, request.DispatchActivation), RequestDigest: request.RequestDigest, SupervisorAudience: request.SupervisorAudience, NodeDigest: v.NodeDigest, Language: metadata.Language, PreparedSHA256: metadata.PreparedSHA256, SourceSHA256: metadata.SourceSHA256, InputSHA256: metadata.InputSHA256}
 		if binding.Validate() != nil {
-			return code.ErrRejected
+			return staged("binding", code.ErrRejected)
 		}
 		wire, _ := code.Canonical(binding)
 		_, err = tx.Exec(ctx, `INSERT INTO elitea_runtime.original_code_intents(execution_id,generation,visit_id,dispatch_activation,binding_json,binding_digest,compiled_selector_json,registered_claim_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`, v.ExecutionID, int64(v.Generation), request.OriginalVisit.VisitID, request.DispatchActivation, wire, code.Digest(wire), selector, claim.ClaimID)
 		if err != nil {
-			return err
+			return staged("intent_insert", err)
 		}
 		var saved, savedSelector []byte
 		err = tx.QueryRow(ctx, `SELECT binding_json,compiled_selector_json FROM elitea_runtime.original_code_intents WHERE execution_id=$1 AND generation=$2 AND visit_id=$3 FOR UPDATE`, v.ExecutionID, int64(v.Generation), request.OriginalVisit.VisitID).Scan(&saved, &savedSelector)
-		if err != nil || !bytes.Equal(saved, wire) || !bytes.Equal(selector, savedSelector) {
-			return code.ErrRejected
+		if errors.Is(err, pgx.ErrNoRows) {
+			return staged("intent_read", code.ErrRejected)
+		}
+		if err != nil {
+			return staged("intent_read", err)
+		}
+		if !bytes.Equal(saved, wire) || !bytes.Equal(selector, savedSelector) {
+			return staged("intent_mismatch", code.ErrRejected)
 		}
 		// Bounded index lookup may outlive a lease. Revalidate after it, before commit/signature.
 		current, err := r.lockAccess(ctx, tx, claim, "RUNNING")
 		if err != nil || current.attempt != a.attempt || current.epoch != a.epoch || !bytes.Equal(current.digest, a.digest) {
-			return storage.ErrContentUnauthorized
+			return staged("claim_recheck", storage.ErrContentUnauthorized)
 		}
 		issued, expires, err := grantEnd(current)
 		if err != nil {
-			return err
+			return staged("grant", err)
 		}
 		fence := sha256.Sum256(claim.FenceToken)
 		claims = code.IntentClaims{Schema: "elitea.sandbox.original-code-intent.v1", Purpose: "whole_code_execute", TenantID: v.Tenant, ProjectID: v.Project, ExecutionID: v.ExecutionID, OriginalGeneration: v.Generation, ClaimID: claim.ClaimID, ClaimAttempt: a.attempt, LeaseEpoch: a.epoch, FenceSHA256: hex.EncodeToString(fence[:]), ActivationID: v.Activation, NodeID: v.Node, GraphThread: v.Thread, Step: v.Step, Attempt: v.Attempt, NodeDigest: v.NodeDigest, DispatchActivation: binding.DispatchActivation, JobKey: binding.JobKey, RequestDigest: binding.RequestDigest, SupervisorAudience: binding.SupervisorAudience, SubmitterWorkloadIdentity: a.peer, Language: binding.Language, PreparedSHA256: binding.PreparedSHA256, SourceSHA256: binding.SourceSHA256, InputSHA256: binding.InputSHA256, IssuedAtMillis: issued, ExpiresAtMillis: expires}

@@ -55,7 +55,7 @@ An agent also sees what was written since it last answered. If another agent or 
 A conversation with several agents has a **floor** that decides who answers a message:
 
 - **Addressed** (the default). The agents you address answer. Address several and each answers in turn, one after another: the agent selected in the composer first, if you addressed it, then the others in the order you named them. Each answers your message as you wrote it. With no address, the message goes to the agent you last addressed, as above.
-- **Lead**. One agent is the lead. A message with no address goes to the lead, which answers it, hands it to other agents, or stays silent. A message that names agents still goes to them.
+- **Lead**. One agent is the lead. A message with no address goes to the lead, which answers it, hands it to other agents, or stays silent. A message that names agents still goes to them. Selecting another agent doesn't address it: to have that agent answer instead of the lead, name it in your message. In the web app, picking it in **To:** does that for you.
 
 An agent can hand the floor to other agents of the conversation with its **hand floor** tool, saying what it wants them to do. They answer after its turn ends, one at a time. The chat shows such a hand-off as agent-to-agent talk.
 
@@ -116,6 +116,8 @@ While an agent answers, its avatar moves with what it is doing:
 | Done or failed | A check or a cross badge for 3 seconds, then idle |
 
 An agent with an [avatar pack](/menus/agents#avatar) shows its still in place of the icon, and plays its own file for a state that has one in place of the motion. A video loop is muted and never plays sound.
+
+The mobile app shows the still too, and a state's own still image in place of the motion. It does not play an animated WebP or a video loop yet: for those states it shows the still, or the video's poster, with the motion. It shows packs on a workspace that runs this release or later; an older workspace shows the agent's icon.
 
 The motions use the workspace's brand colour and its signal colours, so a [custom brand](/admin/branding) re-colours them. Only one avatar moves at a time: the newest answer of the agent that is working. When you stop an answer, or the connection to it is lost, the avatar goes back to the still. The other avatars show the still icon. When your system asks for reduced motion, every avatar shows the still icon. The mobile app does not yet switch to the still icon in a data-saver mode.
 

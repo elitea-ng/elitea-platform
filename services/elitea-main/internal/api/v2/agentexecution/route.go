@@ -20,6 +20,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/approvalpolicy"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -40,7 +41,7 @@ const (
 	CurrentOutputLimitContinuationContract   = "agent.continue.output-limit.v1"
 	CurrentStaticContinuationContract        = "agent.continue.static.v1"
 	CurrentApplicationStartMode              = auth.PermissionModeDefault
-	CurrentApplicationStartPermission        = "models.chat.messages.create"
+	CurrentApplicationStartPermission        = agentexecutionapp.ChatTurnPermission
 	CurrentRegenerationPermission            = "models.chat.conversations.regenerate"
 	maxCurrentApplicationStartBody           = int64(512 * 1024)
 )
@@ -654,6 +655,12 @@ func writeStartError(writer http.ResponseWriter, err error) {
 	if status, body, refused := agentrelease.HTTPRefusal(err); refused {
 		// A release run (ADR-0040 decision 2): the toolkit id and the
 		// reason, never a setting.
+		writeJSON(writer, status, body)
+		return
+	}
+	if status, body, refused := agentworkforce.HTTPRefusal(err); refused {
+		// A retired agent, or one that nests a retired agent (ADR-0050
+		// decision 5g): agent_retired or nested_agent_retired.
 		writeJSON(writer, status, body)
 		return
 	}

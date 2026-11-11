@@ -105,6 +105,9 @@ COPY libs/proto ./libs/proto
 # comes with them: the crates inherit their package fields and lints from
 # libs/rust/Cargo.toml.
 COPY libs/rust ./libs/rust
+# elitea-faults' build script generates its codes from the shared fault
+# registry (FU-299); the Go package owns those files.
+COPY libs/go/faults/registry ./libs/go/faults/registry
 COPY services/elitea-worker-rust ./services/elitea-worker-rust
 
 # The sources over the toolchain, for the stages that build from them directly

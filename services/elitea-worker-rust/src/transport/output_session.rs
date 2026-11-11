@@ -86,6 +86,14 @@ impl fmt::Display for OutputSessionError {
 
 impl std::error::Error for OutputSessionError {}
 
+/// FU-299: every variant's text is a `&'static str` literal with no request
+/// data, so the Display is safe in a cause chain.
+impl elitea_faults::SafeCause for OutputSessionError {
+    fn safe_cause(&self) -> String {
+        format!("output session: {self}")
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct StreamBinding {
     stream_id: String,

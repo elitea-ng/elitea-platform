@@ -1144,7 +1144,7 @@ fn apply_worktree(
     let path = worktree_path(source.top(), &short)?;
     std::fs::create_dir(&path)
         .map_err(|error| ToolError::io("cannot create the worktree", &error))?;
-    let path = std::fs::canonicalize(&path)
+    let path = crate::sys::canonicalize(&path)
         .map_err(|error| ToolError::io("cannot create the worktree", &error))?;
     let Replayed {
         branch,

@@ -239,6 +239,16 @@ impl<'a> AuthorizedNativeAssembly<'a> {
     ) -> Option<Arc<crate::protocol::control::ClaimBoundSandboxAuthority>> {
         self.sandbox.clone()
     }
+    /// A test assembly with a claim-bound sandbox authority, as
+    /// [`Self::bind_sandbox`] gives a verified command.
+    #[cfg(test)]
+    pub(crate) fn with_sandbox_for_tests(
+        mut self,
+        authority: Arc<crate::protocol::control::ClaimBoundSandboxAuthority>,
+    ) -> Self {
+        self.sandbox = Some(authority);
+        self
+    }
     pub(crate) fn bind_sandbox(
         mut self,
         verified: &crate::protocol::command::VerifiedAgentCommand,

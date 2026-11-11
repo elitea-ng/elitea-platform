@@ -31,7 +31,7 @@ import {
   rootContainerSx,
   welcomeMessageInputSx,
 } from './CreateAgentForm.styles';
-import { ApplicationAdvanceSettings } from './ApplicationAdvanceSettings';
+import { ApplicationAdvanceSettings, type ContentControlErrors } from './ApplicationAdvanceSettings';
 import { ApplicationVariables } from './ApplicationVariables';
 import { ConversationStartersEditor } from './ConversationStartersEditor';
 import { InstructionsInput } from './InstructionsInput';
@@ -246,7 +246,8 @@ export interface CreateAgentFormProps {
    * serves the feature.
    */
   readonly instructionsAiEditSlot?: ReactNode | undefined;
-  readonly showOutputContract?: boolean | undefined;
+  /** Shows the version meta controls; an object also carries the server's refusals of them (12-prop budget). */
+  readonly showOutputContract?: boolean | ContentControlErrors | undefined;
   readonly sx?: SxProps<Theme> | undefined;
 }
 
@@ -258,17 +259,8 @@ export interface CreateAgentFormProps {
  * frequently has nothing to mount here.
  */
 function InstructionsAiEditRow({ slot }: { readonly slot?: ReactNode | undefined }) {
-  if (!slot) {
-    return null;
-  }
-  return (
-    <Box
-      data-testid="agent-instructions-ai-edit-slot"
-      sx={instructionsAiEditSlotSx}
-    >
-      {slot}
-    </Box>
-  );
+  if (!slot) return null;
+  return <Box data-testid="agent-instructions-ai-edit-slot" sx={instructionsAiEditSlotSx}>{slot}</Box>;
 }
 
 export function CreateAgentForm({
@@ -392,7 +384,10 @@ export function CreateAgentForm({
           modelSettingsSlot={modelSettingsSlot}
           outputContract={state.outputContract} onOutputContractChange={state.onOutputContractChange}
           showOutputContract={showOutputContract}
-          citations={{ value: state.citations, onChange: state.onCitationsChange }}
+          contentControls={{
+            citations: { value: state.citations, onChange: state.onCitationsChange },
+            contextHistory: { value: state.contextHistory, onChange: state.onContextHistoryChange },
+          }}
         />
       </Box>
     </Box>

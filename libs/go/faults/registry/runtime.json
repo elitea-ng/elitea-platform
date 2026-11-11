@@ -1,0 +1,565 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "code": "runtime.application_composition_invalid",
+      "sentence": "This agent or pipeline cannot run: its attachments form a circular reference, nest deeper than allowed, or include a pipeline that pauses where the pause cannot be continued. Review its attachments and change the one that breaks the rule.",
+      "action": "Review the agent's attachments for a circular reference, excess nesting or a pause that cannot continue.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ApplicationCompositionInvalid",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY"
+    },
+    {
+      "code": "runtime.application_composition_too_large",
+      "sentence": "This agent or pipeline cannot run: its attached agents and pipelines are too large to load together. Remove attachments or shorten their instructions.",
+      "action": "Reduce the attachments or their instructions so they load together.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ApplicationCompositionTooLarge",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY"
+    },
+    {
+      "code": "runtime.authorization_failed",
+      "sentence": "Execution authorization failed.",
+      "action": "Check the run's credentials and project permissions in Main's lines for this support reference.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "AuthorizationFailed",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED"
+    },
+    {
+      "code": "runtime.cancelled",
+      "sentence": "Execution was cancelled.",
+      "action": "Nothing; the run was cancelled.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "Cancelled",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_CANCELLED"
+    },
+    {
+      "code": "runtime.cap_reached.browser_monthly_quota",
+      "sentence": "The run stopped because the project used its monthly cloud browser time. The task may be incomplete. Check what it completed before you continue.",
+      "action": "Raise the project's monthly cloud browser quota or wait for it to reset.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "CapReached(BrowserMonthlyQuota)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED"
+    },
+    {
+      "code": "runtime.cap_reached.max_browser_seconds",
+      "sentence": "The run stopped because it reached the maximum cloud browser time an administrator set. The task may be incomplete. Check what it completed before you continue.",
+      "action": "Raise the run's cloud browser time cap if the task needs more time.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "CapReached(MaxBrowserSeconds)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED"
+    },
+    {
+      "code": "runtime.cap_reached.max_model_turns",
+      "sentence": "The run stopped because it reached the maximum number of model turns an administrator set. The task may be incomplete. Check what it completed before you continue.",
+      "action": "Raise the run's model turn cap if the task needs more turns.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "CapReached(MaxModelTurns)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED"
+    },
+    {
+      "code": "runtime.cap_reached.max_records_read",
+      "sentence": "The run stopped because it reached the maximum number of records read an administrator set. The task may be incomplete. Check what it completed before you continue.",
+      "action": "Raise the run's records read cap if the task needs more records.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "CapReached(MaxRecordsRead)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED"
+    },
+    {
+      "code": "runtime.cap_reached.max_tool_calls",
+      "sentence": "The run stopped because it reached the maximum number of tool calls an administrator set. The task may be incomplete. Check what it completed before you continue.",
+      "action": "Raise the run's tool call cap if the task needs more calls.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "CapReached(MaxToolCalls)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED"
+    },
+    {
+      "code": "runtime.code_deadline_insufficient",
+      "sentence": "The Code node could not start: too little time was left before the run's deadline.",
+      "action": "Run it again, or give the run more time if this keeps happening.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "CodeDeadlineInsufficient",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED"
+    },
+    {
+      "code": "runtime.code_preparation_cancelled",
+      "sentence": "Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.",
+      "action": "Review the existing preparation attempt before a retry.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "CodePreparationCancelled",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED"
+    },
+    {
+      "code": "runtime.code_preparation_failed",
+      "sentence": "Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying.",
+      "action": "Read the sandbox preparation lines for this support reference before a retry.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "CodePreparationFailed",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED"
+    },
+    {
+      "code": "runtime.code_preparation_unconfirmed",
+      "sentence": "Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.",
+      "action": "Reconcile the existing preparation attempt in the sandbox supervisor before a retry.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "CodePreparationUnconfirmed",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED"
+    },
+    {
+      "code": "runtime.context_budget_exceeded",
+      "sentence": "The model input exceeds the available context budget. Enable compaction, reduce attached content, or select a model with a larger context window.",
+      "action": "Nothing on the platform; the user enables compaction, reduces content or selects a larger model.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ContextBudgetExceeded",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_CONTEXT_BUDGET_EXCEEDED"
+    },
+    {
+      "code": "runtime.deadline_exceeded",
+      "sentence": "The execution deadline was exceeded.",
+      "action": "Check what slowed the run in the Worker's lines; the run can be retried.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "DeadlineExceeded",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED"
+    },
+    {
+      "code": "runtime.dependency_unavailable",
+      "sentence": "A required runtime dependency is unavailable.",
+      "action": "Check the Worker's dependencies (database, NATS, Main); the run can be retried.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "DependencyUnavailable",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE"
+    },
+    {
+      "code": "runtime.execution_input_field_limit.agent_settings",
+      "sentence": "The request cannot start because the agent instructions or settings exceed a platform input limit. Reduce the saved content or ask an administrator to inspect the support reference. This is not a model token limit.",
+      "action": "Inspect the agent's saved instructions and settings for oversized content.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ExecutionInputFieldLimit(AgentSettings)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT"
+    },
+    {
+      "code": "runtime.execution_input_field_limit.chat_history",
+      "sentence": "The request cannot start because the conversation history exceeds a platform input limit before compaction can run. Start a new chat with the required context. Share the support reference if this repeats.",
+      "action": "Nothing on the platform; the user starts a new chat. If it repeats, check the Worker's input limits.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ExecutionInputFieldLimit(ChatHistory)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT"
+    },
+    {
+      "code": "runtime.execution_input_field_limit.tool_configuration",
+      "sentence": "The request cannot start because the attached tool configuration exceeds a platform input limit. Reduce the attached tools or ask an administrator to inspect their schemas using the support reference.",
+      "action": "Inspect the attached toolkits' schemas for oversized content.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ExecutionInputFieldLimit(ToolConfiguration)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT"
+    },
+    {
+      "code": "runtime.execution_input_field_limit.user_message",
+      "sentence": "The request cannot start because the user message exceeds a platform size limit. Shorten the message or attach the content as a file. This is not a model token limit.",
+      "action": "Nothing on the platform; the user shortens the message or attaches it as a file.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ExecutionInputFieldLimit(UserMessage)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT"
+    },
+    {
+      "code": "runtime.execution_input_limit",
+      "sentence": "The request cannot start because its input exceeds a platform size limit. Reduce the message, instructions, or attached context. This is not a model token limit. Share the support reference if the cause is unclear.",
+      "action": "Nothing on the platform; the user reduces the input. Check the Worker's lines if the cause is unclear.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ExecutionInputLimit",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT"
+    },
+    {
+      "code": "runtime.fanout_agent_calls_pipeline",
+      "sentence": "A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools.",
+      "action": "Nothing on the platform; the user runs the saved pipeline directly as the Map worker or branch, or removes it from the Agent's tools.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "FanoutAgentCallsPipeline",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY"
+    },
+    {
+      "code": "runtime.fanout_deadline_insufficient",
+      "sentence": "The fan-out node could not start: too little time was left before the run's deadline for its items.",
+      "action": "Lower the number of items, raise the node's concurrency, or give the run more time.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "FanoutDeadlineInsufficient",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED"
+    },
+    {
+      "code": "runtime.fanout_member_failed",
+      "sentence": "The pipeline stopped because a Map item or Parallel branch failed (On Error is Stop, or every item failed). The other items finished first; later nodes did not run. Open Execution details to see the failed item.",
+      "action": "Read the Worker's lines for this support reference to find the failed item or branch.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "FanoutMemberFailed",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED"
+    },
+    {
+      "code": "runtime.incompatible_version",
+      "sentence": "The requested contract version is not compatible.",
+      "action": "Align the Main and Worker versions; the command's contract version is not one this Worker serves.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "IncompatibleVersion",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_INCOMPATIBLE_VERSION"
+    },
+    {
+      "code": "runtime.internal",
+      "sentence": "The runtime operation failed.",
+      "action": "Read the Worker's lines for this support reference.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "Internal",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_INTERNAL"
+    },
+    {
+      "code": "runtime.invalid_input",
+      "sentence": "The execution input is invalid.",
+      "action": "Read the Worker's lines for this support reference to see which input check refused the run.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "InvalidInput",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_INVALID_INPUT"
+    },
+    {
+      "code": "runtime.model_access_denied",
+      "sentence": "The model service denied access. Ask an administrator to check the model credentials and project permissions.",
+      "action": "Check the model's credentials and the project's permissions for it.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ModelAccessDenied",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_ACCESS_DENIED"
+    },
+    {
+      "code": "runtime.model_budget_exhausted.member",
+      "sentence": "Your budget in this project is exhausted. Requests are unavailable until the budget resets or an administrator raises your limit.",
+      "action": "Raise the member's budget in this project or wait for it to reset.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ModelBudgetExhausted(Member)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_BUDGET_EXHAUSTED"
+    },
+    {
+      "code": "runtime.model_budget_exhausted.project",
+      "sentence": "The shared model budget of this project is exhausted. Requests are unavailable until the budget resets or an administrator raises the limit.",
+      "action": "Raise the project's shared model budget or wait for it to reset.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ModelBudgetExhausted(Project)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_BUDGET_EXHAUSTED"
+    },
+    {
+      "code": "runtime.model_budget_exhausted.unknown",
+      "sentence": "The model budget is exhausted. Ask an administrator to check the project budget or provider billing before retrying.",
+      "action": "Check the project budget and the provider's billing.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ModelBudgetExhausted(Unknown)",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_BUDGET_EXHAUSTED"
+    },
+    {
+      "code": "runtime.model_provider_failure",
+      "sentence": "The model service reported an error while generating the response. Try again or select another model. An administrator can inspect the execution logs.",
+      "action": "Read the gateway's lines for this support reference for the provider's error.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ModelProviderFailure",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_PROVIDER_FAILURE"
+    },
+    {
+      "code": "runtime.model_rate_limited",
+      "sentence": "The model service reached its request limit. Wait briefly and try again, or select another model.",
+      "action": "Check the model provider's rate limits for this model.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ModelRateLimited",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_RATE_LIMITED"
+    },
+    {
+      "code": "runtime.model_request_rejected",
+      "sentence": "The model service rejected this request. Check the selected model and its settings, or ask an administrator to inspect the execution logs.",
+      "action": "Read the gateway's lines for this support reference to see why the provider refused the request.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ModelRequestRejected",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_REQUEST_REJECTED"
+    },
+    {
+      "code": "runtime.model_request_too_large",
+      "sentence": "The model request exceeds the transport size limit. Reduce attached content or tool results. A larger token window alone may not resolve this.",
+      "action": "Nothing on the platform; the user reduces attached content or tool results.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ModelRequestTooLarge",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_REQUEST_TOO_LARGE"
+    },
+    {
+      "code": "runtime.model_response_invalid",
+      "sentence": "The model returned an incomplete or invalid response. Try again or select another model. Report repeated failures to an administrator.",
+      "action": "Read the gateway's lines for this support reference; report repeated failures for one model.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ModelResponseInvalid",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_RESPONSE_INVALID"
+    },
+    {
+      "code": "runtime.model_timeout",
+      "sentence": "The model did not respond in time. Try again; if this continues, ask an administrator to check the model connection.",
+      "action": "Check the model connection and the gateway's lines for this support reference.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ModelTimeout",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_TIMEOUT"
+    },
+    {
+      "code": "runtime.model_unavailable",
+      "sentence": "The model service could not be reached or is temporarily unavailable. Try again; ask an administrator to check the connection if it persists.",
+      "action": "Check the model provider's status and the gateway's connection to it.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ModelUnavailable",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_UNAVAILABLE"
+    },
+    {
+      "code": "runtime.output_continuation_exhausted",
+      "sentence": "Continuation could not finish. The model response is incomplete.",
+      "action": "Read the Worker's lines for this support reference; the model kept stopping before the answer ended.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "OutputContinuationExhausted",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_OUTPUT_CONTINUATION_EXHAUSTED"
+    },
+    {
+      "code": "runtime.output_contract_violation",
+      "sentence": "The answer did not have the format that the agent or pipeline node requires, and one retry did not correct it. Later nodes did not run. Change the instructions or the output contract, or select a different model.",
+      "action": "Review the agent's instructions and output contract, or select a different model.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "OutputContractViolation",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_MODEL_RESPONSE_INVALID"
+    },
+    {
+      "code": "runtime.output_projection_limit",
+      "sentence": "The run stopped because its output exceeded the delivery limit. Some results may be missing. Share the support reference with your administrator before repeating actions.",
+      "action": "Read the Worker's lines for this support reference before the user repeats any action.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "OutputProjectionLimit",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_OUTPUT_DELIVERY_LIMIT"
+    },
+    {
+      "code": "runtime.pipeline_child_input_type_invalid",
+      "sentence": "The pipeline stopped because a mapped child input has the wrong type. Compare the Agent node's input mapping with the child pipeline's state types. The child and later nodes did not run. Review earlier completed actions before restarting.",
+      "action": "Compare the Agent node's input mapping with the child pipeline's state types.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "PipelineChildInputTypeInvalid",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_INVALID"
+    },
+    {
+      "code": "runtime.pipeline_code_failed",
+      "sentence": "The pipeline stopped at a Code node. Check its source, selected input, and sandbox limits. Later nodes did not run. Share the support reference with your administrator before retrying.",
+      "action": "Read the Code node's sandbox lines for this support reference.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "PipelineCodeFailed",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED"
+    },
+    {
+      "code": "runtime.pipeline_input_invalid",
+      "sentence": "The pipeline stopped because a tool node has invalid input or a stale approval decision. Check its input mapping and restart only after reviewing completed actions.",
+      "action": "Check the tool node's input mapping and any pending approval decision in the pipeline.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "PipelineInputInvalid",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_INVALID"
+    },
+    {
+      "code": "runtime.pipeline_input_limit",
+      "sentence": "The pipeline stopped because a tool node input exceeds its size limit. Reduce the mapped input or use smaller batches. This is not a model context limit.",
+      "action": "Nothing on the platform; the user reduces the mapped input or uses smaller batches.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "PipelineInputLimit",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_LIMIT"
+    },
+    {
+      "code": "runtime.pipeline_node_type_not_available",
+      "sentence": "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it.",
+      "action": "Enable the node type on this deployment or replace the node in the pipeline.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "PipelineNodeTypeNotAvailable",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY"
+    },
+    {
+      "code": "runtime.pipeline_result_invalid",
+      "sentence": "The pipeline stopped because a tool result does not match the node output mapping. Check the required fields and their types. Later nodes did not run.",
+      "action": "Check the node's output mapping against the tool's result fields and types.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "PipelineResultInvalid",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_INVALID"
+    },
+    {
+      "code": "runtime.pipeline_result_limit",
+      "sentence": "The pipeline stopped because a tool result exceeds the node state size limit. Use smaller batches or reduce the returned data. Later nodes did not run.",
+      "action": "Nothing on the platform; the user uses smaller batches or returns less data.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "PipelineResultLimit",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_RESULT_LIMIT"
+    },
+    {
+      "code": "runtime.pipeline_tool_failed",
+      "sentence": "A pipeline tool call failed. Later nodes did not run. Review the support reference and completed actions before retrying; the tool may have started work.",
+      "action": "Read the Worker's lines for this support reference and check the tool's target system before a retry.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "PipelineToolFailed",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED"
+    },
+    {
+      "code": "runtime.pipeline_tool_unavailable",
+      "sentence": "The pipeline stopped because its selected tool cannot run. Check the toolkit binding, permissions, and supported operation. Share the support reference with your administrator.",
+      "action": "Check the toolkit binding, its permissions and that the operation is supported.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "PipelineToolUnavailable",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_UNAVAILABLE"
+    },
+    {
+      "code": "runtime.recovery_frontier_unsupported",
+      "sentence": "This run stopped at a point where it cannot be safely continued. Nothing was repeated. Start it again, and share the support reference with your administrator if it happens again.",
+      "action": "Report the support reference to the platform team; the run cannot continue from its checkpoint.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "RecoveryFrontierUnsupported",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_RECOVERY_FRONTIER_UNSUPPORTED"
+    },
+    {
+      "code": "runtime.recovery_refused",
+      "sentence": "An approved tool call may have started before the run stopped, and its result was not recorded. It was not repeated. Check the target system before retrying, and share the support reference with your administrator.",
+      "action": "Check the target system for the tool call's effect before a retry; it was not repeated.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "RecoveryRefused",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_RECOVERY_REFUSED"
+    },
+    {
+      "code": "runtime.resource_exhausted",
+      "sentence": "The execution exceeded an approved resource limit.",
+      "action": "Read the Worker's lines for this support reference to see which limit was reached.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ResourceExhausted",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_RESOURCE_EXHAUSTED"
+    },
+    {
+      "code": "runtime.result_refused",
+      "sentence": "The index result was refused by the platform.",
+      "action": "Read Main's lines for this support reference to see why the index result was refused.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ResultRefused",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_RESULT_REFUSED"
+    },
+    {
+      "code": "runtime.toolkit_run_authorization_failed",
+      "sentence": "The platform could not authorize this tool run's credentials or context.",
+      "action": "Check the tool run's credentials and context in Main's lines for this support reference.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "ToolkitRunAuthorizationFailed",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED"
+    },
+    {
+      "code": "runtime.unsupported_capability",
+      "sentence": "Configuration type is not supported.",
+      "action": "Check that the Worker version supports this configuration type; upgrade the Worker if it is older than Main.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "UnsupportedCapability",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY"
+    }
+  ]
+}

@@ -3001,3 +3001,317 @@ async fn a_parallel_stopped_by_a_failed_branch_ends_the_run_with_readable_chat_t
     drop(node);
     assert_fanout_stop_reaches_the_chat_readably(&codes.await.expect("codes"));
 }
+
+// ---- W3-2 D3: activation deadline admission before freeze ----
+
+/// The pausing graphs with a scripted activation admission: it counts its
+/// calls and refuses while `refuse` is set.
+struct ScriptedAdmission {
+    inner: PausingBranchGraphs,
+    calls: Arc<AtomicUsize>,
+    refuse: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl ParallelBranchGraphFactory for ScriptedAdmission {
+    fn validate_branch(&self, branch: &ParallelBranchDefinition) -> Result<(), GraphError> {
+        self.inner.validate_branch(branch)
+    }
+
+    fn admit_activation(
+        &self,
+        branches: &[ParallelBranchDefinition],
+        _concurrency: u32,
+        _node_id: &str,
+    ) -> Result<(), GraphError> {
+        assert_eq!(branches.len(), 2);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err(super::parallel::fanout_deadline_refusal());
+        }
+        Ok(())
+    }
+
+    fn owned_definition_digest(
+        &self,
+        branch: &ParallelBranchDefinition,
+    ) -> Result<[u8; 32], GraphError> {
+        self.inner.owned_definition_digest(branch)
+    }
+
+    fn compile_branch(
+        &self,
+        branch: &ParallelBranchDefinition,
+        execution: ParallelBranchExecution,
+    ) -> Result<CompiledGraph, GraphError> {
+        self.inner.compile_branch(branch, execution)
+    }
+
+    fn project_input(
+        &self,
+        branch: &ParallelBranchDefinition,
+        parent: &State,
+    ) -> Result<State, GraphError> {
+        self.inner.project_input(branch, parent)
+    }
+
+    fn project_result(
+        &self,
+        branch: &ParallelBranchDefinition,
+        child: &State,
+    ) -> Result<ParallelBranchTerminal, GraphError> {
+        self.inner.project_result(branch, child)
+    }
+
+    fn pause_cards(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+    ) -> Result<Vec<ParallelPauseCard>, GraphError> {
+        self.inner.pause_cards(branch, pause)
+    }
+
+    async fn resume_input(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+        decisions: &[ParallelDecision],
+    ) -> Result<State, GraphError> {
+        self.inner.resume_input(branch, pause, decisions).await
+    }
+}
+
+fn scripted_admission_runtime(
+    checkpoints: &Arc<MemoryChildCheckpoints>,
+    runs: &Arc<HashMap<String, AtomicUsize>>,
+    calls: &Arc<AtomicUsize>,
+    refuse: &Arc<std::sync::atomic::AtomicBool>,
+) -> Arc<AdkParallelBranchRuntime> {
+    let factory: Arc<dyn ParallelChildCheckpointerFactory> = checkpoints.clone();
+    let parent: Arc<dyn ParallelCheckpointAppender> = checkpoints.parent.clone();
+    Arc::new(AdkParallelBranchRuntime::new(
+        factory,
+        Arc::new(ScriptedAdmission {
+            inner: PausingBranchGraphs {
+                runs: Arc::clone(runs),
+                complete: BTreeSet::from(["done".to_owned()]),
+                cards: BTreeMap::new(),
+            },
+            calls: Arc::clone(calls),
+            refuse: Arc::clone(refuse),
+        }),
+        Arc::new(ParallelOccurrenceCheckpointer::new(parent)),
+    ))
+}
+
+/// W3-2 D3: a refused activation is refused whole and typed before it
+/// freezes. No occurrence row, no child thread activated, no child ran.
+#[tokio::test]
+async fn a_refused_activation_freezes_and_starts_nothing() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = run_counts(&["done", "pause"]);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let refuse = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let definition = definition(&[("done", "done"), ("pause", "pause")], 2);
+    let node = DurableParallelNode::new(
+        definition,
+        scripted_admission_runtime(&checkpoints, &runs, &calls, &refuse),
+    );
+    let error = node
+        .execute(&input_context("root-refused", 4))
+        .await
+        .err()
+        .expect("the activation is refused");
+    assert!(
+        error
+            .to_string()
+            .contains(crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE),
+        "{error}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!((runs_of(&runs, "done"), runs_of(&runs, "pause")), (0, 0));
+    assert!(checkpoints.issued_threads.lock().await.is_empty());
+    assert!(
+        checkpoints
+            .parent
+            .list("root-refused")
+            .await
+            .unwrap()
+            .is_empty(),
+        "nothing was frozen"
+    );
+}
+
+/// W3-2 D3 (C2): an occurrence frozen before is restored, never re-admitted:
+/// its children may already have started. Admission refuses on the resume,
+/// yet the parked activation completes; admission ran once.
+#[tokio::test]
+async fn a_frozen_activation_is_never_re_admitted_on_resume() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let runs = run_counts(&["done", "pause"]);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let refuse = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let definition = definition(&[("done", "done"), ("pause", "pause")], 2);
+    let ledger = TestLedger::new();
+    let context = input_context("root-readmit", 4);
+    let node = ledger_node(
+        definition.clone(),
+        scripted_admission_runtime(&checkpoints, &runs, &calls, &refuse),
+        &ledger,
+        1,
+    );
+    let cards = parked(&node.execute(&context).await.unwrap());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    refuse.store(true, Ordering::SeqCst);
+    ledger.decide(&key_of(&cards, "card-pause"), "approve", None);
+    let resumed = ledger_node(
+        definition,
+        scripted_admission_runtime(&checkpoints, &runs, &calls, &refuse),
+        &ledger,
+        1,
+    );
+    let output = resumed.execute(&context).await.unwrap();
+    assert_eq!(output.updates["gathered"][1]["outputs"]["output"], "pause");
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "never re-admitted");
+}
+
+/// B2: a failed child's operator cause keeps kinds, node ids and a leading
+/// dotted code only; free text after it, or text that is not a code, never
+/// reaches the line.
+#[test]
+fn a_child_failure_cause_keeps_codes_and_node_ids_only() {
+    use super::parallel::safe_graph_cause;
+    let scoped = GraphError::NodeExecutionFailed {
+        node: "gather".into(),
+        message: "Node 'js_a' execution failed: Checkpoint error: checkpoint.invalid_scope: secret_marker detail".into(),
+    };
+    // R7: an unregistered dotted prefix is dropped; only FU-299 registry
+    // codes are copied.
+    assert_eq!(
+        safe_graph_cause(&scoped),
+        ["graph.node_execution_failed", "node gather", "node js_a"]
+    );
+    let registered = GraphError::NodeExecutionFailed {
+        node: "gather".into(),
+        message: "Node 'js_a' execution failed: pipeline.node_recovery.child_effect_unknown: secret_marker".into(),
+    };
+    assert_eq!(
+        safe_graph_cause(&registered),
+        [
+            "pipeline.node_recovery.child_effect_unknown",
+            "node gather",
+            "node js_a"
+        ]
+    );
+    let deadline = GraphError::NodeExecutionFailed {
+        node: "gather".into(),
+        message: "Node 'js_a' execution failed: pipeline.code.nested_slot: secret_marker".into(),
+    };
+    assert_eq!(
+        safe_graph_cause(&deadline),
+        [
+            "graph.node_execution_failed",
+            "node gather",
+            "node js_a",
+            "pipeline.code.nested_slot"
+        ]
+    );
+    for host in [
+        "api.openai.com: connection refused",
+        "vault.internal.svc:8200 timed out",
+    ] {
+        let error = GraphError::NodeExecutionFailed {
+            node: "shout".into(),
+            message: host.into(),
+        };
+        assert_eq!(
+            safe_graph_cause(&error),
+            ["graph.node_execution_failed", "node shout"],
+            "{host}"
+        );
+    }
+    let free = GraphError::NodeExecutionFailed {
+        node: "shout".into(),
+        message: "secret_marker: value.with.dots".into(),
+    };
+    assert_eq!(
+        safe_graph_cause(&free),
+        ["graph.node_execution_failed", "node shout"]
+    );
+    let other = GraphError::Other("Secret.Marker text".into());
+    assert_eq!(safe_graph_cause(&other), ["graph.other"]);
+    let deep = GraphError::NodeExecutionFailed {
+        node: "n".into(),
+        message: "Node 'n' execution failed: ".repeat(20),
+    };
+    assert!(safe_graph_cause(&deep).len() <= elitea_faults::MAX_CAUSES);
+}
+
+const HOST_CAUSE_CHILD_ENV: &str = "ELITEA_FANOUT_HOST_CAUSE_CHILD";
+
+/// R7 log capture: a child failure whose error text starts with host names
+/// writes its fault line without them.
+#[test]
+fn a_child_failure_line_never_logs_a_host_name() {
+    let output = elitea_faults::logtest::run_child(
+        "agents::graph::parallel_tests::host_cause_log_child",
+        HOST_CAUSE_CHILD_ENV,
+    );
+    for host in ["api.openai.com", "vault.internal.svc"] {
+        assert!(
+            !output.stdout.contains(host) && !output.stderr.contains(host),
+            "{host} reached the log: {}",
+            output.stdout
+        );
+    }
+    let code = elitea_faults::codes::GRAPH_FANOUT_CHILD_FAILED;
+    let lines: Vec<_> = output
+        .operator_lines()
+        .into_iter()
+        .filter(|line| line.get("code").is_some_and(|value| value == code.as_str()))
+        .collect();
+    assert_eq!(lines.len(), 2, "{}", output.stdout);
+    assert_eq!(
+        lines[0]["cause"],
+        json!(["graph.node_execution_failed", "node crunch"])
+    );
+    assert_eq!(
+        lines[1]["cause"],
+        json!(["graph.node_execution_failed", "node crunch", "node inner"])
+    );
+}
+
+#[test]
+fn host_cause_log_child() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+    if !elitea_faults::logtest::is_child(HOST_CAUSE_CHILD_ENV) {
+        return;
+    }
+    tracing_subscriber::registry()
+        .with(
+            crate::diagnostics::log_layer(Some("debug"), std::io::stdout).expect("operator stream"),
+        )
+        .init();
+    let failure = elitea_agent_runtime::graph::fanout::plan::ChildFailure::new(
+        "graph.node_execution_failed",
+        "The branch failed.",
+    );
+    for message in [
+        "api.openai.com: connection refused",
+        "Node 'inner' execution failed: vault.internal.svc:8200 timed out",
+    ] {
+        super::parallel::write_child_failure_line(
+            "execution-1",
+            "map_parts",
+            "0",
+            "m1:item-0",
+            &failure,
+            &GraphError::NodeExecutionFailed {
+                node: "crunch".into(),
+                message: message.into(),
+            },
+        );
+    }
+    elitea_faults::logtest::child_ran();
+}

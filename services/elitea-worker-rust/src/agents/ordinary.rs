@@ -417,8 +417,18 @@ impl OrdinaryNativeAgentAssembler {
             _ => None,
         };
         tracing::Span::current().record("stage", "toolsets");
-        // What `recall` returns this turn, for a sub-agent brief (#1614).
-        let recalled = Arc::new(super::agent_memory_tools::RecalledEntries::default());
+        // What this turn recalled, for a sub-agent brief: the entries Main
+        // put in the instructions (#1826) and what `recall` returns (#1614).
+        let recalled = Arc::new(super::agent_memory_tools::RecalledEntries::seeded(
+            profile.recalled_memory(),
+        ));
+        // W3-1: Code runs admitted against the run's deadline.
+        let code_runtime = match self.sandbox.as_ref().zip(sandbox_authority) {
+            Some((factory, authority)) => {
+                Some(factory.bind(authority, plan.code_admission_deadline()?))
+            }
+            None => None,
+        };
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
                 &tool_snapshot,
@@ -430,10 +440,7 @@ impl OrdinaryNativeAgentAssembler {
                 model_scopes,
                 plan.thread_id().to_owned(),
                 plan.conversation_id().to_owned(),
-                self.sandbox
-                    .as_ref()
-                    .zip(sandbox_authority)
-                    .map(|(factory, authority)| factory.bind(authority)),
+                code_runtime,
                 attachment_library,
                 browser_host.as_ref(),
                 &recalled,
@@ -879,6 +886,7 @@ impl OrdinaryNativeAgentAssembler {
             elitea_agent_runtime::subagents::TOOLSET_NAME.to_owned(),
             super::hand_floor_tool::TOOLSET_NAME.to_owned(),
             super::propose_agent_tool::TOOLSET_NAME.to_owned(),
+            super::propose_dismissal_tool::TOOLSET_NAME.to_owned(),
         ]);
         let mut frozen = freeze_toolsets(toolsets, "elitea_ordinary_tool_binding")
             .await
@@ -951,6 +959,21 @@ impl OrdinaryNativeAgentAssembler {
         ) {
             frozen.extend(
                 freeze_toolsets(vec![proposals], "elitea_ordinary_tool_binding")
+                    .await
+                    .map_err(tool_binding_error)?,
+            );
+        }
+        // propose_dismissal (ADR-0050 decision 5l, #1616): an HR agent's
+        // one workforce tool, only when the version grants
+        // can_review_agents. Bound after the filter: it writes nothing but a
+        // proposal a person decides.
+        if let Some(workforce) = super::propose_dismissal_tool::toolset(
+            profile.can_review_agents(),
+            Arc::clone(&self.platform),
+            Arc::clone(runtime_context),
+        ) {
+            frozen.extend(
+                freeze_toolsets(vec![workforce], "elitea_ordinary_tool_binding")
                     .await
                     .map_err(tool_binding_error)?,
             );

@@ -50,7 +50,9 @@ export const ConversationParticipantPersona = zod
     avatar_pack: zod
       .string()
       .optional()
-      .describe("Reserved for the avatar pack of a later release."),
+      .describe(
+        'Client contract 1.46 (ADR-0050 decision 6): on a read, the avatar pack of the version the agent participant runs, an AgentAvatarPackV1 OBJECT, read live from the version on every participants read; absent when the version has none (the client then shows `entity_settings.icon_meta`). It stays declared as a string, the "reserved" type contract 1.38 locked, because a type change is a breaking change within the major. A client reads the value as unknown JSON and validates it (`avatarPackOf` in `@elitea/client-core/conversation`); a value that is not a valid pack is ignored. A create request does not set it.',
+      ),
   })
   .describe(
     "Client contract 1.38: the agent's persona in this conversation, from the soul of the version the conversation runs, refreshed on every turn. Absent when the agent has none. Show `display_name` instead of the agent's name when it is set.",

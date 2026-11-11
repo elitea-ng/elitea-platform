@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.45",
+  "client_contract": "1.48",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -2826,6 +2826,80 @@
         }
       }
     },
+    "GET /agent_media/{project_id}/{file}": {
+      "operation_id": "getAgentMedia",
+      "parameters": {
+        "path:file": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "image/jpeg": {
+              "type": "string",
+              "format": "binary"
+            },
+            "image/png": {
+              "type": "string",
+              "format": "binary"
+            },
+            "image/svg+xml": {
+              "type": "string",
+              "format": "binary"
+            },
+            "image/webp": {
+              "type": "string",
+              "format": "binary"
+            },
+            "video/mp4": {
+              "type": "string",
+              "format": "binary"
+            },
+            "video/webm": {
+              "type": "string",
+              "format": "binary"
+            }
+          }
+        },
+        "206": {
+          "content": {
+            "video/mp4": {
+              "type": "string",
+              "format": "binary"
+            },
+            "video/webm": {
+              "type": "string",
+              "format": "binary"
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "GET /auth/native/authorize": {
       "operation_id": "authorizeNativeClient",
       "parameters": {
@@ -4633,6 +4707,9 @@
                           "properties": {
                             "can_propose_agents": {
                               "type": "boolean"
+                            },
+                            "can_review_agents": {
+                              "type": "boolean"
                             }
                           },
                           "open": true
@@ -4750,6 +4827,84 @@
                         },
                         "parent_project_id": {
                           "type": "string"
+                        },
+                        "proactivity": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "act_target": {
+                              "type": "string",
+                              "enum": [
+                                "home_thread",
+                                "new_conversation"
+                              ]
+                            },
+                            "interval": {
+                              "type": "string"
+                            },
+                            "jitter": {
+                              "one_of": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 50
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^[0-9]{1,2}%?$"
+                                }
+                              ]
+                            },
+                            "limits": {
+                              "type": "object",
+                              "properties": {
+                                "acts_per_day": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 96
+                                },
+                                "spend_per_day_usd": {
+                                  "type": "number",
+                                  "minimum": 0,
+                                  "maximum": 1000
+                                },
+                                "wakes_per_day": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 96
+                                }
+                              }
+                            },
+                            "mode": {
+                              "type": "string",
+                              "enum": [
+                                "heartbeat",
+                                "off"
+                              ]
+                            },
+                            "quiet_hours": {
+                              "type": "string"
+                            },
+                            "watch": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "kind"
+                                ],
+                                "properties": {
+                                  "kind": {
+                                    "type": "string"
+                                  },
+                                  "tool": {
+                                    "type": "string",
+                                    "max_length": 128
+                                  }
+                                }
+                              },
+                              "max_items": 16
+                            }
+                          }
                         },
                         "run_caps": {
                           "type": "object",
@@ -5056,6 +5211,9 @@
                             "properties": {
                               "can_propose_agents": {
                                 "type": "boolean"
+                              },
+                              "can_review_agents": {
+                                "type": "boolean"
                               }
                             },
                             "open": true
@@ -5173,6 +5331,84 @@
                           },
                           "parent_project_id": {
                             "type": "string"
+                          },
+                          "proactivity": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "act_target": {
+                                "type": "string",
+                                "enum": [
+                                  "home_thread",
+                                  "new_conversation"
+                                ]
+                              },
+                              "interval": {
+                                "type": "string"
+                              },
+                              "jitter": {
+                                "one_of": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 50
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[0-9]{1,2}%?$"
+                                  }
+                                ]
+                              },
+                              "limits": {
+                                "type": "object",
+                                "properties": {
+                                  "acts_per_day": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 96
+                                  },
+                                  "spend_per_day_usd": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1000
+                                  },
+                                  "wakes_per_day": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 96
+                                  }
+                                }
+                              },
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "heartbeat",
+                                  "off"
+                                ]
+                              },
+                              "quiet_hours": {
+                                "type": "string"
+                              },
+                              "watch": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "kind"
+                                  ],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "tool": {
+                                      "type": "string",
+                                      "max_length": 128
+                                    }
+                                  }
+                                },
+                                "max_items": 16
+                              }
+                            }
                           },
                           "run_caps": {
                             "type": "object",
@@ -8882,6 +9118,111 @@
                           },
                           "mentions_everyone": {
                             "type": "boolean"
+                          },
+                          "subagents_v1": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "agent_id",
+                                "items",
+                                "ordinal",
+                                "parent_call_id",
+                                "status"
+                              ],
+                              "properties": {
+                                "agent_id": {
+                                  "type": "string"
+                                },
+                                "avatar": {
+                                  "type": "string",
+                                  "max_length": 120
+                                },
+                                "display_name": {
+                                  "type": "string",
+                                  "max_length": 120
+                                },
+                                "error": {
+                                  "type": "string"
+                                },
+                                "input_tokens": {
+                                  "type": "integer"
+                                },
+                                "items": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "type"
+                                    ],
+                                    "properties": {
+                                      "args_summary": {
+                                        "type": "string",
+                                        "max_length": 240
+                                      },
+                                      "call_id": {
+                                        "type": "string"
+                                      },
+                                      "ok": {
+                                        "type": "boolean"
+                                      },
+                                      "summary": {
+                                        "type": "string",
+                                        "max_length": 240
+                                      },
+                                      "text": {
+                                        "type": "string",
+                                        "max_length": 600
+                                      },
+                                      "tool": {
+                                        "type": "string",
+                                        "max_length": 120
+                                      },
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "text",
+                                          "tool"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "max_items": 96
+                                },
+                                "label": {
+                                  "type": "string",
+                                  "max_length": 120
+                                },
+                                "ordinal": {
+                                  "type": "integer",
+                                  "minimum": 1
+                                },
+                                "output_tokens": {
+                                  "type": "integer"
+                                },
+                                "parent_call_id": {
+                                  "type": "string"
+                                },
+                                "result": {
+                                  "type": "string",
+                                  "max_length": 2000
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "budget_exhausted",
+                                    "cancelled",
+                                    "completed",
+                                    "failed",
+                                    "running"
+                                  ]
+                                },
+                                "steps": {
+                                  "type": "integer"
+                                }
+                              }
+                            },
+                            "max_items": 24
                           }
                         },
                         "open": true
@@ -9649,6 +9990,9 @@
                             "properties": {
                               "can_propose_agents": {
                                 "type": "boolean"
+                              },
+                              "can_review_agents": {
+                                "type": "boolean"
                               }
                             },
                             "open": true
@@ -9766,6 +10110,84 @@
                           },
                           "parent_project_id": {
                             "type": "string"
+                          },
+                          "proactivity": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "act_target": {
+                                "type": "string",
+                                "enum": [
+                                  "home_thread",
+                                  "new_conversation"
+                                ]
+                              },
+                              "interval": {
+                                "type": "string"
+                              },
+                              "jitter": {
+                                "one_of": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 50
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[0-9]{1,2}%?$"
+                                  }
+                                ]
+                              },
+                              "limits": {
+                                "type": "object",
+                                "properties": {
+                                  "acts_per_day": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 96
+                                  },
+                                  "spend_per_day_usd": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1000
+                                  },
+                                  "wakes_per_day": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 96
+                                  }
+                                }
+                              },
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "heartbeat",
+                                  "off"
+                                ]
+                              },
+                              "quiet_hours": {
+                                "type": "string"
+                              },
+                              "watch": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "kind"
+                                  ],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "tool": {
+                                      "type": "string",
+                                      "max_length": 128
+                                    }
+                                  }
+                                },
+                                "max_items": 16
+                              }
+                            }
                           },
                           "run_caps": {
                             "type": "object",
@@ -19000,6 +19422,33 @@
               "user_input"
             ],
             "properties": {
+              "addressed_to": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
+                },
+                "max_items": 16
+              },
+              "floor_turn": {
+                "type": "object",
+                "required": [
+                  "position",
+                  "question_id"
+                ],
+                "properties": {
+                  "position": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 15
+                  },
+                  "question_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
               "participant_id": {
                 "type": "integer",
                 "format": "int64"
@@ -19115,9 +19564,69 @@
                 "execution_id": {
                   "type": "string"
                 },
+                "executor": {
+                  "type": "string",
+                  "enum": [
+                    "cloud",
+                    "local"
+                  ]
+                },
                 "expires_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "floor": {
+                  "type": "object",
+                  "required": [
+                    "agents",
+                    "position",
+                    "question_id",
+                    "targets"
+                  ],
+                  "properties": {
+                    "agents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "executor",
+                          "name",
+                          "participant_id"
+                        ],
+                        "properties": {
+                          "executor": {
+                            "type": "string",
+                            "enum": [
+                              "cloud",
+                              "local"
+                            ]
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "participant_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          }
+                        }
+                      }
+                    },
+                    "position": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "question_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "targets": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "format": "int64"
+                      }
+                    }
+                  }
                 },
                 "memory_recall": {
                   "type": "object",
@@ -32374,6 +32883,133 @@
             "waking",
             "working"
           ]
+        },
+        "stream_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "open": true
+    },
+    "agent_subagent": {
+      "type": "object",
+      "required": [
+        "response_metadata",
+        "type"
+      ],
+      "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "content": {
+          "nullable": true
+        },
+        "created_at": {
+          "type": "string",
+          "nullable": true
+        },
+        "message_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
+        },
+        "response_metadata": {
+          "type": "object",
+          "required": [
+            "subagent_v1"
+          ],
+          "properties": {
+            "subagent_v1": {
+              "type": "object",
+              "required": [
+                "agent_id",
+                "kind"
+              ],
+              "properties": {
+                "agent_id": {
+                  "type": "string"
+                },
+                "args_summary": {
+                  "type": "string"
+                },
+                "avatar": {
+                  "type": "string"
+                },
+                "call_id": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "error": {
+                  "type": "string"
+                },
+                "input_tokens": {
+                  "type": "integer"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "finished",
+                    "resumed",
+                    "started",
+                    "text",
+                    "tool_end",
+                    "tool_start"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "ordinal": {
+                  "type": "integer"
+                },
+                "output_tokens": {
+                  "type": "integer"
+                },
+                "parent_call_id": {
+                  "type": "string"
+                },
+                "result": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "budget_exhausted",
+                    "cancelled",
+                    "completed",
+                    "failed",
+                    "running"
+                  ]
+                },
+                "steps": {
+                  "type": "integer"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "open": true
         },
         "stream_id": {
           "type": "string",

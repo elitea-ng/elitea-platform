@@ -45,6 +45,12 @@ struct MainScript {
     refuse_visit: bool,
     /// The first platform step takes this long (a step in flight).
     first_step_delay: Option<Duration>,
+    /// The intent answer takes this long: time spent inside the slot after
+    /// admission and before the first submission (W3-2, N3).
+    intent_delay: Option<Duration>,
+    /// The first this many original visit calls answer `UNAVAILABLE`, as
+    /// Main does on a serialization failure or a busy request slot.
+    visit_unavailable: usize,
     effects: Effects,
 }
 #[derive(Default)]
@@ -58,6 +64,8 @@ struct MainCalls {
     visit_attempts: Vec<u64>,
     /// The dispatch activation of every intent Main signed, in order.
     intent_dispatches: Vec<String>,
+    /// Every original visit call, answered or not.
+    visit_calls: usize,
 }
 struct FakeMain {
     script: MainScript,
@@ -144,6 +152,14 @@ impl FakeMain {
         body: serde_json::Value,
     ) -> Result<Vec<u8>, Status> {
         if path == "visits" {
+            let call = {
+                let mut calls = self.calls.lock().unwrap();
+                calls.visit_calls += 1;
+                calls.visit_calls
+            };
+            if call <= self.script.visit_unavailable {
+                return Err(Status::unavailable("Node recovery control is busy"));
+            }
             if let Some(attempt) = body["attempt"].as_u64() {
                 self.calls.lock().unwrap().visit_attempts.push(attempt);
             }
@@ -170,6 +186,9 @@ impl FakeMain {
             );
         }
         if path == "intents" {
+            if let Some(delay) = self.script.intent_delay {
+                tokio::time::sleep(delay).await;
+            }
             let pending: Option<bool> = sqlx::query_scalar(
                 "SELECT submission_pending FROM elitea_runtime.sandbox_dispatches LIMIT 1",
             )
@@ -386,6 +405,8 @@ struct FakeSupervisor {
     /// Scripted terminal answers, one per submission; when empty, the runtime
     /// fails the way a thrown error does.
     answers: Arc<StdMutex<std::collections::VecDeque<pb::SubmitSandboxJobResponseV1>>>,
+    /// Submissions answered Busy (`RESOURCE_EXHAUSTED`) before any answer.
+    busy: Arc<StdMutex<usize>>,
     calls: Arc<StdMutex<SupervisorCalls>>,
     pool: sqlx::PgPool,
 }
@@ -405,6 +426,13 @@ impl SandboxSupervisorService for FakeSupervisor {
             let mut calls = self.calls.lock().unwrap();
             calls.submits += 1;
             calls.pending_at_submit.push(pending);
+        }
+        {
+            let mut busy = self.busy.lock().unwrap();
+            if *busy > 0 {
+                *busy -= 1;
+                return Err(Status::resource_exhausted("the supervisor is at capacity"));
+            }
         }
         tokio::time::sleep(self.fail_after).await;
         if let Some(answer) = self.answers.lock().unwrap().pop_front() {
@@ -540,6 +568,7 @@ fn runtime_config(broker: bool) -> SandboxRuntimeConfig {
 
 struct Harness {
     _database: IsolatedPostgres,
+    pool: sqlx::PgPool,
     factory: CodeRuntimeFactory,
     runtime: Arc<dyn CodeSandboxRuntime>,
     authority: Arc<ClaimBoundSandboxAuthority>,
@@ -549,10 +578,27 @@ struct Harness {
     main: Arc<StdMutex<MainCalls>>,
     supervisor: Arc<StdMutex<SupervisorCalls>>,
     answers: Arc<StdMutex<std::collections::VecDeque<pb::SubmitSandboxJobResponseV1>>>,
+    busy: Arc<StdMutex<usize>>,
 }
 
-#[allow(clippy::too_many_lines)] // One harness wires every fake the code-recovery proofs share.
 async fn harness(script: MainScript, fail_after: Duration) -> Harness {
+    harness_with(
+        script,
+        fail_after,
+        None,
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await
+}
+
+/// The harness with the profiles' `code_slots` and the run's deadline (W3-1).
+#[allow(clippy::too_many_lines)] // One harness wires every fake the code-recovery proofs share.
+async fn harness_with(
+    script: MainScript,
+    fail_after: Duration,
+    code_slots: Option<u32>,
+    execution_deadline: tokio::time::Instant,
+) -> Harness {
     let url = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL")
         .expect("ELITEA_TEST_DATABASE_URL is required");
     let database = IsolatedPostgres::create(&url).await;
@@ -579,6 +625,7 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
     let supervisor = Arc::new(StdMutex::new(SupervisorCalls::default()));
     let effects = Arc::new(StdMutex::new(script.effects));
     let answers = Arc::new(StdMutex::new(std::collections::VecDeque::new()));
+    let busy = Arc::new(StdMutex::new(0));
     let content = Arc::new(
         crate::transport::InputContentClient::with_original_code_visit_fixture_rpc_deadline(
             FakeMain {
@@ -606,6 +653,7 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
             .add_service(SandboxSupervisorServiceServer::new(FakeSupervisor {
                 fail_after,
                 answers: answers.clone(),
+                busy: busy.clone(),
                 calls: supervisor.clone(),
                 pool: database.pool.clone(),
             }))
@@ -637,7 +685,9 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
         )
         .unwrap()
     };
-    let (pure, broker) = (runtime_config(false), runtime_config(true));
+    let (mut pure, mut broker) = (runtime_config(false), runtime_config(true));
+    pure.code_slots = code_slots;
+    broker.code_slots = code_slots;
     let factory = CodeRuntimeFactory::new(
         control,
         vec![(pure.clone(), client(&pure), None)],
@@ -653,16 +703,18 @@ async fn harness(script: MainScript, fail_after: Duration) -> Harness {
     .unwrap()
     .with_code_intents(content);
     Harness {
-        runtime: factory.bind(authority.clone()),
+        runtime: factory.bind(authority.clone(), execution_deadline),
         factory,
         authority,
         dispatch: DispatchJournal::new(database.pool.clone()),
         effects,
+        pool: database.pool.clone(),
         _database: database,
         scope,
         main,
         supervisor,
         answers,
+        busy,
     }
 }
 
@@ -737,6 +789,8 @@ impl Run {
 const QUIET: MainScript = MainScript {
     refuse_visit: false,
     first_step_delay: None,
+    intent_delay: None,
+    visit_unavailable: 0,
     effects: Effects::None,
 };
 const REFUSED_VISIT: MainScript = MainScript {
@@ -1398,3 +1452,364 @@ async fn a_lost_platform_client_runtime_with_a_clean_journal_settles_typed_and_n
     assert_eq!(failure.class, NodeFailureClass::InvalidResult);
     assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
 }
+
+// ------------------------------------------- W3-1: Code slots and admission
+
+/// Root Code with 30 s left and `timeout_seconds` 30 (needs 120 s): refused
+/// readably before the original visit, with no dispatch row and no
+/// submission; the node fails typed, once.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_root_code_with_too_little_time_is_refused_without_a_dispatch_row() {
+    let h = harness_with(
+        QUIET,
+        Duration::ZERO,
+        None,
+        tokio::time::Instant::now() + Duration::from_secs(30),
+    )
+    .await;
+    let run = default_run(&h, PURE_YAML);
+    let error = run.node.execute(&run.context).await.err().unwrap();
+    assert!(error.to_string().contains("pipeline.node_recovery.failed"));
+    assert_eq!(
+        run.events().await,
+        [crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE]
+    );
+    assert_eq!(h.supervisor.lock().unwrap().submits, 0);
+    assert_eq!(
+        h.main.lock().unwrap().visit_attempts,
+        Vec::<u64>::new(),
+        "no original visit"
+    );
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM elitea_runtime.sandbox_dispatches")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "no sandbox dispatch row");
+    let failure = run.ledger().await.effective_failure().unwrap();
+    assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
+    assert_eq!(run.ledger().await.history().len(), 1);
+}
+
+/// A Supervisor Busy/Pending caused by another Worker keeps the existing
+/// backoff, and the attempt keeps its one slot through it until the
+/// terminal receipt.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_busy_from_another_worker_backs_off_without_releasing_the_slot() {
+    let h = harness_with(
+        QUIET,
+        Duration::ZERO,
+        Some(1),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await;
+    let pending = pb::SubmitSandboxJobResponseV1 {
+        status: pb::SandboxJobStatusV1::Pending.into(),
+        result_json: Vec::new(),
+        failure_code: String::new(),
+        cleanup_pending: false,
+    };
+    h.answers
+        .lock()
+        .unwrap()
+        .extend([pending.clone(), pending, completed()]);
+    let slots = h
+        .factory
+        .code_slots_for_tests("sandbox.internal:9446")
+        .expect("the target's slots");
+    let run = default_run(&h, PURE_YAML);
+    let attempt = run.node.execute(&run.context);
+    tokio::pin!(attempt);
+    let mut saw_held = false;
+    let output = loop {
+        tokio::select! {
+            output = &mut attempt => break output.unwrap(),
+            () = tokio::time::sleep(Duration::from_millis(50)) => {
+                if h.supervisor.lock().unwrap().submits >= 1 {
+                    assert_eq!(slots.available(), 0, "the slot was released during backoff");
+                    saw_held = true;
+                }
+            }
+        }
+    };
+    assert!(saw_held, "the backoff was observed");
+    assert_eq!(output.updates["count"], serde_json::json!(41));
+    assert_eq!(h.supervisor.lock().unwrap().submits, 3);
+    assert_eq!(slots.available(), 1);
+}
+
+/// The deadlock regression end to end: `code_slots = 1`, one attempt runs
+/// its preparation and its job on one slot and completes.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_one_slot_runs_one_attempt_through_preparation_and_run() {
+    let h = harness_with(
+        QUIET,
+        Duration::ZERO,
+        Some(1),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await;
+    h.answers.lock().unwrap().push_back(completed());
+    let run = default_run(&h, PURE_YAML);
+    let output = tokio::time::timeout(Duration::from_secs(60), run.node.execute(&run.context))
+        .await
+        .expect("one attempt never waits on its own slot")
+        .unwrap();
+    assert_eq!(output.updates["count"], serde_json::json!(41));
+    assert_eq!(h.supervisor.lock().unwrap().submits, 1);
+}
+
+const BUSY_CHILD_ENV: &str = "ELITEA_CODE_SUPERVISOR_BUSY_CHILD";
+
+/// Supervisor Busy through the real submit loop: three Busy answers, then the
+/// result. The attempt keeps its backoff and completes; the log has exactly
+/// one INFO `code_supervisor_busy` line for it, and no slot-wait line (the
+/// slot was free).
+#[test]
+#[ignore = "requires disposable PostgreSQL"]
+fn real_pg_supervisor_busy_is_one_info_line_per_attempt() {
+    let output = elitea_faults::logtest::run_child(
+        "agents::graph::node_recovery_runtime::tests::code_owner_tests::wiring_tests::supervisor_busy_child",
+        BUSY_CHILD_ENV,
+    );
+    let lines = output.operator_lines();
+    let busy = elitea_faults::codes::PIPELINE_CODE_SUPERVISOR_BUSY;
+    let busy_lines: Vec<_> = lines
+        .iter()
+        .filter(|line| line["code"] == busy.as_str())
+        .collect();
+    assert_eq!(busy_lines.len(), 1, "{}", output.stdout);
+    assert_eq!(busy_lines[0]["level"], "INFO");
+    assert_eq!(busy_lines[0]["supervisor_target"], "sandbox.internal:9446");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line["code"] == elitea_faults::codes::PIPELINE_CODE_SLOT_WAITED.as_str()),
+        "an uncontended acquire logs nothing"
+    );
+}
+
+#[test]
+fn supervisor_busy_child() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+    if !elitea_faults::logtest::is_child(BUSY_CHILD_ENV) {
+        return;
+    }
+    tracing_subscriber::registry()
+        .with(
+            crate::diagnostics::log_layer(Some("info"), std::io::stdout).expect("operator stream"),
+        )
+        .init();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let h = harness(QUIET, Duration::ZERO).await;
+            *h.busy.lock().unwrap() = 3;
+            h.answers.lock().unwrap().push_back(completed());
+            let run = default_run(&h, PURE_YAML);
+            let output = run.node.execute(&run.context).await.unwrap();
+            assert_eq!(output.updates["count"], serde_json::json!(41));
+            assert_eq!(h.supervisor.lock().unwrap().submits, 4);
+        });
+    elitea_faults::logtest::child_ran();
+}
+
+// ------------------------------- W3-2: Code children, R1 and N3 (real PG)
+
+/// One journaled root-path Code visit on its own thread and input, as one
+/// fan-out child runs it: its own journal and its own dispatch identity.
+fn sibling_run(h: &Harness, thread: &str, value: i64) -> DefaultRun {
+    let mut run = default_run(h, PURE_YAML);
+    run.context = NodeContext::new(
+        State::from([
+            ("value".into(), serde_json::json!(value)),
+            ("input".into(), serde_json::json!("original user input")),
+            ("count".into(), serde_json::json!(-1)),
+        ]),
+        ExecutionConfig::new(thread),
+        2,
+    );
+    let digest = run.activation.node_digest;
+    run.activation = NodeAttemptActivation::from_context("code", digest, &run.context).unwrap();
+    run
+}
+
+/// R1 / C3: `code_slots = 1` and two sibling Code attempts polled by one
+/// task, as two fan-out children are. The second waits for the first one's
+/// slot; both complete, none is refused as a nested acquire.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_two_sibling_attempts_on_one_slot_both_complete_never_nested() {
+    let h = harness_with(
+        QUIET,
+        Duration::from_millis(200),
+        Some(1),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await;
+    h.answers.lock().unwrap().extend([completed(), completed()]);
+    let slots = h
+        .factory
+        .code_slots_for_tests("sandbox.internal:9446")
+        .expect("the target's slots");
+    let first = sibling_run(&h, "child-a", 1);
+    let second = sibling_run(&h, "child-b", 2);
+    let (one, two) = tokio::time::timeout(Duration::from_secs(120), async {
+        tokio::join!(
+            first.node.execute(&first.context),
+            second.node.execute(&second.context)
+        )
+    })
+    .await
+    .expect("one slot never deadlocks two siblings");
+    assert_eq!(one.unwrap().updates["count"], serde_json::json!(41));
+    assert_eq!(two.unwrap().updates["count"], serde_json::json!(41));
+    assert_eq!(h.supervisor.lock().unwrap().submits, 2);
+    assert!(first.events().await.is_empty() && second.events().await.is_empty());
+    assert_eq!(slots.available(), 1);
+}
+
+/// N3: the window was there at admission, but the time spent inside the slot
+/// before the first submission used it up. The fresh attempt is refused with
+/// the same typed refusal before any submission, and its slot is free.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_preparation_past_the_window_is_refused_before_any_submission() {
+    let required = Duration::from_secs(30)
+        + elitea_agent_runtime::graph::fanout::admission::CODE_OBSERVATION_MARGIN;
+    let h = harness_with(
+        MainScript {
+            intent_delay: Some(Duration::from_millis(1500)),
+            ..QUIET
+        },
+        Duration::ZERO,
+        Some(1),
+        tokio::time::Instant::now() + Duration::from_secs(3600),
+    )
+    .await;
+    h.answers.lock().unwrap().push_back(completed());
+    let mut run = default_run(&h, PURE_YAML);
+    // The run's deadline is bound just before the attempt, so a loaded
+    // machine cannot spend the 600 ms margin before admission.
+    let tight = h.factory.bind(
+        h.authority.clone(),
+        tokio::time::Instant::now() + required + Duration::from_millis(600),
+    );
+    let pipeline =
+        crate::agents::graph::compiler::PipelineDefinition::from_yaml(PURE_YAML).unwrap();
+    let definition = pipeline.original_code_definition_fixture("code").unwrap();
+    let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
+    run.receiver = receiver;
+    run.node = RecoverableNode::new(
+        Arc::new(
+            CodeNode::new(definition, types(), tight)
+                .unwrap()
+                .with_events(Some(sender)),
+        ),
+        run.activation.node_digest,
+        NodeRecoveryPolicy::default(),
+        run.factory.clone(),
+        None,
+    )
+    .with_legacy_first_attempt();
+    run.node.clock = Arc::new(Clock(AtomicU64::new(200)));
+    let error = run.node.execute(&run.context).await.err().unwrap();
+    assert!(error.to_string().contains("pipeline.node_recovery.failed"));
+    assert_eq!(
+        run.events().await,
+        [crate::protocol::output::CODE_DEADLINE_INSUFFICIENT_UPSTREAM_CODE]
+    );
+    assert_eq!(h.main.lock().unwrap().visit_attempts, [1], "admitted first");
+    assert_eq!(h.supervisor.lock().unwrap().submits, 0, "nothing submitted");
+    let failure = run.ledger().await.effective_failure().unwrap();
+    assert_eq!(failure.replay, ReplaySafety::NoExternalEffect);
+    let slots = h
+        .factory
+        .code_slots_for_tests("sandbox.internal:9446")
+        .expect("the target's slots");
+    assert_eq!(slots.available(), 1, "the refused attempt holds no slot");
+}
+
+/// C2 for N3: an attempt that may already have started (claim 1 submitted,
+/// then died) is reconciled, never refused after preparation, even with far
+/// less than `timeout + margin` left on claim 2's run.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_a_possibly_started_attempt_is_never_refused_after_preparation() {
+    let h = harness(QUIET, Duration::from_millis(100)).await;
+    claim_one_submitted(&h).await;
+    *h.effects.lock().unwrap() = Effects::Possible;
+    let mut run = run(&h, PLATFORM_YAML, true).await;
+    // Claim 2's run has 5 s left: a fresh attempt would be refused.
+    let short = h.factory.bind(
+        h.authority.clone(),
+        tokio::time::Instant::now() + Duration::from_secs(5),
+    );
+    let pipeline =
+        crate::agents::graph::compiler::PipelineDefinition::from_yaml(PLATFORM_YAML).unwrap();
+    let definition = pipeline.original_code_definition_fixture("code").unwrap();
+    let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
+    let body = Arc::new(
+        CodeNode::new(definition, types(), short)
+            .unwrap()
+            .with_events(Some(sender)),
+    );
+    run.receiver = receiver;
+    run.node = RecoverableNode::new(body, run.node_digest, policy(), run.factory.clone(), None);
+    run.node.clock = Arc::new(Clock(AtomicU64::new(200)));
+    let output = run.node.execute(&run.context).await.unwrap();
+    assert!(
+        output.interrupt.is_some(),
+        "the possibly started attempt goes to reconciliation"
+    );
+    assert_eq!(run.events().await, [] as [String; 0], "never refused");
+    assert_eq!(
+        run.failure().await.replay,
+        ReplaySafety::UnknownExternalEffect {
+            effect_id: run.dispatch_activation
+        }
+    );
+}
+
+/// R6: an attempt that may already have started, asked for a slot inside an
+/// attempt that already holds one (R1), fails with the nested-slot internal
+/// failure (as the fresh path does), never as an attempt timeout; it keeps
+/// its possible effect, so it is never re-run.
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL"]
+async fn real_pg_a_started_attempt_refused_as_nested_is_not_a_timeout() {
+    use elitea_agent_runtime::graph::fanout::admission::{CodeSlots, code_attempt_scope};
+    let h = harness(QUIET, Duration::from_millis(100)).await;
+    claim_one_submitted(&h).await;
+    *h.effects.lock().unwrap() = Effects::Possible;
+    let mut run = run(&h, PLATFORM_YAML, true).await;
+    run.node.clock = Arc::new(Clock(AtomicU64::new(200)));
+    let outer = CodeSlots::new(1);
+    code_attempt_scope(async {
+        let _held = outer
+            .admit_fresh(
+                tokio::time::Instant::now() + Duration::from_secs(600),
+                Duration::ZERO,
+            )
+            .await
+            .expect("the outer attempt holds a slot");
+        let _ = run.node.execute(&run.context).await;
+    })
+    .await;
+    let failure = run.failure().await;
+    assert_eq!(failure.class, NodeFailureClass::InvalidConfiguration);
+    assert_eq!(
+        failure.replay,
+        ReplaySafety::UnknownExternalEffect {
+            effect_id: run.dispatch_activation
+        }
+    );
+}
+
+#[path = "node_recovery_code_fanout_pg_tests.rs"]
+mod fanout_pg_tests;

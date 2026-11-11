@@ -60,6 +60,8 @@ pub(crate) mod fanout_control;
 pub(crate) mod fanout_test_ledger;
 use elitea_agent_runtime::graph::hitl;
 pub(crate) use elitea_agent_runtime::graph::{fanout_budget, fanout_trace};
+#[cfg(test)]
+mod context_view_tests;
 pub(crate) mod fanout_frames;
 pub(crate) mod fanout_turn;
 pub(crate) mod fanout_wake;
@@ -84,6 +86,9 @@ pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
     Gate, journaled_node, node_activation, pause_data, recovery_card, state as direct_tool_state,
     with_decision,
 };
+mod fanout_code_child;
+#[cfg(test)]
+mod fanout_families_parity_tests;
 mod fanout_source;
 #[cfg(test)]
 pub(crate) use fanout_source::{FanoutSource, MapSource};

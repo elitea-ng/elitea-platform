@@ -1148,5 +1148,16 @@
   "desktop.nativeMenu.computerUsing": "Using {app}",
   "desktop.nativeMenu.computerPausedButton": "Paused",
   "desktop.doctor.itSupport": "IT support:",
-  "desktop.nativeMenu.aboutSupport": "IT support: {contact}"
+  "desktop.nativeMenu.aboutSupport": "IT support: {contact}",
+  "workspace.floor.addCloud": "Add a cloud agent",
+  "workspace.floor.addLocal": "Add an agent",
+  "workspace.floor.agent": "{{name}} · {{where}}",
+  "workspace.floor.answeredBy": "Answered by {{name}}",
+  "workspace.floor.cloud": "in the cloud, conversation text only",
+  "workspace.floor.header": "Also in this thread",
+  "workspace.floor.local": "on this computer",
+  "workspace.floor.note": "Write @Name to address an agent; the cloud ones get the conversation text only.",
+  "workspace.floor.stopped": "The next agent this message addressed did not answer: {{message}}",
+  "workspace.floor.superseded": "A newer message took the floor: the other agents this message addressed do not answer it.",
+  "workspace.subagent.temporary": "Temporary"
 }

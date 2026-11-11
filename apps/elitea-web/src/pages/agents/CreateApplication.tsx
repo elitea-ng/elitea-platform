@@ -15,7 +15,7 @@ import {
   useCreateApplicationInitialValues,
   type ApplicationCreationInput,
 } from '@/entities/application-form';
-import { CreateAgentForm } from '@/features/agents';
+import { contextBlockRefusal, CreateAgentForm } from '@/features/agents';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
 import { usePageCrumbs } from '@/shared/ui/page-chrome';
@@ -27,6 +27,7 @@ import {
   areExtraFieldsEqual,
   mapCreateErrorToFieldErrors,
   applyContentControlField,
+  createMetaControls,
   type CreateAgentFormExtraFields,
 } from './lib/createApplicationDraftState';
 import { agentSaveErrorMessage } from './lib/agentSaveErrorMessage';
@@ -174,7 +175,7 @@ export function CreateApplication(): ReactNode {
       instructions: extraFields.instructions,
       welcome_message: extraFields.welcomeMessage,
       variables: extraFields.variables,
-      meta: { step_limit: extraFields.stepLimit, output_contract: extraFields.outputContract, citations: extraFields.citations ?? null },
+      meta: { step_limit: extraFields.stepLimit, output_contract: extraFields.outputContract, citations: extraFields.citations ?? null, context: extraFields.contextBlock },
       llm_settings: extraFields.llmSettings,
     },
   };
@@ -227,7 +228,7 @@ export function CreateApplication(): ReactNode {
         // EDIT page's identical-looking branch IS live, which is what made
         // this one read as reachable. Do not re-add it.
         default:
-          // `meta.output_contract` and `meta.citations` (ADR-0043).
+          // `meta.output_contract`, `meta.citations` (ADR-0043) and `meta.context` (ADR-0050).
           setExtraFields((previous) => applyContentControlField(previous, path, value));
           return;
       }
@@ -257,8 +258,7 @@ export function CreateApplication(): ReactNode {
           meta: {
             ...draftDefaults.versionDetails.meta,
             step_limit: extraFields.stepLimit ?? draftDefaults.versionDetails.meta.step_limit,
-            ...(extraFields.outputContract === null ? {} : { output_contract: extraFields.outputContract }),
-            ...(extraFields.citations === 'required' ? { citations: 'required' } : {}),
+            ...createMetaControls(extraFields),
           },
           llmSettings: extraFields.llmSettings,
         },
@@ -335,7 +335,7 @@ export function CreateApplication(): ReactNode {
             values={agentDraftValues}
             onFieldChange={handleAgentFieldChange}
             disabled={isCreating}
-            showOutputContract
+            showOutputContract={{ contextHistory: contextBlockRefusal(createDraftError) }}
             modelSettingsSlot={
               <AgentModelSettings
                 projectId={projectId}

@@ -373,7 +373,7 @@ fn report_failures(outcome: &HookOutcome, events: &TurnEvents) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

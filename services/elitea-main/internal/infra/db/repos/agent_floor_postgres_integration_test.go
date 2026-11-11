@@ -211,3 +211,51 @@ WHERE message.conversation_id = $1 AND author.entity_name = 'system' AND author.
 		t.Fatalf("an older exchange's run handed: %v", err)
 	}
 }
+
+// Issue 1804: FloorSettle answers a run with no exchange from its pre-check
+// (no transaction), still settles a run that has one, and names the agent
+// that handed the floor from that one participant's row.
+func TestAgentFloorSettlePreCheckAndHandingName(t *testing.T) {
+	f := newFloorHarness(t)
+	// A run of the conversation that no exchange names, and an unknown run.
+	stray := f.runOf(f.agents[1], floorQuestion2)
+	if exists, err := f.floorRunHasExchange(stray); err != nil || exists {
+		t.Fatalf("pre-check of a run with no exchange: %v %v", exists, err)
+	}
+	if view, found, err := f.floors.FloorSettle(t.Context(), stray); err != nil || found || view.Next != nil {
+		t.Fatalf("settle of a run with no exchange: %+v %v %v", view, found, err)
+	}
+	if _, found, err := f.floors.FloorSettle(t.Context(), "0123456789abcdef0123456789abcdef"); err != nil || found {
+		t.Fatalf("settle of an unknown run: %v %v", found, err)
+	}
+
+	f.admitExchange(floorQuestion1, f.agents[0])
+	run := storage.HandFloorRun{ProjectID: 1, ConversationUUID: f.conversation, ParticipantID: f.agents[0],
+		ExecutionID: f.runOf(f.agents[0], floorQuestion1)}
+	if exists, err := f.floorRunHasExchange(run.ExecutionID); err != nil || !exists {
+		t.Fatalf("pre-check of the exchange's first run: %v %v", exists, err)
+	}
+	if err := f.floors.HandFloorInExchange(t.Context(), run, func(storage.FloorExchangeView) (storage.FloorHandWrite, error) {
+		return storage.FloorHandWrite{Queue: []int64{f.agents[2]}, Message: "Cy, over to you"}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The handing agent's persona name wins over its participant name.
+	f.exec(`UPDATE p_1.chat_participant_mapping SET persona = '{"display_name": "Ada Lead"}'::jsonb
+WHERE participant_id = $1`, f.agents[0])
+	view, found, err := f.floors.FloorSettle(t.Context(), run.ExecutionID)
+	if err != nil || !found || view.Next == nil || view.Next.ToParticipantID != f.agents[2] ||
+		view.Next.FromParticipantID != f.agents[0] || view.Next.FromName != "Ada Lead" {
+		t.Fatalf("view=%+v next=%+v found=%v err=%v", view, view.Next, found, err)
+	}
+	// An agent that is not in the conversation has no name.
+	name, err := readFloorAgentName(t.Context(), f.pool, 1, f.conversation, 999999)
+	if err != nil || name != "" {
+		t.Fatalf("name of a non-member = %q %v", name, err)
+	}
+}
+
+func (f *floorHarness) floorRunHasExchange(executionID string) (bool, error) {
+	_, exists, err := runHasExchange(f.t.Context(), f.pool, executionID)
+	return exists, err
+}

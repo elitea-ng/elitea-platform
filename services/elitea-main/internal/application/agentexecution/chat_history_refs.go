@@ -77,6 +77,57 @@ type ReaderView struct {
 	Settings contextview.Settings
 	History  json.RawMessage
 	Refs     []ChatHistoryRef
+	// Entries is every projection entry in transcript order, the ones the
+	// filter dropped included, each with why (issue 1669, the "What the
+	// agent saw" inspector). Message ids and reasons only, never a body.
+	Entries []ContextViewEntry
+}
+
+// ContextViewEntry is one projection entry of a reader's view: in the view
+// (Reason empty) or dropped, and by which rule.
+type ContextViewEntry struct {
+	MessageID string             `json:"message_id"`
+	Reason    contextview.Reason `json:"reason,omitempty"`
+}
+
+// ContextViewRecord is what Main stores about the view one turn was given
+// (issue 1669): the reader, the settings, the window, the digest the worker
+// checked and the entries. The admission writes it with the turn; the
+// inspector reads it back. It holds no message body.
+type ContextViewRecord struct {
+	ReaderParticipantID int64
+	// ParticipantHistory is the participant's own `context_history` ("" when
+	// unset): it explains a since_joined the version did not ask for.
+	ParticipantHistory string
+	Settings           contextview.Settings
+	WindowTokens       uint32
+	Digest             string
+	Entries            []ContextViewEntry
+}
+
+// newContextViewRecord is the record of the input's view.
+func newContextViewRecord(readerParticipantID int64, participantHistory string, view ReaderView, input *runtimev1.AgentExecutionInputV1) *ContextViewRecord {
+	if input.GetContextView() == nil || readerParticipantID <= 0 {
+		return nil
+	}
+	return &ContextViewRecord{
+		ReaderParticipantID: readerParticipantID,
+		ParticipantHistory:  participantHistory,
+		Settings:            view.Settings,
+		WindowTokens:        input.GetContextView().GetWindowTokens(),
+		Digest:              input.GetContextView().GetDigest(),
+		Entries:             append([]ContextViewEntry(nil), view.Entries...),
+	}
+}
+
+// Clone copies the record.
+func (record *ContextViewRecord) Clone() *ContextViewRecord {
+	if record == nil {
+		return nil
+	}
+	clone := *record
+	clone.Entries = append([]ContextViewEntry(nil), record.Entries...)
+	return &clone
 }
 
 // BuildReaderView keeps the entries the reader may see, in order. The
@@ -92,8 +143,11 @@ func BuildReaderView(settings contextview.Settings, history json.RawMessage, ref
 	}
 	keptEntries := make([]json.RawMessage, 0, len(entries))
 	keptRefs := make([]ChatHistoryRef, 0, len(refs))
+	viewEntries := make([]ContextViewEntry, 0, len(refs))
 	for index, ref := range refs {
-		if !settings.Eligible(ref.facts()) {
+		reason := settings.Exclusion(ref.facts())
+		viewEntries = append(viewEntries, ContextViewEntry{MessageID: ref.MessageID, Reason: reason})
+		if reason != "" {
 			continue
 		}
 		keptEntries = append(keptEntries, entries[index])
@@ -102,13 +156,13 @@ func BuildReaderView(settings contextview.Settings, history json.RawMessage, ref
 	if len(keptEntries) == len(entries) {
 		// Nothing filtered: the projection's own bytes, so a one-agent
 		// conversation's input is unchanged.
-		return ReaderView{Settings: settings, History: bytes.Clone(history), Refs: refs}, nil
+		return ReaderView{Settings: settings, History: bytes.Clone(history), Refs: refs, Entries: viewEntries}, nil
 	}
 	encoded, err := json.Marshal(keptEntries)
 	if err != nil {
 		return ReaderView{}, ErrMalformedChatHistoryRefs
 	}
-	return ReaderView{Settings: settings, History: encoded, Refs: keptRefs}, nil
+	return ReaderView{Settings: settings, History: encoded, Refs: keptRefs, Entries: viewEntries}, nil
 }
 
 // readerViewSettings is the reader's context settings: the frozen version's

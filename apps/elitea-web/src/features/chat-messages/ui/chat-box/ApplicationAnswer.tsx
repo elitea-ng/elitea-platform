@@ -57,6 +57,7 @@ import { FailureReference } from '../error-trace/FailureReference';
 import { ContinuationError } from '../error-trace/ContinuationError';
 
 import { PersistedMessageTrace } from './PersistedMessageTrace';
+import { CloudSubAgents } from './CloudSubAgents';
 
 import { AnswerContent } from './AnswerContent';
 import { readAnswerItems } from './AnswerMessageItems';
@@ -282,6 +283,8 @@ export function ApplicationAnswer({
       {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}
 
       {nonSwarmChildActions.length > 0 && <ApplicationAnswerThinking actions={nonSwarmChildActions} isStreaming={isActivelyProcessing} pendingInstanceKeys={pendingInstanceKeys} />}
+
+      <CloudSubAgents lanes={answer.subAgents} />
 
       {!isProcessing && swarmChildActions.length > 0 && (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 0.5 }}>

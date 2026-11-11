@@ -37,14 +37,14 @@
 //! plain text, never run or read. A repository cannot grant tools, pick a
 //! model or run a command through a template.
 
+use crate::sys::fd::{AsFd, OwnedFd};
+use crate::sys::os::MetadataExt as _;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read as _;
-use std::os::fd::{AsFd, OwnedFd};
-use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 
-use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+use crate::sys::fs::{AtFlags, FileType, Mode, OFlags};
 
 use crate::error::ErrorCode;
 use crate::workspace::{EntryKind, Intent, Workspace, WsPath};
@@ -266,7 +266,7 @@ fn workspace_dir(workspace: &Workspace, dir: &WsPath, out: &mut Listing) -> Vec<
         let Some(path) = child(dir, &name) else {
             continue;
         };
-        let Ok(stat) = rustix::fs::statat(&fd, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) else {
+        let Ok(stat) = crate::sys::fs::statat(&fd, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) else {
             continue;
         };
         let stem = stem_of(&name);
@@ -343,11 +343,11 @@ fn read_capped(file: File) -> Result<Vec<u8>, String> {
 
 /// The person's own: their uid, and writable by no one else.
 fn owned_privately(metadata: &std::fs::Metadata) -> bool {
-    metadata.uid() == rustix::process::geteuid().as_raw() && metadata.mode() & 0o022 == 0
+    metadata.uid() == crate::sys::process::geteuid().as_raw() && metadata.mode() & 0o022 == 0
 }
 
 fn open_at(dir: &impl AsFd, name: &str, flags: OFlags) -> Option<OwnedFd> {
-    rustix::fs::openat(
+    crate::sys::fs::openat(
         dir,
         name,
         flags | OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
@@ -366,7 +366,7 @@ fn private_dir(fd: Option<OwnedFd>) -> Option<OwnedFd> {
 
 /// The names in the folder `fd`, sorted.
 fn names_in(fd: &OwnedFd) -> Vec<String> {
-    let Ok(dir) = rustix::fs::Dir::read_from(fd) else {
+    let Ok(dir) = crate::sys::fs::Dir::read_from(fd) else {
         return Vec::new();
     };
     let mut names: Vec<String> = dir
@@ -397,7 +397,7 @@ fn read_user_file(dir: &OwnedFd, name: &str) -> Result<Vec<u8>, String> {
 
 /// The person's command files, each read (or the reason it was not).
 fn user_files(user_dir: &Path, wanted: Wanted<'_>) -> Vec<(Found, Result<Vec<u8>, String>)> {
-    let root = rustix::fs::open(
+    let root = crate::sys::fs::open(
         user_dir,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
@@ -679,7 +679,7 @@ pub fn expand(entry: &CommandEntry, arguments: &str) -> String {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt as _;
@@ -813,7 +813,7 @@ mod tests {
         fs::write(dir.path().join(".elitea/commands/ship.md"), [0xff, 0xfe]).unwrap();
         write(dir.path(), ".claude/commands/ship.md", "the other ship");
         write(dir.path(), "inside.md", "INSIDE");
-        std::os::unix::fs::symlink(
+        crate::sys::os::symlink(
             dir.path().join("inside.md"),
             dir.path().join(".claude/commands/linked.md"),
         )
@@ -929,9 +929,9 @@ mod tests {
     fn a_symlinked_folder_on_the_way_is_not_listed() {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), "real/commands/x.md", "INSIDE");
-        std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join(".claude")).unwrap();
+        crate::sys::os::symlink(dir.path().join("real"), dir.path().join(".claude")).unwrap();
         write(dir.path(), ".elitea/real/y.md", "INSIDE TOO");
-        std::os::unix::fs::symlink(
+        crate::sys::os::symlink(
             dir.path().join(".elitea/real"),
             dir.path().join(".elitea/commands"),
         )
@@ -968,7 +968,7 @@ mod tests {
         fs::set_permissions(user.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let other = tempfile::tempdir().unwrap();
         let link = other.path().join("commands");
-        std::os::unix::fs::symlink(user.path(), &link).unwrap();
+        crate::sys::os::symlink(user.path(), &link).unwrap();
         assert_eq!(list(None, Some(&link)).commands.len(), 0);
     }
 
@@ -979,18 +979,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), ".claude/commands/ok.md", "fine");
         write(dir.path(), "inside.md", "INSIDE");
-        std::os::unix::fs::symlink(
+        crate::sys::os::symlink(
             outside.path().join("evil.md"),
             dir.path().join(".claude/commands/evil.md"),
         )
         .unwrap();
-        std::os::unix::fs::symlink(
+        crate::sys::os::symlink(
             dir.path().join("inside.md"),
             dir.path().join(".claude/commands/inside.md"),
         )
         .unwrap();
         // A symlinked folder: `.elitea` leads out of the workspace.
-        std::os::unix::fs::symlink(outside.path(), dir.path().join(".elitea")).unwrap();
+        crate::sys::os::symlink(outside.path(), dir.path().join(".elitea")).unwrap();
         fs::create_dir_all(outside.path().join("commands")).unwrap();
         fs::write(outside.path().join("commands/out.md"), "OUTSIDE").unwrap();
         let listing = list(Some(&open(&dir, &[])), None);
@@ -1007,7 +1007,7 @@ mod tests {
         }
         // In the person's folder too.
         let user = user_dir();
-        std::os::unix::fs::symlink(outside.path().join("evil.md"), user.path().join("evil.md"))
+        crate::sys::os::symlink(outside.path().join("evil.md"), user.path().join("evil.md"))
             .unwrap();
         let listing = list(None, Some(user.path()));
         assert!(listing.commands.is_empty(), "{listing:?}");

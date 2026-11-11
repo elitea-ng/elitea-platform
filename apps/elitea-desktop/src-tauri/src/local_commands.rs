@@ -638,6 +638,8 @@ pub async fn agent_turn_start(
     images: Option<Vec<ImagePick>>,
     bypass_approvals: Option<bool>,
     unattended: Option<Value>,
+    addressed_to: Option<Vec<i64>>,
+    cloud_agent: Option<bool>,
 ) -> Result<TurnStarted, IpcError> {
     let bypass = bypass_approvals.unwrap_or(false);
     if bypass && plan_mode {
@@ -703,6 +705,13 @@ pub async fn agent_turn_start(
             command,
             images: images.unwrap_or_default(),
             unattended,
+            // The agents the person addressed (ADR-0050 decision 7f): Main
+            // routes the message, the host runs the agents one at a time.
+            addressed_to: addressed_to.unwrap_or_default(),
+            floor_turn: None,
+            // The agent's participant runs in the cloud: only the
+            // conversation's text goes to it.
+            cloud: cloud_agent.unwrap_or(false),
         })
         .await?)
 }
@@ -1179,7 +1188,7 @@ pub async fn checkpoint_preview(
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

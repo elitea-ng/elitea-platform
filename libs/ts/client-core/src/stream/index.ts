@@ -41,3 +41,14 @@ export {
   type SteeringItem,
   type SteeringMove,
 } from './steering';
+export {
+  MAX_SUBAGENT_LANES,
+  MAX_SUBAGENT_LANE_ITEMS,
+  foldSubAgentEntry,
+  parseSubAgentLanes,
+  settleSubAgentLanes,
+  subAgentEntryOf,
+  type CloudSubAgentLane,
+  type SubAgentLaneItem,
+  type SubAgentLaneStatus,
+} from './subAgentLane';

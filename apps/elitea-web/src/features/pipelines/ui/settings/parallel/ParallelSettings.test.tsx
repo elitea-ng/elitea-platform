@@ -15,7 +15,7 @@ describe('fixed Parallel settings and YAML roundtrip', () => {
   it('renders exact identities, mapping modes, ordered output and policy defaults without deriving YAML', async () => {
     const screen = renderExtensionCard(EditableParallelSettings, parallelYaml);
     expect(await screen.findByLabelText('Branch 1 result key')).toHaveValue('stable_left');
-    expect(screen.getByLabelText('Branch 1 Agent or LLM node')).toHaveValue('Agent_left');
+    expect(screen.getByLabelText('Branch 1 Agent, LLM or Code node')).toHaveValue('Agent_left');
     expect(screen.getByLabelText('On Error')).toHaveValue('continue');
     expect(screen.getByLabelText('Join')).toHaveValue('append');
     expect(screen.getByText(/Task mapping: variable/u)).toBeVisible();
@@ -26,6 +26,20 @@ describe('fixed Parallel settings and YAML roundtrip', () => {
     expect(owner()).not.toHaveProperty('error_policy');
     expect(owner()).not.toHaveProperty('on_error');
     expect(owner()).not.toHaveProperty('join');
+  });
+  it('summarises a Code branch by its inputs and outputs, never an Agent task mapping (R10)', async () => {
+    const yaml = parallelYaml.replace(
+      "  - id: Agent_right\n    type: agent\n    tool: right_participant\n    input_mapping: {task: {type: fstring, value: 'Keep {prefix}.'}}\n    output: [note]\n",
+      "  - id: Agent_right\n    type: code\n    language: python\n    code: '1'\n    input: [prefix]\n    output: [note]\n",
+    );
+    expect(yaml).not.toBe(parallelYaml);
+    const screen = renderExtensionCard(EditableParallelSettings, yaml);
+    expect(await screen.findByText(/Code node Agent_right runs as this branch/u)).toBeVisible();
+    expect(screen.getByText('Declared inputs: prefix. Declared outputs: note.')).toBeVisible();
+    expect(screen.getAllByText(/Task mapping:/u)).toHaveLength(1);
+    cleanup();
+    const all = renderExtensionCard(EditableParallelSettings, yaml.replace('    input: [prefix]\n', '    input: []\n'));
+    expect(await all.findByText('Declared inputs: all state variables. Declared outputs: note.')).toBeVisible();
   });
   it('round-trips On Error and Join as the exact YAML keys and offers merge only with stop', async () => {
     const screen = renderExtensionCard(EditableParallelSettings, parallelYaml);
@@ -74,7 +88,7 @@ describe('fixed Parallel settings and YAML roundtrip', () => {
     cleanup();
     const again = renderExtensionCard(EditableParallelSettings, saved);
     expect(await again.findByLabelText('Branch 1 result key')).toHaveValue('stable_right');
-    expect(again.getByLabelText('Branch 1 Agent or LLM node')).toHaveValue('Agent_right');
+    expect(again.getByLabelText('Branch 1 Agent, LLM or Code node')).toHaveValue('Agent_right');
   });
   it('changes only a selected branch field and preserves invalid foreign branch metadata and null siblings', async () => {
     const yaml = parallelYaml.replace('node: Agent_left}', 'node: Agent_left, foreign: {opaque: [null, true]}}').replace('{id: stable_right, node: Agent_right}', 'null');
@@ -116,7 +130,7 @@ describe('fixed Parallel settings and YAML roundtrip', () => {
     const screen = renderExtensionCard(EditableParallelSettings, yaml);
     const before = currentExtensionDocument();
     const user = userEvent.setup();
-    await user.selectOptions(await screen.findByLabelText('Branch 2 Agent or LLM node'), 'Agent_extra');
+    await user.selectOptions(await screen.findByLabelText('Branch 2 Agent, LLM or Code node'), 'Agent_extra');
     expect(owner()?.['branches']).toEqual([{ id: 'stable_left', node: 'Agent_left' }, { id: 'stable_right', node: 'Agent_extra' }]);
     expect(currentExtensionDocument().nodes?.slice(1)).toEqual(before.nodes?.slice(1));
     expect(screen.getByRole('button', { name: 'Remove transition from Agent_extra' })).toBeEnabled();
@@ -135,7 +149,7 @@ describe('fixed Parallel settings and YAML roundtrip', () => {
   it('withholds child transition actions when Map or another Parallel shares the exact Agent', async () => {
     const yaml = parallelYaml.replace('    tool: left_participant', '    transition: END\n    tool: left_participant') + '  - {id: foreign_map, type: map, worker: Agent_left}\n';
     const screen = renderExtensionCard(EditableParallelSettings, yaml);
-    await screen.findByLabelText('Branch 1 Agent or LLM node');
+    await screen.findByLabelText('Branch 1 Agent, LLM or Code node');
     expect(screen.queryByRole('button', { name: 'Remove transition from Agent_left' })).toBeNull();
     expect(usePipelineYamlStore.getState().yamlCode).toBe(yaml);
   });

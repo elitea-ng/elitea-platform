@@ -243,7 +243,7 @@ function RecordedTurn({ stored, onFork, resume }: { stored: StoredTurn; onFork: 
   const fork = forkAction(onFork, stored.state === 'running' ? null : turnForkPoint(stored.turn_id, view.done));
   return (
     <Box data-testid="history-turn" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      {view.continuation === undefined && <YourPrompt text={stored.prompt} fork={fork} images={stored.images} />}
+      {view.continuation === undefined && (view.agent?.position ?? 0) === 0 && <YourPrompt text={stored.prompt} fork={fork} images={stored.images} />}
       <TurnTranscript view={view} busy={false} continuation={view.continuation} onTextContextMenu={(text, event) => copyMenu(text, event, fork)} />
       {stored.state === 'interrupted' && view.done === undefined && (
         <InterruptedNote turnId={stored.turn_id} resumable={stored.resumable === true} resume={resume} />

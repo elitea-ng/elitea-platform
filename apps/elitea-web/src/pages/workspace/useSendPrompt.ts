@@ -1,8 +1,20 @@
 /**
  * "Send": make sure the conversation exists, then start the turn on the host.
+ *
+ * In a thread of several agents (ADR-0050 decision 7f) the message's "@Name"
+ * mentions are its `addressed_to` (client-core `addressedTo`). Main answers
+ * the first addressed agent first, so the turn starts on it (a cloud agent's
+ * with `cloud_agent`); the host starts the others in order itself. A
+ * composer pick is not an address (decision 7c, #1917): a message that
+ * names no agent goes to the thread's lead when it has one, so the turn
+ * starts on the lead; a start Main routes elsewhere anyway is refused by the
+ * host before any agent runs, and is sent once more to the routed agent.
  */
 import { useRef, useState } from 'react';
 
+import { addressedTo, FLOOR_POLICY, floorOf } from '@elitea/client-core/conversation';
+
+import { conversationApi } from '@/entities/conversation';
 import { isDesktopGrantsOff, markGrantsTurnedOff } from '@/features/unattended';
 import { describeWorkspaceError, type WorkspaceTurn } from '@/features/workspace';
 import type { TurnModelChoice } from '@/shared/desktop/turnModel';
@@ -10,7 +22,7 @@ import type { AttachedImage, TurnCommand, TurnImagePick, TurnModeChoice, TurnSta
 
 import type { AgentSelection } from './useAgentSelection';
 import { modeFields } from './turnModeFields';
-import { useEnsureConversation } from './useEnsureConversation';
+import { threadAgentsOf, useEnsureConversation, type CompanionAgent, type ThreadAgent } from './useEnsureConversation';
 
 /** The images a message carries: the tokens the host holds them by, and what the transcript shows of them. */
 export interface SentImages {
@@ -82,6 +94,96 @@ function shownOf(images: SentImages | undefined): SentImages['shown'] {
   return images === undefined ? [] : images.shown;
 }
 
+/** The start fields that run the turn as `agent`. */
+function startedOn(agent: ThreadAgent): Pick<TurnStartRequest, 'cloud_agent' | 'application_id' | 'version_id'> {
+  return { application_id: agent.applicationId, version_id: agent.versionId, ...(agent.cloud ? { cloud_agent: true } : {}) };
+}
+
+/**
+ * Who a message is for, in a thread of several agents, as Main routes it (`turntaking.Route`): the agents it names are
+ * its `addressed_to`, and the first of them answers first. A composer pick is not an address (ADR-0050 decision 7c,
+ * #1917): a message that names no agent carries no `addressed_to`, and in a thread with a lead (`meta.floor`) the lead
+ * answers it, so the turn starts on the lead. One agent, or no address and no lead: the composer's agent, as before.
+ */
+export function floorFields(prompt: string, agents: readonly ThreadAgent[], meta?: unknown): Pick<TurnStartRequest, 'addressed_to' | 'cloud_agent' | 'application_id' | 'version_id'> | Record<string, never> {
+  if (agents.length < 2) return {};
+  const addressed = addressedTo(prompt, agents);
+  const first = agents.find((agent) => agent.participantId === addressed[0]);
+  if (first !== undefined) return { addressed_to: addressed, ...startedOn(first) };
+  const floor = floorOf(meta);
+  const lead = floor.policy === FLOOR_POLICY.Lead ? agents.find((agent) => agent.participantId === floor.leadParticipantId) : undefined;
+  return lead === undefined ? {} : startedOn(lead);
+}
+
+/** The thread as Main routes a message in it: its agent participants and its `meta` (the lead, `meta.floor`). */
+interface ThreadFloor {
+  agents: ThreadAgent[];
+  meta: unknown;
+}
+
+const NO_FLOOR: ThreadFloor = { agents: [], meta: undefined };
+
+/**
+ * A message routed to several agents is not a "Run to completion" chain (the host follows the floor instead, one agent
+ * after another). A cloud agent's turn takes none of the composer's sticky modes: no grant, model choice, plan mode or
+ * bypass (the host would refuse them, `cloud_agent_text_only`), so they are dropped, not sent to be refused. What the
+ * person attached to this message (files, images, a command, skills) is sent as it is: the host refuses it with its
+ * reason rather than the message going without it.
+ */
+export function routedRequest(request: TurnStartRequest): TurnStartRequest {
+  const routed = (request.addressed_to?.length ?? 0) > 1;
+  const cloud = request.cloud_agent === true;
+  if (!routed && !cloud) return request;
+  const { unattended: _chain, model, bypass_approvals: bypass, ...rest } = request;
+  if (cloud) return { ...rest, plan_mode: false };
+  return { ...rest, ...(model === undefined ? {} : { model }), ...(bypass === undefined ? {} : { bypass_approvals: bypass }) };
+}
+
+/** The thread's other agents, as the conversation adds them (the composer's agent is never its own companion). */
+function companionsOf(selection: AgentSelection, agentId: string): CompanionAgent[] {
+  return (selection.companions ?? [])
+    .filter((c) => c.agentId !== agentId)
+    .map((c) => ({ applicationId: Number(c.agentId), applicationName: c.name, versionId: c.versionId, agentType: c.agentType, cloud: c.cloud }));
+}
+
+/** The thread's agents and meta, read from the conversation; `NO_FLOOR` when it cannot be read. */
+async function readFloor(projectId: number, conversationId: string): Promise<ThreadFloor> {
+  try {
+    const detail = await conversationApi.details({ projectId, id: conversationId });
+    return { agents: threadAgentsOf(detail.participants), meta: detail.meta };
+  } catch {
+    // The thread could not be read: the composer's agent answers, as in a thread of one (and the host refuses a start
+    // Main routes elsewhere, `floor_routed_elsewhere`).
+    return NO_FLOOR;
+  }
+}
+
+/**
+ * The thread a message is routed in. A conversation created by this send has no lead and only the agents it added. An
+ * existing one is read (its agents and its lead may have changed since the composer opened it): a message that names
+ * no agent there goes to the lead, when it has one.
+ */
+async function threadFloor(projectId: number, conversationId: string, existed: boolean, prompt: string, added: ThreadAgent[]): Promise<ThreadFloor> {
+  if (!existed) return { agents: added, meta: undefined };
+  const read = await readFloor(projectId, conversationId);
+  if (read.agents.length > 0) return read;
+  // Unreadable: the agents this send added still route an address.
+  return { agents: /[@#]/.test(prompt) || added.length > 0 ? added : [], meta: undefined };
+}
+
+/** The host's refusal of a start Main routed to another agent than the one it started on (`check_routed`). */
+const ROUTED_ELSEWHERE = 'floor_routed_elsewhere';
+
+/**
+ * A start Main routed elsewhere (the thread's lead changed since it was read): the same message once more, on the agent
+ * Main routes it to as the thread now reads. `undefined` when that is the agent the refused start was on.
+ */
+async function rerouted(request: TurnStartRequest, projectId: number, conversationId: string, base: TurnStartRequest): Promise<TurnStartRequest | undefined> {
+  const floor = await readFloor(projectId, conversationId);
+  const again = routedRequest({ ...base, ...floorFields(base.prompt, floor.agents, floor.meta) });
+  return again.application_id === request.application_id && again.version_id === request.version_id ? undefined : again;
+}
+
 /** The start request's `command`, only when the message runs one. */
 function commandField(command: TurnCommand | undefined): { command?: TurnCommand } {
   return command === undefined ? {} : { command };
@@ -115,7 +217,7 @@ export function useSendPrompt(
     const startsNew = selection.conversationId === '';
     const reuse = reusable(pending.current, startsNew, key);
     try {
-      const conversationId = await ensureConversation({
+      const ensured = await ensureConversation({
         projectId,
         conversationId: reuse === null ? selection.conversationId : reuse.id,
         completeSetup: reuse === null ? false : !reuse.ready,
@@ -128,9 +230,12 @@ export function useSendPrompt(
         versionId: version.id,
         agentType: version.agentType,
         folderName: workspace.name,
+        companions: companionsOf(selection, agent.id),
       });
+      const conversationId = ensured.id;
+      const floor = await threadFloor(projectId, conversationId, selection.conversationId !== '', prompt, ensured.agents);
       if (startsNew) pending.current = { key, id: conversationId, ready: true };
-      const request: TurnStartRequest = {
+      const base: TurnStartRequest = {
         workspace_id: workspace.id,
         project_id: projectId,
         conversation_id: conversationId,
@@ -145,7 +250,12 @@ export function useSendPrompt(
         ...commandField(command),
         ...imagesField(images),
       };
-      const started = await turn.start(request, (refusal) => withoutRefusedGrant(request, refusal));
+      const request = routedRequest({ ...base, ...floorFields(prompt, floor.agents, floor.meta) });
+      // Main routed the message to another agent than the one it started on (the lead changed since the thread was
+      // read): once more, on the agent the thread now routes it to.
+      const started = await turn.start(request, (refusal) =>
+        refusal.code === ROUTED_ELSEWHERE ? rerouted(request, projectId, conversationId, base) : withoutRefusedGrant(request, refusal),
+      );
       // A refused start (its reason is the turn's startError) keeps the
       // prompt and the person's conversation choice as they were.
       if (!started) return false;

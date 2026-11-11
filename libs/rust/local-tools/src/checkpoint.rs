@@ -490,7 +490,7 @@ impl TempIndex {
         ));
         std::fs::create_dir(&dir)
             .map_err(|error| ToolError::io("cannot create a temporary index", &error))?;
-        let dir = std::fs::canonicalize(&dir)
+        let dir = crate::sys::canonicalize(&dir)
             .map_err(|error| ToolError::io("cannot create a temporary index", &error))?;
         Ok(Self {
             index: dir.join("index"),
@@ -1234,7 +1234,7 @@ impl CopyCheckpoints {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::path::Path;
     use std::process::Command;
@@ -1737,9 +1737,9 @@ mod tests {
         checkpoints.create("turn").expect("create");
 
         std::fs::remove_dir_all(root.join("src")).expect("rm src");
-        std::os::unix::fs::symlink("lib", root.join("src")).expect("link dir");
+        crate::sys::os::symlink("lib", root.join("src")).expect("link dir");
         std::fs::remove_file(root.join("b.txt")).expect("rm b");
-        std::os::unix::fs::symlink("lib/b.txt", root.join("b.txt")).expect("link file");
+        crate::sys::os::symlink("lib/b.txt", root.join("b.txt")).expect("link file");
         checkpoints.restore(1).expect("restore");
 
         assert!(
@@ -1834,9 +1834,9 @@ mod tests {
     #[test]
     fn checkpoint_in_worktree_uses_shared_objects_and_own_index() {
         let dir = repo();
-        let root = std::fs::canonicalize(dir.path()).expect("canonical");
+        let root = crate::sys::canonicalize(dir.path()).expect("canonical");
         let data = tempfile::tempdir().expect("data");
-        let data_root = std::fs::canonicalize(data.path()).expect("canonical");
+        let data_root = crate::sys::canonicalize(data.path()).expect("canonical");
         let main = crate::git::Repo::discover(
             &root,
             &crate::sandbox::SandboxConfig::default(),
