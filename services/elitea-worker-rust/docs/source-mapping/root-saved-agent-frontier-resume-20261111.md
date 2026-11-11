@@ -113,10 +113,10 @@
 | Condition | Enforced in code | Proving test |
 |---|---|---|
 | C1 single, proof-bound re-entry | `RootAgentReentry::take` admits a proven `(node, step, call_id)` once (`W/agents/pipeline/scoped_runtime.rs:178`); the scoped runtime refuses any other non-fresh `Started` (`:351-366`). A retried assembly in the same claim re-inspects: a restored call it already sent rewrote the Agent's checkpoint (new invocation id), so the v3 digest differs and Main's one-digest-per-claim grant refuses it. | `a_root_reentry_is_proof_bound_and_taken_once` (unit); `postgres_a_root_agent_step_changed_after_its_grant_is_refused` (a changed step after the grant is refused, 0 model calls) |
-| C2 only transient errors retained, per-cycle line, bounded | `storage_failure` / `checkpoint_load_failure` (`W/agents/session_agent_frontier.rs:259-290`) add the retained cause only to the stores' own `storage_unavailable` (connection, I/O, pool timeout, 08xxx, 40001, 40P01, 55P03, 57P0x, 25P03, 57014; `W/state/postgres_session.rs:2252`, `W/state/postgres_checkpointer.rs:1765`); decode, constraint and data errors keep their terminal. `checkpoint_recovery.rs:157` retains only that cause. The retained line is written once per result code per 60 s with `suppressed` (`W/execution/agent_delivery_processor.rs:891`, `W/diagnostics/cycle.rs:38`). Bound: the command deadline, checked before every inspect (`W/execution/agent_preparation.rs:2226`), so at most one reclaim per AckWait (60 s) until the deadline, then a typed `DeadlineExceeded`. | `postgres_a_transient_read_failure_at_a_root_agent_inspect_is_retained` (real PG lock on the root and the scope writer rows), `a_transient_inspect_failure_keeps_the_checkpoint_delivery_for_the_next_reclaim`, `only_a_transient_storage_failure_is_retained`, `one_line_per_class_per_window_with_the_suppressed_count`, `retained_delivery_is_one_registered_fault_line` (two retained deliveries, one line, `suppressed` 0) |
-| C3 one snapshot under the claim's authority | Not one SQL transaction: the root row (with its receipt, one row) and the scope are read in two fenced reads. Argument: both are read after this claim activated the root session and root checkpoint writer rows (`activate_pipeline_postgres`, `W/agents/session.rs:1753`); a graph checkpoint write locks the root writer row and requires its claim (`W/state/postgres_checkpointer.rs:424-451`), and a model-scope write locks the root session writer row first (`lock_current_writer`, `W/state/postgres_session.rs:754-765`). An older claim therefore cannot change either between the reads; this claim writes nothing during inspect. | `postgres_a_takeover_between_a_root_agent_inspect_and_assembly_fences_the_older_claim` (the older claim writes nothing after the takeover) |
+| C2 only transient errors retained, per-cycle line, bounded | The stores' own `storage_unavailable` (connection, I/O, pool timeout, 08xxx, 40001, 40P01, 55P03, 57P0x, 25P03, 57014; `W/state/postgres_session.rs:2252`, `W/state/postgres_checkpointer.rs:1765`) carries an internal cause (`STORAGE_UNAVAILABLE_CAUSE`, `W/agents/session_agent_frontier.rs:299`) that changes no terminal and no message. Only the reclaim inspect turns it into the retained cause (`reclaim_inspect_failure` `:327`, applied at `W/agents/pipeline.rs:1272,1284`), and `W/execution/checkpoint_recovery.rs:157` retains only that. Decode, constraint and data errors keep their terminal. "Every frontier kind" means only these C2 transient classes, on any frontier kind's reclaim inspect (root row load, walk loads, continuation load, the proof's scope open, the root activation). The retained line for this cause is written once per execution per 60 s with that execution's `suppressed` count, findable by `support_ref` (windows owned by `AgentDeliveryProcessor`, `W/execution/agent_delivery_processor.rs:74,912`, `W/diagnostics/cycle.rs`, at most 4 096 keys, never hidden when full); every other retained code keeps one line per delivery. Bound: the command deadline, checked before every inspect (`W/execution/agent_preparation.rs:2226`), with one redelivery per AckWait (60 s, `services/elitea-main/internal/transport/commandbus/contract.go:120`) until then, then a typed `DeadlineExceeded`. | `postgres_a_transient_read_failure_at_a_root_agent_inspect_is_retained` (real PG lock on the root and the scope writer rows; the assembly path under the same lock keeps its terminal), `a_transient_inspect_failure_keeps_the_checkpoint_delivery_for_the_next_reclaim`, `only_a_transient_storage_failure_is_retained`, `activation_failures_keep_their_message_and_carry_no_reclaim_cause`, `only_transient_inspect_retains_are_windowed_per_execution`, `one_line_per_key_per_window_with_the_suppressed_count`, `a_full_table_drops_expired_windows_and_never_hides_a_line` |
+| C3 one snapshot under the claim's authority (fence argument accepted) | Not one SQL transaction: the root row (with its receipt, one row) and the scope are read in two fenced reads. Argument: both are read after this claim activated the root session and root checkpoint writer rows (`activate_pipeline_postgres`, `W/agents/session.rs:1753`); a graph checkpoint write locks the root writer row and requires its claim (`W/state/postgres_checkpointer.rs:424-451`), and a model-scope write locks the root session writer row first (`lock_current_writer`, `W/state/postgres_session.rs:754-765`). An older claim therefore cannot change either between the reads; this claim writes nothing during inspect. | `postgres_a_takeover_between_a_root_agent_inspect_and_assembly_fences_the_older_claim` (the older claim writes nothing after the takeover); `postgres_a_takeover_of_the_agents_scope_during_the_proof_is_a_lost_writer` (a newer claim owning the scope when the proof opens it: `AuthorizationFailed`, as the root activation) |
 | C4 the restored request is the stored one | `prepare_request` returns the saved request (`W/agents/model_checkpoint.rs`). | STEP 0 compares the re-issued request body with the lost one (JSON equal). The model gateway sees the call twice (the lost one and the restored one): a cost, not a repeated effect, as for an ordinary root. |
-| C5 one card, keyed on the durable receipt | Re-entry forwards the receipt's `original_start` (same event id); the session stores it once. | STEP 0: one start event in the root session, the receipt's id |
+| C5 one card, keyed on the durable receipt | Re-entry forwards the receipt's `original_start` (same event id); the session stores it once. An answer served from the Agent's completion receipt is not forwarded again (round 1 #3). | STEP 0: one start event in the root session, the receipt's id; T3: no second copy of the answer |
 | C6 operator note | This mapping and the upgrade note. | — |
 
 ## Tests
@@ -149,17 +149,43 @@ V1 (version skew, gate reverted): with the agent aliases forced empty every new 
 rollout: F typed, nothing repeated. V2: no durable record kind or key changed (receipts and model checkpoints are
 written exactly as before; `root_recovery` is in-process only).
 
-Not covered by a dedicated test: T1c (the model → tool write window, FU-329), T5b (an approved call in flight; the
-existing dispatch-journal rows apply), T5c (a Code tool in flight: not replayable, so the T5 rule; no Code journal
-applies to an Agent's Code tool), the delegated-call limits (8/9, unchanged `delegation.rs`), the receipt limits
-(128/256 KiB, unchanged), tier 3/4 (unchanged admission), two Agent frontier nodes in one row.
+Not covered by a dedicated test:
+
+- **T1c** was to prove the narrow window after the model returned tool calls and before the tool boundary was written
+  (a completed model event after the `ModelPending` marker). The pre-existing D2 rule refuses it
+  (`W/agents/model_checkpoint.rs` restore: a completed model event after the marker is not an unfinished step); at the
+  root this now shows as `agent_step_invalid` at inspect, never a repeat. Left as a gap with its own plan: FU-329.
+- **T5b** was to prove an approved (sensitive) call in flight inside the root Agent. That call's dispatch journal on
+  the root session decides it (recorded outcome served, dispatched without outcome refused, never started runs once;
+  `W/agents/dispatch_journal.rs`), unchanged by this slice; its member twin is proven by
+  `postgres_an_approved_agent_member_call_in_flight_at_a_crash_ends_typed`. No root-level test here: a gap.
+- **T5c** was to prove a Code tool in flight inside the root Agent. A Code tool is neither an agent tool nor read-only,
+  so `before_tool` writes `ToolMayHaveStarted` and the reclaim ends `RECOVERY_REFUSED` exactly as T5 proves for an MCP
+  tool; no Code journal applies to an Agent's Code tool. Covered by the T5 rule, no Code-specific test.
+- Also unchanged and not re-tested at the root: the delegated-call limits (8/9, `delegation.rs`), the receipt limits
+  (128 receipts, 256 KiB), tier 3/4 admission, and two Agent frontier nodes in one row.
+
+## Review round 1 (code-review high on `origin/main...ecd3eaa91`)
+
+| # | Finding | Verdict | Fix | Test (seen failing first) |
+|---|---|---|---|---|
+| 1 | a scope-open writer loss or invalid scope became a terminal `DependencyUnavailable` | real | the proof maps scope errors through `session_code_error` (`W/agents/session.rs:5420`), the one classification the root activation uses (`W/agents/session_agent_frontier.rs:242`) | `postgres_a_takeover_of_the_agents_scope_during_the_proof_is_a_lost_writer` (was `native_agent.dependency_unavailable`, now `native_agent.authorization_failed`), `a_scope_open_failure_is_classified_as_the_session_activation` |
+| 2 | inspect accepted `ContextPending` that restore refuses | real | the inspect passes the restore's predicate: the run's admitted context plan, which a nested Agent takes as is (`W/agents/assembly.rs:517`, `W/agents/session_agent_frontier.rs:233`) | forged case "a context-preparation step while the run does not compact" (was a mid-run `agent.legacy` failure after the grant, now `agent_step_invalid` at inspect) |
+| 3 | an `Answered` re-entry forwarded a second copy of the Agent's answer | real (live frames; the root session persists only the call result) | the copy served from the completion receipt is marked in process (`W/agents/model_scope.rs:60,512`) and never forwarded (`W/agents/application_tools.rs:5047`) | T3 now asserts the frames that carry the answer (was `agent_llm_chunk,agent_llm_end,partial_message` twice, now only the call result and the pipeline answer) |
+| 4 | a process-wide window per result code hid other executions | real | windows owned by `AgentDeliveryProcessor`, only for the transient-inspect code, keyed by execution; every other code one line per delivery as before | `only_transient_inspect_retains_are_windowed_per_execution` (was one line for three deliveries) |
+| 5 | activation messages changed and every activation carried the reclaim cause | real | activation errors keep their messages and carry an internal storage cause; only the reclaim inspect adds `inspect_transient` | `activation_failures_keep_their_message_and_carry_no_reclaim_cause` (was the wrong message), T9 assembly-path assertion |
+| 6 | module lines between a doc comment and its function | real | moved (`W/agents/session.rs:2448`) | — |
+| 7 | duplicated fault block | done | `log_refusal` / `refused` helpers; `AgentFrontierClass` kept (folding it is not trivial) | — |
+| (b) | `(application, version)` binding condition | see Deviations | receipt stamp + assembly check | `postgres_a_saved_agent_edited_between_the_kill_and_the_reclaim_is_refused_typed` (was a resume) |
+
+Failing-first output: `handoffs/point5-wave1-20261008/fu323/evidence/round1-failing-first.txt` (local).
 
 ## Gates (branch head, local)
 
 | Gate | Result |
 |---|---|
-| `cargo test --offline --locked --lib --all-features` with `ELITEA_TEST_DATABASE_URL` (PG18), `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18` | 3240 passed, 0 failed, 134 ignored (the `#[ignore]` set other CI steps run; NATS-secure tests skip without the server, as locally always) |
-| new/changed tests in this PR | 16 real-PG two-process tests in `root_saved_agent_frontier_pg_tests.rs` (13 parents + 3 child processes), 5 unit tests in `session_agent_frontier.rs`, 1 compiler matrix + 1 parallel case, 2 marker/session tests, 1 lifecycle test, 1 window test, 1 extended fault-line test |
+| `cargo test --offline --locked --lib --all-features` with `ELITEA_TEST_DATABASE_URL` (PG18), `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18` | round 1: 3247 passed, 0 failed, 134 ignored (the `#[ignore]` set other CI steps run; NATS-secure tests skip without the server, as locally always) |
+| new/changed tests in this PR | 18 real-PG two-process tests in `root_saved_agent_frontier_pg_tests.rs` (15 parents + 3 child processes), 7 unit tests in `session_agent_frontier.rs`, 1 compiler matrix + 1 parallel case, 2 marker/session tests, 1 lifecycle test, 2 window tests, 1 per-execution fault-line test |
 | `cargo clippy --offline --locked --all-targets --all-features -- -D warnings` | clean |
 | `cargo fmt --all -- --check` | clean |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --offline --locked --no-deps --all-features` | clean |
@@ -253,17 +279,29 @@ Pending (orchestrating session).
 - **D-5:** `send_container_call` is not skipped on re-entry. The scoped runtime already replaces the child's start with
   the receipt's durable `original_start`, which the root session stores once; skipping would lose the start when the
   crash came before its first forward. Proven in STEP 0 (one start event, the receipt's).
-- **D-3.4 / D1:** `saved_agent_fingerprint` is not in the v3 evidence: the pre-assembly inspect cannot read it (it comes
-  from materializing the Agent), and both inspects must produce the same digest. The frozen `(application, version)`
-  from the authorized command is bound instead; the restored request still has to match the Agent's current tool
-  declarations (`prepare_request`).
+- **D-3.4 / D1 (accepted with a condition, round 1 (b)):** Main's `saved_agent_fingerprint` cannot be read before
+  assembly, so the frozen `(application, version)` is bound instead, plus the definition digest the call started with.
+  The condition asked to show that restore runs a frozen copy, or that a version row cannot change in place. Neither
+  holds: every assembly re-reads the version from Main, which materializes its current content and recomputes the
+  digest (`services/elitea-main/internal/infra/storage/runtime_application_version.go:239-252`), and only published or
+  embedded versions are refused an in-place edit (`services/elitea-main/internal/infra/db/repos/applications.go:995-1000`;
+  a draft can change). So the call's receipt is now stamped with Main's digest when the call starts
+  (`prepare_graph_call_stamped`, `W/agents/pipeline/scope_receipts.rs:399`, key `:27`, read `:42`), the proof binds it
+  into the v3 evidence, and assembly refuses a re-entry whose current digest differs, or where either is missing
+  (`require_unchanged_agent`, `W/agents/pipeline.rs:1114,2162`): typed `pipeline.recovery.agent_definition_changed`, the
+  Agent-step text, before any model call. The stamp is a key in the start event's free provider metadata, so no codec
+  changes; a receipt an older Worker wrote has none and is refused (fail closed). Test:
+  `postgres_a_saved_agent_edited_between_the_kill_and_the_reclaim_is_refused_typed` (the fake Main serves the edited
+  content with its recomputed digest; refused, 0 model calls, the edited text in no log). The restored request equals
+  the lost one in every resume test (C4, STEP 0).
 - **D-3 "session without checkpoint":** a session with no event is `Fresh` (a Worker lost between creating the scope and
   its first checkpoint write sent nothing); only a session with events and no checkpoint is refused.
 - **D-4:** read-only replay applies to every pipeline Agent-node call, not only on re-entry: the crash-time write must
   already classify a read-only batch as replayable.
 - **C2 bound:** the bound is the command deadline (no separate redelivery counter: JetStream `MaxDeliver` is `-1` by
-  contract); the per-window line covers every retained result code, not only this one.
-- **C3:** two fenced reads with the stated fence argument, not one SQL snapshot.
+  contract). The per-window line covers only the transient-inspect cause, per execution (round 1 #4).
+- **C3 (accepted):** two fenced reads with the stated fence argument (`W/state/postgres_checkpointer.rs:424-451`,
+  `W/state/postgres_session.rs:754-765`), not one SQL snapshot.
 
 ## Follow-ups
 

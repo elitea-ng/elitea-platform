@@ -23,6 +23,37 @@ pub(crate) use parallel_authority::PipelineGraphReceiptAuthority;
 
 pub(crate) const GRAPH_CALL_RECEIPTS_METADATA_KEY: &str = "elitea.pipeline.graph-calls.v1";
 pub(crate) const GRAPH_CALL_REVISION_METADATA_KEY: &str = "elitea.pipeline.graph-call-revision.v1";
+/// The original start's stamp of the saved Agent's definition digest (hex).
+pub(crate) const SAVED_AGENT_DEFINITION_METADATA_KEY: &str =
+    "elitea.pipeline.saved-agent-definition.v1";
+
+pub(crate) fn definition_stamp(digest: [u8; 32]) -> String {
+    digest
+        .iter()
+        .fold(String::with_capacity(64), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+}
+
+impl PipelineGraphCallReceipt {
+    /// The saved Agent definition digest the call was started with, when the
+    /// receipt was stamped with a well-formed one.
+    pub(crate) fn agent_definition(&self) -> Option<[u8; 32]> {
+        let stamp = self
+            .original_start
+            .provider_metadata
+            .get(SAVED_AGENT_DEFINITION_METADATA_KEY)?;
+        if stamp.len() != 64 {
+            return None;
+        }
+        let mut digest = [0_u8; 32];
+        for (index, byte) in digest.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(stamp.get(index * 2..index * 2 + 2)?, 16).ok()?;
+        }
+        Some(digest)
+    }
+}
 /// Written by `elitea_agent_runtime::graph::turn_checkpointer::TurnCheckpointer` on every append.
 const TURN_EXECUTION_METADATA_KEY: &str = "elitea.pipeline.execution.v1";
 const REVISION_SCHEMA: &str = "elitea.pipeline.graph-call-revision.v1";
@@ -349,6 +380,31 @@ pub(crate) async fn prepare_graph_call(
     author: &str,
     branch: &str,
 ) -> Result<(PipelineGraphCallReceipt, bool), GraphError> {
+    prepare_graph_call_stamped(
+        checkpointer,
+        gate,
+        context,
+        activation,
+        (tool_name, arguments),
+        (invocation_id, author, branch),
+        None,
+    )
+    .await
+}
+
+/// [`prepare_graph_call`], stamping a new receipt's original start with the
+/// digest Main gave of the saved Agent the call runs (FU-323a review (b)), so
+/// a reclaim can prove the Agent it re-enters is the one the step started
+/// with. An existing receipt is returned as it was recorded.
+pub(crate) async fn prepare_graph_call_stamped(
+    checkpointer: &dyn Checkpointer,
+    gate: &Mutex<()>,
+    context: &NodeContext,
+    activation: PipelineApplicationActivation,
+    (tool_name, arguments): (&str, &Value),
+    (invocation_id, author, branch): (&str, &str, &str),
+    agent_definition: Option<[u8; 32]>,
+) -> Result<(PipelineGraphCallReceipt, bool), GraphError> {
     let _guard = gate.lock().await;
     let checkpoint = checkpointer
         .load(&context.config.thread_id)
@@ -394,6 +450,12 @@ pub(crate) async fn prepare_graph_call(
     activation
         .stamp_with_branch(&mut original_start, branch.to_owned())
         .map_err(|_| receipt_error())?;
+    if let Some(digest) = agent_definition {
+        original_start.provider_metadata.insert(
+            SAVED_AGENT_DEFINITION_METADATA_KEY.to_owned(),
+            definition_stamp(digest),
+        );
+    }
     let receipt = PipelineGraphCallReceipt {
         schema: RECEIPTS_SCHEMA.to_owned(),
         activation,

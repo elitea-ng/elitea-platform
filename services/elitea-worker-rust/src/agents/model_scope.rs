@@ -53,6 +53,12 @@ impl Toolset for ReadOnlyRecordingToolset {
 
 const COMPLETION_KEY: &str = "elitea.model.completion.v1";
 
+/// Marks an answer served from the Agent's completion receipt (round 1 #3):
+/// its original was already forwarded when it was persisted, so the parent
+/// never forwards this copy again (`application_tools.rs` `drain_child`).
+/// In-process only: the copy is never appended to a session.
+pub(super) const COMPLETION_REPLAY_METADATA_KEY: &str = "elitea.model.completion_replayed.v1";
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ModelCompletion {
@@ -329,6 +335,7 @@ impl ModelScopeSessions {
         base: AdkIdentity,
         child_session: &str,
         agent_name: &str,
+        allow_context_preparation: bool,
     ) -> Result<AgentScopeState, AdkError> {
         let identity = self.scoped_identity(base, child_session, agent_name)?;
         let sessions: Arc<dyn SessionService> = Arc::new(
@@ -370,8 +377,9 @@ impl ModelScopeSessions {
                 AgentScopeRefusal::ForeignExecution,
             ));
         }
-        // A context-preparation step exists only where the Agent compacts, so
-        // its presence is accepted here and checked again by the restore.
+        // The restore's own predicate (round 1 #2): a context-preparation
+        // step is restorable only where the Agent compacts, which the run's
+        // admitted context plan decides for the crash and the reclaim alike.
         Ok(
             match ModelCheckpointWriter::new(
                 sessions,
@@ -379,7 +387,7 @@ impl ModelScopeSessions {
                 self.generation,
                 self.definition_digest,
             )
-            .inspect(session.as_ref(), true)
+            .inspect(session.as_ref(), allow_context_preparation)
             {
                 Ok(Some(validated)) => AgentScopeState::Restorable(validated.digest()),
                 Err(error)
@@ -499,6 +507,9 @@ impl ScopedModelCheckpoint {
             context.branch().clone_into(&mut event.branch);
             event.set_content(content.clone());
             event.llm_response.turn_complete = true;
+            event
+                .provider_metadata
+                .insert(COMPLETION_REPLAY_METADATA_KEY.to_owned(), "1".to_owned());
             event
         }))
     }

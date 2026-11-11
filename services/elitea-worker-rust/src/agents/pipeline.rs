@@ -1106,12 +1106,25 @@ impl PipelineNativeAgentAssembler {
                         projection.presentation_catalog(),
                     )?;
                 }
+                let definition = fingerprint.map(|fingerprint| fingerprint.definition_digest());
+                // FU-323a review (b): a proven re-entry continues the saved
+                // Agent its step started with, never an edited one. Main
+                // recomputes the digest from the version's current content.
+                if let Some(reentry) = &runtime.root_reentry {
+                    require_unchanged_agent(
+                        &reentry.definitions_for(node),
+                        definition,
+                        runtime.context.execution_id(),
+                        node,
+                    )?;
+                }
                 let scope = scopes.bind_application(
                     "",
                     node,
                     Arc::new(projection),
                     runtime.node_events.clone(),
                     runtime.root_reentry.clone(),
+                    definition,
                 )?;
                 NativePipelineApplicationParticipant::ScopedAgent {
                     tool,
@@ -1251,9 +1264,12 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             pipelines: frozen_pipeline_aliases(&toolsets),
             agents: frozen_agent_aliases(&toolsets),
         };
+        // D-6 (C2): only this reclaim inspect retains a transient failure,
+        // of the activation as of the reads.
         self.state
             .open(session, lease, &plan, profile.definition())
-            .await?
+            .await
+            .map_err(super::session::reclaim_inspect_failure)?
             .inspect_checkpoint(
                 &plan,
                 profile.definition(),
@@ -1265,6 +1281,7 @@ impl NativeAgentAssembler for PipelineNativeAgentAssembler {
             )
             .await
             .map(|(evidence, _, _)| evidence)
+            .map_err(super::session::reclaim_inspect_failure)
     }
 
     async fn assemble_checkpoint(
@@ -2139,6 +2156,37 @@ impl super::session::FrozenRecoveryLevel for RootRecoveryLevel<'_> {
     }
 }
 
+/// FU-323a review (b): every proven re-entry of `node` was stamped with the
+/// saved Agent definition `current` Main serves now. An unstamped receipt or a
+/// missing digest proves nothing, so it is refused too (fail closed).
+fn require_unchanged_agent(
+    started: &[Option<[u8; 32]>],
+    current: Option<[u8; 32]>,
+    execution_id: &str,
+    node: &str,
+) -> Result<(), NativeAgentAssemblyError> {
+    if started
+        .iter()
+        .all(|started| started.is_some() && *started == current)
+    {
+        return Ok(());
+    }
+    let code = elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_CHANGED;
+    elitea_faults::fault!(
+        tracing::Level::WARN,
+        code = code,
+        event = "pipeline_recovery_frontier_refused",
+        execution_id = execution_id,
+        node_id = node,
+        support_ref = execution_id
+    );
+    Err(NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::InvalidConfiguration,
+        "the saved agent changed since its step started",
+    )
+    .with_cause(code.as_str(), None))
+}
+
 /// The attachments Main froze as saved Agents (`agent_type == "agent"`, as
 /// `bind_scoped_agent` requires), with the frozen application version: a root
 /// Agent node running one may be a recovery frontier (FU-323a).
@@ -2655,6 +2703,7 @@ fn bind_admitted_saved_pipeline<'a>(
                     node,
                     Arc::new(projection),
                     runtime.node_events.clone(),
+                    None,
                     None,
                 )?;
                 descendant_guards.insert("ordinary child continuation");

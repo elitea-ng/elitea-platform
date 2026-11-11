@@ -5040,7 +5040,13 @@ impl ApplicationAgentTool {
                     final_response = Some(text);
                 }
             }
+            // An answer served from the Agent's completion receipt was
+            // forwarded when it was first persisted: never a second copy.
+            let replayed = event
+                .provider_metadata
+                .contains_key(super::model_scope::COMPLETION_REPLAY_METADATA_KEY);
             match application_batch.observe_results(&mut event)? {
+                ApplicationResultDisposition::Forward if replayed => {}
                 ApplicationResultDisposition::Forward => {
                     self.send_event(ctx, event).await?;
                 }

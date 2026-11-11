@@ -2,6 +2,7 @@
 
 use super::scope_receipts::{
     GraphCallOutcome, PipelineGraphCallReceipt, finish_graph_call, prepare_graph_call,
+    prepare_graph_call_stamped,
 };
 use super::scoped_applications::PipelineApplicationScope;
 use crate::agents::application_tools::{ApplicationEventSignal, application_signal_event};
@@ -143,6 +144,9 @@ pub(crate) struct PipelineApplicationNodeRuntime {
     /// FU-323a: the started calls this root occurrence may re-enter, as this
     /// claim's inspect step proved them. `None` everywhere else.
     root_reentry: Option<Arc<RootAgentReentry>>,
+    /// The saved Agent's definition digest Main gave this run, stamped on the
+    /// call's receipt (root Agent nodes; FU-323a review (b)).
+    agent_definition: Option<[u8; 32]>,
 }
 
 /// FU-323a (C1): the root saved-Agent calls this claim's inspect step proved
@@ -152,7 +156,9 @@ pub(crate) struct PipelineApplicationNodeRuntime {
 /// either: the first one's checkpoint write changes the evidence digest, and
 /// Main grants one digest per claim (`model_checkpoint_authority.go`).
 pub(crate) struct RootAgentReentry {
-    proven: std::collections::BTreeSet<(String, usize, String)>,
+    /// Each proven re-entry, with the saved Agent definition its receipt was
+    /// stamped with (`None`: unstamped, which proves nothing).
+    proven: std::collections::BTreeMap<(String, usize, String), Option<[u8; 32]>>,
     taken: std::sync::Mutex<std::collections::BTreeSet<(String, usize, String)>>,
 }
 
@@ -163,9 +169,15 @@ impl RootAgentReentry {
     ) -> Option<Arc<Self>> {
         let proven = proofs
             .iter()
-            .filter_map(crate::agents::session::AgentFrontierProof::reentry)
-            .map(|(node, step, call_id)| (node.to_owned(), step, call_id.to_owned()))
-            .collect::<std::collections::BTreeSet<_>>();
+            .filter_map(|proof| {
+                proof.reentry().map(|(node, step, call_id)| {
+                    (
+                        (node.to_owned(), step, call_id.to_owned()),
+                        proof.agent_definition(),
+                    )
+                })
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
         (!proven.is_empty()).then(|| {
             Arc::new(Self {
                 proven,
@@ -174,10 +186,20 @@ impl RootAgentReentry {
         })
     }
 
+    /// The saved Agent definitions the proven re-entries of `node` started
+    /// with; empty when none is proven for it.
+    pub(crate) fn definitions_for(&self, node: &str) -> Vec<Option<[u8; 32]>> {
+        self.proven
+            .iter()
+            .filter(|((proven, _, _), _)| proven == node)
+            .map(|(_, definition)| *definition)
+            .collect()
+    }
+
     /// Admit the proven re-entry `(node, step, call_id)` once.
     pub(crate) fn take(&self, node: &str, step: usize, call_id: &str) -> bool {
         let key = (node.to_owned(), step, call_id.to_owned());
-        self.proven.contains(&key) && self.taken.lock().is_ok_and(|mut taken| taken.insert(key))
+        self.proven.contains_key(&key) && self.taken.lock().is_ok_and(|mut taken| taken.insert(key))
     }
 }
 
@@ -198,13 +220,20 @@ impl PipelineApplicationNodeRuntime {
             visible_starts: Arc::default(),
             member_events: None,
             root_reentry: None,
+            agent_definition: None,
         }
     }
 
-    /// FU-323a: the root occurrence's proven re-entries.
+    /// FU-323a: the root occurrence's proven re-entries, and the saved Agent
+    /// definition digest its new call receipts are stamped with.
     #[must_use]
-    pub(crate) fn with_root_reentry(mut self, reentry: Option<Arc<RootAgentReentry>>) -> Self {
+    pub(crate) fn with_root_reentry(
+        mut self,
+        reentry: Option<Arc<RootAgentReentry>>,
+        agent_definition: Option<[u8; 32]>,
+    ) -> Self {
         self.root_reentry = reentry;
+        self.agent_definition = agent_definition;
         self
     }
 
@@ -219,6 +248,7 @@ impl PipelineApplicationNodeRuntime {
             visible_starts: Arc::default(),
             member_events: self.member_events.clone(),
             root_reentry: None,
+            agent_definition: self.agent_definition,
         }
     }
 
@@ -240,6 +270,7 @@ impl PipelineApplicationNodeRuntime {
             visible_starts: Arc::default(),
             member_events: Some(member_events),
             root_reentry: None,
+            agent_definition: self.agent_definition,
         }
     }
 
@@ -262,16 +293,14 @@ impl PipelineApplicationNodeRuntime {
         .map_err(|_| failure())?;
         let (invocation, author, branch) =
             graph_invocation_identity_with_events(context, Some(&self.events))?;
-        let (mut receipt, fresh) = prepare_graph_call(
+        let (mut receipt, fresh) = prepare_graph_call_stamped(
             checkpointer,
             &self.prepare_gate,
             context,
             activation,
-            tool.name(),
-            &arguments,
-            &invocation,
-            &author,
-            &branch,
+            (tool.name(), &arguments),
+            (&invocation, &author, &branch),
+            self.agent_definition,
         )
         .await?;
         let fanout = self.events.has_parallel_event_scope();

@@ -56,6 +56,8 @@ const (
 	PipelineCodeSupervisorBusy Code = "pipeline.code.supervisor_busy"
 	// A Code item of a Map or Parallel was interrupted after it may have started and no owner proof showed its effect, so it ended typed and was not run again.
 	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
+	// A checkpoint reclaim found that the saved Agent a root Agent node runs is no longer the definition its stopped step started with, so the run ended typed and the changed Agent did not run.
+	PipelineRecoveryAgentDefinitionChanged Code = "pipeline.recovery.agent_definition_changed"
 	// A checkpoint reclaim found a call receipt for a root Agent node that is not this pipeline's own call of its saved Agent, so the run ended typed and nothing was repeated.
 	PipelineRecoveryAgentReceiptMismatch Code = "pipeline.recovery.agent_receipt_mismatch"
 	// A checkpoint reclaim found a root Agent node's saved-Agent model checkpoint written by another execution, so the run ended typed and nothing was repeated.

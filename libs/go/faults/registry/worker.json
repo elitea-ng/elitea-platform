@@ -194,6 +194,14 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "pipeline.recovery.agent_definition_changed",
+      "sentence": "A checkpoint reclaim found that the saved Agent a root Agent node runs is no longer the definition its stopped step started with, so the run ended typed and the changed Agent did not run.",
+      "action": "Nothing to repair on the platform; the saved Agent's version was edited during the run, so the user starts the run again with the current version.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "pipeline.recovery.inspect_transient",
       "sentence": "A checkpoint reclaim could not read its checkpoint because PostgreSQL was briefly unavailable, so the delivery was kept and is reclaimed again until the run's deadline.",
       "action": "Nothing when it is rare; if it repeats, check PostgreSQL connectivity and lock waits, since suppressed counts the reclaims kept since the last line.",

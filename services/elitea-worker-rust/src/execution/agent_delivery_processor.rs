@@ -69,6 +69,9 @@ pub(super) struct AgentDeliveryProcessor<R, RC, T, K, D, I> {
     preparation: AgentPreparationConfig,
     terminal_recovery: AgentTerminalRecoveryConfig,
     coordinator: AgentInvocationCoordinator<R, RC, T, K, D>,
+    /// The per-execution windows of the transient-inspect retained line
+    /// (FU-323a C2), owned by this processor.
+    transient_retains: Arc<crate::diagnostics::cycle::CycleWindows>,
 }
 
 impl<R, RC, T, K, D, I> AgentDeliveryProcessor<R, RC, T, K, D, I>
@@ -112,6 +115,9 @@ where
             preparation,
             terminal_recovery,
             coordinator,
+            transient_retains: Arc::new(crate::diagnostics::cycle::CycleWindows::new(
+                crate::diagnostics::cycle::CYCLE_LINE_EVERY,
+            )),
         }
     }
 
@@ -209,6 +215,7 @@ where
     ) -> DeliveryVerdict {
         let command = verified.command();
         let delivery_token = delivery.delivery_token().to_owned();
+        let execution_id = command.execution_id.clone();
         let span = tracing::info_span!(
             parent: None,
             "agent.delivery",
@@ -243,7 +250,7 @@ where
                 match Box::pin(self.process_owned(delivery, verified)).await {
                     Ok(outcome) => {
                         let verdict = outcome.verdict(&delivery_token);
-                        outcome.record();
+                        outcome.record(&self.transient_retains, &execution_id);
                         verdict
                     }
                     Err(error) => {
@@ -863,7 +870,15 @@ impl AgentDeliveryProcessOutcome {
         }
     }
 
-    fn record(self) {
+    /// Record the outcome on the delivery span. A retained delivery is one
+    /// WARN line each, except a transient inspect failure (FU-323a C2): one
+    /// line per execution per window, findable by its `support_ref`, with the
+    /// count of that execution's retains kept quiet since; those go to DEBUG.
+    fn record(
+        self,
+        transient_retains: &crate::diagnostics::cycle::CycleWindows,
+        execution_id: &str,
+    ) {
         match self {
             Self::DeadLettered { code, reason } => {
                 tracing::Span::current().record("outcome", "dead_lettered");
@@ -885,10 +900,17 @@ impl AgentDeliveryProcessOutcome {
                 tracing::Span::current().record("outcome", "retained_no_ack");
                 tracing::Span::current().record("result_code", code);
                 tracing::Span::current().record("retryable", retryable);
-                // FU-323a C2 (FU-299 C3): a delivery kept again and again
-                // (a reclaim retained on each redelivery) writes one line per
-                // result code per window, with the count kept quiet since.
-                if let Some(suppressed) = RETAINED_LINES.admit(code, std::time::Instant::now()) {
+                if code != elitea_faults::codes::PIPELINE_RECOVERY_INSPECT_TRANSIENT.as_str() {
+                    elitea_faults::fault!(
+                        tracing::Level::WARN,
+                        code = elitea_faults::codes::AGENT_DELIVERY_RETAINED_NO_ACK,
+                        event = "agent_delivery_retained_no_ack",
+                        result_code = code,
+                        retryable
+                    );
+                } else if let Some(suppressed) =
+                    transient_retains.admit(execution_id, std::time::Instant::now())
+                {
                     elitea_faults::fault!(
                         tracing::Level::WARN,
                         code = elitea_faults::codes::AGENT_DELIVERY_RETAINED_NO_ACK,
@@ -908,12 +930,6 @@ impl AgentDeliveryProcessOutcome {
         }
     }
 }
-
-/// The retained-delivery line's windows, one per result code (FU-299 C3).
-static RETAINED_LINES: std::sync::LazyLock<crate::diagnostics::cycle::CycleWindows> =
-    std::sync::LazyLock::new(|| {
-        crate::diagnostics::cycle::CycleWindows::new(crate::diagnostics::cycle::CYCLE_LINE_EVERY)
-    });
 
 pub(super) enum AgentDeliveryProcessError {
     Delivery(AgentDeliveryError),
@@ -1023,9 +1039,82 @@ mod fault_line_tests {
         assert_eq!(line["retryable"], true);
         assert_eq!(line["support_ref"], "exec-retained");
         assert_eq!(line["span"], "agent.delivery");
-        // FU-323a C2: the second retained delivery of the same code within
-        // the window writes no second line.
-        assert_eq!(line["suppressed"], 0);
+    }
+
+    const WINDOW_CHILD_ENV: &str = "ELITEA_RETAINED_WINDOW_FAULT_LINE_CHILD";
+
+    /// Round 1 #4: any other retained code keeps one line per retained
+    /// delivery; the transient-inspect code writes one line per execution per
+    /// window, each findable by its `support_ref`, with that execution's
+    /// suppressed count.
+    #[test]
+    fn only_transient_inspect_retains_are_windowed_per_execution() {
+        let output = elitea_faults::logtest::run_child(
+            "execution::agent_delivery_processor::fault_line_tests::retained_window_child",
+            WINDOW_CHILD_ENV,
+        );
+        let lines = output.operator_lines();
+        let refs = |code: &str| {
+            lines
+                .iter()
+                .filter(|line| line["result_code"] == code)
+                .map(|line| line["support_ref"].as_str().unwrap_or_default().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            refs("agent_delivery.scripted_retry"),
+            ["exec-a", "exec-a", "exec-b"],
+            "{}",
+            output.stdout
+        );
+        let transient = elitea_faults::codes::PIPELINE_RECOVERY_INSPECT_TRANSIENT.as_str();
+        assert_eq!(refs(transient), ["exec-a", "exec-b"], "{}", output.stdout);
+        assert!(
+            lines
+                .iter()
+                .filter(|line| line["result_code"] == transient)
+                .all(|line| line["level"] == "WARN" && line["suppressed"] == 0),
+            "{}",
+            output.stdout
+        );
+    }
+
+    #[test]
+    fn retained_window_child() {
+        if !elitea_faults::logtest::is_child(WINDOW_CHILD_ENV) {
+            return;
+        }
+        tracing_subscriber::registry()
+            .with(
+                crate::diagnostics::log_layer(Some("info"), std::io::stdout)
+                    .expect("operator stream"),
+            )
+            .init();
+        let transient = elitea_faults::codes::PIPELINE_RECOVERY_INSPECT_TRANSIENT.as_str();
+        let windows = crate::diagnostics::cycle::CycleWindows::new(
+            crate::diagnostics::cycle::CYCLE_LINE_EVERY,
+        );
+        for (execution, code) in [
+            ("exec-a", "agent_delivery.scripted_retry"),
+            ("exec-a", "agent_delivery.scripted_retry"),
+            ("exec-b", "agent_delivery.scripted_retry"),
+            ("exec-a", transient),
+            ("exec-a", transient),
+            ("exec-b", transient),
+        ] {
+            let span = tracing::info_span!(
+                "agent.delivery",
+                execution_id = execution,
+                support_ref = execution,
+                outcome = tracing::field::Empty,
+                result_code = tracing::field::Empty,
+                retryable = tracing::field::Empty,
+            );
+            span.in_scope(|| {
+                AgentDeliveryProcessOutcome::retained(code, true).record(&windows, execution);
+            });
+        }
+        elitea_faults::logtest::child_ran();
     }
 
     #[test]
@@ -1048,8 +1137,12 @@ mod fault_line_tests {
             retryable = tracing::field::Empty,
         );
         span.in_scope(|| {
-            AgentDeliveryProcessOutcome::retained("agent_delivery.scripted_retry", true).record();
-            AgentDeliveryProcessOutcome::retained("agent_delivery.scripted_retry", true).record();
+            AgentDeliveryProcessOutcome::retained("agent_delivery.scripted_retry", true).record(
+                &crate::diagnostics::cycle::CycleWindows::new(
+                    crate::diagnostics::cycle::CYCLE_LINE_EVERY,
+                ),
+                "exec-retained",
+            );
         });
         elitea_faults::logtest::child_ran();
     }

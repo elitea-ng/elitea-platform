@@ -224,6 +224,10 @@ struct SavedAgentVersions {
     second: Option<Value>,
     /// A third saved version (application 7, version 8): PM-2 depth 3.
     third: Option<Value>,
+    /// Main's digest of application 3, version 4 (default `ab…`): Main
+    /// recomputes it from the version's current content, so an edit of a
+    /// draft version changes it (FU-323a).
+    primary_digest: Option<String>,
 }
 
 #[tonic::async_trait]
@@ -256,7 +260,7 @@ impl crate::transport::input_content::content_fake::ContextRoutes for SavedAgent
                 "application_id":3,"version_id":4,"version_details":self.details,
                 // Main's authenticated digest of the frozen version: the saved
                 // participant fingerprint a Parallel branch is bound to.
-                "frozen_definition_sha256":"ab".repeat(32)})
+                "frozen_definition_sha256":self.primary_digest.clone().unwrap_or_else(|| "ab".repeat(32))})
         } else {
             return Err(tonic::Status::unavailable("fixture route"));
         };
@@ -316,11 +320,24 @@ fn saved_runtime_on(
     third: Option<Value>,
     gateway_config: crate::transport::openai_compatible_facade::ModelGatewayConfig,
 ) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
+    saved_runtime_digest(outcomes, details, second, third, None, gateway_config)
+}
+
+/// [`saved_runtime_on`] with Main's digest of application 3, version 4.
+fn saved_runtime_digest(
+    outcomes: Vec<TestModelGatewayOutcome>,
+    details: Value,
+    second: Option<Value>,
+    third: Option<Value>,
+    primary_digest: Option<String>,
+    gateway_config: crate::transport::openai_compatible_facade::ModelGatewayConfig,
+) -> (Arc<PlatformClient>, Arc<ModelFacade>, CapturedModelRequests) {
     let runtime = RuntimeContextClient::with_rpc(
         crate::transport::input_content::content_fake::Routes(SavedAgentVersions {
             details,
             second,
             third,
+            primary_digest,
         }),
         RuntimeContextConfig {
             origin: "https://content.internal".to_owned(),

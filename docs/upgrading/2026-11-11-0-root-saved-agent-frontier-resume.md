@@ -15,21 +15,28 @@
   - A state the Worker cannot prove ends with the Agent-step `RECOVERY_FRONTIER_UNSUPPORTED` text, as before, with
     one WARN operator line per cause: `pipeline.recovery.agent_receipt_mismatch`, `pipeline.recovery.agent_step_paused`,
     `pipeline.recovery.agent_step_invalid`, `pipeline.recovery.agent_step_foreign_execution`,
-    `pipeline.recovery.agent_step_session_without_checkpoint`, and `pipeline.recovery.agent_step_may_have_started`
+    `pipeline.recovery.agent_step_session_without_checkpoint`, `pipeline.recovery.agent_definition_changed`, and
+    `pipeline.recovery.agent_step_may_have_started`
     for the `RECOVERY_REFUSED` end. Lines carry ids and `support_ref` only.
   - **Every frontier kind:** a reclaim whose checkpoint read hits a transient PostgreSQL failure (connection loss,
     timeout, serialization failure, deadlock, lock not available) no longer ends the run with `DependencyUnavailable`.
     The delivery is kept and reclaimed again (about once a minute) until the run's deadline, then it ends
     `DeadlineExceeded`. Its retained line carries result code `pipeline.recovery.inspect_transient`.
-  - **Every retained delivery:** `agent_delivery_retained_no_ack` is now written at most once a minute per result code,
-    with a `suppressed` count of the retained deliveries not written since (the others are at DEBUG).
+  - For that result code only, `agent_delivery_retained_no_ack` is written at most once a minute per execution (find
+    it by `support_ref`), with a `suppressed` count of that execution's retains not written since (the others are at
+    DEBUG). Every other retained result code is unchanged: one line per retained delivery.
+  - If the saved Agent's version was edited while the run was stopped (a draft version can be edited in place), the
+    reclaim refuses to continue it: the Agent-step `RECOVERY_FRONTIER_UNSUPPORTED` text, operator code
+    `pipeline.recovery.agent_definition_changed`, and the edited Agent does not run. A call started by an older Worker
+    carries no definition stamp and is refused the same way during the rollout.
 - **Who is affected.**
   - **Stock Helm: nothing yet.** Both recovery flags are off by default (`agentModelCheckpointRecovery: false`,
     `agentNodeRecovery: false`), so these runs still end typed after a Worker loss. They resume once PLAN-REMAINING
     0.7a flips the defaults (scheduled right after FU-323), or when an operator turns `agentNodeRecovery` on (it also
     turns model-step resume on).
   - **Compose deployments** (`agent_node_recovery: true` in `deploy/runtime/worker-runtime.rust.json`) benefit now.
-  - Operators alerting on `agent_delivery_retained_no_ack` line counts: count `suppressed` too.
+  - Operators alerting on `agent_delivery_retained_no_ack` lines with result code `pipeline.recovery.inspect_transient`:
+    count `suppressed` too.
 - **What to do.**
   - Nothing to migrate: no new durable record, schema or Main change.
   - During the rollout an older Worker may reclaim such a run; it ends it typed as before (#1933) and repeats nothing.

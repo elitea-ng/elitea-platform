@@ -531,6 +531,10 @@ async fn scenario_db() -> Option<IsolatedPostgres> {
 const CRASH_THEN_RECOVER: &[(&str, Option<i32>)] =
     &[("crash", Some(CRASH_EXIT_CODE)), ("recover", Some(0))];
 
+/// The frames that carry the Agent's answer after an `Answered` re-entry.
+const ANSWERED_FRAMES: &str =
+    "ok agent_tool_end,partial_message,agent_llm_chunk,agent_llm_end,partial_message";
+
 /// Every root row's receipt revision after the node's `Started` one is
 /// removed: a Worker lost after the Agent's answer was persisted, before the
 /// call receipt completed (T3). The rows are deleted newest first, as a
@@ -577,7 +581,10 @@ async fn postgres_a_root_saved_agent_answered_before_its_receipt_completed_is_se
         "",
     )
     .await;
-    assert_eq!(outcome.outcome, "ok");
+    // C5 (round 1 #3): the answer served from the Agent's completion receipt
+    // is not forwarded as a second copy of the Agent's message: only the
+    // call's result and the pipeline's own answer carry it.
+    assert_eq!(outcome.outcome, ANSWERED_FRAMES);
     assert_eq!(outcome.model_calls, 0, "served from the completion receipt");
     let (state, pending, _) = latest_root(&db.pool).await;
     assert_eq!(pending, "[]");
@@ -723,7 +730,7 @@ async fn postgres_a_forged_root_agent_frontier_is_refused_typed() {
     };
     let scope = "session_id LIKE 'elitea-model-%'";
     let root = "thread_id NOT LIKE '%/%'";
-    let cases: [(&str, String, elitea_faults::Code); 4] = [
+    let cases: [(&str, String, elitea_faults::Code); 5] = [
         (
             "receipt names another Agent",
             format!(
@@ -748,6 +755,16 @@ async fn postgres_a_forged_root_agent_frontier_is_refused_typed() {
                  replace(state, '\"generation\":{GENERATION}', '\"generation\":9') WHERE {scope}; \
                  UPDATE elitea_runtime.agent_session_events SET event_payload = \
                  replace(event_payload, '\"generation\":{GENERATION}', '\"generation\":9') WHERE {scope}"
+            ),
+            elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_INVALID,
+        ),
+        (
+            "a context-preparation step while the run does not compact",
+            format!(
+                "UPDATE elitea_runtime.agent_sessions SET state = \
+                 replace(state, '\"phase\":\"model_pending\"', '\"phase\":\"context_pending\"') WHERE {scope}; \
+                 UPDATE elitea_runtime.agent_session_events SET event_payload = \
+                 replace(event_payload, '\"phase\":\"model_pending\"', '\"phase\":\"context_pending\"') WHERE {scope}"
             ),
             elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_INVALID,
         ),
@@ -780,6 +797,61 @@ async fn postgres_a_forged_root_agent_frontier_is_refused_typed() {
         );
         db.pool.close().await;
     }
+    db.pool.close().await;
+}
+
+/// Round 1 #1: a newer claim owns the Agent's model scope when the older
+/// claim's proof opens it: a lost writer (`AuthorizationFailed`), exactly as
+/// the other activation paths classify it, never a terminal dependency error.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_takeover_of_the_agents_scope_during_the_proof_is_a_lost_writer() {
+    let Some(db) = scenario_db().await else {
+        return;
+    };
+    let (outcome, _) = scenario(
+        &db.pool,
+        &db.database_name,
+        "scope_taken",
+        CRASH_THEN_RECOVER,
+        "UPDATE elitea_runtime.agent_session_writers SET writer_claim_id = 'claim-9', \
+         writer_claimed_at = writer_claimed_at + interval '1 day' \
+         WHERE session_id LIKE 'elitea-model-%'",
+    )
+    .await;
+    assert_eq!(outcome.outcome, "native_agent.authorization_failed -");
+    assert_eq!(outcome.model_calls, 0);
+    db.pool.close().await;
+}
+
+/// Review (b): the saved Agent's draft version is edited between the kill
+/// and the reclaim (Main serves the new content and its recomputed digest).
+/// The step started under the old definition, so the reclaim is refused
+/// typed at assembly and never runs the edited content.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_saved_agent_edited_between_the_kill_and_the_reclaim_is_refused_typed() {
+    let Some(db) = scenario_db().await else {
+        return;
+    };
+    let (outcome, stdout) = scenario(
+        &db.pool,
+        &db.database_name,
+        "edited_agent",
+        CRASH_THEN_RECOVER,
+        "",
+    )
+    .await;
+    let code = elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_CHANGED;
+    assert!(
+        outcome.outcome.contains(code.as_str()),
+        "{}",
+        outcome.outcome
+    );
+    assert_eq!(outcome.model_calls, 0, "the edited content never runs");
+    assert!(stdout.contains(code.as_str()), "the fault line");
+    assert!(
+        !stdout.contains("EDITED"),
+        "the edited content reached the log"
+    );
     db.pool.close().await;
 }
 
@@ -948,14 +1020,27 @@ fn scenario_assembler(
 ) -> (PipelineNativeAgentAssembler, CapturedModelRequests) {
     let mut config = test_model_gateway_config();
     config.response_header_timeout = Duration::from_secs(60);
-    let (details, second) = match mode {
+    let (mut details, second) = match mode {
         "read_only" | "effect" => (effectful_agent(), None),
         "agent_tool" => (delegating_agent(), Some(helper_agent())),
         _ => (plain_saved_agent(), None),
     };
+    // The saved Agent's draft version edited between the kill and the
+    // reclaim: Main serves the new content with its recomputed digest.
+    let edited = mode == "edited_agent" && std::env::var(PHASE_ENV).as_deref() != Ok("crash");
+    if edited {
+        details["instructions"] = json!("EDITED: answer only in capitals.");
+    }
     assembler_on(
         pool,
-        saved_runtime_on(outcomes, details, second, None, config),
+        saved_runtime_digest(
+            outcomes,
+            details,
+            second,
+            None,
+            edited.then(|| "ac".repeat(32)),
+            config,
+        ),
         connector,
     )
 }
@@ -1101,6 +1186,30 @@ async fn postgres_root_saved_agent_scenario_child() {
             assert_eq!(rows().await, before, "claim 2 wrote nothing");
             report("fenced", &captured, 0);
         }
+        "scope_taken" => {
+            let (assembler, captured) =
+                scenario_assembler(&pool, &mode, Vec::new(), pipeline_connector());
+            let outcome = match crate::agents::runtime::NativeAgentAssembler::inspect_checkpoint(
+                &assembler,
+                &request,
+                &AuthorizedNativeCommandBinding::fixture_for_execution(EXECUTION),
+                test_session_authority_for_reclaim(EXECUTION, GENERATION, 2),
+                Arc::new(TestStateWriterLease::current()),
+            )
+            .await
+            {
+                Ok(_) => "inspected".to_owned(),
+                Err(error) => format!(
+                    "{} {}",
+                    error.code().as_str(),
+                    error.cause().map_or(
+                        "-",
+                        elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code
+                    )
+                ),
+            };
+            report(&outcome, &captured, 0);
+        }
         "transient" => {
             let (assembler, captured) = scenario_assembler(
                 &pool,
@@ -1146,6 +1255,22 @@ async fn postgres_root_saved_agent_scenario_child() {
                         .cause()
                         .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
                 );
+                if name == "root" {
+                    // Round 1 #5: the same failure on the assembly path keeps
+                    // its terminal; only the reclaim inspect retains it.
+                    let assembly = assembler.assemble_checkpoint(claim(&request, 2)).await;
+                    let Err(error) = assembly else {
+                        panic!("root: the held row blocks the assembly");
+                    };
+                    assert_eq!(
+                        error.code(),
+                        elitea_agent_runtime::assembly_error::NativeAgentAssemblyErrorCode::DependencyUnavailable
+                    );
+                    assert!(
+                        !crate::agents::session::is_transient_inspect_failure(&error),
+                        "the assembly path never carries the retained cause"
+                    );
+                }
                 holder.rollback().await.expect("release the row");
                 seen.push(format!("retained {name}"));
             }
@@ -1239,6 +1364,34 @@ async fn postgres_root_saved_agent_scenario_child() {
                 Err(error) => format!("authorize the lifecycle: {error}"),
             };
             report(&outcome, &captured, 0);
+        }
+        "answered" => {
+            let (assembler, captured) =
+                scenario_assembler(&pool, &mode, Vec::new(), pipeline_connector());
+            let mut invocation = recovered(&assembler, &request, EXECUTION, attempt)
+                .await
+                .unwrap_or_else(|error| panic!("answered: the reclaim resumes: {error}"));
+            invocation
+                .project_start(timestamp(1))
+                .expect("pipeline browser start");
+            let (mut run, mut projector, completion) = invocation.start().expect("pipeline start");
+            // Every projected frame that carries the Agent's answer, by type.
+            let mut frames = Vec::new();
+            while let Some(event) = run.next_event().await.expect("the run streams") {
+                for frame in projector.project(&event).expect("projected frames") {
+                    let metadata = String::from_utf8_lossy(&frame.response_metadata).into_owned();
+                    if String::from_utf8_lossy(&frame.content).contains("answered once")
+                        || metadata.contains("answered once")
+                    {
+                        frames.push(frame.r#type.clone());
+                    }
+                }
+            }
+            completion
+                .select()
+                .await
+                .expect("answered: the run completes");
+            report(&format!("ok {}", frames.join(",")), &captured, 0);
         }
         _ => {
             let (outcomes, connector) = match (mode.as_str(), phase.as_str()) {
