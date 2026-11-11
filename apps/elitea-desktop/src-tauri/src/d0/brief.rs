@@ -95,11 +95,35 @@ fn quotable(content: &Content) -> Option<(String, String)> {
         Part::Text { text } => Some(text.as_str()),
         _ => None,
     })?;
-    let short = first.strip_prefix("[message ")?.get(..12)?;
-    let line = tag(short);
-    let text = first.strip_prefix(line.as_str())?;
+    let (short, text) = strip_tag(first)?;
+    Some((short.to_owned(), normalize_whitespace(text)))
+}
+
+/// `text` split at its `[message m-…]` line: the short id and the text
+/// after the line; `None` when it does not open with one.
+#[must_use]
+pub fn strip_tag(text: &str) -> Option<(&str, &str)> {
+    let short = text.strip_prefix("[message ")?.get(..12)?;
     let valid = short.starts_with("m-") && short[2..].bytes().all(|b| b.is_ascii_hexdigit());
-    valid.then(|| (short.to_owned(), normalize_whitespace(text)))
+    if !valid {
+        return None;
+    }
+    let rest = text.strip_prefix(tag(short).as_str())?;
+    Some((short, rest))
+}
+
+/// `text` without the `[message m-…]` line it may open with (a message as
+/// the person wrote it).
+#[must_use]
+pub fn without_tag(text: &str) -> &str {
+    strip_tag(text).map_or(text, |(_, rest)| rest)
+}
+
+/// An image's name as a model or a child reads it: quoted-attribute safe
+/// and neutralized, so it cannot close its quotes, add a line or show a
+/// message's id.
+fn shown_name(name: &str) -> String {
+    neutralize(&super::framing::attribute_value(name)).into_owned()
 }
 
 /// The person's message of this turn as the model reads it: its id line,
@@ -116,9 +140,11 @@ impl TurnQuestion {
     pub fn new(question_id: &str, message: &str, images: &[Arc<Attachment>]) -> Self {
         let mut attachments: Vec<(String, String)> = Vec::new();
         for image in images {
-            let id = attachment_id(&image.picture.bytes);
-            if !attachments.iter().any(|(known, _)| *known == id) {
-                attachments.push((id, image.name.clone()));
+            // One line per image: two names for the same bytes are both
+            // shown (and either names the id).
+            let entry = (attachment_id(&image.picture.bytes), image.name.clone());
+            if !attachments.contains(&entry) {
+                attachments.push(entry);
             }
         }
         Self {
@@ -133,12 +159,7 @@ impl TurnQuestion {
         (!self.attachments.is_empty()).then(|| {
             self.attachments
                 .iter()
-                .map(|(id, name)| {
-                    format!(
-                        "[Attachment {id}: \"{}\"]",
-                        neutralize(&super::framing::attribute_value(name))
-                    )
-                })
+                .map(|(id, name)| format!("[Attachment {id}: \"{}\"]", shown_name(name)))
                 .collect::<Vec<_>>()
                 .join("\n")
         })
@@ -213,7 +234,8 @@ impl BriefView {
                         (
                             id.clone(),
                             format!(
-                                "the image \"{name}\" attached to this turn (you cannot view it)"
+                                "the image \"{}\" attached to this turn (you cannot view it)",
+                                shown_name(name)
                             ),
                         )
                     })

@@ -3709,10 +3709,7 @@ pub(crate) fn memory_platform_for(
 /// A person's message without the `[message m-…]` line it reaches the
 /// model under (#1827).
 pub(crate) fn without_message_id(text: &str) -> &str {
-    match text.strip_prefix("[message m-") {
-        Some(rest) if rest.len() > 12 && &rest[10..12] == "]\n" => &rest[12..],
-        _ => text,
-    }
+    super::brief::without_tag(text)
 }
 
 fn last_message(body: &Value) -> &Value {

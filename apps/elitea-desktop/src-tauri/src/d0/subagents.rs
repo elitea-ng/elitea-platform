@@ -273,14 +273,10 @@ impl SubAgentHost for DesktopSubAgents {
         _child: &ChildIdentity,
         brief: &Brief,
     ) -> Result<CheckedBrief, &'static str> {
-        let contents = self
-            .transport
-            .capture
-            .as_ref()
-            .and_then(|capture| capture.last())
-            .map(|captured| captured.contents)
-            .unwrap_or_default();
-        self.view.check(&contents, brief)
+        match self.transport.capture.as_ref() {
+            Some(capture) => capture.with_contents(|contents| self.view.check(contents, brief)),
+            None => self.view.check(&[], brief),
+        }
     }
 
     fn started(&self, child: &ChildIdentity) {

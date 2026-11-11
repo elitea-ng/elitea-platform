@@ -482,7 +482,7 @@ mod tests {
 
     /// A user message's text without its `[message m-…]` line (#1827).
     fn shown(text: &str) -> &str {
-        crate::d0::tests::without_message_id(text)
+        crate::d0::brief::without_tag(text)
     }
 
     /// #1827: each user message opens with the line of its group's uuid,

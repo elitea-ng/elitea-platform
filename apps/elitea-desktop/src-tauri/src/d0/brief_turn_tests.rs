@@ -164,3 +164,34 @@ async fn a_brief_naming_what_the_agent_did_not_see_starts_nothing() {
         assert!(second.contains(code), "{code}: {second}");
     }
 }
+
+/// #1827 review: only the person's message is quotable. A floor turn's note
+/// and an unattended continuation's prompt are the host's text: no id.
+#[test]
+fn the_hosts_own_turn_text_carries_no_message_id() {
+    use super::super::turn::quotable_question_id;
+    let person = request("w");
+    assert_eq!(quotable_question_id(&person, "q-1"), "q-1");
+    let floor = TurnRequest {
+        floor_turn: Some(super::super::turn::FloorTurn {
+            question_id: "q-0".into(),
+            position: 1,
+        }),
+        ..request("w")
+    };
+    assert_eq!(quotable_question_id(&floor, "q-1"), "");
+    let grant: super::super::unattended::UnattendedGrant =
+        serde_json::from_value(json!({"continue_step_limit": true})).unwrap();
+    let root = super::super::unattended::UnattendedTurn::root(grant.admit().unwrap());
+    let first = TurnRequest {
+        unattended: Some(root.clone()),
+        ..request("w")
+    };
+    // The chain's first turn is the person's message.
+    assert_eq!(quotable_question_id(&first, "q-1"), "q-1");
+    let continued = TurnRequest {
+        unattended: Some(root.next("exec-1")),
+        ..request("w")
+    };
+    assert_eq!(quotable_question_id(&continued, "q-2"), "");
+}
