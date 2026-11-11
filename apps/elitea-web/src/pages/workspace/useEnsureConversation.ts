@@ -51,6 +51,7 @@ export interface ThreadAgent {
   participantId: number;
   applicationId: number;
   name: string;
+  /** The version the participant is pinned to; 0 for an unpinned one (it runs its agent's default version, #1926). */
   versionId: number;
   cloud: boolean;
 }
@@ -69,8 +70,10 @@ export function threadAgentsOf(participants: readonly DetailParticipant[] | unde
   return (participants ?? []).flatMap((participant): ThreadAgent[] => {
     const participantId = Number(participant.id);
     const applicationId = Number(participant.entity_meta?.id);
-    const versionId = Number(participant.entity_settings?.['version_id']);
-    if (participant.entity_name !== 'application' || ![participantId, applicationId, versionId].every((n) => Number.isSafeInteger(n) && n > 0)) return [];
+    // An unpinned participant (no `version_id`, or null) is an agent of the thread too (#1926): version 0.
+    const pin = participant.entity_settings?.['version_id'];
+    const versionId = pin === undefined || pin === null ? 0 : Number(pin);
+    if (participant.entity_name !== 'application' || ![participantId, applicationId].every((n) => Number.isSafeInteger(n) && n > 0) || !Number.isSafeInteger(versionId) || versionId < 0) return [];
     const named = [participant.meta?.['name'], participant.entity_meta?.name].find((name): name is string => typeof name === 'string' && name.trim() !== '');
     return [{ participantId, applicationId, name: named?.trim() ?? '', versionId, cloud: participant.entity_settings?.['executor'] === 'cloud' }];
   });

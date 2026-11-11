@@ -1159,5 +1159,8 @@
   "workspace.floor.note": "Write @Name to address an agent; the cloud ones get the conversation text only.",
   "workspace.floor.stopped": "The next agent this message addressed did not answer: {{message}}",
   "workspace.floor.superseded": "A newer message took the floor: the other agents this message addressed do not answer it.",
+  "workspace.cloudLead.unnamed": "the lead",
+  "workspace.cloudLead.text": "To: {{name}} (lead). A message that names no agent goes to {{name}}, which runs in the cloud and gets only the text: no @ files, images, skills, / commands or /compact.",
+  "workspace.cloudLead.address": "To use them, address a local agent, for example @{{local}}.",
   "workspace.subagent.temporary": "Temporary"
 }

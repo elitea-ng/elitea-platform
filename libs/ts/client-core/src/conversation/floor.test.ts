@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { DEFAULT_FLOOR, MAX_ADDRESSED, addressedTo, floorOf, foldSideTalk, metaWithLead, sideTalkLabel } from './floor';
+import { DEFAULT_FLOOR, MAX_ADDRESSED, addressedTo, firstAnswerer, floorOf, foldSideTalk, metaWithLead, sideTalkLabel } from './floor';
 import { MESSAGE_CLASS, type MessageClass } from './messageClass';
 
 describe('floorOf', () => {
@@ -49,6 +49,25 @@ describe('addressedTo', () => {
     assert.deepEqual(addressedTo('@Analyst', [a, a, { participantId: 0, name: 'Analyst' }]), [21]);
     const many = Array.from({ length: MAX_ADDRESSED + 3 }, (_, i) => ({ participantId: i + 1, name: `A${i}` }));
     assert.equal(addressedTo(many.map((x) => `@${x.name}`).join(' '), many).length, MAX_ADDRESSED);
+  });
+});
+
+describe('firstAnswerer', () => {
+  const agents = [
+    { participantId: 77, name: 'Coder' },
+    { participantId: 88, name: 'Reviewer' },
+  ];
+  const lead = { policy: 'lead', leadParticipantId: 88 } as const;
+  it('answers the first addressee, else the lead, else the fallback (turntaking.Route)', () => {
+    assert.equal(firstAnswerer([77, 88], lead, agents), 77);
+    assert.equal(firstAnswerer([], lead, agents, 77), 88);
+    assert.equal(firstAnswerer([], DEFAULT_FLOOR, agents, 77), 77);
+    assert.equal(firstAnswerer([], DEFAULT_FLOOR, agents), 0);
+  });
+  it('counts only the conversation’s agents', () => {
+    assert.equal(firstAnswerer([], { policy: 'lead', leadParticipantId: 99 }, agents, 77), 77);
+    assert.equal(firstAnswerer([99], DEFAULT_FLOOR, agents, 77), 77);
+    assert.equal(firstAnswerer([], DEFAULT_FLOOR, agents, 99), 0);
   });
 });
 
