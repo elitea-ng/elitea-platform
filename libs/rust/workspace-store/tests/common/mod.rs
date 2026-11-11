@@ -47,12 +47,16 @@ pub fn repo() -> (tempfile::TempDir, PathBuf, String) {
     std::fs::write(top.join("src/main.rs"), "fn main() {}\n").unwrap();
     std::fs::write(top.join("src/deep/data.bin"), [0u8, 1, 2, 255, 0, 7]).unwrap();
     std::fs::write(top.join("run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(top.join("run.sh"), std::fs::Permissions::from_mode(0o755))
             .unwrap();
     }
     git(&top, &["add", "-A"]);
+    // Windows has no execute bit: git takes the mode from the index.
+    #[cfg(windows)]
+    git(&top, &["update-index", "--chmod=+x", "run.sh"]);
     git(&top, &["commit", "-q", "-m", "first"]);
     let head = git(&top, &["rev-parse", "HEAD"]);
     (dir, top, head)

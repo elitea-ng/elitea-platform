@@ -13,7 +13,7 @@ This is separate from your personal memory, which follows you across agents. An 
 - **During a turn** the agent has three tools: `remember` saves a note, `recall` looks for notes the start of the turn left out, and `forget` deletes a wrong note.
 - **Notes about a person** are used only when that person is in the conversation. An agent never recalls what it noted about you in a conversation you are not part of.
 
-The notes are given to the agent as its own notes, not as instructions from the agent's author.
+The notes are given to the agent as its own notes, not as instructions from the agent's author. Each note starts with its id, for example `[memory 42, fact]`, so the agent can pass a note to a sub-agent or forget it by id (see [Sub-agent profiles, briefs and lanes](/how-tos/agents-pipelines/sub-agent-profiles/)).
 
 ## When a note waits for approval
 

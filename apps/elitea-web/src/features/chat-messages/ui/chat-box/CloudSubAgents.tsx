@@ -1,5 +1,5 @@
 /**
- * A cloud answer's temporary sub-agents (client contract 1.47, ADR-0050
+ * A cloud answer's temporary sub-agents (client contract 1.48, ADR-0050
  * decision 4), under the answer's thinking: one row per child with its
  * dashed-ring avatar, its profile name, a "Temporary" badge and its status;
  * opened, its own tool calls and its final answer. Open while the child runs.

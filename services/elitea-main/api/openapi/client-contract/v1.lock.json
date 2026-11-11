@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.47",
+  "client_contract": "1.48",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -2826,6 +2826,80 @@
         }
       }
     },
+    "GET /agent_media/{project_id}/{file}": {
+      "operation_id": "getAgentMedia",
+      "parameters": {
+        "path:file": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "image/jpeg": {
+              "type": "string",
+              "format": "binary"
+            },
+            "image/png": {
+              "type": "string",
+              "format": "binary"
+            },
+            "image/svg+xml": {
+              "type": "string",
+              "format": "binary"
+            },
+            "image/webp": {
+              "type": "string",
+              "format": "binary"
+            },
+            "video/mp4": {
+              "type": "string",
+              "format": "binary"
+            },
+            "video/webm": {
+              "type": "string",
+              "format": "binary"
+            }
+          }
+        },
+        "206": {
+          "content": {
+            "video/mp4": {
+              "type": "string",
+              "format": "binary"
+            },
+            "video/webm": {
+              "type": "string",
+              "format": "binary"
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "GET /auth/native/authorize": {
       "operation_id": "authorizeNativeClient",
       "parameters": {
@@ -4633,6 +4707,9 @@
                           "properties": {
                             "can_propose_agents": {
                               "type": "boolean"
+                            },
+                            "can_review_agents": {
+                              "type": "boolean"
                             }
                           },
                           "open": true
@@ -4750,6 +4827,84 @@
                         },
                         "parent_project_id": {
                           "type": "string"
+                        },
+                        "proactivity": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "act_target": {
+                              "type": "string",
+                              "enum": [
+                                "home_thread",
+                                "new_conversation"
+                              ]
+                            },
+                            "interval": {
+                              "type": "string"
+                            },
+                            "jitter": {
+                              "one_of": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 50
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^[0-9]{1,2}%?$"
+                                }
+                              ]
+                            },
+                            "limits": {
+                              "type": "object",
+                              "properties": {
+                                "acts_per_day": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 96
+                                },
+                                "spend_per_day_usd": {
+                                  "type": "number",
+                                  "minimum": 0,
+                                  "maximum": 1000
+                                },
+                                "wakes_per_day": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 96
+                                }
+                              }
+                            },
+                            "mode": {
+                              "type": "string",
+                              "enum": [
+                                "heartbeat",
+                                "off"
+                              ]
+                            },
+                            "quiet_hours": {
+                              "type": "string"
+                            },
+                            "watch": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "kind"
+                                ],
+                                "properties": {
+                                  "kind": {
+                                    "type": "string"
+                                  },
+                                  "tool": {
+                                    "type": "string",
+                                    "max_length": 128
+                                  }
+                                }
+                              },
+                              "max_items": 16
+                            }
+                          }
                         },
                         "run_caps": {
                           "type": "object",
@@ -5056,6 +5211,9 @@
                             "properties": {
                               "can_propose_agents": {
                                 "type": "boolean"
+                              },
+                              "can_review_agents": {
+                                "type": "boolean"
                               }
                             },
                             "open": true
@@ -5173,6 +5331,84 @@
                           },
                           "parent_project_id": {
                             "type": "string"
+                          },
+                          "proactivity": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "act_target": {
+                                "type": "string",
+                                "enum": [
+                                  "home_thread",
+                                  "new_conversation"
+                                ]
+                              },
+                              "interval": {
+                                "type": "string"
+                              },
+                              "jitter": {
+                                "one_of": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 50
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[0-9]{1,2}%?$"
+                                  }
+                                ]
+                              },
+                              "limits": {
+                                "type": "object",
+                                "properties": {
+                                  "acts_per_day": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 96
+                                  },
+                                  "spend_per_day_usd": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1000
+                                  },
+                                  "wakes_per_day": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 96
+                                  }
+                                }
+                              },
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "heartbeat",
+                                  "off"
+                                ]
+                              },
+                              "quiet_hours": {
+                                "type": "string"
+                              },
+                              "watch": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "kind"
+                                  ],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "tool": {
+                                      "type": "string",
+                                      "max_length": 128
+                                    }
+                                  }
+                                },
+                                "max_items": 16
+                              }
+                            }
                           },
                           "run_caps": {
                             "type": "object",
@@ -9754,6 +9990,9 @@
                             "properties": {
                               "can_propose_agents": {
                                 "type": "boolean"
+                              },
+                              "can_review_agents": {
+                                "type": "boolean"
                               }
                             },
                             "open": true
@@ -9871,6 +10110,84 @@
                           },
                           "parent_project_id": {
                             "type": "string"
+                          },
+                          "proactivity": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "act_target": {
+                                "type": "string",
+                                "enum": [
+                                  "home_thread",
+                                  "new_conversation"
+                                ]
+                              },
+                              "interval": {
+                                "type": "string"
+                              },
+                              "jitter": {
+                                "one_of": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 50
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[0-9]{1,2}%?$"
+                                  }
+                                ]
+                              },
+                              "limits": {
+                                "type": "object",
+                                "properties": {
+                                  "acts_per_day": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 96
+                                  },
+                                  "spend_per_day_usd": {
+                                    "type": "number",
+                                    "minimum": 0,
+                                    "maximum": 1000
+                                  },
+                                  "wakes_per_day": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 96
+                                  }
+                                }
+                              },
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "heartbeat",
+                                  "off"
+                                ]
+                              },
+                              "quiet_hours": {
+                                "type": "string"
+                              },
+                              "watch": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "kind"
+                                  ],
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "tool": {
+                                      "type": "string",
+                                      "max_length": 128
+                                    }
+                                  }
+                                },
+                                "max_items": 16
+                              }
+                            }
                           },
                           "run_caps": {
                             "type": "object",
@@ -19105,6 +19422,33 @@
               "user_input"
             ],
             "properties": {
+              "addressed_to": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
+                },
+                "max_items": 16
+              },
+              "floor_turn": {
+                "type": "object",
+                "required": [
+                  "position",
+                  "question_id"
+                ],
+                "properties": {
+                  "position": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 15
+                  },
+                  "question_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
               "participant_id": {
                 "type": "integer",
                 "format": "int64"
@@ -19220,9 +19564,69 @@
                 "execution_id": {
                   "type": "string"
                 },
+                "executor": {
+                  "type": "string",
+                  "enum": [
+                    "cloud",
+                    "local"
+                  ]
+                },
                 "expires_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "floor": {
+                  "type": "object",
+                  "required": [
+                    "agents",
+                    "position",
+                    "question_id",
+                    "targets"
+                  ],
+                  "properties": {
+                    "agents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "executor",
+                          "name",
+                          "participant_id"
+                        ],
+                        "properties": {
+                          "executor": {
+                            "type": "string",
+                            "enum": [
+                              "cloud",
+                              "local"
+                            ]
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "participant_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          }
+                        }
+                      }
+                    },
+                    "position": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "question_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "targets": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "format": "int64"
+                      }
+                    }
+                  }
                 },
                 "memory_recall": {
                   "type": "object",

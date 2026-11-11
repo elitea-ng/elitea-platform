@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	github.com/elitea-ng/elitea-platform/libs/go/faults v0.0.0-00010101000000-000000000000
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
@@ -19,3 +20,5 @@ require (
 replace github.com/elitea-ng/elitea-platform/libs/go/egresslib => ../../libs/go/egresslib
 
 replace github.com/elitea-ng/elitea-platform/libs/proto/gen/go => ../../libs/proto/gen/go
+
+replace github.com/elitea-ng/elitea-platform/libs/go/faults => ../../libs/go/faults

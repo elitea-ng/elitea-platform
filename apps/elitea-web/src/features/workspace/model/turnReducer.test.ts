@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 
+import { waitsForNextTurn } from './chainEvents';
 import { PROCESS_LINES } from './processEvents';
 import { activeView, earlierViews, initialTurnsState, latestPlan, MAX_UNCLAIMED_TURNS, replayView, turnReducer, type TurnAction, type TurnsState } from './turnReducer';
 
@@ -403,6 +404,20 @@ describe('sub-agents (#1226)', () => {
     expect(replayView([...events, finished(5, 'a_1', 'cancelled')]).subAgents?.[0]?.result).toBeUndefined();
   });
 
+  it('keeps the spawn profile a local start names (#1827, #1910)', () => {
+    const named: AgentEvent = {
+      turn_id: T,
+      seq: 2,
+      kind: 'subagent_started',
+      payload: { agent_id: 'a_1', parent_call_id: 'c1', ordinal: 1, label: 'audit', display_name: 'Reviewer', avatar: 'default:owl', brief_digest: 'sha256:x' },
+    };
+    const [lane] = activeView(run([spawn(1, 'c1'), named])).subAgents ?? [];
+    expect(lane).toMatchObject({ label: 'audit', displayName: 'Reviewer', avatar: 'default:owl' });
+    const [plain] = activeView(run([spawn(1, 'c1'), started(2, 'a_1', 'c1', 1)])).subAgents ?? [];
+    expect(plain).not.toHaveProperty('displayName');
+    expect(plain).not.toHaveProperty('avatar');
+  });
+
   it('ignores an event for a child whose start it never heard, and a repeated start', () => {
     const view = activeView(run([inner(1, 'a_9', { kind: 'text_delta', text: 'x' }), finished(2, 'a_9', 'completed'), spawn(3, 'c1'), started(4, 'a_1', 'c1', 1), started(5, 'a_1', 'c1', 1)]));
     expect(view.subAgents?.map((lane) => lane.agentId)).toEqual(['a_1']);
@@ -571,5 +586,48 @@ describe('unattended chain events', () => {
     const blocked: AgentEvent = { turn_id: T, seq: 3, kind: 'chain_ended', payload: { outcome: 'failed', goal: { outcome: 'blocked', met: 0, total: 2, reason: 'No access' } } };
     expect(activeView(run([finished, blocked])).goalCheck).toEqual({ outcome: 'blocked', conditions: [], met: 0, total: 2, reason: 'No access' });
     expect(activeView(run([finished, { ...blocked, payload: { outcome: 'completed' } }])).goalCheck).toBeUndefined();
+  });
+});
+
+describe('several agents in a thread (ADR-0050 decision 7f)', () => {
+  const NEXT = 'turn-2';
+  const running = (turnId: string, position: number, name: string, executor: 'local' | 'cloud'): AgentEvent => ({
+    turn_id: turnId,
+    seq: 1,
+    kind: 'status',
+    payload: { phase: 'running', floor: { position, targets: 2, participant_id: position === 0 ? 77 : 88, agent_name: name, executor } },
+  });
+  const done: AgentEvent = {
+    turn_id: T,
+    seq: 2,
+    kind: 'done',
+    payload: { committed: false, conversation_id: 'c', message_ids: [], changed_files: 0, continuing: true, floor_next: { participant_id: 88, agent_name: 'Reviewer', position: 1 } },
+  };
+  const continued: AgentEvent = {
+    turn_id: T,
+    seq: 3,
+    kind: 'turn_continued',
+    payload: { next_turn_id: NEXT, execution_id: 'e2', continuation_index: 1, kind: 'floor', participant_id: 88, agent_name: 'Reviewer', executor: 'cloud' },
+  };
+
+  it('names the answering agent, and makes the next agent’s turn the active one', () => {
+    const state = run([running(T, 0, 'Coder', 'local'), done, continued, running(NEXT, 1, 'Reviewer', 'cloud')]);
+    expect(state.activeTurnId).toBe(NEXT);
+    const first = earlierViews(state)[0]?.view;
+    expect(first?.agent).toEqual({ name: 'Coder', participantId: 77, executor: 'local', position: 0, targets: 2 });
+    expect(first?.continuedTo).toEqual({ nextTurnId: NEXT, index: 1, kind: 'floor', agentName: 'Reviewer', executor: 'cloud' });
+    expect(activeView(state).agent?.executor).toBe('cloud');
+    // A later agent's turn is no chain continuation: no "Continued automatically" marker.
+    expect(activeView(state).continuation).toBeUndefined();
+  });
+
+  it('keeps the composer busy for the next agent, until it starts or the floor stops', () => {
+    const waiting = activeView(run([running(T, 0, 'Coder', 'local'), done]));
+    expect(waiting.done?.continuing).toBe(true);
+    const stopped: AgentEvent = { turn_id: T, seq: 3, kind: 'floor_stopped', payload: { code: 'floor_turn_superseded', message: 'A newer message superseded this one.' } };
+    const view = activeView(run([running(T, 0, 'Coder', 'local'), done, stopped]));
+    expect(view.floorStopped).toEqual({ code: 'floor_turn_superseded', message: 'A newer message superseded this one.' });
+    expect(waitsForNextTurn(view)).toBe(false);
+    expect(waitsForNextTurn(waiting)).toBe(true);
   });
 });

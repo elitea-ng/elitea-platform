@@ -15,6 +15,9 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+// tokio's `process_group` is Unix-only; Windows gets the stand-in.
+#[cfg(windows)]
+use crate::sys::os::CommandExt as _;
 
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt as _;
@@ -99,7 +102,7 @@ pub fn settings(language: Language, cache: &Path) -> Value {
 /// process group (`SIGTERM`, then `SIGKILL` after [`TERM_GRACE`]).
 pub struct Process {
     pub connection: Arc<Connection>,
-    group: Option<rustix::process::Pid>,
+    group: Option<crate::sys::process::Group>,
     exited: Arc<AtomicBool>,
 }
 
@@ -109,11 +112,11 @@ impl Process {
         self.exited.load(Ordering::SeqCst) || self.connection.closed()
     }
 
-    fn signal(&self, signal: rustix::process::Signal) {
-        if let Some(group) = self.group
+    fn signal(&self, signal: crate::sys::process::Signal) {
+        if let Some(group) = &self.group
             && !self.exited.load(Ordering::SeqCst)
         {
-            let _ = rustix::process::kill_process_group(group, signal);
+            group.signal(signal);
         }
     }
 }
@@ -123,8 +126,8 @@ impl Drop for Process {
         if self.exited.load(Ordering::SeqCst) {
             return;
         }
-        self.signal(rustix::process::Signal::TERM);
-        let (group, exited) = (self.group, Arc::clone(&self.exited));
+        self.signal(crate::sys::process::Signal::TERM);
+        let (group, exited) = (self.group.clone(), Arc::clone(&self.exited));
         let _ = std::thread::Builder::new()
             .name("elitea-lsp-stop".to_owned())
             .spawn(move || {
@@ -132,11 +135,10 @@ impl Drop for Process {
                 while !exited.load(Ordering::SeqCst) && Instant::now() < deadline {
                     std::thread::sleep(Duration::from_millis(20));
                 }
-                if let Some(group) = group
+                if let Some(group) = &group
                     && !exited.load(Ordering::SeqCst)
                 {
-                    let _ =
-                        rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+                    group.signal(crate::sys::process::Signal::KILL);
                 }
             });
     }
@@ -166,7 +168,7 @@ impl Launch {
         args: &[String],
     ) -> Result<Self, String> {
         let workspace = session.workspace();
-        let resolved = std::fs::canonicalize(program)
+        let resolved = crate::sys::canonicalize(program)
             .map_err(|_| format!("`{}` does not exist", program.display()))?;
         if resolved.starts_with(workspace.root()) {
             return Err("a language server's program cannot be inside the workspace".to_owned());
@@ -177,14 +179,14 @@ impl Launch {
         let shell = session.shell_config();
         let cache = shell.temp_dir.join("lsp").join(language.as_str());
         for sub in ["", "tmp", "xdg", "target", "go-build"] {
-            use std::os::unix::fs::DirBuilderExt as _;
+            use crate::sys::os::DirBuilderExt as _;
             std::fs::DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
                 .create(cache.join(sub))
                 .map_err(|_| "cannot create the language server's cache".to_owned())?;
         }
-        let cache = std::fs::canonicalize(&cache)
+        let cache = crate::sys::canonicalize(&cache)
             .map_err(|_| "cannot resolve the language server's cache".to_owned())?;
         // The session's request (its deny list and `path_deny`), with the
         // workspace taken out of what may be written: only the cache is.
@@ -237,10 +239,7 @@ impl Launch {
         let mut child = command
             .spawn()
             .map_err(|error| format!("the language server could not start: {}", error.kind()))?;
-        let group = child
-            .id()
-            .and_then(|pid| i32::try_from(pid).ok())
-            .and_then(rustix::process::Pid::from_raw);
+        let group = crate::sys::process::Group::of_tokio(&child);
         let (Some(stdin), Some(stdout), Some(mut stderr)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
@@ -313,7 +312,7 @@ impl Launch {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

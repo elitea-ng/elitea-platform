@@ -12,6 +12,8 @@ import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { InfoLabelWithTooltip } from '@/shared/ui/InfoLabelWithTooltip';
 import { OutputContractField, readOutputContract } from '@/shared/ui/OutputContractField';
 import { CitationsField, type CitationsValue } from './CitationsField';
+import type { ContextBlock } from '../lib/contextBlock';
+import { ConversationHistoryField } from './ConversationHistoryField';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
 /**
@@ -51,13 +53,43 @@ export interface ApplicationAdvanceSettingsProps {
    * prop of the same name). The stored value is opaque `meta` content, read here.
    */
   readonly outputContract?: unknown;
-  readonly showOutputContract?: boolean | undefined;
+  /** An object also carries the server's refusals of the meta controls on the last save. */
+  readonly showOutputContract?: boolean | ContentControlErrors | undefined;
   readonly onOutputContractChange?: ((next: OutputContract | null) => void) | undefined;
-  /** `meta.citations` (ADR-0043 decision 5) and its setter; shown with `showOutputContract`. */
-  readonly citations?:
-    | { readonly value: unknown; readonly onChange: (next: CitationsValue) => void }
-    | undefined;
+  /** `meta.citations` and `meta.context`, shown with `showOutputContract`; one object for the 12-prop budget. */
+  readonly contentControls?: AdvanceContentControls | undefined;
   readonly sx?: SxProps<Theme> | undefined;
+}
+
+/** The server's refusals (on the last save) the version meta controls show on their field. */
+export interface ContentControlErrors {
+  /** 422 `context_block_invalid` (`contextBlockRefusal`). */
+  readonly contextHistory?: string | undefined;
+}
+
+/** The version meta controls only the pages that save the meta render. */
+interface AdvanceContentControls {
+  /** `meta.citations` (ADR-0043 decision 5) and its setter. */
+  readonly citations: { readonly value: unknown; readonly onChange: (next: CitationsValue) => void };
+  /**
+   * ADR-0050 decision 9 — `meta.context` ("Conversation history"), its
+   * setter and the server's refusal of it on the last save.
+   */
+  readonly contextHistory: { readonly value: unknown; readonly onChange: (next: ContextBlock | null) => void };
+}
+
+function ContentControls({ controls, errors, disabled }: {
+  readonly controls: AdvanceContentControls;
+  readonly errors: ContentControlErrors | undefined;
+  readonly disabled?: boolean | undefined;
+}): ReactNode {
+  const { citations, contextHistory } = controls;
+  return (
+    <>
+      <CitationsField value={citations.value} onChange={citations.onChange} disabled={disabled} />
+      <ConversationHistoryField value={contextHistory.value} onChange={contextHistory.onChange} error={errors?.contextHistory} disabled={disabled} />
+    </>
+  );
 }
 
 function clampStepLimit(rawValue: string): number | undefined {
@@ -104,9 +136,11 @@ export function ApplicationAdvanceSettings({
   outputContract,
   onOutputContractChange,
   showOutputContract,
-  citations,
+  contentControls,
   sx,
 }: ApplicationAdvanceSettingsProps): ReactNode {
+  const showContent = showOutputContract !== undefined && showOutputContract !== false;
+  const contentErrors = typeof showOutputContract === 'object' ? showOutputContract : undefined;
   const handleChange = useCallback(
     (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       onStepLimitChange(clampStepLimit(event.target.value));
@@ -157,7 +191,7 @@ export function ApplicationAdvanceSettings({
               htmlInput: { inputMode: 'numeric', pattern: '[0-9]*', min: MIN_STEP_LIMIT, max: MAX_STEP_LIMIT },
             }}
           />
-          {showOutputContract === true && onOutputContractChange !== undefined && (
+          {showContent && onOutputContractChange !== undefined && (
             <OutputContractField
               value={readOutputContract(outputContract)}
               onChange={onOutputContractChange}
@@ -165,8 +199,8 @@ export function ApplicationAdvanceSettings({
               testIdPrefix="agent-output-contract"
             />
           )}
-          {showOutputContract === true && citations !== undefined && (
-            <CitationsField value={citations.value} onChange={citations.onChange} disabled={disabled} />
+          {showContent && contentControls !== undefined && (
+            <ContentControls controls={contentControls} errors={contentErrors} disabled={disabled} />
           )}
           {showIgnoreProjectContext && (
             <Box sx={toggleRowSx}>

@@ -81,7 +81,16 @@ const (
 	SourceBreaker       Source = "breaker"
 	SourceCertification Source = "certification"
 	SourceSelfTest      Source = "self_test"
+	// SourceDismissal is the dismissal ladder's Suspend stage (ADR-0050
+	// decision 5g, shared 0236): an agent manager approved a suspension
+	// proposal. Any project or platform administrator resumes it, and a
+	// granted appeal or a reinstatement resumes it too.
+	SourceDismissal Source = "dismissal"
 )
+
+// DismissalMessage is the caller-safe sentence of a run refused by a
+// dismissal suspension.
+const DismissalMessage = "An agent manager suspended this agent while its dismissal is reviewed. An administrator must resume it."
 
 // BreakerMessage is the caller-safe sentence of a run refused by a breaker
 // suspension.
@@ -294,6 +303,9 @@ func (e *SuspendedError) Message() string {
 	}
 	if e.Source == SourceBreaker {
 		return BreakerMessage
+	}
+	if e.Source == SourceDismissal {
+		return DismissalMessage
 	}
 	switch e.Scope {
 	case ScopePlatform:

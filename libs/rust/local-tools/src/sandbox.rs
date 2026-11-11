@@ -5,7 +5,7 @@
 //! | macOS | Seatbelt: `/usr/bin/sandbox-exec -p <profile>` with a profile generated per command ([`seatbelt`]) | `full`: writes confined, `.git` read-only, credentials and `path_deny` unreadable, network denied (loopback included) |
 //! | Linux, `bwrap` installed and usable | bubblewrap ([`bubblewrap`]): a read-only bind of `/`, the writable roots bound read-write, every `.git` found bound read-only, credentials and `path_deny` masked, a private network namespace when the network is off (UDP, raw and abstract sockets included), well-known pathname sockets (`/run/user`, Docker) masked; the walk is cached per session until a write | `full`; `partial` past 20 000 directories (`path_deny` matches and `.git` entries past the cap are not masked: the result carries [`BWRAP_TRUNCATED_GAPS`] and the session asks for the command), where commands that may write are **refused** unless the host sets [`SandboxConfig::allow_partial`]. A host-given `bwrap` path is probed like the well-known ones |
 //! | Linux, Landlock only | a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to; ABI 3 (truncate) required, ABI 4 (TCP) required when the network is off, abstract-socket scoping when the kernel has it | `partial`: Landlock cannot keep `.git` read-only under a writable root, cannot deny reads under `/` (so **credentials, the desktop app's data and `path_deny` files are not hidden**), has no UDP or pathname-socket rules. **Refused** unless the host sets [`SandboxConfig::allow_partial`]; when it does, every such command is asked ([`Prepared::hides_denied`] is false) and each result carries [`LANDLOCK_GAPS`] |
-//! | Windows | none (the crate does not build there yet; restricted tokens are phase D3) | `none` |
+//! | Windows | none yet (#1828: the crate builds and runs there; a restricted-token or `AppContainer` sandbox is not written). A command that needs confinement is **refused** unless the host sets [`SandboxConfig::allow_unenforced`]; when it does, the command runs unconfined, its result says `none`, and the session asks for it ([`Prepared::hides_denied`] is false). Full access with the network on needs no sandbox and runs | `none` |
 //! | A container the host set [`SandboxConfig::container`] for (the cloud executor's workspace runner, ADR-0034 decision 9) | none in the process: the container is the confinement boundary (its own file system, no credentials, the network the project allows), so commands run unwrapped | `container` |
 //!
 //! What every confined command gets, whatever the mode:
@@ -195,6 +195,25 @@ pub fn credential_paths(home: &Path) -> Vec<PathBuf> {
         "Library/Application Support/Vivaldi",
         "Library/Application Support/com.operasoftware.Opera",
         "Library/Application Support/elitea*",
+        // Windows (#1828): under the profile's `AppData`. Every system
+        // lists them, as it lists `Library` on Linux: a profile copied or
+        // mounted elsewhere keeps them.
+        "AppData/Roaming/GitHub CLI",
+        "AppData/Roaming/gcloud",
+        "AppData/Roaming/Docker",
+        "AppData/Roaming/Microsoft/Credentials",
+        "AppData/Roaming/Microsoft/Protect",
+        "AppData/Roaming/Microsoft/Crypto",
+        "AppData/Local/Microsoft/Credentials",
+        "AppData/Roaming/Mozilla",
+        "AppData/Local/Google/Chrome",
+        "AppData/Local/Chromium",
+        "AppData/Local/BraveSoftware",
+        "AppData/Local/Microsoft/Edge",
+        "AppData/Local/Vivaldi",
+        "AppData/Roaming/Opera Software",
+        "AppData/Roaming/elitea*",
+        "AppData/Local/elitea*",
     ];
     RELATIVE
         .iter()
@@ -264,7 +283,7 @@ pub struct SandboxConfig {
 ///
 /// The root does not exist or cannot be resolved.
 pub fn git_trust_root(root: &Path) -> std::io::Result<PathBuf> {
-    std::fs::canonicalize(root)
+    crate::sys::canonicalize(root)
 }
 
 /// Whether `name` is an environment variable that adds git config
@@ -518,6 +537,9 @@ fn platform_prepare(
     }))
 }
 
+/// Windows (and any other system): no sandbox, so `None`, and [`prepare`]
+/// refuses a command that needs confinement unless the host allowed
+/// unenforced commands. Fail closed: never run unconfined silently.
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 #[allow(clippy::unnecessary_wraps)]
 fn platform_prepare(
@@ -1611,7 +1633,7 @@ pub mod landlock {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::path::{Path, PathBuf};
 
@@ -1792,7 +1814,7 @@ mod tests {
     #[test]
     fn a_truncated_bubblewrap_walk_does_not_hide_denied_paths() {
         let dir = tempfile::tempdir().expect("dir");
-        let ws = std::fs::canonicalize(dir.path()).expect("canonical");
+        let ws = crate::sys::canonicalize(dir.path()).expect("canonical");
         for index in 0..8 {
             std::fs::create_dir_all(ws.join(format!("d{index}/e"))).expect("dirs");
         }
@@ -1959,7 +1981,7 @@ mod tests {
     #[test]
     fn bubblewrap_keeps_git_read_only_and_hides_what_is_denied() {
         let dir = tempfile::tempdir().expect("dir");
-        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let base = crate::sys::canonicalize(dir.path()).expect("canonical");
         let ws = base.join("ws");
         let data = base.join("data");
         let temp = data.join("tmp/s1");
@@ -2061,7 +2083,7 @@ mod tests {
     #[test]
     fn a_walk_past_its_cap_fails_closed() {
         let dir = tempfile::tempdir().expect("dir");
-        let ws = std::fs::canonicalize(dir.path()).expect("canonical");
+        let ws = crate::sys::canonicalize(dir.path()).expect("canonical");
         for index in 0..8 {
             std::fs::create_dir_all(ws.join(format!("d{index}/e"))).expect("dirs");
         }
@@ -2108,7 +2130,7 @@ mod tests {
     #[test]
     fn mask_walks_are_cached_until_invalidated() {
         let dir = tempfile::tempdir().expect("dir");
-        let ws = std::fs::canonicalize(dir.path()).expect("canonical");
+        let ws = crate::sys::canonicalize(dir.path()).expect("canonical");
         std::fs::create_dir_all(ws.join("src")).expect("src");
         let request = SandboxRequest {
             git_roots: vec![ws.clone()],

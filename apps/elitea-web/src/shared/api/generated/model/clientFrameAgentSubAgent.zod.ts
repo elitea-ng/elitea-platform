@@ -85,7 +85,7 @@ export const ClientFrameAgentSubAgent = ClientFrameEnvelope.and(
     }),
   }),
 ).describe(
-  "Client contract 1.47 (ADR-0050 decision 4). One step of a temporary sub-agent a cloud run started with `spawn_agent`: `response_metadata.subagent_v1.kind` is `started` (with its `parent_call_id`, `ordinal`, `label`, `display_name` and `avatar`), `resumed`, `tool_start` (`call_id`, `tool`, `args_summary`), `tool_end` (`call_id`, `ok`, `summary`), `text` or `finished` (`status`, `steps`, tokens, `result`, `error`). Fold them into one lane per `agent_id` under the `spawn_agent` row; the answer keeps the same lanes as `metadata.subagents_v1`. A client that does not know the frame ignores it. Not terminal. Untrusted text: render it as plain text.",
+  "Client contract 1.48 (ADR-0050 decision 4). One step of a temporary sub-agent a cloud run started with `spawn_agent`: `response_metadata.subagent_v1.kind` is `started` (with its `parent_call_id`, `ordinal`, `label`, `display_name` and `avatar`), `resumed`, `tool_start` (`call_id`, `tool`, `args_summary`), `tool_end` (`call_id`, `ok`, `summary`), `text` or `finished` (`status`, `steps`, tokens, `result`, `error`). Fold them into one lane per `agent_id` under the `spawn_agent` row; the answer keeps the same lanes as `metadata.subagents_v1`. A client that does not know the frame ignores it. Not terminal. Untrusted text: render it as plain text.",
 );
 
 export type ClientFrameAgentSubAgent = zod.input<

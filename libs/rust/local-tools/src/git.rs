@@ -82,7 +82,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io::Write as _;
-use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -775,7 +774,7 @@ static WORKTREE_TRUST: Mutex<Option<WorktreeTrust>> = Mutex::new(None);
 /// a worktree they made with `git worktree add` works on its own, without
 /// its repository open). Kept for the life of the process.
 pub fn trust_worktree_parent(top: &Path) {
-    let top = std::fs::canonicalize(top).unwrap_or_else(|_| top.to_path_buf());
+    let top = crate::sys::canonicalize(top).unwrap_or_else(|_| top.to_path_buf());
     if let Ok(mut parents) = WORKTREE_PARENTS.lock() {
         parents.insert(top);
     }
@@ -785,7 +784,7 @@ pub fn trust_worktree_parent(top: &Path) {
 /// (its workspace was removed). Undoes [`trust_worktree_parent`], whether
 /// the folder still exists or not.
 pub fn forget_worktree_parent(top: &Path) {
-    let canonical = std::fs::canonicalize(top).unwrap_or_else(|_| top.to_path_buf());
+    let canonical = crate::sys::canonicalize(top).unwrap_or_else(|_| top.to_path_buf());
     if let Ok(mut parents) = WORKTREE_PARENTS.lock() {
         parents.remove(&canonical);
         parents.remove(top);
@@ -833,7 +832,7 @@ impl RegisteredWorktree {
     #[must_use]
     pub fn canonical(&self) -> Self {
         let resolve =
-            |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            |path: &Path| crate::sys::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         Self {
             worktree: resolve(&self.worktree),
             top: resolve(&self.top),
@@ -857,7 +856,7 @@ pub fn register_worktree(entry: &RegisteredWorktree) {
 
 /// Forget a task worktree (it was removed).
 pub fn unregister_worktree(worktree: &Path) {
-    let canonical = std::fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
+    let canonical = crate::sys::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
     if let Ok(mut registered) = REGISTERED_WORKTREES.lock() {
         registered.remove(&canonical);
         registered.remove(worktree);
@@ -867,7 +866,7 @@ pub fn unregister_worktree(worktree: &Path) {
 /// The registered task worktree whose folder is `worktree`, if any.
 #[must_use]
 pub fn registered_worktree(worktree: &Path) -> Option<RegisteredWorktree> {
-    let canonical = std::fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
+    let canonical = crate::sys::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
     REGISTERED_WORKTREES
         .lock()
         .ok()
@@ -897,7 +896,7 @@ pub fn valid_worktree_name(name: &str) -> bool {
 /// repository wrote, a pointer anywhere else, a `commondir` elsewhere and a
 /// submodule's git directory are all refused.
 fn registered_linked_worktree(entry: &RegisteredWorktree) -> ToolResult<(PathBuf, PathBuf)> {
-    use std::os::unix::fs::MetadataExt as _;
+    use crate::sys::os::MetadataExt as _;
     let refuse = |why: &str| {
         unsafe_repo(format!(
             "the worktree's .git is not the one the host created ({why})"
@@ -911,7 +910,7 @@ fn registered_linked_worktree(entry: &RegisteredWorktree) -> ToolResult<(PathBuf
     if !meta.file_type().is_file() {
         return Err(refuse("not a regular file"));
     }
-    let me = rustix::process::geteuid().as_raw();
+    let me = crate::sys::process::geteuid().as_raw();
     if meta.uid() != me {
         return Err(refused(
             "the worktree's .git is not the one the host created (another user owns it)",
@@ -931,7 +930,7 @@ fn registered_linked_worktree(entry: &RegisteredWorktree) -> ToolResult<(PathBuf
     if !target.is_absolute() {
         return Err(refuse("a relative gitdir"));
     }
-    let top = std::fs::canonicalize(&entry.top).map_err(|_| refuse("its repository is gone"))?;
+    let top = crate::sys::canonicalize(&entry.top).map_err(|_| refuse("its repository is gone"))?;
     let common = top.join(".git");
     if !std::fs::symlink_metadata(&common).is_ok_and(|meta| meta.file_type().is_dir()) {
         return Err(refuse("its repository's .git is not a directory"));
@@ -939,10 +938,10 @@ fn registered_linked_worktree(entry: &RegisteredWorktree) -> ToolResult<(PathBuf
     let expected = common.join("worktrees").join(&entry.name);
     // No component of the expected path may be a symlink: the canonical
     // spelling must be the literal one.
-    if std::fs::canonicalize(&expected).ok().as_deref() != Some(expected.as_path()) {
+    if crate::sys::canonicalize(&expected).ok().as_deref() != Some(expected.as_path()) {
         return Err(refuse("its admin directory is not in its repository"));
     }
-    if std::fs::canonicalize(target).ok().as_deref() != Some(expected.as_path()) {
+    if crate::sys::canonicalize(target).ok().as_deref() != Some(expected.as_path()) {
         return Err(refuse(
             "its gitdir points outside its repository's worktrees",
         ));
@@ -955,7 +954,7 @@ fn registered_linked_worktree(entry: &RegisteredWorktree) -> ToolResult<(PathBuf
     } else {
         expected.join(commondir)
     };
-    if std::fs::canonicalize(commondir).ok().as_deref() != Some(common.as_path()) {
+    if crate::sys::canonicalize(commondir).ok().as_deref() != Some(common.as_path()) {
         return Err(refuse("its commondir leads elsewhere"));
     }
     let back = small_text(&expected.join("gitdir")).ok_or_else(|| refuse("no gitdir"))?;
@@ -965,7 +964,7 @@ fn registered_linked_worktree(entry: &RegisteredWorktree) -> ToolResult<(PathBuf
     } else {
         expected.join(back)
     };
-    if std::fs::canonicalize(back).ok() != std::fs::canonicalize(&dot_git).ok() {
+    if crate::sys::canonicalize(back).ok() != crate::sys::canonicalize(&dot_git).ok() {
         return Err(refuse("its repository registered another worktree there"));
     }
     Ok((expected, common))
@@ -1019,7 +1018,7 @@ fn linked_worktree(top: &Path) -> ToolResult<(PathBuf, PathBuf)> {
     } else {
         top.join(target)
     };
-    let admin = std::fs::canonicalize(&target).map_err(|_| refuse("its target is missing"))?;
+    let admin = crate::sys::canonicalize(&target).map_err(|_| refuse("its target is missing"))?;
     if !std::fs::symlink_metadata(&admin).is_ok_and(|meta| meta.file_type().is_dir()) {
         return Err(refuse("its target is not a directory"));
     }
@@ -1037,7 +1036,7 @@ fn linked_worktree(top: &Path) -> ToolResult<(PathBuf, PathBuf)> {
     // The person opened the repository, or this worktree itself (one they
     // made with `git worktree add`, on another branch): every structural
     // check here and of `<P>/.git` still applies either way.
-    let own_top = std::fs::canonicalize(top).unwrap_or_else(|_| top.to_path_buf());
+    let own_top = crate::sys::canonicalize(top).unwrap_or_else(|_| top.to_path_buf());
     if !trusted_worktree_parent(parent_top) && !trusted_worktree_parent(&own_top) {
         return Err(refuse(
             "a worktree that is not an open workspace, of a repository that is not one either",
@@ -1050,7 +1049,7 @@ fn linked_worktree(top: &Path) -> ToolResult<(PathBuf, PathBuf)> {
     } else {
         admin.join(commondir)
     };
-    if std::fs::canonicalize(commondir).ok().as_deref() != Some(common) {
+    if crate::sys::canonicalize(commondir).ok().as_deref() != Some(common) {
         return Err(refuse("its commondir leads elsewhere"));
     }
     let back = small_text(&admin.join("gitdir")).ok_or_else(|| refuse("no gitdir"))?;
@@ -1060,7 +1059,7 @@ fn linked_worktree(top: &Path) -> ToolResult<(PathBuf, PathBuf)> {
     } else {
         admin.join(back)
     };
-    if std::fs::canonicalize(back).ok() != std::fs::canonicalize(&dot_git).ok() {
+    if crate::sys::canonicalize(back).ok() != crate::sys::canonicalize(&dot_git).ok() {
         return Err(refuse("its repository registered another worktree there"));
     }
     let common = common.to_path_buf();
@@ -1077,7 +1076,7 @@ fn git_binary() -> ToolResult<PathBuf> {
         let path = std::env::var_os("PATH")?;
         let found = std::env::split_paths(&path)
             .filter(|dir| dir.is_absolute())
-            .map(|dir| dir.join("git"))
+            .flat_map(|dir| crate::sys::program_candidates(&dir, "git"))
             .find(|candidate| candidate.is_file())?;
         if cfg!(target_os = "macos") && found == Path::new("/usr/bin/git") {
             let resolved = Command::new("/usr/bin/xcrun")
@@ -1719,7 +1718,7 @@ impl Repo {
         if let Some(path) = &self.global_config {
             return vec![path.clone()];
         }
-        let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
+        let home = crate::sys::home_dir();
         let xdg = std::env::var_os("XDG_CONFIG_HOME")
             .filter(|xdg| !xdg.is_empty())
             .map(PathBuf::from)
@@ -1844,7 +1843,7 @@ impl Repo {
         let mut dirs = BTreeSet::new();
         dirs.insert(PathBuf::new());
         for path in paths.split(|byte| *byte == 0) {
-            let path = Path::new(OsStr::from_bytes(path));
+            let path = crate::sys::path_from_bytes(path);
             dirs.extend(path.ancestors().skip(1).map(Path::to_path_buf));
         }
         for dir in &dirs {
@@ -2123,7 +2122,7 @@ impl Repo {
 
 /// Feed `path` and its metadata (or its absence) to `hash`.
 fn hash_stat(hash: &mut Sha256, path: &Path) {
-    use std::os::unix::fs::MetadataExt as _;
+    use crate::sys::os::MetadataExt as _;
     hash.update(path.as_os_str().as_encoded_bytes());
     hash.update([0]);
     match std::fs::symlink_metadata(path) {
@@ -2301,8 +2300,8 @@ impl<'a> Git<'a> {
         hit: fn(&[u8]) -> bool,
         record_cap: usize,
     ) -> ToolResult<Option<Vec<u8>>> {
+        use crate::sys::os::CommandExt as _;
         use std::io::{BufRead as _, Read as _};
-        use std::os::unix::process::CommandExt as _;
         let what = args.first().copied().unwrap_or_default();
         let mut command = self.command(args)?;
         command
@@ -2316,12 +2315,10 @@ impl<'a> Git<'a> {
                 format!("git is not available: {}", error.kind()),
             )
         })?;
-        let group = i32::try_from(child.id())
-            .ok()
-            .and_then(rustix::process::Pid::from_raw);
+        let group = crate::sys::process::Group::of_child(&child);
         let stop = |child: &mut std::process::Child| {
-            if let Some(group) = group {
-                let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+            if let Some(group) = &group {
+                group.signal(crate::sys::process::Signal::KILL);
             }
             let _ = child.kill();
             let _ = child.wait();
@@ -2532,7 +2529,7 @@ fn run_collect(
     timeout: Duration,
     what: &str,
 ) -> ToolResult<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
-    use std::os::unix::process::CommandExt as _;
+    use crate::sys::os::CommandExt as _;
     command
         .stdin(if stdin.is_some() {
             Stdio::piped()
@@ -2548,9 +2545,7 @@ fn run_collect(
             format!("git is not available: {}", error.kind()),
         )
     })?;
-    let group = i32::try_from(child.id())
-        .ok()
-        .and_then(rustix::process::Pid::from_raw);
+    let group = crate::sys::process::Group::of_child(&child);
     if let (Some(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
         let bytes = bytes.to_vec();
         std::thread::spawn(move || {
@@ -2572,8 +2567,8 @@ fn run_collect(
             _ => break None,
         }
     };
-    if let Some(group) = group {
-        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+    if let Some(group) = &group {
+        group.signal(crate::sys::process::Signal::KILL);
     }
     let Some(status) = status else {
         let _ = child.kill();
@@ -2735,7 +2730,7 @@ impl CharBoundary for [u8] {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::path::Path;
     use std::process::Command;
@@ -2807,7 +2802,7 @@ mod tests {
 
     fn repo() -> (tempfile::TempDir, std::path::PathBuf, Repo) {
         let dir = tempfile::tempdir().expect("dir");
-        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let base = crate::sys::canonicalize(dir.path()).expect("canonical");
         let top = base.join("repo");
         std::fs::create_dir(&top).expect("repo");
         init(&top);
@@ -2828,7 +2823,7 @@ mod tests {
         git(&top, &["add", "a.txt"]);
         git(&top, &["commit", "-q", "-m", "a"]);
         let link = base.join("link");
-        std::os::unix::fs::symlink(&base, &link).expect("symlink");
+        crate::sys::os::symlink(&base, &link).expect("symlink");
 
         let through_link = discover(&link.join("repo"))
             .expect("trusted")
@@ -3156,7 +3151,7 @@ mod tests {
     #[test]
     fn host_git_runs_under_the_sessions_deny_list() {
         let dir = tempfile::tempdir().expect("dir");
-        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let base = crate::sys::canonicalize(dir.path()).expect("canonical");
         let top = base.join("repo");
         std::fs::create_dir(&top).expect("repo");
         init(&top);

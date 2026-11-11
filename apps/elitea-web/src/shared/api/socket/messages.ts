@@ -756,7 +756,7 @@ const AgentStateMessageSchema = z.looseObject({
 });
 
 /**
- * Client contract 1.47 (ADR-0050 decision 4): one step of a temporary
+ * Client contract 1.48 (ADR-0050 decision 4): one step of a temporary
  * sub-agent a cloud run started. `response_metadata.subagent_v1` is read by
  * `@elitea/client-core/stream` `foldSubAgentEntry`, which bounds it.
  */

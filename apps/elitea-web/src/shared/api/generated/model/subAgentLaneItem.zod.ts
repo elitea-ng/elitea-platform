@@ -75,7 +75,7 @@ export const SubAgentLaneItem = zod
     text: zod.string().max(subAgentLaneItemTextMax).optional(),
   })
   .describe(
-    "Client contract 1.47. One of a sub-agent's own tool calls (`tool`) or one of its texts (`text`). Untrusted text: render it as plain text.",
+    "Client contract 1.48. One of a sub-agent's own tool calls (`tool`) or one of its texts (`text`). Untrusted text: render it as plain text.",
   );
 
 export type SubAgentLaneItem = zod.input<typeof SubAgentLaneItem>;

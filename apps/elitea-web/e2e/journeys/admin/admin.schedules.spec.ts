@@ -45,9 +45,32 @@ async function openSchedules(page: Page, routine: string): Promise<void> {
   await expect(page.getByText(routine, { exact: true })).toBeVisible({ timeout: 20_000 });
 }
 
+/**
+ * The full reload every write is verified by. A reload fired into the
+ * write's follow-up traffic is the second document navigation WebKit fails
+ * with "WebKit encountered an internal error" (see artifacts.lifecycle's
+ * `reenterArtifacts`); the page settles first.
+ */
+async function reloadSchedules(page: Page): Promise<void> {
+  await page.waitForLoadState('networkidle');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+}
+
 function probeSwitch(page: Page, routine: string) {
   return page.getByRole('switch', { name: `Schedule enabled: ${routine}` });
 }
+
+// Every attempt starts from the seeded row. A test that dies between its
+// write and its own restore (J33c's reload once hit "WebKit encountered an
+// internal error" right after saving 12h) otherwise leaves the override, and
+// every serial retry then reads 12h where the seed says 24h. Through the
+// same API the controls use, so the reset is itself a checked write.
+adminTest.beforeEach(async ({ page }, testInfo) => {
+  const response = await page.request.put(`${BASE_URL}/api/v2${ROUTINES_PATH}/${probeRoutine(testInfo.project.name)}`, {
+    data: { enabled: true, schedule: '' },
+  });
+  expect(response.status(), 'resetting the probe routine to its seeded state').toBe(200);
+});
 
 function isRoutineWrite(r: { url(): string; request(): { method(): string } }): boolean {
   return r.url().includes(ROUTINES_PATH) && r.request().method() === 'PUT';
@@ -84,7 +107,7 @@ adminTest('J33b: switching a routine off reaches the server and survives a reloa
   expect(off.status(), 'the routine write must be authorised server-side').toBe(200);
 
   // A FULL RELOAD, not a cache read.
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  await reloadSchedules(page);
   await expect(page.getByText(probe, { exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(probeSwitch(page, probe)).not.toBeChecked();
 
@@ -94,7 +117,7 @@ adminTest('J33b: switching a routine off reaches the server and survives a reloa
     probeSwitch(page, probe).click(),
   ]);
   expect(on.status()).toBe(200);
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  await reloadSchedules(page);
   await expect(page.getByText(probe, { exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(probeSwitch(page, probe)).toBeChecked();
 });
@@ -110,7 +133,7 @@ adminTest('J33c: a new schedule is stored, shown as custom, and can be reset', a
   const [saved] = await Promise.all([page.waitForResponse(isRoutineWrite), editor.press('Tab')]);
   expect(saved.status()).toBe(200);
 
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  await reloadSchedules(page);
   await expect(page.getByText(probe, { exact: true })).toBeVisible({ timeout: 20_000 });
   const reloaded = page.getByRole('row').filter({ hasText: probe });
   await expect(reloaded.getByText('12h', { exact: true })).toBeVisible();
@@ -122,7 +145,7 @@ adminTest('J33c: a new schedule is stored, shown as custom, and can be reset', a
   await reset.fill('');
   const [restored] = await Promise.all([page.waitForResponse(isRoutineWrite), reset.press('Tab')]);
   expect(restored.status()).toBe(200);
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  await reloadSchedules(page);
   await expect(
     page.getByRole('row').filter({ hasText: probe }).getByText('Default', { exact: true }),
   ).toBeVisible({ timeout: 20_000 });
@@ -143,7 +166,7 @@ adminTest('J33d: the server refuses a schedule faster than the routine allows', 
   // The operator is told WHICH limit was hit, not "failed to save".
   await expect(page.getByTestId('admin-schedules-error')).toContainText('more often');
 
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  await reloadSchedules(page);
   await expect(
     page.getByRole('row').filter({ hasText: probe }).getByText(SEEDED_SCHEDULE, { exact: true }),
   ).toBeVisible({ timeout: 20_000 });

@@ -3357,7 +3357,7 @@ mod browser_tests;
 #[cfg(test)]
 mod computer_tests;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::sync::{Arc, Mutex};
 

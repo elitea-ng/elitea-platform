@@ -9,6 +9,9 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+// tokio's `process_group` is Unix-only; Windows gets the stand-in.
+#[cfg(windows)]
+use crate::sys::os::CommandExt as _;
 
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -25,6 +28,12 @@ use crate::workspace::{EntryKind, Workspace, WsPath};
 const PASSTHROUGH: &[&str] = &[
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
 ];
+
+/// The shell a compound command (pipes, redirects, `&&`) runs under. The
+/// analysis reads POSIX shell syntax, so it is a POSIX shell everywhere: on
+/// Windows the `sh` on `PATH` (Git for Windows has one). Without one, the
+/// command does not start.
+pub const COMPOUND_SHELL: &str = if cfg!(windows) { "sh" } else { "/bin/sh" };
 
 /// Variables never passed, even when a host lists them.
 const SECRET_MARKERS: &[&str] = &[
@@ -151,11 +160,7 @@ impl ShellConfig {
     /// else a non-empty `HOME`.
     #[must_use]
     pub fn home_dir(&self) -> Option<PathBuf> {
-        self.home.clone().or_else(|| {
-            std::env::var_os("HOME")
-                .filter(|home| !home.is_empty())
-                .map(PathBuf::from)
-        })
+        self.home.clone().or_else(crate::sys::home_dir)
     }
 
     /// The build tools' cache root: [`Self::cache_dir`], else `build-cache`
@@ -513,7 +518,7 @@ pub fn sandbox_request(
     std::fs::create_dir_all(&config.temp_dir).map_err(|error| {
         ToolError::io("cannot create the session's temporary directory", &error)
     })?;
-    let temp = std::fs::canonicalize(&config.temp_dir).map_err(|error| {
+    let temp = crate::sys::canonicalize(&config.temp_dir).map_err(|error| {
         ToolError::io("cannot resolve the session's temporary directory", &error)
     })?;
     // The build tools' cache root, kept across sessions, is writable too
@@ -522,7 +527,7 @@ pub fn sandbox_request(
     let cache = config.cache_root();
     std::fs::create_dir_all(&cache)
         .map_err(|error| ToolError::io("cannot create the build tools' cache", &error))?;
-    let cache = std::fs::canonicalize(&cache)
+    let cache = crate::sys::canonicalize(&cache)
         .map_err(|error| ToolError::io("cannot resolve the build tools' cache", &error))?;
     let mut writable_roots = vec![workspace.root().to_path_buf(), temp];
     if !writable_roots.iter().any(|root| cache.starts_with(root)) {
@@ -642,7 +647,11 @@ pub fn prepare_command(
     let (argv, shell) = match analyse(&spec.command) {
         CommandShape::Simple(argv) => (argv, false),
         CommandShape::Compound { .. } => (
-            vec!["/bin/sh".to_owned(), "-c".to_owned(), spec.command.clone()],
+            vec![
+                COMPOUND_SHELL.to_owned(),
+                "-c".to_owned(),
+                spec.command.clone(),
+            ],
             true,
         ),
     };
@@ -754,14 +763,11 @@ pub async fn run_checked_up_to(
     let mut child = command
         .spawn()
         .map_err(|error| ToolError::io(&format!("cannot start `{program}`"), &error))?;
-    let group = child
-        .id()
-        .and_then(|id| i32::try_from(id).ok())
-        .and_then(rustix::process::Pid::from_raw);
+    let group = crate::sys::process::Group::of_tokio(&child);
     // A caller that stops waiting (the future is dropped, e.g. a cloud
     // turn's take back) kills the whole group: `kill_on_drop` alone reaches
     // only the leader, and a build's children would keep writing.
-    let mut group_guard = GroupKillOnDrop(group);
+    let mut group_guard = GroupKillOnDrop(group.clone());
     let stdout = child
         .stdout
         .take()
@@ -780,8 +786,8 @@ pub async fn run_checked_up_to(
     let (status, timed_out) = if let Ok(status) = waited {
         (status.ok(), false)
     } else {
-        if let Some(group) = group {
-            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        if let Some(group) = &group {
+            group.signal(crate::sys::process::Signal::KILL);
         }
         let _ = child.start_kill();
         (child.wait().await.ok(), true)
@@ -894,10 +900,7 @@ pub async fn login_environment(shell: &std::path::Path, timeout: Duration) -> Lo
     let Ok(mut child) = command.spawn() else {
         return failed(format!("{} could not be started", shell.display()));
     };
-    let group = child
-        .id()
-        .and_then(|id| i32::try_from(id).ok())
-        .and_then(rustix::process::Pid::from_raw);
+    let group = crate::sys::process::Group::of_tokio(&child);
     let Some(stdout) = child.stdout.take() else {
         return failed("the login shell gave no output".to_owned());
     };
@@ -911,16 +914,16 @@ pub async fn login_environment(shell: &std::path::Path, timeout: Duration) -> Lo
         (out, status)
     };
     let Ok((out, status)) = tokio::time::timeout(timeout, read).await else {
-        if let Some(group) = group {
-            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        if let Some(group) = &group {
+            group.signal(crate::sys::process::Signal::KILL);
         }
         return failed(format!(
             "the login shell did not answer in {}s",
             timeout.as_secs()
         ));
     };
-    if let Some(group) = group {
-        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+    if let Some(group) = &group {
+        group.signal(crate::sys::process::Signal::KILL);
     }
     if !status.is_some_and(|status| status.success()) {
         return failed("the login shell exited with an error".to_owned());
@@ -948,13 +951,13 @@ pub async fn login_environment(shell: &std::path::Path, timeout: Duration) -> Lo
 }
 
 /// Kills a command's process group when dropped.
-struct GroupKillOnDrop(Option<rustix::process::Pid>);
+struct GroupKillOnDrop(Option<crate::sys::process::Group>);
 
 impl GroupKillOnDrop {
     /// Kill the group now, once: a later drop must not signal a reused id.
     fn kill_now(&mut self) {
         if let Some(group) = self.0.take() {
-            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+            group.signal(crate::sys::process::Signal::KILL);
         }
     }
 }
@@ -965,7 +968,7 @@ impl Drop for GroupKillOnDrop {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::time::Duration;
 
@@ -1149,7 +1152,7 @@ mod tests {
         let request =
             super::sandbox_request(&workspace, &config, SandboxMode::WorkspaceWrite, false)
                 .expect("request");
-        let canonical = std::fs::canonicalize(&cache).expect("created");
+        let canonical = crate::sys::canonicalize(&cache).expect("created");
         assert_eq!(request.writable_roots.last(), Some(&canonical));
         let passed = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
             pairs
@@ -1344,7 +1347,7 @@ mod tests {
     fn the_temp_dir_under_the_denied_app_data_stays_writable() {
         use crate::sandbox::{bubblewrap, seatbelt};
         let dir = tempfile::tempdir().expect("dir");
-        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let base = crate::sys::canonicalize(dir.path()).expect("canonical");
         let home = base.join("home");
         let app = home.join("Library/Application Support/ai.elitea.desktop");
         let data = app.join("workspaces/w1");

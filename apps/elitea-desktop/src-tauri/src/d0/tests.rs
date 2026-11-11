@@ -387,6 +387,9 @@ fn request(workspace_id: &str) -> TurnRequest {
         command: None,
         images: Vec::new(),
         unattended: None,
+        addressed_to: Vec::new(),
+        floor_turn: None,
+        cloud: false,
     }
 }
 
@@ -3703,6 +3706,12 @@ pub(crate) fn memory_platform_for(
     }
 }
 
+/// A person's message without the `[message m-…]` line it reaches the
+/// model under (#1827).
+pub(crate) fn without_message_id(text: &str) -> &str {
+    super::brief::without_tag(text)
+}
+
 fn last_message(body: &Value) -> &Value {
     body["messages"]
         .as_array()
@@ -6135,7 +6144,7 @@ fn reading_script(summaries: Arc<AtomicUsize>) -> Script {
                 &json!({"path": "big.txt"}),
             );
         }
-        let prompt = last["content"].as_str().unwrap_or_default();
+        let prompt = without_message_id(last["content"].as_str().unwrap_or_default());
         if let Some(times) = prompt
             .strip_prefix("read big.txt ")
             .and_then(|rest| rest.split_whitespace().next())
@@ -7690,7 +7699,15 @@ async fn text_only_body_is_unchanged() {
     let bodies = llm_bodies(&h.server);
     let user = person_messages(&bodies[0])[0];
     // A plain string, as before images existed: prompt caches key on it.
-    assert_eq!(user["content"], "Write notes and file a bug");
+    // It opens with the message's id line (#1827), the same bytes each turn.
+    assert_eq!(
+        without_message_id(user["content"].as_str().unwrap()),
+        "Write notes and file a bug"
+    );
+    assert!(
+        user["content"].as_str().unwrap().starts_with("[message m-"),
+        "{user}"
+    );
     assert_eq!(
         user.as_object().unwrap().keys().collect::<Vec<_>>(),
         ["content", "role"]
@@ -8085,6 +8102,10 @@ async fn subagent_spend_uses_the_turn_execution_id() {
     assert!(order.contains(&&"call-wait".to_owned()));
 }
 
+/// A sub-agent's profile and brief on a workspace turn (#1827).
+#[path = "brief_turn_tests.rs"]
+mod brief_turn_tests;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn turn_cancel_stops_children() {
     let hang = Arc::new(AtomicBool::new(true));
@@ -8211,7 +8232,10 @@ async fn recall_moves_to_the_tail_with_identical_text() {
             .iter()
             .position(|m| m["name"] == crate::d0::model::HOST_CONTEXT_NAME)
             .unwrap();
-        assert_eq!(messages[at + 1]["content"], "Write notes and file a bug");
+        assert_eq!(
+            without_message_id(messages[at + 1]["content"].as_str().unwrap()),
+            "Write notes and file a bug"
+        );
     }
 }
 
@@ -11202,3 +11226,7 @@ async fn revoking_an_app_reaches_every_folder_and_reports_the_one_that_failed() 
         [("com.apple.notes".to_owned(), true, false)]
     );
 }
+
+/// Several agents in one thread (ADR-0050 decision 7f, #1806).
+#[path = "floor_tests.rs"]
+mod floor_tests;

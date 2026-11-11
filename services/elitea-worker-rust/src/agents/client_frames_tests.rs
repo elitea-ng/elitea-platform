@@ -250,7 +250,7 @@ fn capture() -> BTreeMap<&'static str, Value> {
         "mcp_authorization",
         first_of(&projected, "mcp_authorization_required"),
     );
-    // Client contract 1.47 (#1823): a cloud sub-agent's lane, from its start
+    // Client contract 1.48 (#1823): a cloud sub-agent's lane, from its start
     // to its end.
     let child = elitea_agent_runtime::subagents::ChildIdentity {
         agent_id: "a_0000beef".to_owned(),

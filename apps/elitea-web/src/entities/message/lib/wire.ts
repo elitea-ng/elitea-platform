@@ -185,7 +185,7 @@ export interface MessageGroupMetaWire {
   readonly skipped_capabilities?: unknown;
   /** The grounding indicator of a citing agent's answer (worker `grounding`); see `features/chat-messages/lib/grounding`. */
   readonly grounding?: unknown;
-  /** Client contract 1.47: the cloud answer's temporary sub-agents (`@elitea/client-core/stream` `parseSubAgentLanes`). */
+  /** Client contract 1.48: the cloud answer's temporary sub-agents (`@elitea/client-core/stream` `parseSubAgentLanes`). */
   readonly subagents_v1?: unknown;
   readonly interaction_uuid?: string;
   readonly references?: unknown;

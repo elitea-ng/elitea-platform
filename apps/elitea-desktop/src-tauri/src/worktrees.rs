@@ -213,10 +213,10 @@ fn read_private<T: serde::de::DeserializeOwned + Default>(
         Err(e) => return Err(storage(e)),
     };
     {
-        use std::os::unix::fs::MetadataExt as _;
+        use elitea_local_tools::sys::os::MetadataExt as _;
         let meta = opened.metadata().map_err(storage)?;
         if !meta.is_file()
-            || meta.uid() != rustix::process::geteuid().as_raw()
+            || meta.uid() != elitea_local_tools::sys::process::geteuid().as_raw()
             || meta.mode() & 0o077 != 0
         {
             return Err(TurnError::new(

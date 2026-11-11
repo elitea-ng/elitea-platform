@@ -9,6 +9,10 @@
 //! files the database's mode; [`inspect_private_file`] re-checks them after
 //! the database is opened.
 //!
+//! Windows has no mode bits or owner check here (#1828): the index lives in
+//! the app's data folder under the person's profile, whose ACL is
+//! owner-only, and a symlink or a file that is not regular is still refused.
+//!
 //! The index never lives inside the workspace it indexes
 //! ([`ensure_outside`]): the agent's own tools would read it, a checkpoint
 //! would copy it, and a `git add .` would commit it.
@@ -123,7 +127,7 @@ pub fn resolved(path: &Path) -> io::Result<PathBuf> {
     let mut missing = Vec::new();
     let mut existing = path;
     let base = loop {
-        match fs::canonicalize(existing) {
+        match elitea_local_tools::sys::canonicalize(existing) {
             Ok(canonical) => break canonical,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let Some(name) = existing.file_name() else {
@@ -153,7 +157,7 @@ pub fn resolved(path: &Path) -> io::Result<PathBuf> {
 /// It is inside, or either path cannot be resolved.
 pub fn ensure_outside(index_dir: &Path, workspace_root: &Path) -> io::Result<()> {
     let index = resolved(index_dir)?;
-    let root = fs::canonicalize(workspace_root)?;
+    let root = elitea_local_tools::sys::canonicalize(workspace_root)?;
     if index.starts_with(&root) {
         return Err(refused(
             &index,

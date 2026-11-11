@@ -245,7 +245,7 @@ pub fn file_urls_to_paths(urls: &[url::Url]) -> Vec<PathBuf> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

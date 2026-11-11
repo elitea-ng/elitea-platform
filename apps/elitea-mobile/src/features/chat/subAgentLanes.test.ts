@@ -8,7 +8,7 @@ const lane = (entry: Record<string, unknown>) => frameOf({ type: 'agent_subagent
 
 const started = { kind: 'started', agent_id: 'a_1', parent_call_id: 'call-spawn', ordinal: 1, display_name: 'Owl', avatar: 'default:owl' };
 
-describe('cloud sub-agents (client contract 1.47)', () => {
+describe('cloud sub-agents (client contract 1.48)', () => {
   it('folds a live child into the turn and shows its calls under "<name> · temporary"', () => {
     let turn = INITIAL_TURN;
     for (const entry of [

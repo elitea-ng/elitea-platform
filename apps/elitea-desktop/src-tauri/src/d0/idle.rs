@@ -638,7 +638,9 @@ async fn compact(
                 .parts
                 .iter()
                 .filter_map(|part| match part {
-                    Part::Text { text } => Some(text.as_str()),
+                    // As the person wrote it: not the `[message m-…]` line
+                    // the model reads it under (#1827).
+                    Part::Text { text } => Some(super::brief::without_tag(text)),
                     _ => None,
                 })
                 .collect::<Vec<_>>()

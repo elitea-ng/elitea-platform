@@ -83,7 +83,9 @@ pub(crate) struct BriefView {
     pub(crate) history: Vec<QuotableMessage>,
     /// This turn's input attachments: id and display name.
     pub(crate) attachments: Vec<(String, String)>,
-    /// What `recall` returned this turn; `None` without agent memory.
+    /// The memory entries given this turn: what Main recalled into the
+    /// instructions (#1826) and what `recall` returned, less what `forget`
+    /// deleted; `None` without agent memory.
     pub(crate) recalled: Option<Arc<super::agent_memory_tools::RecalledEntries>>,
 }
 

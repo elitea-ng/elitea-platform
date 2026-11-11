@@ -1175,6 +1175,16 @@ const fanoutMemberFailedSafeMessage = "The pipeline stopped because a Map item o
 // before the run (FU-291).
 const fanoutAgentCallsPipelineSafeMessage = "A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools."
 
+// W3-1: a fresh Code attempt refused before dispatch because the run's time
+// left cannot hold the Code timeout plus the observation margin. Nothing ran;
+// not retryable. The Worker's registered text (protocol/output.rs
+// CODE_DEADLINE_INSUFFICIENT_MESSAGE, registry runtime.code_deadline_insufficient).
+const codeDeadlineInsufficientSafeMessage = "The Code node could not start: too little time was left before the run's deadline."
+
+// W3-1 registers it, W3-2 raises it: a fan-out of Code items that cannot
+// finish before the run's deadline (registry runtime.fanout_deadline_insufficient).
+const fanoutDeadlineInsufficientSafeMessage = "The fan-out node could not start: too little time was left before the run's deadline for its items."
+
 // The budget scope that refused a model call (#6732). The gateway names the
 // scope in its 402 refusal (error.code insufficient_quota for the project
 // ceiling, member_budget_exceeded for the member ceiling). A worker that read it
@@ -1203,9 +1213,13 @@ func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFai
 		switch payload.GetSafeMessage() {
 		case "Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying.",
 			"Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.",
-			"Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.":
+			"Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.",
+			codeDeadlineInsufficientSafeMessage:
 			return runtimeFailurePolicy{Code: "PIPELINE_CODE_FAILED", SafeMessage: payload.GetSafeMessage()}, true
 		}
+	}
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED && payload.GetSafeMessage() == fanoutDeadlineInsufficientSafeMessage {
+		return runtimeFailurePolicy{Code: "PIPELINE_TOOL_FAILED", SafeMessage: fanoutDeadlineInsufficientSafeMessage}, true
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED && payload.GetSafeMessage() == fanoutMemberFailedSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_TOOL_FAILED", SafeMessage: fanoutMemberFailedSafeMessage}, true

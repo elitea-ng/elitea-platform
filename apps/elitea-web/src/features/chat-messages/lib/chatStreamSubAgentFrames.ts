@@ -1,5 +1,5 @@
 /**
- * lib/chatStreamSubAgentFrames.ts — `agent_subagent` (client contract 1.47,
+ * lib/chatStreamSubAgentFrames.ts — `agent_subagent` (client contract 1.48,
  * ADR-0050 decision 4).
  *
  * A cloud run that starts temporary sub-agents streams each child's

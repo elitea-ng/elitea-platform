@@ -82,7 +82,7 @@ export interface TurnState {
    */
   steering: SteeringItem[];
   /**
-   * Client contract 1.47: the temporary sub-agents this cloud turn started
+   * Client contract 1.48: the temporary sub-agents this cloud turn started
    * (`agent_subagent`), shown as tool groups (`subAgentSteps`).
    */
   subAgents: readonly CloudSubAgentLane[];

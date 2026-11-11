@@ -616,7 +616,7 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entit
 	start(modelTurn, "33333333-3333-4333-8333-333333333333", 0)
 
 	binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, agentTurn)
-	if err != nil || binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 6, Credential: localturn.Credential{TokenID: "77"}}) {
+	if err != nil || binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 6, Credential: localturn.Credential{TokenID: "77"}, Executor: localturn.ExecutorLocal}) {
 		t.Fatalf("agent turn binding = %+v, %v", binding, err)
 	}
 	// The version is PINNED at start: switching the participant to another
@@ -627,19 +627,19 @@ WHERE conversation_id = $1 AND participant_id = $2`, conversationID, participant
 		t.Fatal(err)
 	}
 	if binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, agentTurn); err != nil ||
-		binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 6, Credential: localturn.Credential{TokenID: "77"}}) {
+		binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 6, Credential: localturn.Credential{TokenID: "77"}, Executor: localturn.ExecutorLocal}) {
 		t.Fatalf("binding after a mid-turn version switch = %+v, %v; want the pinned version 6", binding, err)
 	}
 	// A turn started after the switch runs the new version.
 	switched := strings.Repeat("4", 32)
 	start(switched, "44444444-4444-4444-8444-444444444444", participants["agent"])
 	if binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, switched); err != nil ||
-		binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 9, Credential: localturn.Credential{TokenID: "77"}}) {
+		binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 9, Credential: localturn.Credential{TokenID: "77"}, Executor: localturn.ExecutorLocal}) {
 		t.Fatalf("binding of a turn started after the switch = %+v, %v", binding, err)
 	}
 	for name, id := range map[string]string{"catalogue agent": foreignTurn, "model": modelTurn} {
 		binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, id)
-		if err != nil || binding != (localturn.StoredBinding{Credential: localturn.Credential{TokenID: "77"}}) {
+		if err != nil || binding != (localturn.StoredBinding{Credential: localturn.Credential{TokenID: "77"}, Executor: localturn.ExecutorLocal}) {
 			t.Fatalf("%s turn binding = %+v, %v; want no agent", name, binding, err)
 		}
 	}

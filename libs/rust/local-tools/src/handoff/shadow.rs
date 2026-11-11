@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn a_carved_list_opens_the_shadow_only() {
         let dir = tempfile::tempdir().expect("dir");
-        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let base = crate::sys::canonicalize(dir.path()).expect("canonical");
         let data = base.join("data");
         let shadow = dir_for(&data, &base.join("folder"));
         ensure(&shadow).expect("ensure");

@@ -190,8 +190,8 @@ impl fmt::Display for ToolError {
 
 impl std::error::Error for ToolError {}
 
-impl From<rustix::io::Errno> for ToolError {
-    fn from(errno: rustix::io::Errno) -> Self {
+impl From<crate::sys::io::Errno> for ToolError {
+    fn from(errno: crate::sys::io::Errno) -> Self {
         Self::io("file system", &std::io::Error::from(errno))
     }
 }

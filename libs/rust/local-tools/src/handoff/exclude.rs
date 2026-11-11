@@ -402,7 +402,8 @@ mod tests {
             ("cert.p12", Some(Reason::Platform)),
             (
                 "cert.PFX",
-                if cfg!(target_os = "macos") {
+                // Folded where the file system folds case (macOS, Windows).
+                if crate::workspace::CASE_INSENSITIVE_FS {
                     Some(Reason::Platform)
                 } else {
                     None

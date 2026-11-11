@@ -1,5 +1,5 @@
 /**
- * The cloud sub-agent lane (client contract 1.47, ADR-0050 decision 4).
+ * The cloud sub-agent lane (client contract 1.48, ADR-0050 decision 4).
  *
  * A cloud run that starts temporary sub-agents (`spawn_agent`) streams each
  * child's lifecycle as `agent_subagent` frames: `response_metadata.subagent_v1`

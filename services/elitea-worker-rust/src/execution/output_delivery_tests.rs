@@ -40,10 +40,10 @@ use super::native_agent_lifecycle::{AgentPauseAccumulator, NativeAuthorizedAgent
 use super::output_delivery::{
     AcceptedTerminalOutputRecovery, AgentOutputPreflight, AgentOutputPreflightError,
     AgentOutputPreflightKind, AgentOutputPreflightOutcome, AgentOutputRecoveryRequiredKind,
-    AgentProgressConnector, AgentProgressPublishOutcome, AgentProgressPublisherConfig,
-    AgentProgressReplaySession, AgentProgressSession, AgentTerminalRecoveryConfig,
-    AgentTerminalRecoveryError, AgentTerminalReplay, FreshAgentProgressPublisher,
-    publish_pre_invocation_terminal, recover_accepted_terminal,
+    AgentProgressConnector, AgentProgressPublishError, AgentProgressPublishOutcome,
+    AgentProgressPublisherConfig, AgentProgressReplaySession, AgentProgressSession,
+    AgentTerminalRecoveryConfig, AgentTerminalRecoveryError, AgentTerminalReplay,
+    FreshAgentProgressPublisher, publish_pre_invocation_terminal, recover_accepted_terminal,
 };
 use crate::agents::events::{
     AgentEventProjectionContext, AgentEventProjector, CompletedAgentBrowserOutput,
@@ -6458,6 +6458,75 @@ async fn a_pending_terminal_main_refuses_is_replaced_by_internal_without_a_stop(
     assert_eq!(failure_code(&sent[1]), RuntimeErrorCodeV1::Internal as i32);
 }
 
+/// W3-1 (C3), mixed rollout: Main without a post-FU-299 kind's text refuses
+/// its terminal; the Worker replaces it once with the kind's baseline
+/// fallback at the same sequence, which that Main accepts, and the run
+/// settles once, typed.
+#[tokio::test]
+async fn a_refused_post_baseline_failure_is_replaced_once_by_its_fallback_and_settles() {
+    for (kind, fallback) in [
+        (
+            RuntimeFailureKind::CodeDeadlineInsufficient,
+            RuntimeFailureKind::PipelineCodeFailed,
+        ),
+        (
+            RuntimeFailureKind::FanoutDeadlineInsufficient,
+            RuntimeFailureKind::PipelineToolFailed,
+        ),
+    ] {
+        let (_temporary, output_root) = root();
+        seed_pending_terminal(&output_root, |_| superseded_failure_terminal(kind)).await;
+        let (events, sent) = output_recovery_delivery(
+            &output_root,
+            "claim_recover_ambiguous_invocation_noack",
+            vec![],
+            vec![ReplayResult::FrameRefused, ReplayResult::Acknowledged],
+        )
+        .await;
+        assert_settled_once(&events);
+        assert_eq!(sent.len(), 2, "{kind:?}: one replay, one replacement");
+        assert_eq!(restored_terminal_failure_kind(&sent[0]), Some(kind));
+        assert_eq!(restored_terminal_failure_kind(&sent[1]), Some(fallback));
+        assert_eq!(sent[1].sequence, sent[0].sequence);
+    }
+}
+
+/// W3-1 (C3): the substitution happens at most once. When Main refuses the
+/// fallback too, nothing is substituted again: the FU-290 path dead-letters
+/// the delivery after exactly two sends, and nothing settles.
+#[tokio::test]
+async fn a_refused_fallback_is_not_substituted_again() {
+    let (_temporary, output_root) = root();
+    seed_pending_terminal(&output_root, |_| {
+        superseded_failure_terminal(RuntimeFailureKind::CodeDeadlineInsufficient)
+    })
+    .await;
+    let (verdict, events, sent) = output_recovery_verdict(
+        &output_root,
+        "claim_recover_ambiguous_invocation_noack",
+        vec![],
+        vec![
+            ReplayResult::FrameRefused,
+            ReplayResult::FrameRefused,
+            ReplayResult::Acknowledged,
+        ],
+    )
+    .await;
+    assert_eq!(sent.len(), 2, "no third frame");
+    assert_eq!(
+        restored_terminal_failure_kind(&sent[1]),
+        Some(RuntimeFailureKind::PipelineCodeFailed)
+    );
+    assert_eq!(count(&events, "settlement") + count(&events, "retire"), 0);
+    assert!(matches!(
+        verdict,
+        crate::transport::command_bus::DeliveryVerdict::Poison {
+            reason: crate::transport::command_bus::PoisonReason::TerminalRefused,
+            ..
+        }
+    ));
+}
+
 /// A pending failure terminal Main accepts on replay settles with that very
 /// frame; no second terminal is persisted next to it.
 #[tokio::test]
@@ -7793,4 +7862,139 @@ fn a_full_message_with_the_step_limit_flag_is_the_step_limit_terminal() {
         )),
         None
     );
+}
+
+const PROGRESS_FAULT_CHILD_ENV: &str = "ELITEA_PROGRESS_FAULT_LINE_CHILD";
+
+/// FU-299 worked case: a progress update Main refuses is one fault line on
+/// the operator stream: the registry sentence as `msg`, the code, the legacy
+/// `event`/`error_code`/`retryable` fields, a cause chain rendered only by the
+/// Worker's safe renderers, and the run's `support_ref` from its span.
+#[test]
+fn progress_rejection_is_one_readable_fault_line() {
+    let output = elitea_faults::logtest::run_child(
+        "execution::output_delivery_tests::progress_rejection_fault_line_child",
+        PROGRESS_FAULT_CHILD_ENV,
+    );
+    let lines = output.operator_lines();
+    let failed: Vec<_> = lines
+        .iter()
+        .filter(|line| line["event"] == "agent_progress_publication_failed")
+        .collect();
+    assert_eq!(failed.len(), 1, "{}", output.stdout);
+    let line = failed[0];
+    let code = elitea_faults::codes::AGENT_PROGRESS_OUTPUT_REJECTED;
+    assert_eq!(line["level"], "WARN");
+    assert_eq!(line["msg"], code.sentence());
+    assert_eq!(line["code"], code.as_str());
+    assert_eq!(line["error_code"], code.as_str());
+    assert_eq!(line["action"], code.action());
+    assert_eq!(line["retryable"], false);
+    assert_eq!(line["execution_id"], "exec-progress");
+    assert_eq!(line["support_ref"], "exec-progress");
+    assert_eq!(
+        line["cause"],
+        json!([
+            "output",
+            "output session: the scripted progress session is not authorized"
+        ])
+    );
+    assert!(
+        !output.stdout.contains("PROGRESS-CONTENT-CANARY"),
+        "{}",
+        output.stdout
+    );
+    println!(
+        "FU-299 progress rejection line: {}",
+        serde_json::Value::Object(line.clone())
+    );
+}
+
+#[test]
+fn progress_rejection_fault_line_child() {
+    use tracing::Instrument as _;
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+
+    if !elitea_faults::logtest::is_child(PROGRESS_FAULT_CHILD_ENV) {
+        return;
+    }
+    tracing_subscriber::registry()
+        .with(
+            crate::diagnostics::log_layer(Some("info"), std::io::stdout).expect("operator stream"),
+        )
+        .init();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("child runtime");
+    runtime.block_on(async {
+        let state = FakeProgressState::new([LiveProgressAction::AuthorizationFailed], []);
+        let (_temporary, verified, mut publisher) =
+            fresh_progress_publisher(Arc::clone(&state), 2).await;
+        let span = tracing::info_span!(
+            "agent.delivery",
+            execution_id = "exec-progress",
+            support_ref = "exec-progress"
+        );
+        let error = publisher
+            .publish(&verified, browser_progress("PROGRESS-CONTENT-CANARY"), NOW)
+            .instrument(span)
+            .await
+            .expect_err("an unauthorized progress session refuses the update");
+        assert_eq!(error.code(), "agent_progress.output_rejected");
+    });
+    elitea_faults::logtest::child_ran();
+}
+
+/// Each `code()` string of the progress and preflight errors is the code of
+/// its registered `Fault`, so the fault line and `error_code` never disagree.
+#[test]
+fn progress_fault_codes_match_the_legacy_code_strings() {
+    use elitea_faults::Fault as _;
+
+    let unavailable = || OutputGrpcError::Unavailable("scripted");
+    let preflights = [
+        AgentOutputPreflightError::InvalidConfiguration("scripted"),
+        AgentOutputPreflightError::InvalidDurableState("scripted"),
+        AgentOutputPreflightError::Unavailable("scripted"),
+        AgentOutputPreflightError::Output(OutputGrpcError::InvalidConfiguration("scripted")),
+        AgentOutputPreflightError::Output(OutputGrpcError::Protocol(
+            OutputProtocolError::FrameRefused,
+        )),
+        AgentOutputPreflightError::Output(OutputGrpcError::Spool(SpoolError::InvalidInput(
+            "scripted",
+        ))),
+        AgentOutputPreflightError::Output(OutputGrpcError::Spool(SpoolError::ResourceExhausted(
+            "scripted",
+        ))),
+        AgentOutputPreflightError::Output(OutputGrpcError::Spool(
+            SpoolError::OwnershipUnavailable("scripted"),
+        )),
+        AgentOutputPreflightError::Output(unavailable()),
+    ];
+    for error in &preflights {
+        assert_eq!(error.fault_code().as_str(), error.code(), "{error:?}");
+        assert_eq!(error.fault_retryable(), Some(error.retryable()));
+    }
+    let mut progress = vec![
+        AgentProgressPublishError::InvalidConfiguration("scripted"),
+        AgentProgressPublishError::InvalidState("scripted"),
+        AgentProgressPublishError::InvalidFrame(crate::protocol::ProtocolError::InvalidInput(
+            "scripted",
+        )),
+        AgentProgressPublishError::Output(unavailable()),
+        AgentProgressPublishError::Output(OutputGrpcError::Protocol(
+            OutputProtocolError::FrameRefused,
+        )),
+    ];
+    progress.extend(
+        preflights
+            .into_iter()
+            .map(AgentProgressPublishError::Preflight),
+    );
+    for error in &progress {
+        assert_eq!(error.fault_code().as_str(), error.code(), "{error:?}");
+        assert_eq!(error.fault_retryable(), Some(error.retryable()));
+    }
 }

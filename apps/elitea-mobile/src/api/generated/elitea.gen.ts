@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.47
- * operations sha256:  27f1115f052a1dce26cdb61fca19d2e7d60270ce0bc0d49003e54f0955abb678
+ * client contract:    1.48
+ * operations sha256:  90f7ce0d441261594219777baafedfb6c11c64e23476f55952ced30a49d7d69e
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -34,6 +34,31 @@ export interface paths {
          *     sign-in".
          */
         get: operations["getClientDiscovery"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agent_media/{project_id}/{file}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <sha256 hex>.<ext>, ext one of png, jpg, webp, svg, mp4, webm */
+                file: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Download one avatar pack media file
+         * @description Immutable for a year. A `Range` request answers 206, as a <video> element asks. Client contract 1.46: a native client downloads the pack media `persona.avatar_pack` names through this route. It is root-mounted with no credential, so the X-Client-Version gate never judges it (like getBrandingPackJSON) and it never answers 426.
+         */
+        get: operations["getAgentMedia"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2287,6 +2312,61 @@ export interface components {
         /** @enum {string} */
         AgentMemoryStatus: "pending" | "active" | "archived";
         /**
+         * @description The heartbeat block of an agent version (ADR-0050 decision 2), meta.proactivity. The heartbeat reads the block of the agent's published release, never of a draft. Every field is optional; an empty object is mode heartbeat with the defaults.
+         * @example {
+         *       "mode": "heartbeat",
+         *       "interval": "1h",
+         *       "quiet_hours": "22:00-07:00 Europe/Berlin",
+         *       "watch": [
+         *         {
+         *           "kind": "conversation"
+         *         },
+         *         {
+         *           "kind": "schedule_note"
+         *         }
+         *       ],
+         *       "act_target": "home_thread",
+         *       "limits": {
+         *         "wakes_per_day": 24,
+         *         "acts_per_day": 4,
+         *         "spend_per_day_usd": 2
+         *       }
+         *     }
+         */
+        AgentProactivity: {
+            /**
+             * @description Where an act runs. Default home_thread. workspace_thread is not available in v1 (422).
+             * @enum {string}
+             */
+            act_target?: "home_thread" | "new_conversation";
+            /** @description Whole minutes from 15m to 24h, as a Go duration ("1h", "30m"). Default 1h. */
+            interval?: string;
+            /** @description A whole percentage of the interval from 0 to 50, as a number or "10%". Default 10. */
+            jitter?: number | string;
+            /** @description The agent's daily envelope. The platform's maximums (section proactivity) apply when they are lower; a personal project also has its own act limit. */
+            limits?: {
+                /** @description Default 4. */
+                acts_per_day?: number;
+                /** @description The triage and the runs it starts. Default 2.0. */
+                spend_per_day_usd?: number;
+                /** @description Default 24. */
+                wakes_per_day?: number;
+            };
+            /**
+             * @description off (the default when the block is absent) or heartbeat.
+             * @enum {string}
+             */
+            mode?: "off" | "heartbeat";
+            /** @description "HH:MM-HH:MM Zone" with an IANA zone, for example "22:00-07:00 Europe/Berlin". No wake starts inside the window. */
+            quiet_hours?: string;
+            /** @description What a wake reads. Default conversation and schedule_note. toolkit_read names a read-only tool for the triage; v1 lists it in the digest and does not call it. */
+            watch?: {
+                /** @description conversation, schedule_note or toolkit_read. */
+                kind: string;
+                tool?: string;
+            }[];
+        };
+        /**
          * @description ADR-0050 decision 1a: an agent version's soul document, the JSON form of a `SOUL.md` file (YAML front matter holding every key but `body`, then `body` as the markdown after the closing `---`). It shapes how the agent speaks and behaves and GRANTS NOTHING: no key names a tool, a toolkit, a credential, a secret, a permission or a scope, and Main refuses an unknown key outright (400 `soul_capability_key` for a capability-shaped one, `soul_invalid` for any other), so a soul can never be read as a grant. At most 16384 bytes of text: the UTF-8 bytes of every string value (keys not counted) are summed, which reads the same in every client and in SOUL.md (400 `soul_too_large`). Prompt order: platform system text, organization guardrails, the soul, the instructions, recalled memory. `proactive_goals` is not put into the prompt; the heartbeat reads it. Self-contained (no $ref, no `nullable`) so it is valid JSON Schema as written.
          * @example {
          *       "schema": "elitea.soul/v1",
@@ -3315,7 +3395,7 @@ export interface components {
                 mentioned_user_ids?: number[];
                 /** @description Client contract 1.14. On a user's message: true when it tagged `@everyone` (the send's `sending_to_everyone`); absent otherwise. */
                 mentions_everyone?: boolean;
-                /** @description Client contract 1.47 (ADR-0050 decision 4). On a cloud answer whose agent started temporary sub-agents (`spawn_agent`): one lane per child, as its `agent_subagent` frames left it. Show each under the `spawn_agent` tool row whose call id is its `parent_call_id`, with its display name and a "temporary" badge. Absent when the answer started none. */
+                /** @description Client contract 1.48 (ADR-0050 decision 4). On a cloud answer whose agent started temporary sub-agents (`spawn_agent`): one lane per child, as its `agent_subagent` frames left it. Show each under the `spawn_agent` tool row whose call id is its `parent_call_id`, with its display name and a "temporary" badge. Absent when the answer started none. */
                 subagents_v1?: components["schemas"]["SubAgentLane"][];
             } & {
                 [key: string]: unknown;
@@ -3422,7 +3502,7 @@ export interface components {
         };
         /** @description Client contract 1.38: the agent's persona in this conversation, from the soul of the version the conversation runs, refreshed on every turn. Absent when the agent has none. Show `display_name` instead of the agent's name when it is set. */
         ConversationParticipantPersona: {
-            /** @description Reserved for the avatar pack of a later release. */
+            /** @description Client contract 1.46 (ADR-0050 decision 6): on a read, the avatar pack of the version the agent participant runs, an AgentAvatarPackV1 OBJECT, read live from the version on every participants read; absent when the version has none (the client then shows `entity_settings.icon_meta`). It stays declared as a string, the "reserved" type contract 1.38 locked, because a type change is a breaking change within the major. A client reads the value as unknown JSON and validates it (`avatarPackOf` in `@elitea/client-core/conversation`); a value that is not a valid pack is ignored. A create request does not set it. */
             avatar_pack?: string;
             display_name?: string;
             pronouns?: string;
@@ -4072,7 +4152,7 @@ export interface components {
             event_type: string;
             id: number;
             is_seen: boolean;
-            /** @description Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds. For `run_finished` (client contract 1.32, ADR-0045 decision 5) the server writes ids and the outcome only, never content: `outcome` (`completed`, `failed`, `waiting` or `limit_reached`), `limit` (`continuations`, `spend` or `deadline`, only for `limit_reached`), `project_id`, `conversation_uuid`, `thread_id` (a desktop chain, when known), `chain_root_execution_id`, `execution_id` (the chain's last run), `origin` (`cloud` or `desktop`) and `continuations` (internal/infra/db/repos/run_finished.go). One row per chain end. */
+            /** @description Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds. For `run_finished` (client contract 1.32, ADR-0045 decision 5) the server writes ids and the outcome only, never content: `outcome` (`completed`, `failed`, `waiting` or `limit_reached`), `limit` (`continuations`, `spend` or `deadline`, only for `limit_reached`), `project_id`, `conversation_uuid`, `thread_id` (a desktop chain, when known), `chain_root_execution_id`, `execution_id` (the chain's last run), `origin` (`cloud` or `desktop`) and `continuations` (internal/infra/db/repos/run_finished.go). One row per chain end. For `agent_heartbeat` (ADR-0050 decision 2) a proactive agent wrote to its owner: `conversation_id` (the home thread UUID), `message_id`, `project_id`, `application_id`, `agent_name`, `outcome` (`notify`, `act_degraded` or `paused`), `reason_code` `text` (the first 280 bytes of the message) and `message` (the agent's name, the text and an empty `[...]()` link to the conversation) (internal/infra/db/repos/agent_heartbeats.go, PostToOwner). */
             meta: {
                 /** @description `chat_user_mentioned`: who mentioned the recipient. `name` is empty when it could not be resolved. */
                 sender?: {
@@ -4420,7 +4500,7 @@ export interface components {
             /** @description The message, at most 16 KiB of UTF-8 and not only white space. */
             content: string;
         };
-        /** @description Client contract 1.47 (ADR-0050 decision 4). A temporary sub-agent a cloud run started with `spawn_agent`, as the answer keeps it (`metadata.subagents_v1`). Untrusted text: render it as plain text. */
+        /** @description Client contract 1.48 (ADR-0050 decision 4). A temporary sub-agent a cloud run started with `spawn_agent`, as the answer keeps it (`metadata.subagents_v1`). Untrusted text: render it as plain text. */
         SubAgentLane: {
             agent_id: string;
             /** @description The profile's avatar key (`default:<name>`); display only. */
@@ -4445,7 +4525,7 @@ export interface components {
             status: "running" | "completed" | "failed" | "budget_exhausted" | "cancelled";
             steps?: number;
         };
-        /** @description Client contract 1.47. One of a sub-agent's own tool calls (`tool`) or one of its texts (`text`). Untrusted text: render it as plain text. */
+        /** @description Client contract 1.48. One of a sub-agent's own tool calls (`tool`) or one of its texts (`text`). Untrusted text: render it as plain text. */
         SubAgentLaneItem: {
             /** @description The call's arguments as one short line, secrets masked. */
             args_summary?: string;
@@ -4687,6 +4767,8 @@ export interface components {
             capabilities?: ({
                 /** @description The agent may propose, with the propose_agent tool, that a temporary sub-agent it started become a saved agent (ADR-0050 decision 5a). The person it works for must also hold models.applications.applications.create. */
                 can_propose_agents?: boolean;
+                /** @description The agent is an HR agent (ADR-0050 decision 5l): it may propose, with the propose_dismissal tool, a ladder stage for another agent of the project. It never decides; a person holding agents.workforce.manage does. Guards refuse a proposal against itself, its hirer, a higher tier, another HR agent, a critical-tier agent or one under legal hold. */
+                can_review_agents?: boolean;
             } & {
                 [key: string]: boolean;
             }) | null;
@@ -4712,6 +4794,8 @@ export interface components {
             parent_author_id?: string;
             parent_entity_id?: string;
             parent_project_id?: string;
+            /** @description The agent's heartbeat (ADR-0050 decision 2): how often it wakes, its quiet hours, what it reads, where it acts and its daily limits. The heartbeat reads the block of the published release. A save with an invalid block is refused with 422 proactivity_invalid. */
+            proactivity?: components["schemas"]["AgentProactivity"] | null;
             /** @description The author's run caps of this agent (ADR-0041 decision 3). Each key LOWERS the platform's cap for the agent's risk tier (Configuration › Run caps); the lower value applies. A save that sets a value above the tier's cap is refused with 422 RUN_CAP_ABOVE_TIER. Omit a key, or set it to null, to keep the tier's cap. `step_limit` still bounds each agent loop: with `max_model_turns` the lower of the two stops first. */
             run_caps?: components["schemas"]["VersionRunCaps"] | null;
             source_version_id?: string;
@@ -5059,6 +5143,47 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+        };
+    };
+    getAgentMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <sha256 hex>.<ext>, ext one of png, jpg, webp, svg, mp4, webm */
+                file: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                    "image/svg+xml": string;
+                    "image/webp": string;
+                    "video/mp4": string;
+                    "video/webm": string;
+                };
+            };
+            /** @description The requested byte range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "video/mp4": string;
+                    "video/webm": string;
+                };
+            };
+            404: components["responses"]["404"];
         };
     };
     listNativeDevices: {

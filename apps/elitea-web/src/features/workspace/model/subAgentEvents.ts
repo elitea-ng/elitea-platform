@@ -16,9 +16,9 @@ export interface SubAgentLane {
   parentCallId: string;
   ordinal: number;
   label?: string;
-  /** Client contract 1.47: a cloud child's profile name; absent when the spawn named none. */
+  /** The spawn profile's name (client contract 1.48 for a cloud child, `subagent_started` for a local one); absent when it named none. */
   displayName?: string;
-  /** Client contract 1.47: a cloud child's profile avatar key (display only). */
+  /** The spawn profile's avatar key (display only). */
   avatar?: string;
   /** A cloud child (ADR-0050 decision 4): the lane says it is a temporary participant. */
   temporary?: boolean;
@@ -56,10 +56,20 @@ function withLane<V extends LaneView>(view: V, agentId: string, change: (lane: S
 }
 
 function onStarted<V extends LaneView>(view: V, event: EventOf<'subagent_started'>): V {
-  const { agent_id: agentId, parent_call_id: parentCallId, ordinal, label } = event.payload;
+  const { agent_id: agentId, parent_call_id: parentCallId, ordinal, label, display_name: displayName, avatar } = event.payload;
   const lanes = view.subAgents ?? [];
   if (lanes.some((lane) => lane.agentId === agentId)) return view;
-  const lane: SubAgentLane = { agentId, parentCallId, ordinal, status: 'running', items: [], ...(label === undefined ? {} : { label }) };
+  // The spawn's profile (#1827): the same name and avatar key a cloud lane carries.
+  const lane: SubAgentLane = {
+    agentId,
+    parentCallId,
+    ordinal,
+    status: 'running',
+    items: [],
+    ...(label === undefined ? {} : { label }),
+    ...(displayName === undefined ? {} : { displayName }),
+    ...(avatar === undefined ? {} : { avatar }),
+  };
   return { ...view, subAgents: [...lanes, lane] };
 }
 

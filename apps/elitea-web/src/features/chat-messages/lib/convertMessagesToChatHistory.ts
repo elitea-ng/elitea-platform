@@ -357,7 +357,7 @@ export function convertMessagesToChatHistory(
 
 /** An answer's unattended marks: without the continuation mark when its question carries it. */
 /**
- * Client contract 1.47: the answer's sub-agent lanes. A lane still running
+ * Client contract 1.48: the answer's sub-agent lanes. A lane still running
  * on a settled answer was stopped with the run.
  */
 function subAgentsOf(raw: unknown, streaming: boolean): Pick<ChatMessage, 'subAgents'> {

@@ -95,7 +95,7 @@ export const SubAgentLane = zod
       ),
   })
   .describe(
-    "Client contract 1.47 (ADR-0050 decision 4). A temporary sub-agent a cloud run started with `spawn_agent`, as the answer keeps it (`metadata.subagents_v1`). Untrusted text: render it as plain text.",
+    "Client contract 1.48 (ADR-0050 decision 4). A temporary sub-agent a cloud run started with `spawn_agent`, as the answer keeps it (`metadata.subagents_v1`). Untrusted text: render it as plain text.",
   );
 
 export type SubAgentLane = zod.input<typeof SubAgentLane>;

@@ -32,7 +32,7 @@ import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 
 import { lanesOf } from '../model/subAgentEvents';
 import { isTerminalPhase, type TranscriptItem, type TurnView } from '../model/turnReducer';
-import { ContinuedMarker, StopNotices } from './ChainNotices';
+import { AnsweringAgent, ContinuedMarker, StopNotices } from './ChainNotices';
 import { SteerMessage } from './SteerMessage';
 import { SubAgentLanes, type SubAgentAvatar } from './SubAgentLanes';
 import { ThinkingBlock } from './ThinkingBlock';
@@ -275,6 +275,7 @@ export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, o
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       <ContinuedMarker index={continuation} resumed={view.resumed === true} />
+      <AnsweringAgent agent={view.agent} />
       <RunBriefCard value={view.runBrief} />
       {view.items.map((item) =>
         item.type === 'text' ? (

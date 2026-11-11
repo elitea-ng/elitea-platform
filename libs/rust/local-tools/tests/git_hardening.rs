@@ -6,6 +6,7 @@
 //! refused with `local_tools.unsafe_repository`, checkpoints fall back to
 //! copies, and the marker the payload would write never appears.
 
+#![cfg(unix)]
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;

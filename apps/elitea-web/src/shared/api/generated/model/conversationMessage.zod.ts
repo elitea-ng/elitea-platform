@@ -124,7 +124,7 @@ export const ConversationMessage = zod
           .max(conversationMessageMetadataSubagentsV1Max)
           .optional()
           .describe(
-            'Client contract 1.47 (ADR-0050 decision 4). On a cloud answer whose agent started temporary sub-agents (`spawn_agent`): one lane per child, as its `agent_subagent` frames left it. Show each under the `spawn_agent` tool row whose call id is its `parent_call_id`, with its display name and a "temporary" badge. Absent when the answer started none.',
+            'Client contract 1.48 (ADR-0050 decision 4). On a cloud answer whose agent started temporary sub-agents (`spawn_agent`): one lane per child, as its `agent_subagent` frames left it. Show each under the `spawn_agent` tool row whose call id is its `parent_call_id`, with its display name and a "temporary" badge. Absent when the answer started none.',
           ),
       })
       .optional(),

@@ -32,6 +32,7 @@ const (
 	RuntimeContentService_ForgetAgentMemory_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/ForgetAgentMemory"
 	RuntimeContentService_HandFloor_FullMethodName                     = "/elitea.runtime.v1.RuntimeContentService/HandFloor"
 	RuntimeContentService_ProposeAgent_FullMethodName                  = "/elitea.runtime.v1.RuntimeContentService/ProposeAgent"
+	RuntimeContentService_ProposeDismissal_FullMethodName              = "/elitea.runtime.v1.RuntimeContentService/ProposeDismissal"
 	RuntimeContentService_ListArtifacts_FullMethodName                 = "/elitea.runtime.v1.RuntimeContentService/ListArtifacts"
 	RuntimeContentService_ReadArtifact_FullMethodName                  = "/elitea.runtime.v1.RuntimeContentService/ReadArtifact"
 	RuntimeContentService_WriteArtifact_FullMethodName                 = "/elitea.runtime.v1.RuntimeContentService/WriteArtifact"
@@ -143,6 +144,15 @@ type RuntimeContentServiceClient interface {
 	// Main checks the agent's can_propose_agents capability and the person's
 	// create permission, and stores a proposal; nothing is saved as an agent.
 	ProposeAgent(ctx context.Context, in *ProposeAgentRequestV1, opts ...grpc.CallOption) (*ProposeAgentResponseV1, error)
+	// Propose demoting or dismissing another agent (ADR-0050 decision 5j,
+	// #1616): the propose_dismissal tool of an HR agent. The project, the
+	// proposing agent and the person come from the claim; the request carries
+	// only the target agent, the ladder stage, the rationale and a demotion's
+	// narrowing. Main checks the can_review_agents capability and the guards
+	// (no self, no hirer, no other HR agent, no higher tier, never critical
+	// or under legal hold) and stores a proposal; nothing is applied until a
+	// person approves it.
+	ProposeDismissal(ctx context.Context, in *ProposeDismissalRequestV1, opts ...grpc.CallOption) (*ProposeDismissalResponseV1, error)
 	// The `artifact` toolkit family (#906).
 	ListArtifacts(ctx context.Context, in *ListArtifactsRequestV1, opts ...grpc.CallOption) (*ListArtifactsResponseV1, error)
 	ReadArtifact(ctx context.Context, in *ReadArtifactRequestV1, opts ...grpc.CallOption) (*ReadArtifactResponseV1, error)
@@ -331,6 +341,16 @@ func (c *runtimeContentServiceClient) ProposeAgent(ctx context.Context, in *Prop
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ProposeAgentResponseV1)
 	err := c.cc.Invoke(ctx, RuntimeContentService_ProposeAgent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeContentServiceClient) ProposeDismissal(ctx context.Context, in *ProposeDismissalRequestV1, opts ...grpc.CallOption) (*ProposeDismissalResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProposeDismissalResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeContentService_ProposeDismissal_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -722,6 +742,15 @@ type RuntimeContentServiceServer interface {
 	// Main checks the agent's can_propose_agents capability and the person's
 	// create permission, and stores a proposal; nothing is saved as an agent.
 	ProposeAgent(context.Context, *ProposeAgentRequestV1) (*ProposeAgentResponseV1, error)
+	// Propose demoting or dismissing another agent (ADR-0050 decision 5j,
+	// #1616): the propose_dismissal tool of an HR agent. The project, the
+	// proposing agent and the person come from the claim; the request carries
+	// only the target agent, the ladder stage, the rationale and a demotion's
+	// narrowing. Main checks the can_review_agents capability and the guards
+	// (no self, no hirer, no other HR agent, no higher tier, never critical
+	// or under legal hold) and stores a proposal; nothing is applied until a
+	// person approves it.
+	ProposeDismissal(context.Context, *ProposeDismissalRequestV1) (*ProposeDismissalResponseV1, error)
 	// The `artifact` toolkit family (#906).
 	ListArtifacts(context.Context, *ListArtifactsRequestV1) (*ListArtifactsResponseV1, error)
 	ReadArtifact(context.Context, *ReadArtifactRequestV1) (*ReadArtifactResponseV1, error)
@@ -815,6 +844,9 @@ func (UnimplementedRuntimeContentServiceServer) HandFloor(context.Context, *Hand
 }
 func (UnimplementedRuntimeContentServiceServer) ProposeAgent(context.Context, *ProposeAgentRequestV1) (*ProposeAgentResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ProposeAgent not implemented")
+}
+func (UnimplementedRuntimeContentServiceServer) ProposeDismissal(context.Context, *ProposeDismissalRequestV1) (*ProposeDismissalResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ProposeDismissal not implemented")
 }
 func (UnimplementedRuntimeContentServiceServer) ListArtifacts(context.Context, *ListArtifactsRequestV1) (*ListArtifactsResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListArtifacts not implemented")
@@ -1144,6 +1176,24 @@ func _RuntimeContentService_ProposeAgent_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(RuntimeContentServiceServer).ProposeAgent(ctx, req.(*ProposeAgentRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeContentService_ProposeDismissal_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProposeDismissalRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeContentServiceServer).ProposeDismissal(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeContentService_ProposeDismissal_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeContentServiceServer).ProposeDismissal(ctx, req.(*ProposeDismissalRequestV1))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1670,6 +1720,10 @@ var RuntimeContentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ProposeAgent",
 			Handler:    _RuntimeContentService_ProposeAgent_Handler,
+		},
+		{
+			MethodName: "ProposeDismissal",
+			Handler:    _RuntimeContentService_ProposeDismissal_Handler,
 		},
 		{
 			MethodName: "ListArtifacts",

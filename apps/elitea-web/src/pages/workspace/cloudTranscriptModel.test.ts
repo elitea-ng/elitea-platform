@@ -29,7 +29,7 @@ describe('turnViewOf', () => {
   });
 });
 
-describe('the cloud sub-agent lanes (client contract 1.47)', () => {
+describe('the cloud sub-agent lanes (client contract 1.48)', () => {
   it('shows each temporary child under its spawn_agent row, named, as a remote lane', () => {
     const message = {
       ...answer([{ id: 'call-spawn', type: 'tool', name: 'spawn_agent', status: 'complete', toolOutputs: '{}' }]),

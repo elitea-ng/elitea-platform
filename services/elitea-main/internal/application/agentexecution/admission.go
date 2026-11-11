@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
@@ -225,6 +226,9 @@ type AdmissionService struct {
 	newID   executionapp.IDGenerator
 	// nested reads sub-agents' frozen toolkits (WithNestedMemoryToolkits).
 	nested NestedApplicationTools
+	// retired refuses a run of a retired agent, or of one that nests a
+	// retired agent (WithRetiredAgents, ADR-0050 decision 5g).
+	retired RetiredAgents
 	// governed freezes governed credential references (WithGovernedCredentials).
 	governed *GovernedCredentials
 	// preamble freezes the platform preamble into the input
@@ -471,7 +475,7 @@ func validateAgentTurns(request SubmitRequest, generation string) error {
 		if request.CurrentTurn != nil || request.CurrentAdhocTurn != nil || request.CurrentRegenerateTurn != nil ||
 			request.CurrentContinueTurn != nil || request.CurrentFanoutWakeTurn != nil ||
 			request.HandoffCompletion != nil || request.CloudThread || request.RunPolicy != nil ||
-			request.Unattended != nil || request.Release != nil || turn.Validate() != nil ||
+			request.Unattended != nil || !sameReleaseRun(request.Release, turn.Release) || turn.Validate() != nil ||
 			request.IdempotencyKey != IdleCompactionIdempotencyKey(turn.SourceExecutionID) ||
 			turn.ResponseMessageID != request.ClientMessageID || turn.ConversationUUID != request.ClientStreamID ||
 			turn.ExecutionGeneration != generation || request.SIOEvent != "chat_continue_predict" ||
@@ -551,6 +555,75 @@ func (s *AdmissionService) WithNestedMemoryToolkits(tools NestedApplicationTools
 	return s
 }
 
+// RetiredAgents answers which of a project's agents are retired (or
+// deleted): repos.AgentWorkforce.
+type RetiredAgents interface {
+	RetiredAgents(ctx context.Context, projectID int64, applicationIDs []int64) (map[int64]bool, error)
+}
+
+// WithRetiredAgents makes admission refuse a run of a retired agent
+// (agent_retired) and a run whose frozen toolkit set nests one, at any depth
+// the sub-agent walk reads (nested_agent_retired).
+func (s *AdmissionService) WithRetiredAgents(retired RetiredAgents) *AdmissionService {
+	if s != nil && retired != nil {
+		s.retired = retired
+	}
+	return s
+}
+
+// requestApplicationID is the agent the request runs as (Admission.ApplicationID).
+func requestApplicationID(request SubmitRequest) int64 {
+	switch {
+	case request.CurrentTurn != nil:
+		return request.CurrentTurn.ApplicationID
+	case request.CurrentRegenerateTurn != nil:
+		return request.CurrentRegenerateTurn.ApplicationID
+	case request.CurrentContinueTurn != nil:
+		return request.CurrentContinueTurn.ApplicationID
+	case request.CurrentIdleCompactionTurn != nil:
+		return request.CurrentIdleCompactionTurn.ApplicationID
+	}
+	return 0
+}
+
+// checkRetired refuses a retired agent or a retired sub-agent.
+func (s *AdmissionService) checkRetired(ctx context.Context, request SubmitRequest, children []int64) error {
+	if s.retired == nil {
+		return nil
+	}
+	project, err := strconv.ParseInt(request.Identity.ResourceProjectID, 10, 64)
+	if err != nil || project <= 0 {
+		return nil
+	}
+	own := requestApplicationID(request)
+	if own == 0 && request.CurrentFanoutWakeTurn != nil && request.CapabilityID == executiondomain.AgentApplicationCapability {
+		// A fan-out wake carries no application id of its own; the parked
+		// run's frozen application names the agent it resumes, and a
+		// retired agent's parked wake is refused like any start of it.
+		own = frozenApplicationID(request.Input)
+	}
+	ids := append([]int64{}, children...)
+	if own > 0 {
+		ids = append(ids, own)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	retired, err := s.retired.RetiredAgents(ctx, project, ids)
+	if err != nil {
+		return fmt.Errorf("read the retired agents: %w", err)
+	}
+	if own > 0 && retired[own] {
+		return &agentworkforce.RetiredError{ApplicationID: own}
+	}
+	for _, child := range children {
+		if retired[child] {
+			return &agentworkforce.RetiredError{ApplicationID: child, Nested: true}
+		}
+	}
+	return nil
+}
+
 // The bounds of the sub-agent walk: the platform's nesting hop limit and a
 // cap on distinct child versions read for one admission.
 const (
@@ -575,6 +648,9 @@ func (s *AdmissionService) runToolkitSet(ctx context.Context, request SubmitRequ
 	}
 	types := toolkitTypeEntries(raw)
 	if s.nested == nil || len(children) == 0 {
+		if err := s.checkRetired(ctx, request, childApplications(children)); err != nil {
+			return nil, nil, err
+		}
 		return ids, finishToolkitTypes(types), nil
 	}
 	project, err := strconv.ParseInt(request.Identity.ResourceProjectID, 10, 64)
@@ -610,8 +686,26 @@ func (s *AdmissionService) runToolkitSet(ctx context.Context, request SubmitRequ
 		}
 		frontier = next
 	}
+	nestedApplications := make([]int64, 0, len(seen))
+	for child := range seen {
+		nestedApplications = append(nestedApplications, child[0])
+	}
+	slices.Sort(nestedApplications)
+	if err := s.checkRetired(ctx, request, slices.Compact(nestedApplications)); err != nil {
+		return nil, nil, err
+	}
 	slices.Sort(ids)
 	return slices.Compact(ids), finishToolkitTypes(types), nil
+}
+
+// childApplications is the application ids of sub-agent references.
+func childApplications(children [][2]int64) []int64 {
+	out := make([]int64, 0, len(children))
+	for _, child := range children {
+		out = append(out, child[0])
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // memoryToolkitIDs lists the memory toolkits of an agent run's OWN frozen
@@ -698,6 +792,25 @@ func finishToolkitTypes(types []string) []string {
 }
 
 // frozenToolkitsRaw is the frozen `tools` list frozenToolkitSet reads.
+// frozenApplicationID is the frozen application's id, 0 when the input has
+// none or it is not readable.
+func frozenApplicationID(input *runtimev1.AgentExecutionInputV1) int64 {
+	if input == nil || len(input.GetApplication()) == 0 {
+		return 0
+	}
+	var application struct {
+		ID json.Number `json:"id"`
+	}
+	if json.Unmarshal(input.GetApplication(), &application) != nil {
+		return 0
+	}
+	id, err := application.ID.Int64()
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
+}
+
 func frozenToolkitsRaw(capabilityID string, input *runtimev1.AgentExecutionInputV1) (json.RawMessage, error) {
 	if input == nil {
 		return nil, nil

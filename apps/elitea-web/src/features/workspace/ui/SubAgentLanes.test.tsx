@@ -45,7 +45,7 @@ describe('SubAgentLanes', () => {
   });
 });
 
-describe('SubAgentLanes for a cloud temporary child (client contract 1.47)', () => {
+describe('SubAgentLanes for a cloud temporary child (client contract 1.48)', () => {
   const cloud = (displayName: string): TurnView => {
     const base = view('running');
     return { ...base, subAgents: (base.subAgents ?? []).map((lane) => ({ ...lane, label: 'callers', displayName, temporary: true })) };

@@ -8,6 +8,7 @@
 //! Without the runner on `PATH` a test skips, unless
 //! `ELITEA_REQUIRE_TOOLCHAINS=1`.
 
+#![cfg(unix)]
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 

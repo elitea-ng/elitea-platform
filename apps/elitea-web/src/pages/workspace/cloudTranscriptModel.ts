@@ -85,7 +85,7 @@ function toolItem(action: RawAction, index: number): TranscriptItem | undefined 
 }
 
 /**
- * A cloud answer's temporary sub-agents (client contract 1.47, ADR-0050
+ * A cloud answer's temporary sub-agents (client contract 1.48, ADR-0050
  * decision 4) as the local lanes: under the `spawn_agent` row whose call id
  * started them, with their profile name and a "temporary" badge.
  */

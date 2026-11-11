@@ -21,7 +21,7 @@ const lane = (over: Partial<CloudSubAgentLane>, named = true): CloudSubAgentLane
 
 const answer = (subAgents: CloudSubAgentLane[]): ChatMessage => ({ id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', role: 'assistant', name: 'Agent', content: 'Done.', createdAt: '', subAgents });
 
-describe('cloud sub-agents under a chat answer (client contract 1.47)', () => {
+describe('cloud sub-agents under a chat answer (client contract 1.48)', () => {
   it('shows a running child open, named, temporary, with its own tool calls', () => {
     renderWithTheme(<ApplicationAnswer answer={answer([lane({})])} messageId="m" />);
     const row = screen.getByTestId('cloud-subagent');

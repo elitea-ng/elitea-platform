@@ -24,7 +24,7 @@ export interface ChatMessage {
   /** Persisted `meta.grounding` (ADR-0043 decision 5): the grounding indicator of a citing agent's answer. Live turns carry it in `responseMetadata`. */
   readonly grounding?: unknown;
   /**
-   * Client contract 1.47 (ADR-0050 decision 4): the temporary sub-agents a
+   * Client contract 1.48 (ADR-0050 decision 4): the temporary sub-agents a
    * cloud answer started, one lane each. Live turns fold `agent_subagent`
    * frames into it; a reload reads `meta.subagents_v1`.
    */

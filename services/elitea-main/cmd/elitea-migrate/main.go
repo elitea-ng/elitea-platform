@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/faults/logx"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	bootstrapschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrations"
 	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
@@ -31,7 +32,9 @@ func main() {
 		exitError(fmt.Errorf("-agentstate cannot be combined with tenant migration flags"))
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	// The shared handler (FU-299): the same JSON lines and level as before,
+	// plus the cause chain, typed-fault fields and support_ref.
+	logger := slog.New(logx.Wrap(slog.NewJSONHandler(os.Stdout, nil), nil))
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

@@ -2,6 +2,7 @@ import { areAgentLlmSettingsEqual, type AgentLlmSettings } from '@/shared/api/ag
 import type { OutputContract } from '@/shared/api/generated/model';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { areOutputContractsEqual, readOutputContract } from '@/shared/ui/OutputContractField';
+import { contextBlockForSave, readContextBlock, type ContextBlock } from '@/features/agents';
 
 /**
  * The draft state `pages/agents/CreateApplication.tsx` holds outside its RHF
@@ -44,6 +45,8 @@ export interface CreateAgentFormExtraFields {
   readonly outputContract: OutputContract | null;
   /** `meta.citations` (ADR-0043 decision 5). `null` is off and is not sent. */
   readonly citations?: 'required' | null | undefined;
+  /** `meta.context` (ADR-0050 decision 9). `null` is the default and is not sent. */
+  readonly contextBlock?: ContextBlock | null | undefined;
 }
 
 /**
@@ -59,12 +62,33 @@ export interface CreateAgentFormExtraFields {
  * started from rather than tracked with a sticky "user touched something"
  * boolean, so undoing an edit correctly disarms the guard again.
  */
+/** `meta.citations` and `meta.context`, out of `areExtraFieldsEqual` for the complexity budget. */
+function areMetaControlsEqual(a: CreateAgentFormExtraFields, b: CreateAgentFormExtraFields): boolean {
+  return (a.citations ?? null) === (b.citations ?? null) && JSON.stringify(a.contextBlock ?? null) === JSON.stringify(b.contextBlock ?? null);
+}
+
+/**
+ * The optional meta keys a create sends: only the ones set, so a draft
+ * nobody touched carries no contract, citation or context block.
+ */
+export function createMetaControls(fields: CreateAgentFormExtraFields): {
+  readonly output_contract?: OutputContract;
+  readonly citations?: 'required';
+  readonly context?: Readonly<Record<string, unknown>>;
+} {
+  return {
+    ...(fields.outputContract === null ? {} : { output_contract: fields.outputContract }),
+    ...(fields.citations === 'required' ? { citations: 'required' as const } : {}),
+    ...(fields.contextBlock ? { context: { ...fields.contextBlock } } : {}),
+  };
+}
+
 export function areExtraFieldsEqual(a: CreateAgentFormExtraFields, b: CreateAgentFormExtraFields): boolean {
   if (a.instructions !== b.instructions) return false;
   if (a.welcomeMessage !== b.welcomeMessage) return false;
   if (a.stepLimit !== b.stepLimit) return false;
   if (!areOutputContractsEqual(a.outputContract, b.outputContract)) return false;
-  if ((a.citations ?? null) !== (b.citations ?? null)) return false;
+  if (!areMetaControlsEqual(a, b)) return false;
   // Key by key, never by identity: the picker hands back a fresh object on
   // every change, so an identity check would report "dirty" forever.
   if (!areAgentLlmSettingsEqual(a.llmSettings, b.llmSettings)) return false;
@@ -118,8 +142,9 @@ export function mapCreateErrorToFieldErrors(error: unknown): CreateApplicationFi
 }
 
 /**
- * The create page's ADR-0043 fields: `meta.output_contract` and
- * `meta.citations`. Any other path leaves the fields as they are.
+ * The create page's ADR-0043 fields (`meta.output_contract` and
+ * `meta.citations`) and ADR-0050's `meta.context`. Any other path leaves the
+ * fields as they are.
  */
 export function applyContentControlField(
   previous: CreateAgentFormExtraFields,
@@ -128,5 +153,6 @@ export function applyContentControlField(
 ): CreateAgentFormExtraFields {
   if (path === 'version_details.meta.output_contract') return { ...previous, outputContract: readOutputContract(value) };
   if (path === 'version_details.meta.citations') return { ...previous, citations: value === 'required' ? 'required' : null };
+  if (path === 'version_details.meta.context') return { ...previous, contextBlock: contextBlockForSave(readContextBlock(value)) };
   return previous;
 }

@@ -34,7 +34,7 @@
 mod client;
 mod launch;
 mod registry;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};

@@ -1,5 +1,5 @@
 /**
- * Client contract 1.47 (ADR-0050 decision 4): a cloud answer's temporary
+ * Client contract 1.48 (ADR-0050 decision 4): a cloud answer's temporary
  * sub-agents, live (`agent_subagent` frames) and after a reload
  * (`meta.subagents_v1`), fold into the same `subAgents`.
  */

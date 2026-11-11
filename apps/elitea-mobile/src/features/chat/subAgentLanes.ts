@@ -3,7 +3,7 @@ import { parseSubAgentLanes, settleSubAgentLanes, type CloudSubAgentLane } from 
 import type { ToolStatus, ToolStep } from '@/features/chat/toolActivity';
 
 /**
- * A cloud answer's temporary sub-agents (client contract 1.47, ADR-0050
+ * A cloud answer's temporary sub-agents (client contract 1.48, ADR-0050
  * decision 4) in the app's tool view: each child's own tool calls, grouped
  * (`groupByAgent`) under "<name> · temporary". Live turns fold the
  * `agent_subagent` frames (`@elitea/client-core/stream` `foldSubAgentEntry`);

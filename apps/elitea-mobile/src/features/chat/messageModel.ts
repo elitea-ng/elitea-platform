@@ -62,7 +62,7 @@ export interface ChatMessage {
   authorRole?: string | null;
   /** Participant ids the message is addressed to (`addressed_to`, contract 1.38); empty for everyone. */
   addressedTo?: number[];
-  /** Client contract 1.47: the temporary sub-agents a cloud answer started (`meta.subagents_v1`). */
+  /** Client contract 1.48: the temporary sub-agents a cloud answer started (`meta.subagents_v1`). */
   subAgents?: CloudSubAgentLane[];
 }
 

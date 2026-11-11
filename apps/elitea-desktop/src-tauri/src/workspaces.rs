@@ -532,7 +532,7 @@ fn check_private(file: &fs::File) -> Result<(), HostError> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
