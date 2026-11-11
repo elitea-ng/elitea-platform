@@ -67,3 +67,22 @@ export function stepStateValues(
   if (isFinal) return { before, after: finalValueOf(timeline, variable), isFinal };
   return { before, after: timeline[selectedStep]?.state?.[variable], isFinal };
 }
+
+/**
+ * 5b-1 (D12): the nodes whose failure the run settled through their settings
+ * (`node_errors` entries in the newest state the timeline holds). The dialog
+ * marks their steps "Failed · continued" with the existing failed styling;
+ * there is no protocol event of its own.
+ */
+export function continuedFailureNodes(timeline: readonly RunStateStep[]): ReadonlySet<string> {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const entries = timeline[index]?.state?.['node_errors'];
+    if (!Array.isArray(entries)) continue;
+    return new Set(entries.flatMap((entry: unknown) => {
+      if (typeof entry !== 'object' || entry === null) return [];
+      const { node, handled } = entry as { readonly node?: unknown; readonly handled?: unknown };
+      return typeof node === 'string' && (handled === 'continue' || handled === 'error_output') ? [node] : [];
+    }));
+  }
+  return new Set();
+}

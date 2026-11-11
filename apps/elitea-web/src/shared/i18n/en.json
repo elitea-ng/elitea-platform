@@ -6182,5 +6182,14 @@
   "features.chatMessages.subAgents.failed": "Failed",
   "features.chatMessages.subAgents.running": "Running",
   "features.chatMessages.subAgents.temporary": "Temporary",
-  "features.chatMessages.subAgents.title": "Sub-agent {{n}}"
+  "features.chatMessages.subAgents.title": "Sub-agent {{n}}",
+  "pipelines.flowEditor.state.failedContinued": "Failed · continued",
+  "pipelines.nodeSettings.alwaysOutputData": "Always output data",
+  "pipelines.nodeSettings.errorOutput": "Error output",
+  "pipelines.nodeSettings.executeOnce": "Run once per execution",
+  "pipelines.nodeSettings.onError": "On error",
+  "pipelines.nodeSettings.onErrorContinue": "Continue",
+  "pipelines.nodeSettings.onErrorErrorOutput": "Continue (using error output)",
+  "pipelines.nodeSettings.onErrorStop": "Stop pipeline",
+  "pipelines.nodeSettings.title": "Settings"
 }

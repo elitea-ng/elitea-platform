@@ -29,6 +29,7 @@ import {
   handleTransitionNode,
 } from './parsePipelineModernBranches.helpers';
 import { getNodePosition } from './parsePipelineState.helpers';
+import { addErrorRouteEdge } from './nodeErrorRoute.helpers';
 import { EDGE_PREFIX, ORIENTATION, PipelineNodeTypes, type Orientation } from '../constants/flowEditor.constants';
 import type { FlowGraphEdge, FlowGraphNode, YamlPipelineDocument, YamlPipelineNode } from './pipelineFlow.types';
 
@@ -48,8 +49,10 @@ export const goThroughNodesTree = (
   checkAndAddNode({ nodes, id, type, data: { label: id }, orientation });
 
   const remainingYamlNodes = yamlNodes.filter(node => node.id !== rootNodeId);
+  // 5b-1: the error output edge (settings.error_transition) is walked with the node's own branches.
+  const errorBranches = addErrorRouteEdge(currentJsonNode, edges);
   const recurse = (branches: readonly string[]): void => {
-    branches.forEach(branch => {
+    [...branches, ...errorBranches].forEach(branch => {
       goThroughNodesTree(remainingYamlNodes, branch, nodes, edges, interrupt_after, interrupt_before, orientation);
     });
   };
@@ -117,6 +120,7 @@ export const goThroughNodesTree = (
     return;
   }
   checkAndAddEdge({ edges, edgeId: `${EDGE_PREFIX}${id}---EliteAPipelineEnd`, source: id, target: PipelineNodeTypes.End });
+  recurse([]);
 };
 
 export const parseNodes = (

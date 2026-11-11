@@ -154,6 +154,8 @@ export const ReservedStateKeys: readonly ReservedStateKey[] = [
   { key: 'thread_id', citation: 'compiler.rs:2697', reason: 'runtime thread identity' },
   { key: 'execution_finished', citation: 'compiler.rs:2698', reason: 'run completion flag' },
   { key: 'chat_history', citation: 'compiler.rs:2699', reason: 'runtime chat history' },
+  // 5b-1: the private run-once set (node settings `execute_once`).
+  { key: '__elitea_executed_once_v1', citation: 'compiler.rs:3469 (node_settings.rs EXECUTED_ONCE_KEY)', reason: 'node settings run-once set' },
 ];
 
 const reservedStateKeySet: ReadonlySet<string> = new Set(ReservedStateKeys.map(entry => entry.key));

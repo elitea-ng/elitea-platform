@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isRunFinished, stepStateValues } from './runStateValues';
+import { continuedFailureNodes, isRunFinished, stepStateValues } from './runStateValues';
 
 /**
  * #6883: a pipeline whose last node is an agent. The agent's entry got no
@@ -57,5 +57,18 @@ describe('isRunFinished (#6883)', () => {
       after: undefined,
       isFinal: false,
     });
+  });
+});
+
+describe('continuedFailureNodes (5b-1, D12)', () => {
+  it('names the nodes whose failure the newest state recorded as continued or routed', () => {
+    const timeline = [
+      { state: { node_errors: [] } },
+      { state: { node_errors: [{ node: 'shape', handled: 'continue' }, { node: 'route', handled: 'error_output' }, { node: 'odd' }, 'junk'] } },
+      { state: {} },
+    ];
+    expect([...continuedFailureNodes(timeline)].sort()).toEqual(['route', 'shape']);
+    expect(continuedFailureNodes([{ state: { out: 'x' } }]).size).toBe(0);
+    expect(continuedFailureNodes([]).size).toBe(0);
   });
 });
