@@ -153,7 +153,7 @@ fn brief_refused(code: &str) -> Value {
             "An attachment in `context.attachments` is not one you can read in this turn. Name only this turn's attachment ids."
         }
         BRIEF_MEMORY_NOT_RECALLED => {
-            "A memory entry in `context.memory_entries` is not one you were given in this turn: an id on a `[memory N, ...]` line of your notes, or one `recall` gave you. Recall it first, or pass it as a fact."
+            "A memory entry in `context.memory_entries` is not one you were given in this turn. Name it exactly as its mark shows it, `N·TAG` from a `[memory N·TAG, ...]` line of your notes, or the `memory_ref` that `recall` gave you; a bare number or a mark without this turn's tag is not one of your notes. Recall it first, or pass it as a fact."
         }
         _ => "The brief could not be checked.",
     };
@@ -248,7 +248,7 @@ fn spawn_schema() -> Value {
                         "type": "array",
                         "maxItems": MAX_BRIEF_ITEMS,
                         "items": {"type": "string"},
-                        "description": "Ids of memory entries you were given in this turn: N on a [memory N, ...] line of your notes, or an entry_id from recall"
+                        "description": "Memory entries you were given in this turn, each as N·TAG exactly as its [memory N·TAG, ...] line of your notes shows it, or a memory_ref from recall"
                     }
                 },
                 "additionalProperties": false

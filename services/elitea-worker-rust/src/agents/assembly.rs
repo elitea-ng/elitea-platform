@@ -107,6 +107,9 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// The agent memory entries Main recalled into the instructions
     /// (#1826). Only a root application agent with `meta.memory` has them.
     recalled_memory: Vec<super::request::RecalledMemoryEntry>,
+    /// Their marks' tag (#1900), on the same terms: a brief cites an entry
+    /// as `N·TAG` with it.
+    recalled_memory_tag: Option<String>,
     /// The version's `meta.capabilities.can_review_agents` (ADR-0050
     /// decision 5l, #1616): an HR agent, bound `propose_dismissal`. Only a
     /// root application agent has it; Main checks it again on every call.
@@ -352,6 +355,7 @@ impl OrdinaryNoToolProfile {
             can_propose_agents: false,
             subagent_policy: SubAgentModels::default(),
             recalled_memory: Vec::new(),
+            recalled_memory_tag: None,
             can_review_agents: false,
         })
     }
@@ -416,6 +420,7 @@ impl OrdinaryNoToolProfile {
                 &request.payload.context_settings,
             ),
             recalled_memory: application_recalled_memory(request),
+            recalled_memory_tag: application_recalled_memory_tag(request),
             can_review_agents: application_capability(
                 request,
                 super::propose_dismissal_tool::CAPABILITY_KEY,
@@ -537,6 +542,7 @@ impl OrdinaryNoToolProfile {
             can_propose_agents: false,
             subagent_policy: SubAgentModels::default(),
             recalled_memory: Vec::new(),
+            recalled_memory_tag: None,
             can_review_agents: false,
         })
     }
@@ -611,6 +617,12 @@ impl OrdinaryNoToolProfile {
     #[must_use]
     pub(crate) fn recalled_memory(&self) -> &[super::request::RecalledMemoryEntry] {
         &self.recalled_memory
+    }
+
+    /// The tag of those entries' marks (#1900).
+    #[must_use]
+    pub(crate) fn recalled_memory_tag(&self) -> Option<&str> {
+        self.recalled_memory_tag.as_deref()
     }
 
     /// Whether the version makes the agent an HR agent
@@ -1227,6 +1239,12 @@ fn application_recalled_memory(
         return Vec::new();
     }
     request.payload.recalled_memory.clone()
+}
+
+/// The tag of those entries' marks (#1900), kept on the same terms.
+fn application_recalled_memory_tag(request: &AgentExecutionRequest) -> Option<String> {
+    application_agent_memory(request)?;
+    request.payload.recalled_memory_tag.clone()
 }
 
 /// `meta.capabilities.can_propose_agents` of a root application agent:

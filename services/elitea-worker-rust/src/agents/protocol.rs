@@ -241,6 +241,18 @@ mod recalled_memory_tests {
             assert!(recalled_memory(&bad).is_err(), "{bad:?}");
         }
     }
+
+    /// #1900: the marks' tag has Main's shape, or the input is refused.
+    #[test]
+    fn recalled_memory_tag_is_checked() {
+        assert_eq!(
+            super::recalled_memory_tag("k7f2m6q3xz").expect("tag"),
+            "k7f2m6q3xz"
+        );
+        for bad in ["", "k7f2m6q3x", "K7F2M6Q3XZ", "k7f2m6q3x0", "k7f2m6q3xz1"] {
+            assert!(super::recalled_memory_tag(bad).is_err(), "{bad}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -672,6 +684,11 @@ pub fn request_from(
                 .map(|view| view.binding.clone())
                 .filter(|binding| !binding.is_empty()),
             recalled_memory: recalled_memory(&message.recalled_memory)?,
+            recalled_memory_tag: message
+                .recalled_memory_tag
+                .as_deref()
+                .map(recalled_memory_tag)
+                .transpose()?,
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
                     id: context.id,
@@ -897,6 +914,18 @@ fn recalled_memory(
             })
         })
         .collect()
+}
+
+/// #1900: the tag of the recalled entries' marks has Main's shape
+/// (`agentmemory.NewMarkTag`): a tag of any other shape is no tag Main drew.
+fn recalled_memory_tag(tag: &str) -> Result<String, AgentProtocolError> {
+    if elitea_agent_runtime::subagents::memory_ref::valid_memory_tag(tag) {
+        Ok(tag.to_owned())
+    } else {
+        Err(AgentProtocolError::InvalidInput(
+            "the agent recalled memory tag is invalid",
+        ))
+    }
 }
 
 /// ADR-0050 decision 9c: one reference per history entry, each a uuid, or

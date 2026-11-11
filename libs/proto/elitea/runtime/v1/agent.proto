@@ -190,9 +190,10 @@ message AgentExecutionInputV1 {
   optional string current_message_id = 75;
   // #1826 (ADR-0050 decision 9d): the agent memory entries Main recalled
   // into this turn's instructions, in the order shown, at most 50. The
-  // instructions show each one with a `[memory N, ...]` mark, N its
-  // entry_id, so a `spawn_agent` brief can name it in
-  // `context.memory_entries`; the worker then passes the content stored
+  // instructions show each one with a `[memory N·TAG, ...]` mark, N its
+  // entry_id and TAG `recalled_memory_tag` (#1900), so a `spawn_agent`
+  // brief can name it in `context.memory_entries` as `N·TAG`; the worker
+  // then passes the content stored
   // here, never the model's text. Main recalls an entry about a person only
   // while that person is in the conversation. EMPTY: no agent memory
   // recalled, a pipeline, a regeneration or a continuation. An input
@@ -209,6 +210,22 @@ message AgentExecutionInputV1 {
   // runs on its parent's model, as before. Workers are upgraded before
   // Main, because a worker from an earlier release refuses this tag.
   SubAgentPolicyV1 subagent_policy = 77;
+  // #1900 (ADR-0050 decision 9d): the per-run tag of this turn's
+  // `[memory N·TAG, ...]` marks, 10 characters of `a`-`z` and `2`-`7`
+  // (base32, 50 bits) that Main draws from a CSPRNG for every turn that
+  // recalls agent memory. Authored instructions and skill bodies share the
+  // instructions with the marks and are never rewritten, so a copied
+  // `[memory N, ...]` line could otherwise point a brief at a real entry
+  // with different text; no author can predict the tag, so the worker
+  // accepts a `context.memory_entries` reference only as `N·TAG` with this
+  // tag, and refuses a bare `N` or another tag. The worker shows `recall`
+  // results with the same tag. Set exactly when `recalled_memory` is.
+  // ABSENT: no entry is in the instructions; the worker draws its own tag
+  // for the entries `recall` returns. An input derived from a frozen one
+  // (a fan-out wake) keeps it unchanged, since its frozen instructions show
+  // the same marks. Workers are upgraded before Main, because a worker from
+  // an earlier release refuses this tag.
+  optional string recalled_memory_tag = 78;
 }
 
 // The run's sub-agent policy (ADR-0050 decision 4).
@@ -325,7 +342,8 @@ message ContextViewV1 {
 
 // One agent memory entry recalled into a turn (#1826).
 message RecalledMemoryEntryV1 {
-  // The entry id, a positive decimal number, as the recall tool gives it.
+  // The entry id, a positive decimal number, as the recall tool gives it
+  // (bare: the run's tag is `recalled_memory_tag`).
   string entry_id = 1;
   // The entry's text as stored, at most 2048 bytes.
   string content = 2;

@@ -1387,7 +1387,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// answer was given: reader, mode, window, digest and the projected
 	// message ids with why each was dropped (ADR-0050 decision 9, issue
 	// 1669). No data, no permission.
-	require.EqualValues(t, 167, Head(tenant))
+	//
+	// 169: tenant/0169_chat_message_context_view_frames.sql, an answer's view
+	// stored as a delta against the reader's previous one: the immutable
+	// chat_message_context_view_frames chain (keyframe every 64) and
+	// chat_message_context_views.frame_id (issue 1893). Rows written before
+	// it keep their full entries. No data, no permission.
+	require.EqualValues(t, 169, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

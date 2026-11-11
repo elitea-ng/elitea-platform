@@ -3,7 +3,8 @@ package repos
 // The "What the agent saw" read (ADR-0050 decision 9, issue 1669) over
 // tenant/0167's chat_message_context_views: the view one agent answer was
 // given, its entries labelled with their authors, and the answer's own
-// context measurement. agent_context_view.go writes the row.
+// context measurement. agent_context_view.go writes the row; since
+// tenant/0169 its entries decode from a frame chain (context_view_frames.go).
 //
 // What it never returns: a message body (the client shows the text of the
 // messages it already holds), a tool call, a tool result or a thinking step
@@ -22,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -100,6 +102,8 @@ func (s *ContextViews) MessageContextView(ctx context.Context, projectID, messag
 	var view ContextView
 	var conversationID int64
 	var compaction []byte
+	var storedEntries []byte
+	var frameID *int64
 	err = tx.QueryRow(ctx, fmt.Sprintf(`
 SELECT response.uuid::text, view.reader_participant_id,
        NULLIF(COALESCE(reader.meta->>'name', reader.meta->>'user_name', ''), ''),
@@ -111,7 +115,8 @@ SELECT response.uuid::text, view.reader_participant_id,
        CASE WHEN jsonb_typeof(response.meta->'runtime_context'->'measurement') = 'object'
              AND response.meta->'runtime_context'->>'execution_id' = response.task_id
              AND response.meta->'runtime_context'->>'execution_generation' = response.meta->>'execution_generation'
-            THEN response.meta->'runtime_context'->'measurement' END
+            THEN response.meta->'runtime_context'->'measurement' END,
+       view.entries, view.frame_id
 FROM %[1]s.chat_message_context_views view
 JOIN %[1]s.chat_message_group response ON response.uuid = view.message_group_uuid
 LEFT JOIN %[1]s.chat_participants reader ON reader.id = view.reader_participant_id
@@ -120,7 +125,7 @@ WHERE view.message_group_uuid = $1::uuid
 		messageUUID,
 	).Scan(&view.MessageID, &view.ReaderParticipantID, &view.ReaderName, &view.History,
 		&view.IncludeSideTalk, &view.ParticipantHistory, &view.WindowTokens, &view.Digest,
-		&view.RecordedAt, &conversationID, &compaction)
+		&view.RecordedAt, &conversationID, &compaction, &storedEntries, &frameID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ContextView{}, apierr.NotFound("context view not found")
 	}
@@ -128,23 +133,36 @@ WHERE view.message_group_uuid = $1::uuid
 		return ContextView{}, fmt.Errorf("read context view: %w", err)
 	}
 	view.Compaction = decodeContextViewCompaction(compaction)
+	// The recorded list: a row written before tenant/0169 holds it whole;
+	// any other decodes from its frame chain (issue 1893).
+	var recorded []agentexecutionapp.ContextViewEntry
+	if frameID == nil {
+		if err := json.Unmarshal(storedEntries, &recorded); err != nil {
+			return ContextView{}, fmt.Errorf("decode context view entries: %w", err)
+		}
+	} else if recorded, err = readContextViewFrame(ctx, tx, tenant+".", *frameID); err != nil {
+		return ContextView{}, fmt.Errorf("read context view entries: %w", err)
+	}
+	ids := make([]string, len(recorded))
+	reasons := make([]string, len(recorded))
+	for i, entry := range recorded {
+		ids[i], reasons[i] = entry.MessageID, string(entry.Reason)
+	}
 	// The entries in recorded order, each joined to its message in the same
 	// conversation only: an id that names a group elsewhere labels nothing.
 	rows, err := tx.Query(ctx, fmt.Sprintf(`
-SELECT entry.value->>'message_id', NULLIF(entry.value->>'reason', ''),
+SELECT entry.message_id, NULLIF(entry.reason, ''),
        NULLIF(COALESCE(author.meta->>'name', author.meta->>'user_name', ''), ''),
        COALESCE(message.author_kind, author.kind), message.created_at
-FROM %[1]s.chat_message_context_views view
-CROSS JOIN LATERAL jsonb_array_elements(view.entries) WITH ORDINALITY AS entry(value, position)
+FROM unnest($1::text[], $2::text[]) WITH ORDINALITY AS entry(message_id, reason, position)
 LEFT JOIN %[1]s.chat_message_group message
        -- Compare as uuid so the unique index on chat_message_group.uuid is
        -- used; an entry id that is not a uuid labels nothing.
-       ON message.uuid = CASE WHEN entry.value->>'message_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-                              THEN (entry.value->>'message_id')::uuid END
-      AND message.conversation_id = $2
+       ON message.uuid = CASE WHEN entry.message_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                              THEN entry.message_id::uuid END
+      AND message.conversation_id = $3
 LEFT JOIN %[1]s.chat_participants author ON author.id = message.author_participant_id
-WHERE view.message_group_uuid = $1::uuid
-ORDER BY entry.position`, tenant), messageUUID, conversationID)
+ORDER BY entry.position`, tenant), ids, reasons, conversationID)
 	if err != nil {
 		return ContextView{}, fmt.Errorf("read context view entries: %w", err)
 	}

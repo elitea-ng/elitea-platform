@@ -473,5 +473,6 @@ fn printer_resume_payload(input: &str) -> AgentExecutionPayload {
         context_view_history: None,
         context_view_binding: None,
         recalled_memory: Vec::new(),
+        recalled_memory_tag: None,
     }
 }

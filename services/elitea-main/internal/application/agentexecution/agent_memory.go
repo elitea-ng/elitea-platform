@@ -22,18 +22,24 @@ type AgentMemoryRecallResolver interface {
 // AgentMemoryRecall is what a turn recalled: the prompt block and, in the
 // same order, each entry's id and stored content (#1826), which the run
 // input carries so a spawn_agent brief can name an entry recalled here.
+// Tag is the turn's mark tag the text was rendered with (#1900); the
+// resolver need not set it, resolveAgentMemory does.
 type AgentMemoryRecall struct {
 	Text    string
 	Entries []agentmemory.RecalledEntry
+	Tag     string
 }
 
-// AgentMemoryRecallRequest is one turn's recall question.
+// AgentMemoryRecallRequest is one turn's recall question. MarkTag is the
+// turn's mark tag (agentmemory.NewMarkTag) the resolver renders the marks
+// with (#1900).
 type AgentMemoryRecallRequest struct {
 	ProjectID        int64
 	ApplicationID    int64
 	ConversationUUID string
 	UserInput        string
 	Settings         agentmemory.Settings
+	MarkTag          string
 }
 
 // WithAgentMemory attaches the agent memory recall. Without it no agent
@@ -64,9 +70,12 @@ func (service *CurrentApplicationStartService) resolveAgentMemory(
 	if !settings.Enabled {
 		return AgentMemoryRecall{}
 	}
+	// #1900: a fresh tag for every turn, so no authored text can carry a
+	// real mark.
+	tag := agentmemory.NewMarkTag()
 	recall, err := service.agentMemory.ResolveAgentMemoryRecall(ctx, AgentMemoryRecallRequest{
 		ProjectID: projectID, ApplicationID: applicationID, ConversationUUID: conversationUUID,
-		UserInput: userInput, Settings: settings,
+		UserInput: userInput, Settings: settings, MarkTag: tag,
 	})
 	if err != nil {
 		slog.WarnContext(ctx, "agent memory: recall failed; the turn runs without the agent's notes", "error", err)
@@ -75,17 +84,21 @@ func (service *CurrentApplicationStartService) resolveAgentMemory(
 	if recall.Text == "" {
 		return AgentMemoryRecall{}
 	}
+	recall.Tag = tag
 	return recall
 }
 
-// recalledMemoryInput is the run input's recalled_memory (#1826): each
-// entry the instructions show, by id, with its stored content. None when
-// the splice did not land the block in the frozen instructions (a version
-// whose instructions are not prose): a brief may name only what the model
-// was shown.
-func recalledMemoryInput(recall AgentMemoryRecall, application []byte) []*runtimev1.RecalledMemoryEntryV1 {
-	if len(recall.Entries) == 0 || !frozenInstructionsShow(application, recall.Text) {
-		return nil
+// recalledMemoryInput is the run input's recalled_memory (#1826) and
+// recalled_memory_tag (#1900): each entry the instructions show, by id,
+// with its stored content, and the tag of their marks. None when the splice
+// did not land the block in the frozen instructions (a version whose
+// instructions are not prose): a brief may name only what the model was
+// shown. Both are frozen with the instructions, so an input derived from
+// this one keeps them.
+func recalledMemoryInput(recall AgentMemoryRecall, application []byte) ([]*runtimev1.RecalledMemoryEntryV1, *string) {
+	if len(recall.Entries) == 0 || !agentmemory.ValidMarkTag(recall.Tag) ||
+		!frozenInstructionsShow(application, recall.Text) {
+		return nil, nil
 	}
 	out := make([]*runtimev1.RecalledMemoryEntryV1, len(recall.Entries))
 	for i, entry := range recall.Entries {
@@ -93,7 +106,8 @@ func recalledMemoryInput(recall AgentMemoryRecall, application []byte) []*runtim
 			EntryId: strconv.FormatInt(entry.ID, 10), Content: entry.Content,
 		}
 	}
-	return out
+	tag := recall.Tag
+	return out, &tag
 }
 
 // frozenInstructionsShow reports whether the input's frozen

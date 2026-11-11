@@ -334,9 +334,10 @@ type AgentExecutionInputV1 struct {
 	CurrentMessageId *string `protobuf:"bytes,75,opt,name=current_message_id,json=currentMessageId,proto3,oneof" json:"current_message_id,omitempty"`
 	// #1826 (ADR-0050 decision 9d): the agent memory entries Main recalled
 	// into this turn's instructions, in the order shown, at most 50. The
-	// instructions show each one with a `[memory N, ...]` mark, N its
-	// entry_id, so a `spawn_agent` brief can name it in
-	// `context.memory_entries`; the worker then passes the content stored
+	// instructions show each one with a `[memory N·TAG, ...]` mark, N its
+	// entry_id and TAG `recalled_memory_tag` (#1900), so a `spawn_agent`
+	// brief can name it in `context.memory_entries` as `N·TAG`; the worker
+	// then passes the content stored
 	// here, never the model's text. Main recalls an entry about a person only
 	// while that person is in the conversation. EMPTY: no agent memory
 	// recalled, a pipeline, a regeneration or a continuation. An input
@@ -353,8 +354,24 @@ type AgentExecutionInputV1 struct {
 	// runs on its parent's model, as before. Workers are upgraded before
 	// Main, because a worker from an earlier release refuses this tag.
 	SubagentPolicy *SubAgentPolicyV1 `protobuf:"bytes,77,opt,name=subagent_policy,json=subagentPolicy,proto3" json:"subagent_policy,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// #1900 (ADR-0050 decision 9d): the per-run tag of this turn's
+	// `[memory N·TAG, ...]` marks, 10 characters of `a`-`z` and `2`-`7`
+	// (base32, 50 bits) that Main draws from a CSPRNG for every turn that
+	// recalls agent memory. Authored instructions and skill bodies share the
+	// instructions with the marks and are never rewritten, so a copied
+	// `[memory N, ...]` line could otherwise point a brief at a real entry
+	// with different text; no author can predict the tag, so the worker
+	// accepts a `context.memory_entries` reference only as `N·TAG` with this
+	// tag, and refuses a bare `N` or another tag. The worker shows `recall`
+	// results with the same tag. Set exactly when `recalled_memory` is.
+	// ABSENT: no entry is in the instructions; the worker draws its own tag
+	// for the entries `recall` returns. An input derived from a frozen one
+	// (a fan-out wake) keeps it unchanged, since its frozen instructions show
+	// the same marks. Workers are upgraded before Main, because a worker from
+	// an earlier release refuses this tag.
+	RecalledMemoryTag *string `protobuf:"bytes,78,opt,name=recalled_memory_tag,json=recalledMemoryTag,proto3,oneof" json:"recalled_memory_tag,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *AgentExecutionInputV1) Reset() {
@@ -756,6 +773,13 @@ func (x *AgentExecutionInputV1) GetSubagentPolicy() *SubAgentPolicyV1 {
 		return x.SubagentPolicy
 	}
 	return nil
+}
+
+func (x *AgentExecutionInputV1) GetRecalledMemoryTag() string {
+	if x != nil && x.RecalledMemoryTag != nil {
+		return *x.RecalledMemoryTag
+	}
+	return ""
 }
 
 // The run's sub-agent policy (ADR-0050 decision 4).
@@ -1265,7 +1289,8 @@ func (x *ContextViewV1) GetBinding() string {
 // One agent memory entry recalled into a turn (#1826).
 type RecalledMemoryEntryV1 struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The entry id, a positive decimal number, as the recall tool gives it.
+	// The entry id, a positive decimal number, as the recall tool gives it
+	// (bare: the run's tag is `recalled_memory_tag`).
 	EntryId string `protobuf:"bytes,1,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
 	// The entry's text as stored, at most 2048 bytes.
 	Content       string `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
@@ -2368,7 +2393,7 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x10request_entry_id\x18\x01 \x01(\tR\x0erequestEntryId\x12(\n" +
 	"\x10client_stream_id\x18\x02 \x01(\tR\x0eclientStreamId\x12*\n" +
 	"\x11client_message_id\x18\x03 \x01(\tR\x0fclientMessageId\x12\x1b\n" +
-	"\tsio_event\x18\x04 \x01(\tR\bsioEventJ\x04\b\x05\x10\x10\"\xd1\x16\n" +
+	"\tsio_event\x18\x04 \x01(\tR\bsioEventJ\x04\b\x05\x10\x10\"\x9e\x17\n" +
 	"\x15AgentExecutionInputV1\x12'\n" +
 	"\x0fschema_revision\x18\x01 \x01(\tR\x0eschemaRevision\x12\x10\n" +
 	"\x03llm\x18\x02 \x01(\fR\x03llm\x12!\n" +
@@ -2430,7 +2455,9 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\rtool_envelope\x18J \x01(\v2&.elitea.runtime.v1.AgentToolEnvelopeV1R\ftoolEnvelope\x121\n" +
 	"\x12current_message_id\x18K \x01(\tH\tR\x10currentMessageId\x88\x01\x01\x12Q\n" +
 	"\x0frecalled_memory\x18L \x03(\v2(.elitea.runtime.v1.RecalledMemoryEntryV1R\x0erecalledMemory\x12L\n" +
-	"\x0fsubagent_policy\x18M \x01(\v2#.elitea.runtime.v1.SubAgentPolicyV1R\x0esubagentPolicyB\f\n" +
+	"\x0fsubagent_policy\x18M \x01(\v2#.elitea.runtime.v1.SubAgentPolicyV1R\x0esubagentPolicy\x123\n" +
+	"\x13recalled_memory_tag\x18N \x01(\tH\n" +
+	"R\x11recalledMemoryTag\x88\x01\x01B\f\n" +
 	"\n" +
 	"_thread_idB\x10\n" +
 	"\x0e_checkpoint_idB\x0e\n" +
@@ -2441,7 +2468,8 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x10_conversation_idB\x1d\n" +
 	"\x1b_exception_handling_enabledB\r\n" +
 	"\v_debug_modeB\x15\n" +
-	"\x13_current_message_idJ\x04\b(\x10@\"q\n" +
+	"\x13_current_message_idB\x16\n" +
+	"\x14_recalled_memory_tagJ\x04\b(\x10@\"q\n" +
 	"\x10SubAgentPolicyV1\x12\x1b\n" +
 	"\tmax_depth\x18\x01 \x01(\rR\bmaxDepth\x12:\n" +
 	"\x06models\x18\x02 \x03(\v2\".elitea.runtime.v1.SubAgentModelV1R\x06modelsJ\x04\b\x03\x10\x10\"\xe3\x01\n" +
