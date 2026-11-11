@@ -438,16 +438,16 @@ reclaim re-entered the old frontier on the new nodes, tools or `llm_settings`.
   `CorruptStoredState` (`ledger_entries`, `:491`, v1 refused at `:498`). The format changed because nothing has
   shipped; the browser-evidence stack's rows were v1.
 - **Compare on re-entry, completed threads included.** `invoke_durable` loads the nested thread's latest row, then
-  compares the stamp with Main's current digest (`W/agents/application_pipeline.rs:1619`, `definition_refusal`
+  compares the stamp with Main's current digest (`W/agents/application_pipeline.rs:1631`, `definition_refusal`
   `:1193`) before compiling and before projecting a stored result, so before any nested model call, tool call or row:
-  - equal and completed → its stored result (C3, `:1630`); the projection (`completed_text`, the definition's result
+  - equal and completed → its stored result (C3, `:1642`); the projection (`completed_text`, the definition's result
     policy) is the uninterrupted call's byte for byte because the definition is the same;
   - equal and pending → re-entry at its frontier;
   - different → `pipeline.recovery.tool_pipeline_definition_changed`, also for a completed thread: its stored state
     was projected by the old definition's result keys, and nothing of the call is repeated, so refusing is safe;
-  - no stamp or no current digest → `pipeline.recovery.tool_pipeline_definition_unproven`. Main always serves the
-    digest (`runtime_application_version.go:277`); an older Main would make a first call refused rather than run
-    unprovably.
+  - no stamp or no current digest → `pipeline.recovery.tool_pipeline_definition_unproven`. A call without a current
+    digest is refused before its admission (N5, `:1608`): no ledger slot, no writer. Current Main always serves the
+    digest (B2 below); only an older Main omits it.
   - The refusal is a typed tool result to the member's Agent (`tool_definition_refusal_result`, `:1208`), the shape of
     the D3 limit and the nested "may have started" failure, plus one registered fault line
     (`nested_pipeline_definition_refused`, ids only). The writer's claim is re-fenced by the admission (no row).
@@ -481,6 +481,34 @@ reclaim re-entered the old frontier on the new nodes, tools or `llm_settings`.
   row, no event), `a_completed_nested_thread_whose_pipeline_changed_is_refused_typed` (both codes; failed first: it
   served `HANDLED ship it`), `a_ledger_row_reads_back_its_stamps_and_refuses_anything_else`; the golden test pins
   the v2 key; `a_completed_nested_thread_answers_its_stored_result_and_is_never_written` is the unchanged case.
+
+**B2, current Main always serves the digest on this route** (review of `de06c4599`). The Worker reads a saved
+pipeline version only through `resolve_application_version` (`W/transport/platform_client.rs:66`, called by the
+composition at `W/agents/pipeline/composition.rs:121`), which is the one gRPC call `GetApplicationVersion`
+(`W/transport/runtime_context.rs:599`). In Main:
+- `ContentServer.GetApplicationVersion` (`M/internal/infra/storage/content_server.go:618`) answers only from
+  `s.runtimeVersions.Resolve` (`:634`). `runtimeVersions` is the concrete `*RuntimeApplicationVersionService`, wired
+  once (`M/internal/runtimecomposition/composition.go:2001`), so there is no other implementation and no cache.
+- `Resolve` (`M/internal/infra/storage/runtime_application_version.go:158`) has one success return (`:271`), and it
+  always sets `FrozenDefinitionSHA256: definitionSHA256` (`:277`). Every version takes the same path: the row read
+  and freeze (`freezeSavedApplicationVersion`, `:331`, with no draft/published/release branch and no early return
+  other than errors); the optional saved-child capture (`:233`), which only rewrites `frozen` before the digest;
+  then the digest (`:239`) and materialization.
+- `runtimeApplicationDefinitionSHA256` (`M/internal/infra/storage/runtime_application_definition.go:19`) returns
+  either an error, which `Resolve` turns into an `Unavailable` refusal (`:242`), or
+  `hex.EncodeToString(sha256)` (`:45`), never empty. `omitempty` (`:65`) therefore drops the field only for an
+  older Main build (the legacy envelope, `TestRuntimeApplicationDefinitionLegacyEnvelopeOmitsIdentity`).
+- Test through the production route, freeze and materializer:
+  `TestNestedApplicationVersionServesASavedPipelineWithItsFullContentDigest`
+  (`M/internal/infra/storage/runtime_application_version_test.go`). A saved **pipeline** version served as the
+  Worker requests it carries 64 lowercase hex digits; the same content gives the same digest; changing only the
+  nodes, only `llm_settings` or only the tools changes it. Mutation check: with `:277` set to `""` the test fails
+  (`does not contain "frozen_definition_sha256"`). It passed on its first run, since no Main path omits the field;
+  no Main code changed.
+
+**N5.** A call whose current digest is `None` is refused `unproven` before `admit_durable`, so it reserves none of
+the member's 8 slots and activates no writer: `a_call_without_main_s_digest_is_refused_before_its_admission`
+(failed first: `not admitted`, 1 admission instead of 0).
 
 **Recovery rows:** see the three FU-338 rows above. **Browser:** the evidence below predates this delta (images
 `fu291-ab5c03796`); no new browser pass was taken for it.

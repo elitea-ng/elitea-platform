@@ -1603,6 +1603,18 @@ impl ApplicationPipelineTool {
             )
             .await
             .map_err(|_| child_execution_error())?;
+        // FU-338 N5: without Main's digest the call can never be proven, so it
+        // is refused before its admission: no ledger slot, no writer.
+        if self.definition_sha256.is_none() {
+            let code = elitea_faults::codes::PIPELINE_RECOVERY_TOOL_PIPELINE_DEFINITION_UNPROVEN;
+            elitea_faults::fault!(
+                tracing::Level::WARN,
+                code = code,
+                event = "nested_pipeline_definition_refused",
+                function_call_id = %ctx.function_call_id()
+            );
+            return Ok(tool_definition_refusal_result(&self.name, code));
+        }
         let (admitted, latest) = match self
             .admit_durable(ctx.as_ref(), admission.as_ref(), &agent_thread, &lineage)
             .await?

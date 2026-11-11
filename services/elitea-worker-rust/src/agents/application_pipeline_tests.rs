@@ -320,6 +320,15 @@ fn harness_named(yaml: &str, tool_name: &str) -> Harness {
 const HARNESS_DEFINITION: [u8; 32] = [0x5d; 32];
 
 fn harness_with_runtimes(yaml: &str, tool_name: &str, runtimes: PipelineNodeRuntimes) -> Harness {
+    harness_with_definition(yaml, tool_name, runtimes, Some(HARNESS_DEFINITION))
+}
+
+fn harness_with_definition(
+    yaml: &str,
+    tool_name: &str,
+    runtimes: PipelineNodeRuntimes,
+    definition_sha256: Option<[u8; 32]>,
+) -> Harness {
     let definition = PipelineDefinition::from_yaml(yaml).expect("pipeline definition");
     let (node_sender, node_receiver) = pipeline_node_event_channel();
     let (sender, events) = mpsc::channel(64);
@@ -336,7 +345,7 @@ fn harness_with_runtimes(yaml: &str, tool_name: &str, runtimes: PipelineNodeRunt
             event_sender: Some(sender),
             resume: Some(resume.clone()),
         },
-        Some(HARNESS_DEFINITION),
+        definition_sha256,
     );
     Harness {
         tool,
@@ -2015,6 +2024,34 @@ mod durable_member_calls {
             );
             assert!(persisted(&mut harness.events).is_empty(), "{code}");
         }
+    }
+
+    /// FU-338 N5: a call whose saved pipeline Main served without a digest is
+    /// refused `unproven` before its admission: it reserves no ledger slot (of
+    /// the member's 8), activates no writer and runs nothing.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_call_without_main_s_digest_is_refused_before_its_admission() {
+        let mut harness = harness_with_definition(
+            PLAIN_PIPELINE,
+            TOOL_NAME,
+            PipelineNodeRuntimes::default(),
+            None,
+        );
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let admission = admission(0, false);
+        let result = call(&harness, &admission).await.unwrap();
+        assert_eq!(
+            result["failure"]["code"], "pipeline.recovery.tool_pipeline_definition_unproven",
+            "{result}"
+        );
+        assert_eq!(admission.calls.load(Ordering::SeqCst), 0, "not admitted");
+        assert_eq!(admission.threads.len(), 0, "no slot");
+        assert_eq!(admission.store.saves.load(Ordering::SeqCst), 0);
+        assert!(persisted(&mut harness.events).is_empty());
     }
 
     /// FU-338: a completed nested thread whose pipeline changed is refused
