@@ -166,17 +166,16 @@ pub const DEFAULT_MAX_DEPTH: u32 = 1;
 /// child may start children, and those never start more.
 pub const MAX_DEPTH: u32 = 2;
 
-/// The most children running at once in one run, at every level: the
-/// graph's parallel fan-out budget.
-pub const MAX_RUNNING_IN_RUN: usize = fanout_budget::MAX_PARALLEL_BRANCHES;
-
 // The parallel cap is a fan-out like the graph's: held to the same budget.
 const _: () = assert!(MAX_CONCURRENT_CHILDREN <= fanout_budget::MAX_PARALLEL_BRANCHES);
 const _: () = assert!(MAX_CHILDREN_PER_TURN <= fanout_budget::MAX_FANOUT_CHILDREN);
+// Every child of a run, at every level, counts toward the per-turn budget, so
+// a run never has more children running at once than a Parallel node may run
+// branches: the run needs no running cap of its own (#1935).
+const _: () = assert!(MAX_CHILDREN_PER_TURN <= fanout_budget::MAX_PARALLEL_BRANCHES);
 const _: () = assert!(MAX_CONCURRENT_CHILDREN <= MAX_CHILDREN_PER_TURN);
 const _: () = assert!(DEFAULT_CHILD_STEPS <= MAX_CHILD_STEPS);
 const _: () = assert!(DEFAULT_INPUT_TOKEN_BUDGET <= MAX_INPUT_TOKEN_BUDGET);
-const _: () = assert!(MAX_CONCURRENT_CHILDREN <= MAX_RUNNING_IN_RUN);
 const _: () = assert!(DEFAULT_MAX_DEPTH <= MAX_DEPTH);
 
 /// The start of the sentence every child's prompt ends its preamble with.
@@ -587,11 +586,6 @@ impl SubAgentConfig {
         self.excluded_tools.extend(names);
         self
     }
-
-    /// A child's whole system instruction, after `preamble`.
-    fn system_instruction(&self, preamble: &str) -> String {
-        with_sections(preamble, &self.instruction)
-    }
 }
 
 fn with_sections(preamble: &str, sections: &str) -> String {
@@ -611,15 +605,10 @@ pub struct SubAgents {
 
 pub(crate) struct Registry {
     host: Arc<dyn SubAgentHost>,
-    /// The host's sections, after a preamble.
-    sections: String,
-    instruction: String,
-    /// A child with a checkout of its own: [`ISOLATED_CHILD_PREAMBLE`] and
-    /// the host's sections.
-    isolated_instruction: String,
-    /// A child that may start children of its own:
-    /// [`NESTING_CHILD_PREAMBLE`] and the host's sections.
-    nesting_instruction: String,
+    /// The host's sections, after a preamble ([`Registry::instruction_for`]
+    /// builds a child's whole instruction from them, #1832). Shared by every
+    /// level's registry.
+    sections: Arc<str>,
     limits: SubAgentLimits,
     excluded: BTreeSet<String>,
     delegation: Option<crate::delegation::DelegationScope>,
@@ -644,8 +633,8 @@ pub(crate) struct Registry {
     ancestors: Vec<Arc<Vec<crate::tool_envelope::RequestedTool>>>,
 }
 
-/// Every child one run started, at every level: the run's spawn budget,
-/// its running cap and its ordinals are counted here (#1824).
+/// Every child one run started, at every level: the run's spawn budget and
+/// its ordinals are counted here (#1824).
 #[derive(Default)]
 struct RunChildren {
     state: Mutex<RunState>,
@@ -670,8 +659,6 @@ struct Reservation {
 enum RunRefusal {
     /// The run started its most children.
     Limit,
-    /// The run has its most children running.
-    Busy(usize),
     /// No unique id could be made.
     NoId,
 }
@@ -684,9 +671,8 @@ impl RunChildren {
             .unwrap_or_default()
     }
 
-    /// Reserve one spawn: the run's budget (`max_per_turn`, every level)
-    /// and its running cap ([`MAX_RUNNING_IN_RUN`]) are checked here, so
-    /// two levels spawning at once cannot pass them.
+    /// Reserve one spawn: the run's budget (`max_per_turn`, every level) is
+    /// checked here, so two levels spawning at once cannot pass it.
     fn reserve(
         &self,
         max_per_turn: usize,
@@ -697,15 +683,6 @@ impl RunChildren {
         };
         if state.all.len() + state.pending.len() >= max_per_turn {
             return Err(RunRefusal::Limit);
-        }
-        let running = state
-            .all
-            .iter()
-            .filter(|child| !child.status().is_settled())
-            .count()
-            + state.pending.len();
-        if running >= MAX_RUNNING_IN_RUN {
-            return Err(RunRefusal::Busy(running));
         }
         let agent_id = (0..4)
             .find_map(|_| {
@@ -753,16 +730,10 @@ struct Nesting {
 impl SubAgents {
     #[must_use]
     pub fn new(host: Arc<dyn SubAgentHost>, config: SubAgentConfig) -> Self {
-        let instruction = config.system_instruction(CHILD_PREAMBLE);
-        let isolated_instruction = config.system_instruction(ISOLATED_CHILD_PREAMBLE);
-        let nesting_instruction = config.system_instruction(NESTING_CHILD_PREAMBLE);
         Self {
             inner: Arc::new(Registry {
                 host,
-                sections: config.instruction.clone(),
-                instruction,
-                isolated_instruction,
-                nesting_instruction,
+                sections: Arc::from(config.instruction),
                 limits: config.limits.capped(),
                 excluded: config.excluded_tools,
                 delegation: config.delegation,
@@ -823,10 +794,7 @@ impl Registry {
         ancestors.extend(nesting.requested);
         Arc::new(Self {
             host: Arc::clone(&self.host),
-            sections: self.sections.clone(),
-            instruction: self.instruction.clone(),
-            isolated_instruction: self.isolated_instruction.clone(),
-            nesting_instruction: self.nesting_instruction.clone(),
+            sections: Arc::clone(&self.sections),
             limits: self.limits,
             excluded: self.excluded.clone(),
             delegation: nesting.delegation,
@@ -868,12 +836,13 @@ impl Registry {
     /// of its role text (the safety sentence stays), then the host's
     /// sections.
     fn instruction_for(&self, isolated: bool, nests: bool, soul: Option<&str>) -> String {
-        match soul {
-            Some(soul) => with_sections(&soul_preamble(soul, isolated, nests), &self.sections),
-            None if isolated => self.isolated_instruction.clone(),
-            None if nests => self.nesting_instruction.clone(),
-            None => self.instruction.clone(),
-        }
+        let preamble = match soul {
+            Some(soul) => std::borrow::Cow::Owned(soul_preamble(soul, isolated, nests)),
+            None if isolated => ISOLATED_CHILD_PREAMBLE.into(),
+            None if nests => NESTING_CHILD_PREAMBLE.into(),
+            None => CHILD_PREAMBLE.into(),
+        };
+        with_sections(&preamble, &self.sections)
     }
 
     fn close_all(&self) {

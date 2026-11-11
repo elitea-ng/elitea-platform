@@ -50,6 +50,10 @@ type EphemeralAgentRow struct {
 	ErrorCode    string
 	StartedAt    time.Time
 	FinishedAt   time.Time
+	// Depth is 1 or 2 (#1872); 0 is stored as 1. ParentAgentID is the
+	// sub-agent that started this one, empty (NULL) at depth 1.
+	Depth         int
+	ParentAgentID string
 }
 
 // Record upserts every row in one transaction. The project, the
@@ -57,7 +61,8 @@ type EphemeralAgentRow struct {
 // agent_execution_jobs) at the given generation, never from the worker.
 // An existing row is updated only by the same execution and a generation
 // no older than the stored one; its identity columns (the parent call, the
-// ordinal, the profile and the brief) never change.
+// ordinal, the profile, the brief, the depth and the parent sub-agent) never
+// change.
 func (s *EphemeralAgents) Record(ctx context.Context, executionID, commandID string, generation uint64, rows []EphemeralAgentRow) error {
 	if executionID == "" || commandID == "" || generation == 0 || generation > math.MaxInt64 {
 		return ErrEphemeralAgentsRefused
@@ -104,11 +109,12 @@ WITH run AS (
 INSERT INTO elitea_runtime.ephemeral_agents AS e (
     execution_id, agent_id, command_id, generation, project_id, conversation_uuid, parent_application_id,
     parent_call_id, ordinal, label, display_name, avatar, profile_digest, brief_digest, brief_refs,
-    status, steps, input_tokens, output_tokens, error_code, started_at, finished_at)
+    status, steps, input_tokens, output_tokens, error_code, started_at, finished_at, depth, parent_agent_id)
 SELECT run.execution_id, $4::text, $2::text, $3::bigint, run.resource_project_id, run.conversation_uuid,
        run.application_id, $5::text, $6::integer, NULLIF($7::text, ''), NULLIF($8::text, ''),
        NULLIF($9::text, ''), $10::text, NULLIF($11::text, ''), $12::jsonb, $13::text, $14::integer,
-       $15::bigint, $16::bigint, NULLIF($17::text, ''), $18::timestamptz, $19::timestamptz
+       $15::bigint, $16::bigint, NULLIF($17::text, ''), $18::timestamptz, $19::timestamptz,
+       $20::smallint, NULLIF($21::text, '')
 FROM run
 ON CONFLICT (execution_id, agent_id) DO UPDATE SET
     command_id    = EXCLUDED.command_id,
@@ -123,10 +129,13 @@ ON CONFLICT (execution_id, agent_id) DO UPDATE SET
 WHERE EXCLUDED.generation >= e.generation
   AND e.parent_call_id = EXCLUDED.parent_call_id
   AND e.profile_digest = EXCLUDED.profile_digest
-  AND e.brief_digest IS NOT DISTINCT FROM EXCLUDED.brief_digest`,
+  AND e.brief_digest IS NOT DISTINCT FROM EXCLUDED.brief_digest
+  AND e.depth = EXCLUDED.depth
+  AND e.parent_agent_id IS NOT DISTINCT FROM EXCLUDED.parent_agent_id`,
 			executionID, commandID, int64(generation), row.AgentID, row.ParentCallID, row.Ordinal, //nolint:gosec // bounded above
 			row.Label, row.DisplayName, row.Avatar, row.ProfileDigest, row.BriefDigest, refs, row.Status,
-			row.Steps, row.InputTokens, row.OutputTokens, row.ErrorCode, row.StartedAt.UTC(), finished)
+			row.Steps, row.InputTokens, row.OutputTokens, row.ErrorCode, row.StartedAt.UTC(), finished,
+			max(row.Depth, 1), row.ParentAgentID)
 	}
 	results := tx.SendBatch(ctx, batch)
 	for range rows {

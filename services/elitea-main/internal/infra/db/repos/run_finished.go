@@ -256,7 +256,9 @@ JOIN elitea_runtime.execution_jobs AS job
 WHERE binding.execution_id = $1
   AND NOT EXISTS (SELECT 1 FROM elitea_runtime.run_chain_links AS link WHERE link.execution_id = $1)
   -- An idle compaction (ADR-0050 decision 9b2) is no run a person waits
-  -- for: it never notifies.
+  -- for: it never notifies. Its own marker (shared 0240) outlives the row,
+  -- which CASCADE-deletes with the source's job (#1921).
+  AND NOT job.idle_compaction
   AND NOT EXISTS (SELECT 1 FROM elitea_runtime.agent_idle_compactions AS idle WHERE idle.idle_execution_id = $1)
 ORDER BY binding.generation DESC
 LIMIT 1`, executionID).Scan(&run.TriggerOrigin, &actor, &project, &run.ConversationUUID, &run.ResponseMessageID)

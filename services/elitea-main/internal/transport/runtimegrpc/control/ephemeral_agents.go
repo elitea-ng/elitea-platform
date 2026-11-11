@@ -57,6 +57,10 @@ type EphemeralAgent struct {
 	StartedAt    time.Time
 	// FinishedAt is zero while the child runs.
 	FinishedAt time.Time
+	// Depth is 1 for a child of the run's agent, 2 for a child a child
+	// started (#1872); ParentAgentID names that child (empty at depth 1).
+	Depth         int
+	ParentAgentID string
 }
 
 // EphemeralAgents keeps the sub-agents a claimed execution started
@@ -105,6 +109,11 @@ func (s *Server) ReportEphemeralAgents(ctx context.Context, request *runtimev1.R
 	if err := s.claims.VerifyActive(ctx, fence); err != nil {
 		code, message, retryable := safeRuntimeError(err)
 		return ephemeralAgentsRejection(code, message, retryable), nil
+	}
+	agents, orphans := withoutOrphanGrandchildren(agents)
+	if orphans > 0 {
+		slog.WarnContext(ctx, "sub-agent report: grandchildren whose parent the report does not carry are not stored",
+			"execution_id", fence.ExecutionID, "dropped", orphans)
 	}
 	if len(agents) == 0 {
 		return &runtimev1.ReportEphemeralAgentsResponseV1{}, nil
@@ -165,7 +174,12 @@ func ephemeralAgentsFromWire(wire []*runtimev1.EphemeralAgentV1) ([]EphemeralAge
 		if finished != 0 {
 			finishedAt = time.UnixMilli(finished).UTC()
 		}
+		depth, ok := ephemeralDepth(agent)
+		if !ok {
+			return nil, false
+		}
 		agents = append(agents, EphemeralAgent{
+			Depth: depth, ParentAgentID: agent.GetParentAgentId(),
 			AgentID: agent.GetAgentId(), ParentCallID: agent.GetParentCallId(), Ordinal: int(agent.GetOrdinal()),
 			Label: agent.GetLabel(), DisplayName: agent.GetDisplayName(), Avatar: agent.GetAvatar(),
 			ProfileDigest: agent.GetProfileDigest(), BriefDigest: agent.GetBriefDigest(), BriefRefs: refs,
@@ -174,7 +188,57 @@ func ephemeralAgentsFromWire(wire []*runtimev1.EphemeralAgentV1) ([]EphemeralAge
 			ErrorCode: agent.GetErrorCode(), StartedAt: time.UnixMilli(started).UTC(), FinishedAt: finishedAt,
 		})
 	}
+	// A grandchild's parent, when the report carries it, is a child at
+	// depth 1; a grandchild named as a parent is a malformed report.
+	// (Ordinals are no order here: a failed start gives its ordinal back to
+	// a later spawn.)
+	byID := make(map[string]EphemeralAgent, len(agents))
+	for _, agent := range agents {
+		byID[agent.AgentID] = agent
+	}
+	for _, agent := range agents {
+		if agent.Depth == 1 {
+			continue
+		}
+		if parent, found := byID[agent.ParentAgentID]; found && parent.Depth != 1 {
+			return nil, false
+		}
+	}
 	return agents, true
+}
+
+// withoutOrphanGrandchildren drops a grandchild whose parent the report does
+// not carry. A cumulative snapshot carries it, except when the worker lost
+// the run's ledger (its registry evicts by age and size) and started a new
+// one: then only the orphan is dropped, never the rest of the report.
+func withoutOrphanGrandchildren(agents []EphemeralAgent) ([]EphemeralAgent, int) {
+	present := make(map[string]bool, len(agents))
+	for _, agent := range agents {
+		present[agent.AgentID] = true
+	}
+	kept := agents[:0:0]
+	for _, agent := range agents {
+		if agent.Depth != 1 && !present[agent.ParentAgentID] {
+			continue
+		}
+		kept = append(kept, agent)
+	}
+	return kept, len(agents) - len(kept)
+}
+
+// ephemeralDepth answers the spawn's depth: 0 (an earlier worker) and 1 are
+// a child of the run's agent, with no parent; 2 is a child a child started,
+// whose parent is another sub-agent id.
+func ephemeralDepth(agent *runtimev1.EphemeralAgentV1) (int, bool) {
+	parent := agent.GetParentAgentId()
+	switch agent.GetDepth() {
+	case 0, 1:
+		return 1, parent == ""
+	case 2:
+		return 2, ephemeralAgentID.MatchString(parent) && parent != agent.GetAgentId()
+	default:
+		return 0, false
+	}
 }
 
 func boundedText(text string, maxChars int) bool {

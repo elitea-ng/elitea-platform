@@ -1,7 +1,6 @@
 package agentexecution
 
 import (
-	"context"
 	"encoding/json"
 	"slices"
 
@@ -26,30 +25,25 @@ const subagentModelsKey = "subagent_models"
 // more).
 const maxSubagentModels = 64
 
-// subagentModelOutputCap is the output cap of a sub-agent on a named model
-// when the model allows more.
-const subagentModelOutputCap = 8192
-
 // subagentsInternalTool is the agent's sub-agents toggle.
 const subagentsInternalTool = "subagents"
 
 // freezeSubagentModels writes the models a sub-agent may name. It writes
 // nothing for an agent that cannot start sub-agents. A catalogue model whose
 // limits are not valid is left out, never sent with other limits.
+//
+// The catalogue is the one FreezeCurrentApplicationVersion read (#1936). Each
+// name resolves as selectCurrentAgentModel resolves a name with no project
+// (this project's model, else the public project's), from one map built in
+// a single pass rather than a scan per name.
 func (service *CurrentApplicationToolSnapshotService) freezeSubagentModels(
-	ctx context.Context, projectID int32, internalTools json.RawMessage, version map[string]any,
+	projectID int32, catalog configurationapp.CurrentModelCatalogResponse, internalTools json.RawMessage, version map[string]any,
 ) error {
 	delete(version, subagentModelsKey)
 	if !startsSubagents(internalTools, version) {
 		return nil
 	}
-	catalog, err := service.models.Get(ctx, configurationapp.CurrentModelCatalogQuery{
-		Section: configurationapp.CurrentModelSectionLLM, ProjectID: projectID,
-		PublicProjectID: service.publicProjectID, IncludeShared: true,
-	})
-	if err != nil {
-		return err
-	}
+	selectable := selectableCatalogModels(catalog.Items, projectID, service.publicProjectID)
 	own := ""
 	if settings, ok := version["llm_settings"].(map[string]any); ok {
 		own, _ = settings["model_name"].(string)
@@ -65,7 +59,7 @@ func (service *CurrentApplicationToolSnapshotService) freezeSubagentModels(
 		}
 		// The same name in this project and the public one: the project's
 		// own wins, as selectCurrentAgentModel picks it.
-		selected, found := selectCurrentAgentModel(catalog.Items, item.Name, 0, false, projectID, service.publicProjectID)
+		selected, found := selectable[item.Name]
 		if !found {
 			continue
 		}
@@ -81,29 +75,49 @@ func (service *CurrentApplicationToolSnapshotService) freezeSubagentModels(
 	return nil
 }
 
-// subagentModel is one catalogue model in the summary model's shape.
+// selectableCatalogModels maps each name to the item
+// selectCurrentAgentModel(items, name, 0, false, projectID, publicProjectID)
+// returns: the first item of this project with the name, else the first of
+// the public project. A name held by neither is absent.
+func selectableCatalogModels(items []configurationapp.CurrentModelCatalogItem, projectID, publicProjectID int32) map[string]configurationapp.CurrentModelCatalogItem {
+	own := map[string]configurationapp.CurrentModelCatalogItem{}
+	public := map[string]configurationapp.CurrentModelCatalogItem{}
+	for _, item := range items {
+		if item.Name == "" {
+			continue
+		}
+		switch item.ProjectID {
+		case projectID:
+			if _, set := own[item.Name]; !set {
+				own[item.Name] = item
+			}
+		case publicProjectID:
+			if _, set := public[item.Name]; !set {
+				public[item.Name] = item
+			}
+		}
+	}
+	for name, item := range public {
+		if _, set := own[name]; !set {
+			own[name] = item
+		}
+	}
+	return own
+}
+
+// subagentModel is one catalogue model in the summary model's shape, with
+// the summary model's default output cap (frozenCatalogModel).
 func subagentModel(selected configurationapp.CurrentModelCatalogItem) (*runtimev1.SubAgentModelV1, bool) {
-	limitsVersion := map[string]any{}
-	if freezeCurrentModelContextLimits(limitsVersion, selected) != nil {
+	limits, err := catalogModelLimits(selected)
+	if err != nil {
 		return nil, false
 	}
-	limits, err := currentFrozenModelContextLimits(limitsVersion)
-	if err != nil || limits == nil {
-		return nil, false
-	}
-	settings := map[string]any{
-		"model_name": selected.Name, "model_project_id": selected.ProjectID,
-		"max_tokens":        min(int64(subagentModelOutputCap), int64(limits.MaxOutputTokens)),
-		"openai_compatible": selected.OpenAICompatible != nil && *selected.OpenAICompatible,
-		"temperature":       nil,
-	}
-	encoded, err := json.Marshal(settings)
+	model, err := frozenCatalogModel(selected, limits, defaultFrozenModelOutput(limits), nil)
 	if err != nil {
 		return nil, false
 	}
 	return &runtimev1.SubAgentModelV1{
-		LlmSettings: encoded, ModelContextLimits: limits,
-		ModelReasoning: currentModelReasoningSnapshot(selected),
+		LlmSettings: model.settings, ModelContextLimits: model.limits, ModelReasoning: model.reasoning,
 	}, true
 }
 
@@ -136,7 +150,7 @@ func currentFrozenSubagentPolicy(version map[string]any) (*runtimev1.SubAgentPol
 		return nil, ErrUnsupportedCurrentAgentStart
 	}
 	for _, model := range models {
-		if model == nil || model.ModelContextLimits == nil || !validJSONObject(model.LlmSettings) {
+		if model == nil || !validFrozenModel(model.LlmSettings, model.ModelContextLimits) {
 			return nil, ErrUnsupportedCurrentAgentStart
 		}
 	}

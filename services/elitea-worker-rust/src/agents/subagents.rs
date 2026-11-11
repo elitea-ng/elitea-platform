@@ -85,6 +85,20 @@ pub(crate) struct QuotableMessage {
     pub(crate) text: String,
 }
 
+/// `text` whitespace-normalized, kept as it is when it already is (the
+/// plan's view builds it so, #1832): no second copy of the history.
+fn normalized(text: String) -> String {
+    let already = !text.starts_with(' ')
+        && !text.ends_with(' ')
+        && !text.contains("  ")
+        && !text.chars().any(|c| c.is_whitespace() && c != ' ');
+    if already {
+        text
+    } else {
+        normalize_whitespace(&text)
+    }
+}
+
 /// What the creator (the turn's root agent) itself sees, for checking a
 /// brief: its history by message, this turn's attachments by id, and the
 /// memory entries it recalled.
@@ -115,7 +129,7 @@ impl BriefView {
                 .map(|(short_id, message_id, text)| QuotableMessage {
                     short_id,
                     message_id,
-                    text: normalize_whitespace(&text),
+                    text: normalized(text),
                 })
                 .collect(),
             attachments: attachments

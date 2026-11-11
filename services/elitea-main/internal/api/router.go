@@ -4745,12 +4745,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// route takes models.applications.memory.list; the handler
 				// decides edit, delete and approve from ownership and the
 				// update, delete and approve permissions, and keeps an entry
-				// about a person to that person and the agent's managers.
+				// about a person to that person and the agent's managers. The
+				// agent proposals block below reuses the same store as its
+				// owner check.
+				var memoryStore *dbrepos.AgentMemory
+				if cfg.Pool != nil {
+					store, err := dbrepos.ComposeAgentMemory(cfg.Pool)
+					memoryStore = composedStore(slog.Default(), "agent memory", store, err)
+				}
 				{
-					var memoryStore *dbrepos.AgentMemory
-					if cfg.Pool != nil {
-						memoryStore, _ = dbrepos.ComposeAgentMemory(cfg.Pool)
-					}
 					memory := v2agentmemory.NewHandler(memoryStore, func(r *http.Request, permission string) (bool, error) {
 						return apimw.HoldsResolvedPermission(coreResolver, platformauth.PermissionModeDefault, permission)(r)
 					})
@@ -4786,29 +4789,28 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// path's project; Dismiss takes create or ownership of the
 				// proposing agent (decided in the handler).
 				{
+					// The resolver's ensurer is the outer `personalProjects`
+					// (*personalproject.Ensurer); the handler's value is named
+					// proposalPersonal so it cannot shadow it (#1862).
 					var proposalStore *dbrepos.AgentProposals
-					var ownerStore *dbrepos.AgentMemory
-					var personal *apimw.DBPersonalProjectResolver
-					if cfg.Pool != nil {
-						proposalStore, _ = dbrepos.ComposeAgentProposals(cfg.Pool)
-						ownerStore, _ = dbrepos.ComposeAgentMemory(cfg.Pool)
-						personal = apimw.NewDBPersonalProjectResolver(cfg.Pool)
-						if personalProjects != nil {
-							personal = personal.WithPersonalProjectEnsurer(personalProjects)
-						}
-					}
 					var owners v2agentproposals.Owners
-					if ownerStore != nil {
-						owners = ownerStore
-					}
-					var personalProjects v2agentproposals.PersonalProjects
-					if personal != nil {
-						personalProjects = personal
+					var proposalPersonal v2agentproposals.PersonalProjects
+					if cfg.Pool != nil {
+						store, err := dbrepos.ComposeAgentProposals(cfg.Pool)
+						proposalStore = composedStore(slog.Default(), "agent proposals", store, err)
+						if memoryStore != nil {
+							owners = memoryStore
+						}
+						resolver := apimw.NewDBPersonalProjectResolver(cfg.Pool)
+						if personalProjects != nil {
+							resolver = resolver.WithPersonalProjectEnsurer(personalProjects)
+						}
+						proposalPersonal = resolver
 					}
 					proposals := v2agentproposals.NewHandler(proposalStore, owners,
 						func(r *http.Request, projectID, permission string) (bool, error) {
 							return apimw.HoldsPermissionIn(coreResolver, platformauth.PermissionModeDefault, permission)(r, projectID)
-						}, personalProjects)
+						}, proposalPersonal)
 					readProposals := projectPermission(v2agentproposals.ListPermission)
 					createAgents := projectPermission(v2agentproposals.CreatePermission)
 					r.With(readProposals).Get(v2agentproposals.ProposalsPath, proposals.List)
@@ -6106,4 +6108,18 @@ func newWorkerEgressHostsHandler(pool *pgxpool.Pool) *v2workeregress.Handler {
 		return v2workeregress.NewHandler(nil)
 	}
 	return v2workeregress.NewHandler(dbrepos.NewEgressRunSummaries(pool))
+}
+
+// composedStore returns a store a Compose* constructor built, logging the
+// compose error instead of discarding it (#1862). A store that fails to build
+// (its audit appender, say) leaves its routes answering 503, and the log line
+// says why. A failed compose returns the zero value, so the handler's
+// nil-store guard applies.
+func composedStore[T any](logger *slog.Logger, what string, store T, err error) T {
+	if err != nil {
+		logger.Error("compose store; its routes answer 503", "store", what, "err", err)
+		var zero T
+		return zero
+	}
+	return store
 }

@@ -210,10 +210,15 @@ fn tag_message(content: &mut Content, short: &str, limit: usize) -> Option<Strin
         if index >= limit {
             continue;
         }
-        if !quotable.is_empty() {
-            quotable.push_str("\n\n");
+        // The brief view compares whitespace-normalized text: build it so
+        // here, in one copy (#1832), rather than copying the text and then
+        // normalizing that copy.
+        for word in text.split_whitespace() {
+            if !quotable.is_empty() {
+                quotable.push(' ');
+            }
+            quotable.push_str(word);
         }
-        quotable.push_str(text);
         if !tagged {
             text.insert_str(0, &tag(short));
             tagged = true;

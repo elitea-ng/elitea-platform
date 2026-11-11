@@ -259,7 +259,7 @@ func Check(request Request) (Request, error) {
 		// trimmed and lower-cased, a wildcard only as the whole tool.
 		toolkitType := strings.TrimSpace(tool.ToolkitType)
 		toolkit, name, found := strings.Cut(tool.Key, "/")
-		toolkit, name = strings.ToLower(strings.TrimSpace(toolkit)), strings.ToLower(strings.TrimSpace(name))
+		toolkit, name = RuntimeLower(strings.TrimSpace(toolkit)), RuntimeLower(strings.TrimSpace(name))
 		key := toolkit + "/" + name
 		if !found || toolkit == "" || name == "" || strings.Contains(name, "/") ||
 			(name != "*" && strings.Contains(name, "*")) || len(tool.Key) > MaxToolKeyBytes ||
@@ -383,7 +383,7 @@ func SpecDigest(profile Profile) string {
 		tools = make([]string, 0, len(profile.Tools))
 		seen := map[string]struct{}{}
 		for _, tool := range profile.Tools {
-			key := strings.ToLower(tool.Key)
+			key := runtimeToolKey(tool.Key)
 			if _, dup := seen[key]; dup {
 				continue
 			}
