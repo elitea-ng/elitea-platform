@@ -168,6 +168,36 @@ impl PostgresCheckpointError {
     pub const fn retryable(&self) -> bool {
         matches!(self, Self::StorageUnavailable { .. })
     }
+
+    /// Every code this boundary emits with its [`Self::retryable`]: the one
+    /// source a caller reads back a code carried by a `GraphError` from.
+    pub(crate) const CODES: [(&'static str, bool); 8] = [
+        ("checkpoint.invalid_configuration", false),
+        ("checkpoint.invalid_scope", false),
+        ("checkpoint.resource_exhausted", false),
+        ("checkpoint.writer_not_current", false),
+        ("checkpoint.conflict", false),
+        ("checkpoint.corrupt_state", false),
+        ("checkpoint.storage_unavailable", true),
+        ("checkpoint.storage_failure", false),
+    ];
+}
+
+/// The canonical code and retryability of a checkpoint failure that a
+/// `GraphError` carries (`From<PostgresCheckpointError>` writes `"{code}: …"`).
+#[must_use]
+pub(crate) fn checkpoint_error_code(error: &GraphError) -> Option<(&'static str, bool)> {
+    let GraphError::CheckpointError(message) = error else {
+        return None;
+    };
+    PostgresCheckpointError::CODES
+        .iter()
+        .copied()
+        .find(|(code, _)| {
+            message
+                .strip_prefix(code)
+                .is_some_and(|rest| rest.starts_with(':'))
+        })
 }
 
 impl From<PostgresCheckpointError> for GraphError {
@@ -2030,6 +2060,41 @@ mod tests {
                 .expect("canonical first map"),
             serialize_map_json(&reverse, MAX_DATABASE_PAYLOAD_BYTES)
                 .expect("canonical reverse map")
+        );
+    }
+
+    /// FU-291 review 1: `CODES` is exactly each error's code and
+    /// retryability, and `checkpoint_error_code` reads it back from the
+    /// `GraphError` the boundary returns, never a prefix of another code.
+    #[test]
+    fn the_code_table_is_each_errors_code_and_retryability() {
+        let errors = [
+            PostgresCheckpointError::InvalidConfiguration("x"),
+            PostgresCheckpointError::InvalidScope("x"),
+            PostgresCheckpointError::ResourceExhausted("x"),
+            PostgresCheckpointError::WriterNotCurrent,
+            PostgresCheckpointError::CheckpointConflict,
+            PostgresCheckpointError::CorruptStoredState,
+            PostgresCheckpointError::StorageUnavailable {
+                source: sqlx::Error::PoolTimedOut,
+            },
+            PostgresCheckpointError::StorageFailure {
+                source: sqlx::Error::RowNotFound,
+            },
+        ];
+        assert_eq!(errors.len(), PostgresCheckpointError::CODES.len());
+        for (error, expected) in errors.into_iter().zip(PostgresCheckpointError::CODES) {
+            assert_eq!((error.code(), error.retryable()), expected);
+            assert_eq!(
+                checkpoint_error_code(&GraphError::from(error)),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            checkpoint_error_code(&GraphError::CheckpointError(
+                "checkpoint.storage_unavailable_more: x".to_owned()
+            )),
+            None
         );
     }
 

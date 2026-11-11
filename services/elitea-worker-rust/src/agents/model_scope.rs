@@ -464,16 +464,15 @@ impl ScopedModelCheckpoint {
                     self.storage.definition_digest,
                 )
                 .with_application_tools(self.storage.application_tools.iter().map(String::as_str))
-                .with_durable_pipeline_tools(
+                .with_durable_pipeline_tools({
+                    let durable = crate::agents::application_tools::current_member_tool_pipelines()
+                        .is_some_and(|member| member.admission.is_some());
                     self.storage
                         .pipeline_tools
                         .iter()
                         .map(String::as_str)
-                        .filter(|_| {
-                            crate::agents::application_tools::current_member_tool_pipelines()
-                                .is_some()
-                        }),
-                )
+                        .filter(move |_| durable)
+                })
                 .with_read_only_tools(self.read_only_tools.clone())
                 .with_request_budget(self.budget.clone())
                 .with_context_events(self.context_events.clone())

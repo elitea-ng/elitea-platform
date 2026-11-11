@@ -13,6 +13,7 @@ pub(crate) mod postgres_session_tests;
 mod writer_lease;
 
 pub(crate) use postgres_checkpointer::CheckpointWriterAuthority;
+pub(crate) use postgres_checkpointer::checkpoint_error_code;
 #[cfg(test)]
 pub(crate) use postgres_checkpointer::derive_child_thread_id;
 pub use postgres_checkpointer::{CheckpointLimits, PostgresCheckpointError, PostgresCheckpointer};

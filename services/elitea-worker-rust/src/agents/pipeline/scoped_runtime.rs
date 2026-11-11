@@ -343,15 +343,18 @@ impl PipelineApplicationNodeRuntime {
         // its own family admits. `A` is this activation's own node thread: the
         // Agent node's admitted path under the thread it runs on, which no
         // graph writes (a saved Agent runs no subgraph there).
-        let tool_pipelines = self.tool_pipelines.clone().map(|admission| {
-            crate::agents::application_tools::MemberToolPipelines {
-                admission,
-                agent_thread: format!(
-                    "{}/{}",
-                    receipt.activation().thread_id(),
-                    receipt.activation().node_name()
-                ),
-            }
+        // Review 3: every fan-out member's Agent call carries it, so a member
+        // whose family lends no admission refuses its pipeline calls instead of
+        // running them in memory.
+        let tool_pipelines = (self.tool_pipelines.is_some()
+            || self.events.has_parallel_event_scope())
+        .then(|| crate::agents::application_tools::MemberToolPipelines {
+            admission: self.tool_pipelines.clone(),
+            agent_thread: format!(
+                "{}/{}",
+                receipt.activation().thread_id(),
+                receipt.activation().node_name()
+            ),
         });
         let mut terminal = None;
         let result = self

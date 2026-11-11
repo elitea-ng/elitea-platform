@@ -114,6 +114,12 @@ const APPLICATION_REPLAY_BATCH_KEY: &str = "elitea.application.replay_batch.v1";
 /// FU-291 C2: the original model event of a durable pipeline batch replayed
 /// after a crash, so its calls keep their lineage and nested threads.
 pub(super) const DURABLE_REPLAY_BATCH_KEY: &str = "elitea.application.durable_replay_batch.v1";
+
+/// A durable pipeline batch's original model event id (C2): the one check the
+/// record, the replay key and the lineage share (review 9).
+pub(super) fn valid_batch_event_id(batch: &str) -> bool {
+    !batch.is_empty() && batch.len() <= 512 && !batch.chars().any(char::is_control)
+}
 /// The execution whose ROOT continuation emitted a replay batch. A key of its
 /// own beside the batch (whose schema is strict), so a Worker without it still
 /// reads the batch; only that execution's replacement may continue behind it
@@ -327,8 +333,10 @@ pub(super) fn current_member_events() -> Option<ApplicationEventSender> {
 /// beside its child run, like its event channel.
 #[derive(Clone)]
 pub(crate) struct MemberToolPipelines {
+    /// The member family's admission; `None` in a member whose family lends
+    /// none, whose pipeline calls are refused (never run in memory).
     pub(crate) admission:
-        Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>,
+        Option<Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>>,
     /// The member Agent node's thread: `A` of every nested thread it admits.
     pub(crate) agent_thread: String,
 }
@@ -1903,13 +1911,8 @@ pub(super) fn original_application_batch_id(
     if let Some(batch) = replay_batch(event)? {
         return Ok(batch.event_id);
     }
-    let durable = replay_metadata::<String>(event, DURABLE_REPLAY_BATCH_KEY)?;
-    match durable {
-        Some(batch)
-            if batch.is_empty() || batch.len() > 512 || batch.chars().any(char::is_control) =>
-        {
-            Err(invalid_configuration())
-        }
+    match replay_metadata::<String>(event, DURABLE_REPLAY_BATCH_KEY)? {
+        Some(batch) if !valid_batch_event_id(&batch) => Err(invalid_configuration()),
         Some(batch) => Ok(batch),
         None => Ok(event.id.clone()),
     }

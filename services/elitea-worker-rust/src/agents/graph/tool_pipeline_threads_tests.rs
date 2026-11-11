@@ -158,6 +158,48 @@ fn the_member_total_admits_129_threads_and_refuses_the_130th() {
     ));
 }
 
+/// Review 5: each bound refuses with its own code: the 9th call of a member
+/// with room in its total is the per-member bound; the 130th thread of a
+/// member with calls left is the shared total.
+#[test]
+fn each_bound_refuses_with_its_own_code() {
+    let per_member = ToolPipelineThreads::new(2);
+    for call in 0..MAX_TOOL_PIPELINE_THREADS_PER_MEMBER {
+        per_member
+            .register(admitted(
+                "m1:member/agent",
+                &lineage(&format!("call-{call}"), "t"),
+            ))
+            .unwrap();
+    }
+    let GraphError::CheckpointError(message) = per_member
+        .register(admitted("m1:member/agent", &lineage("call-9", "t")))
+        .unwrap_err()
+    else {
+        panic!("a checkpoint error");
+    };
+    assert!(message.starts_with(TOOL_PIPELINE_LIMIT_CODE), "{message}");
+    let total = ToolPipelineThreads::new(125);
+    for call in 0..4 {
+        total
+            .register(admitted(
+                "m1:member/agent",
+                &lineage(&format!("call-{call}"), "t"),
+            ))
+            .unwrap();
+    }
+    let GraphError::CheckpointError(message) = total
+        .register(admitted("m1:member/agent", &lineage("call-4", "t")))
+        .unwrap_err()
+    else {
+        panic!("a checkpoint error");
+    };
+    assert!(
+        message.starts_with(TOOL_PIPELINE_TOTAL_LIMIT_CODE),
+        "{message}"
+    );
+}
+
 /// The set is append-only: a registered thread is never replaced, and it is
 /// found only for the Agent it was admitted for.
 #[test]

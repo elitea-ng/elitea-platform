@@ -44,6 +44,8 @@ const THREAD_SEGMENT: &str = "/pt1:";
 const MAX_RECEIPT_BYTES: usize = 4096;
 /// The stable code of a refused admission the model reads as a tool error.
 pub(crate) const TOOL_PIPELINE_LIMIT_CODE: &str = "pipeline.tool_thread_limit";
+/// The member's shared thread total (`MAX_CHILD_THREADS`) is reached.
+pub(crate) const TOOL_PIPELINE_TOTAL_LIMIT_CODE: &str = "pipeline.tool_thread_total_limit";
 const TOOL_PIPELINE_SCOPE_CODE: &str = "pipeline.tool_thread_invalid";
 
 fn scope_error(detail: &str) -> GraphError {
@@ -57,11 +59,39 @@ fn limit_error() -> GraphError {
     ))
 }
 
-/// Whether `error` is a refusal of the admission bounds (D3), returned to the
-/// model as a tool error, never a dependency failure.
-pub(crate) fn is_tool_pipeline_limit(error: &GraphError) -> bool {
+fn total_limit_error() -> GraphError {
+    GraphError::CheckpointError(format!(
+        "{TOOL_PIPELINE_TOTAL_LIMIT_CODE}: a fan-out member holds at most {} threads in all",
+        super::fanout_budget::MAX_CHILD_THREADS
+    ))
+}
+
+fn coded(error: &GraphError, code: &str) -> bool {
     matches!(error, GraphError::CheckpointError(message)
-        if message.starts_with(TOOL_PIPELINE_LIMIT_CODE))
+        if message.strip_prefix(code).is_some_and(|rest| rest.starts_with(':')))
+}
+
+/// Whether `error` is a refusal of the admission bounds (D3, or the member's
+/// shared total), returned to the model as a tool error, never a dependency
+/// failure.
+pub(crate) fn is_tool_pipeline_limit(error: &GraphError) -> bool {
+    coded(error, TOOL_PIPELINE_LIMIT_CODE) || is_tool_pipeline_total_limit(error)
+}
+
+/// Whether `error` is the member's shared thread total (review 5).
+pub(crate) fn is_tool_pipeline_total_limit(error: &GraphError) -> bool {
+    coded(error, TOOL_PIPELINE_TOTAL_LIMIT_CODE)
+}
+
+/// This module's own code carried by `error`, for an operator log line.
+pub(crate) fn tool_pipeline_error_code(error: &GraphError) -> Option<&'static str> {
+    [
+        TOOL_PIPELINE_LIMIT_CODE,
+        TOOL_PIPELINE_TOTAL_LIMIT_CODE,
+        TOOL_PIPELINE_SCOPE_CODE,
+    ]
+    .into_iter()
+    .find(|code| coded(error, code))
 }
 
 fn valid_agent_thread(thread: &str) -> bool {
@@ -159,12 +189,17 @@ impl ToolPipelineThreads {
 
     /// D3 and the shared total, checked before any activation.
     pub(crate) fn check_room(&self) -> Result<(), GraphError> {
-        let admitted = self.len();
-        if admitted >= MAX_TOOL_PIPELINE_THREADS_PER_MEMBER
-            || self.static_threads.saturating_add(admitted)
-                >= super::fanout_budget::MAX_CHILD_THREADS
-        {
+        self.check_room_for(self.len())
+    }
+
+    /// The bounds for a member that already holds `admitted` nested threads:
+    /// the durable count at admission (review 2), never only this process's.
+    pub(crate) fn check_room_for(&self, admitted: usize) -> Result<(), GraphError> {
+        if admitted >= MAX_TOOL_PIPELINE_THREADS_PER_MEMBER {
             return Err(limit_error());
+        }
+        if self.static_threads.saturating_add(admitted) >= super::fanout_budget::MAX_CHILD_THREADS {
+            return Err(total_limit_error());
         }
         Ok(())
     }
@@ -207,12 +242,12 @@ struct DurableToolThreadReceipt {
     lineage: PipelineToolCallLineage,
 }
 
-/// Stamp the receipt that proves `event`'s nested thread.
-pub(crate) fn stamp_durable_tool_thread(
-    event: &mut Event,
+/// The receipt that proves a durable call's nested thread, serialized once
+/// per call and stamped on each of its events (review 6).
+pub(crate) fn durable_tool_receipt(
     agent_thread: &str,
     lineage: &PipelineToolCallLineage,
-) -> Result<(), GraphError> {
+) -> Result<String, GraphError> {
     let receipt = serde_json::to_string(&DurableToolThreadReceipt {
         schema: DURABLE_TOOL_THREAD_METADATA_KEY.to_owned(),
         agent_thread: agent_thread.to_owned(),
@@ -222,18 +257,27 @@ pub(crate) fn stamp_durable_tool_thread(
     if receipt.len() > MAX_RECEIPT_BYTES {
         return Err(scope_error("the nested thread receipt exceeds its bound"));
     }
+    Ok(receipt)
+}
+
+/// Stamp the receipt that proves `event`'s nested thread.
+#[cfg(test)]
+pub(crate) fn stamp_durable_tool_thread(
+    event: &mut Event,
+    agent_thread: &str,
+    lineage: &PipelineToolCallLineage,
+) -> Result<(), GraphError> {
+    let receipt = durable_tool_receipt(agent_thread, lineage)?;
     event
         .provider_metadata
         .insert(DURABLE_TOOL_THREAD_METADATA_KEY.to_owned(), receipt);
     Ok(())
 }
 
-/// The nested thread `event` names, re-derived from its receipt, and the
-/// receipt's Agent thread. `None` without a receipt; an error when the
-/// receipt is malformed or does not derive the thread the event names.
-pub(crate) fn proved_durable_tool_thread(
-    event: &Event,
-) -> Result<Option<(String, String)>, GraphError> {
+/// An event's receipt, parsed once, with the nested thread it derives (one
+/// SHA-256). `None` without a receipt; an error when it is malformed or does
+/// not derive the thread the event names.
+fn proved_receipt(event: &Event) -> Result<Option<(String, DurableToolThreadReceipt)>, GraphError> {
     let Some(raw) = event
         .provider_metadata
         .get(DURABLE_TOOL_THREAD_METADATA_KEY)
@@ -256,31 +300,22 @@ pub(crate) fn proved_durable_tool_thread(
     {
         return Err(scope_error("the nested thread does not match its receipt"));
     }
-    Ok(Some((thread, receipt.agent_thread)))
+    Ok(Some((thread, receipt)))
 }
 
-/// The call lineage a receipt carries, for the projector's call match.
-pub(crate) fn durable_tool_thread_lineage(
+/// The nested thread `event` names, re-derived from its receipt, and the
+/// receipt's Agent thread. `None` without a receipt; an error when the
+/// receipt is malformed or does not derive the thread the event names.
+pub(crate) fn proved_durable_tool_thread(
     event: &Event,
-) -> Result<Option<PipelineToolCallLineage>, GraphError> {
-    let Some(raw) = event
-        .provider_metadata
-        .get(DURABLE_TOOL_THREAD_METADATA_KEY)
-    else {
-        return Ok(None);
-    };
-    if raw.len() > MAX_RECEIPT_BYTES {
-        return Err(scope_error("the nested thread receipt exceeds its bound"));
-    }
-    serde_json::from_str::<DurableToolThreadReceipt>(raw)
-        .map(|receipt| Some(receipt.lineage))
-        .map_err(|_| scope_error("the nested thread receipt is invalid"))
+) -> Result<Option<(String, String)>, GraphError> {
+    Ok(proved_receipt(event)?.map(|(thread, receipt)| (thread, receipt.agent_thread)))
 }
 
 /// The browser projector's admission of a durable nested pipeline's event:
 /// the receipt's lineage is exactly the projected call (batch, ordinal, call
 /// id, name, arguments) and it re-derives the thread the event names. `None`
-/// without a receipt.
+/// without a receipt. One parse and one derivation (review 6).
 pub(crate) fn durable_thread_for_projected_call(
     event: &Event,
     batch: &str,
@@ -289,12 +324,10 @@ pub(crate) fn durable_thread_for_projected_call(
     name: &str,
     args: &serde_json::Value,
 ) -> Result<Option<String>, GraphError> {
-    let Some(lineage) = durable_tool_thread_lineage(event)? else {
+    let Some((thread, receipt)) = proved_receipt(event)? else {
         return Ok(None);
     };
-    let Some((thread, _)) = proved_durable_tool_thread(event)? else {
-        return Ok(None);
-    };
+    let lineage = &receipt.lineage;
     if lineage.parent_call_id() != call
         || !event
             .provider_metadata

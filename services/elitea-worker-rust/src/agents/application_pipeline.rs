@@ -1135,24 +1135,37 @@ struct ChildIdentity<'call> {
     durable: Option<&'call DurableToolCall>,
 }
 
-/// What proves a durable nested pipeline's thread on each event it sends (C1).
+/// What proves a durable nested pipeline's thread on each event it sends
+/// (C1): its receipt, serialized once per call (review 6).
 struct DurableToolCall {
-    agent_thread: String,
-    lineage: PipelineToolCallLineage,
+    receipt: String,
 }
 
 /// The upstream code of a transient failure to admit or read a durable nested
 /// thread: a retryable dependency failure, never a refusal (C5).
 pub(crate) const TOOL_THREAD_UNAVAILABLE_CODE: &str = "pipeline.tool_thread_unavailable";
 
+/// FU-291 review 3: a pipeline call inside a fan-out member whose family lends
+/// no nested thread admission: refused typed, never run in memory.
+pub(crate) const TOOL_THREAD_UNBOUND_CODE: &str = "pipeline.tool_thread_unbound";
+
 /// In-process attempts at a transient admission or read before answering
 /// the Agent a retryable failure.
 const DURABLE_DEPENDENCY_ATTEMPTS: u32 = 3;
 
+/// Retried only where the store itself says a retry can succeed
+/// (`PostgresCheckpointError::retryable`, review 1).
 fn is_transient_checkpoint_error(error: &adk_rust::graph::GraphError) -> bool {
-    matches!(error, adk_rust::graph::GraphError::CheckpointError(message)
-        if message.starts_with("checkpoint.storage_unavailable")
-            || message.starts_with("checkpoint.storage_failure"))
+    crate::state::checkpoint_error_code(error).is_some_and(|(_, retryable)| retryable)
+}
+
+fn tool_thread_unbound() -> adk_rust::AdkError {
+    adk_rust::AdkError::new(
+        adk_rust::ErrorComponent::Agent,
+        adk_rust::ErrorCategory::Unsupported,
+        TOOL_THREAD_UNBOUND_CODE,
+        "the saved pipeline call has no durable thread admission in this member",
+    )
 }
 
 fn tool_thread_unavailable() -> adk_rust::AdkError {
@@ -1165,16 +1178,33 @@ fn tool_thread_unavailable() -> adk_rust::AdkError {
 }
 
 /// D3: the member's nested pipeline bound, answered to the model as a tool
-/// error naming the limit.
-fn tool_thread_limit_result(tool_name: &str) -> Value {
-    let message = format!(
-        "The pipeline '{tool_name}' was not run: a Map item or Parallel branch runs at most {} saved pipeline calls.",
-        super::graph::tool_pipeline_threads::MAX_TOOL_PIPELINE_THREADS_PER_MEMBER
-    );
+/// error naming the limit it reached (review 5: the per-member calls or the
+/// member's shared thread total).
+fn tool_thread_limit_result(tool_name: &str, error: &adk_rust::graph::GraphError) -> Value {
+    use super::graph::tool_pipeline_threads::{
+        MAX_TOOL_PIPELINE_THREADS_PER_MEMBER, TOOL_PIPELINE_LIMIT_CODE,
+        TOOL_PIPELINE_TOTAL_LIMIT_CODE, is_tool_pipeline_total_limit,
+    };
+    let (code, message) = if is_tool_pipeline_total_limit(error) {
+        (
+            TOOL_PIPELINE_TOTAL_LIMIT_CODE,
+            format!(
+                "The pipeline '{tool_name}' was not run: a Map item or Parallel branch holds at most {} checkpoint threads in all, its own included.",
+                super::graph::fanout_budget::MAX_CHILD_THREADS
+            ),
+        )
+    } else {
+        (
+            TOOL_PIPELINE_LIMIT_CODE,
+            format!(
+                "The pipeline '{tool_name}' was not run: a Map item or Parallel branch runs at most {MAX_TOOL_PIPELINE_THREADS_PER_MEMBER} saved pipeline calls."
+            ),
+        )
+    };
     json!({
         "error": message,
         "failure": {
-            "code": super::graph::tool_pipeline_threads::TOOL_PIPELINE_LIMIT_CODE,
+            "code": code,
             "message": message,
             "recoverable": true,
             "retryable": false,
@@ -1433,6 +1463,12 @@ impl ApplicationPipelineTool {
             let read = async {
                 let admitted = member
                     .admission
+                    .as_ref()
+                    .ok_or_else(|| {
+                        adk_rust::graph::GraphError::CheckpointError(
+                            "pipeline.tool_thread_invalid: no admission".to_owned(),
+                        )
+                    })?
                     .admit_tool_pipeline(&member.agent_thread, lineage)
                     .await?;
                 let latest = admitted.writer.load(&admitted.thread_id).await?;
@@ -1449,7 +1485,7 @@ impl ApplicationPipelineTool {
                         function_call_id = %ctx.function_call_id(),
                         "a fan-out member reached its nested pipeline call bound"
                     );
-                    return Ok(Err(tool_thread_limit_result(&self.name)));
+                    return Ok(Err(tool_thread_limit_result(&self.name, &error)));
                 }
                 Err(error)
                     if is_transient_checkpoint_error(&error)
@@ -1544,8 +1580,11 @@ impl ApplicationPipelineTool {
         ));
         let branch = child_context.branch().to_owned();
         let durable = DurableToolCall {
-            agent_thread: admitted.agent_thread.clone(),
-            lineage,
+            receipt: super::graph::tool_pipeline_threads::durable_tool_receipt(
+                &admitted.agent_thread,
+                &lineage,
+            )
+            .map_err(|_| child_execution_error())?,
         };
         self.drain_child(
             ctx.as_ref(),
@@ -1570,6 +1609,16 @@ impl ApplicationPipelineTool {
         arguments: Value,
     ) -> adk_rust::Result<Value> {
         if let Some(member) = super::application_tools::current_member_tool_pipelines() {
+            // Review 3: inside a fan-out member a pipeline call is durable or
+            // refused; it never falls back to the in-memory run.
+            if member.admission.is_none() {
+                tracing::warn!(
+                    event = "nested_pipeline_thread_unbound",
+                    function_call_id = %ctx.function_call_id(),
+                    "a fan-out member's pipeline call has no nested thread admission"
+                );
+                return Err(tool_thread_unbound());
+            }
             return self.invoke_durable(ctx, arguments, member).await;
         }
         let task = application_task(&arguments)
@@ -2150,12 +2199,10 @@ impl ApplicationPipelineTool {
         if let Some(durable) = durable {
             // C1: every event names its nested thread with the receipt the
             // member's projector re-derives it from.
-            super::graph::tool_pipeline_threads::stamp_durable_tool_thread(
-                &mut event,
-                &durable.agent_thread,
-                &durable.lineage,
-            )
-            .map_err(|_| child_execution_error())?;
+            event.provider_metadata.insert(
+                super::graph::tool_pipeline_threads::DURABLE_TOOL_THREAD_METADATA_KEY.to_owned(),
+                durable.receipt.clone(),
+            );
         } else if thread_id != self.checkpoint_thread_id(ctx.function_call_id()) {
             let lineage = self
                 .resume
@@ -2257,26 +2304,13 @@ fn durable_visit(thread: &str) -> String {
     visit
 }
 
-/// The stable code prefix of a graph error, for an operator log line.
+/// The stable code of a graph error, for an operator log line: the store's
+/// canonical code (review 7), the nested thread's own, or a generic one.
 fn error_code(error: &adk_rust::graph::GraphError) -> &'static str {
-    match error {
-        adk_rust::graph::GraphError::CheckpointError(message)
-            if message.starts_with("checkpoint.writer_not_current") =>
-        {
-            "checkpoint.writer_not_current"
-        }
-        adk_rust::graph::GraphError::CheckpointError(message)
-            if message.starts_with("checkpoint.invalid_scope") =>
-        {
-            "checkpoint.invalid_scope"
-        }
-        adk_rust::graph::GraphError::CheckpointError(message)
-            if message.starts_with("pipeline.tool_thread_invalid") =>
-        {
-            "pipeline.tool_thread_invalid"
-        }
-        _ => "checkpoint.failed",
-    }
+    crate::state::checkpoint_error_code(error)
+        .map(|(code, _)| code)
+        .or_else(|| super::graph::tool_pipeline_threads::tool_pipeline_error_code(error))
+        .unwrap_or("checkpoint.failed")
 }
 
 /// The tool result a refused pause returns.

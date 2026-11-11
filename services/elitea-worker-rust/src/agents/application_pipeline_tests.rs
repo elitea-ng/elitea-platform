@@ -1767,18 +1767,30 @@ mod durable_member_calls {
         store: Arc<Store>,
         calls: AtomicUsize,
         transient: AtomicUsize,
+        /// What the first `transient` admissions fail with.
+        failure: &'static str,
         limit: bool,
     }
 
     fn admission(transient: usize, limit: bool) -> Arc<Admission> {
+        admission_on(2, transient, "checkpoint.storage_unavailable: held", limit)
+    }
+
+    fn admission_on(
+        static_threads: usize,
+        transient: usize,
+        failure: &'static str,
+        limit: bool,
+    ) -> Arc<Admission> {
         Arc::new(Admission {
-            threads: Arc::new(ToolPipelineThreads::new(2)),
+            threads: Arc::new(ToolPipelineThreads::new(static_threads)),
             store: Arc::new(Store {
                 inner: MemoryCheckpointer::new(),
                 saves: AtomicUsize::new(0),
             }),
             calls: AtomicUsize::new(0),
             transient: AtomicUsize::new(transient),
+            failure,
             limit,
         })
     }
@@ -1801,9 +1813,7 @@ mod durable_member_calls {
                 })
                 .is_ok()
             {
-                return Err(GraphError::CheckpointError(
-                    "checkpoint.storage_unavailable: held".to_owned(),
-                ));
+                return Err(GraphError::CheckpointError(self.failure.to_owned()));
             }
             if self.limit {
                 return Err(GraphError::CheckpointError(format!(
@@ -1827,7 +1837,7 @@ mod durable_member_calls {
     async fn call(harness: &Harness, admission: &Arc<Admission>) -> adk_rust::Result<Value> {
         with_member_tool_pipelines(
             MemberToolPipelines {
-                admission: admission.clone(),
+                admission: Some(admission.clone()),
                 agent_thread: AGENT_THREAD.to_owned(),
             },
             harness.tool.execute(context(), json!({"task": "ship it"})),
@@ -1985,6 +1995,90 @@ mod durable_member_calls {
         assert_eq!(unavailable.store.saves.load(Ordering::SeqCst), 0);
     }
 
+    /// Review 1: a permanent store fault (`checkpoint.storage_failure`, not
+    /// retryable by the store's own classification) is refused at once:
+    /// never retried, never answered as a retryable dependency failure.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_permanent_storage_failure_is_refused_and_never_retried() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let broken = admission_on(2, 3, "checkpoint.storage_failure: broken", false);
+        let result = call(&harness, &broken).await;
+        assert!(result.is_err(), "refused, not answered: {result:?}");
+        assert_eq!(broken.calls.load(Ordering::SeqCst), 1, "never retried");
+        assert_eq!(broken.store.saves.load(Ordering::SeqCst), 0);
+        assert!(persisted(&mut harness.events).is_empty());
+    }
+
+    /// Review 3: a pipeline call inside a fan-out member whose family lends no
+    /// admission is refused typed; it never runs on the in-memory path.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_member_call_without_an_admission_refuses_typed_and_runs_nothing() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let result = with_member_tool_pipelines(
+            MemberToolPipelines {
+                admission: None,
+                agent_thread: AGENT_THREAD.to_owned(),
+            },
+            harness.tool.execute(context(), json!({"task": "ship it"})),
+        )
+        .await;
+        // The Agent reads it as a typed tool error, never a result.
+        let report = result.expect("a typed tool error");
+        assert_eq!(
+            report["failure"]["code"], "UNSUPPORTED_CAPABILITY",
+            "{report}"
+        );
+        assert_eq!(report["failure"]["retryable"], false);
+        assert!(report.get("response").is_none(), "{report}");
+        assert_eq!(
+            crate::protocol::output::model_failure(Some(
+                crate::agents::application_pipeline::TOOL_THREAD_UNBOUND_CODE
+            )),
+            crate::protocol::output::RuntimeFailureKind::UnsupportedCapability
+        );
+        assert!(persisted(&mut harness.events).is_empty(), "nothing ran");
+    }
+
+    /// Review 5: the member's shared thread total has its own typed tool
+    /// error: 129 threads admitted, the 130th refused with the total's code.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_shared_thread_total_reads_its_own_typed_tool_error() {
+        let harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let at_limit = admission_on(128, 0, "", false);
+        assert_eq!(
+            call(&harness, &at_limit).await.unwrap(),
+            json!({"response": "HANDLED ship it"}),
+            "the 129th thread is admitted"
+        );
+        let past = admission_on(129, 0, "", false);
+        let result = call(&harness, &past).await.unwrap();
+        assert_eq!(
+            result["failure"]["code"],
+            crate::agents::graph::tool_pipeline_threads::TOOL_PIPELINE_TOTAL_LIMIT_CODE
+        );
+        let message = result["failure"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("129") && !message.contains("8 saved"),
+            "{message}"
+        );
+        assert_eq!(past.store.saves.load(Ordering::SeqCst), 0);
+    }
+
     const LOG_CHILD_ENV: &str = "ELITEA_FU291_DURABLE_LOG_CHILD";
     const TASK_MARKER: &str = "secret_task_marker_fu291";
 
@@ -2081,7 +2175,7 @@ mod durable_member_calls {
             let execute = |admission: Arc<dyn ToolPipelineAdmission>| {
                 with_member_tool_pipelines(
                     MemberToolPipelines {
-                        admission,
+                        admission: Some(admission),
                         agent_thread: AGENT_THREAD.to_owned(),
                     },
                     harness

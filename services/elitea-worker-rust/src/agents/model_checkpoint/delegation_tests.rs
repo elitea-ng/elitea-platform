@@ -752,3 +752,88 @@ async fn a_replayed_durable_batch_keeps_its_original_event_and_call_lineage() {
         "the replayed call keeps its lineage"
     );
 }
+
+/// Review 4: a model batch whose durable replay key is malformed.
+struct MalformedBatchModel {
+    batch: String,
+}
+
+#[async_trait]
+impl Llm for MalformedBatchModel {
+    fn name(&self) -> &'static str {
+        "fixture"
+    }
+    async fn generate_content(
+        &self,
+        _request: LlmRequest,
+        _: bool,
+    ) -> adk_rust::Result<LlmResponseStream> {
+        let mut response = LlmResponse::new(calls());
+        response.provider_metadata = Some(
+            json!({crate::agents::application_tools::DURABLE_REPLAY_BATCH_KEY: self.batch.clone()}),
+        );
+        Ok(Box::pin(adk_rust::futures::stream::once(async {
+            Ok(response)
+        })))
+    }
+}
+
+/// Review 4 (C2): a durable pipeline batch whose replay key is malformed
+/// (empty, or over 512 bytes) is refused before its tool runs; it is never
+/// recorded under a fresh batch id, which would name another nested thread.
+#[tokio::test]
+async fn a_malformed_durable_batch_key_refuses_and_runs_nothing() {
+    for batch in [String::new(), "b".repeat(513)] {
+        let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+        sessions
+            .create(CreateRequest {
+                app_name: "delegation-test".into(),
+                user_id: "user".into(),
+                session_id: Some("parent".into()),
+                state: HashMap::new(),
+            })
+            .await
+            .unwrap();
+        let probe = blocking_probe();
+        probe.block.store(false, Ordering::SeqCst);
+        let writer = ModelCheckpointWriter::new(sessions.clone(), "execution".into(), 1, [1; 32])
+            .with_durable_pipeline_tools(["saved_agent"].into_iter());
+        let model = writer.delegation_model(Arc::new(MalformedBatchModel { batch }));
+        let agent = writer
+            .bind(
+                LlmAgentBuilder::new("parent")
+                    .model(model)
+                    .tool(probe.clone()),
+            )
+            .build()
+            .unwrap();
+        let runner = adk_rust::runner::Runner::builder()
+            .app_name("delegation-test")
+            .agent(Arc::new(agent))
+            .session_service(sessions.clone())
+            .build()
+            .unwrap();
+        let mut events = runner
+            .run(
+                "user".try_into().unwrap(),
+                "parent".try_into().unwrap(),
+                Content::new("user").with_text("Delegate the inspection"),
+            )
+            .await
+            .unwrap();
+        let mut failed = false;
+        while let Some(event) = events.next().await {
+            failed |= event.is_err();
+        }
+        assert!(failed, "the batch is refused");
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 0, "its tool never ran");
+        let stored = session(sessions.as_ref()).await;
+        assert!(
+            stored
+                .state()
+                .get(CHECKPOINT_KEY)
+                .is_none_or(|record| record["phase"] != "durable_delegation_pending"),
+            "no durable record names a fresh batch"
+        );
+    }
+}

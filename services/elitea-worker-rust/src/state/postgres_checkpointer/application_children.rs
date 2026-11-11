@@ -438,6 +438,48 @@ impl crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory for Applic
     }
 }
 
+impl PostgresCheckpointer {
+    /// FU-291 review 2: how many nested pipeline threads have a writer row
+    /// under `member` (any claim of this run's scope), and whether `thread` is
+    /// one of them. One read.
+    async fn durable_tool_threads(
+        &self,
+        member: &str,
+        thread: &str,
+    ) -> Result<(usize, bool), PostgresCheckpointError> {
+        let authority = &self.scope.authority;
+        let (count, exists) = sqlx::query_as::<_, (i64, bool)>(
+            r"
+SELECT count(*), coalesce(bool_or(thread_id = $8), false)
+FROM elitea_runtime.agent_graph_checkpoint_writers
+WHERE tenant_id = $1
+  AND resource_project_id = $2
+  AND projection_project_id = $3
+  AND capability_id = $4
+  AND checkpoint_family = $5
+  AND definition_digest = $6
+  AND starts_with(thread_id, $7)
+  AND strpos(thread_id, '/pt1:') > 0
+            ",
+        )
+        .bind(&authority.tenant_id)
+        .bind(authority.resource_project_id)
+        .bind(authority.projection_project_id)
+        .bind(authority.capability_id)
+        .bind(super::CHECKPOINT_FAMILY)
+        .bind(authority.definition_digest.as_slice())
+        .bind(format!("{member}/"))
+        .bind(thread)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(super::storage_error)?;
+        super::note_round_trip();
+        let count =
+            usize::try_from(count).map_err(|_| PostgresCheckpointError::CorruptStoredState)?;
+        Ok((count, exists))
+    }
+}
+
 #[async_trait]
 impl ToolPipelineAdmission for ApplicationCheckpointers {
     fn tool_threads(&self) -> Arc<ToolPipelineThreads> {
@@ -472,7 +514,15 @@ impl ToolPipelineAdmission for ApplicationCheckpointers {
         if let Some(admitted) = self.tool_threads.admitted(&thread_id, agent_thread) {
             return Ok(admitted);
         }
-        self.tool_threads.check_room()?;
+        // Review 2: the bounds count the member's durable nested writers, so
+        // a call refused before a crash or a takeover is refused after it; a
+        // thread that already has its writer re-admits.
+        let (durable, exists) = agent
+            .durable_tool_threads(&self.root_thread, &thread_id)
+            .await?;
+        if !exists {
+            self.tool_threads.check_room_for(durable)?;
+        }
         let writer = agent.activate_fanout_child(thread_id.clone()).await?;
         let admitted = AdmittedToolPipeline {
             thread_id,

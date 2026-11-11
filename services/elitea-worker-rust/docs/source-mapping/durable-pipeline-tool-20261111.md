@@ -252,6 +252,56 @@ This is correct (events never cross calls), but a 4-wide Map runs its nested pip
 - T1e covers the "started" journal state; the "committed" and "undispatched" states are the FU-248 journal's own
   tests at the root and at depth (`child_direct_scenario`), not repeated under a member.
 
+## Code review (high, full diff against main), 2026-11-11
+
+Each fix was written test-first; for 1–5 the test was seen failing on the code before the fix.
+
+1. **Retry classification.** `checkpoint.storage_failure` was retried 3× and answered as a retryable
+   `DEPENDENCY_UNAVAILABLE`, but the store says only `StorageUnavailable` is retryable. There is now one source:
+   `PostgresCheckpointError::CODES` and `checkpoint_error_code` (`W/state/postgres_checkpointer.rs:174,189`).
+   `is_transient_checkpoint_error` (`W/agents/application_pipeline.rs:1158`) reads that classification.
+   - Tests: `a_permanent_storage_failure_is_refused_and_never_retried`. Before the fix it was answered retryable
+     after 3 attempts; now it is refused after 1.
+   - `the_code_table_is_each_errors_code_and_retryability` pins the table against each variant's `code()` and
+     `retryable()`.
+2. **A durable D3 bound** (one more read per admission; the budget re-measured at p50 2.6 ms, p99 4.5 ms). The 8-per-member and 129-total bounds counted only the in-memory registry, which a
+   takeover rebuilds empty. Admission now counts the member's durable nested writer rows (one read,
+   `durable_tool_threads`, `W/state/postgres_checkpointer/application_children.rs:445`). It checks them against the
+   bounds before activating (`:524`); a thread that already has its writer re-admits.
+   - Test: `a_refused_ninth_call_stays_refused_after_a_takeover` (real PG, two OS processes: claim 1, then claim 2
+     in a fresh process). Before the fix, the second process admitted the 9th call.
+   - After the fix it is refused again, an admitted call re-admits, and the rows stay 8.
+   - The per-call budget test now takes a new member every 8 calls.
+3. **No in-memory fallback in a member.** Every fan-out member's Agent call now carries `MemberToolPipelines`, with
+   `admission: None` when its family lends none (`W/agents/pipeline/scoped_runtime.rs:350`). A pipeline call there is
+   refused typed (`pipeline.tool_thread_unbound` → `UNSUPPORTED_CAPABILITY`, a tool error to the model,
+   `application_pipeline.rs:1614`); it never runs in memory.
+   - Test: `a_member_call_without_an_admission_refuses_typed_and_runs_nothing`. Before the fix the pipeline ran in
+     memory ("HANDLED").
+4. **No fresh batch id.** A durable batch whose replay key is malformed now refuses (`agent_recovery.invalid_checkpoint`)
+   instead of taking the event's own id (`original_batch_id`, `W/agents/model_checkpoint/delegation.rs:296`). A
+   non-durable batch needs no id and is unchanged.
+   - Test: `a_malformed_durable_batch_key_refuses_and_runs_nothing` (an empty key and a 513-byte key). Before the
+     fix the tool ran.
+5. **The shared total's own answer.** `check_room_for` (`W/agents/graph/tool_pipeline_threads.rs:197`) refuses the
+   129 total with `pipeline.tool_thread_total_limit`. Its text names the 129 checkpoint threads.
+   - Tests: `the_shared_thread_total_reads_its_own_typed_tool_error` (the 129th thread admitted, the 130th refused
+     with the total's code and text).
+   - `each_bound_refuses_with_its_own_code`. Before the fix both were the per-member code and text.
+6. **Perf: the receipt is built and parsed once.** It is serialized once per call (`durable_tool_receipt`,
+   `tool_pipeline_threads.rs:247`) and inserted as is on every event. Each projector parses it once and derives once
+   (`proved_receipt`, `:280`): the browser projector's check went from 2 parses and 2 SHA-256 derivations to 1 and
+   1, and the member projector does 1 and 1. Covered by the existing receipt, projector and member-run tests.
+7. **One source for checkpoint codes** (with 1): the operator line's `error_code` reads `checkpoint_error_code`, then
+   the nested thread's own codes (`tool_pipeline_error_code`). There is no prefix matching of its own.
+8. **The dead refusal is deleted.** `FanoutChildRefusal::AgentCallsPipeline` is gone, with its arms and its
+   assembly mapping. Deleted test: `an_agent_member_calling_a_saved_pipeline_ends_as_its_registered_text`
+   (`execution/native_agent_lifecycle.rs`), which only exercised that variant. The wire kind
+   `RuntimeFailureKind::FanoutAgentCallsPipeline` and its text stay for spooled frames, as the older-Main fallback.
+9. **One batch-id check.** `valid_batch_event_id` (`W/agents/application_tools.rs:120`) is shared by the record, the
+   replay key and the lineage. `model_scope.rs:468` reads the member context once, not once per tool name.
+10. **Mapping.** FU-322 appears once: the ordinary (non-graph) root's pipeline tool.
+
 ## Real-browser evidence
 
 Pending (orchestrating session).
@@ -259,7 +309,6 @@ Pending (orchestrating session).
 ## Follow-ups
 
 - **FU-319**: Code in a pipeline tool (Main needs the tool-lineage edge).
-- **FU-322**: as registered by the orchestrator for this slice.
 - **FU-323**: a root saved-Agent node as a recovery frontier (the root pipeline tool stays F until then).
 - **FU-329**: the stored-response-before-batch window (polish, after FU-323).
 - **FU-330**: raising or reshaping the 1024-call lineage cap (polish); call 1025 is typed here.

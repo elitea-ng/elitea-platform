@@ -3736,9 +3736,6 @@ pub(crate) enum FanoutChildRefusal {
     /// A saved child pipeline contains a Parallel node, which binds its
     /// checkpoint authority to the started root only (FU-249).
     ContainsParallel,
-    /// The member's saved Agent calls a saved pipeline among its tools; that
-    /// pipeline's checkpoint threads are not admitted to the member (FU-291).
-    AgentCallsPipeline,
     /// A Code worker or branch of a Map or Parallel inside a saved child
     /// pipeline: its visit scope is the run root's only (R4, W3-2b; FU-317).
     CodeBelowRoot,
@@ -3764,7 +3761,6 @@ impl FanoutChildRefusal {
         match self {
             Self::Kind | Self::Router => "graph.fanout.child_kind_unsupported",
             Self::ContainsParallel => "graph.fanout.parallel_in_child_pipeline",
-            Self::AgentCallsPipeline => "graph.fanout.agent_calls_saved_pipeline",
             Self::CodeBelowRoot => elitea_faults::codes::GRAPH_FANOUT_CODE_BELOW_ROOT.as_str(),
             Self::AgentToolPipeline(_) => {
                 elitea_faults::codes::GRAPH_FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED.as_str()
@@ -3779,7 +3775,6 @@ impl FanoutChildRefusal {
             Self::Kind,
             Self::Router,
             Self::ContainsParallel,
-            Self::AgentCallsPipeline,
             Self::CodeBelowRoot,
             Self::AgentToolPipeline(ToolPipelineCause::Code),
         ]
@@ -3797,9 +3792,6 @@ impl std::fmt::Display for FanoutChildRefusal {
             }
             Self::ContainsParallel => {
                 "a saved pipeline with a Parallel node runs only as the started pipeline"
-            }
-            Self::AgentCallsPipeline => {
-                "an Agent that calls a saved pipeline cannot run as a Map item or Parallel branch yet"
             }
             Self::CodeBelowRoot => {
                 "a Code worker or branch runs only in a Map or Parallel of the started pipeline, not inside a saved child pipeline yet"
@@ -3852,7 +3844,6 @@ impl PipelineConfigurationError {
                 FanoutChildRefusal::Kind => "fanout_child_kind",
                 FanoutChildRefusal::Router => "fanout_child_router",
                 FanoutChildRefusal::ContainsParallel => "parallel_in_child_pipeline",
-                FanoutChildRefusal::AgentCallsPipeline => "fanout_agent_calls_pipeline",
                 FanoutChildRefusal::CodeBelowRoot => "fanout_code_below_root",
                 FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::Code) => {
                     "fanout_agent_tool_pipeline_code"

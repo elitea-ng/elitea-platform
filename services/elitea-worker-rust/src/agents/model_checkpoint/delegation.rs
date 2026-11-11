@@ -11,10 +11,7 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-/// A stored durable batch's original model event id (C2).
-pub(super) fn valid_batch_event_id(batch: &str) -> bool {
-    !batch.is_empty() && batch.len() <= 512 && !batch.chars().any(char::is_control)
-}
+use crate::agents::application_tools::valid_batch_event_id;
 
 pub(super) fn validate_calls(
     content: &Content,
@@ -212,10 +209,16 @@ impl ModelCheckpointWriter {
                             .llm_response
                             .content
                             .clone()
-                            .map(|content| (content, Some(original_batch_id(event))))
+                            .map(|content| (content, original_batch_id(event)))
                     })
                 else {
                     return Err(invalid_checkpoint());
+                };
+                // Only a durable batch is named by its id; its key must be sound.
+                let batch = match batch {
+                    Ok(batch) => Some(batch),
+                    Err(error) if self.holds_durable_call(&content) => return Err(error),
+                    Err(_) => None,
                 };
                 (content, batch)
             }
@@ -287,10 +290,12 @@ struct DelegationReplayModel {
     batch: Option<String>,
 }
 
-/// The id a batch event names its calls by: the original of a replayed batch.
-fn original_batch_id(event: &Event) -> String {
+/// The id a batch event names its calls by: the original of a replayed
+/// batch. A malformed replay key refuses (review 4): a fresh id would name
+/// another nested thread and run a finished pipeline again.
+fn original_batch_id(event: &Event) -> adk_rust::Result<String> {
     crate::agents::application_tools::original_application_batch_id(event)
-        .unwrap_or_else(|_| event.id.clone())
+        .map_err(|_| invalid_checkpoint())
 }
 
 #[async_trait]

@@ -57,6 +57,14 @@ fn lineage(call: &str) -> PipelineToolCallLineage {
 /// One Map-free Parallel member family whose owned node is `fetch_short`,
 /// under the claim of `root_family`.
 async fn member(root_family: &impl ParallelChildCheckpointerFactory) -> ParallelChildCheckpoint {
+    member_at(root_family, 4).await
+}
+
+/// The member of the Parallel occurrence at `step`: each step is another member.
+async fn member_at(
+    root_family: &impl ParallelChildCheckpointerFactory,
+    step: u64,
+) -> ParallelChildCheckpoint {
     let parallel = ParallelNodeDefinition::from_yaml(
         r"
 id: gather
@@ -77,7 +85,7 @@ transition: END
     let activation = ParallelActivation {
         root_thread_id: "thread-1".to_owned(),
         node_id: parallel.id().to_owned(),
-        step: 4,
+        step,
         config_digest: parallel.config_digest(),
         map: None,
     };
@@ -343,7 +351,7 @@ async fn the_per_call_nested_admission_cost_is_within_the_child_overhead_budget(
         .await
         .expect("activate the root family");
     let first = member(&family).await;
-    let agent = format!("{}/fetch_short", first.thread_id);
+    let mut agent = format!("{}/fetch_short", first.thread_id);
     let mut admission = first.tool_pipelines.clone().unwrap();
     let mut costs = Vec::new();
     let mut call = 0_usize;
@@ -351,9 +359,15 @@ async fn the_per_call_nested_admission_cost_is_within_the_child_overhead_budget(
     for sample in 0..=SAMPLES {
         let mut best = std::time::Duration::MAX;
         for _ in 0..REPEATS {
-            // A fresh member family object every 8 calls keeps each within D3.
+            // Another member every 8 calls keeps each within its durable D3 bound.
             if call > 0 && call.is_multiple_of(MAX_TOOL_PIPELINE_THREADS_PER_MEMBER) {
-                admission = member(&family).await.tool_pipelines.unwrap();
+                let next = member_at(
+                    &family,
+                    4 + u64::try_from(call / MAX_TOOL_PIPELINE_THREADS_PER_MEMBER).expect("step"),
+                )
+                .await;
+                agent = format!("{}/fetch_short", next.thread_id);
+                admission = next.tool_pipelines.unwrap();
             }
             let lineage = lineage(&format!("call-{call}"));
             call += 1;
@@ -457,4 +471,99 @@ async fn a_nested_thread_never_collides_with_the_members_own_graph_paths() {
     };
     assert!(refused.to_string().contains("collides"), "{refused}");
     assert_eq!(writers(&database.pool, "%/pt1:%").await, rows, "no row");
+}
+
+const BOUND_CHILD: &str =
+    "state::postgres_checkpointer_tests::tool_pipeline_admission::the_durable_bound_child";
+const BOUND_DATABASE_ENV: &str = "ELITEA_FU291_BOUND_DATABASE";
+const BOUND_PHASE_ENV: &str = "ELITEA_FU291_BOUND_PHASE";
+
+/// One process of [`a_refused_ninth_call_stays_refused_after_a_takeover`]:
+/// `first` (claim 1) admits 8 nested calls and is refused the 9th; `second`
+/// (claim 2, a fresh process: an empty in-memory registry) takes the run.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn the_durable_bound_child() {
+    let Ok(name) = std::env::var(BOUND_DATABASE_ENV) else {
+        return;
+    };
+    let url = crate::test_pg::database_url_var(TEST_DATABASE_URL).expect("database URL");
+    let pool = crate::test_pg::pool_options()
+        .max_connections(4)
+        .connect_with(
+            crate::test_pg::connect_options(&url)
+                .expect("parse database URL")
+                .database(&name),
+        )
+        .await
+        .expect("connect the isolated database");
+    let first = std::env::var(BOUND_PHASE_ENV).expect("phase") == "first";
+    let family = root(pool.clone(), if first { 1 } else { 2 })
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member = member(&family).await;
+    let admission = member.tool_pipelines.clone().unwrap();
+    let agent = format!("{}/fetch_short", member.thread_id);
+    if first {
+        for call in 0..MAX_TOOL_PIPELINE_THREADS_PER_MEMBER {
+            admission
+                .admit_tool_pipeline(&agent, &lineage(&format!("call-{call}")))
+                .await
+                .expect("admit within the bound");
+        }
+    } else {
+        // An admitted call re-derives and re-admits after the takeover.
+        admission
+            .admit_tool_pipeline(&agent, &lineage("call-3"))
+            .await
+            .expect("an admitted call re-admits");
+    }
+    let Err(refused) = admission
+        .admit_tool_pipeline(&agent, &lineage("call-8"))
+        .await
+    else {
+        panic!("the 9th call was admitted (first: {first})");
+    };
+    assert!(is_tool_pipeline_limit(&refused), "{refused}");
+}
+
+/// Review 2 (D3 durable): a member refused its 9th nested call keeps that
+/// answer after a process replacement and a takeover: the bound counts the
+/// member's durable nested writers, not the replacement's empty registry, so
+/// the same call is refused again and no row is added. An admitted call
+/// re-admits.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_refused_ninth_call_stays_refused_after_a_takeover() {
+    let database = database().await;
+    let run = |phase: &str| {
+        std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                BOUND_CHILD,
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(BOUND_DATABASE_ENV, &database.database_name)
+            .env(BOUND_PHASE_ENV, phase)
+            .output()
+            .expect("run the child process")
+    };
+    for phase in ["first", "second"] {
+        let output = run(phase);
+        assert!(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "{phase}: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            writers(&database.pool, "%/pt1:%").await,
+            8,
+            "{phase}: the member holds exactly its 8 nested writers"
+        );
+    }
 }
