@@ -5,6 +5,7 @@
 //! global identity (not the repository's), and an unsafe repository is
 //! refused.
 
+#![cfg(unix)]
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};

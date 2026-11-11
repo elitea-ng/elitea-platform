@@ -301,6 +301,20 @@ impl<R: ContextRoutes> ContentFake for Routes<R> {
             .await?;
         reply(pb::ProposeAgentResponseV1 { response_json })
     }
+    async fn propose_dismissal(
+        &self,
+        request: Request<pb::ProposeDismissalRequestV1>,
+    ) -> Result<Response<pb::ProposeDismissalResponseV1>, Status> {
+        let response_json = self
+            .json(
+                request,
+                "agent-workforce/propose-dismissal".to_owned(),
+                |message| message.scope.clone(),
+                |message| (message.request_json, Vec::new()),
+            )
+            .await?;
+        reply(pb::ProposeDismissalResponseV1 { response_json })
+    }
     async fn forget_agent_memory(
         &self,
         request: Request<pb::ForgetAgentMemoryRequestV1>,
@@ -456,6 +470,7 @@ content_fake! {
     forget_agent_memory(ForgetAgentMemoryRequestV1) -> ForgetAgentMemoryResponseV1;
     hand_floor(HandFloorRequestV1) -> HandFloorResponseV1;
     propose_agent(ProposeAgentRequestV1) -> ProposeAgentResponseV1;
+    propose_dismissal(ProposeDismissalRequestV1) -> ProposeDismissalResponseV1;
     list_artifacts(ListArtifactsRequestV1) -> ListArtifactsResponseV1;
     read_artifact(ReadArtifactRequestV1) -> ReadArtifactResponseV1;
     write_artifact(WriteArtifactRequestV1) -> WriteArtifactResponseV1;

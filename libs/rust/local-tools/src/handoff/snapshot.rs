@@ -154,7 +154,7 @@ pub fn open_source(
     deny: &Arc<DenyList>,
     global_config: Option<&Path>,
 ) -> ToolResult<Source> {
-    let root = std::fs::canonicalize(root)
+    let root = crate::sys::canonicalize(root)
         .map_err(|error| ToolError::io("cannot open the folder", &error))?;
     let found = Repo::discover(&root, sandbox, deny.clone())?;
     let (repo, is_shadow) = if let Some(repo) = found {

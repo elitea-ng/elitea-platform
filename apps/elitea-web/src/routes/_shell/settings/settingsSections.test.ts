@@ -11,6 +11,7 @@ const ALL_OPEN = {
   isPersonalProject: false,
   analyticsVisible: true,
   usageVisible: true,
+  workforceManager: true,
 };
 
 function projectTabIds(gates: Parameters<typeof buildSettingsSections>[0]): string[] {
@@ -32,6 +33,8 @@ describe('buildSettingsSections — PROJECT', () => {
     // (the outbound webhook registry is a capability this platform added,
     // see webhook/handler.go's file header) — it is added by #876 right
     // after Secrets, the other project-scoped credential-shaped tab.
+    // `agent-workforce` (issue 1617, the automatic hiring and dismissal
+    // policy) is new too and follows Webhooks.
     expect(
       projectTabIds({ ...ALL_OPEN, isPersonalProject: true }),
     ).toEqual([
@@ -40,6 +43,7 @@ describe('buildSettingsSections — PROJECT', () => {
       'project-params',
       'secrets',
       'webhooks',
+      'agent-workforce',
       'analytics',
       'usage',
     ]);
@@ -68,6 +72,16 @@ describe('buildSettingsSections — PROJECT', () => {
     // A one-person project has no membership to manage.
     expect(projectTabIds({ ...ALL_OPEN, isPersonalProject: true })).not.toContain('users');
     expect(projectTabIds(ALL_OPEN)).toContain('users');
+  });
+
+  it('shows Agent workforce to an agent manager only (issue 1617)', () => {
+    // The policy and its automatic actions are refused to anyone without
+    // agents.workforce.manage; a plain member must not see a row that
+    // opens a 403.
+    expect(projectTabIds(ALL_OPEN)).toContain('agent-workforce');
+    expect(projectTabIds({ ...ALL_OPEN, workforceManager: false })).not.toContain('agent-workforce');
+    expect(isTabHidden('agent-workforce', { ...ALL_OPEN, workforceManager: false })).toBe(true);
+    expect(isTabHidden('agent-workforce', ALL_OPEN)).toBe(false);
   });
 
   it('keeps the two platform-flag gates that already worked', () => {

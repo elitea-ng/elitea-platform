@@ -3,6 +3,7 @@
 //! `ToolContext`, approvals go through the `ApprovalChannel`, and a turn's
 //! first change takes a checkpoint the person can restore.
 
+#![cfg(unix)]
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 

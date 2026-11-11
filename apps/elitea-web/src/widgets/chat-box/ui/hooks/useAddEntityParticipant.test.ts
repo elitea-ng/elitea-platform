@@ -136,7 +136,7 @@ describe('applyParticipantSelection', () => {
   it('creates the participant with the version_id the detail response marks as current', async () => {
     const { runtime, added } = selectionRuntime();
 
-    await applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime);
+    await applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime, 'start');
 
     expect(added).toHaveLength(1);
     expect(added[0]?.conversationId).toBe('55');
@@ -148,7 +148,7 @@ describe('applyParticipantSelection', () => {
       fetchDetails: () => Promise.resolve({ ...AGENT_DETAIL_ROW, agent_type: 'pipeline' }),
     });
 
-    await applyParticipantSelection({ ...AGENT_LIST_ROW, participantType: 'pipeline', agent_type: 'pipeline' }, undefined, runtime);
+    await applyParticipantSelection({ ...AGENT_LIST_ROW, participantType: 'pipeline', agent_type: 'pipeline' }, undefined, runtime, 'start');
 
     expect(added[0]?.participants[0]?.entity_settings['version_id']).toBe('34');
   });
@@ -160,7 +160,7 @@ describe('applyParticipantSelection', () => {
     // no version still gets attached, just without a `version_id`.
     const { runtime, added } = selectionRuntime({ fetchDetails: () => Promise.resolve({}) });
 
-    await applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime);
+    await applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime, 'start');
 
     expect(added).toHaveLength(1);
     expect(added[0]?.participants[0]?.entity_meta['id']).toBe('12');
@@ -170,7 +170,7 @@ describe('applyParticipantSelection', () => {
   it('does not look up a version for a toolkit, which has none', async () => {
     const { runtime, added, order } = selectionRuntime();
 
-    await applyParticipantSelection({ id: '20', project_id: '2', participantType: 'toolkit', type: 'openapi' }, undefined, runtime);
+    await applyParticipantSelection({ id: '20', project_id: '2', participantType: 'toolkit', type: 'openapi' }, undefined, runtime, 'start');
 
     expect(order).not.toContain('fetch');
     expect(added).toHaveLength(1);
@@ -179,7 +179,7 @@ describe('applyParticipantSelection', () => {
   it('creates a conversation when the chat has none, and announces it only once the agent is on it', async () => {
     const { runtime, added, announced, activated, order } = selectionRuntime({ conversationId: undefined });
 
-    await applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime);
+    await applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime, 'start');
 
     expect(order).toEqual(['fetch', 'create', 'add', 'announce']);
     expect(added[0]?.conversationId).toBe('77');
@@ -193,7 +193,7 @@ describe('applyParticipantSelection', () => {
       fetchDetails: () => Promise.reject(new Error('boom')),
     });
 
-    await expect(applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime)).rejects.toThrow('boom');
+    await expect(applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime, 'start')).rejects.toThrow('boom');
     expect(order).not.toContain('create');
   });
 
@@ -201,16 +201,33 @@ describe('applyParticipantSelection', () => {
     const { runtime, added, detached } = selectionRuntime();
     const attached: Participant = { id: '31', entityName: 'toolkit', entityMeta: { id: '20', projectId: '2' } };
 
-    await applyParticipantSelection({ id: '20', project_id: '2', participantType: 'toolkit' }, attached, runtime);
+    await applyParticipantSelection({ id: '20', project_id: '2', participantType: 'toolkit' }, attached, runtime, 'start');
 
     expect(detached).toEqual([{ projectId: 2, conversationId: '55', id: '31' }]);
     expect(added).toHaveLength(0);
   });
 
+  it('shares history from now as entity_settings.context_history since_joined (issue 1669)', async () => {
+    const { runtime, added } = selectionRuntime();
+
+    await applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime, 'now');
+
+    expect(added[0]?.participants[0]?.entity_settings['context_history']).toBe('since_joined');
+    expect(added[0]?.participants[0]?.entity_settings['version_id']).toBe('34');
+  });
+
+  it('sends no context_history when history is shared from the start', async () => {
+    const { runtime, added } = selectionRuntime();
+
+    await applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime, 'start');
+
+    expect(added[0]?.participants[0]?.entity_settings).not.toHaveProperty('context_history');
+  });
+
   it('does nothing without a project, which is half the route', async () => {
     const { runtime, order } = selectionRuntime({ projectId: undefined, conversationId: undefined });
 
-    await applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime);
+    await applyParticipantSelection(AGENT_LIST_ROW, undefined, runtime, 'start');
 
     expect(order).toEqual([]);
   });

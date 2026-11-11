@@ -173,7 +173,7 @@ pub fn with_mentions(prompt: &str, mentions: &[String]) -> String {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::fs;
 

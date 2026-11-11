@@ -4,11 +4,15 @@
 //! its BUNDLED assets. This crate owns what a webview must not: the OS
 //! stored sign-in (an owner-only credentials file), the loopback sign-in listener, the token endpoint. Remote
 //! content is never loaded into the privileged webview (see `window.rs`).
+// The test modules that need Unix files (mode bits, symlinks, `/bin/sh`)
+// are Unix-only; on Windows the helpers only they call are unused (#1828).
+#![cfg_attr(all(test, windows), allow(dead_code))]
 
 mod acp;
 mod activity;
 mod app_events;
 mod attention;
+mod aumid;
 mod auth;
 mod brand;
 mod browser_control;

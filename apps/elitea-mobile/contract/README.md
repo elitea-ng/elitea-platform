@@ -162,3 +162,19 @@ opened in; a project or workspace switch while it is open shows "moved" and read
 | Area | What |
 |---|---|
 | IT support line (ADR-0052 W6.2) | `support_contact` in `NativeClientPolicy` (the token response's `client_policy`) and in `ClientPublicPolicy` (discovery): one line, at most 200 characters, empty for none. The app shows it as "IT support" in Settings › About and in About (`src/security/supportContact.ts`); the device's managed `support_contact` (`src/security/managedConfig.ts`) wins. Normalised and linked by `@elitea/client-core/support` (at most one `https:`, `mailto:` or `tel:` link). A server before 1.45 sends none, and the row is absent. |
+
+## Client contract 1.46
+
+| Area | What |
+|---|---|
+| Avatar packs (ADR-0050 decision 6, issue 1835) | `persona.avatar_pack` on a conversation participant carries the version's pack (an `AgentAvatarPackV1` object, read live by the participants read since #1619). The 1.38 lock types the property as a string, so the generated type says `string`: the app reads it as unknown JSON through `avatarPackOf` (`participantAvatarPack`, `src/features/chat/avatarPackMedia.ts`) and ignores anything that is not a valid pack. `getAgentMedia` (`GET /agent_media/{project_id}/{file}`, root-mounted, no credential, never version-gated) is kept for the media the pack names. |
+
+The thread reads the pack only when discovery says `client_contract` >= 1.46 (`AVATAR_PACK_CONTRACT`); on an
+older server it shows `meta.icon_meta` as before. Media is downloaded like Discover's icons (SEC-3): the
+workspace origin only, no credential, redirects refused, a raster Content-Type, at most 2 MiB, and PNG,
+JPEG or WebP bytes; only those bytes reach `<Image>` as a `data:` URI. This build draws a state's own still
+(PNG, JPEG, static WebP) with no default motion. It cannot play an animated WebP (React Native's `Image`
+does not animate WebP: Android builds with `expo.webp.animated=false`, iOS animates GIF only) or a video
+(no video module; expo-video needs a new native build), so an animated WebP state shows the still and a
+video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
+Reduced motion shows the still only and downloads nothing else.

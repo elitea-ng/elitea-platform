@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 import type { Tag } from '@/entities/tag';
+import { contextBlockForSave, readContextBlock, type ContextBlock } from '@/features/agents';
 import {
   areAgentLlmSettingsEqual,
   toAgentLlmSettings,
@@ -88,6 +89,12 @@ export interface EditApplicationVersionFields {
    */
   readonly citations?: 'required' | null | undefined;
   /**
+   * `meta.context` (ADR-0050 decision 9): the Conversation history block.
+   * `null` is the default, and a save sends `null` so that choosing the
+   * default clears a stored block.
+   */
+  readonly contextBlock?: ContextBlock | null | undefined;
+  /**
    * ADR-0050 decision 1a — the Persona tab's draft of the version's soul.
    * Held as text (see `agentSoulDraft.ts`) and turned into the wire object
    * only by the save body, which sends it only when it was edited.
@@ -158,6 +165,7 @@ function fromVersion(version: ApplicationVersionDetail | undefined): EditApplica
     notes: typeof metaRecord['notes'] === 'string' ? metaRecord['notes'] : '',
     outputContract: readOutputContract(metaRecord['output_contract']),
     citations: citationsOf(metaRecord['citations']),
+    contextBlock: contextBlockForSave(readContextBlock(metaRecord['context'])),
     ...personaDraftsOf(version),
   };
 }
@@ -172,11 +180,25 @@ function citationsOf(raw: unknown): 'required' | null {
   return raw === 'required' ? 'required' : null;
 }
 
+/** The ADR-0043/0050 meta controls' field changes, out of the switch for the complexity budget. */
+function contentControlPatch(path: string, value: unknown): Partial<EditApplicationVersionFields> | undefined {
+  if (path === 'version_details.meta.output_contract') return { outputContract: readOutputContract(value) };
+  if (path === 'version_details.meta.citations') return { citations: citationsOf(value) };
+  if (path === 'version_details.meta.context') return { contextBlock: contextBlockForSave(readContextBlock(value)) };
+  return undefined;
+}
+
+function areContextBlocksEqual(a: ContextBlock | null, b: ContextBlock | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.history === b.history && a.include_side_talk === b.include_side_talk && (a.activity_notes ?? false) === (b.activity_notes ?? false);
+}
+
 /** The ADR-0043 fields (the output contract and the citation setting) and the ADR-0050 soul. */
 function areContentControlsEqual(a: EditApplicationVersionFields, b: EditApplicationVersionFields): boolean {
   return (
     areOutputContractsEqual(a.outputContract, b.outputContract) &&
     (a.citations ?? null) === (b.citations ?? null) &&
+    areContextBlocksEqual(a.contextBlock ?? null, b.contextBlock ?? null) &&
     areSoulDraftsEqual(a.soul, b.soul) &&
     areAvatarPacksEqual(a.avatarPack, b.avatarPack)
   );
@@ -289,12 +311,6 @@ export function useEditApplicationVersionFields(
       case 'version_details.notes':
         setFields((previous) => ({ ...previous, notes: typeof value === 'string' ? value : '' }));
         return true;
-      case 'version_details.meta.output_contract':
-        setFields((previous) => ({ ...previous, outputContract: readOutputContract(value) }));
-        return true;
-      case 'version_details.meta.citations':
-        setFields((previous) => ({ ...previous, citations: citationsOf(value) }));
-        return true;
       case 'version_details.meta.step_limit':
         setFields((previous) => ({ ...previous, stepLimit: typeof value === 'number' ? value : undefined }));
         return true;
@@ -306,6 +322,11 @@ export function useEditApplicationVersionFields(
         setFields((previous) => ({ ...previous, llmSettings: toAgentLlmSettings(value) }));
         return true;
       default: {
+        const contentPatch = contentControlPatch(path, value);
+        if (contentPatch !== undefined) {
+          setFields((previous) => ({ ...previous, ...contentPatch }));
+          return true;
+        }
         const key = LLM_SETTINGS_KEY_PATTERN.exec(path)?.[1];
         if (key === undefined) return false;
         setFields((previous) => ({

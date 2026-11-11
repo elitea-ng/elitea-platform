@@ -384,6 +384,7 @@ export function EditApplication(): ReactNode {
                 isEditorDisabled={isEditorDisabled}
                 isDirty={isDirty}
                 isReadOnly={isReadOnlyView}
+                saveError={saveError}
                 onModelSettingsChange={handleModelSettingsChange}
                 instructionsAiEditSlot={
                   <EditApplicationAiEditSlot editor={editor} projectId={projectId} disabled={isEditorDisabled} />

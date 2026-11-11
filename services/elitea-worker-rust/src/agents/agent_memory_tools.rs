@@ -47,10 +47,11 @@ pub(crate) const TOOLSET_NAME: &str = "agent_memory";
 pub(crate) const REMEMBER: &str = "remember";
 pub(crate) const RECALL: &str = "recall";
 pub(crate) const FORGET: &str = "forget";
-/// Main's own bounds (`agentmemory.MaxContentBytes`, `MaxRecallEntries`).
-const MAX_CONTENT_BYTES: usize = 2_048;
+/// Main's own bounds (`agentmemory.MaxContentBytes`, `MaxRecallEntries`),
+/// shared with the run input's `recalled_memory` check (`protocol.rs`).
+pub(crate) const MAX_CONTENT_BYTES: usize = 2_048;
 const MAX_QUERY_BYTES: usize = 1_024;
-const MAX_RECALL_ENTRIES: u64 = 50;
+pub(crate) const MAX_RECALL_ENTRIES: u64 = 50;
 /// The kinds the agent may write. A `cursor` is the heartbeat's state.
 const AGENT_KINDS: [&str; 3] = ["fact", "preference", "episode"];
 
@@ -118,16 +119,33 @@ impl AgentMemoryBinding {
 /// The most entries one turn's recorder keeps.
 const MAX_RECALLED_ENTRIES: usize = 256;
 
-/// The entries `recall` returned in this turn, by id, with their content
-/// (#1614): a `spawn_agent` brief may name only these, so a creator passes
-/// on only what it recalled itself. One per turn, shared between the
-/// `recall` tool and the sub-agent host.
+/// The entries recalled in this turn, by id, with their content (#1614):
+/// what `recall` returned, and what Main recalled into the instructions
+/// (#1826, [`Self::seeded`]). A `spawn_agent` brief may name only these, so
+/// a creator passes on only what it was shown. One per turn, shared between
+/// the `recall` tool and the sub-agent host.
 #[derive(Default)]
 pub(crate) struct RecalledEntries {
     entries: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 impl RecalledEntries {
+    /// A recorder that starts with the entries Main recalled into the
+    /// instructions (`AgentExecutionInputV1.recalled_memory`, #1826). The
+    /// content is Main's stored text, never the model's.
+    #[must_use]
+    pub(crate) fn seeded(entries: &[crate::agents::request::RecalledMemoryEntry]) -> Self {
+        Self {
+            entries: std::sync::Mutex::new(
+                entries
+                    .iter()
+                    .take(MAX_RECALLED_ENTRIES)
+                    .map(|entry| (entry.entry_id.clone(), entry.content.clone()))
+                    .collect(),
+            ),
+        }
+    }
+
     fn record(&self, entries: &[crate::transport::runtime_context::AgentMemoryRecalledEntry]) {
         if let Ok(mut recalled) = self.entries.lock() {
             for entry in entries {
@@ -137,6 +155,14 @@ impl RecalledEntries {
                 }
                 recalled.insert(entry.entry_id.clone(), entry.content.clone());
             }
+        }
+    }
+
+    /// Drop an entry `forget` deleted: a brief may not pass on a note the
+    /// agent removed as wrong.
+    fn forget(&self, entry_id: &str) {
+        if let Ok(mut recalled) = self.entries.lock() {
+            recalled.remove(entry_id);
         }
     }
 
@@ -411,7 +437,7 @@ impl Tool for ForgetTool {
     }
 
     fn description(&self) -> &'static str {
-        "Delete one note from this agent's memory, by the entry_id recall gave you, when it is wrong or someone asks you to forget it."
+        "Delete one note from this agent's memory, by its entry_id (the N of a [memory N, ...] note, or an entry_id recall gave you), when it is wrong or someone asks you to forget it."
     }
 
     fn is_read_only(&self) -> bool {
@@ -446,7 +472,7 @@ impl Tool for ForgetTool {
         else {
             return Ok(error(
                 "invalid_argument",
-                "entry_id must be an id recall gave you.",
+                "entry_id must be the id of one of your notes: the N of [memory N, ...], or an id recall gave you.",
             ));
         };
         let request = AgentMemoryForgetRequest {
@@ -458,7 +484,13 @@ impl Tool for ForgetTool {
             .forget_agent_memory(&self.authority.authority, &request)
             .await
         {
-            Ok(outcome) if outcome.forgotten => Ok(json!({"status": "ok", "note": "Forgotten."})),
+            Ok(outcome) if outcome.forgotten => {
+                // The recorder keys ids in canonical form (no leading zero).
+                self.authority
+                    .recalled
+                    .forget(entry_id.trim_start_matches('0'));
+                Ok(json!({"status": "ok", "note": "Forgotten."}))
+            }
             Ok(_) => Ok(error(
                 "not_found",
                 "No such note in this agent's memory, or it is about someone not in this conversation.",
@@ -489,6 +521,24 @@ mod tests {
         recalled.record(&[entry("1"), entry("2")]);
         assert_eq!(recalled.content("2").as_deref(), Some("note 2"));
         assert_eq!(recalled.content("3"), None);
+        // A forgotten note can no longer be passed on (#1826).
+        recalled.forget("2");
+        assert_eq!(recalled.content("2"), None);
+        assert_eq!(recalled.content("1").as_deref(), Some("note 1"));
+    }
+
+    #[test]
+    fn a_seeded_entry_is_forgotten_too() {
+        let recalled = RecalledEntries::seeded(&[crate::agents::request::RecalledMemoryEntry {
+            entry_id: "42".to_owned(),
+            content: "deploys on Fridays".to_owned(),
+        }]);
+        assert_eq!(
+            recalled.content("42").as_deref(),
+            Some("deploys on Fridays")
+        );
+        recalled.forget("42");
+        assert_eq!(recalled.content("42"), None);
     }
 
     #[test]

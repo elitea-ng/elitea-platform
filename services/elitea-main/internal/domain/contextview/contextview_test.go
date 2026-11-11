@@ -118,6 +118,34 @@ func TestDigestCoversEveryField(t *testing.T) {
 	}
 }
 
+func TestExclusionNamesTheRuleThatDroppedTheMessage(t *testing.T) {
+	sinceJoined := Settings{History: HistorySinceJoined, SideTalk: SideTalkParty}
+	addressedOnly := Settings{History: HistoryAddressedOnly, SideTalk: SideTalkParty}
+	noSide := Settings{History: HistoryFull, SideTalk: SideTalkNone}
+	none := Settings{History: HistoryNone, SideTalk: SideTalkParty}
+	cases := []struct {
+		name string
+		s    Settings
+		f    Facts
+		want Reason
+	}{
+		{"foreign side talk", Default, Facts{Side: true, AfterJoined: true}, ReasonSideTalkOfOthers},
+		{"own side talk, side talk off", noSide, Facts{Side: true, OwnAgent: true}, ReasonSideTalkOff},
+		{"none", none, Facts{OwnAgent: true}, ReasonHistoryNone},
+		{"before joined", sinceJoined, Facts{}, ReasonBeforeJoined},
+		{"not addressed", addressedOnly, Facts{AfterJoined: true}, ReasonNotAddressed},
+		{"in view", Default, Facts{}, ""},
+	}
+	for _, c := range cases {
+		if got := c.s.Exclusion(c.f); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+		if c.s.Eligible(c.f) != (c.want == "") {
+			t.Errorf("%s: Eligible disagrees with Exclusion", c.name)
+		}
+	}
+}
+
 // digestVector is Digest(since_joined, 8192, `[]`, no refs); the worker's
 // context_view test pins the same value.
 const digestVector = "98c87e67997f565a4d27a3a984ac5d8e9aa3353c0457a2222ac27566fd08b5dc"

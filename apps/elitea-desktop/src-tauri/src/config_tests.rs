@@ -259,8 +259,10 @@ fn every_host_command_is_granted_once() {
 /// document type; Alternate keeps Finder the default for folders.
 #[test]
 fn folders_are_an_alternate_document_type() {
-    let plist =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Info.plist")).unwrap();
+    // A Windows checkout may write the file with CRLF line endings.
+    let plist = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Info.plist"))
+        .unwrap()
+        .replace("\r\n", "\n");
     assert!(plist.contains("<string>public.folder</string>"));
     assert!(plist.contains("<key>LSHandlerRank</key>\n      <string>Alternate</string>"));
 }

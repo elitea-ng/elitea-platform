@@ -72,6 +72,12 @@ apps/elitea-docs/src/screenshots/*.webp
 # ceiling still applies to every other generated file.
 services/elitea-main/internal/api/generated/api.gen.go
 
+# orval output for the applications tag of the same spec: source text the
+# web generated-client drift gate regenerates and compares. It crossed 1 MiB
+# when the agent workforce policy operations landed (issue 1617, 1.06 MB).
+# Exact path, for the same reason as above.
+apps/elitea-web/src/shared/api/generated/applications/applications.ts
+
 # Public, self-signed certificate fixtures verify sandbox peer identity parsing.
 # They contain no private keys. Exact paths exclude other binary files.
 services/elitea-worker-rust/src/sandbox/testdata/peer-cn.der

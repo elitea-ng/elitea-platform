@@ -20,6 +20,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/elitea-ng/elitea-platform/libs/go/egresslib v0.0.0-00010101000000-000000000000
+	github.com/elitea-ng/elitea-platform/libs/go/faults v0.0.0-00010101000000-000000000000
 	github.com/elitea-ng/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
 	github.com/elitea-ng/elitea-platform/libs/go/observability v0.0.0
 	github.com/elitea-ng/elitea-platform/libs/proto/gen/go v0.0.0
@@ -148,6 +149,8 @@ require (
 )
 
 replace github.com/elitea-ng/elitea-platform/libs/go/egresslib => ../../libs/go/egresslib
+
+replace github.com/elitea-ng/elitea-platform/libs/go/faults => ../../libs/go/faults
 
 replace github.com/elitea-ng/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn
 

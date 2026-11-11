@@ -9,7 +9,6 @@ use elitea_inventory_core::store::{
 use elitea_local_index::sqlite_store::{FILE_NAME, SqliteGraphStore, Stats, StoreError};
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::path::Path;
 
 #[tokio::test]
 async fn the_sqlite_store_passes_the_shared_conformance_suite() {
@@ -242,7 +241,7 @@ async fn the_directory_database_and_sidecars_are_owner_only() {
     let index = dir.path().join("workspaces/abc/index");
     let store = SqliteGraphStore::open(&index).unwrap();
     commit(&store, &graph_of(3, 2), 3).await;
-    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode(&index), 0o700);
     assert_eq!(mode(&dir.path().join("workspaces/abc")), 0o700);
     assert_eq!(mode(store.path()), 0o600);

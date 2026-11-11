@@ -1454,6 +1454,12 @@ impl PipelineNativeAgentAssembler {
                 continuation_for_checkpoint(&checkpoint, profile.definition())
                     .map_err(|_| invalid_pipeline_tool_scope())?
             };
+            // W3-1: every Code runtime of this pipeline (its nodes and its
+            // tools) is admitted against the run's deadline.
+            let code_deadline = match (&self.sandbox, &sandbox_authority) {
+                (Some(_), Some(_)) => Some(plan.code_admission_deadline()?),
+                _ => None,
+            };
             let mut node_runtimes = self
                 .bind_node_runtimes(
                     &profile,
@@ -1465,7 +1471,8 @@ impl PipelineNativeAgentAssembler {
                     self.sandbox
                         .as_ref()
                         .zip(sandbox_authority.clone())
-                        .map(|(factory, authority)| factory.bind(authority)),
+                        .zip(code_deadline)
+                        .map(|((factory, authority), deadline)| factory.bind(authority, deadline)),
                     &composition,
                     continuation,
                     plan.session_id().to_owned(),
@@ -1474,8 +1481,10 @@ impl PipelineNativeAgentAssembler {
                 )
                 .await?;
             node_runtimes.nodes = node_runtimes.nodes.with_context_view(context_view);
-            if let (Some(factory), Some(authority)) = (&self.sandbox, sandbox_authority) {
-                node_runtimes.nodes = factory.attach(node_runtimes.nodes, authority);
+            if let (Some(factory), Some(authority), Some(deadline)) =
+                (&self.sandbox, sandbox_authority, code_deadline)
+            {
+                node_runtimes.nodes = factory.attach(node_runtimes.nodes, authority, deadline);
             }
             tracing::Span::current().record("stage", "state");
             let assembled = assemble_pipeline_native(

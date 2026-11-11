@@ -84,7 +84,27 @@ data:
     {{- $_ := set $config "agent_node_recovery" true }}
     {{- end }}
     {{- if gt (len $r.sandboxRuntimes) 0 }}
-    {{- $_ := set $config "sandbox_runtimes" $r.sandboxRuntimes }}
+    {{- /* W3-1: codeSlots, the Code attempts this worker runs at once on the
+    entry's supervisor target, is written as code_slots only when set (the
+    worker's default is 4, the shipped supervisor concurrency). A whole number
+    from 1 to 1024; the worker refuses entries on one supervisor that
+    disagree. */}}
+    {{- $runtimes := list }}
+    {{- range $index, $profile := $r.sandboxRuntimes }}
+    {{- $entry := omit $profile "codeSlots" }}
+    {{- if hasKey $profile "codeSlots" }}
+    {{- $slots := $profile.codeSlots }}
+    {{- if not (or (kindIs "float64" $slots) (kindIs "int" $slots) (kindIs "int64" $slots)) }}
+    {{- fail (printf "worker.runtime.sandboxRuntimes[%d].codeSlots must be a whole number from 1 to 1024 (the supervisor's concurrency), not %v" $index $slots) }}
+    {{- end }}
+    {{- if or (ne (float64 $slots) (float64 (int64 $slots))) (lt (int64 $slots) 1) (gt (int64 $slots) 1024) }}
+    {{- fail (printf "worker.runtime.sandboxRuntimes[%d].codeSlots must be a whole number from 1 to 1024 (the supervisor's concurrency), not %v" $index $slots) }}
+    {{- end }}
+    {{- $_ := set $entry "code_slots" (int64 $slots) }}
+    {{- end }}
+    {{- $runtimes = append $runtimes $entry }}
+    {{- end }}
+    {{- $_ := set $config "sandbox_runtimes" $runtimes }}
     {{- end }}
     {{- /* ADR-0034: the cloud executor's workspace runs. */}}
     {{- with ($r.workspaceRuns | default dict) }}

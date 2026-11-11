@@ -109,3 +109,31 @@ fn a_memory_entry_must_have_been_recalled() {
         [("7".to_owned(), "the team prefers short reports".to_owned())]
     );
 }
+
+/// #1826: an entry Main recalled into the instructions may be named in a
+/// brief, with the content Main sent; an id it did not recall is refused.
+#[test]
+fn an_auto_recalled_memory_entry_may_be_named() {
+    use crate::agents::request::RecalledMemoryEntry;
+    let recalled = Arc::new(RecalledEntries::seeded(&[RecalledMemoryEntry {
+        entry_id: "42".to_owned(),
+        content: "the team ships on Fridays".to_owned(),
+    }]));
+    let named = Brief {
+        memory_entries: vec!["42".to_owned()],
+        ..Brief::default()
+    };
+    let checked = view(Some(Arc::clone(&recalled))).check(&named).unwrap();
+    assert_eq!(
+        checked.memory_entries,
+        [("42".to_owned(), "the team ships on Fridays".to_owned())]
+    );
+    let made_up = Brief {
+        memory_entries: vec!["42".to_owned(), "43".to_owned()],
+        ..Brief::default()
+    };
+    assert_eq!(
+        view(Some(recalled)).check(&made_up),
+        Err(BRIEF_MEMORY_NOT_RECALLED)
+    );
+}

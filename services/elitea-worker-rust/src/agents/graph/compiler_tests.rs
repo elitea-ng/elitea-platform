@@ -749,6 +749,8 @@ fn resume_payload(interrupt_id: &str, action: &str, value: &str) -> AgentExecuti
         floor: None,
         tool_envelope: None,
         current_message_id: None,
+        context_view_history: None,
+        recalled_memory: Vec::new(),
     }
 }
 

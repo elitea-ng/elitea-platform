@@ -95,3 +95,20 @@ function serverBodyMessage(body: unknown): string | undefined {
   const detail = record['error'] ?? record['message'];
   return typeof detail === 'string' && detail !== '' ? detail : undefined;
 }
+
+/** The `code` of the server's refusal of a bad `meta.context` block (ADR-0050 decision 9). */
+const CONTEXT_BLOCK_INVALID = 'context_block_invalid';
+
+/**
+ * The server's text when a save was refused for the agent's `meta.context`
+ * block (422 `context_block_invalid`), for the Conversation history field;
+ * `undefined` for any other failure, which the page's banner reports.
+ */
+export function contextBlockRefusal(error: unknown): string | undefined {
+  if (!(error instanceof EliteaApiError) || error.failure.kind !== 'http' || error.failure.status !== 422) return undefined;
+  const body = error.failure.body;
+  if (typeof body !== 'object' || body === null || (body as Record<string, unknown>)['code'] !== CONTEXT_BLOCK_INVALID) {
+    return undefined;
+  }
+  return serverBodyMessage(body);
+}

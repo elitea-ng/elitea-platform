@@ -85,11 +85,8 @@ impl TempDir {
         ));
         std::fs::create_dir(&path)
             .map_err(|error| ToolError::io("cannot create a temporary directory", &error))?;
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
-        }
-        let path = std::fs::canonicalize(&path)
+        let _ = crate::sys::set_path_mode(&path, 0o700);
+        let path = crate::sys::canonicalize(&path)
             .map_err(|error| ToolError::io("cannot create a temporary directory", &error))?;
         Ok(Self { path })
     }

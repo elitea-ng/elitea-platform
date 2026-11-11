@@ -5,7 +5,8 @@
  * rest behind ⋯.
  *
  *   Copy · Good · Bad · Read out · Regenerate · ⋯ (Remember this, Open as
- *   document, Fork from here, — , Delete) · Using N memories · 2 minutes ago
+ *   document, Fork from here, What the agent saw, — , Delete) · Using N
+ *   memories · 2 minutes ago
  *
  * It used to sit inside the card, spread across its full width (the thumbs
  * and bookmark at the left, six icons at the right), at MUI's default
@@ -28,12 +29,14 @@ import CallSplitOutlinedIcon from '@mui/icons-material/CallSplitOutlined';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import VolumeUpOutlinedIcon from '@mui/icons-material/VolumeUpOutlined';
 import Menu from '@mui/material/Menu';
 
 import { t } from '@/shared/i18n';
 import { MenuDivider, MenuRow, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 
+import { ContextViewInspector } from './ContextViewInspector';
 import { MessageFeedbackControl } from './MessageFeedbackControl';
 import { MessageMeta, type MessageMetaProps } from './MessageMeta';
 import { ReplyActionButton, ReplyActionsRow } from './ReplyActionButton';
@@ -108,10 +111,13 @@ interface MoreMenuProps {
   readonly memory: RememberMemory | undefined;
   readonly anchor: HTMLElement | null;
   readonly onAnchor: (anchor: HTMLElement | null) => void;
+  /** "What the agent saw" (issue 1669); set only with a resolved project and a settled answer. */
+  readonly onInspect: (() => void) | undefined;
 }
 
-function hasMoreRows({ state, handlers, memory }: Pick<MoreMenuProps, 'state' | 'handlers' | 'memory'>): boolean {
-  return Boolean(memory?.available) || Boolean(handlers.onOpenAsDocument && state.hasContent) || Boolean(handlers.onFork) || Boolean(handlers.onDelete);
+function hasMoreRows({ state, handlers, memory, onInspect }: Pick<MoreMenuProps, 'state' | 'handlers' | 'memory' | 'onInspect'>): boolean {
+  const { onOpenAsDocument, onFork, onDelete } = handlers;
+  return Boolean(memory?.available) || Boolean(onOpenAsDocument && state.hasContent) || Boolean(onFork) || Boolean(onDelete) || Boolean(onInspect);
 }
 
 /** One menu row that runs `action` and closes the menu. */
@@ -126,9 +132,9 @@ function ActionRow({ icon, label, testId, disabled, action, close }: {
   );
 }
 
-function MoreMenu({ state, handlers, memory, anchor, onAnchor }: MoreMenuProps): ReactNode {
+function MoreMenu({ state, handlers, memory, anchor, onAnchor, onInspect }: MoreMenuProps): ReactNode {
   const { onOpenAsDocument, onFork, onDelete } = handlers;
-  if (!hasMoreRows({ state, handlers, memory })) return null;
+  if (!hasMoreRows({ state, handlers, memory, onInspect })) return null;
   const close = (): void => onAnchor(null);
   const label = t('features.chatMessages.replyActions.more', 'More actions');
   const openAsDocument = t('features.chatMessages.canvas.document.openAsDocument', 'Open as document');
@@ -145,6 +151,9 @@ function MoreMenu({ state, handlers, memory, anchor, onAnchor }: MoreMenuProps):
         {onFork && (
           <ActionRow icon={<CallSplitOutlinedIcon />} label={t('features.chatMessages.forkFromHere', 'Fork from here')} testId="message-fork" disabled={state.isProcessing} action={onFork} close={close} />
         )}
+        {onInspect && (
+          <ActionRow icon={<VisibilityOutlinedIcon />} label={t('features.chatMessages.contextView.title', 'What the agent saw')} testId="answer-context-view" action={onInspect} close={close} />
+        )}
         {onDelete && <MenuDivider />}
         {onDelete && <ActionRow icon={<DeleteOutlinedIcon />} label={t('features.chatMessages.replyActions.delete', 'Delete')} testId="answer-delete" action={onDelete} close={close} />}
       </Menu>
@@ -154,11 +163,16 @@ function MoreMenu({ state, handlers, memory, anchor, onAnchor }: MoreMenuProps):
 
 function ActionsRow({ state, handlers, feedback, alwaysVisible, memory, meta }: Omit<ApplicationAnswerActionsProps, 'memoryContent'> & { readonly memory: RememberMemory | undefined }): ReactNode {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [inspecting, setInspecting] = useState(false);
   const shown = alwaysVisible || anchor !== null;
+  const onInspect = feedback ? () => setInspecting(true) : undefined;
   return (
     <ReplyActionsRow shown={shown}>
       <InlineActions state={state} handlers={handlers} feedback={feedback} />
-      <MoreMenu state={state} handlers={handlers} memory={memory} anchor={anchor} onAnchor={setAnchor} />
+      <MoreMenu state={state} handlers={handlers} memory={memory} anchor={anchor} onAnchor={setAnchor} onInspect={onInspect} />
+      {feedback && inspecting && (
+        <ContextViewInspector open projectId={feedback.projectId} messageId={feedback.messageId} onClose={() => setInspecting(false)} />
+      )}
       {memory?.toast}
       {meta && <MessageMeta {...meta} />}
     </ReplyActionsRow>

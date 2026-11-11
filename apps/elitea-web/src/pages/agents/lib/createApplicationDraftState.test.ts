@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 
 import {
+  applyContentControlField,
   areExtraFieldsEqual,
+  createMetaControls,
   mapCreateErrorToFieldErrors,
   type CreateAgentFormExtraFields,
 } from './createApplicationDraftState';
@@ -73,5 +75,20 @@ describe('mapCreateErrorToFieldErrors', () => {
 
   it('returns nothing for something that is not an API error at all', () => {
     expect(mapCreateErrorToFieldErrors(new Error('offline'))).toEqual({});
+  });
+});
+
+describe('meta.context on the create page (ADR-0050 decision 9)', () => {
+  it('holds a chosen block, reports the draft dirty and sends it', () => {
+    const next = applyContentControlField(BASE, 'version_details.meta.context', { history: 'since_joined', include_side_talk: 'party' });
+    expect(next.contextBlock).toEqual({ history: 'since_joined', include_side_talk: 'party' });
+    expect(areExtraFieldsEqual(BASE, next)).toBe(false);
+    expect(createMetaControls(next)).toEqual({ context: { history: 'since_joined', include_side_talk: 'party' } });
+  });
+
+  it('sends no block for the default', () => {
+    const next = applyContentControlField(BASE, 'version_details.meta.context', { history: 'full', include_side_talk: 'party' });
+    expect(next.contextBlock).toBeNull();
+    expect(createMetaControls(next)).toEqual({});
   });
 });
