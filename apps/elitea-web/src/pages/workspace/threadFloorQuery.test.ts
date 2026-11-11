@@ -18,7 +18,7 @@ const reviewer = { id: 88, entity_name: 'application', entity_meta: { id: 6, nam
 const detail = { id: 77, uuid: 'c0ffee00-0000-4000-8000-000000000077', name: 'fix it', meta: { floor: { policy: 'lead', lead_participant_id: 88 } }, participants: [coder, reviewer] };
 
 /** Answers the thread's detail (`body`) and counts the reads, per conversation id. */
-function serveThread(body: (id: string) => unknown): Record<string, number> {
+function serveThread(body: (id: string) => Record<string, unknown>): Record<string, number> {
   const reads: Record<string, number> = {};
   server.use(
     http.get(`${BASE}/elitea_core/conversation/prompt_lib/42/:id`, ({ params }) => {
