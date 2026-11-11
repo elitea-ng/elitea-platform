@@ -221,6 +221,36 @@ fn a_profile_digest_matches_mains_vectors() {
     assert_eq!(modelled.digest(), MODEL_VECTOR);
 }
 
+// #1861: tool keys Go's strings.ToLower would lower differently (a final
+// sigma, capital I with dot above). Main's agentproposal RuntimeLower and
+// TestSpecDigestLowersNonASCIIKeysAsTheRuntime pin the same lowering and
+// digest.
+#[test]
+fn a_non_ascii_tool_key_digests_as_mains_vector() {
+    for (input, want) in [
+        ("GitHub", "github"),
+        ("ΟΔΟΣ", "οδος"),
+        ("ΣΑΣ", "σας"),
+        ("Σ", "σ"),
+        ("ΑΣ.Β", "ασ.β"),
+        ("Α.Σ", "α.ς"),
+        ("ΑΣ'Β", "ασ'β"),
+        ("ΑΣ1", "ας1"),
+        ("İSTANBUL", "i\u{307}stanbul"),
+        ("Почта", "почта"),
+    ] {
+        assert_eq!(input.to_lowercase(), want, "{input}");
+    }
+    let profile = parse_profile(&json!({"profile": {
+        "soul": "s",
+        "tools": ["ΟΔΟΣ/ΣΑΣ", "İKIT/*"],
+    }}))
+    .unwrap();
+    assert_eq!(profile.digest(), NON_ASCII_VECTOR);
+}
+
+const NON_ASCII_VECTOR: &str = "9a3ad9dce6052b88b11d55abce4abd384544a6d566802f31835a48292978d265";
+
 const MODEL_VECTOR: &str = "269196e377071ba701f1bfe522036f8b22561dbe114e6ff1ded015ebea4b4d94";
 
 const EMPTY_VECTOR: &str = "8e93047b83c690ec8ada61c3103afaece889147e8adf85467c1e173e51b72083";

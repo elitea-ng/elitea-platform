@@ -1102,7 +1102,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// thread (ADR-0050 decision 7f, issue 1806): local_turn_executions
 	// floor_question_id, floor_position, floor_targets and executor. No
 	// backfill, no permission.
-	require.EqualValues(t, 238, Head(shared))
+	//
+	// 239: shared/0239_ephemeral_agent_depth.sql, a sub-agent's depth and
+	// parent sub-agent in elitea_runtime.ephemeral_agents (ADR-0050
+	// decision 4, issue 1872). No backfill, no permission.
+	require.EqualValues(t, 239, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

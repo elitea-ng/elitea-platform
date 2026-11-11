@@ -19,9 +19,7 @@
 //! command is forgotten; one that never settles (lease loss, abandonment)
 //! ages out, and can only ever be served to its own command.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, OnceLock};
 
 use elitea_agent_runtime::egress::{
     Allowlist, EgressSummary, PublicPolicy, PublicPolicyError, RunEgress,
@@ -29,12 +27,7 @@ use elitea_agent_runtime::egress::{
 
 use super::ProtocolError;
 use super::elitea::runtime::v1::{ExecutionIdentityV1, WorkerCommandV1, WorkerEgressModeV1};
-
-/// The most executions the registry holds; past it the oldest is dropped.
-const MAX_TRACKED_EXECUTIONS: usize = 4_096;
-/// An execution not settled within this is dropped (its summary is lost; the
-/// run is long over or abandoned).
-const MAX_TRACKED_AGE: Duration = Duration::from_hours(12);
+use super::execution_registry::{ExecutionRegistry, GenerationKey};
 
 /// The command's policy, validated.
 ///
@@ -95,16 +88,21 @@ impl CommandKey {
     }
 }
 
-struct Tracked {
-    egress: Arc<RunEgress>,
-    since: Instant,
+impl GenerationKey for CommandKey {
+    fn execution_id(&self) -> &str {
+        &self.execution_id
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
 }
 
 /// The commands this process is running, each with its one [`RunEgress`].
 /// Production uses [`EgressRegistry::global`]; a test may hold its own.
 #[derive(Default)]
 pub struct EgressRegistry {
-    tracked: Mutex<HashMap<CommandKey, Tracked>>,
+    tracked: ExecutionRegistry<CommandKey, RunEgress>,
 }
 
 impl EgressRegistry {
@@ -126,38 +124,12 @@ impl EgressRegistry {
     pub fn run_egress(&self, command: &WorkerCommandV1) -> Arc<RunEgress> {
         let policy = policy_from_command(command)
             .unwrap_or_else(|_| PublicPolicy::Allowlist(Allowlist::default()));
-        let Ok(mut tracked) = self.tracked.lock() else {
-            return RunEgress::new(policy);
-        };
-        let key = CommandKey::of_command(command);
-        if let Some(existing) = tracked.get(&key)
-            && *existing.egress.policy() == policy
-        {
-            return Arc::clone(&existing.egress);
-        }
-        let now = Instant::now();
-        tracked.retain(|other, entry| {
-            now.duration_since(entry.since) < MAX_TRACKED_AGE
-                && !(other.execution_id == key.execution_id && other.generation < key.generation)
-        });
-        if !tracked.contains_key(&key)
-            && tracked.len() >= MAX_TRACKED_EXECUTIONS
-            && let Some(oldest) = tracked
-                .iter()
-                .min_by_key(|(_, entry)| entry.since)
-                .map(|(key, _)| key.clone())
-        {
-            tracked.remove(&oldest);
-        }
-        let egress = RunEgress::new(policy);
-        tracked.insert(
-            key,
-            Tracked {
-                egress: Arc::clone(&egress),
-                since: now,
-            },
-        );
-        egress
+        let make = policy.clone();
+        self.tracked.get_or_make(
+            CommandKey::of_command(command),
+            |existing| *existing.policy() == policy,
+            || RunEgress::new(make),
+        )
     }
 
     /// The command's cumulative summary, for the report sent before
@@ -166,19 +138,16 @@ impl EgressRegistry {
     /// [`Self::forget`]: a retried settlement reports the same snapshot.
     #[must_use]
     pub fn summary_for_settlement(&self, identity: &ExecutionIdentityV1) -> Option<EgressSummary> {
-        let tracked = self.tracked.lock().ok()?;
-        let summary = tracked
+        let summary = self
+            .tracked
             .get(&CommandKey::of_identity(identity))?
-            .egress
             .summary();
         (!summary.is_empty()).then_some(summary)
     }
 
     /// Stop tracking a settled command.
     pub fn forget(&self, identity: &ExecutionIdentityV1) {
-        if let Ok(mut tracked) = self.tracked.lock() {
-            tracked.remove(&CommandKey::of_identity(identity));
-        }
+        self.tracked.forget(&CommandKey::of_identity(identity));
     }
 }
 

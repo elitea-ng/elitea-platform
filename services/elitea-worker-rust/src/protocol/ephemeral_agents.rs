@@ -3,25 +3,28 @@
 //!
 //! The cloud sub-agent host records each child into the execution's one
 //! [`EphemeralAgentLedger`] when it starts and again when it settles. Like
-//! the egress ledger, ledgers live in a process registry, keyed here by
-//! execution and generation (the host knows the claim, not the command id).
+//! the egress ledger, ledgers live in a process registry
+//! ([`super::execution_registry`]), keyed here by execution and generation
+//! (the host knows the claim, not the command id).
 //! `AgentControlClient` sends the ledger's snapshot with
 //! `ReportEphemeralAgents` under the live claim, before `PrepareSettlement`,
 //! and forgets it once the settlement is prepared. A child still running at
 //! that point was stopped with the run, so it is reported cancelled.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
 
 use elitea_agent_runtime::subagents::{ChildIdentity, ChildReport, ChildStatus, Profile};
 
 use super::elitea::runtime::v1::{EphemeralAgentV1, ExecutionIdentityV1};
+use super::execution_registry::{ExecutionRegistry, GenerationKey};
 
-/// The most executions the registry holds; past it the oldest is dropped.
-const MAX_TRACKED_EXECUTIONS: usize = 4_096;
-/// An execution not settled within this is dropped.
-const MAX_TRACKED_AGE: Duration = Duration::from_hours(12);
+/// Process-wide count of spawns whose brief digest and references were not
+/// recorded because the references were over [`MAX_BRIEF_REFS_BYTES`]. The
+/// crate has no metrics exporter; the count rides every drop's WARN event.
+static DROPPED_BRIEF_REFS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
 /// The most spawns one report carries (the runtime's per-turn cap).
 pub(crate) const MAX_REPORTED_AGENTS: usize =
     elitea_agent_runtime::subagents::MAX_CHILDREN_PER_TURN;
@@ -59,8 +62,17 @@ impl EphemeralAgentLedger {
             record.brief_refs.to_string()
         };
         // The brief's bounds keep its references far under Main's 8 KiB;
-        // past it both are dropped, as Main needs them together.
+        // past it both are dropped, as Main needs them together (#1832:
+        // counted and logged, never silent).
         let (brief_digest, brief_refs) = if brief_refs.len() > MAX_BRIEF_REFS_BYTES {
+            let dropped = DROPPED_BRIEF_REFS_TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
+            tracing::warn!(
+                agent_id = %child.agent_id,
+                refs_bytes = brief_refs.len(),
+                max_bytes = MAX_BRIEF_REFS_BYTES,
+                dropped_total = dropped,
+                "sub-agent brief references over the record's bound; the brief digest and references are not recorded"
+            );
             (String::new(), String::new())
         } else {
             (record.brief_digest.clone().unwrap_or_default(), brief_refs)
@@ -77,6 +89,8 @@ impl EphemeralAgentLedger {
             brief_refs_json: brief_refs,
             status: ChildStatus::Running.as_str().to_owned(),
             started_at_unix_millis: now_unix_ms,
+            depth: child.depth.max(1),
+            parent_agent_id: child.parent_agent_id.clone().unwrap_or_default(),
             ..EphemeralAgentV1::default()
         };
         if let Ok(mut agents) = self.agents.lock() {
@@ -166,9 +180,23 @@ struct ExecutionKey {
     generation: u64,
 }
 
-struct Tracked {
-    ledger: Arc<EphemeralAgentLedger>,
-    since: Instant,
+impl ExecutionKey {
+    fn new(execution_id: &str, generation: u64) -> Self {
+        Self {
+            execution_id: execution_id.to_owned(),
+            generation,
+        }
+    }
+}
+
+impl GenerationKey for ExecutionKey {
+    fn execution_id(&self) -> &str {
+        &self.execution_id
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
 }
 
 /// The executions this process is running, each with its one ledger.
@@ -176,7 +204,7 @@ struct Tracked {
 /// own.
 #[derive(Default)]
 pub(crate) struct EphemeralAgentRegistry {
-    tracked: Mutex<HashMap<ExecutionKey, Tracked>>,
+    tracked: ExecutionRegistry<ExecutionKey, EphemeralAgentLedger>,
 }
 
 impl EphemeralAgentRegistry {
@@ -191,38 +219,11 @@ impl EphemeralAgentRegistry {
     /// generation drops the older generations' ledgers.
     #[must_use]
     pub(crate) fn ledger(&self, execution_id: &str, generation: u64) -> Arc<EphemeralAgentLedger> {
-        let Ok(mut tracked) = self.tracked.lock() else {
-            return Arc::default();
-        };
-        let key = ExecutionKey {
-            execution_id: execution_id.to_owned(),
-            generation,
-        };
-        if let Some(existing) = tracked.get(&key) {
-            return Arc::clone(&existing.ledger);
-        }
-        let now = Instant::now();
-        tracked.retain(|other, entry| {
-            now.duration_since(entry.since) < MAX_TRACKED_AGE
-                && !(other.execution_id == key.execution_id && other.generation < key.generation)
-        });
-        if tracked.len() >= MAX_TRACKED_EXECUTIONS
-            && let Some(oldest) = tracked
-                .iter()
-                .min_by_key(|(_, entry)| entry.since)
-                .map(|(key, _)| key.clone())
-        {
-            tracked.remove(&oldest);
-        }
-        let ledger = Arc::new(EphemeralAgentLedger::default());
-        tracked.insert(
-            key,
-            Tracked {
-                ledger: Arc::clone(&ledger),
-                since: now,
-            },
-        );
-        ledger
+        self.tracked.get_or_make(
+            ExecutionKey::new(execution_id, generation),
+            |_| true,
+            Arc::default,
+        )
     }
 
     /// The execution generation's ledger when its host made one (a run that
@@ -234,13 +235,7 @@ impl EphemeralAgentRegistry {
         generation: u64,
     ) -> Option<Arc<EphemeralAgentLedger>> {
         self.tracked
-            .lock()
-            .ok()?
-            .get(&ExecutionKey {
-                execution_id: execution_id.to_owned(),
-                generation,
-            })
-            .map(|entry| Arc::clone(&entry.ledger))
+            .get(&ExecutionKey::new(execution_id, generation))
     }
 
     /// The command's spawns for the report before settlement; empty when it
@@ -252,26 +247,21 @@ impl EphemeralAgentRegistry {
         identity: &ExecutionIdentityV1,
         now_unix_ms: i64,
     ) -> Vec<EphemeralAgentV1> {
-        let Ok(tracked) = self.tracked.lock() else {
-            return Vec::new();
-        };
-        tracked
-            .get(&ExecutionKey {
-                execution_id: identity.execution_id.clone(),
-                generation: identity.generation,
-            })
-            .map(|entry| entry.ledger.snapshot(now_unix_ms))
+        self.tracked
+            .get(&ExecutionKey::new(
+                &identity.execution_id,
+                identity.generation,
+            ))
+            .map(|ledger| ledger.snapshot(now_unix_ms))
             .unwrap_or_default()
     }
 
     /// Stop tracking a settled command.
     pub(crate) fn forget(&self, identity: &ExecutionIdentityV1) {
-        if let Ok(mut tracked) = self.tracked.lock() {
-            tracked.remove(&ExecutionKey {
-                execution_id: identity.execution_id.clone(),
-                generation: identity.generation,
-            });
-        }
+        self.tracked.forget(&ExecutionKey::new(
+            &identity.execution_id,
+            identity.generation,
+        ));
     }
 }
 
@@ -396,5 +386,40 @@ mod tests {
         assert_eq!(rows[0].error_code, CANCELLED_WITH_RUN);
         assert_eq!(rows[0].finished_at_unix_millis, 3_000);
         assert_eq!(rows[0].steps, 3);
+    }
+
+    #[test]
+    fn a_depth_two_run_reports_two_levels_with_their_parents() {
+        let ledger = EphemeralAgentLedger::default();
+        let first = child(1, &Brief::default());
+        let mut grandchild = child(2, &Brief::default());
+        grandchild.depth = 2;
+        grandchild.parent_agent_id = Some(first.agent_id.clone());
+        let mut legacy = child(3, &Brief::default());
+        legacy.depth = 0;
+        ledger.started(&first, 1_000);
+        ledger.started(&grandchild, 1_100);
+        ledger.started(&legacy, 1_200);
+        let rows = ledger.snapshot(2_000);
+        let levels: Vec<(u32, &str)> = rows
+            .iter()
+            .map(|row| (row.depth, row.parent_agent_id.as_str()))
+            .collect();
+        assert_eq!(levels, [(1, ""), (2, "a_00000001"), (1, "")]);
+    }
+
+    #[test]
+    fn brief_references_over_the_bound_are_dropped_and_counted() {
+        let ledger = EphemeralAgentLedger::default();
+        let mut spawned = child(1, &Brief::default());
+        spawned.record.brief_digest = Some("ab".repeat(32));
+        spawned.record.brief_refs = serde_json::json!({
+            "message_ids": vec!["m".repeat(64); 200],
+        });
+        let before = DROPPED_BRIEF_REFS_TOTAL.load(Ordering::Relaxed);
+        ledger.started(&spawned, 1_000);
+        let rows = ledger.snapshot(2_000);
+        assert!(rows[0].brief_digest.is_empty() && rows[0].brief_refs_json.is_empty());
+        assert!(DROPPED_BRIEF_REFS_TOTAL.load(Ordering::Relaxed) > before);
     }
 }

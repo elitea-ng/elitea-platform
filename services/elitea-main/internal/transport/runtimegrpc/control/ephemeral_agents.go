@@ -57,6 +57,10 @@ type EphemeralAgent struct {
 	StartedAt    time.Time
 	// FinishedAt is zero while the child runs.
 	FinishedAt time.Time
+	// Depth is 1 for a child of the run's agent, 2 for a child a child
+	// started (#1872); ParentAgentID names that child (empty at depth 1).
+	Depth         int
+	ParentAgentID string
 }
 
 // EphemeralAgents keeps the sub-agents a claimed execution started
@@ -165,7 +169,12 @@ func ephemeralAgentsFromWire(wire []*runtimev1.EphemeralAgentV1) ([]EphemeralAge
 		if finished != 0 {
 			finishedAt = time.UnixMilli(finished).UTC()
 		}
+		depth, ok := ephemeralDepth(agent)
+		if !ok {
+			return nil, false
+		}
 		agents = append(agents, EphemeralAgent{
+			Depth: depth, ParentAgentID: agent.GetParentAgentId(),
 			AgentID: agent.GetAgentId(), ParentCallID: agent.GetParentCallId(), Ordinal: int(agent.GetOrdinal()),
 			Label: agent.GetLabel(), DisplayName: agent.GetDisplayName(), Avatar: agent.GetAvatar(),
 			ProfileDigest: agent.GetProfileDigest(), BriefDigest: agent.GetBriefDigest(), BriefRefs: refs,
@@ -174,7 +183,38 @@ func ephemeralAgentsFromWire(wire []*runtimev1.EphemeralAgentV1) ([]EphemeralAge
 			ErrorCode: agent.GetErrorCode(), StartedAt: time.UnixMilli(started).UTC(), FinishedAt: finishedAt,
 		})
 	}
+	// A grandchild's parent is a child of the same report at depth 1: a
+	// cumulative snapshot always carries it. (Ordinals are no order here: a
+	// failed start gives its ordinal back to a later spawn.)
+	byID := make(map[string]EphemeralAgent, len(agents))
+	for _, agent := range agents {
+		byID[agent.AgentID] = agent
+	}
+	for _, agent := range agents {
+		if agent.Depth == 1 {
+			continue
+		}
+		parent, found := byID[agent.ParentAgentID]
+		if !found || parent.Depth != 1 {
+			return nil, false
+		}
+	}
 	return agents, true
+}
+
+// ephemeralDepth answers the spawn's depth: 0 (an earlier worker) and 1 are
+// a child of the run's agent, with no parent; 2 is a child a child started,
+// whose parent is another sub-agent id.
+func ephemeralDepth(agent *runtimev1.EphemeralAgentV1) (int, bool) {
+	parent := agent.GetParentAgentId()
+	switch agent.GetDepth() {
+	case 0, 1:
+		return 1, parent == ""
+	case 2:
+		return 2, ephemeralAgentID.MatchString(parent) && parent != agent.GetAgentId()
+	default:
+		return 0, false
+	}
 }
 
 func boundedText(text string, maxChars int) bool {

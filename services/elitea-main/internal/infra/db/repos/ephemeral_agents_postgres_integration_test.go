@@ -8,6 +8,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -101,5 +102,74 @@ SELECT status FROM elitea_runtime.ephemeral_agents WHERE execution_id = $1 AND a
 	// No job for the generation: refused, nothing stored.
 	if err := store.Record(ctx, execution, "cmd-x", 9, []EphemeralAgentRow{ephemeralRow("a_44556677", "running")}); !errors.Is(err, ErrEphemeralAgentsRefused) {
 		t.Fatalf("unknown generation: %v", err)
+	}
+}
+
+// A depth-2 run records two levels (#1872): the children at depth 1 with no
+// parent, the grandchild at depth 2 under the child that started it. A
+// later report cannot move a spawn to another parent, and the table refuses
+// a grandchild without one.
+func TestEphemeralAgentsRecordDepthAndParent(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const execution = "exec-ephemeral-1872"
+	seedEgressExecution(t, pool, execution, 7, 31)
+	store, err := NewEphemeralAgents(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := ephemeralRow("a_00000001", "running")
+	child.Depth = 1
+	legacy := ephemeralRow("a_00000002", "running")
+	legacy.Ordinal = 2 // Depth 0: an earlier worker, stored as 1.
+	grandchild := ephemeralRow("a_00000003", "running")
+	grandchild.Ordinal, grandchild.Depth, grandchild.ParentAgentID = 3, 2, "a_00000001"
+	if err := store.Record(ctx, execution, "cmd-"+execution, 1, []EphemeralAgentRow{child, legacy, grandchild}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	rows, err := pool.Query(ctx, `
+SELECT agent_id, depth, COALESCE(parent_agent_id, '') FROM elitea_runtime.ephemeral_agents
+WHERE execution_id = $1 ORDER BY ordinal`, execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for rows.Next() {
+		var (
+			agentID, parent string
+			depth           int
+		)
+		if err := rows.Scan(&agentID, &depth, &parent); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, fmt.Sprintf("%s:%d:%s", agentID, depth, parent))
+	}
+	rows.Close()
+	want := []string{"a_00000001:1:", "a_00000002:1:", "a_00000003:2:a_00000001"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("rows=%v, want %v", got, want)
+	}
+
+	// A report that names another parent does not rewrite the row.
+	moved := grandchild
+	moved.ParentAgentID, moved.Status = "a_00000002", "completed"
+	if err := store.Record(ctx, execution, "cmd-"+execution, 1, []EphemeralAgentRow{moved}); err != nil {
+		t.Fatalf("record moved: %v", err)
+	}
+	var status, parent string
+	if err := pool.QueryRow(ctx, `
+SELECT status, parent_agent_id FROM elitea_runtime.ephemeral_agents WHERE execution_id = $1 AND agent_id = 'a_00000003'`,
+		execution).Scan(&status, &parent); err != nil {
+		t.Fatal(err)
+	}
+	if status != "running" || parent != "a_00000001" {
+		t.Fatalf("a changed parent rewrote the row: status=%s parent=%s", status, parent)
+	}
+
+	// The table refuses a grandchild without a parent.
+	orphan := ephemeralRow("a_00000004", "running")
+	orphan.Ordinal, orphan.Depth = 4, 2
+	if err := store.Record(ctx, execution, "cmd-"+execution, 1, []EphemeralAgentRow{orphan}); err == nil {
+		t.Fatal("a depth-2 spawn without a parent was stored")
 	}
 }

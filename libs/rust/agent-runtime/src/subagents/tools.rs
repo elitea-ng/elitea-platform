@@ -392,14 +392,6 @@ impl SubAgentTool {
                     ),
                 ));
             }
-            Err(RunRefusal::Busy(running)) => {
-                return Err(refused(
-                    "subagent_busy",
-                    format!(
-                        "{running} sub-agents of this turn are already running, the most at once; wait for one (`{WAIT_AGENT}`) first."
-                    ),
-                ));
-            }
             Err(RunRefusal::NoId) => {
                 return Err(refused(
                     "subagent_unavailable",
