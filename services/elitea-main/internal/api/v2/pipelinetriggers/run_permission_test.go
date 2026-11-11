@@ -42,7 +42,7 @@ func TestHoldsRunPermissionIsTheOneRunIdentityCheck(t *testing.T) {
 		t.Fatalf("a resolver error = %v, %v", ok, err)
 	}
 
-	if ok, err := HoldsRunPermission(ctx, nil, 12, 7); err != nil || ok {
+	if ok, err := HoldsRunPermission(ctx, nil, 12, 7); !errors.Is(err, ErrNoRunPermissionResolver) || ok {
 		t.Fatalf("a nil resolver = %v, %v", ok, err)
 	}
 

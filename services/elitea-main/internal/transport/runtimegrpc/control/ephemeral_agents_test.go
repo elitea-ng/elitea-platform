@@ -110,6 +110,33 @@ func TestReportEphemeralAgentsCarriesDepthAndParent(t *testing.T) {
 	}
 }
 
+// A grandchild whose parent the report does not carry (the worker lost the
+// run's ledger) is dropped alone; the rest of the report is stored.
+func TestReportEphemeralAgentsDropsOnlyAnOrphanGrandchild(t *testing.T) {
+	calls := []string{}
+	lease := validLease()
+	store := &ephemeralAgentsStub{calls: &calls}
+	server := newSteeringTestServer(t, &calls, lease).WithEphemeralAgents(store)
+	child := ephemeralAgentWire()
+	child.AgentId = "a_00000001"
+	orphan := grandchildOf("a_00000002", "a_00000009")
+	orphan.Ordinal = 2
+	response, err := server.ReportEphemeralAgents(context.Background(), ephemeralAgentsRequestFor(lease.Fence, child, orphan))
+	if err != nil || response.GetRejection() != nil {
+		t.Fatalf("err=%v rejection=%v", err, response.GetRejection())
+	}
+	if len(store.agents) != 1 || len(store.agents[0]) != 1 || store.agents[0][0].AgentID != "a_00000001" {
+		t.Fatalf("agents=%+v", store.agents)
+	}
+
+	// A report of nothing but orphans stores nothing and is not refused.
+	store.agents = nil
+	response, err = server.ReportEphemeralAgents(context.Background(), ephemeralAgentsRequestFor(lease.Fence, orphan))
+	if err != nil || response.GetRejection() != nil || len(store.agents) != 0 {
+		t.Fatalf("err=%v rejection=%v agents=%+v", err, response.GetRejection(), store.agents)
+	}
+}
+
 func TestReportEphemeralAgentsRefusals(t *testing.T) {
 	lease := validLease()
 	stale := lease.Fence
@@ -152,7 +179,6 @@ func TestReportEphemeralAgentsRefusals(t *testing.T) {
 		{name: "depth past two", store: &ephemeralAgentsStub{}, request: mutate(func(a *runtimev1.EphemeralAgentV1) { a.Depth = 3 }), code: protocol},
 		{name: "parent at depth one", store: &ephemeralAgentsStub{}, request: mutate(func(a *runtimev1.EphemeralAgentV1) { a.ParentAgentId = "a_00000009" }), code: protocol},
 		{name: "depth two without parent", store: &ephemeralAgentsStub{}, request: mutate(func(a *runtimev1.EphemeralAgentV1) { a.Depth = 2 }), code: protocol},
-		{name: "parent not in report", store: &ephemeralAgentsStub{}, request: mutate(func(a *runtimev1.EphemeralAgentV1) { a.Depth, a.ParentAgentId = 2, "a_00000009" }), code: protocol},
 		{name: "parent is a grandchild", store: &ephemeralAgentsStub{}, request: ephemeralAgentsRequestFor(lease.Fence, grandchildOf("a_00000001", "a_00000002"), grandchildOf("a_00000002", "a_00000001")), code: protocol},
 		{name: "stale fence", store: &ephemeralAgentsStub{}, request: ephemeralAgentsRequestFor(stale, ephemeralAgentWire()), code: runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_STALE_FENCE},
 		{name: "store unavailable", store: &ephemeralAgentsStub{err: errors.New("database down")}, request: ephemeralAgentsRequestFor(lease.Fence, ephemeralAgentWire()), code: runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, retryable: true},

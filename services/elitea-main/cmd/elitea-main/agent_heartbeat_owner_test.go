@@ -32,4 +32,9 @@ func TestOwnerCanRunUsesThePipelineRunIdentityCheck(t *testing.T) {
 	if ok, err := ownerCanRun(heartbeatOwnerResolver{err: boom})(ctx, 1, 3); !errors.Is(err, boom) || ok {
 		t.Fatalf("resolver error = %v, %v", ok, err)
 	}
+	// No resolver is no decision: the act fails, it does not read as a lost
+	// permission.
+	if ok, err := ownerCanRun(nil)(ctx, 1, 3); !errors.Is(err, v2pipelinetriggers.ErrNoRunPermissionResolver) || ok {
+		t.Fatalf("no resolver = %v, %v", ok, err)
+	}
 }

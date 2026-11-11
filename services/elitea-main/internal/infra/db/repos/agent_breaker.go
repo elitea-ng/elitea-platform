@@ -117,7 +117,10 @@ WITH fresh AS MATERIALIZED (
           SELECT 1 FROM elitea_runtime.agent_breaker_runs AS seen
           WHERE seen.execution_id = j.execution_id AND seen.generation = j.generation)
       -- An idle compaction run (shared 0230, issue 1610) is upkeep, not a
-      -- run of the agent's: it neither trips nor dilutes the window.
+      -- run of the agent's: it neither trips nor dilutes the window. Its
+      -- own marker (shared 0240) outlives the row, which CASCADE-deletes
+      -- with the source's job (#1921).
+      AND NOT j.idle_compaction
       AND NOT EXISTS (
           SELECT 1 FROM elitea_runtime.agent_idle_compactions AS idle
           WHERE idle.idle_execution_id = j.execution_id)

@@ -110,6 +110,11 @@ func (s *Server) ReportEphemeralAgents(ctx context.Context, request *runtimev1.R
 		code, message, retryable := safeRuntimeError(err)
 		return ephemeralAgentsRejection(code, message, retryable), nil
 	}
+	agents, orphans := withoutOrphanGrandchildren(agents)
+	if orphans > 0 {
+		slog.WarnContext(ctx, "sub-agent report: grandchildren whose parent the report does not carry are not stored",
+			"execution_id", fence.ExecutionID, "dropped", orphans)
+	}
 	if len(agents) == 0 {
 		return &runtimev1.ReportEphemeralAgentsResponseV1{}, nil
 	}
@@ -183,9 +188,10 @@ func ephemeralAgentsFromWire(wire []*runtimev1.EphemeralAgentV1) ([]EphemeralAge
 			ErrorCode: agent.GetErrorCode(), StartedAt: time.UnixMilli(started).UTC(), FinishedAt: finishedAt,
 		})
 	}
-	// A grandchild's parent is a child of the same report at depth 1: a
-	// cumulative snapshot always carries it. (Ordinals are no order here: a
-	// failed start gives its ordinal back to a later spawn.)
+	// A grandchild's parent, when the report carries it, is a child at
+	// depth 1; a grandchild named as a parent is a malformed report.
+	// (Ordinals are no order here: a failed start gives its ordinal back to
+	// a later spawn.)
 	byID := make(map[string]EphemeralAgent, len(agents))
 	for _, agent := range agents {
 		byID[agent.AgentID] = agent
@@ -194,12 +200,30 @@ func ephemeralAgentsFromWire(wire []*runtimev1.EphemeralAgentV1) ([]EphemeralAge
 		if agent.Depth == 1 {
 			continue
 		}
-		parent, found := byID[agent.ParentAgentID]
-		if !found || parent.Depth != 1 {
+		if parent, found := byID[agent.ParentAgentID]; found && parent.Depth != 1 {
 			return nil, false
 		}
 	}
 	return agents, true
+}
+
+// withoutOrphanGrandchildren drops a grandchild whose parent the report does
+// not carry. A cumulative snapshot carries it, except when the worker lost
+// the run's ledger (its registry evicts by age and size) and started a new
+// one: then only the orphan is dropped, never the rest of the report.
+func withoutOrphanGrandchildren(agents []EphemeralAgent) ([]EphemeralAgent, int) {
+	present := make(map[string]bool, len(agents))
+	for _, agent := range agents {
+		present[agent.AgentID] = true
+	}
+	kept := agents[:0:0]
+	for _, agent := range agents {
+		if agent.Depth != 1 && !present[agent.ParentAgentID] {
+			continue
+		}
+		kept = append(kept, agent)
+	}
+	return kept, len(agents) - len(kept)
 }
 
 // ephemeralDepth answers the spawn's depth: 0 (an earlier worker) and 1 are

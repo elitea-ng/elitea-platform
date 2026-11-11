@@ -4745,13 +4745,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// route takes models.applications.memory.list; the handler
 				// decides edit, delete and approve from ownership and the
 				// update, delete and approve permissions, and keeps an entry
-				// about a person to that person and the agent's managers.
+				// about a person to that person and the agent's managers. The
+				// agent proposals block below reuses the same store as its
+				// owner check.
+				var memoryStore *dbrepos.AgentMemory
+				if cfg.Pool != nil {
+					store, err := dbrepos.ComposeAgentMemory(cfg.Pool)
+					memoryStore = composedStore(slog.Default(), "agent memory", store, err)
+				}
 				{
-					var memoryStore *dbrepos.AgentMemory
-					if cfg.Pool != nil {
-						store, err := dbrepos.ComposeAgentMemory(cfg.Pool)
-						memoryStore = composedStore("agent memory", store, err)
-					}
 					memory := v2agentmemory.NewHandler(memoryStore, func(r *http.Request, permission string) (bool, error) {
 						return apimw.HoldsResolvedPermission(coreResolver, platformauth.PermissionModeDefault, permission)(r)
 					})
@@ -4795,10 +4797,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					var proposalPersonal v2agentproposals.PersonalProjects
 					if cfg.Pool != nil {
 						store, err := dbrepos.ComposeAgentProposals(cfg.Pool)
-						proposalStore = composedStore("agent proposals", store, err)
-						ownerStore, err := dbrepos.ComposeAgentMemory(cfg.Pool)
-						if ownerStore = composedStore("agent proposal owners", ownerStore, err); ownerStore != nil {
-							owners = ownerStore
+						proposalStore = composedStore(slog.Default(), "agent proposals", store, err)
+						if memoryStore != nil {
+							owners = memoryStore
 						}
 						resolver := apimw.NewDBPersonalProjectResolver(cfg.Pool)
 						if personalProjects != nil {
@@ -6114,9 +6115,9 @@ func newWorkerEgressHostsHandler(pool *pgxpool.Pool) *v2workeregress.Handler {
 // (its audit appender, say) leaves its routes answering 503, and the log line
 // says why. A failed compose returns the zero value, so the handler's
 // nil-store guard applies.
-func composedStore[T any](what string, store T, err error) T {
+func composedStore[T any](logger *slog.Logger, what string, store T, err error) T {
 	if err != nil {
-		slog.Error("compose store; its routes answer 503", "store", what, "err", err)
+		logger.Error("compose store; its routes answer 503", "store", what, "err", err)
 		var zero T
 		return zero
 	}

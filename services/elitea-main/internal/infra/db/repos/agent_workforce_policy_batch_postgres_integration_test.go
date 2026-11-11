@@ -156,3 +156,39 @@ VALUES ('agent', 1, $1, 'x', 7, 'manual')`, "991882")
 		t.Fatalf("under a project hold: %+v %v", summary, err)
 	}
 }
+
+// A hire whose create path wrote no registry row (a trigger swallows it
+// here) is not recorded: no tier or probation would hold it, so the
+// proposal stays proposed and no auto_hire action is written.
+func TestWorkforceAutoHireWithoutARegistryRowIsNotRecorded(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedPolicyBase(t, pool)
+	now := time.Now().UTC()
+	store := workforceStore(t, pool, &now)
+	ctx := context.Background()
+	seedWorkforceAgent(t, pool, policyProposer, "medium", `{}`)
+	onPolicy(t, store, func(p *agentworkforce.Policy) { p.AutoHireEnabled = true; p.MaxAutoHired = 1 })
+	id := seedHireProposal(t, pool, 41, []string{"github/read_file"}, 3, 0)
+	wfExec(t, pool, `
+CREATE FUNCTION wf_test_skip_registry() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$`)
+	wfExec(t, pool, `
+CREATE TRIGGER skip_registry BEFORE INSERT ON elitea_lifecycle.agent_registry
+FOR EACH ROW EXECUTE FUNCTION wf_test_skip_registry()`)
+
+	summary, _ := store.WorkforcePolicyPass(ctx)
+	if summary.Hired != 0 {
+		t.Fatalf("a hire with no registry row was recorded: %+v", summary)
+	}
+	var status string
+	var actions int
+	if err := pool.QueryRow(ctx, `SELECT status FROM elitea_lifecycle.agent_proposals WHERE id = $1`, id).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM elitea_lifecycle.agent_automatic_actions WHERE kind = $1`,
+		agentworkforce.ActionAutoHire).Scan(&actions); err != nil {
+		t.Fatal(err)
+	}
+	if status != "proposed" || actions != 0 {
+		t.Fatalf("status=%q auto_hire actions=%d", status, actions)
+	}
+}

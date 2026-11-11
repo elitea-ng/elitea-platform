@@ -245,6 +245,11 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 	if err != nil {
 		return nil, unsupportedStartBecause("version details are not one decodable JSON object", err)
 	}
+	if settings, ok := version["llm_settings"].(map[string]any); !ok || settings == nil {
+		// Checked before the catalogue read, so a turn that can never run
+		// says why and costs no catalogue round trip.
+		return nil, unsupportedStartBecause("model resolution", unsupportedStart("the turn carries no llm_settings object"))
+	}
 	// One catalogue read serves the agent's model, the summary model and
 	// the sub-agent models (#1936): the three used to read it apiece.
 	catalog, err := service.models.Get(ctx, configurationapp.CurrentModelCatalogQuery{

@@ -3,6 +3,7 @@ package agentexecution
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
@@ -57,6 +58,19 @@ func TestOneFreezeReadsTheCatalogueOnceAndSharesTheModelShape(t *testing.T) {
 		!proto.Equal(summary.GetModelContextLimits(), small.GetModelContextLimits()) ||
 		!proto.Equal(summary.GetModelReasoning(), small.GetModelReasoning()) {
 		t.Fatalf("summary %v and sub-agent %v shapes differ", summary, small)
+	}
+}
+
+// A version with no llm_settings is refused for that reason before the
+// catalogue is read.
+func TestAFreezeWithoutLLMSettingsReadsNoCatalogue(t *testing.T) {
+	service := subagentFreezer(t)
+	stub := service.models.(*currentAgentModelCatalogStub)
+	_, err := service.FreezeCurrentApplicationVersion(context.Background(), CurrentApplicationVersionFreezeRequest{
+		ProjectID: 7, ActorUserID: 11, VersionDetails: json.RawMessage(`{"agent_type":"agent","tools":[]}`),
+	})
+	if err == nil || !strings.Contains(err.Error(), "llm_settings") || len(stub.queries) != 0 {
+		t.Fatalf("err = %v, catalogue reads = %d", err, len(stub.queries))
 	}
 }
 

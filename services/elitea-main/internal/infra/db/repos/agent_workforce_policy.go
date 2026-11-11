@@ -621,13 +621,20 @@ SELECT EXISTS (SELECT 1 FROM elitea_lifecycle.agent_automatic_actions
 		}
 		now := s.now().UTC()
 		until := now.Add(agentworkforce.ProbationWindow)
-		if _, err := tx.Exec(ctx, `
+		tag, err := tx.Exec(ctx, `
 UPDATE elitea_lifecycle.agent_registry
 SET risk_tier = 'low', auto_hired_at = $3, auto_hire_proposal_id = $4, probation_until = $5,
     probation_reviewed_at = NULL, probation_reviewed_by = NULL, updated_at = clock_timestamp()
 WHERE tenant_project_id = $1 AND application_id = $2`,
-			policy.ProjectID, applicationID, now, candidate.id, until); err != nil {
+			policy.ProjectID, applicationID, now, candidate.id, until)
+		if err != nil {
 			return fmt.Errorf("agent workforce: put the hire on probation: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			// The create path wrote no registry row: a hire with no tier and
+			// no probation must not be recorded as one (the transaction
+			// rolls back).
+			return fmt.Errorf("agent workforce: the hire of proposal %d has no registry row", candidate.id)
 		}
 		if _, err := tx.Exec(ctx, `
 UPDATE elitea_lifecycle.agent_proposals
