@@ -2,6 +2,9 @@ import type { components } from '@/api/generated/elitea.gen';
 import { budgetRefusalText, budgetScopeOf } from '@/features/usage/budgetRefusal';
 import { parseServerTime } from '@/lib/time';
 import { classifyMessage, participantKindOf, type MessageClass } from '@elitea/client-core/conversation';
+import type { CloudSubAgentLane } from '@elitea/client-core/stream';
+
+import { storedSubAgents } from '@/features/chat/subAgentLanes';
 
 /**
  * Persisted conversation history → what the thread renders.
@@ -59,6 +62,8 @@ export interface ChatMessage {
   authorRole?: string | null;
   /** Participant ids the message is addressed to (`addressed_to`, contract 1.38); empty for everyone. */
   addressedTo?: number[];
+  /** Client contract 1.48: the temporary sub-agents a cloud answer started (`meta.subagents_v1`). */
+  subAgents?: CloudSubAgentLane[];
 }
 
 /** One file of a message. */
@@ -227,6 +232,12 @@ function groupError(group: Record<string, unknown>): string | null {
   return reason !== '' ? reason.slice(0, 500) : 'This answer failed.';
 }
 
+function subAgentsOf(role: ChatRole, group: Record<string, unknown>): Pick<ChatMessage, 'subAgents'> {
+  if (role !== 'assistant') return {};
+  const lanes = storedSubAgents(asRecord(group.meta) ?? asRecord(group.metadata), group.is_streaming === true);
+  return lanes.length === 0 ? {} : { subAgents: lanes };
+}
+
 export function toChatMessages(
   detail: Pick<ConversationDetail, 'participants' | 'message_groups'> | undefined,
   self: SelfContext = { selfUserId: null },
@@ -278,6 +289,7 @@ export function toChatMessages(
       addressedTo: (Array.isArray(group.addressed_to) ? group.addressed_to : []).filter(
         (id): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0,
       ),
+      ...subAgentsOf(role, group),
     });
   }
   // Oldest first; equal or missing times keep the server's id order.

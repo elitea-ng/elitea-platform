@@ -289,3 +289,13 @@ describe('client contract 1.46', () => {
     assert.match(persona.description, /Client contract 1\.46/);
   });
 });
+
+describe('client contract 1.48', () => {
+  it('keeps the cloud sub-agent lane frame and the stored lanes', () => {
+    const { doc } = buildContract();
+    const lane = doc.components.schemas.SubAgentLane;
+    for (const key of ['agent_id', 'parent_call_id', 'ordinal', 'status', 'items']) assert.ok(lane?.required.includes(key), key);
+    assert.equal(doc.components.schemas.SubAgentLaneItem?.properties.type.enum.join(','), 'tool,text');
+    assert.equal(doc.info['x-elitea-client-contract'], '1.48');
+  });
+});

@@ -241,6 +241,79 @@
     "thinking": null,
     "type": "agent_hitl_interrupt"
   },
+  "subagent_finished": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "2026-08-14T12:00:03+00:00",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "subagent_v1": {
+        "agent_id": "a_0000beef",
+        "input_tokens": 100,
+        "kind": "finished",
+        "output_tokens": 20,
+        "result": "Two callers.",
+        "status": "completed",
+        "steps": 2
+      }
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_subagent"
+  },
+  "subagent_started": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "2026-08-14T12:00:03+00:00",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "subagent_v1": {
+        "agent_id": "a_0000beef",
+        "avatar": "default:owl",
+        "display_name": "Owl",
+        "kind": "started",
+        "label": "callers",
+        "ordinal": 1,
+        "parent_call_id": "call-spawn"
+      }
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_subagent"
+  },
+  "subagent_tool_start": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "2026-08-14T12:00:03+00:00",
+    "execution_generation": "generation-1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "subagent_v1": {
+        "agent_id": "a_0000beef",
+        "args_summary": "src/main.rs",
+        "call_id": "call-child-1",
+        "kind": "tool_start",
+        "tool": "read_file"
+      }
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "conversation-1",
+    "thinking": null,
+    "type": "agent_subagent"
+  },
   "tool_end": {
     "agent_name": null,
     "content": null,

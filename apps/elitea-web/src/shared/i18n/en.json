@@ -6175,5 +6175,12 @@
   "widgets.chatBox.shareHistory.now": "Now",
   "widgets.chatBox.shareHistory.start": "The start",
   "widgets.chatBox.shareHistory.title": "Share history from",
-  "features.chatMessages.contextView.compactionLabel": "Context"
+  "features.chatMessages.contextView.compactionLabel": "Context",
+  "features.chatMessages.subAgents.budgetExhausted": "Out of budget",
+  "features.chatMessages.subAgents.cancelled": "Stopped",
+  "features.chatMessages.subAgents.completed": "Done",
+  "features.chatMessages.subAgents.failed": "Failed",
+  "features.chatMessages.subAgents.running": "Running",
+  "features.chatMessages.subAgents.temporary": "Temporary",
+  "features.chatMessages.subAgents.title": "Sub-agent {{n}}"
 }

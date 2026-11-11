@@ -38,9 +38,12 @@ function statusLabel(status: SubAgentStatus): string {
 }
 
 function title(lane: SubAgentLane): string {
-  const name = t('workspace.subagent.title', 'Sub-agent {{n}}', { n: lane.ordinal });
-  return lane.label === undefined ? name : `${name} · ${lane.label}`;
+  const name = lane.displayName ?? t('workspace.subagent.title', 'Sub-agent {{n}}', { n: lane.ordinal });
+  return lane.label === undefined || lane.label === lane.displayName ? name : `${name} · ${lane.label}`;
 }
+
+/** The avatar a lane's host draws for it (the cloud transcript's: a temporary agent's dashed ring). */
+export type SubAgentAvatar = ComponentType<{ lane: SubAgentLane }>;
 
 function usage(lane: SubAgentLane): string | null {
   if (lane.steps === undefined) return null;
@@ -50,7 +53,7 @@ function usage(lane: SubAgentLane): string | null {
   });
 }
 
-function Lane({ lane, ToolRow }: { lane: SubAgentLane; ToolRow: ComponentType<{ item: ToolItem }> }): React.JSX.Element {
+function Lane({ lane, ToolRow, Avatar }: { lane: SubAgentLane; ToolRow: ComponentType<{ item: ToolItem }>; Avatar?: SubAgentAvatar | undefined }): React.JSX.Element {
   const running = lane.status === 'running';
   // Open while it runs; once it settled, the person's choice.
   const [chosen, setChosen] = useState<boolean | null>(null);
@@ -80,9 +83,27 @@ function Lane({ lane, ToolRow }: { lane: SubAgentLane; ToolRow: ComponentType<{ 
         <Box aria-hidden sx={{ display: 'flex', '& svg': { width: '1rem', height: '1rem' } }}>
           {open ? <ExpandMoreIcon /> : <ChevronRightIcon />}
         </Box>
+        {Avatar !== undefined && <Avatar lane={lane} />}
+        {/* Untrusted text (the spawn's profile): React renders it as text. */}
         <Typography variant="labelSmall" component="span" sx={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {title(lane)}
         </Typography>
+        {lane.temporary === true && (
+          <Typography
+            variant="bodySmall"
+            component="span"
+            data-testid="subagent-temporary"
+            sx={(theme: Theme) => ({
+              flexShrink: 0,
+              paddingX: 0.5,
+              borderRadius: theme.vars.shape.radiusSm,
+              border: `1px dashed ${theme.vars.palette.divider}`,
+              color: theme.vars.palette.text.secondary,
+            })}
+          >
+            {t('workspace.subagent.temporary', 'Temporary')}
+          </Typography>
+        )}
         {spent !== null && (
           <Typography variant="bodySmall" component="span" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics, flexShrink: 0 })}>
             {spent}
@@ -126,14 +147,16 @@ export interface SubAgentLanesProps {
   lanes: readonly SubAgentLane[];
   /** The transcript's own tool row, for the children's calls. */
   ToolRow: ComponentType<{ item: ToolItem }>;
+  /** Each lane's avatar; absent: none (the desktop's local children). */
+  Avatar?: SubAgentAvatar | undefined;
 }
 
-export function SubAgentLanes({ lanes, ToolRow }: SubAgentLanesProps): React.JSX.Element | null {
+export function SubAgentLanes({ lanes, ToolRow, Avatar }: SubAgentLanesProps): React.JSX.Element | null {
   if (lanes.length === 0) return null;
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }} data-testid="subagent-lanes">
       {lanes.map((lane) => (
-        <Lane key={lane.agentId} lane={lane} ToolRow={ToolRow} />
+        <Lane key={lane.agentId} lane={lane} ToolRow={ToolRow} Avatar={Avatar} />
       ))}
     </Box>
   );

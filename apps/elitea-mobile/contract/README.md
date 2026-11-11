@@ -178,3 +178,9 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 (no video module; expo-video needs a new native build), so an animated WebP state shows the still and a
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
+
+## Client contract 1.48
+
+| Area | What |
+|---|---|
+| Cloud sub-agent lane (ADR-0050 decision 4, #1823) | A cloud run's temporary sub-agents (`spawn_agent`) stream as `agent_subagent` frames on the answer's own `execution.node_event` stream: `response_metadata.subagent_v1` is one entry (`started` with `display_name`, `avatar`, `label`, `parent_call_id`; `tool_start`; `tool_end`; `text`; `finished` with `status`; `resumed`). The answer keeps the folded lanes as `metadata.subagents_v1` (`SubAgentLane`), so a reload shows them. The app folds both with `@elitea/client-core/stream` (`foldSubAgentEntry`, `parseSubAgentLanes`) and shows each child's tool calls, then its final answer, in the tool card under "<name> · temporary" (`src/features/chat/subAgentLanes.ts`); its in-between text is web and desktop only for now. A server before 1.48 sends neither, and nothing shows. |

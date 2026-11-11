@@ -11,6 +11,7 @@ import { ROLES } from '@/shared/lib/enums';
 
 import type { ExecutionEventData } from '@/shared/api/sse';
 
+import { settleSubAgents } from './chatStreamSubAgentFrames';
 import { settleContextProgress } from './chatStreamToolAction';
 import { nowIso, type ChatStreamContext } from './chatStreamShared';
 import type { ChatMessage } from './convertMessagesToChatHistory';
@@ -31,8 +32,11 @@ export function settleInFlight(history: readonly ChatMessage[], exception?: unkn
   const next = history.map((message) => {
     if (!message.isStreaming && !message.isLoading) return message;
     changed = true;
+    const subAgents = settleSubAgents(message.subAgents);
     return {
       ...message,
+      // A lane the stream never ended stops with it, as at a terminal frame.
+      ...(subAgents === undefined ? {} : { subAgents }),
       isStreaming: false,
       isLoading: false,
       isRegenerating: false,

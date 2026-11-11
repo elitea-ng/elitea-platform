@@ -404,6 +404,20 @@ describe('sub-agents (#1226)', () => {
     expect(replayView([...events, finished(5, 'a_1', 'cancelled')]).subAgents?.[0]?.result).toBeUndefined();
   });
 
+  it('keeps the spawn profile a local start names (#1827, #1910)', () => {
+    const named: AgentEvent = {
+      turn_id: T,
+      seq: 2,
+      kind: 'subagent_started',
+      payload: { agent_id: 'a_1', parent_call_id: 'c1', ordinal: 1, label: 'audit', display_name: 'Reviewer', avatar: 'default:owl', brief_digest: 'sha256:x' },
+    };
+    const [lane] = activeView(run([spawn(1, 'c1'), named])).subAgents ?? [];
+    expect(lane).toMatchObject({ label: 'audit', displayName: 'Reviewer', avatar: 'default:owl' });
+    const [plain] = activeView(run([spawn(1, 'c1'), started(2, 'a_1', 'c1', 1)])).subAgents ?? [];
+    expect(plain).not.toHaveProperty('displayName');
+    expect(plain).not.toHaveProperty('avatar');
+  });
+
   it('ignores an event for a child whose start it never heard, and a repeated start', () => {
     const view = activeView(run([inner(1, 'a_9', { kind: 'text_delta', text: 'x' }), finished(2, 'a_9', 'completed'), spawn(3, 'c1'), started(4, 'a_1', 'c1', 1), started(5, 'a_1', 'c1', 1)]));
     expect(view.subAgents?.map((lane) => lane.agentId)).toEqual(['a_1']);
