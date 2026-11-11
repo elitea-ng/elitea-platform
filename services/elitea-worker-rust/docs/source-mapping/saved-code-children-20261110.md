@@ -466,8 +466,9 @@ The recovery walk refuses no shape this change admits:
   browser pass.
 - **Agent as tool.** An ordinary root Agent (not a pipeline) calling a saved pipeline as a tool still has no owner
   scope for that pipeline's Code, which fails closed as before (FU-319, registered).
-- **The browser pass did not route a partition to an error output.** The Router routes to `normalize` on every item,
-  because On Error routing (5b) is not in this slice.
+- **No partition was routed to an error output.** That would be a failure route (FU-312), which is out of scope. In the
+  kill runs, `route_quality` (Router) was present and its condition was the constant `normalize`, so every item took the
+  same branch. A separate run, below, proves a non-default branch.
 
 ## Real-browser evidence
 
@@ -504,6 +505,18 @@ The recovery walk refuses no shape this change admits:
     `InvalidResult` with and without a kill;
   - the fixture was corrected to end with the value `41` before the evidence above;
   - those two failed runs remain visible in chat 887.
+- **The Router inside a saved child takes both branches.**
+  - Stack `w32g`, same images. `verify-profile` 49 passed, 1 failed; the failing check compares the tenant ledger
+    (166) with the worktree head (167). Migration 0167 came from `main` with the merge and is unrelated to this change.
+  - The saved pipeline `silver_route`:
+    - `validate` (Python) sets `quality` to `flag` when the partition is `p2`, otherwise to `normalize`;
+    - `route_quality` (Router, `condition: '{{ quality }}'`, routes `normalize` and `flag`);
+    - `normalize` (TypeScript) returns `normalized`;
+    - `flag` (Python) returns `flagged`.
+  - A Map over `["p1", "p2"]`, whose worker runs it with `input_mapping: {task: {type: variable, value: entity}}`, in a
+    main chat. Execution `da56bb61…00f3`: item 0 gave `normalized` and item 1 gave `flagged`.
+  - The answer persists after a reload. 0 WARN or ERROR. 4 visits (validate ×2, normalize, flag), 4 distinct
+    activations, 0 locks.
 - The overhead p99 showed no regression: each kill run settled in about 1–1.5 min, dominated by the 4 s Code sleeps
   and the takeover lease. So FU-320 stays a follow-up.
 
