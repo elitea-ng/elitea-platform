@@ -81,7 +81,7 @@ func TestSubagentModelsAreFrozenFromTheCatalogue(t *testing.T) {
 	if names["small"]["model_project_id"] != float64(7) || names["small"]["max_tokens"] != float64(4000) {
 		t.Fatalf("small = %v, want the project's own with its output cap", names["small"])
 	}
-	if names["public-large"]["max_tokens"] != float64(subagentModelOutputCap) {
+	if names["public-large"]["max_tokens"] != float64(frozenModelDefaultOutputCap) {
 		t.Fatalf("public-large = %v", names["public-large"])
 	}
 	if policy.GetMaxDepth() != 0 {

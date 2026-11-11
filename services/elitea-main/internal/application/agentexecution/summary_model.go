@@ -1,7 +1,6 @@
 package agentexecution
 
 import (
-	"context"
 	"encoding/json"
 	"math"
 
@@ -12,7 +11,7 @@ import (
 // freezeCurrentSummaryModel replaces authored snapshots with catalogue authority.
 // An absent selection retains the worker's isolated same-model summarizer.
 func (service *CurrentApplicationToolSnapshotService) freezeCurrentSummaryModel(
-	ctx context.Context, projectID int32, requested map[string]any, version map[string]any,
+	projectID int32, catalog configurationapp.CurrentModelCatalogResponse, requested map[string]any, version map[string]any,
 ) error {
 	delete(version, "summary_model")
 	if len(requested) == 0 {
@@ -46,27 +45,16 @@ func (service *CurrentApplicationToolSnapshotService) freezeCurrentSummaryModel(
 	} else if requested["model_project_id"] != nil && !ownerSet {
 		return unsupportedStart("the summary model project is invalid")
 	}
-	catalog, err := service.models.Get(ctx, configurationapp.CurrentModelCatalogQuery{
-		Section: configurationapp.CurrentModelSectionLLM, ProjectID: projectID,
-		PublicProjectID: service.publicProjectID, IncludeShared: true,
-	})
-	if err != nil {
-		return err
-	}
 	selected, found := selectCurrentAgentModel(catalog.Items, name, owner, ownerSet, projectID, service.publicProjectID)
 	if !found {
 		// A requested summarizer never silently becomes the catalogue default.
 		return unsupportedStart("the summary model is not in the authorized project catalogue")
 	}
-	limitsVersion := map[string]any{}
-	if err := freezeCurrentModelContextLimits(limitsVersion, selected); err != nil {
-		return err
-	}
-	limits, err := currentFrozenModelContextLimits(limitsVersion)
+	limits, err := catalogModelLimits(selected)
 	if err != nil {
 		return err
 	}
-	output := min(int64(8192), int64(limits.MaxOutputTokens))
+	output := defaultFrozenModelOutput(limits)
 	if value := requested["max_tokens"]; value != nil {
 		var ok bool
 		output, ok = positiveCurrentAgentJSONInteger(value)
@@ -74,30 +62,87 @@ func (service *CurrentApplicationToolSnapshotService) freezeCurrentSummaryModel(
 			return unsupportedStart("the summary output cap exceeds the model limits")
 		}
 	}
-	settings := map[string]any{
-		"model_name": selected.Name, "model_project_id": selected.ProjectID,
-		"max_tokens": output, "openai_compatible": selected.OpenAICompatible != nil && *selected.OpenAICompatible,
-		"temperature": nil,
-	}
+	var temperature *float64
 	if value := requested["temperature"]; value != nil {
 		encoded, err := json.Marshal(value)
-		var temperature float64
-		if err != nil || json.Unmarshal(encoded, &temperature) != nil || temperature < 0 || temperature > 1 {
+		var parsed float64
+		if err != nil || json.Unmarshal(encoded, &parsed) != nil || parsed < 0 || parsed > 1 {
 			return unsupportedStart("the summary temperature is invalid for the selected model")
 		}
-		settings["temperature"] = temperature
+		temperature = &parsed
 	}
-	encoded, err := json.Marshal(settings)
+	model, err := frozenCatalogModel(selected, limits, output, temperature)
 	if err != nil {
 		return ErrUnsupportedCurrentAgentStart
 	}
 	// The control form lets the worker switch thinking off for a summary
 	// (ADR-0038 decision 4); a model that declares none keeps its form.
 	version["summary_model"] = &runtimev1.SummaryModelSnapshotV1{
-		LlmSettings: encoded, ModelContextLimits: limits,
-		ModelReasoning: currentModelReasoningSnapshot(selected),
+		LlmSettings: model.settings, ModelContextLimits: model.limits, ModelReasoning: model.reasoning,
 	}
 	return nil
+}
+
+// frozenModel is a catalogue model in the shape the worker's
+// SummaryModelProfile::admit reads: the summary model and every sub-agent
+// model (#1936) are built by frozenCatalogModel, so the two cannot drift.
+type frozenModel struct {
+	settings  json.RawMessage
+	limits    *runtimev1.ModelContextLimitsV1
+	reasoning *runtimev1.ModelReasoningV1
+}
+
+// frozenModelDefaultOutputCap is the output cap of a frozen summary or
+// sub-agent model when the model allows more and nothing asks otherwise.
+const frozenModelDefaultOutputCap = 8192
+
+// catalogModelLimits freezes a catalogue model's context limits.
+func catalogModelLimits(selected configurationapp.CurrentModelCatalogItem) (*runtimev1.ModelContextLimitsV1, error) {
+	limitsVersion := map[string]any{}
+	if err := freezeCurrentModelContextLimits(limitsVersion, selected); err != nil {
+		return nil, err
+	}
+	limits, err := currentFrozenModelContextLimits(limitsVersion)
+	if err != nil {
+		return nil, err
+	}
+	if limits == nil {
+		return nil, unsupportedStart("the model declares no context limits")
+	}
+	return limits, nil
+}
+
+// defaultFrozenModelOutput is min(frozenModelDefaultOutputCap, the model's
+// output limit).
+func defaultFrozenModelOutput(limits *runtimev1.ModelContextLimitsV1) int64 {
+	return min(int64(frozenModelDefaultOutputCap), int64(limits.MaxOutputTokens))
+}
+
+// frozenCatalogModel builds the frozen shape. A nil temperature is written
+// as null: the key must exist (see resolveCurrentAgentModel).
+func frozenCatalogModel(
+	selected configurationapp.CurrentModelCatalogItem, limits *runtimev1.ModelContextLimitsV1,
+	maxTokens int64, temperature *float64,
+) (frozenModel, error) {
+	settings := map[string]any{
+		"model_name": selected.Name, "model_project_id": selected.ProjectID,
+		"max_tokens": maxTokens, "openai_compatible": selected.OpenAICompatible != nil && *selected.OpenAICompatible,
+		"temperature": nil,
+	}
+	if temperature != nil {
+		settings["temperature"] = *temperature
+	}
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		return frozenModel{}, err
+	}
+	return frozenModel{settings: encoded, limits: limits, reasoning: currentModelReasoningSnapshot(selected)}, nil
+}
+
+// validFrozenModel is the check both frozen-model readers apply to what the
+// freeze wrote.
+func validFrozenModel(settings json.RawMessage, limits *runtimev1.ModelContextLimitsV1) bool {
+	return limits != nil && validJSONObject(settings)
 }
 
 // currentFrozenSummaryModel only reads the output of the authorized freezer.
@@ -111,7 +156,7 @@ func currentFrozenSummaryModel(version map[string]any) (*runtimev1.SummaryModelS
 		return nil, ErrUnsupportedCurrentAgentStart
 	}
 	var snapshot runtimev1.SummaryModelSnapshotV1
-	if json.Unmarshal(encoded, &snapshot) != nil || snapshot.ModelContextLimits == nil || !validJSONObject(snapshot.LlmSettings) {
+	if json.Unmarshal(encoded, &snapshot) != nil || !validFrozenModel(snapshot.LlmSettings, snapshot.ModelContextLimits) {
 		return nil, ErrUnsupportedCurrentAgentStart
 	}
 	return &snapshot, nil

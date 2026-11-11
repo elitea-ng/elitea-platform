@@ -245,22 +245,31 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 	if err != nil {
 		return nil, unsupportedStartBecause("version details are not one decodable JSON object", err)
 	}
-	if err := service.resolveCurrentAgentModel(ctx, request.ProjectID, version); err != nil {
+	// One catalogue read serves the agent's model, the summary model and
+	// the sub-agent models (#1936): the three used to read it apiece.
+	catalog, err := service.models.Get(ctx, configurationapp.CurrentModelCatalogQuery{
+		Section: configurationapp.CurrentModelSectionLLM, ProjectID: request.ProjectID,
+		PublicProjectID: service.publicProjectID, IncludeShared: true,
+	})
+	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, contextErr
 		}
 		return nil, unsupportedStartBecause("model resolution", err)
 	}
-	if err := service.freezeCurrentSummaryModel(ctx, request.ProjectID, request.SummaryLLMSettings, version); err != nil {
+	if err := service.resolveCurrentAgentModel(ctx, request.ProjectID, catalog, version); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, unsupportedStartBecause("model resolution", err)
+	}
+	if err := service.freezeCurrentSummaryModel(request.ProjectID, catalog, request.SummaryLLMSettings, version); err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, contextErr
 		}
 		return nil, unsupportedStartBecause("summary model resolution", err)
 	}
-	if err := service.freezeSubagentModels(ctx, request.ProjectID, request.InternalTools, version); err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return nil, contextErr
-		}
+	if err := service.freezeSubagentModels(request.ProjectID, catalog, request.InternalTools, version); err != nil {
 		return nil, unsupportedStartBecause("sub-agent model resolution", err)
 	}
 	normalizeCurrentAgentRuntimeProfile(ctx, version, request.ProjectID)
@@ -742,6 +751,7 @@ func emptyCurrentAgentJSONArray(value any) bool {
 func (service *CurrentApplicationToolSnapshotService) resolveCurrentAgentModel(
 	ctx context.Context,
 	projectID int32,
+	catalog configurationapp.CurrentModelCatalogResponse,
 	version map[string]any,
 ) error {
 	settings, ok := version["llm_settings"].(map[string]any)
@@ -752,13 +762,6 @@ func (service *CurrentApplicationToolSnapshotService) resolveCurrentAgentModel(
 	// must never select the SDK model client implementation.
 	delete(settings, "openai_compatible")
 
-	catalog, err := service.models.Get(ctx, configurationapp.CurrentModelCatalogQuery{
-		Section: configurationapp.CurrentModelSectionLLM, ProjectID: projectID,
-		PublicProjectID: service.publicProjectID, IncludeShared: true,
-	})
-	if err != nil {
-		return err
-	}
 	modelName, _ := settings["model_name"].(string)
 	modelProjectID, modelProjectSet := positiveCurrentAgentJSONInteger(settings["model_project_id"])
 	selected, found := selectCurrentAgentModel(
