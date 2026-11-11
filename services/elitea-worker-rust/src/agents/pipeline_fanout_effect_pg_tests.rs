@@ -7954,3 +7954,92 @@ member_pipeline_tool_kill_test!(
 
 #[path = "root_saved_agent_frontier_pg_tests.rs"]
 mod root_saved_agent_frontier;
+
+/// Review A: a Map worker or Parallel branch that is a saved pipeline (app
+/// 3, version 4) whose Agent node runs a saved Agent (app 5, version 6) that
+/// calls a saved pipeline (app 7, version 8) as a tool. The member's family
+/// lends that inner Agent no nested thread admission, so the shape is refused
+/// before the run with the precise registered kind: no model call, nothing
+/// refused mid-run after model spend.
+async fn assert_saved_pipeline_member_with_an_agent_pipeline_tool_is_refused(yaml: String) {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 refusal proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let mut worker = middle_pipeline();
+    worker["tools"][0]["agent_type"] = json!("agent");
+    let mut agent = pipeline_delegating_agent();
+    agent["tools"][0]["settings"] = json!({"application_id": 7, "application_version_id": 8});
+    let runtime = saved_runtime_on(
+        Vec::new(),
+        worker,
+        Some(agent),
+        Some(helper_pipeline()),
+        test_model_gateway_config(),
+    );
+    let (assembler, captured) = assembler_on(
+        &db.pool,
+        runtime,
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        }),
+    );
+    let mut request = request_for("continue", "pipeline");
+    request.payload.application["version_details"]["instructions"] = json!(yaml);
+    let decisions = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let assembly = assembler
+        .with_fanout_decisions_for_tests(decisions.client(1))
+        .assemble(claim(&request, 1))
+        .await;
+    let error = match assembly {
+        Ok(invocation) => {
+            let outcome = run_to_end(invocation).await;
+            panic!(
+                "assembled; {} model requests, then {outcome:?}",
+                model_requests(&captured)
+            );
+        }
+        Err(error) => error,
+    };
+    let cause = error.cause().expect("a typed cause");
+    assert_eq!(
+        cause.code(),
+        elitea_faults::codes::GRAPH_FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED.as_str()
+    );
+    assert_eq!(
+        cause.detail(),
+        Some("fanout_agent_tool_pipeline_in_saved_pipeline")
+    );
+    assert_eq!(model_requests(&captured), 0, "nothing ran");
+    assert_eq!(nested_tool_threads(&db.pool).await, Vec::<String>::new());
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_saved_pipeline_map_worker_whose_agent_calls_a_pipeline_is_refused_before_the_run()
+ {
+    let topics = (0..2)
+        .map(|index| format!("topic-s{index:02}x"))
+        .collect::<Vec<_>>();
+    assert_saved_pipeline_member_with_an_agent_pipeline_tool_is_refused(saved_agent_map_yaml(
+        &topics, 2,
+    ))
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_saved_pipeline_parallel_branch_whose_agent_calls_a_pipeline_is_refused_before_the_run()
+ {
+    assert_saved_pipeline_member_with_an_agent_pipeline_tool_is_refused(
+        SAVED_AGENT_PARALLEL_YAML.to_owned(),
+    )
+    .await;
+}

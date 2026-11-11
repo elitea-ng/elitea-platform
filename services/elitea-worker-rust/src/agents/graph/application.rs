@@ -388,6 +388,13 @@ pub(crate) trait PipelineApplicationResolver: Send + Sync {
         None
     }
 
+    /// Whether an Agent node of this resolver (or of a saved pipeline below
+    /// it) runs a saved Agent with a saved pipeline among its tools (FU-291
+    /// review A).
+    fn holds_agent_pipeline_tool(&self) -> bool {
+        false
+    }
+
     /// Why the saved Agent that `node` runs (by `alias`) cannot run as a
     /// fan-out member: a saved pipeline among its tools that a member cannot
     /// run durably (FU-291 D-7). `None` when it can.

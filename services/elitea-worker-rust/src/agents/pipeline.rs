@@ -1749,8 +1749,35 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
                 .applications
                 .presentation_catalog()
                 .fanout_tool_pipeline_refusal(),
+            // Review A: a saved pipeline worker's own Agent nodes are lent no
+            // nested thread admission, so a pipeline tool among their tools
+            // is refused before the run, never mid-run.
+            Some(NativePipelineApplicationParticipant::Pipeline { runtimes, .. })
+                if runtimes
+                    .application_resolver()
+                    .is_some_and(|resolver| resolver.holds_agent_pipeline_tool()) =>
+            {
+                Some(super::graph::compiler::ToolPipelineCause::InSavedPipeline)
+            }
             _ => None,
         }
+    }
+
+    fn holds_agent_pipeline_tool(&self) -> bool {
+        self.nodes
+            .values()
+            .map(|(_, participant)| participant)
+            .chain(self.participants.values())
+            .any(|participant| match participant {
+                NativePipelineApplicationParticipant::ScopedAgent { scope, .. } => scope
+                    .applications
+                    .presentation_catalog()
+                    .has_pipeline_descendant(),
+                NativePipelineApplicationParticipant::Pipeline { runtimes, .. } => runtimes
+                    .application_resolver()
+                    .is_some_and(|resolver| resolver.holds_agent_pipeline_tool()),
+                NativePipelineApplicationParticipant::Agent(_) => false,
+            })
     }
 
     fn fixed_parallel_definition_digest(

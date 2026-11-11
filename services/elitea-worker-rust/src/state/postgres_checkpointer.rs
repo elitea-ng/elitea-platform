@@ -147,40 +147,67 @@ pub enum PostgresCheckpointError {
     },
 }
 
+/// One list defines each checkpoint error code and its retryability (review
+/// G): the error's code and retryability and the code table read back from a
+/// `GraphError` all come from it, and `PostgresCheckpointError::kind` maps
+/// every variant exhaustively.
+macro_rules! checkpoint_error_codes {
+    ($($kind:ident => $code:literal, $retryable:literal;)*) => {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub(crate) enum CheckpointErrorCode { $($kind),* }
+
+        impl CheckpointErrorCode {
+            pub(crate) const ALL: &'static [Self] = &[$(Self::$kind),*];
+
+            pub(crate) const fn as_str(self) -> &'static str {
+                match self { $(Self::$kind => $code),* }
+            }
+
+            pub(crate) const fn retryable(self) -> bool {
+                match self { $(Self::$kind => $retryable),* }
+            }
+        }
+    };
+}
+
+checkpoint_error_codes! {
+    InvalidConfiguration => "checkpoint.invalid_configuration", false;
+    InvalidScope => "checkpoint.invalid_scope", false;
+    ResourceExhausted => "checkpoint.resource_exhausted", false;
+    WriterNotCurrent => "checkpoint.writer_not_current", false;
+    CheckpointConflict => "checkpoint.conflict", false;
+    CorruptStoredState => "checkpoint.corrupt_state", false;
+    StorageUnavailable => "checkpoint.storage_unavailable", true;
+    StorageFailure => "checkpoint.storage_failure", false;
+}
+
 impl PostgresCheckpointError {
+    /// This error's entry in the one code list.
+    #[must_use]
+    pub(crate) const fn kind(&self) -> CheckpointErrorCode {
+        match self {
+            Self::InvalidConfiguration(_) => CheckpointErrorCode::InvalidConfiguration,
+            Self::InvalidScope(_) => CheckpointErrorCode::InvalidScope,
+            Self::ResourceExhausted(_) => CheckpointErrorCode::ResourceExhausted,
+            Self::WriterNotCurrent => CheckpointErrorCode::WriterNotCurrent,
+            Self::CheckpointConflict => CheckpointErrorCode::CheckpointConflict,
+            Self::CorruptStoredState => CheckpointErrorCode::CorruptStoredState,
+            Self::StorageUnavailable { .. } => CheckpointErrorCode::StorageUnavailable,
+            Self::StorageFailure { .. } => CheckpointErrorCode::StorageFailure,
+        }
+    }
+
     /// Stable, low-cardinality code for tracing and terminal classification.
     #[must_use]
     pub const fn code(&self) -> &'static str {
-        match self {
-            Self::InvalidConfiguration(_) => "checkpoint.invalid_configuration",
-            Self::InvalidScope(_) => "checkpoint.invalid_scope",
-            Self::ResourceExhausted(_) => "checkpoint.resource_exhausted",
-            Self::WriterNotCurrent => "checkpoint.writer_not_current",
-            Self::CheckpointConflict => "checkpoint.conflict",
-            Self::CorruptStoredState => "checkpoint.corrupt_state",
-            Self::StorageUnavailable { .. } => "checkpoint.storage_unavailable",
-            Self::StorageFailure { .. } => "checkpoint.storage_failure",
-        }
+        self.kind().as_str()
     }
 
     /// Whether replay under the same immutable command can reasonably succeed.
     #[must_use]
     pub const fn retryable(&self) -> bool {
-        matches!(self, Self::StorageUnavailable { .. })
+        self.kind().retryable()
     }
-
-    /// Every code this boundary emits with its [`Self::retryable`]: the one
-    /// source a caller reads back a code carried by a `GraphError` from.
-    pub(crate) const CODES: [(&'static str, bool); 8] = [
-        ("checkpoint.invalid_configuration", false),
-        ("checkpoint.invalid_scope", false),
-        ("checkpoint.resource_exhausted", false),
-        ("checkpoint.writer_not_current", false),
-        ("checkpoint.conflict", false),
-        ("checkpoint.corrupt_state", false),
-        ("checkpoint.storage_unavailable", true),
-        ("checkpoint.storage_failure", false),
-    ];
 }
 
 /// The canonical code and retryability of a checkpoint failure that a
@@ -190,9 +217,9 @@ pub(crate) fn checkpoint_error_code(error: &GraphError) -> Option<(&'static str,
     let GraphError::CheckpointError(message) = error else {
         return None;
     };
-    PostgresCheckpointError::CODES
+    CheckpointErrorCode::ALL
         .iter()
-        .copied()
+        .map(|kind| (kind.as_str(), kind.retryable()))
         .find(|(code, _)| {
             message
                 .strip_prefix(code)
@@ -2063,7 +2090,7 @@ mod tests {
         );
     }
 
-    /// FU-291 review 1: `CODES` is exactly each error's code and
+    /// FU-291 review 1/G: the one code list is exactly each error's code and
     /// retryability, and `checkpoint_error_code` reads it back from the
     /// `GraphError` the boundary returns, never a prefix of another code.
     #[test]
@@ -2082,8 +2109,10 @@ mod tests {
                 source: sqlx::Error::RowNotFound,
             },
         ];
-        assert_eq!(errors.len(), PostgresCheckpointError::CODES.len());
-        for (error, expected) in errors.into_iter().zip(PostgresCheckpointError::CODES) {
+        assert_eq!(errors.len(), CheckpointErrorCode::ALL.len());
+        for (error, kind) in errors.into_iter().zip(CheckpointErrorCode::ALL) {
+            assert_eq!(error.kind(), *kind);
+            let expected = (kind.as_str(), kind.retryable());
             assert_eq!((error.code(), error.retryable()), expected);
             assert_eq!(
                 checkpoint_error_code(&GraphError::from(error)),

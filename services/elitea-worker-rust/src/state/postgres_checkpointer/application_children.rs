@@ -10,7 +10,8 @@ use async_trait::async_trait;
 use super::{CheckpointWriterAuthority, PostgresCheckpointError, PostgresCheckpointer};
 use crate::agents::application_pipeline::PipelineToolCallLineage;
 use crate::agents::graph::tool_pipeline_threads::{
-    AdmittedToolPipeline, ToolPipelineAdmission, ToolPipelineThreads, tool_pipeline_thread,
+    AdmittedToolPipeline, MAX_TOOL_PIPELINE_THREADS_PER_MEMBER, TOOL_LEDGER_KEY,
+    TOOL_LEDGER_SEGMENT, ToolPipelineAdmission, ToolPipelineThreads, tool_pipeline_thread,
 };
 use crate::agents::graph::{
     ParallelActivation, ParallelBranchDefinition, ParallelCheckpointAppender,
@@ -26,6 +27,8 @@ pub(crate) struct ApplicationCheckpointers {
     /// FU-291: the nested pipeline threads this family's Agents admitted. The
     /// one set the member's event projector reads (C1).
     tool_threads: Arc<ToolPipelineThreads>,
+    /// The member's ledger writer, activated on the first admission (review B).
+    tool_ledger: tokio::sync::OnceCell<PostgresCheckpointer>,
 }
 
 /// Exact descendant families derived only from the admitted application paths.
@@ -198,6 +201,7 @@ impl ApplicationCheckpointers {
         Self {
             root_thread: root_thread.unwrap_or_default(),
             tool_threads: Arc::new(ToolPipelineThreads::new(threads.len())),
+            tool_ledger: tokio::sync::OnceCell::new(),
             threads,
             branch_paths,
         }
@@ -438,45 +442,81 @@ impl crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory for Applic
     }
 }
 
-impl PostgresCheckpointer {
-    /// FU-291 review 2: how many nested pipeline threads have a writer row
-    /// under `member` (any claim of this run's scope), and whether `thread` is
-    /// one of them. One read.
-    async fn durable_tool_threads(
-        &self,
-        member: &str,
-        thread: &str,
-    ) -> Result<(usize, bool), PostgresCheckpointError> {
-        let authority = &self.scope.authority;
-        let (count, exists) = sqlx::query_as::<_, (i64, bool)>(
-            r"
-SELECT count(*), coalesce(bool_or(thread_id = $8), false)
-FROM elitea_runtime.agent_graph_checkpoint_writers
-WHERE tenant_id = $1
-  AND resource_project_id = $2
-  AND projection_project_id = $3
-  AND capability_id = $4
-  AND checkpoint_family = $5
-  AND definition_digest = $6
-  AND starts_with(thread_id, $7)
-  AND strpos(thread_id, '/pt1:') > 0
-            ",
-        )
-        .bind(&authority.tenant_id)
-        .bind(authority.resource_project_id)
-        .bind(authority.projection_project_id)
-        .bind(authority.capability_id)
-        .bind(super::CHECKPOINT_FAMILY)
-        .bind(authority.definition_digest.as_slice())
-        .bind(format!("{member}/"))
-        .bind(thread)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(super::storage_error)?;
-        super::note_round_trip();
-        let count =
-            usize::try_from(count).map_err(|_| PostgresCheckpointError::CorruptStoredState)?;
-        Ok((count, exists))
+/// The admitted nested threads a member ledger row holds: each one of this
+/// member's, at most the per-member bound. Anything else is corrupt.
+fn ledger_threads(
+    member: &str,
+    latest: Option<&Checkpoint>,
+) -> Result<Vec<String>, PostgresCheckpointError> {
+    let Some(latest) = latest else {
+        return Ok(Vec::new());
+    };
+    let threads: Vec<String> = latest
+        .state
+        .get(TOOL_LEDGER_KEY)
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|_| PostgresCheckpointError::CorruptStoredState)?
+        .unwrap_or_default();
+    let prefix = format!("{member}/");
+    if threads.len() > MAX_TOOL_PIPELINE_THREADS_PER_MEMBER
+        || threads
+            .iter()
+            .any(|thread| !thread.starts_with(&prefix) || !thread.contains("/pt1:"))
+    {
+        return Err(PostgresCheckpointError::CorruptStoredState);
+    }
+    Ok(threads)
+}
+
+impl ApplicationCheckpointers {
+    /// FU-291 review B: the member's admitted nested threads live in one
+    /// ledger thread (`<member>/pt1=ledger`), read by its exact thread (the
+    /// `thread_order` index) and appended only after its latest row, under
+    /// the ledger writer's row lock (`append_after`). Two admissions of one
+    /// member, from any process or family object, serialize there: the bound
+    /// holds across takeovers and races. `thread` already in the ledger
+    /// re-admits; past the bound the admission is refused typed.
+    async fn reserve_in_ledger(&self, thread: &str) -> Result<(), GraphError> {
+        let ledger_thread = format!("{}{TOOL_LEDGER_SEGMENT}", self.root_thread);
+        let ledger = self
+            .tool_ledger
+            .get_or_try_init(|| async {
+                let root = self.for_thread(&self.root_thread)?;
+                root.activate_fanout_child(ledger_thread.clone()).await
+            })
+            .await?;
+        // Each conflict means another admission appended; at most the bound
+        // can, so this ends.
+        for _ in 0..=MAX_TOOL_PIPELINE_THREADS_PER_MEMBER + 1 {
+            let latest = ledger.load(&ledger_thread).await?;
+            let mut threads = ledger_threads(&self.root_thread, latest.as_ref())?;
+            if threads.iter().any(|admitted| admitted == thread) {
+                return Ok(());
+            }
+            self.tool_threads.check_room_for(threads.len())?;
+            threads.push(thread.to_owned());
+            let candidate = Checkpoint::new(
+                &ledger_thread,
+                std::collections::HashMap::from([(
+                    TOOL_LEDGER_KEY.to_owned(),
+                    serde_json::json!(threads),
+                )]),
+                latest.as_ref().map_or(0, |row| row.step + 1),
+                Vec::new(),
+            );
+            match ParallelCheckpointAppender::append_after(ledger, latest.as_ref(), &candidate)
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(error)
+                    if crate::state::checkpoint_error_code(&error)
+                        .is_some_and(|(code, _)| code == "checkpoint.conflict") => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(PostgresCheckpointError::CheckpointConflict.into())
     }
 }
 
@@ -514,22 +554,16 @@ impl ToolPipelineAdmission for ApplicationCheckpointers {
         if let Some(admitted) = self.tool_threads.admitted(&thread_id, agent_thread) {
             return Ok(admitted);
         }
-        // Review 2: the bounds count the member's durable nested writers, so
-        // a call refused before a crash or a takeover is refused after it; a
-        // thread that already has its writer re-admits.
-        let (durable, exists) = agent
-            .durable_tool_threads(&self.root_thread, &thread_id)
-            .await?;
-        if !exists {
-            self.tool_threads.check_room_for(durable)?;
-        }
+        self.reserve_in_ledger(&thread_id).await?;
+        // The slot is durable before the writer: a crash in between leaves a
+        // reserved thread the same call re-admits, never an unledgered row.
         let writer = agent.activate_fanout_child(thread_id.clone()).await?;
         let admitted = AdmittedToolPipeline {
             thread_id,
             agent_thread: agent_thread.to_owned(),
             writer: Arc::new(writer),
         };
-        self.tool_threads.register(admitted.clone())?;
+        self.tool_threads.register(admitted.clone());
         Ok(admitted)
     }
 }

@@ -853,8 +853,11 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         }
         // FU-291 review 3: a member's pipeline call without its nested thread
         // admission is refused typed, never run in memory.
+        // Unreachable in production since review A (every member family
+        // lends its admission; the shapes that lend none are refused before
+        // the run); kept fail-closed with the precise registered kind.
         Some(crate::agents::application_pipeline::TOOL_THREAD_UNBOUND_CODE) => {
-            RuntimeFailureKind::UnsupportedCapability
+            RuntimeFailureKind::FanoutAgentToolPipelineUnsupported
         }
         // FU-291: an Agent node's call-lineage store reached its bound
         // (`MAX_CALL_LINEAGE`); the bound itself is FU-330.

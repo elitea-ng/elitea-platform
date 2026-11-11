@@ -2267,6 +2267,10 @@ mod taxonomy_tests {
             (ToolPipelineCause::Code, "Code node"),
             (ToolPipelineCause::Agent, "Agent node"),
             (ToolPipelineCause::NestedAgents, "another Agent"),
+            (
+                ToolPipelineCause::InSavedPipeline,
+                "Agent node of the saved pipeline",
+            ),
         ] {
             let refusal = PipelineConfigurationError::FanoutChildUnsupported {
                 node: "asker/release-agent".to_owned(),

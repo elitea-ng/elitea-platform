@@ -302,6 +302,78 @@ Each fix was written test-first; for 1–5 the test was seen failing on the code
    replay key and the lineage. `model_scope.rs:468` reads the member context once, not once per tool name.
 10. **Mapping.** FU-322 appears once: the ordinary (non-graph) root's pipeline tool.
 
+### Delta review (a69d0f17c..3e2a7e9e3, high), 2026-11-11
+
+**A. No refusal after model spend.** First, which production shapes reach a member whose family lends no admission:
+
+- **The session's fan-out authority.** It is always the `ApplicationCheckpointers` family. `with_application_paths`
+  (`W/agents/session.rs:1838`) returns it, and it is the holder at `:1846-1848`. The other two `PipelineStateServices`
+  (`:1707` and `:5620`) are `#[cfg(test)]`. Its `for_branch` / `prepare_children` lend `tool_pipelines: Some`.
+- **The plain `PostgresCheckpointer` factory.** Its `tool_pipelines: None` (`parallel_children.rs:58,100`) is reached
+  only by tests: the family calls `activate_parallel_branch`, not that factory.
+- **The other child factories.** `FanoutTurnAuthority`, `ChildParallelAuthority` and `PipelineGraphReceiptAuthority`
+  delegate to their inner factory and keep its value.
+- **`ParallelBranchExecution::new`.** Its `None` (`parallel_checkpoint.rs:556`) is overwritten by the only production
+  caller (`parallel.rs:1050`, `.with_tool_pipelines` at `:1063`).
+- **The shape that was reachable.** A member whose worker or branch is a *saved pipeline* with an Agent node whose saved
+  Agent calls a saved pipeline. The admission is lent only to the member's own Agent participants, and that inner
+  Agent's events carry the member's parallel scope, so it refused at run time after its model ran.
+
+That shape is now refused at assembly with the registered `FanoutAgentToolPipelineUnsupported` kind:
+
+- cause `InSavedPipeline`, detail `fanout_agent_tool_pipeline_in_saved_pipeline`;
+- implemented by `holds_agent_pipeline_tool` (`W/agents/pipeline.rs:1766`, trait default `W/agents/graph/application.rs:394`).
+
+Tests: `postgres_a_saved_pipeline_map_worker_whose_agent_calls_a_pipeline_is_refused_before_the_run` and
+`…parallel_branch…`, both real PG with 0 model calls and no nested thread. They failed first: the shape assembled
+and spent 2 model requests.
+
+**B. The bound is serialized and index-backed.** The member's admitted nested threads live in one ledger thread,
+`<member>/pt1=ledger`, which can be neither an admitted path nor a nested thread (`TOOL_LEDGER_SEGMENT`,
+`W/agents/graph/tool_pipeline_threads.rs:47`). `reserve_in_ledger` (`W/state/postgres_checkpointer/application_children.rs:481`, called at `:557`):
+
+1. reads the ledger's latest row by exact thread;
+2. checks the bounds;
+3. appends only after that row (`append_after`: the ledger writer's row lock and the latest-identity check in one
+   transaction), retrying on conflict;
+4. then activates the nested writer.
+
+The slot is durable before the writer, so a crash in between leaves a slot that the same call re-admits, and never a
+row the ledger does not count. The prefix count is gone.
+
+- Race tests:
+  - `twelve_concurrent_admissions_of_one_member_admit_exactly_eight` (12 family objects, multi-thread). Failed first
+    with (10 admitted, 2 refused); now (8, 4), with 8 rows.
+  - `two_admissions_racing_for_the_last_slot_admit_exactly_one`.
+- Plan test: `the_bound_is_read_through_an_index_condition_on_one_thread`, with 38 other executions' rows of the same
+  definition seeded.
+  - The ledger read is an `Index Scan using agent_graph_checkpoints_thread_order_idx`, with `thread_id =` in its
+    `Index Cond`.
+  - The old prefix count keeps `thread_id` in a `Filter`.
+- Takeover: `a_refused_ninth_call_stays_refused_after_a_takeover` still passes.
+- Cost (min of 3, 20 samples, load ~9): p50 6.7–6.9 ms, p99 8.9–9.8 ms (gate 30 ms). It was p50 2.6, p99 4.5 before
+  the ledger read and append.
+
+**C.** `pipeline.tool_thread_unbound` maps to the precise registered `FanoutAgentToolPipelineUnsupported`
+(`W/protocol/output.rs:859`). After A it is unreachable in production, and it is kept fail-closed. The test
+`a_member_call_without_an_admission_refuses_typed_and_runs_nothing` now asserts the precise kind and text; it failed
+first on `UnsupportedCapability`.
+
+**D.** `the_durable_bound_child` follows the repo's `*_child` pattern: not ignored, so a bare `--ignored` run never
+lists it. Without its parent's environment it does nothing. Its parent spawns it without `--ignored` and checks that
+the child itself ran (`1 passed`).
+
+**E.** The scoped runtime reuses its `fanout` local (`W/agents/pipeline/scoped_runtime.rs:349`).
+
+**F.** `invoke_durable` and `admit_durable` take the unwrapped admission, so the `no admission` branch is gone.
+
+**G.** One macro list, `checkpoint_error_codes!` (`W/state/postgres_checkpointer.rs:173`), defines each code and its
+retryability. `PostgresCheckpointError::kind` (`:187`) maps every variant exhaustively, and `code()`, `retryable()`
+and `checkpoint_error_code` all read it.
+
+**H.** `ToolPipelineThreads::register` (`tool_pipeline_threads.rs:216`) is infallible. The bounds are checked against
+the ledger before the activation, so an activated writer is always registered and never orphaned.
+
 ## Real-browser evidence
 
 Pending (orchestrating session).

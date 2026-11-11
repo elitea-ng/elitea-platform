@@ -456,7 +456,7 @@ fn a_nested_pipeline_thread_is_proved_by_its_receipt_and_the_member_registry() {
     // A correct derivation whose writer is not active (nothing registered).
     assert!(project(&mut nested_leaf(agent, &call, &thread)).is_err());
 
-    registry.register(admitted(agent, &call)).unwrap();
+    registry.register(admitted(agent, &call));
     let mut proved = nested_leaf(agent, &call, &thread);
     let original = json!(proved);
     project(&mut proved).unwrap();
@@ -481,7 +481,7 @@ fn a_nested_pipeline_thread_is_proved_by_its_receipt_and_the_member_registry() {
 
     // The member root is never an Agent thread.
     let rooted = tool_pipeline_thread("hashed-branch", &call).unwrap();
-    registry.register(admitted("hashed-branch", &call)).unwrap();
+    registry.register(admitted("hashed-branch", &call));
     assert!(project(&mut nested_leaf("hashed-branch", &call, &rooted)).is_err());
 
     // Without a registry (no admission lent) nothing nested is admitted.

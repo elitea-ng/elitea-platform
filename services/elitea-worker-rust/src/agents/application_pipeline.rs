@@ -1446,7 +1446,8 @@ impl ApplicationPipelineTool {
     async fn admit_durable(
         &self,
         ctx: &dyn ToolContext,
-        member: &super::application_tools::MemberToolPipelines,
+        admission: &dyn super::graph::tool_pipeline_threads::ToolPipelineAdmission,
+        agent_thread: &str,
         lineage: &PipelineToolCallLineage,
     ) -> adk_rust::Result<
         Result<
@@ -1461,16 +1462,7 @@ impl ApplicationPipelineTool {
         loop {
             attempt += 1;
             let read = async {
-                let admitted = member
-                    .admission
-                    .as_ref()
-                    .ok_or_else(|| {
-                        adk_rust::graph::GraphError::CheckpointError(
-                            "pipeline.tool_thread_invalid: no admission".to_owned(),
-                        )
-                    })?
-                    .admit_tool_pipeline(&member.agent_thread, lineage)
-                    .await?;
+                let admitted = admission.admit_tool_pipeline(agent_thread, lineage).await?;
                 let latest = admitted.writer.load(&admitted.thread_id).await?;
                 Ok::<_, adk_rust::graph::GraphError>((admitted, latest))
             }
@@ -1526,7 +1518,8 @@ impl ApplicationPipelineTool {
         &self,
         ctx: Arc<dyn ToolContext>,
         arguments: Value,
-        member: super::application_tools::MemberToolPipelines,
+        admission: Arc<dyn super::graph::tool_pipeline_threads::ToolPipelineAdmission>,
+        agent_thread: String,
     ) -> adk_rust::Result<Value> {
         let task = application_task(&arguments)
             .map_err(|_| tool_input_error())?
@@ -1546,7 +1539,10 @@ impl ApplicationPipelineTool {
             )
             .await
             .map_err(|_| child_execution_error())?;
-        let (admitted, latest) = match self.admit_durable(ctx.as_ref(), &member, &lineage).await? {
+        let (admitted, latest) = match self
+            .admit_durable(ctx.as_ref(), admission.as_ref(), &agent_thread, &lineage)
+            .await?
+        {
             Ok(admitted) => admitted,
             Err(refused) => return Ok(refused),
         };
@@ -1611,15 +1607,17 @@ impl ApplicationPipelineTool {
         if let Some(member) = super::application_tools::current_member_tool_pipelines() {
             // Review 3: inside a fan-out member a pipeline call is durable or
             // refused; it never falls back to the in-memory run.
-            if member.admission.is_none() {
+            let Some(admission) = member.admission else {
                 tracing::warn!(
                     event = "nested_pipeline_thread_unbound",
                     function_call_id = %ctx.function_call_id(),
                     "a fan-out member's pipeline call has no nested thread admission"
                 );
                 return Err(tool_thread_unbound());
-            }
-            return self.invoke_durable(ctx, arguments, member).await;
+            };
+            return self
+                .invoke_durable(ctx, arguments, admission, member.agent_thread)
+                .await;
         }
         let task = application_task(&arguments)
             .map_err(|_| tool_input_error())?

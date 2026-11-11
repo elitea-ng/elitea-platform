@@ -430,6 +430,11 @@ impl PipelineNodeRuntimes {
         self
     }
 
+    /// The resolver of this pipeline's application nodes, if any.
+    pub(crate) fn application_resolver(&self) -> Option<&Arc<dyn PipelineApplicationResolver>> {
+        self.application.as_ref()
+    }
+
     pub(crate) fn application_scopes(
         &self,
     ) -> Option<&crate::agents::pipeline::scoped_applications::PipelineApplicationScopeRegistry>
@@ -3753,6 +3758,9 @@ pub(crate) enum ToolPipelineCause {
     Agent,
     /// The pipeline is reached through another Agent (tier 2 or deeper).
     NestedAgents,
+    /// The member runs a saved pipeline whose Agent node calls a saved
+    /// pipeline: that inner Agent is lent no nested thread admission.
+    InSavedPipeline,
 }
 
 impl FanoutChildRefusal {
@@ -3805,6 +3813,9 @@ impl std::fmt::Display for FanoutChildRefusal {
             Self::AgentToolPipeline(ToolPipelineCause::NestedAgents) => {
                 "the Agent reaches a saved pipeline through another Agent, which a Map item or Parallel branch cannot run yet"
             }
+            Self::AgentToolPipeline(ToolPipelineCause::InSavedPipeline) => {
+                "an Agent node of the saved pipeline calls a saved pipeline, which a Map item or Parallel branch cannot run yet"
+            }
         })
     }
 }
@@ -3853,6 +3864,9 @@ impl PipelineConfigurationError {
                 }
                 FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::NestedAgents) => {
                     "fanout_agent_tool_pipeline_nested_agents"
+                }
+                FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::InSavedPipeline) => {
+                    "fanout_agent_tool_pipeline_in_saved_pipeline"
                 }
             }),
         }

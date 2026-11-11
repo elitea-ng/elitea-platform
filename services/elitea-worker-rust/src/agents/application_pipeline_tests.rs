@@ -1829,7 +1829,8 @@ mod durable_member_calls {
                 agent_thread: agent_thread.to_owned(),
                 writer: self.store.clone(),
             };
-            self.threads.register(admitted.clone())?;
+            self.threads.check_room()?;
+            self.threads.register(admitted.clone());
             Ok(admitted)
         }
     }
@@ -2040,11 +2041,16 @@ mod durable_member_calls {
         );
         assert_eq!(report["failure"]["retryable"], false);
         assert!(report.get("response").is_none(), "{report}");
+        // Review C: the precise registered kind and text, not the generic one.
         assert_eq!(
             crate::protocol::output::model_failure(Some(
                 crate::agents::application_pipeline::TOOL_THREAD_UNBOUND_CODE
             )),
-            crate::protocol::output::RuntimeFailureKind::UnsupportedCapability
+            crate::protocol::output::RuntimeFailureKind::FanoutAgentToolPipelineUnsupported
+        );
+        assert_eq!(
+            report["failure"]["message"],
+            crate::protocol::output::FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED_MESSAGE
         );
         assert!(persisted(&mut harness.events).is_empty(), "nothing ran");
     }

@@ -41,6 +41,12 @@ pub(crate) const MAX_TOOL_PIPELINE_THREAD_BYTES: usize = 480;
 pub(crate) const DURABLE_TOOL_THREAD_METADATA_KEY: &str = "elitea.pipeline.durable-tool-thread.v1";
 const THREAD_DOMAIN: &[u8] = b"elitea.pipeline.tool-thread.v1\0";
 const THREAD_SEGMENT: &str = "/pt1:";
+/// FU-291 review B: the member's ledger of its admitted nested threads,
+/// `<member>/pt1=ledger`. `=` is no graph-id byte and the name holds no
+/// `/pt1:`, so it is neither an admitted path nor a nested thread.
+pub(crate) const TOOL_LEDGER_SEGMENT: &str = "/pt1=ledger";
+/// The ledger row's state key: the admitted nested threads, in order.
+pub(crate) const TOOL_LEDGER_KEY: &str = "elitea.pipeline.tool-threads.v1";
 const MAX_RECEIPT_BYTES: usize = 4096;
 /// The stable code of a refused admission the model reads as a tool error.
 pub(crate) const TOOL_PIPELINE_LIMIT_CODE: &str = "pipeline.tool_thread_limit";
@@ -181,13 +187,16 @@ impl ToolPipelineThreads {
             .cloned()
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries
             .read()
             .map_or(usize::MAX, |entries| entries.len())
     }
 
-    /// D3 and the shared total, checked before any activation.
+    /// D3 and the shared total for this registry alone (tests; admission
+    /// checks the durable ledger with [`Self::check_room_for`]).
+    #[cfg(test)]
     pub(crate) fn check_room(&self) -> Result<(), GraphError> {
         self.check_room_for(self.len())
     }
@@ -204,18 +213,17 @@ impl ToolPipelineThreads {
         Ok(())
     }
 
-    /// Append one thread whose writer is already active. Never replaces one.
-    pub(crate) fn register(&self, admitted: AdmittedToolPipeline) -> Result<(), GraphError> {
-        self.check_room()?;
+    /// Append one thread whose writer is already active (review H: the bounds
+    /// were checked against the durable ledger before the activation, so this
+    /// cannot refuse and never orphans the row). Never replaces one.
+    pub(crate) fn register(&self, admitted: AdmittedToolPipeline) {
         let mut entries = self
             .entries
             .write()
-            .map_err(|_| scope_error("the nested thread set is unavailable"))?;
-        if entries.contains_key(&admitted.thread_id) {
-            return Err(scope_error("the nested thread is already admitted"));
-        }
-        entries.insert(admitted.thread_id.clone(), admitted);
-        Ok(())
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        entries
+            .entry(admitted.thread_id.clone())
+            .or_insert(admitted);
     }
 }
 

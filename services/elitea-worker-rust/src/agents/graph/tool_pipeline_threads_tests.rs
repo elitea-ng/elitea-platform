@@ -49,6 +49,13 @@ impl NodeRecoveryFactory for StubWriter {
     }
 }
 
+/// The registry half of an admission: the bound first, then the entry.
+fn admit(threads: &ToolPipelineThreads, entry: AdmittedToolPipeline) -> Result<(), GraphError> {
+    threads.check_room()?;
+    threads.register(entry);
+    Ok(())
+}
+
 pub(crate) fn admitted(
     agent_thread: &str,
     lineage: &PipelineToolCallLineage,
@@ -118,17 +125,18 @@ fn a_nested_thread_is_never_an_agent_thread() {
 fn a_member_admits_8_nested_threads_and_refuses_the_9th() {
     let threads = ToolPipelineThreads::new(2);
     for call in 0..MAX_TOOL_PIPELINE_THREADS_PER_MEMBER {
-        threads
-            .register(admitted(
-                "m1:member/agent",
-                &lineage(&format!("call-{call}"), "t"),
-            ))
-            .unwrap();
+        admit(
+            &threads,
+            admitted("m1:member/agent", &lineage(&format!("call-{call}"), "t")),
+        )
+        .unwrap();
     }
     assert_eq!(threads.len(), 8);
-    let refused = threads
-        .register(admitted("m1:member/agent", &lineage("call-9", "t")))
-        .unwrap_err();
+    let refused = admit(
+        &threads,
+        admitted("m1:member/agent", &lineage("call-9", "t")),
+    )
+    .unwrap_err();
     assert!(is_tool_pipeline_limit(&refused));
     assert!(threads.check_room().is_err());
     assert_eq!(threads.len(), 8, "a refused thread is never registered");
@@ -140,21 +148,22 @@ fn a_member_admits_8_nested_threads_and_refuses_the_9th() {
 fn the_member_total_admits_129_threads_and_refuses_the_130th() {
     let threads = ToolPipelineThreads::new(125);
     for call in 0..4 {
-        threads
-            .register(admitted(
-                "m1:member/agent",
-                &lineage(&format!("call-{call}"), "t"),
-            ))
-            .unwrap();
+        admit(
+            &threads,
+            admitted("m1:member/agent", &lineage(&format!("call-{call}"), "t")),
+        )
+        .unwrap();
     }
     assert_eq!(
         125 + threads.len(),
         super::super::fanout_budget::MAX_CHILD_THREADS
     );
     assert!(is_tool_pipeline_limit(
-        &threads
-            .register(admitted("m1:member/agent", &lineage("call-4", "t")))
-            .unwrap_err()
+        &admit(
+            &threads,
+            admitted("m1:member/agent", &lineage("call-4", "t"))
+        )
+        .unwrap_err()
     ));
 }
 
@@ -165,32 +174,30 @@ fn the_member_total_admits_129_threads_and_refuses_the_130th() {
 fn each_bound_refuses_with_its_own_code() {
     let per_member = ToolPipelineThreads::new(2);
     for call in 0..MAX_TOOL_PIPELINE_THREADS_PER_MEMBER {
-        per_member
-            .register(admitted(
-                "m1:member/agent",
-                &lineage(&format!("call-{call}"), "t"),
-            ))
-            .unwrap();
+        admit(
+            &per_member,
+            admitted("m1:member/agent", &lineage(&format!("call-{call}"), "t")),
+        )
+        .unwrap();
     }
-    let GraphError::CheckpointError(message) = per_member
-        .register(admitted("m1:member/agent", &lineage("call-9", "t")))
-        .unwrap_err()
-    else {
+    let GraphError::CheckpointError(message) = admit(
+        &per_member,
+        admitted("m1:member/agent", &lineage("call-9", "t")),
+    )
+    .unwrap_err() else {
         panic!("a checkpoint error");
     };
     assert!(message.starts_with(TOOL_PIPELINE_LIMIT_CODE), "{message}");
     let total = ToolPipelineThreads::new(125);
     for call in 0..4 {
-        total
-            .register(admitted(
-                "m1:member/agent",
-                &lineage(&format!("call-{call}"), "t"),
-            ))
-            .unwrap();
+        admit(
+            &total,
+            admitted("m1:member/agent", &lineage(&format!("call-{call}"), "t")),
+        )
+        .unwrap();
     }
-    let GraphError::CheckpointError(message) = total
-        .register(admitted("m1:member/agent", &lineage("call-4", "t")))
-        .unwrap_err()
+    let GraphError::CheckpointError(message) =
+        admit(&total, admitted("m1:member/agent", &lineage("call-4", "t"))).unwrap_err()
     else {
         panic!("a checkpoint error");
     };
@@ -207,8 +214,11 @@ fn a_registered_thread_is_never_replaced_and_names_only_its_agent() {
     let threads = ToolPipelineThreads::new(2);
     let call = lineage("call-1", "t");
     let entry = admitted("m1:member/agent", &call);
-    threads.register(entry.clone()).unwrap();
-    assert!(threads.register(entry.clone()).is_err());
+    admit(&threads, entry.clone()).unwrap();
+    let mut replacement = admitted("m1:member/agent", &call);
+    replacement.agent_thread = "m1:other/agent".to_owned();
+    threads.register(replacement);
+    assert_eq!(threads.len(), 1, "the first entry is kept");
     assert!(
         threads
             .admitted(&entry.thread_id, "m1:member/agent")
