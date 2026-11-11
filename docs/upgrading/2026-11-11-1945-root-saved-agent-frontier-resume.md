@@ -36,7 +36,7 @@
 - **Who is affected.**
   - **Stock Helm: nothing yet.** Both recovery flags are off by default (`agentModelCheckpointRecovery: false`,
     `agentNodeRecovery: false`), so these runs still end typed after a Worker loss. They resume once PLAN-REMAINING
-    0.7a flips the defaults (scheduled right after FU-323), or when an operator turns `agentNodeRecovery` on (it also
+    0.7a flips the defaults (exit work, after FU-323b), or when an operator turns `agentNodeRecovery` on (it also
     turns model-step resume on).
   - **Compose deployments** (`agent_node_recovery: true` in `deploy/runtime/worker-runtime.rust.json`) benefit now.
   - Operators alerting on `agent_delivery_retained_no_ack` lines with result code `pipeline.recovery.inspect_transient`:

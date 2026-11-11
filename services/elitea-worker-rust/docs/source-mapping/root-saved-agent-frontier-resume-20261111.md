@@ -55,7 +55,7 @@
   `W/agents/graph/parallel_compiler_tests.rs`, `W/agents/application_tools.rs` (tests), `W/execution/output_delivery_tests.rs`,
   `W/execution/agent_delivery_processor.rs` (fault-line test), `W/diagnostics/cycle.rs`.
 - Docs: `services/elitea-worker-rust/docs/recovery-guarantees.md`, this mapping, the README entry,
-  `docs/upgrading/2026-11-11-0-root-saved-agent-frontier-resume.md`.
+  `docs/upgrading/2026-11-11-1945-root-saved-agent-frontier-resume.md`.
 - **Corrected plan refs (main moved since the plan):** `recovery_frontier_supported` is `compiler.rs:1104` (plan
   `:1056`); `inspect_checkpoint` `session.rs:2232` on the base (plan `:2218`); its refusal `:2286-2304` (plan
   `:2271-2290`); `recovery_evidence` `:2334` (plan `:2320`); `walk_child_frontier` `:1981` (as plan);
@@ -292,7 +292,7 @@ receipt; the forged cases and the post-grant edit change stored text in place. N
 ## Recovery rows (root saved-Agent node; recovery on)
 
 On stock Helm (`agentModelCheckpointRecovery: false`, `agentNodeRecovery: false`) every row stays F until PLAN-REMAINING
-0.7a flips the defaults (scheduled right after FU-323). Compose deployments (`agent_node_recovery: true`) benefit now.
+0.7a flips the defaults (exit work, after FU-323b; TRIAGE item 2-R). Compose deployments (`agent_node_recovery: true`) benefit now.
 
 | Component × phase | Class | Enforced by | Proven by |
 |---|---|---|---|
@@ -307,15 +307,15 @@ On stock Helm (`agentModelCheckpointRecovery: false`, `agentNodeRecovery: false`
 | Worker × answer persisted, receipt not `Completed` | R (served, 0 model calls) | `Answered` | T3 |
 | Worker × receipt `Completed` | R (served) | `scoped_runtime.rs` Completed branch | existing |
 | Worker × unprovable step (receipt mismatch, paused, invalid, foreign, no checkpoint) | F typed `RECOVERY_FRONTIER_UNSUPPORTED` | `prove_agent_frontier` | forged-frontier test |
-| Worker × planned stop past the 30 s drain | as the phase reached | same | browser case 4 (pending) |
-| Main restart / lease loss | as the Worker rows (takeover) | writer fence, one digest per claim | T8; browser case 5 (pending) |
+| Worker × planned stop past the 30 s drain | as the phase reached | same | browser case 4: the drain completed the in-flight turn (chats 892, 895); a drain expiry could not be produced (FU-341) and is the crash path of case 1 |
+| Main restart / lease loss | as the Worker rows (takeover) | writer fence, one digest per claim | T8; browser case 5: R over two reclaims (chat 890; FU-302 cost, FU-340) |
 | PostgreSQL × transient error at inspect | retained (`RecoveryRequiredNoAck`), bounded by the deadline | `W/execution/checkpoint_recovery.rs:157` | T9 |
 | Older Worker during the rollout | F typed (#1933), nothing repeated | `saved_agent_frontier` refusal | V1 (gate reverted) |
 
 ## Real-browser evidence
 
 **Setup.**
-- **Stack:** a disposable stack `f323` with the production profile (recovery and node recovery on). verify-profile:
+- **Stacks:** a disposable stack `f323` (cases 1–5 and the first case 6), then `f323b` (case 6 re-run on the FU-342 Worker); with the production profile (recovery and node recovery on). verify-profile:
   50 passed, 0 failed.
 - **Images:** Worker, Main and Web `fu323a-d01577bc8`, built from this branch's head, which is main `b6633e6e6` plus
   FU-323a. The Worker binary was extracted and contains the branch-only `pipeline.recovery.agent_definition_unproven`,
@@ -334,7 +334,7 @@ On stock Helm (`agentModelCheckpointRecovery: false`, `agentNodeRecovery: false`
 | 3. Agent → Agent: killed 3 s into the child Agent's model call | 888 / `b515f88c0e463ad14970661214a2c6a0` | **R.** Reclaim `AGENT_MODEL_CHECKPOINT`: the child call was restored, then the parent's final step ran (2 requests). The parent's answer persists after reload. Only the pre-existing FU-336 WARN. |
 | 5. Worker kill, then `docker restart` of Main 2 s into the restored model step | 890 / `f11a0280cc4a240117c7fa308ee32f39` | **R over two reclaims.** The Main restart cost claim 2 its lease (`claim_lease_control_failure`), the delivery was retained, and claim 3 (`AGENT_MODEL_CHECKPOINT`) completed. One answer persists after reload. The model call was paid twice (a cost, not a repeated effect; FU-302). Claim 2's lost stream logs ERROR `native_agent.event_failed` / `agent.legacy` although the run recovers: FU-340 (it should be one operator WARN). 0 locks. |
 | 2. Built-in tools (Attachments read-only, memory effectful) | 889 / `5985af576ad62b24e56676a6a40972a6` | **Not run, blocked by FU-335 (probable).** The saved Agent at the root Agent node was offered **0 tools** (`tool_count: 0`) although Attachments and memory are enabled on its version. The model then *claimed* in text to have listed attachments and saved a note; it did neither (0 memory entries). The tool-call recovery rows are proven by the real-PG tests. |
-| 6. Pipeline tool in flight under a root Agent node | 891 / `59ff027e125d8fd77d9dcff454ddb6c6` | **Not reached; pre-existing defect FU-342.** The fresh run fails before any kill: `agent_event.invalid_state` at the nested pipeline's first projected event. It fails identically on main `b6633e6e6` (`fu323/evidence/case6-on-main-b6633e6e6.txt`). The cause is a thread mismatch between `application_pipeline.rs:1283-1285` and `events.rs:6918-6920`. The typed refusal for a pipeline tool in flight is proven by the real-PG test. |
+| 6. Pipeline tool in flight under a root Agent node | first stack `f323`: 891 / `59ff027e125d8fd77d9dcff454ddb6c6`; re-run on stack `f323b` (Worker `fu323a-657711d53`, Main/Web `fu323a-d01577bc8`): 887 / `ebe2ec92e52b3f350515abcd96e201f0`, 888 / `a3343a5c4e91787fd9d9aecc6d8444be` | **First stack:** the fresh run failed before any kill, `agent_event.invalid_state`. That is FU-342, pre-existing on main `b6633e6e6`, now fixed inline (§FU-342). **After the fix, no kill (887):** the run completes (3 model requests: the Agent, the nested pipeline's LLM node, then the Agent's answer). The answer persists after reload; only the FU-336 WARN. **Worker killed 3 s into the nested pipeline's LLM call (888):** claim 1 `LEASE_EXPIRED`, claim 2 `AGENT_MODEL_CHECKPOINT` refuses at re-entry (`pipeline.recovery.agent_step_may_have_started`), and the run settles typed `RECOVERY_REFUSED` with the readable text after reload. 0 locks. FU-323b makes it R. **Image check:** FU-342 adds no string literal to the binary, so the proof is behavioural: the same fresh run fails on `fu323a-d01577bc8` and completes on `fu323a-657711d53`. |
 | 4. Planned stop: `docker stop -t 45` (stands in for the compose `stop_grace_period: 45s` override) 3 s into a turn | 892 / `a95156abf9c9a20c819a920bdf810e96`; 895 / `c0e46d6c76330da2b48be98d1136039b` | **The drain completed the turn.** Both turns finished within the 30 s drain (12 s and 19 s). A turn that outlasts the drain could not be produced: a single very long stream (about 6000 words) fails by itself at about 23 s with no stop (chats 893 and 894: `failure_diagnostic` `disabled_or_rate_limited` under `agent.legacy`, FU-341). A drain that expires mid-turn is the same drop-then-reclaim path as a crash (SHUTDOWN-FACTS), proven by case 1 and the real-PG tests. Not run as a drain expiry. |
 
 No Supervisor kill: no Code is in scope. The negative "Thought for -1 h…" label after a failed run is FU-327.
@@ -383,5 +383,5 @@ No Supervisor kill: no Code is in scope. The negative "Thought for -1 h…" labe
 - FU-329: the model → tool write window (T1c).
 - FU-325 / FU-326: drain to the next boundary; compose `stop_grace_period`.
 - FU-334 (pre-existing, not this change): a model request sent while Main restarts fails its node.
-- Not covered here: two Agent frontier nodes pending in one row (static fan-in) as a PG test; delegated-call and
+- Not covered here: two Agent frontier nodes pending in one row (static fan-in) as a PG test (FU-344); delegated-call and
   receipt limit tests at the root.
