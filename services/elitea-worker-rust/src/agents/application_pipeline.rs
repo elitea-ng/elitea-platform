@@ -362,7 +362,27 @@ impl PipelineToolCallLineage {
         value.validate()?;
         Ok(value)
     }
-    fn validate(&self) -> Result<(), NativeAgentAssemblyError> {
+    /// A lineage for tests, validated like a captured one.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        batch: &str,
+        ordinal: usize,
+        call: &str,
+        name: &str,
+        args: &Value,
+    ) -> Self {
+        let value = Self {
+            schema: "elitea.pipeline.tool-call.v1".to_owned(),
+            original_batch_event_id: batch.to_owned(),
+            original_ordinal: ordinal,
+            parent_call_id: call.to_owned(),
+            tool_name: name.to_owned(),
+            arguments_digest: super::pipeline::scope_receipts::arguments_digest(args).unwrap(),
+        };
+        value.validate().unwrap();
+        value
+    }
+    pub(crate) fn validate(&self) -> Result<(), NativeAgentAssemblyError> {
         if self.schema != "elitea.pipeline.tool-call.v1"
             || !(1..=16).contains(&self.original_ordinal)
             || [

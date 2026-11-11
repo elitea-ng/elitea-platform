@@ -193,6 +193,9 @@ pub(crate) struct ParallelChildCheckpoint {
     /// The branch family's own fenced node journals, for the effectful direct
     /// nodes of the saved pipelines its Agent member runs (FU-248).
     pub(crate) node_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// FU-291: the branch family's admission of the nested pipeline threads
+    /// its Agent's pipeline tools run on, and the one set its projector reads.
+    pub(crate) tool_pipelines: Option<Arc<dyn super::tool_pipeline_threads::ToolPipelineAdmission>>,
 }
 
 #[async_trait]
@@ -520,6 +523,7 @@ pub(crate) struct PreparedParallelBranch {
     thread_id: String,
     admitted_threads: BTreeSet<String>,
     node_recovery: Option<Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>>,
+    tool_pipelines: Option<Arc<dyn super::tool_pipeline_threads::ToolPipelineAdmission>>,
     /// The frozen occurrence's child count (W3-2).
     family_size: usize,
     /// What the branch's own checkpoint already proves; `None` must run.
@@ -537,6 +541,7 @@ impl PreparedParallelBranch {
             thread_id: self.thread_id.clone(),
             admitted_threads: self.admitted_threads.clone(),
             node_recovery: self.node_recovery.clone(),
+            tool_pipelines: self.tool_pipelines.clone(),
             family_size: self.family_size,
             replay: None,
         }
@@ -1025,6 +1030,7 @@ impl AdkParallelBranchRuntime {
                 thread_id: child.thread_id,
                 admitted_threads: child.admitted_threads,
                 node_recovery: child.node_recovery,
+                tool_pipelines: child.tool_pipelines,
                 family_size: inputs.len(),
                 replay,
             });
@@ -1054,6 +1060,7 @@ impl AdkParallelBranchRuntime {
                     .cloned(),
             )
             .with_node_recovery(branch.node_recovery.clone())
+            .with_tool_pipelines(branch.tool_pipelines.clone())
             .with_family_size(branch.family_size)
             .with_static_after_checkpoints(
                 branch

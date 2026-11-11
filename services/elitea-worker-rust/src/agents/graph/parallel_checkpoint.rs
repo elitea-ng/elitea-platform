@@ -524,6 +524,9 @@ pub(crate) struct ParallelBranchExecution {
     /// The branch family's node journals (FU-248).
     node_recovery:
         Option<Arc<dyn crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory>>,
+    /// FU-291: the family's admission of its Agent's nested pipeline threads.
+    tool_pipelines:
+        Option<Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>>,
     /// How many children the frozen occurrence holds (W3-2: a Code child's
     /// owner scope names it); `0` when the caller did not set it.
     family_size: usize,
@@ -550,6 +553,7 @@ impl ParallelBranchExecution {
             parent_event_scope,
             static_after_checkpoints: std::collections::BTreeMap::new(),
             node_recovery: None,
+            tool_pipelines: None,
             family_size: 0,
         }
     }
@@ -585,6 +589,23 @@ impl ParallelBranchExecution {
         &self,
     ) -> Option<Arc<dyn crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory>> {
         self.node_recovery.clone()
+    }
+
+    /// FU-291: the branch family's nested pipeline admission.
+    pub(super) fn with_tool_pipelines(
+        mut self,
+        tool_pipelines: Option<
+            Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>,
+        >,
+    ) -> Self {
+        self.tool_pipelines = tool_pipelines;
+        self
+    }
+
+    pub(crate) fn tool_pipelines(
+        &self,
+    ) -> Option<Arc<dyn crate::agents::graph::tool_pipeline_threads::ToolPipelineAdmission>> {
+        self.tool_pipelines.clone()
     }
 
     pub(crate) fn static_after_checkpoints(&self) -> &std::collections::BTreeMap<String, String> {

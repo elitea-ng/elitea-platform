@@ -8,6 +8,10 @@ use adk_rust::graph::{Checkpoint, Checkpointer, GraphError};
 use async_trait::async_trait;
 
 use super::{CheckpointWriterAuthority, PostgresCheckpointError, PostgresCheckpointer};
+use crate::agents::application_pipeline::PipelineToolCallLineage;
+use crate::agents::graph::tool_pipeline_threads::{
+    AdmittedToolPipeline, ToolPipelineAdmission, ToolPipelineThreads, tool_pipeline_thread,
+};
 use crate::agents::graph::{
     ParallelActivation, ParallelBranchDefinition, ParallelCheckpointAppender,
     ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
@@ -15,8 +19,13 @@ use crate::agents::graph::{
 };
 
 pub(crate) struct ApplicationCheckpointers {
+    /// The family's own root: the run root or one fan-out member's thread.
+    root_thread: String,
     threads: BTreeMap<String, PostgresCheckpointer>,
     branch_paths: ApplicationBranchCatalog,
+    /// FU-291: the nested pipeline threads this family's Agents admitted. The
+    /// one set the member's event projector reads (C1).
+    tool_threads: Arc<ToolPipelineThreads>,
 }
 
 /// Exact descendant families derived only from the admitted application paths.
@@ -172,15 +181,24 @@ fn admitted_application_paths(paths: &[String]) -> Result<BTreeSet<&str>, Postgr
 }
 
 impl ApplicationCheckpointers {
+    /// `writers` holds the family's root first (`application_family`).
     fn assemble(
         writers: impl IntoIterator<Item = PostgresCheckpointer>,
         branch_paths: ApplicationBranchCatalog,
     ) -> Self {
+        let mut root_thread = None;
+        let threads = writers
+            .into_iter()
+            .map(|writer| {
+                let thread = writer.scope.authority.thread_id.clone();
+                root_thread.get_or_insert_with(|| thread.clone());
+                (thread, writer)
+            })
+            .collect::<BTreeMap<_, _>>();
         Self {
-            threads: writers
-                .into_iter()
-                .map(|writer| (writer.scope.authority.thread_id.clone(), writer))
-                .collect(),
+            root_thread: root_thread.unwrap_or_default(),
+            tool_threads: Arc::new(ToolPipelineThreads::new(threads.len())),
+            threads,
             branch_paths,
         }
     }
@@ -326,7 +344,8 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
             thread_id,
             checkpointer: child.clone(),
             admitted_threads,
-            node_recovery: Some(child),
+            node_recovery: Some(child.clone()),
+            tool_pipelines: Some(child),
         })
     }
 
@@ -391,7 +410,8 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
                         thread_id,
                         checkpointer: child.clone(),
                         admitted_threads,
-                        node_recovery: Some(child),
+                        node_recovery: Some(child.clone()),
+                        tool_pipelines: Some(child),
                     },
                     latest,
                 }
@@ -415,6 +435,52 @@ impl crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory for Applic
             policy,
         )
         .await
+    }
+}
+
+#[async_trait]
+impl ToolPipelineAdmission for ApplicationCheckpointers {
+    fn tool_threads(&self) -> Arc<ToolPipelineThreads> {
+        Arc::clone(&self.tool_threads)
+    }
+
+    /// D-3: the Agent thread is one of this family's own threads (never its
+    /// root), the nested thread is derived from it and the captured lineage,
+    /// and its writer is activated under the Agent writer's exact claim and
+    /// fence before it is registered. Re-admission in this process returns the
+    /// registered writer; after a takeover the same derivation re-activates it.
+    async fn admit_tool_pipeline(
+        &self,
+        agent_thread: &str,
+        lineage: &PipelineToolCallLineage,
+    ) -> Result<AdmittedToolPipeline, GraphError> {
+        let agent = self
+            .threads
+            .get(agent_thread)
+            .filter(|_| agent_thread != self.root_thread)
+            .ok_or(PostgresCheckpointError::InvalidScope(
+                "the nested pipeline's Agent thread is not admitted in this family",
+            ))?;
+        let thread_id = tool_pipeline_thread(agent_thread, lineage)?;
+        if self.threads.contains_key(&thread_id) {
+            return Err(PostgresCheckpointError::InvalidScope(
+                "the nested pipeline thread collides with an admitted thread",
+            )
+            .into());
+        }
+        let _admission = self.tool_threads.admission().await;
+        if let Some(admitted) = self.tool_threads.admitted(&thread_id, agent_thread) {
+            return Ok(admitted);
+        }
+        self.tool_threads.check_room()?;
+        let writer = agent.activate_fanout_child(thread_id.clone()).await?;
+        let admitted = AdmittedToolPipeline {
+            thread_id,
+            agent_thread: agent_thread.to_owned(),
+            writer: Arc::new(writer),
+        };
+        self.tool_threads.register(admitted.clone())?;
+        Ok(admitted)
     }
 }
 

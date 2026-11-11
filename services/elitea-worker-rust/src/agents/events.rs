@@ -176,6 +176,7 @@ pub(crate) fn strip_descendant_private_metadata(event: &mut Event) {
         PIPELINE_TOOL_BOUNDARY_METADATA_KEY,
         super::application_pipeline::BOUNDARY_LEDGER_KEY,
         super::application_pipeline::STATIC_TOOL_THREAD_METADATA_KEY,
+        super::graph::tool_pipeline_threads::DURABLE_TOOL_THREAD_METADATA_KEY,
         super::pipeline::scoped_applications::PIPELINE_APPLICATION_SCOPE_METADATA_KEY,
         super::pipeline::scoped_applications::PIPELINE_ROOT_PROJECTION_METADATA_KEY,
         super::pipeline::scoped_applications::ACTIVATION_CHAIN_KEY,
