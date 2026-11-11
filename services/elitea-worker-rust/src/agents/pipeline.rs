@@ -880,6 +880,7 @@ impl PipelineNativeAgentAssembler {
         let llm_factory = context.zip(model_facade).map(|(context, model_facade)| {
             Arc::new(NativePipelineLlmAgentFactory {
                 fanout_branch: false,
+                member_recovery: false,
                 profile: profile.shell().clone(),
                 context,
                 model_facade,
@@ -1574,6 +1575,9 @@ impl PipelineNativeAgentAssembler {
 struct NativePipelineLlmAgentFactory {
     /// An inline fixed Parallel LLM branch (`for_fanout_branch`).
     fanout_branch: bool,
+    /// FU-291: an LLM node of a fan-out member's durable nested pipeline
+    /// (`for_member_recovery`): D2 recovery, its events still stream.
+    member_recovery: bool,
     profile: OrdinaryNoToolProfile,
     context: Arc<ClaimScopedEliteaContext>,
     model_facade: Arc<ModelFacade>,
@@ -1745,6 +1749,13 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
         Some(Arc::new(self.rebind_branch_journals(&journals)))
     }
 
+    fn for_tool_pipelines(
+        &self,
+        admission: Arc<dyn super::graph::tool_pipeline_threads::ToolPipelineAdmission>,
+    ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+        Some(Arc::new(self.rebind_tool_pipelines(&admission)))
+    }
+
     fn for_parallel_events(
         &self,
         events: PipelineNodeEventSender,
@@ -1761,7 +1772,11 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
             .map(|resolver| Arc::new(resolver) as Arc<dyn PipelineApplicationResolver>)
     }
 
-    fn agent_calls_saved_pipeline(&self, node: &str, alias: &str) -> bool {
+    fn agent_tool_pipeline_refusal(
+        &self,
+        node: &str,
+        alias: &str,
+    ) -> Option<super::graph::compiler::ToolPipelineCause> {
         let participant = if self.nodes.is_empty() {
             self.participants.get(alias)
         } else {
@@ -1770,11 +1785,40 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
                 .filter(|(selected, _)| selected == alias)
                 .map(|(_, participant)| participant)
         };
-        matches!(
-            participant,
-            Some(NativePipelineApplicationParticipant::ScopedAgent { scope, .. })
-                if scope.applications.presentation_catalog().has_pipeline_descendant()
-        )
+        match participant {
+            Some(NativePipelineApplicationParticipant::ScopedAgent { scope, .. }) => scope
+                .applications
+                .presentation_catalog()
+                .fanout_tool_pipeline_refusal(),
+            // Review A: a saved pipeline worker's own Agent nodes are lent no
+            // nested thread admission, so a pipeline tool among their tools
+            // is refused before the run, never mid-run.
+            Some(NativePipelineApplicationParticipant::Pipeline { runtimes, .. })
+                if runtimes
+                    .application_resolver()
+                    .is_some_and(|resolver| resolver.holds_agent_pipeline_tool()) =>
+            {
+                Some(super::graph::compiler::ToolPipelineCause::InSavedPipeline)
+            }
+            _ => None,
+        }
+    }
+
+    fn holds_agent_pipeline_tool(&self) -> bool {
+        self.nodes
+            .values()
+            .map(|(_, participant)| participant)
+            .chain(self.participants.values())
+            .any(|participant| match participant {
+                NativePipelineApplicationParticipant::ScopedAgent { scope, .. } => scope
+                    .applications
+                    .presentation_catalog()
+                    .has_pipeline_descendant(),
+                NativePipelineApplicationParticipant::Pipeline { runtimes, .. } => runtimes
+                    .application_resolver()
+                    .is_some_and(|resolver| resolver.holds_agent_pipeline_tool()),
+                NativePipelineApplicationParticipant::Agent(_) => false,
+            })
     }
 
     fn fixed_parallel_definition_digest(
@@ -1950,7 +1994,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
         // resumes its own model step and replays a read-only batch; a tool
         // past its boundary is refused typed.
         let scopes = self.model_scopes.for_node(scope.identity());
-        let scopes = if self.fanout_branch && replay.is_none() {
+        let scopes = if (self.fanout_branch || self.member_recovery) && replay.is_none() {
             scopes.with_pending_model_recovery().with_read_only_replay()
         } else {
             scopes
@@ -2080,6 +2124,12 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
     fn for_fanout_branch(&self) -> Option<Arc<dyn PipelineLlmAgentFactory>> {
         let mut factory = self.clone();
         factory.fanout_branch = true;
+        Some(Arc::new(factory))
+    }
+
+    fn for_member_recovery(&self) -> Option<Arc<dyn PipelineLlmAgentFactory>> {
+        let mut factory = self.clone();
+        factory.member_recovery = true;
         Some(Arc::new(factory))
     }
 }
@@ -2215,7 +2265,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
         materialization,
         node_recovery: None,
     };
-    let (definition, bound) = match admit_saved_pipeline_child(
+    let (definition, bound, definition_sha256) = match admit_saved_pipeline_child(
         platform,
         runtime_context,
         &runtime,
@@ -2321,6 +2371,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
         bound.runtimes,
         bound.presentations,
         bound.delegation,
+        definition_sha256,
     )))
 }
 
@@ -2480,6 +2531,8 @@ pub(super) type SavedPipelineTool = Result<
         PipelineNodeRuntimes,
         ApplicationToolPresentationCatalog,
         Option<DelegationEvidence>,
+        // FU-338: Main's frozen definition digest of the version, when served.
+        Option<[u8; 32]>,
     ),
     RefusedDelegation,
 >;
@@ -2499,7 +2552,7 @@ async fn admit_saved_pipeline_child(
     identity: (u64, u64),
     project_id: Option<u64>,
 ) -> Result<
-    Result<(PipelineDefinition, BoundSavedPipeline), RefusedDelegation>,
+    Result<(PipelineDefinition, BoundSavedPipeline, Option<[u8; 32]>), RefusedDelegation>,
     NativeAgentAssemblyError,
 > {
     let admitted = composition::admit_tool_composition(
@@ -2524,7 +2577,11 @@ async fn admit_saved_pipeline_child(
         return Ok(Err(refused));
     }
     let bound = bind_admitted_saved_pipeline(admitted.as_ref(), runtime, String::new()).await?;
-    Ok(Ok((admitted.profile.definition().clone(), bound)))
+    Ok(Ok((
+        admitted.profile.definition().clone(),
+        bound,
+        admitted.frozen_definition_sha256,
+    )))
 }
 
 /// Bind the invocation-owned node runtimes of one saved pipeline participant.
@@ -2856,6 +2913,7 @@ async fn bind_saved_pipeline_runtimes(
     let llm_factory = profile.definition().has_llm_nodes().then(|| {
         Arc::new(NativePipelineLlmAgentFactory {
             fanout_branch: false,
+            member_recovery: false,
             profile: profile.shell().clone(),
             context: Arc::clone(&runtime.context),
             model_facade: Arc::clone(&runtime.model_facade),

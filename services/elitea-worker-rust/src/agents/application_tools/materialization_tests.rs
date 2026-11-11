@@ -278,7 +278,7 @@ impl Fixture {
             [1; 32],
         );
         let (sender, _receiver) = pipeline_node_event_channel();
-        let (definition, actual, _, _) = materialize_saved_pipeline_tool(
+        let (definition, actual, _, _, _) = materialize_saved_pipeline_tool(
             &self.platform,
             &authority,
             context,

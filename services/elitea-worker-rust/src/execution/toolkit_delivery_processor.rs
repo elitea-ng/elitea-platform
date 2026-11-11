@@ -2300,6 +2300,9 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::PipelineToolFailed => "pipeline.tool_failed",
         RuntimeFailureKind::FanoutMemberFailed => "graph.fanout.member_failed",
         RuntimeFailureKind::FanoutAgentCallsPipeline => "graph.fanout.agent_calls_saved_pipeline",
+        RuntimeFailureKind::FanoutAgentToolPipelineUnsupported => {
+            elitea_faults::codes::GRAPH_FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED.as_str()
+        }
         RuntimeFailureKind::FanoutDeadlineInsufficient => {
             crate::protocol::output::FANOUT_DEADLINE_INSUFFICIENT_UPSTREAM_CODE
         }

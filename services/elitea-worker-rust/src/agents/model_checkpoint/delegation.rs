@@ -11,6 +11,8 @@ use serde_json::json;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+use crate::agents::application_tools::valid_batch_event_id;
+
 pub(super) fn validate_calls(
     content: &Content,
     admitted: impl Fn(&str) -> bool,
@@ -54,11 +56,54 @@ impl ModelCheckpointWriter {
         self
     }
 
+    /// The pipeline tools this Agent runs on a durable thread (FU-291).
+    pub(in crate::agents) fn with_durable_pipeline_tools<'a>(
+        mut self,
+        names: impl Iterator<Item = &'a str>,
+    ) -> Self {
+        self.durable_pipeline_tools = Arc::new(names.map(str::to_owned).collect());
+        self
+    }
+
+    /// C2/C4: a durable record replays only where this Worker binds its call
+    /// to its durable thread, and always under its original batch event; any
+    /// other record carries no batch id.
+    pub(super) fn durable_replay_batch(
+        &self,
+        phase: Phase,
+        content: &Content,
+        batch: Option<String>,
+    ) -> adk_rust::Result<Option<String>> {
+        if !matches!(phase, Phase::DurableDelegationPending) {
+            return if batch.is_some() {
+                Err(invalid_checkpoint())
+            } else {
+                Ok(None)
+            };
+        }
+        if !self.holds_durable_call(content) {
+            return Err(invalid_checkpoint());
+        }
+        batch
+            .filter(|batch| valid_batch_event_id(batch))
+            .map(Some)
+            .ok_or_else(invalid_checkpoint)
+    }
+
+    /// Whether `content` calls at least one of this writer's durable pipeline tools.
+    pub(super) fn holds_durable_call(&self, content: &Content) -> bool {
+        content.parts.iter().any(|part| {
+            matches!(part, Part::FunctionCall { name, .. }
+                if self.durable_pipeline_tools.contains(name))
+        })
+    }
+
     pub(in crate::agents) fn delegation_model(&self, inner: Arc<dyn Llm>) -> Arc<dyn Llm> {
         match &self.replay_delegation {
             Some(pending) => Arc::new(DelegationReplayModel {
                 inner,
                 pending: pending.clone(),
+                batch: self.replay_batch.clone(),
             }),
             None => inner,
         }
@@ -129,7 +174,7 @@ impl ModelCheckpointWriter {
         // A prior ordinary effect cannot be upgraded into replay permission.
         if !matches!(
             checkpoint.phase,
-            Phase::ModelPending | Phase::DelegationPending
+            Phase::ModelPending | Phase::DelegationPending | Phase::DurableDelegationPending
         ) {
             return Ok(false);
         }
@@ -142,10 +187,15 @@ impl ModelCheckpointWriter {
                     && event.actions.state_delta.get(CHECKPOINT_KEY) == Some(&value)
             })
             .ok_or_else(invalid_checkpoint)?;
-        let content = match checkpoint.phase {
-            Phase::DelegationPending => checkpoint.delegation.ok_or_else(invalid_checkpoint)?,
+        let (content, batch) = match checkpoint.phase {
+            Phase::DelegationPending | Phase::DurableDelegationPending => (
+                checkpoint.delegation.ok_or_else(invalid_checkpoint)?,
+                checkpoint.batch_event_id,
+            ),
             Phase::ModelPending => {
-                let Some(content) = events[marker + 1..]
+                // C2: the batch's own model event names it for good; a replay
+                // after a crash re-emits it under this id.
+                let Some((content, batch)) = events[marker + 1..]
                     .iter()
                     .rev()
                     .find(|event| {
@@ -154,11 +204,23 @@ impl ModelCheckpointWriter {
                             && !event.llm_response.partial
                             && event.llm_response.content.is_some()
                     })
-                    .and_then(|event| event.llm_response.content.clone())
+                    .and_then(|event| {
+                        event
+                            .llm_response
+                            .content
+                            .clone()
+                            .map(|content| (content, original_batch_id(event)))
+                    })
                 else {
                     return Err(invalid_checkpoint());
                 };
-                content
+                // Only a durable batch is named by its id; its key must be sound.
+                let batch = match batch {
+                    Ok(batch) => Some(batch),
+                    Err(error) if self.holds_durable_call(&content) => return Err(error),
+                    Err(_) => None,
+                };
+                (content, batch)
             }
             _ => return Err(invalid_checkpoint()),
         };
@@ -175,29 +237,46 @@ impl ModelCheckpointWriter {
         }
         let mut model = checkpoint.model.ok_or_else(invalid_checkpoint)?;
         model.request.tools = model.tools;
-        self.persist_delegation(identity, ctx.invocation_id(), &model.request, &content)
-            .await?;
+        self.persist_delegation(
+            identity,
+            ctx.invocation_id(),
+            &model.request,
+            &content,
+            batch,
+        )
+        .await?;
         Ok(true)
     }
 
+    /// `batch` is the batch's original model event (C2); a durable pipeline
+    /// batch is never recorded without it.
     pub(super) async fn persist_delegation(
         &self,
         identity: AdkIdentity,
         invocation: &str,
         request: &LlmRequest,
         content: &Content,
+        batch: Option<String>,
     ) -> adk_rust::Result<()> {
+        let mut record = json!({
+            "version": 1, "execution_id": self.execution_id, "generation": self.generation,
+            "definition_digest": self.definition_digest, "invocation_id": invocation,
+            "phase": Phase::DelegationPending,
+            "model": {"request": request, "tools": request.tools}, "delegation": content,
+        });
+        if self.holds_durable_call(content) {
+            let batch = batch
+                .filter(|batch| valid_batch_event_id(batch))
+                .ok_or_else(invalid_checkpoint)?;
+            record["phase"] = json!(Phase::DurableDelegationPending);
+            record["batch_event_id"] = json!(batch);
+        }
         let mut event = Event::new(invocation);
         "elitea-recovery".clone_into(&mut event.author);
-        event.actions.state_delta.insert(
-            CHECKPOINT_KEY.into(),
-            json!({
-                "version": 1, "execution_id": self.execution_id, "generation": self.generation,
-                "definition_digest": self.definition_digest, "invocation_id": invocation,
-                "phase": Phase::DelegationPending,
-                "model": {"request": request, "tools": request.tools}, "delegation": content,
-            }),
-        );
+        event
+            .actions
+            .state_delta
+            .insert(CHECKPOINT_KEY.into(), record);
         self.sessions
             .append_event_for_identity(AppendEventRequest { identity, event })
             .await
@@ -207,6 +286,16 @@ impl ModelCheckpointWriter {
 struct DelegationReplayModel {
     inner: Arc<dyn Llm>,
     pending: Arc<Mutex<Option<Content>>>,
+    /// A durable pipeline batch is re-emitted under its original event (C2).
+    batch: Option<String>,
+}
+
+/// The id a batch event names its calls by: the original of a replayed
+/// batch. A malformed replay key refuses (review 4): a fresh id would name
+/// another nested thread and run a finished pipeline again.
+fn original_batch_id(event: &Event) -> adk_rust::Result<String> {
+    crate::agents::application_tools::original_application_batch_id(event)
+        .map_err(|_| invalid_checkpoint())
 }
 
 #[async_trait]
@@ -235,6 +324,9 @@ impl Llm for DelegationReplayModel {
                 content: Some(content),
                 turn_complete: true,
                 finish_reason: Some(adk_rust::FinishReason::Stop),
+                provider_metadata: self.batch.as_ref().map(|batch| {
+                    json!({crate::agents::application_tools::DURABLE_REPLAY_BATCH_KEY: batch})
+                }),
                 ..LlmResponse::default()
             };
             return Ok(Box::pin(adk_rust::futures::stream::once(async {

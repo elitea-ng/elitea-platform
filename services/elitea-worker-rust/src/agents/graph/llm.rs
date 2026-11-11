@@ -1128,6 +1128,14 @@ pub(crate) trait PipelineLlmAgentFactory: Send + Sync {
     fn for_fanout_branch(&self) -> Option<Arc<dyn PipelineLlmAgentFactory>> {
         None
     }
+
+    /// FU-291: this factory for the LLM nodes of a fan-out member's durable
+    /// nested pipeline: a re-run restores the node's own model checkpoint and
+    /// replays a read-only batch (D2), and its events stream as before.
+    /// `None`: the factory has no model checkpoint to restore.
+    fn for_member_recovery(&self) -> Option<Arc<dyn PipelineLlmAgentFactory>> {
+        None
+    }
 }
 
 #[derive(Clone)]

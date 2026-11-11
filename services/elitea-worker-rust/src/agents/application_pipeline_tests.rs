@@ -316,7 +316,19 @@ fn harness_named(yaml: &str, tool_name: &str) -> Harness {
     harness_with_runtimes(yaml, tool_name, PipelineNodeRuntimes::default())
 }
 
+/// Main's frozen definition digest the harness's pipeline was served with.
+const HARNESS_DEFINITION: [u8; 32] = [0x5d; 32];
+
 fn harness_with_runtimes(yaml: &str, tool_name: &str, runtimes: PipelineNodeRuntimes) -> Harness {
+    harness_with_definition(yaml, tool_name, runtimes, Some(HARNESS_DEFINITION))
+}
+
+fn harness_with_definition(
+    yaml: &str,
+    tool_name: &str,
+    runtimes: PipelineNodeRuntimes,
+    definition_sha256: Option<[u8; 32]>,
+) -> Harness {
     let definition = PipelineDefinition::from_yaml(yaml).expect("pipeline definition");
     let (node_sender, node_receiver) = pipeline_node_event_channel();
     let (sender, events) = mpsc::channel(64);
@@ -333,6 +345,7 @@ fn harness_with_runtimes(yaml: &str, tool_name: &str, runtimes: PipelineNodeRunt
             event_sender: Some(sender),
             resume: Some(resume.clone()),
         },
+        definition_sha256,
     );
     Harness {
         tool,
@@ -1704,4 +1717,624 @@ async fn a_full_parent_channel_never_strands_a_child_holding_the_root_writer() {
         json!({"response": "No response from pipeline"})
     );
     assert_eq!(received.load(std::sync::atomic::Ordering::SeqCst), FLOOD);
+}
+
+/// FU-291: the durable source of a fan-out member's pipeline tool calls.
+mod durable_member_calls {
+    use super::*;
+    use crate::agents::application_tools::{MemberToolPipelines, with_member_tool_pipelines};
+    use crate::agents::graph::node_recovery::NodeRecoveryPolicy;
+    use crate::agents::graph::node_recovery_runtime::{
+        NodeAttemptActivation, NodeAttemptJournal, NodeRecoveryFactory,
+    };
+    use crate::agents::graph::tool_pipeline_threads::{
+        AdmittedToolPipeline, TOOL_PIPELINE_LIMIT_CODE, ToolPipelineAdmission, ToolPipelineThreads,
+        proved_durable_tool_thread, tool_pipeline_thread,
+    };
+    use adk_rust::graph::{Checkpoint, Checkpointer, GraphError, MemoryCheckpointer};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const AGENT_THREAD: &str = "m1:member/agent";
+
+    /// The nested thread's store: counts every save.
+    struct Store {
+        inner: MemoryCheckpointer,
+        saves: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl Checkpointer for Store {
+        async fn save(&self, checkpoint: &Checkpoint) -> Result<String, GraphError> {
+            self.saves.fetch_add(1, Ordering::SeqCst);
+            self.inner.save(checkpoint).await
+        }
+        async fn load(&self, thread: &str) -> Result<Option<Checkpoint>, GraphError> {
+            self.inner.load(thread).await
+        }
+        async fn load_by_id(&self, id: &str) -> Result<Option<Checkpoint>, GraphError> {
+            self.inner.load_by_id(id).await
+        }
+        async fn list(&self, thread: &str) -> Result<Vec<Checkpoint>, GraphError> {
+            self.inner.list(thread).await
+        }
+        async fn delete(&self, thread: &str) -> Result<(), GraphError> {
+            self.inner.delete(thread).await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl NodeRecoveryFactory for Store {
+        async fn open(
+            &self,
+            _: &NodeAttemptActivation,
+            _: &NodeRecoveryPolicy,
+        ) -> Result<NodeAttemptJournal, GraphError> {
+            Err(GraphError::CheckpointError("unused".to_owned()))
+        }
+    }
+
+    /// The member family stand-in: one store, every admission counted, the
+    /// first `transient` admissions failing as a held writer table does.
+    struct Admission {
+        threads: Arc<ToolPipelineThreads>,
+        store: Arc<Store>,
+        calls: AtomicUsize,
+        transient: AtomicUsize,
+        /// What the first `transient` admissions fail with.
+        failure: &'static str,
+        limit: bool,
+        /// FU-338: the stamp the ledger holds for the thread, when set;
+        /// otherwise the admission stamps the digest it is given.
+        stamp: std::sync::Mutex<Option<Held>>,
+    }
+
+    /// The stamp a ledger holds: a digest, or none.
+    #[derive(Clone, Copy)]
+    struct Held(Option<[u8; 32]>);
+
+    fn admission(transient: usize, limit: bool) -> Arc<Admission> {
+        admission_on(2, transient, "checkpoint.storage_unavailable: held", limit)
+    }
+
+    fn admission_on(
+        static_threads: usize,
+        transient: usize,
+        failure: &'static str,
+        limit: bool,
+    ) -> Arc<Admission> {
+        Arc::new(Admission {
+            threads: Arc::new(ToolPipelineThreads::new(static_threads)),
+            store: Arc::new(Store {
+                inner: MemoryCheckpointer::new(),
+                saves: AtomicUsize::new(0),
+            }),
+            calls: AtomicUsize::new(0),
+            transient: AtomicUsize::new(transient),
+            failure,
+            limit,
+            stamp: std::sync::Mutex::new(None),
+        })
+    }
+
+    #[async_trait::async_trait]
+    impl ToolPipelineAdmission for Admission {
+        fn tool_threads(&self) -> Arc<ToolPipelineThreads> {
+            Arc::clone(&self.threads)
+        }
+        async fn admit_tool_pipeline(
+            &self,
+            agent_thread: &str,
+            lineage: &crate::agents::application_pipeline::PipelineToolCallLineage,
+            definition_sha256: Option<[u8; 32]>,
+        ) -> Result<AdmittedToolPipeline, GraphError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self
+                .transient
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(GraphError::CheckpointError(self.failure.to_owned()));
+            }
+            if self.limit {
+                return Err(GraphError::CheckpointError(format!(
+                    "{TOOL_PIPELINE_LIMIT_CODE}: bound"
+                )));
+            }
+            let thread_id = tool_pipeline_thread(agent_thread, lineage)?;
+            let held = *self.stamp.lock().unwrap();
+            if let Some(mut admitted) = self.threads.admitted(&thread_id, agent_thread) {
+                if let Some(Held(stamp)) = held {
+                    admitted.definition_sha256 = stamp;
+                }
+                return Ok(admitted);
+            }
+            let admitted = AdmittedToolPipeline {
+                thread_id,
+                agent_thread: agent_thread.to_owned(),
+                writer: self.store.clone(),
+                definition_sha256: held.map_or(definition_sha256, |Held(stamp)| stamp),
+            };
+            self.threads.check_room()?;
+            self.threads.register(admitted.clone());
+            Ok(admitted)
+        }
+    }
+
+    async fn call(harness: &Harness, admission: &Arc<Admission>) -> adk_rust::Result<Value> {
+        with_member_tool_pipelines(
+            MemberToolPipelines {
+                admission: Some(admission.clone()),
+                agent_thread: AGENT_THREAD.to_owned(),
+            },
+            harness.tool.execute(context(), json!({"task": "ship it"})),
+        )
+        .await
+    }
+
+    fn nested_thread() -> String {
+        tool_pipeline_thread(
+            AGENT_THREAD,
+            &crate::agents::application_pipeline::PipelineToolCallLineage::from_call(
+                &root_call_event(),
+                0,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    /// D-3/D-4: inside a member the call runs on the nested thread its family
+    /// admitted for the captured lineage, and every event it sends names that
+    /// thread with the receipt the member's projector re-derives it from (C1).
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_member_call_runs_on_its_admitted_nested_thread_with_its_receipt() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let admission = admission(0, false);
+        let result = call(&harness, &admission).await.unwrap();
+        assert_eq!(result, json!({"response": "HANDLED ship it"}));
+        assert_eq!(admission.calls.load(Ordering::SeqCst), 1);
+        let thread = nested_thread();
+        let row = admission
+            .store
+            .load(&thread)
+            .await
+            .unwrap()
+            .expect("a durable row");
+        assert!(row.pending_nodes.is_empty(), "the nested run finished");
+        assert_eq!(row.thread_id, thread);
+        assert!(
+            admission.threads.admitted(&thread, AGENT_THREAD).is_some(),
+            "the call ran only after its thread was admitted"
+        );
+        // A State Modifier pipeline forwards nothing but its suppressed
+        // terminal; whatever a node does send carries the receipt.
+        for event in &persisted(&mut harness.events) {
+            assert_eq!(
+                event
+                    .provider_metadata
+                    .get(DESCENDANT_CHECKPOINT_THREAD_KEY),
+                Some(&thread)
+            );
+            let (derived, agent) = proved_durable_tool_thread(event).unwrap().unwrap();
+            assert_eq!(
+                (derived.as_str(), agent.as_str()),
+                (thread.as_str(), AGENT_THREAD)
+            );
+        }
+    }
+
+    /// C3: a completed nested thread answers its stored final output, byte for
+    /// byte the uninterrupted call's, and is never re-entered or written.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_completed_nested_thread_answers_its_stored_result_and_is_never_written() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let admission = admission(0, false);
+        let first = call(&harness, &admission).await.unwrap();
+        let saves = admission.store.saves.load(Ordering::SeqCst);
+        let rows = admission.store.list(&nested_thread()).await.unwrap().len();
+        persisted(&mut harness.events);
+
+        let again = call(&harness, &admission).await.unwrap();
+        assert_eq!(
+            serde_json::to_vec(&again).unwrap(),
+            serde_json::to_vec(&first).unwrap(),
+            "the stored result is the uninterrupted call's"
+        );
+        assert_eq!(
+            admission.store.saves.load(Ordering::SeqCst),
+            saves,
+            "no write"
+        );
+        assert_eq!(
+            admission.store.list(&nested_thread()).await.unwrap().len(),
+            rows
+        );
+        assert!(persisted(&mut harness.events).is_empty(), "nothing re-ran");
+    }
+
+    /// D3: past the member's bound the model reads a typed tool error and
+    /// nothing runs.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_member_past_its_nested_call_bound_reads_a_typed_tool_error() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let admission = admission(0, true);
+        let result = call(&harness, &admission).await.unwrap();
+        assert_eq!(result["failure"]["code"], TOOL_PIPELINE_LIMIT_CODE);
+        assert_eq!(result["failure"]["retryable"], false);
+        assert_eq!(admission.store.saves.load(Ordering::SeqCst), 0);
+        assert!(persisted(&mut harness.events).is_empty());
+    }
+
+    /// FU-338: a nested thread whose first admission stamped another
+    /// definition (the pipeline was edited) is refused with its registered
+    /// code before any nested work: no row, no event; a thread without a
+    /// stamp is refused with its own code.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_nested_thread_stamped_for_another_definition_is_refused_before_any_nested_work() {
+        for (stamp, code, recoverable) in [
+            (
+                Some([0xed; 32]),
+                "pipeline.recovery.tool_pipeline_definition_changed",
+                true,
+            ),
+            (
+                None,
+                "pipeline.recovery.tool_pipeline_definition_unproven",
+                false,
+            ),
+        ] {
+            let mut harness = harness(PLAIN_PIPELINE);
+            harness
+                .resume
+                .observe_call_lineage(&root_call_event())
+                .await
+                .unwrap();
+            let admission = admission(0, false);
+            *admission.stamp.lock().unwrap() = Some(Held(stamp));
+            let result = call(&harness, &admission).await.unwrap();
+            assert_eq!(result["failure"]["code"], code, "{result}");
+            assert_eq!(result["failure"]["recoverable"], recoverable);
+            assert_eq!(result["failure"]["retryable"], false);
+            assert_eq!(admission.store.saves.load(Ordering::SeqCst), 0, "{code}");
+            assert!(
+                admission
+                    .store
+                    .load(&nested_thread())
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{code}: no nested row"
+            );
+            assert!(persisted(&mut harness.events).is_empty(), "{code}");
+        }
+    }
+
+    /// FU-338 N5: a call whose saved pipeline Main served without a digest is
+    /// refused `unproven` before its admission: it reserves no ledger slot (of
+    /// the member's 8), activates no writer and runs nothing.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_call_without_main_s_digest_is_refused_before_its_admission() {
+        let mut harness = harness_with_definition(
+            PLAIN_PIPELINE,
+            TOOL_NAME,
+            PipelineNodeRuntimes::default(),
+            None,
+        );
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let admission = admission(0, false);
+        let result = call(&harness, &admission).await.unwrap();
+        assert_eq!(
+            result["failure"]["code"], "pipeline.recovery.tool_pipeline_definition_unproven",
+            "{result}"
+        );
+        assert_eq!(admission.calls.load(Ordering::SeqCst), 0, "not admitted");
+        assert_eq!(admission.threads.len(), 0, "no slot");
+        assert_eq!(admission.store.saves.load(Ordering::SeqCst), 0);
+        assert!(persisted(&mut harness.events).is_empty());
+    }
+
+    /// FU-338: a completed nested thread whose pipeline changed is refused
+    /// typed, since its stored state was projected by the old definition;
+    /// nothing nested runs or is written. Unchanged it serves its stored result
+    /// (`a_completed_nested_thread_answers_its_stored_result_and_is_never_written`).
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_completed_nested_thread_whose_pipeline_changed_is_refused_typed() {
+        for (stamp, code) in [
+            (
+                Some([0xed; 32]),
+                "pipeline.recovery.tool_pipeline_definition_changed",
+            ),
+            (None, "pipeline.recovery.tool_pipeline_definition_unproven"),
+        ] {
+            let mut harness = harness(PLAIN_PIPELINE);
+            harness
+                .resume
+                .observe_call_lineage(&root_call_event())
+                .await
+                .unwrap();
+            let admission = admission(0, false);
+            let first = call(&harness, &admission).await.unwrap();
+            assert_eq!(first, json!({"response": "HANDLED ship it"}));
+            let saves = admission.store.saves.load(Ordering::SeqCst);
+            let rows = admission.store.list(&nested_thread()).await.unwrap().len();
+            persisted(&mut harness.events);
+            *admission.stamp.lock().unwrap() = Some(Held(stamp));
+            let again = call(&harness, &admission).await.unwrap();
+            assert_eq!(again["failure"]["code"], code, "{again}");
+            assert_eq!(admission.store.saves.load(Ordering::SeqCst), saves);
+            assert_eq!(
+                admission.store.list(&nested_thread()).await.unwrap().len(),
+                rows
+            );
+            assert!(persisted(&mut harness.events).is_empty(), "nothing re-ran");
+        }
+    }
+
+    /// C2/D-3: a call whose lineage was never captured from its model event
+    /// admits nothing and runs nothing.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_call_without_its_captured_lineage_admits_and_runs_nothing() {
+        let harness = harness(PLAIN_PIPELINE);
+        let admission = admission(0, false);
+        assert!(call(&harness, &admission).await.is_err());
+        assert_eq!(admission.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(admission.store.saves.load(Ordering::SeqCst), 0);
+    }
+
+    /// C5: a transiently unavailable store is retried in process; past the
+    /// attempts it is a retryable dependency failure, never a refusal, and
+    /// nothing ran under the nested thread.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_transient_store_failure_is_retried_then_answered_retryable() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let recovering = admission(2, false);
+        assert_eq!(
+            call(&harness, &recovering).await.unwrap(),
+            json!({"response": "HANDLED ship it"})
+        );
+        assert_eq!(recovering.calls.load(Ordering::SeqCst), 3);
+        persisted(&mut harness.events);
+
+        let unavailable = admission(3, false);
+        let result = call(&harness, &unavailable).await.unwrap();
+        assert_eq!(unavailable.calls.load(Ordering::SeqCst), 3);
+        assert_eq!(result["failure"]["retryable"], true, "{result}");
+        assert_eq!(
+            result["failure"]["code"], "DEPENDENCY_UNAVAILABLE",
+            "{result}"
+        );
+        assert_eq!(unavailable.store.saves.load(Ordering::SeqCst), 0);
+    }
+
+    /// Review 1: a permanent store fault (`checkpoint.storage_failure`, not
+    /// retryable by the store's own classification) is refused at once:
+    /// never retried, never answered as a retryable dependency failure.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_permanent_storage_failure_is_refused_and_never_retried() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let broken = admission_on(2, 3, "checkpoint.storage_failure: broken", false);
+        let result = call(&harness, &broken).await;
+        assert!(result.is_err(), "refused, not answered: {result:?}");
+        assert_eq!(broken.calls.load(Ordering::SeqCst), 1, "never retried");
+        assert_eq!(broken.store.saves.load(Ordering::SeqCst), 0);
+        assert!(persisted(&mut harness.events).is_empty());
+    }
+
+    /// Review 3: a pipeline call inside a fan-out member whose family lends no
+    /// admission is refused typed; it never runs on the in-memory path.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_member_call_without_an_admission_refuses_typed_and_runs_nothing() {
+        let mut harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let result = with_member_tool_pipelines(
+            MemberToolPipelines {
+                admission: None,
+                agent_thread: AGENT_THREAD.to_owned(),
+            },
+            harness.tool.execute(context(), json!({"task": "ship it"})),
+        )
+        .await;
+        // The Agent reads it as a typed tool error, never a result.
+        let report = result.expect("a typed tool error");
+        assert_eq!(
+            report["failure"]["code"], "UNSUPPORTED_CAPABILITY",
+            "{report}"
+        );
+        assert_eq!(report["failure"]["retryable"], false);
+        assert!(report.get("response").is_none(), "{report}");
+        // Review C: the precise registered kind and text, not the generic one.
+        assert_eq!(
+            crate::protocol::output::model_failure(Some(
+                crate::agents::application_pipeline::TOOL_THREAD_UNBOUND_CODE
+            )),
+            crate::protocol::output::RuntimeFailureKind::FanoutAgentToolPipelineUnsupported
+        );
+        assert_eq!(
+            report["failure"]["message"],
+            crate::protocol::output::FANOUT_AGENT_TOOL_PIPELINE_UNSUPPORTED_MESSAGE
+        );
+        assert!(persisted(&mut harness.events).is_empty(), "nothing ran");
+    }
+
+    /// Review 5: the member's shared thread total has its own typed tool
+    /// error: 129 threads admitted, the 130th refused with the total's code.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_shared_thread_total_reads_its_own_typed_tool_error() {
+        let harness = harness(PLAIN_PIPELINE);
+        harness
+            .resume
+            .observe_call_lineage(&root_call_event())
+            .await
+            .unwrap();
+        let at_limit = admission_on(128, 0, "", false);
+        assert_eq!(
+            call(&harness, &at_limit).await.unwrap(),
+            json!({"response": "HANDLED ship it"}),
+            "the 129th thread is admitted"
+        );
+        let past = admission_on(129, 0, "", false);
+        let result = call(&harness, &past).await.unwrap();
+        assert_eq!(
+            result["failure"]["code"],
+            crate::agents::graph::tool_pipeline_threads::TOOL_PIPELINE_TOTAL_LIMIT_CODE
+        );
+        let message = result["failure"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("129") && !message.contains("8 saved"),
+            "{message}"
+        );
+        assert_eq!(past.store.saves.load(Ordering::SeqCst), 0);
+    }
+
+    const LOG_CHILD_ENV: &str = "ELITEA_FU291_DURABLE_LOG_CHILD";
+    const TASK_MARKER: &str = "secret_task_marker_fu291";
+
+    /// C7 log capture: a durable member call that runs, one refused past its
+    /// bound, one retried then answered retryable, and one whose thread is
+    /// not admitted log no task text, no result, no arguments digest and no
+    /// nested thread name: only ids, stages and codes.
+    #[test]
+    fn durable_member_calls_log_no_task_result_lineage_or_thread() {
+        let output = elitea_faults::logtest::run_child(
+            "agents::application_pipeline_tests::durable_member_calls::durable_member_calls_log_child",
+            LOG_CHILD_ENV,
+        );
+        let lineage = crate::agents::application_pipeline::PipelineToolCallLineage::for_test(
+            "root-call",
+            1,
+            CALL_ID,
+            TOOL_NAME,
+            &json!({"task": TASK_MARKER}),
+        );
+        let digest = serde_json::to_value(&lineage).unwrap()["arguments_digest"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        for secret in [TASK_MARKER, digest.as_str(), "/pt1:", "HANDLED"] {
+            assert!(
+                !output.stdout.contains(secret) && !output.stderr.contains(secret),
+                "{secret} reached the log"
+            );
+        }
+        let lines = output.operator_lines();
+        for event in [
+            "nested_pipeline_thread_limit",
+            "nested_pipeline_thread_unavailable",
+            "nested_pipeline_thread_refused",
+        ] {
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.get("event").is_some_and(|value| value == event)),
+                "{event} has its operator line: {lines:?}"
+            );
+        }
+    }
+
+    /// Refuses every admission as `denied` does (not this family's thread).
+    struct Denied(Arc<ToolPipelineThreads>);
+
+    #[async_trait::async_trait]
+    impl ToolPipelineAdmission for Denied {
+        fn tool_threads(&self) -> Arc<ToolPipelineThreads> {
+            Arc::clone(&self.0)
+        }
+        async fn admit_tool_pipeline(
+            &self,
+            _: &str,
+            _: &crate::agents::application_pipeline::PipelineToolCallLineage,
+            _: Option<[u8; 32]>,
+        ) -> Result<AdmittedToolPipeline, GraphError> {
+            Err(GraphError::CheckpointError(
+                "checkpoint.invalid_scope: not admitted".to_owned(),
+            ))
+        }
+    }
+
+    #[test]
+    fn durable_member_calls_log_child() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        use tracing_subscriber::util::SubscriberInitExt as _;
+        if !elitea_faults::logtest::is_child(LOG_CHILD_ENV) {
+            return;
+        }
+        tracing_subscriber::registry()
+            .with(
+                crate::diagnostics::log_layer(Some("debug"), std::io::stdout)
+                    .expect("operator stream"),
+            )
+            .init();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut call = turn_root_call_event("root-call", INVOCATION_ID);
+            if let Some(Part::FunctionCall { args, .. }) = call
+                .llm_response
+                .content
+                .as_mut()
+                .and_then(|content| content.parts.first_mut())
+            {
+                *args = json!({"task": TASK_MARKER});
+            }
+            let harness = harness(PLAIN_PIPELINE);
+            harness.resume.observe_call_lineage(&call).await.unwrap();
+            let execute = |admission: Arc<dyn ToolPipelineAdmission>| {
+                with_member_tool_pipelines(
+                    MemberToolPipelines {
+                        admission: Some(admission),
+                        agent_thread: AGENT_THREAD.to_owned(),
+                    },
+                    harness
+                        .tool
+                        .execute(context(), json!({"task": TASK_MARKER})),
+                )
+            };
+            assert!(execute(admission(0, false)).await.is_ok());
+            assert!(execute(admission(0, true)).await.is_ok());
+            assert!(execute(admission(3, false)).await.is_ok());
+            assert!(
+                execute(Arc::new(Denied(Arc::new(ToolPipelineThreads::new(2)))))
+                    .await
+                    .is_err()
+            );
+        });
+        elitea_faults::logtest::child_ran();
+    }
 }

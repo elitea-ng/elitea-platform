@@ -149,7 +149,6 @@ governed.redeem_unavailable
 governed.target_mismatch
 governed.tool_not_served
 governed.toolkit_not_governable
-graph.fanout.agent_calls_saved_pipeline
 graph.fanout.child_kind_unsupported
 graph.fanout.parallel_in_child_pipeline
 graph.fanout.progress_invalid_member

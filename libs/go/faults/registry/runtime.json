@@ -222,6 +222,16 @@
       "wire_code": "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY"
     },
     {
+      "code": "runtime.fanout_agent_tool_pipeline_unsupported",
+      "sentence": "A Map item or Parallel branch calls a saved pipeline tool it cannot run yet: one with a Code or Agent node, or called via another Agent or a saved pipeline's Agent node; remove that node or call the pipeline from the member's own Agent.",
+      "action": "Nothing on the platform; the user removes the Code or Agent node from the pipeline tool, or attaches the pipeline to the Agent directly.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "FanoutAgentToolPipelineUnsupported",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY"
+    },
+    {
       "code": "runtime.fanout_deadline_insufficient",
       "sentence": "The fan-out node could not start: too little time was left before the run's deadline for its items.",
       "action": "Lower the number of items, raise the node's concurrency, or give the run more time.",

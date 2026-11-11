@@ -8,6 +8,9 @@ use super::{
     pipeline_node_event_channel_error, valid_event_identity, valid_graph_id,
 };
 use crate::agents::graph::ParallelBranchExecution;
+use crate::agents::graph::tool_pipeline_threads::{
+    ToolPipelineThreads, proved_durable_tool_thread,
+};
 use crate::agents::pipeline::scoped_applications::PipelineApplicationActivation;
 
 const MAX_BRANCH_THREADS: usize = 129;
@@ -33,6 +36,9 @@ pub(super) struct ParallelEventScope {
     /// PM-5: a root-level inline LLM branch, whose own events carry its
     /// member tier (only [`PipelineNodeEventSender::for_inline_llm_branch`]).
     inline_llm: bool,
+    /// FU-291 C1: the member family's nested pipeline threads, the same set
+    /// its checkpointer admits into. Append-only and bounded there.
+    tool_threads: Option<std::sync::Arc<ToolPipelineThreads>>,
 }
 
 impl PipelineNodeEventSender {
@@ -81,6 +87,9 @@ impl PipelineNodeEventSender {
             execution.admitted_threads().clone(),
             parent,
         )?;
+        scope.tool_threads = execution
+            .tool_pipelines()
+            .map(|admission| admission.tool_threads());
         scope.member_tier = Some(
             serde_json::json!({
                 "call": crate::agents::graph::fanout_frames::member_call_id(
@@ -154,9 +163,9 @@ impl PipelineNodeEventSender {
                     .is_some_and(|value| valid_event_identity(value))
             };
             let proved = if existing == keys.len() {
+                let thread = &event.provider_metadata[DESCENDANT_CHECKPOINT_THREAD_KEY];
                 keys.iter().all(|key| edge(key))
-                    && scope
-                        .contains_thread(&event.provider_metadata[DESCENDANT_CHECKPOINT_THREAD_KEY])
+                    && (scope.contains_thread(thread) || scope.proves_tool_thread(event, thread))
             } else {
                 // An Agent child's leaf carries no checkpoint thread (the
                 // projector refuses one on a non-pipeline child); the
@@ -275,7 +284,27 @@ impl ParallelEventScope {
             parent,
             member_tier: None,
             inline_llm: false,
+            tool_threads: None,
         })
+    }
+
+    /// C1: a nested pipeline thread is admitted only when the event's own
+    /// receipt re-derives exactly `thread` from its lineage and an Agent
+    /// thread of this member, and this member's checkpointer registered that
+    /// thread for that Agent (its fenced writer is active). The string alone,
+    /// another member's receipt, or a derivation without a writer proves
+    /// nothing.
+    fn proves_tool_thread(&self, event: &Event, thread: &str) -> bool {
+        let Some(registered) = self.tool_threads.as_ref() else {
+            return false;
+        };
+        let Ok(Some((derived, agent_thread))) = proved_durable_tool_thread(event) else {
+            return false;
+        };
+        derived == thread
+            && agent_thread != self.branch_root_thread
+            && self.threads.contains(&agent_thread)
+            && registered.admitted(thread, &agent_thread).is_some()
     }
 
     fn contains_thread(&self, thread: &str) -> bool {

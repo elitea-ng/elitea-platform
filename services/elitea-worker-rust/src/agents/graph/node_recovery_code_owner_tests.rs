@@ -21,6 +21,9 @@ mod debug_caller_tests;
 #[cfg(feature = "sandbox-supervisor")]
 #[path = "node_recovery_code_wiring_tests.rs"]
 mod wiring_tests;
+// FU-291 risk 1: graph re-entry on a durable thread (real PostgreSQL).
+#[path = "durable_tool_thread_pg_tests.rs"]
+mod durable_tool_thread_pg_tests;
 
 struct CaptureOriginalVisit(Mutex<Vec<Vec<u8>>>);
 #[async_trait]

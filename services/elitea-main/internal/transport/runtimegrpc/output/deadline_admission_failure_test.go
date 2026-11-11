@@ -46,9 +46,10 @@ func TestDeadlineAdmissionFailuresShowTheirReadableText(t *testing.T) {
 // test pins the same entries to its own table.
 func TestDeadlineAdmissionTextsMatchTheFaultRegistry(t *testing.T) {
 	want := map[string]string{
-		"CodeDeadlineInsufficient":   codeDeadlineInsufficientSafeMessage,
-		"FanoutDeadlineInsufficient": fanoutDeadlineInsufficientSafeMessage,
-		"FanoutAgentCallsPipeline":   fanoutAgentCallsPipelineSafeMessage,
+		"CodeDeadlineInsufficient":           codeDeadlineInsufficientSafeMessage,
+		"FanoutDeadlineInsufficient":         fanoutDeadlineInsufficientSafeMessage,
+		"FanoutAgentCallsPipeline":           fanoutAgentCallsPipelineSafeMessage,
+		"FanoutAgentToolPipelineUnsupported": fanoutAgentToolPipelineUnsupportedSafeMessage,
 	}
 	for _, entry := range faults.Registry() {
 		message, ok := want[entry.RuntimeKind]
