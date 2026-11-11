@@ -1487,3 +1487,37 @@ async fn postgres_root_saved_agent_scenario_child() {
     }
     pool.close().await;
 }
+
+/// Browser case 6 (no kill): the root Agent node's saved Agent calls a saved
+/// pipeline tool whose LLM node streams its answer. Run fresh through the
+/// production assembler and the browser projector, it completes with both
+/// answers and no projection failure.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_root_saved_agent_calling_a_saved_pipeline_tool_completes_fresh() {
+    let Some(db) = scenario_db().await else {
+        return;
+    };
+    let (assembler, captured) = root_assembler(
+        &db.pool,
+        vec![
+            TestModelGatewayOutcome::Response(nested_agent_call_response("call_root_1", TOPIC)),
+            TestModelGatewayOutcome::Response(pipeline_text_response(
+                "nested answer that is long enough to stream in more than one chunk",
+            )),
+            TestModelGatewayOutcome::Response(pipeline_text_response("outer answer")),
+        ],
+    );
+    let request = root_request();
+    let invocation = assembler
+        .assemble(claim(&request, 1))
+        .await
+        .unwrap_or_else(|error| panic!("assemble the root pipeline: {error}"));
+    run_to_end(invocation)
+        .await
+        .unwrap_or_else(|error| panic!("the fresh run completes: {error}"));
+    assert_eq!(model_requests(&captured), 3);
+    let (state, pending, _) = latest_root(&db.pool).await;
+    assert_eq!(pending, "[]");
+    assert_eq!(state["answer"], "outer answer", "{state}");
+    db.pool.close().await;
+}

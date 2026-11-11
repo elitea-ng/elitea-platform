@@ -198,6 +198,30 @@ durable history still carry the text. The orchestrating session checks this afte
 
 Failing-first output: `handoffs/point5-wave1-20261008/fu323/evidence/round2-failing-first.txt` (local).
 
+## FU-342, fixed inline (browser case 6, no kill)
+
+- **Defect (pre-existing on `main` b6633e6e6, not caused by FU-323a).** A root Agent node whose saved Agent calls a
+  saved pipeline tool failed on a fresh run with `agent_event.invalid_state` at the nested pipeline's first projected
+  event ("The runtime operation failed."). The writer names the tool's checkpoint thread
+  `{conversation_thread_id}/{call_id}` (`W/agents/application_pipeline.rs:1283-1285`, static form `:1321`), and a
+  pipeline root gives the writer its session as the conversation thread (`plan.session_id()`,
+  `W/agents/pipeline.rs:1521`, through `with_conversation_thread` at `:2772`). The projector expected the chat thread
+  (`context.thread_id`) instead.
+- **Fix (fail closed).** The projection context carries the writer's conversation thread, `tool_thread_id`
+  (`W/agents/events.rs:376`): the chat thread for an ordinary root (`:774`), the pipeline's session for a pipeline root,
+  taken from the same `session_id` the pipeline projection is built with (`:803`; `W/agents/session.rs:1281`), and kept
+  by every nested tier (`:831`). The descendant thread check and the static-thread check compare against it exactly
+  (`W/agents/events.rs:1745,1765`); nothing else is accepted.
+- **Tests.**
+  - `postgres_a_root_saved_agent_calling_a_saved_pipeline_tool_completes_fresh` (real PostgreSQL, production assembler,
+    browser projector): failed first on this branch and on `main` with `agent_event.invalid_state`; now completes with
+    three model calls and the root answer.
+  - `a_pipeline_root_accepts_only_its_session_thread_for_a_nested_pipeline_tool`: only `{session}/{call}`; the chat
+    thread, another session, another call, a bare prefix and a longer path are refused.
+  - `an_ordinary_root_still_accepts_only_its_chat_thread`: unchanged ordinary behaviour.
+- Browser case 6 (no kill, and with a Worker kill during the nested pipeline: typed `RECOVERY_REFUSED` until 323b):
+  re-run by the orchestrating session.
+
 ## Gates (branch head, local)
 
 | Gate | Result |

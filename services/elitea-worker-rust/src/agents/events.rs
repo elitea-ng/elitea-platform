@@ -370,6 +370,10 @@ pub(crate) struct AgentEventProjectionContext {
     model_name: String,
     application_details: Value,
     graph_checkpoint_thread_id: Option<String>,
+    /// FU-342: the conversation thread the run gave its saved-pipeline tool
+    /// writers (`with_conversation_thread`): the chat thread for an ordinary
+    /// root, the pipeline's session for a pipeline root. Every tier keeps it.
+    tool_thread_id: String,
     should_continue: bool,
     hitl_resume: bool,
     parallel_reconcile: bool,
@@ -767,6 +771,7 @@ impl AgentEventProjectionContext {
             message_id: input.message_id,
             execution_generation: input.execution_generation,
             sio_event: input.sio_event,
+            tool_thread_id: input.thread_id.clone(),
             thread_id: input.thread_id,
             project_id: input.project_id,
             chat_project_id: input.chat_project_id,
@@ -791,6 +796,12 @@ impl AgentEventProjectionContext {
         input: PipelineProjectionInput,
     ) -> Result<Self, AgentEventProjectionError> {
         let mut context = Self::ordinary(input.ordinary)?;
+        // The writer names a saved pipeline tool's thread under the
+        // pipeline's session (`pipeline.rs` passes `plan.session_id()` as the
+        // conversation thread), which is this checkpoint thread.
+        context
+            .tool_thread_id
+            .clone_from(&input.checkpoint_thread_id);
         context.graph_checkpoint_thread_id = Some(input.checkpoint_thread_id);
         context.should_continue = input.should_continue;
         context.hitl_resume = input.hitl_resume;
@@ -817,6 +828,7 @@ impl AgentEventProjectionContext {
             model_name,
             application_details: self.application_details.clone(),
             graph_checkpoint_thread_id,
+            tool_thread_id: self.tool_thread_id.clone(),
             should_continue: self.should_continue,
             hitl_resume: self.hitl_resume,
             parallel_reconcile: self.parallel_reconcile,
@@ -846,6 +858,7 @@ impl AgentEventProjectionContext {
             model_name: "model-1".to_owned(),
             application_details,
             graph_checkpoint_thread_id: None,
+            tool_thread_id: "thread-1".to_owned(),
             should_continue: false,
             hitl_resume: false,
             parallel_reconcile: false,
@@ -1726,9 +1739,10 @@ impl AgentEventProjector {
             .clone()
             .ok_or_else(AgentEventProjectionError::invalid_state)?;
         let checkpoint_thread_id =
+            // FU-342: the writer's conversation thread, not the chat thread.
             match super::application_pipeline::static_thread_for_projected_call(
                 event,
-                &self.context.thread_id,
+                &self.context.tool_thread_id,
                 &active.original_batch_event_id,
                 active.sibling_ordinal.unwrap_or_default(),
                 parent_call_id,
@@ -1748,7 +1762,7 @@ impl AgentEventProjector {
                     event,
                     &application,
                     self.context.graph_checkpoint_thread_id.as_deref(),
-                    &self.context.thread_id,
+                    &self.context.tool_thread_id,
                     parent_call_id,
                 )?,
             };
@@ -6871,7 +6885,9 @@ fn valid_tool_identity(value: &str) -> bool {
 ///   `pipeline:<node>:<step>` and the thread is the parent graph's own thread
 ///   namespaced by that node (ADK `SubgraphNode` semantics);
 /// * an ORDINARY parent (#973) has no graph and no graph thread, so the thread
-///   is the CONVERSATION thread namespaced by the model's function-call id.
+///   is the CONVERSATION thread the run gave the writer (the chat thread at an
+///   ordinary root, the pipeline's session at a pipeline root: FU-342)
+///   namespaced by the model's function-call id.
 ///   That id is stable across the pause because the parent's resume replays
 ///   the identical call, which is what lets the pause be re-entered at all.
 fn descendant_checkpoint_thread(
@@ -7605,4 +7621,93 @@ pub(crate) fn fanout_member_card_parts(
             payload_sha256,
         },
     ))
+}
+
+/// FU-342 (folded into FU-323a): the saved pipeline tool a nested Agent calls
+/// names its checkpoint thread `{conversation thread}/{call id}`, where the
+/// conversation thread is the one the run gave the writer: the pipeline's
+/// session for a pipeline root (`pipeline.rs` `conversation_thread_id`), the
+/// chat thread for an ordinary root. The projector accepts exactly that.
+#[cfg(test)]
+mod descendant_thread_tests {
+    use super::*;
+
+    fn input() -> OrdinaryProjectionInput {
+        OrdinaryProjectionInput {
+            stream_id: "conversation-1".to_owned(),
+            message_id: "message-1".to_owned(),
+            execution_generation: "generation-1".to_owned(),
+            sio_event: "chat_predict".to_owned(),
+            thread_id: "thread-1".to_owned(),
+            project_id: json!(7),
+            chat_project_id: json!(7),
+            root_agent_name: "root-agent".to_owned(),
+            model_name: "model-1".to_owned(),
+            application_details: json!({}),
+            should_continue: false,
+            continuation_prefix: None,
+        }
+    }
+
+    fn pipeline_tool() -> ApplicationToolPresentation {
+        ApplicationToolPresentation {
+            display_name: "helper-flow".to_owned(),
+            agent_type: "pipeline".to_owned(),
+            model_name: "model-1".to_owned(),
+            child_tools: ApplicationToolPresentationCatalog::default(),
+            guards: ApplicationToolGuardCatalogs::default(),
+        }
+    }
+
+    /// The thread a saved pipeline tool's events carry, checked at the
+    /// nested Agent's tier of `root` (an Agent tier: no graph thread).
+    fn accepts(root: &AgentEventProjectionContext, thread: &str) -> bool {
+        let tier = root
+            .nested("elitea_agent_3_v_4".to_owned(), "model-1".to_owned(), None)
+            .expect("the nested Agent tier");
+        let mut event = Event::new("inv-1");
+        event.provider_metadata.insert(
+            DESCENDANT_CHECKPOINT_THREAD_KEY.to_owned(),
+            thread.to_owned(),
+        );
+        descendant_checkpoint_thread(
+            &event,
+            &pipeline_tool(),
+            tier.graph_checkpoint_thread_id.as_deref(),
+            &tier.tool_thread_id,
+            "call_1",
+        )
+        .is_ok_and(|accepted| accepted.as_deref() == Some(thread))
+    }
+
+    #[test]
+    fn a_pipeline_root_accepts_only_its_session_thread_for_a_nested_pipeline_tool() {
+        let root = AgentEventProjectionContext::pipeline(PipelineProjectionInput {
+            ordinary: input(),
+            checkpoint_thread_id: "session-1".to_owned(),
+            should_continue: false,
+            hitl_resume: false,
+        })
+        .expect("a pipeline context");
+        assert!(accepts(&root, "session-1/call_1"));
+        // The chat thread, another session, another call, a bare prefix.
+        for refused in [
+            "thread-1/call_1",
+            "session-2/call_1",
+            "session-1/call_2",
+            "session-1",
+            "session-1/call_1/x",
+        ] {
+            assert!(!accepts(&root, refused), "{refused}");
+        }
+    }
+
+    #[test]
+    fn an_ordinary_root_still_accepts_only_its_chat_thread() {
+        let root = AgentEventProjectionContext::ordinary(input()).expect("an ordinary context");
+        assert!(accepts(&root, "thread-1/call_1"));
+        for refused in ["session-1/call_1", "thread-2/call_1", "thread-1/call_2"] {
+            assert!(!accepts(&root, refused), "{refused}");
+        }
+    }
 }
