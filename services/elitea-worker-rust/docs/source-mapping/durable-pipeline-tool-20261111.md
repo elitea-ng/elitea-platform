@@ -416,6 +416,10 @@ the ledger before the activation, so an activated writer is always registered an
 ## Real-browser evidence
 
 **Setup.**
+- **Taken before the last review delta.** This evidence was taken on images `fu291-ab5c03796`, before `dcd3a0e64`.
+  The delta changes only two things, and no new browser pass was asked for:
+  - the nested-thread identity encoding: pinned by a golden test, and the real-PG two-process kills re-ran on it;
+  - the refusal text: covered by unit and Go tests.
 - **Stack:** a disposable stack `f291` with the production profile (recovery and node recovery on). verify-profile:
   50 passed, 0 failed.
 - **Images:** Main and Worker `fu291-ab5c03796`, built from this branch's head. Both binaries were extracted
