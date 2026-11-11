@@ -83,7 +83,7 @@ Shapes refused before and admitted now:
   `pipeline.saved_code.nested` and `pipeline.saved_code.unscoped`. `libs/go/faults/legacy-codes.txt` drops
   `graph.fanout.child_contains_code`, so the
   list only shrinks.
-- `docs/upgrading/2026-11-10-0-saved-code-children.md` (number assigned at PR time).
+- `docs/upgrading/2026-11-10-1925-saved-code-children.md` (number assigned at PR time).
 - Web: unchanged. No copy says that saved pipelines with Code are refused (`git grep` over `apps/elitea-web/src`). The
   Map worker hint already says "a saved agent or pipeline".
 
