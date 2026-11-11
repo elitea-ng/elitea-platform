@@ -109,10 +109,7 @@ impl<K: GenerationKey, V> ExecutionRegistry<K, V> {
 
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.tracked
-            .lock()
-            .map(|tracked| tracked.len())
-            .unwrap_or(0)
+        self.tracked.lock().map_or(0, |tracked| tracked.len())
     }
 }
 
