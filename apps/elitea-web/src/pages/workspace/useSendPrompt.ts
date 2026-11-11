@@ -219,7 +219,7 @@ export function threadFloorQuery(projectId: number, conversationId: string): { q
 async function readFloor(queryClient: QueryClient, projectId: number, conversationId: string, fresh: boolean): Promise<ThreadFloor | undefined> {
   const query = threadFloorQuery(projectId, conversationId);
   try {
-    return await queryClient.fetchQuery(fresh ? { ...query, staleTime: 0 } : query);
+    return await queryClient.query(fresh ? { ...query, staleTime: 0 } : query);
   } catch {
     return undefined;
   }
