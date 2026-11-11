@@ -75,6 +75,9 @@ type CurrentAdhocTarget struct {
 	ChatHistoryRefs  []ChatHistoryRef
 	ConversationMeta json.RawMessage
 	OriginalSource   *scope.SourceReference
+	// ParticipantJoinedAt is when the reader joined (#1902), as in
+	// CurrentApplicationTarget.
+	ParticipantJoinedAt string
 	// CloudWorkspace: the conversation is a desktop Local work thread
 	// handed off to the cloud executor (CLOUD_IDLE). Its turn has the
 	// workspace tools, so an unattended grant may name workspace/git_push
@@ -521,7 +524,7 @@ func currentAdhocInputWithView(
 	if stepsLimit != nil {
 		input.StepsLimit = stepsLimit
 	}
-	input.ContextView = contextViewInput(view.Settings, modelContextLimits, input.ChatHistory, input.ChatHistoryRefs)
+	input.ContextView = contextViewInput(view.Settings, target.ParticipantJoinedAt, modelContextLimits, input.ChatHistory, input.ChatHistoryRefs)
 	return input, view, nil
 }
 

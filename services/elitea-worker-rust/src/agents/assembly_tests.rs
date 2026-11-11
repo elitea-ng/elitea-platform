@@ -245,6 +245,7 @@ pub(crate) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionReques
             current_message_id: None,
             subagent_policy: None,
             context_view_history: None,
+            context_view_binding: None,
             recalled_memory: Vec::new(),
         },
     }

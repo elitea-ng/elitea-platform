@@ -253,3 +253,33 @@ func Digest(history History, windowTokens uint32, chatHistory []byte, refs []Ref
 	}
 	return hex.EncodeToString(hash.Sum(nil))
 }
+
+// BindingDomain separates a view binding from every other digest.
+const BindingDomain = "elitea.context-view-binding.v1"
+
+// Binding is the lowercase hex SHA-256 of every setting that decides which
+// messages a reader may see (issue 1902): the mode (after the participant's
+// own), include_side_talk and, under since_joined, when the reader joined.
+// The worker binds the reader's durable session to it: a session seeded
+// under another binding is re-seeded, so a narrowed setting never leaves
+// excluded messages in it. Each field is prefixed with its big-endian
+// 64-bit length. activity_notes decides no eligibility and is left out.
+func (s Settings) Binding(joinedAt string) string {
+	hash := sha256.New()
+	field := func(value string) {
+		var size [8]byte
+		binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+		hash.Write(size[:])
+		hash.Write([]byte(value))
+	}
+	field(BindingDomain)
+	field(string(s.History))
+	field(string(s.SideTalk))
+	if s.History != HistorySinceJoined {
+		// The join time decides nothing outside since_joined: re-adding a
+		// full reader keeps its session.
+		joinedAt = ""
+	}
+	field(joinedAt)
+	return hex.EncodeToString(hash.Sum(nil))
+}

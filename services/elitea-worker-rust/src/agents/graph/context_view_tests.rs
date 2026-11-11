@@ -429,6 +429,95 @@ async fn a_resumed_pipeline_is_never_seeded_again() {
     assert_eq!(state.get("chat_history"), Some(&json!(first)));
 }
 
+/// #1913: a pipeline whose definition never names `chat_history` keeps the
+/// view once, at the head of `messages`, where its nodes read it; every
+/// checkpoint stops carrying a second copy.
+#[tokio::test]
+async fn a_pipeline_that_never_names_chat_history_stores_the_view_once() {
+    let definition = PipelineDefinition::from_yaml(
+        r"
+state:
+  answer: str
+entry_point: reply
+nodes:
+  - id: reply
+    type: llm
+    input: [messages]
+    output: [answer]
+    transition: END
+",
+    )
+    .expect("pipeline");
+    let (checkpointer, sessions) = fixture().await;
+    let captured = Arc::new(Mutex::new(Captured::default()));
+    let view = pipeline_state_history(&pipeline_view()).expect("admitted view");
+    let _events = run(
+        &definition,
+        &runtimes(&captured, view.clone()),
+        checkpointer.clone(),
+        sessions,
+        None,
+    )
+    .await;
+    let calls = captured.lock().expect("capture lock").calls.clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].len(), 4, "{:?}", calls[0]);
+    assert_eq!(
+        calls[0][0],
+        ("user".to_owned(), "Plan the release".to_owned())
+    );
+    assert_eq!(calls[0][3], ("user".to_owned(), "now".to_owned()));
+    let state = checkpointer
+        .load(THREAD)
+        .await
+        .expect("checkpoint load")
+        .expect("checkpoint")
+        .state;
+    assert_eq!(
+        &state["messages"].as_array().expect("messages")[..3],
+        view.as_slice()
+    );
+    assert!(
+        state
+            .get("chat_history")
+            .is_none_or(|history| history == &json!([])),
+        "{:?}",
+        state.get("chat_history")
+    );
+}
+
+/// #1916: `{chat_history}` interpolated into an fstring keeps the newest
+/// messages that fit the rendered-input bound instead of failing the node.
+#[test]
+fn an_interpolated_view_keeps_its_newest_messages() {
+    let message = |index: usize| {
+        json!({
+            "role": "user",
+            "content": [{"type": "text", "text": format!("m{index}-{}", "a".repeat(10 * 1024))}],
+            "additional_kwargs": {"elitea_context_view": true}
+        })
+    };
+    let history = (0..20).map(message).collect::<Vec<_>>();
+    let state = adk_rust::graph::State::from([("chat_history".to_owned(), json!(history))]);
+    let rendered =
+        super::llm::render_fstring("History: {chat_history} -- answer", &state).expect("bounded");
+    assert!(rendered.len() <= 64 * 1024, "{}", rendered.len());
+    assert!(rendered.starts_with("History: [") && rendered.ends_with("] -- answer"));
+    let kept = serde_json::from_str::<Vec<Value>>(
+        &rendered["History: ".len()..rendered.len() - " -- answer".len()],
+    )
+    .expect("a JSON array");
+    assert!(!kept.is_empty() && kept.len() < history.len());
+    assert_eq!(kept.last(), history.last(), "the newest is kept");
+    assert_eq!(kept, history[history.len() - kept.len()..]);
+    // A view that fits renders exactly as before.
+    let small = adk_rust::graph::State::from([("chat_history".to_owned(), json!(history[..2]))]);
+    assert_eq!(
+        super::llm::render_fstring("{chat_history}", &small).expect("fits"),
+        serde_json::to_string(&history[..2]).expect("json")
+    );
+}
+
 #[test]
 fn a_node_cannot_write_the_view() {
     let writes = VIEW_PIPELINE.replace("output: [answer]", "output: [answer, chat_history]");

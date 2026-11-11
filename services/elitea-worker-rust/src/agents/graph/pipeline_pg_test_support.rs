@@ -152,6 +152,7 @@ fn bound_resume_payload(session: &dyn Session) -> AgentExecutionPayload {
         current_message_id: None,
         subagent_policy: None,
         context_view_history: None,
+        context_view_binding: None,
         recalled_memory: Vec::new(),
     }
 }

@@ -2124,7 +2124,15 @@ pub(super) fn render_fstring(template: &str, state: &State) -> Result<String, Ll
                 .bytes()
                 .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
         {
-            if let Some(value) = state.get(key) {
+            if let ("chat_history", Some(Value::Array(history))) = (key, state.get(key)) {
+                // #1916: the context view can be far larger than a rendered
+                // input; interpolated, it keeps its newest messages that fit
+                // beside the rest of the template.
+                let budget = MAX_RENDERED_INPUT_BYTES
+                    .saturating_sub(rendered.len())
+                    .saturating_sub(template.len() - (end + 1));
+                rendered.push_str(&newest_json_fitting(history, budget)?);
+            } else if let Some(value) = state.get(key) {
                 let value = normalize_mapping_value(value)?;
                 rendered.push_str(&value);
             } else {
@@ -2146,6 +2154,27 @@ pub(super) fn render_fstring(template: &str, state: &State) -> Result<String, Ll
         return Err(LlmExecutionError::ResourceExhausted);
     }
     Ok(rendered)
+}
+
+/// The newest items of `items` whose compact JSON array fits in `budget`
+/// bytes, oldest first; the same bytes as `serde_json::to_string` when all
+/// fit, `[]` when none does.
+fn newest_json_fitting(items: &[Value], budget: usize) -> Result<String, LlmExecutionError> {
+    let mut kept = Vec::new();
+    // The brackets.
+    let mut used = 2_usize;
+    for item in items.iter().rev() {
+        let encoded =
+            serde_json::to_string(item).map_err(|_| LlmExecutionError::InvalidInputMapping)?;
+        let cost = encoded.len() + usize::from(!kept.is_empty());
+        if used + cost > budget {
+            break;
+        }
+        used += cost;
+        kept.push(encoded);
+    }
+    kept.reverse();
+    Ok(format!("[{}]", kept.join(",")))
 }
 
 pub(super) fn normalize_mapping_value(value: &Value) -> Result<String, LlmExecutionError> {

@@ -3831,6 +3831,47 @@ impl ThreeAgents {
     }
 }
 
+/// The id of the reader's session event in which the user asked `question`:
+/// a history event (`hm-…`) once a re-seed rebuilt it from the view, the
+/// turn's own event while the session lineage is kept.
+async fn question_event_id(sessions: &Arc<InMemorySessionService>, question: &str) -> String {
+    let request = ordinary_request(AgentExecutionKind::Adhoc);
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("ordinary profile");
+    let plan = OrdinaryNativeAgentPlan::from_authorized(
+        &request,
+        &profile,
+        &AuthorizedNativeCommandBinding::fixture(),
+        &request.payload.input_attachments,
+    )
+    .expect("native plan");
+    let session = sessions
+        .get(GetRequest {
+            app_name: "elitea-agent-v1".to_owned(),
+            user_id: plan.user_id().to_owned(),
+            session_id: plan.session_id().to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("reader session");
+    let ids = session
+        .events()
+        .all()
+        .into_iter()
+        .filter(|event| {
+            event.author == "user"
+                && event
+                    .llm_response
+                    .content
+                    .as_ref()
+                    .is_some_and(|content| format!("{content:?}").contains(question))
+        })
+        .map(|event| event.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(ids.len(), 1, "{question}: {ids:?}");
+    ids[0].clone()
+}
+
 fn texts_in(turn: &[(String, String)]) -> Vec<String> {
     turn.iter().map(|(_, text)| text.clone()).collect()
 }
@@ -4009,6 +4050,12 @@ async fn a_session_from_before_the_view_is_reseeded_once() {
         "{second:?}"
     );
     assert_eq!(second.len(), 4, "{second:?}");
+    assert!(
+        question_event_id(&sessions, "first question")
+            .await
+            .starts_with("hm-"),
+        "re-seeded from the view"
+    );
 
     chat.push("q2", "user", None, "second question", true);
     chat.push("a2", "assistant", None, "answer to second question", true);
@@ -4021,6 +4068,109 @@ async fn a_session_from_before_the_view_is_reseeded_once() {
     )
     .await;
     assert_eq!(third[..4], second[..], "re-seeded once: {third:?}");
+}
+
+/// #1905: a session from before the view that holds nothing the view leaves
+/// out is rebound, not re-seeded: its own turns, tool results and cached
+/// prefix stay, and the next turn keeps it.
+#[tokio::test]
+async fn a_session_from_before_the_view_holding_only_the_view_is_rebound() {
+    let mut chat = ThreeAgents::new();
+    chat.push("kickoff", "user", None, "kickoff", false);
+    let sessions = Arc::new(InMemorySessionService::new());
+    let (history, refs) = chat.view(&["kickoff"]);
+    view_turn(
+        &sessions,
+        &ViewTurn::new("first question", None),
+        &history,
+        &refs,
+    )
+    .await;
+    let own = question_event_id(&sessions, "first question").await;
+    assert!(!own.starts_with("hm-"), "{own}");
+
+    chat.push("q1", "user", None, "first question", true);
+    chat.push("a1", "assistant", None, "answer to first question", true);
+    chat.push(
+        "late",
+        "user",
+        Some("Reviewer"),
+        "late reviewer finding",
+        false,
+    );
+    let (history, refs) = chat.view(&["kickoff", "q1", "a1", "late"]);
+    let second = view_turn(
+        &sessions,
+        &ViewTurn::new("second question", Some("full")),
+        &history,
+        &refs,
+    )
+    .await;
+    assert_eq!(second.len(), 5, "{second:?}");
+    assert!(second[3].1.contains("late reviewer finding"), "{second:?}");
+    assert_eq!(
+        question_event_id(&sessions, "first question").await,
+        own,
+        "rebound, not re-seeded"
+    );
+
+    chat.push("q2", "user", None, "second question", true);
+    chat.push("a2", "assistant", None, "answer to second question", true);
+    let (history, refs) = chat.view(&["kickoff", "q1", "a1", "late", "q2", "a2"]);
+    let third = view_turn(
+        &sessions,
+        &ViewTurn::new("third question", Some("full")),
+        &history,
+        &refs,
+    )
+    .await;
+    assert_eq!(third[..5], second[..], "bound after the rebind: {third:?}");
+    assert_eq!(question_event_id(&sessions, "first question").await, own);
+}
+
+/// #1903: a regeneration of a turn that wrote its question carries that
+/// question's id, so the regenerated session stays tagged and the next
+/// tagged turn keeps it instead of re-seeding.
+#[tokio::test]
+async fn a_regeneration_naming_its_question_keeps_the_session_tagged() {
+    let mut chat = ThreeAgents::new();
+    chat.push("kickoff", "user", None, "kickoff", false);
+    let sessions = Arc::new(InMemorySessionService::new());
+    let (history, refs) = chat.view(&["kickoff"]);
+    let q1 = ThreeAgents::id(2);
+    let mut turn = ViewTurn::new("first question", Some("full"));
+    turn.question_id = Some(&q1);
+    turn.tagging = true;
+    view_turn(&sessions, &turn, &history, &refs).await;
+
+    // Regenerate the first answer: the history ends before its question.
+    let mut turn = ViewTurn::new("first question", Some("full"));
+    turn.question_id = Some(&q1);
+    turn.tagging = true;
+    turn.regenerate = true;
+    let regenerated = view_turn(&sessions, &turn, &history, &refs).await;
+    assert!(
+        regenerated.last().is_some_and(
+            |(_, text)| text.contains("first question") && text.starts_with("[message ")
+        ),
+        "{regenerated:?}"
+    );
+    let own = question_event_id(&sessions, "first question").await;
+
+    chat.push("q1", "user", None, "first question", true);
+    chat.push("a1", "assistant", None, "answer to first question", true);
+    let (history, refs) = chat.view(&["kickoff", "q1", "a1"]);
+    let q2 = ThreeAgents::id(4);
+    let mut turn = ViewTurn::new("second question", Some("full"));
+    turn.question_id = Some(&q2);
+    turn.tagging = true;
+    let second = view_turn(&sessions, &turn, &history, &refs).await;
+    assert_eq!(second[..2], regenerated[..], "{second:?}");
+    assert_eq!(
+        question_event_id(&sessions, "first question").await,
+        own,
+        "kept, not re-seeded"
+    );
 }
 
 /// #1865: a session holding messages without their `[message m-…]` ids is

@@ -171,8 +171,22 @@ mod chat_history_ref_tests {
             history: "full".to_owned(),
             window_tokens: 32000,
             digest: digest.clone(),
+            binding: String::new(),
         });
         assert!(super::check_context_view(&message).is_ok());
+        // #1902: a binding is 64 lowercase hex, or absent.
+        let mut bound = message.clone();
+        if let Some(view) = bound.context_view.as_mut() {
+            view.binding = "ab".repeat(32);
+        }
+        assert!(super::check_context_view(&bound).is_ok());
+        for bad in ["ab", &"AB".repeat(32), &"zz".repeat(32)] {
+            let mut malformed = message.clone();
+            if let Some(view) = malformed.context_view.as_mut() {
+                view.binding = bad.to_owned();
+            }
+            assert!(super::check_context_view(&malformed).is_err(), "{bad}");
+        }
 
         let mut widened = message.clone();
         widened.chat_history =
@@ -652,6 +666,11 @@ pub fn request_from(
                 .context_view
                 .as_ref()
                 .map(|view| view.history.clone()),
+            context_view_binding: message
+                .context_view
+                .as_ref()
+                .map(|view| view.binding.clone())
+                .filter(|binding| !binding.is_empty()),
             recalled_memory: recalled_memory(&message.recalled_memory)?,
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
@@ -682,6 +701,18 @@ fn check_context_view(message: &AgentExecutionInputV1) -> Result<(), AgentProtoc
     ) {
         return Err(AgentProtocolError::InvalidInput(
             "the agent context view mode is unknown",
+        ));
+    }
+    // #1902: a binding is Main's lowercase hex SHA-256, or absent.
+    if !view.binding.is_empty()
+        && (view.binding.len() != 64
+            || !view
+                .binding
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+    {
+        return Err(AgentProtocolError::InvalidInput(
+            "the agent context view binding is malformed",
         ));
     }
     let window = message

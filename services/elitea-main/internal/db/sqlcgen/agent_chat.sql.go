@@ -1259,7 +1259,9 @@ SELECT conversation.id AS conversation_id,
        COALESCE(conversation.meta, '{}'::jsonb)::text AS conversation_meta_json,
        COALESCE(current_tools.tools, '[]'::jsonb)::text AS tools_json,
        COALESCE(current_history.chat_history, '[]'::jsonb)::text AS chat_history_json,
-       COALESCE(current_history.chat_history_refs, '[]'::jsonb)::text AS chat_history_refs_json
+       COALESCE(current_history.chat_history_refs, '[]'::jsonb)::text AS chat_history_refs_json,
+       -- #1902: when the reader joined (see ResolveCurrentApplicationTurn).
+       target_mapping.created_at::text AS participant_joined_at
 FROM chat_conversations AS conversation
 JOIN chat_participant_mapping AS author_mapping
   ON author_mapping.conversation_id = conversation.id
@@ -1978,6 +1980,7 @@ type ResolveCurrentAdhocTurnRow struct {
 	ToolsJson            string `db:"tools_json" json:"tools_json"`
 	ChatHistoryJson      string `db:"chat_history_json" json:"chat_history_json"`
 	ChatHistoryRefsJson  string `db:"chat_history_refs_json" json:"chat_history_refs_json"`
+	ParticipantJoinedAt  string `db:"participant_joined_at" json:"participant_joined_at"`
 }
 
 // Chat history for this turn: one entry per prior message group, whose
@@ -2040,6 +2043,7 @@ func (q *Queries) ResolveCurrentAdhocTurn(ctx context.Context, arg ResolveCurren
 		&i.ToolsJson,
 		&i.ChatHistoryJson,
 		&i.ChatHistoryRefsJson,
+		&i.ParticipantJoinedAt,
 	)
 	return i, err
 }
@@ -2123,6 +2127,10 @@ SELECT conversation.id AS conversation_id,
        -- ADR-0050 decision 9b: "share history from: now" on this
        -- participant (` + "`" + `since_joined` + "`" + `), else '' (the version decides).
        COALESCE(target_mapping.entity_settings ->> 'context_history', '')::text AS participant_context_history,
+       -- #1902: when the reader joined, as after_joined reads it. Part of
+       -- the view's binding: an agent re-added later sees less under
+       -- since_joined, and its durable session must be re-seeded.
+       target_mapping.created_at::text AS participant_joined_at,
        COALESCE(conversation.meta -> 'internal_tools', '[]'::jsonb)::text AS internal_tools_json,
        -- BEGIN shared application_version_details_json projection
        -- ADR-0050 decision 1a: ` + "`" + `soul` + "`" + ` joins the object only when the version
@@ -2968,6 +2976,7 @@ type ResolveCurrentApplicationTurnRow struct {
 	ChatHistoryJson               string `db:"chat_history_json" json:"chat_history_json"`
 	ChatHistoryRefsJson           string `db:"chat_history_refs_json" json:"chat_history_refs_json"`
 	ParticipantContextHistory     string `db:"participant_context_history" json:"participant_context_history"`
+	ParticipantJoinedAt           string `db:"participant_joined_at" json:"participant_joined_at"`
 	InternalToolsJson             string `db:"internal_tools_json" json:"internal_tools_json"`
 	ApplicationVersionDetailsJson string `db:"application_version_details_json" json:"application_version_details_json"`
 }
@@ -3052,6 +3061,7 @@ func (q *Queries) ResolveCurrentApplicationTurn(ctx context.Context, arg Resolve
 		&i.ChatHistoryJson,
 		&i.ChatHistoryRefsJson,
 		&i.ParticipantContextHistory,
+		&i.ParticipantJoinedAt,
 		&i.InternalToolsJson,
 		&i.ApplicationVersionDetailsJson,
 	)
@@ -3736,7 +3746,17 @@ SELECT conversation.uuid AS conversation_uuid,
            WHEN 'application' THEN 'application'
            WHEN 'dummy' THEN 'adhoc'
        END::text AS regeneration_kind,
-       question_text.content::text AS user_input
+       question_text.content::text AS user_input,
+       -- #1903: this answer's own turn wrote its question, so no earlier
+       -- answer replies to it. A later addressed agent answers the person's
+       -- existing question instead, which is in its history already.
+       NOT EXISTS (
+           SELECT 1
+           FROM chat_message_group AS earlier_answer
+           WHERE earlier_answer.reply_to_id = question.id
+             AND earlier_answer.conversation_id = conversation.id
+             AND earlier_answer.id < response.id
+       )::boolean AS question_is_own
 FROM chat_message_group AS response
 JOIN chat_conversations AS conversation
   ON conversation.id = response.conversation_id
@@ -3819,6 +3839,7 @@ type ResolveCurrentRegenerationRow struct {
 	ResponseIsStreaming bool        `db:"response_is_streaming" json:"response_is_streaming"`
 	RegenerationKind    string      `db:"regeneration_kind" json:"regeneration_kind"`
 	UserInput           string      `db:"user_input" json:"user_input"`
+	QuestionIsOwn       *bool       `db:"question_is_own" json:"question_is_own"`
 }
 
 func (q *Queries) ResolveCurrentRegeneration(ctx context.Context, arg ResolveCurrentRegenerationParams) (ResolveCurrentRegenerationRow, error) {
@@ -3831,6 +3852,7 @@ func (q *Queries) ResolveCurrentRegeneration(ctx context.Context, arg ResolveCur
 		&i.ResponseIsStreaming,
 		&i.RegenerationKind,
 		&i.UserInput,
+		&i.QuestionIsOwn,
 	)
 	return i, err
 }
