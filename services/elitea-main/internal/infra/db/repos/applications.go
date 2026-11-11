@@ -451,6 +451,28 @@ func getApplication(ctx context.Context, q querier, projectID, applicationID str
 }
 
 func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRequest) (applications.Application, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return applications.Application{}, fmt.Errorf("applications: create: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	app, err := createApplicationTx(ctx, tx, req)
+	if err != nil {
+		return applications.Application{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return applications.Application{}, fmt.Errorf("applications: create: commit: %w", err)
+	}
+	return app, nil
+}
+
+// createApplicationTx is the ONE create path of an agent: the applications
+// row, its first version and its registry record, inside the caller's
+// transaction. The create route (Create) and the workforce policy's
+// automatic hire (agent_workforce_policy.go createHiredAgent, issue 1877)
+// both write through it, so a change to how an agent is created reaches
+// both.
+func createApplicationTx(ctx context.Context, tx pgx.Tx, req applications.CreateRequest) (applications.Application, error) {
 	s, err := tenantSchema(req.ProjectID)
 	if err != nil {
 		return applications.Application{}, err
@@ -477,12 +499,6 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 			return applications.Application{}, err
 		}
 	}
-
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return applications.Application{}, fmt.Errorf("applications: create: begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
 	query := fmt.Sprintf(`
 		INSERT INTO %s.applications (name, description, icon, owner_id, meta, created_at, updated_at)
@@ -516,10 +532,6 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 				return applications.Application{}, err
 			}
 		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return applications.Application{}, fmt.Errorf("applications: create: commit: %w", err)
 	}
 	return app, nil
 }

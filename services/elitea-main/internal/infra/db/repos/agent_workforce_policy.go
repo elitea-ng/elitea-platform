@@ -24,11 +24,14 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentproposal"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentsoul"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
 
@@ -504,42 +507,44 @@ type hireCandidate struct {
 	draft    map[string]any
 }
 
+// autoHirePass tries the project's open proposals, oldest first, until the
+// project holds max_auto_hired automatic hires nobody kept (issue 1876): the
+// count is read once with the policy and kept in step with each hire, so a
+// project at its cap opens no transaction at all. The list reads no draft;
+// tryHire reads the one it decides on under the proposal's row lock, where
+// the cap is counted again (the invariant).
 func (s *AgentWorkforce) autoHirePass(ctx context.Context, policy WorkforcePolicy, summary *PolicySummary) error {
+	open := policy.OpenAutoHired
+	if open >= policy.MaxAutoHired {
+		return nil
+	}
 	rows, err := s.pool.Query(ctx, `
-SELECT id, proposer_application_id, proposed_for_user_id, spec_digest, draft
+SELECT id, proposer_application_id, proposed_for_user_id, spec_digest
 FROM elitea_lifecycle.agent_proposals
 WHERE project_id = $1 AND status = 'proposed'
 ORDER BY created_at, id`, policy.ProjectID)
 	if err != nil {
 		return fmt.Errorf("agent workforce: list the open proposals: %w", err)
 	}
-	var candidates []hireCandidate
-	for rows.Next() {
-		var (
-			c     hireCandidate
-			draft []byte
-		)
-		if err := rows.Scan(&c.id, &c.proposer, &c.forUser, &c.digest, &draft); err != nil {
-			rows.Close()
-			return err
-		}
-		if err := json.Unmarshal(draft, &c.draft); err != nil {
-			rows.Close()
-			return fmt.Errorf("agent workforce: decode a proposal draft: %w", err)
-		}
-		candidates = append(candidates, c)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
+	candidates, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (hireCandidate, error) {
+		var c hireCandidate
+		err := row.Scan(&c.id, &c.proposer, &c.forUser, &c.digest)
+		return c, err
+	})
+	if err != nil {
+		return fmt.Errorf("agent workforce: list the open proposals: %w", err)
 	}
 	for _, candidate := range candidates {
+		if open >= policy.MaxAutoHired {
+			break
+		}
 		hired, err := s.tryHire(ctx, policy, candidate)
 		if err != nil {
 			return err
 		}
 		if hired {
 			summary.Hired++
+			open++
 		}
 	}
 	return nil
@@ -573,14 +578,20 @@ func (s *AgentWorkforce) tryHire(ctx context.Context, policy WorkforcePolicy, ca
 		if err := lockPolicyProject(ctx, tx, policy.ProjectID); err != nil {
 			return err
 		}
-		var status string
+		var (
+			status string
+			draft  []byte
+		)
 		if err := tx.QueryRow(ctx, `
-SELECT status FROM elitea_lifecycle.agent_proposals WHERE project_id = $1 AND id = $2 FOR UPDATE`,
-			policy.ProjectID, candidate.id).Scan(&status); err != nil {
+SELECT status, draft FROM elitea_lifecycle.agent_proposals WHERE project_id = $1 AND id = $2 FOR UPDATE`,
+			policy.ProjectID, candidate.id).Scan(&status, &draft); err != nil {
 			return fmt.Errorf("agent workforce: lock the proposal: %w", err)
 		}
 		if status != string(agentproposal.StatusProposed) {
 			return nil
+		}
+		if err := json.Unmarshal(draft, &candidate.draft); err != nil {
+			return fmt.Errorf("agent workforce: decode a proposal draft: %w", err)
 		}
 		evidence := agentworkforce.HireEvidence{ToolCategories: draftCategories(candidate.draft)}
 		if err := tx.QueryRow(ctx, `
@@ -656,14 +667,23 @@ WHERE project_id = $1 AND id = $2 AND status = 'proposed'`, policy.ProjectID, ca
 	return true, nil
 }
 
-// createHiredAgent writes the agent: one DRAFT version (unpublished), no
-// tool bound, memory writes held for review, the soul the proposal carried,
-// and its registry row (tier low, the person the proposing run served as the
-// owner), as the create route does.
+// createHiredAgent writes the agent through the applications repository's
+// create path (createApplicationTx, issue 1877), inside the policy's
+// transaction: one DRAFT version (unpublished), no tool bound, memory
+// writes held for review, the name, description, instructions, welcome
+// message, conversation starters and soul the proposal carried, and its
+// registry row (tier low, the person the proposing run served as the owner
+// and the version's author). The draft carries no model settings (a saved
+// agent picks its own model), so llm_settings stays empty as on the create
+// route; the sub-agent's avatar is a runtime key with no saved-agent column
+// and is not carried, as on the person's create from the same proposal.
 func (s *AgentWorkforce) createHiredAgent(ctx context.Context, tx pgx.Tx, projectID int64, candidate hireCandidate) (int64, error) {
-	schema, err := tenantschema.QuoteInt(projectID)
-	if err != nil {
+	if _, err := tenantschema.QuoteInt(projectID); err != nil {
 		return 0, agentworkforce.Refuse(agentworkforce.InvalidCode, "The project id is invalid.")
+	}
+	author, err := ownership.NewUserID(candidate.forUser)
+	if err != nil {
+		return 0, agentworkforce.Refuse(agentworkforce.InvalidCode, "The proposal names no person to serve.")
 	}
 	name := strings.TrimSpace(stringOf(candidate.draft["name"]))
 	if name == "" {
@@ -676,40 +696,51 @@ func (s *AgentWorkforce) createHiredAgent(ctx context.Context, tx pgx.Tx, projec
 	if runes := []rune(description); len(runes) > 2000 {
 		description = string(runes[:2000])
 	}
-	var soul any
+	var soul json.RawMessage
 	if raw, ok := candidate.draft["soul"].(map[string]any); ok {
 		normalized, err := agentsoul.Normalize(raw)
 		if err == nil && len(normalized) > 0 {
-			soul = string(normalized)
+			soul = normalized
+		}
+	}
+	starters := []any{}
+	if raw, ok := candidate.draft["conversation_starters"].([]any); ok {
+		for _, starter := range raw {
+			if text, ok := starter.(string); ok && strings.TrimSpace(text) != "" {
+				starters = append(starters, text)
+			}
 		}
 	}
 	memory := agentmemory.DefaultNew
 	memory.Write = agentmemory.WriteReview
-	meta, err := json.Marshal(map[string]any{
-		"step_limit": 25, "internal_tools": []any{}, agentmemory.MetaKey: memory.Block(),
-		"workforce": map[string]any{"auto_hired": true, "proposal_id": candidate.id},
+	created, err := createApplicationTx(ctx, tx, applications.CreateRequest{
+		ProjectID:   strconv.FormatInt(projectID, 10),
+		Name:        name,
+		Description: description,
+		AuthorID:    author,
+		InitialVersion: &applications.Version{
+			Name:                 defaultVersionName,
+			Status:               "draft",
+			AuthorID:             candidate.forUser,
+			AgentType:            defaultAgentType,
+			Instructions:         stringOf(candidate.draft["instructions"]),
+			WelcomeMessage:       stringOf(candidate.draft["welcome_message"]),
+			LLMSettings:          map[string]any{},
+			ConversationStarters: starters,
+			Meta: map[string]any{
+				"step_limit": 25, "internal_tools": []any{}, agentmemory.MetaKey: memory.Block(),
+				"workforce": map[string]any{"auto_hired": true, "proposal_id": candidate.id},
+			},
+			PipelineSettings: map[string]any{},
+			Soul:             soul,
+		},
 	})
 	if err != nil {
-		return 0, err
-	}
-	var applicationID int64
-	if err := tx.QueryRow(ctx, fmt.Sprintf(`
-INSERT INTO %s.applications (name, description, owner_id, meta, created_at, updated_at)
-VALUES ($1, $2, $3, '{}'::jsonb, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
-RETURNING id`, schema), name, description, projectID).Scan(&applicationID); err != nil {
 		return 0, fmt.Errorf("agent workforce: create the hired agent: %w", err)
 	}
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`
-INSERT INTO %s.application_versions
-    (application_id, name, status, author_id, agent_type, instructions, welcome_message, llm_settings,
-     conversation_starters, meta, pipeline_settings, soul, created_at)
-VALUES ($1, $2, 'draft', $3, $4, $5, '', '{}'::jsonb, '[]'::jsonb, $6::jsonb, '{}'::jsonb, $7::jsonb, now() AT TIME ZONE 'UTC')`, schema),
-		applicationID, defaultVersionName, candidate.forUser, defaultAgentType, stringOf(candidate.draft["instructions"]),
-		string(meta), soul); err != nil {
-		return 0, fmt.Errorf("agent workforce: create the hired agent's version: %w", err)
-	}
-	if err := EnsureRegistryTx(ctx, tx, projectID, applicationID, candidate.forUser); err != nil {
-		return 0, err
+	applicationID, err := strconv.ParseInt(created.ID, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("agent workforce: create the hired agent: id %q: %w", created.ID, err)
 	}
 	return applicationID, nil
 }
@@ -728,19 +759,27 @@ type policyAgent struct {
 	openReview bool
 }
 
-// rulePass applies the rules to every active agent's latest scorecard.
+// rulePass applies the rules to every active agent's latest scorecard. The
+// reads are batched (issue 1876): one query for the active agents with
+// their open suspension and open review, one for their latest scorecards,
+// one for the legal holds and one for the recent objections. The rules are
+// evaluated in memory, and a transaction opens only for an agent a rule acts
+// on (applyRule reads the agent again under its row lock).
 func (s *AgentWorkforce) rulePass(ctx context.Context, policy WorkforcePolicy, summary *PolicySummary) error {
 	if len(policy.Rules) == 0 {
 		return nil
 	}
-	ids, err := s.activeAgents(ctx, policy.ProjectID)
+	now := s.now().UTC()
+	agents, err := s.policyAgents(ctx, policy.ProjectID, now)
+	if err != nil || len(agents) == 0 {
+		return err
+	}
+	suppressed, err := s.suppressedRules(ctx, policy.ProjectID, now)
 	if err != nil {
 		return err
 	}
-	now := s.now().UTC()
-	for _, applicationID := range ids {
-		agent, err := s.policyAgentOf(ctx, s.pool, policy.ProjectID, applicationID, now)
-		if err != nil {
+	for _, agent := range agents {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if agent.card == nil || agent.openReview || agentworkforce.ExemptFromAutomatic(agent.Tier, agent.LegalHold) {
@@ -764,11 +803,7 @@ func (s *AgentWorkforce) rulePass(ctx context.Context, policy WorkforcePolicy, s
 			if alreadyAt(agent.WorkforceAgent, candidate.Stage) {
 				continue
 			}
-			suppressed, err := s.ruleSuppressed(ctx, policy.ProjectID, applicationID, candidate.ID, now)
-			if err != nil {
-				return err
-			}
-			if !suppressed {
+			if !suppressed[suppressionKey{agent.ApplicationID, candidate.ID}] {
 				rule, found = candidate, true
 				break
 			}
@@ -777,7 +812,7 @@ func (s *AgentWorkforce) rulePass(ctx context.Context, policy WorkforcePolicy, s
 			continue
 		}
 		evidence := map[string]any{"scorecard": agent.card, "facts": facts, "rule": rule}
-		if err := s.applyRule(ctx, policy, applicationID, rule.ID, rule.Stage, evidence, summary); err != nil {
+		if err := s.applyRule(ctx, policy, agent.ApplicationID, rule.ID, rule.Stage, evidence, summary); err != nil {
 			return err
 		}
 	}
@@ -795,58 +830,134 @@ func alreadyAt(agent WorkforceAgent, stage agentworkforce.Stage) bool {
 	return agent.State != agentworkforce.StateActive
 }
 
-func (s *AgentWorkforce) activeAgents(ctx context.Context, projectID int64) ([]int64, error) {
+// policyAgents reads the project's active agents as the rule pass needs
+// them: the registry's workforce columns with the open suspension, whether
+// a workforce proposal about the agent is open, the latest scorecard (nil
+// when older than two days: the policy never acts on a stale card) and the
+// legal holds. The application name and the HR flag are not read: the pass
+// does not use them, and applyRule reads the full agent under its lock.
+func (s *AgentWorkforce) policyAgents(ctx context.Context, projectID int64, now time.Time) ([]policyAgent, error) {
 	rows, err := s.pool.Query(ctx, `
-SELECT application_id FROM elitea_lifecycle.agent_registry
-WHERE tenant_project_id = $1 AND lifecycle_state = 'active' ORDER BY application_id`, projectID)
+SELECT registry.tenant_project_id, registry.application_id, registry.risk_tier,
+       COALESCE(registry.business_owner_id, 0), COALESCE(registry.technical_owner_id, 0),
+       registry.under_review, registry.under_review_since, registry.lifecycle_state, registry.retired_at,
+       registry.retired_by, registry.reinstate_until, registry.purge_after, registry.auto_hired_at,
+       registry.probation_until, registry.probation_reviewed_at, registry.orphaned_since, registry.created_at,
+       COALESCE(suspension.id, 0), COALESCE(suspension.source, ''),
+       EXISTS (SELECT 1 FROM elitea_lifecycle.agent_workforce_proposals AS proposal
+               WHERE proposal.project_id = $1 AND proposal.application_id = registry.application_id
+                 AND proposal.status IN ('proposed', 'asked_owner'))
+FROM elitea_lifecycle.agent_registry AS registry
+LEFT JOIN LATERAL (
+    SELECT id, source FROM elitea_runtime.execution_suspensions
+    WHERE scope = 'agent' AND project_id = $1 AND scope_key = registry.application_id::text AND resumed_at IS NULL
+    ORDER BY id LIMIT 1) AS suspension ON true
+WHERE registry.tenant_project_id = $1 AND registry.lifecycle_state = 'active'
+ORDER BY registry.application_id`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("agent workforce: list the active agents: %w", err)
 	}
-	return pgx.CollectRows(rows, pgx.RowTo[int64])
-}
-
-// policyAgentOf reads the agent with its latest scorecard (nil when older
-// than two days: the policy never acts on a stale card) and whether a
-// proposal about it is open.
-func (s *AgentWorkforce) policyAgentOf(ctx context.Context, q lifecycleQuerier, projectID, applicationID int64, now time.Time) (policyAgent, error) {
-	agent, err := readWorkforceAgent(ctx, q, projectID, applicationID, false)
+	agents, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (policyAgent, error) {
+		var out policyAgent
+		agent := &out.WorkforceAgent
+		err := row.Scan(&agent.ProjectID, &agent.ApplicationID, &agent.Tier,
+			&agent.BusinessOwnerID, &agent.TechnicalOwnerID, &agent.UnderReview, &agent.UnderReviewSince, &agent.State,
+			&agent.RetiredAt, &agent.RetiredBy, &agent.ReinstateUntil, &agent.PurgeAfter,
+			&agent.AutoHiredAt, &agent.ProbationUntil, &agent.ProbationReviewedAt, &agent.OrphanedSince, &out.createdAt,
+			&agent.SuspensionID, &agent.SuspensionSource, &out.openReview)
+		return out, err
+	})
 	if err != nil {
-		return policyAgent{}, err
+		return nil, fmt.Errorf("agent workforce: list the active agents: %w", err)
 	}
-	out := policyAgent{WorkforceAgent: agent}
-	if err := q.QueryRow(ctx, `
-SELECT created_at,
-       EXISTS (SELECT 1 FROM elitea_lifecycle.agent_workforce_proposals
-               WHERE project_id = $1 AND application_id = $2 AND status IN ('proposed', 'asked_owner'))
-FROM elitea_lifecycle.agent_registry WHERE tenant_project_id = $1 AND application_id = $2`,
-		projectID, applicationID).Scan(&out.createdAt, &out.openReview); err != nil {
-		return policyAgent{}, fmt.Errorf("agent workforce: read the agent: %w", err)
+	if len(agents) == 0 {
+		return agents, nil
 	}
-	card, err := latestScorecard(ctx, q, projectID, applicationID, now)
+	cards, err := latestScorecards(ctx, s.pool, projectID, now)
 	if err != nil {
-		return policyAgent{}, err
+		return nil, err
 	}
-	if card != nil {
-		if day, err := time.Parse("2006-01-02", card.Day[:min(len(card.Day), 10)]); err == nil && now.Sub(day) <= 48*time.Hour {
-			out.card = card
+	projectHeld, heldAgents, err := legalHolds(ctx, s.pool, projectID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range agents {
+		agent := &agents[i]
+		agent.LegalHold = projectHeld || heldAgents[agent.ApplicationID]
+		if card, ok := cards[agent.ApplicationID]; ok {
+			if day, err := time.Parse("2006-01-02", card.Day[:min(len(card.Day), 10)]); err == nil && now.Sub(day) <= 48*time.Hour {
+				agent.card = card
+			}
 		}
 	}
-	return out, nil
+	return agents, nil
 }
 
-// ruleSuppressed: a person objected to, or undid, what this rule did to this
-// agent in the last 30 days.
-func (s *AgentWorkforce) ruleSuppressed(ctx context.Context, projectID, applicationID int64, rule string, now time.Time) (bool, error) {
-	var suppressed bool
-	err := s.pool.QueryRow(ctx, `
-SELECT EXISTS (SELECT 1 FROM elitea_lifecycle.agent_automatic_actions
-               WHERE project_id = $1 AND application_id = $2 AND rule = $3
-                 AND status IN ('objected', 'undone') AND decided_at > $4)`,
-		projectID, applicationID, rule, now.Add(-agentworkforce.SuppressAfterObjection)).Scan(&suppressed)
-	if err != nil {
-		return false, fmt.Errorf("agent workforce: read the objections: %w", err)
+// legalHolds answers whether an active legal hold covers the whole project
+// and which of its agents one covers (legalHold for every agent at once).
+func legalHolds(ctx context.Context, q lifecycleQuerier, projectID int64) (bool, map[int64]bool, error) {
+	agents := map[int64]bool{}
+	project := false
+	rows, err := q.Query(ctx, `
+SELECT scope = 'project', COALESCE(agent_id, 0) FROM elitea_runtime.legal_holds
+WHERE released_at IS NULL AND project_id = $1 AND scope IN ('project', 'agent')`, projectID)
+	if err == nil {
+		for rows.Next() {
+			var (
+				whole bool
+				agent int64
+			)
+			if err = rows.Scan(&whole, &agent); err != nil {
+				break
+			}
+			project = project || whole
+			if agent > 0 {
+				agents[agent] = true
+			}
+		}
+		rows.Close()
+		if err == nil {
+			err = rows.Err()
+		}
 	}
-	return suppressed, nil
+	if err == nil {
+		return project, agents, nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.Code == "42P01" || pgErr.Code == "3F000") {
+		return false, map[int64]bool{}, nil
+	}
+	return false, nil, fmt.Errorf("agent workforce: read the legal holds: %w", err)
+}
+
+type suppressionKey struct {
+	applicationID int64
+	rule          string
+}
+
+// suppressedRules answers each (agent, rule) a person objected to, or
+// undid, in the last 30 days.
+func (s *AgentWorkforce) suppressedRules(ctx context.Context, projectID int64, now time.Time) (map[suppressionKey]bool, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT DISTINCT application_id, rule FROM elitea_lifecycle.agent_automatic_actions
+WHERE project_id = $1 AND status IN ('objected', 'undone') AND decided_at > $2`,
+		projectID, now.Add(-agentworkforce.SuppressAfterObjection))
+	if err != nil {
+		return nil, fmt.Errorf("agent workforce: read the objections: %w", err)
+	}
+	keys, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (suppressionKey, error) {
+		var key suppressionKey
+		err := row.Scan(&key.applicationID, &key.rule)
+		return key, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("agent workforce: read the objections: %w", err)
+	}
+	out := make(map[suppressionKey]bool, len(keys))
+	for _, key := range keys {
+		out[key] = true
+	}
+	return out, nil
 }
 
 // applyRule takes one stage under one rule: watch and suspend at once,

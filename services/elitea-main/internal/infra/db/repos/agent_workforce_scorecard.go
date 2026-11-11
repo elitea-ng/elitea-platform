@@ -249,15 +249,47 @@ const scorecardColumns = `day::text, runs_30d, failed_30d, cap_reached_30d, brea
 guardrail_hits_30d, spend_30d_usd, project_median_spend_usd, thumbs_up_30d, thumbs_down_30d, last_used_at,
 certification_state, computed_at`
 
-func scanScorecard(row pgx.Row, now time.Time) (agentworkforce.Scorecard, error) {
+// scanScorecard scans scorecardColumns; lead are the destinations of any
+// columns selected before them.
+func scanScorecard(row pgx.Row, now time.Time, lead ...any) (agentworkforce.Scorecard, error) {
 	var card agentworkforce.Scorecard
-	if err := row.Scan(&card.Day, &card.Runs30d, &card.Failed30d, &card.CapReached30d, &card.BreakerTrips7d,
+	dest := append(lead, &card.Day, &card.Runs30d, &card.Failed30d, &card.CapReached30d, &card.BreakerTrips7d,
 		&card.ApprovalRejections30d, &card.GuardrailHits30d, &card.Spend30dUSD, &card.ProjectMedianSpendUSD,
-		&card.ThumbsUp30d, &card.ThumbsDown30d, &card.LastUsedAt, &card.CertificationState, &card.ComputedAt); err != nil {
+		&card.ThumbsUp30d, &card.ThumbsDown30d, &card.LastUsedAt, &card.CertificationState, &card.ComputedAt)
+	if err := row.Scan(dest...); err != nil {
 		return agentworkforce.Scorecard{}, err
 	}
 	card.Finish(now)
 	return card, nil
+}
+
+// latestScorecards answers the newest scorecard of each of the project's
+// active agents scored in the last three days (the policy pass ignores an
+// older card anyway), in one query.
+func latestScorecards(ctx context.Context, q lifecycleQuerier, projectID int64, now time.Time) (map[int64]*agentworkforce.Scorecard, error) {
+	rows, err := q.Query(ctx, `SELECT DISTINCT ON (application_id) application_id, `+scorecardColumns+`
+FROM elitea_lifecycle.agent_scorecards
+WHERE project_id = $1 AND day >= (($2::timestamptz AT TIME ZONE 'UTC')::date - 3)
+  AND application_id IN (SELECT application_id FROM elitea_lifecycle.agent_registry
+                         WHERE tenant_project_id = $1 AND lifecycle_state = 'active')
+ORDER BY application_id, day DESC`, projectID, now)
+	if err != nil {
+		return nil, fmt.Errorf("agent workforce: read the scorecards: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]*agentworkforce.Scorecard{}
+	for rows.Next() {
+		var applicationID int64
+		card, err := scanScorecard(rows, now, &applicationID)
+		if err != nil {
+			return nil, fmt.Errorf("agent workforce: read the scorecards: %w", err)
+		}
+		out[applicationID] = &card
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("agent workforce: read the scorecards: %w", err)
+	}
+	return out, nil
 }
 
 // latestScorecard answers the agent's newest scorecard, or nil when the
