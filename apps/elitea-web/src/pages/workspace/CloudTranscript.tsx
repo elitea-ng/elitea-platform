@@ -14,13 +14,13 @@
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { AgentAvatar } from '@/features/chat-messages';
 import { approval, TurnTranscript } from '@/features/workspace';
 import { t } from '@/shared/i18n';
 
 import type { Card } from './cloudPrompts';
-import { exchangesOf, turnViewOf, type SubAgentLane } from './cloudTranscriptModel';
+import { exchangesOf, turnViewOf } from './cloudTranscriptModel';
 import { useCopyMenu, YourPrompt } from './sessionParts';
+import { TemporaryAvatar } from './subAgentAvatars';
 import type { CloudChat } from './useCloudChat';
 
 function ApprovalPrompt({ chat, card }: { chat: CloudChat; card: Card | undefined }): React.JSX.Element {
@@ -70,10 +70,6 @@ function PromptCard({ chat }: { chat: CloudChat }): React.JSX.Element | null {
  * (ADR-0050 decision 7e). Its profile's avatar key names no image yet, so the
  * ring holds the brand mark.
  */
-function TemporaryAvatar(_props: { lane: SubAgentLane }): React.JSX.Element {
-  return <AgentAvatar ephemeral size="1rem" />;
-}
-
 export function CloudTranscript({ chat }: { chat: CloudChat }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   if (chat.loading && chat.history.length === 0) {

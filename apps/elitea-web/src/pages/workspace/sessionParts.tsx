@@ -25,6 +25,7 @@ import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 import { copyText, modKey, selectInspectorShown, useContextMenu, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { turnSlots } from './chainSlots';
+import { ProfileAvatar } from './subAgentAvatars';
 import { CompactNotices } from './CompactNotices';
 import { InterruptedNote, type ResumeAction } from './InterruptedNote';
 import type { ForkMode, ForkPoint } from './useForkThread';
@@ -244,7 +245,7 @@ function RecordedTurn({ stored, onFork, resume }: { stored: StoredTurn; onFork: 
   return (
     <Box data-testid="history-turn" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       {view.continuation === undefined && (view.agent?.position ?? 0) === 0 && <YourPrompt text={stored.prompt} fork={fork} images={stored.images} />}
-      <TurnTranscript view={view} busy={false} continuation={view.continuation} onTextContextMenu={(text, event) => copyMenu(text, event, fork)} />
+      <TurnTranscript view={view} busy={false} continuation={view.continuation} onTextContextMenu={(text, event) => copyMenu(text, event, fork)} subAgentAvatar={ProfileAvatar} />
       {stored.state === 'interrupted' && view.done === undefined && (
         <InterruptedNote turnId={stored.turn_id} resumable={stored.resumable === true} resume={resume} />
       )}
@@ -354,6 +355,7 @@ export function Exchanges({ turn, prompts, promptImages, onFork, live }: {
             continuation={exchange.continuation}
             onRetryCommit={(executionId) => turn.retryCommit(exchange.key, executionId)}
             onTextContextMenu={(text, event) => copyMenu(text, event, fork)}
+            subAgentAvatar={ProfileAvatar}
             {...(exchange.live ? live : {})}
           />
         </Box>

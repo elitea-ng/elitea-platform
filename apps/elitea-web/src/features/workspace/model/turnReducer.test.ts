@@ -409,13 +409,19 @@ describe('sub-agents (#1226)', () => {
       turn_id: T,
       seq: 2,
       kind: 'subagent_started',
-      payload: { agent_id: 'a_1', parent_call_id: 'c1', ordinal: 1, label: 'audit', display_name: 'Reviewer', avatar: 'default:owl', brief_digest: 'sha256:x' },
+      payload: {
+        agent_id: 'a_1', parent_call_id: 'c1', ordinal: 1, label: 'audit', display_name: 'Reviewer', avatar: 'default:owl',
+        profile_digest: 'sha256:p', brief_digest: 'sha256:x', brief_refs: { message_ids: ['m1'], attachments: [], memory_entries: ['e1'], facts: 2 },
+      },
     };
     const [lane] = activeView(run([spawn(1, 'c1'), named])).subAgents ?? [];
     expect(lane).toMatchObject({ label: 'audit', displayName: 'Reviewer', avatar: 'default:owl' });
+    // #1910: the brief's digests and refs stay on the lane, for the recorded turn.
+    expect(lane).toMatchObject({ profileDigest: 'sha256:p', briefDigest: 'sha256:x', briefRefs: { message_ids: ['m1'], attachments: [], memory_entries: ['e1'], facts: 2 } });
     const [plain] = activeView(run([spawn(1, 'c1'), started(2, 'a_1', 'c1', 1)])).subAgents ?? [];
     expect(plain).not.toHaveProperty('displayName');
     expect(plain).not.toHaveProperty('avatar');
+    expect(plain).not.toHaveProperty('briefRefs');
   });
 
   it('ignores an event for a child whose start it never heard, and a repeated start', () => {
