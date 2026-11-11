@@ -257,6 +257,12 @@ func (service *CurrentApplicationToolSnapshotService) FreezeCurrentApplicationVe
 		}
 		return nil, unsupportedStartBecause("summary model resolution", err)
 	}
+	if err := service.freezeSubagentModels(ctx, request.ProjectID, request.InternalTools, version); err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, unsupportedStartBecause("sub-agent model resolution", err)
+	}
 	normalizeCurrentAgentRuntimeProfile(ctx, version, request.ProjectID)
 	tools, ok := version["tools"].([]any)
 	if !ok {

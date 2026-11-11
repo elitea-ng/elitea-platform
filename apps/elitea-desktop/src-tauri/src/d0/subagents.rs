@@ -229,7 +229,16 @@ impl SubAgentHost for DesktopSubAgents {
         &self,
         _child: &ChildIdentity,
         system_instruction: &str,
+        model: Option<&str>,
     ) -> Result<Arc<dyn Llm>, HostError> {
+        // #1825: a desktop child runs on the parent's model only; naming
+        // that model is the same as "inherit", as on the worker.
+        if model.is_some_and(|name| name != self.model.model_name) {
+            return Err(HostError::new(
+                elitea_agent_runtime::host::HostErrorCode::AuthorizationFailed,
+                "this host runs sub-agents on the parent's model only",
+            ));
+        }
         let transport = GatewayTransport {
             quiet: true,
             recorder: None,

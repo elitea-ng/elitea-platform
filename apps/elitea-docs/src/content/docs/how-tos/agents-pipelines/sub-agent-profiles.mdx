@@ -34,10 +34,36 @@ An agent with the `subagents` internal tool starts a sub-agent with `spawn_agent
 | `display_name` | The name shown for the sub-agent, at most 60 characters. It is the label when `label` is not set. |
 | `soul` | A short role and style, at most 2 KiB. It replaces the default role text. The safety sentence stays: a soul never widens what the sub-agent may do. |
 | `tools` | Only these of the agent's tools, as `toolkit/tool` or `toolkit/*`. See [Sub-agent tools](/how-tos/agents-pipelines/agent-tool-envelope#sub-agent-tools). A tool that writes still needs the agent's `subagent_tools`. |
-| `model` | Only `inherit`: the sub-agent uses the agent's model. |
+| `model` | `inherit` (the default): the sub-agent uses the model of the agent that starts it. Or the name of another model of the project catalogue that the agent may use, at most 256 bytes. See [The model](#the-model). |
 | `avatar` | An avatar key, at most 128 bytes. The platform stores it. |
 
 An unknown key or a value out of its bounds refuses the call with `invalid_arguments`.
+
+### The model
+
+When an agent has the `subagents` internal tool, Main freezes the other models of the project catalogue into the run when the run starts: the models of the project and the shared models of the platform, with their limits. A sub-agent that names one of them runs on it with that model's context window, output limit and thinking control. Its calls go through the same budget gate and egress rules as the agent's own calls, and its tokens count against the same run.
+
+A name that is not in the frozen list refuses the call with `SUBAGENT_MODEL_NOT_ALLOWED`. No sub-agent starts. A model added to the catalogue after the run started is not in the list.
+
+The desktop app accepts `inherit` only. It refuses any other name with `SUBAGENT_MODEL_NOT_ALLOWED`.
+
+The profile digest includes the model, so a sub-agent on another model has a different digest. A sub-agent started by a sub-agent uses its parent's model, unless its own profile names one.
+
+## How deep sub-agents go
+
+The platform administrator sets **Sub-Agent Depth** under **Configuration › Agent tools** (see [Agent tools](/admin/enterprise-controls/runtime-safety/#agent-tools)):
+
+- **1** (the default): a sub-agent does not get the four sub-agent tools. A call from a sub-agent is refused with `subagent_depth_exceeded`.
+- **2**: a sub-agent gets the four tools too, and can start sub-agents of its own. Those do not get the tools and cannot start more.
+
+At depth 2 these rules apply:
+
+- **One budget.** All sub-agents of a run, at every level, share the run's limits: at most 12 started in a turn and at most 16 running at a time. One agent or sub-agent runs at most 4 sub-agents at a time.
+- **One delegation depth.** Each level counts one level of the run's delegation depth. When the maximum delegation depth is reached, a spawn is refused with `DELEGATION_DEPTH_EXCEEDED`.
+- **Tools only narrow.** A sub-agent's sub-agent gets only tools that its parent got. A `profile.tools` entry that its parent did not get refuses the call with `SUBAGENT_TOOL_NOT_GRANTED`. A tool that writes still needs the agent's `subagent_tools`.
+- **Own children only.** A sub-agent manages only the sub-agents it started.
+
+The record keeps each spawn with its own row. A sub-agent's ordinal counts across the run, so each spawn of a run has its own ordinal.
 
 ## The brief
 

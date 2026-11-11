@@ -571,6 +571,7 @@ impl OrdinaryNativeAgentAssembler {
                 let facade = Arc::clone(&self.model_facade);
                 let context = Arc::clone(&context);
                 let model_project_id = profile.model_project_id();
+                let subagent_models = profile.subagent_policy().clone();
                 // ADR-0050 decision 3: the agent's `subagent_tools` over its
                 // toolkits (without them a child keeps the read-only rule).
                 // The toolkit types are lent either way, so a `profile.tools`
@@ -599,13 +600,15 @@ impl OrdinaryNativeAgentAssembler {
                             model_project_id,
                             invocation,
                             toolsets: super::subagents::WorkerSubAgents::child_toolsets(toolsets),
-                            config: std::sync::OnceLock::new(),
+                            models: Arc::clone(&subagent_models.models),
+                            configs: std::sync::Mutex::default(),
                             view,
                             ledger,
                         },
                         excluded,
                         delegation_root.clone(),
                         grant,
+                        subagent_models.max_depth,
                     )
                 })
             } else {

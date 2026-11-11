@@ -93,6 +93,47 @@ fn text(text: &str) -> Part {
     }
 }
 
+/// The last function response of `request`: its tool and its value.
+fn last_response(request: &LlmRequest) -> Option<(String, Value)> {
+    request
+        .contents
+        .iter()
+        .flat_map(|content| &content.parts)
+        .filter_map(|part| match part {
+            Part::FunctionResponse {
+                function_response, ..
+            } => Some((
+                function_response.name.clone(),
+                function_response.response.clone(),
+            )),
+            _ => None,
+        })
+        .next_back()
+}
+
+/// One step of a `nest` child: spawn, wait, answer.
+fn nest_step(request: &LlmRequest, task: &str, tools: Option<Vec<String>>) -> Vec<Part> {
+    match last_response(request) {
+        None => {
+            let mut args = json!({"task": task});
+            if let Some(tools) = tools {
+                args["profile"] = json!({"tools": tools});
+            }
+            vec![call("nest-spawn", SPAWN_AGENT, args)]
+        }
+        Some((name, value)) if name == SPAWN_AGENT => match find_key(&value, "code") {
+            Some(code) => vec![text(&format!("refused {code}"))],
+            None => vec![call("nest-wait", WAIT_AGENT, json!({}))],
+        },
+        Some((_, value)) => {
+            let said = find_key(&value, "result")
+                .or_else(|| find_key(&value, "code"))
+                .unwrap_or_default();
+            vec![text(&format!("nested: {said}"))]
+        }
+    }
+}
+
 struct DropFlag(Arc<AtomicBool>);
 
 impl Drop for DropFlag {
@@ -143,6 +184,33 @@ impl Llm for ChildModel {
                 let _flag = DropFlag(self.dropped.clone());
                 std::future::pending::<()>().await;
                 unreachable!()
+            }
+            // #1824: `leave <task>` spawns a child of its own on `<task>`
+            // and answers at once, without waiting for it.
+            Some("leave") => {
+                let task = words.collect::<Vec<_>>().join(" ");
+                response(
+                    match last_response(&request) {
+                        None => vec![call("leave-spawn", SPAWN_AGENT, json!({"task": task}))],
+                        Some(_) => vec![text("left")],
+                    },
+                    100,
+                )
+            }
+            // #1824: `nest [tools=a,b] <task>` spawns a child of its own on
+            // `<task>`, waits for it and answers what it said (or the code
+            // its spawn was refused with).
+            Some("nest") => {
+                let mut rest: Vec<&str> = words.collect();
+                let tools = rest
+                    .first()
+                    .and_then(|word| word.strip_prefix("tools="))
+                    .map(|tools| tools.split(',').map(str::to_owned).collect::<Vec<_>>());
+                if tools.is_some() {
+                    rest.remove(0);
+                }
+                let task = rest.join(" ");
+                response(nest_step(&request, &task, tools), 100)
             }
             // A follow-up: the reply names the task, which only this
             // child's session holds.
@@ -206,7 +274,12 @@ struct TestHost {
     /// Accept every brief (a host that checks references); otherwise the
     /// trait's default.
     accepts_briefs: AtomicBool,
+    /// The model each binding named (`None`: the parent's).
+    models: Mutex<Vec<Option<String>>>,
 }
+
+/// The models [`TestHost`] admits for a child (#1825).
+const ALLOWED_MODELS: [&str; 1] = ["small-model"];
 
 impl TestHost {
     fn new() -> Arc<Self> {
@@ -224,6 +297,7 @@ impl TestHost {
             isolating,
             checkouts: AtomicUsize::new(0),
             accepts_briefs: AtomicBool::new(false),
+            models: Mutex::new(Vec::new()),
         })
     }
 }
@@ -234,7 +308,21 @@ impl SubAgentHost for TestHost {
         &self,
         _child: &ChildIdentity,
         system_instruction: &str,
+        model: Option<&str>,
     ) -> Result<Arc<dyn Llm>, HostError> {
+        // #1825: the run's catalogue, as this host admits it.
+        if let Some(model) = model
+            && !ALLOWED_MODELS.contains(&model)
+        {
+            return Err(HostError::new(
+                crate::host::HostErrorCode::AuthorizationFailed,
+                "not an admitted model",
+            ));
+        }
+        self.models
+            .lock()
+            .unwrap()
+            .push(model.map(ToOwned::to_owned));
         self.instructions
             .lock()
             .unwrap()
@@ -704,7 +792,7 @@ fn spawn_response(responses: &[(String, Value)]) -> Value {
 async fn an_invalid_profile_or_brief_is_refused() {
     for args in [
         json!({"task": "x", "profile": {"colour": "red"}}),
-        json!({"task": "x", "profile": {"model": "other"}}),
+        json!({"task": "x", "profile": {"model": "a\nb"}}),
         json!({"task": "x", "context": {"facts": [""]}}),
         json!({"task": "x", "label": "a\u{0}b"}),
         json!({"task": "x", "profile": {"display_name": "O\nwl"}}),
@@ -1203,3 +1291,6 @@ async fn isolation_is_refused_where_the_host_gives_no_checkout() {
     assert!(host.started.lock().unwrap().is_empty());
     assert_eq!(host.write.0.load(Ordering::SeqCst), 0);
 }
+
+#[path = "depth_model_tests.rs"]
+mod depth_model;

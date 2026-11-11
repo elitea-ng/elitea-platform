@@ -133,6 +133,11 @@ pub struct AgentExecutionPayload {
     /// its own (a regeneration of an addressed turn, a continuation), or an
     /// input from before field 75.
     pub current_message_id: Option<String>,
+    /// How the run's sub-agents may nest and which other models they may
+    /// run on (ADR-0050 decision 4, #1824, #1825), frozen by Main. `None`:
+    /// an input from before field 77; depth 1, and every sub-agent runs on
+    /// its parent's model.
+    pub subagent_policy: Option<SubAgentPolicy>,
     /// The eligibility mode of this reader's context view (`full`,
     /// `since_joined`, `addressed_only` or `none`; ADR-0050 decision 9,
     /// #1609), checked against the history by the host's protocol. The
@@ -145,6 +150,16 @@ pub struct AgentExecutionPayload {
     /// `spawn_agent` brief may name these in `memory_entries`. Empty: none
     /// recalled, or an input from before field 76.
     pub recalled_memory: Vec<RecalledMemoryEntry>,
+}
+
+/// The run's sub-agent policy (ADR-0050 decision 4).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SubAgentPolicy {
+    /// 1 or 2: with 2 a sub-agent may start sub-agents of its own.
+    pub max_depth: u32,
+    /// The catalogue models other than the parent's that a sub-agent may
+    /// name in `profile.model`, each in the summary model's shape.
+    pub models: Vec<SummaryModelSnapshot>,
 }
 
 /// One agent memory entry Main recalled into a turn (#1826).

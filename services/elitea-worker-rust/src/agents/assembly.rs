@@ -99,6 +99,11 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// Only a root application agent has it. Main checks it again, with the
     /// person's create permission, on every call.
     can_propose_agents: bool,
+    /// The run's sub-agent policy (ADR-0050 decision 4, #1824, #1825):
+    /// the depth, and the other catalogue models a sub-agent may name,
+    /// each admitted like the summary model. Only the root agent of a turn
+    /// has it; a nested agent or a pipeline keeps depth 1 and no model.
+    subagent_policy: SubAgentModels,
     /// The agent memory entries Main recalled into the instructions
     /// (#1826). Only a root application agent with `meta.memory` has them.
     recalled_memory: Vec<super::request::RecalledMemoryEntry>,
@@ -106,6 +111,38 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// decision 5l, #1616): an HR agent, bound `propose_dismissal`. Only a
     /// root application agent has it; Main checks it again on every call.
     can_review_agents: bool,
+}
+
+/// The admitted sub-agent policy of a root agent.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SubAgentModels {
+    pub(crate) max_depth: u32,
+    pub(crate) models: Arc<Vec<SummaryModelProfile>>,
+}
+
+impl SubAgentModels {
+    /// A frozen model this agent's context settings cannot admit (its
+    /// limits are fallbacks under a `full` budget, or its output does not
+    /// fit an explicit one) is left out, never the whole turn refused: a
+    /// sub-agent that names it is refused with `SUBAGENT_MODEL_NOT_ALLOWED`
+    /// at spawn, and every other turn runs as before.
+    fn admit(
+        policy: Option<&super::request::SubAgentPolicy>,
+        settings: &Map<String, Value>,
+    ) -> Self {
+        let Some(policy) = policy else {
+            return Self::default();
+        };
+        let models = policy
+            .models
+            .iter()
+            .filter_map(|snapshot| SummaryModelProfile::admit(snapshot, settings).ok())
+            .collect::<Vec<_>>();
+        Self {
+            max_depth: policy.max_depth,
+            models: Arc::new(models),
+        }
+    }
 }
 
 /// Admitted independently from the task model before credential redemption.
@@ -313,6 +350,7 @@ impl OrdinaryNoToolProfile {
             floor: None,
             tool_envelope: None,
             can_propose_agents: false,
+            subagent_policy: SubAgentModels::default(),
             recalled_memory: Vec::new(),
             can_review_agents: false,
         })
@@ -373,6 +411,10 @@ impl OrdinaryNoToolProfile {
             floor: request.payload.floor.clone(),
             tool_envelope: request.payload.tool_envelope.clone(),
             can_propose_agents: application_can_propose_agents(request),
+            subagent_policy: SubAgentModels::admit(
+                request.payload.subagent_policy.as_ref(),
+                &request.payload.context_settings,
+            ),
             recalled_memory: application_recalled_memory(request),
             can_review_agents: application_capability(
                 request,
@@ -493,6 +535,7 @@ impl OrdinaryNoToolProfile {
             floor: None,
             tool_envelope: None,
             can_propose_agents: false,
+            subagent_policy: SubAgentModels::default(),
             recalled_memory: Vec::new(),
             can_review_agents: false,
         })
@@ -556,6 +599,12 @@ impl OrdinaryNoToolProfile {
     #[must_use]
     pub(crate) const fn can_propose_agents(&self) -> bool {
         self.can_propose_agents
+    }
+
+    /// The run's admitted sub-agent policy (ADR-0050 decision 4).
+    #[must_use]
+    pub(crate) const fn subagent_policy(&self) -> &SubAgentModels {
+        &self.subagent_policy
     }
 
     /// The agent memory entries Main recalled into this turn (#1826).

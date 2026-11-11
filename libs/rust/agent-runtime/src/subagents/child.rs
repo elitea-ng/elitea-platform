@@ -7,7 +7,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use adk_agent::LlmAgentBuilder;
+use adk_agent::{LlmAgent, LlmAgentBuilder};
 use adk_core::{
     AdkError, Content, Event, Llm, LlmRequest, LlmResponseStream, Part, ReadonlyContext, RunConfig,
     StreamingMode, Tool, ToolExecutionStrategy, Toolset,
@@ -112,6 +112,10 @@ pub struct ChildToolset {
     grant: Option<Arc<SubAgentGrant>>,
     /// The tools `spawn_agent` asked for: only those are offered.
     requested: Option<Arc<Vec<RequestedTool>>>,
+    /// What each ancestor child asked for (#1824): a grandchild is offered
+    /// only tools every one of them names, so it never gets a tool its
+    /// parent lacks.
+    ancestors: Vec<Arc<Vec<RequestedTool>>>,
 }
 
 impl ChildToolset {
@@ -123,6 +127,7 @@ impl ChildToolset {
             writes: false,
             grant: None,
             requested: None,
+            ancestors: Vec::new(),
         }
     }
 
@@ -136,7 +141,15 @@ impl ChildToolset {
             writes: true,
             grant: None,
             requested: None,
+            ancestors: Vec::new(),
         }
+    }
+
+    /// Offer only tools that every ancestor's `profile.tools` names.
+    #[must_use]
+    pub(super) fn with_ancestors(mut self, ancestors: Vec<Arc<Vec<RequestedTool>>>) -> Self {
+        self.ancestors = ancestors;
+        self
     }
 
     /// Filter by the run's sub-agent grant instead of the read-only rule.
@@ -155,17 +168,19 @@ impl ChildToolset {
 
     fn offers(&self, tool: &dyn Tool) -> bool {
         let toolset = self.inner.name();
+        let names = |requested: &Arc<Vec<RequestedTool>>| {
+            requested
+                .iter()
+                .any(|key| requested_names(self.grant.as_deref(), key, toolset, tool))
+        };
         admissible_for(
             toolset,
             tool,
             &self.excluded,
             self.writes,
             self.grant.as_deref(),
-        ) && self.requested.as_ref().is_none_or(|requested| {
-            requested
-                .iter()
-                .any(|key| requested_names(self.grant.as_deref(), key, toolset, tool))
-        })
+        ) && self.ancestors.iter().all(names)
+            && self.requested.as_ref().is_none_or(names)
     }
 }
 
@@ -279,6 +294,10 @@ struct Shared {
     counters: Arc<Counters>,
     inbox: Mutex<Option<mpsc::UnboundedSender<String>>>,
     abort: Mutex<Option<AbortHandle>>,
+    /// The registry of this child's own children, when it may start some
+    /// (#1824): they are closed, and the host told, when this child ends,
+    /// answers or is closed, so none outlives the child that started it.
+    descendants: Option<Arc<super::Registry>>,
 }
 
 /// A handle on one child; clones share it.
@@ -302,6 +321,14 @@ impl Child {
 
     pub(super) fn status(&self) -> ChildStatus {
         *self.shared.status.borrow()
+    }
+
+    /// Close every child this child started that still runs, telling the
+    /// host (#1824). Their work is for this child, which no longer waits.
+    fn close_descendants(&self) {
+        if let Some(descendants) = &self.shared.descendants {
+            descendants.close_all();
+        }
     }
 
     pub(super) fn report(&self) -> ChildReport {
@@ -376,6 +403,7 @@ impl Child {
         if let Ok(mut inbox) = self.shared.inbox.lock() {
             inbox.take();
         }
+        self.close_descendants();
         let stopped = {
             let mut state = self.shared.state.lock().ok()?;
             let running = state.status == ChildStatus::Running;
@@ -460,6 +488,14 @@ pub(super) struct Start {
     /// `spawn_agent`'s `profile.tools`: each must name a tool the child may
     /// be given, and the child is offered only those.
     pub requested: Option<Arc<Vec<RequestedTool>>>,
+    /// The ancestors' `profile.tools` (#1824).
+    pub ancestors: Vec<Arc<Vec<RequestedTool>>>,
+    /// The model the child runs on (`profile.model`, else the one its
+    /// creator inherited); `None`: the run agent's (#1825).
+    pub model: Option<String>,
+    /// The child's own registry, when it may start children of its own
+    /// (#1824): the child gets the four tools over it.
+    pub nested: Option<Arc<super::Registry>>,
 }
 
 /// The tools the host gives the child: those of a checkout of its own when
@@ -489,6 +525,7 @@ async fn filtered_toolsets(
     isolated: bool,
     grant: Option<Arc<SubAgentGrant>>,
     requested: Option<Arc<Vec<RequestedTool>>>,
+    ancestors: &[Arc<Vec<RequestedTool>>],
 ) -> Result<Vec<ChildToolset>, &'static str> {
     let filtered: Vec<ChildToolset> = toolsets
         .into_iter()
@@ -496,7 +533,9 @@ async fn filtered_toolsets(
             if isolated {
                 ChildToolset::isolated(toolset, Arc::clone(excluded))
             } else {
-                ChildToolset::new(toolset, Arc::clone(excluded)).with_grant(grant.clone())
+                ChildToolset::new(toolset, Arc::clone(excluded))
+                    .with_grant(grant.clone())
+                    .with_ancestors(ancestors.to_vec())
             }
         })
         .collect();
@@ -562,11 +601,22 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
         isolated,
         grant,
         requested,
+        ancestors,
+        model: model_name,
+        nested,
     } = start;
     let counters = Arc::new(Counters::default());
+    // #1825: a model the host does not admit for this run is refused by
+    // name; any other failure is the model being unavailable.
     let model = host
-        .bind_model(&identity, &instruction)
-        .map_err(|_| "subagent_model_unavailable")?;
+        .bind_model(&identity, &instruction, model_name.as_deref())
+        .map_err(|error| {
+            if error.code() == crate::host::HostErrorCode::AuthorizationFailed {
+                super::profile::SUBAGENT_MODEL_NOT_ALLOWED
+            } else {
+                "subagent_model_unavailable"
+            }
+        })?;
     let toolsets = child_toolsets(host.as_ref(), &identity, isolated).await?;
     let name = identity.agent_name();
     let mut builder = LlmAgentBuilder::new(&name)
@@ -585,33 +635,21 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
         .disallow_transfer_to_peers(true)
         // Its reads run together, as the parent's do.
         .tool_execution_strategy(ToolExecutionStrategy::Auto);
-    if let Some(config) = host.generation_config() {
+    if let Some(config) = host.generation_config(model_name.as_deref()) {
         builder = builder.generate_content_config(config);
     }
-    for toolset in filtered_toolsets(toolsets, &excluded, isolated, grant, requested).await? {
+    for toolset in
+        filtered_toolsets(toolsets, &excluded, isolated, grant, requested, &ancestors).await?
+    {
         builder = builder.toolset(Arc::new(toolset));
     }
+    // #1824: the child's own four tools, past the filter (which drops them
+    // from the host's toolsets).
+    if let Some(nested) = &nested {
+        builder = builder.toolset(nested.toolset());
+    }
     let agent = builder.build().map_err(|_| "subagent_invalid")?;
-    let sessions = Arc::new(InMemorySessionService::new());
-    sessions
-        .create(CreateRequest {
-            app_name: APP_NAME.to_owned(),
-            user_id: USER_ID.to_owned(),
-            session_id: Some(identity.agent_id.clone()),
-            state: HashMap::new(),
-        })
-        .await
-        .map_err(|_| "subagent_session_unavailable")?;
-    let runner = Runner::builder()
-        .app_name(APP_NAME)
-        .agent(Arc::new(agent))
-        .session_service(sessions)
-        .run_config(RunConfig {
-            streaming_mode: StreamingMode::None,
-            ..RunConfig::default()
-        })
-        .build()
-        .map_err(|_| "subagent_invalid")?;
+    let runner = child_runner(agent, &identity.agent_id).await?;
     let (status, _) = watch::channel(ChildStatus::Running);
     let (inbox, messages) = mpsc::unbounded_channel();
     let child = Child {
@@ -627,6 +665,7 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
             counters,
             inbox: Mutex::new(Some(inbox)),
             abort: Mutex::new(None),
+            descendants: nested,
         }),
     };
     host.started(child.identity());
@@ -644,6 +683,30 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
     Ok(child)
 }
 
+/// The child's runner over a session of its own, named by its id.
+async fn child_runner(agent: LlmAgent, agent_id: &str) -> Result<Runner, &'static str> {
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: APP_NAME.to_owned(),
+            user_id: USER_ID.to_owned(),
+            session_id: Some(agent_id.to_owned()),
+            state: HashMap::new(),
+        })
+        .await
+        .map_err(|_| "subagent_session_unavailable")?;
+    Runner::builder()
+        .app_name(APP_NAME)
+        .agent(Arc::new(agent))
+        .session_service(sessions)
+        .run_config(RunConfig {
+            streaming_mode: StreamingMode::None,
+            ..RunConfig::default()
+        })
+        .build()
+        .map_err(|_| "subagent_invalid")
+}
+
 /// The child's life: its task, then each message sent to it, one run each
 /// on its own session, until it is closed or the parent's run ends.
 async fn drive(
@@ -656,7 +719,13 @@ async fn drive(
     let mut message = task;
     loop {
         let outcome = run(&child, &runner, message, host.as_ref()).await;
-        if child.settle(outcome) {
+        let settled = child.settle(outcome);
+        // #1824: a child that answered or ended no longer waits for its own
+        // children; they stop before it is reported.
+        if child.status() != ChildStatus::Running {
+            child.close_descendants();
+        }
+        if settled {
             host.finished(child.identity(), &child.report());
         }
         // Only an answered child is continued; any other end is final.

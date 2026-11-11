@@ -32,7 +32,9 @@ fn a_profile_is_parsed_and_bounded() {
         json!({"profile": {"colour": "red"}}),
         json!({"profile": {"display_name": "x".repeat(MAX_DISPLAY_NAME_CHARS + 1)}}),
         json!({"profile": {"soul": "x".repeat(MAX_SOUL_BYTES + 1)}}),
-        json!({"profile": {"model": "gpt-5"}}),
+        json!({"profile": {"model": "a\nb"}}),
+        json!({"profile": {"model": "x".repeat(MAX_MODEL_NAME_BYTES + 1)}}),
+        json!({"profile": {"model": 5}}),
         json!({"profile": {"avatar": "a\nb"}}),
         json!({"profile": {"avatar": "x".repeat(MAX_AVATAR_BYTES + 1)}}),
         json!({"profile": {"tools": ["no-slash"]}}),
@@ -45,6 +47,22 @@ fn a_profile_is_parsed_and_bounded() {
     let name: String = "é".repeat(MAX_DISPLAY_NAME_CHARS);
     assert!(parse_profile(&json!({"profile": {"display_name": name}})).is_ok());
     assert!(parse_profile(&json!({"profile": {"soul": "x".repeat(MAX_SOUL_BYTES)}})).is_ok());
+}
+
+/// #1825: `profile.model` names a model (the host checks it at spawn);
+/// "inherit" is no model, and the digest covers the model.
+#[test]
+fn a_profile_names_a_model() {
+    let named = parse_profile(&json!({"profile": {"model": " gpt-5 "}})).unwrap();
+    assert_eq!(named.model.as_deref(), Some("gpt-5"));
+    assert!(!named.is_empty());
+    let inherit = parse_profile(&json!({"profile": {"model": "inherit"}})).unwrap();
+    assert_eq!(inherit.model, None);
+    assert!(inherit.is_empty());
+    assert_eq!(inherit.digest(), Profile::default().digest());
+    assert_ne!(named.digest(), Profile::default().digest());
+    let other = parse_profile(&json!({"profile": {"model": "gpt-4"}})).unwrap();
+    assert_ne!(named.digest(), other.digest());
 }
 
 #[test]
@@ -198,7 +216,12 @@ fn a_profile_digest_matches_mains_vectors() {
     .unwrap();
     assert_eq!(Profile::default().digest(), EMPTY_VECTOR);
     assert_eq!(sample.digest(), SAMPLE_VECTOR);
+    // #1825: a named model.
+    let modelled = parse_profile(&json!({"profile": {"soul": "s", "model": "gpt-5"}})).unwrap();
+    assert_eq!(modelled.digest(), MODEL_VECTOR);
 }
+
+const MODEL_VECTOR: &str = "269196e377071ba701f1bfe522036f8b22561dbe114e6ff1ded015ebea4b4d94";
 
 const EMPTY_VECTOR: &str = "8e93047b83c690ec8ada61c3103afaece889147e8adf85467c1e173e51b72083";
 const SAMPLE_VECTOR: &str = "e2b787c2bbc4e4526a87f569a06e3ab0cf846cae3febc48157c4ecd4b2fc09dc";

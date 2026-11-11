@@ -13,6 +13,8 @@ fn child() -> ChildIdentity {
         parent_call_id: "call-spawn".to_owned(),
         label: Some("callers".to_owned()),
         ordinal: 1,
+        depth: 1,
+        parent_agent_id: None,
         record: SpawnRecord::new(
             &Profile {
                 display_name: Some("Owl".to_owned()),

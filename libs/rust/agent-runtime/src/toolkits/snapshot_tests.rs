@@ -79,6 +79,7 @@ fn request(kind: AgentExecutionKind, tools: Vec<Value>) -> AgentExecutionRequest
             floor: None,
             tool_envelope: None,
             current_message_id: None,
+            subagent_policy: None,
             context_view_history: None,
             recalled_memory: Vec::new(),
         },

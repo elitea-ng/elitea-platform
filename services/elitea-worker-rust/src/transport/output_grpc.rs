@@ -3571,6 +3571,8 @@ pub(crate) mod tests {
                 parent_call_id: "call-1".to_owned(),
                 label: None,
                 ordinal: 1,
+                depth: 1,
+                parent_agent_id: None,
                 record: SpawnRecord::new(&Profile::default(), &Brief::default()),
             };
             ledger.started(&child, 1_000);

@@ -682,6 +682,10 @@ func currentApplicationInputWithView(
 	if err != nil {
 		return nil, ReaderView{}, err
 	}
+	subagentPolicy, err := currentFrozenSubagentPolicy(version)
+	if err != nil {
+		return nil, ReaderView{}, err
+	}
 	// ADR-0050 decision 9 (issue 1609): the history is this reader's view.
 	view, err := BuildReaderView(
 		readerViewSettings(version, target.ParticipantContextHistory),
@@ -699,6 +703,7 @@ func currentApplicationInputWithView(
 		ModelContextLimits: modelContextLimits,
 		ModelReasoning:     modelReasoning,
 		SummaryModel:       summaryModel,
+		SubagentPolicy:     subagentPolicy,
 		// Current chat history remains authoritative for ordinary turns. The
 		// shared LangGraph checkpoint stores resumable graph state for this stable
 		// thread; it does not replace the current chat-history projection.

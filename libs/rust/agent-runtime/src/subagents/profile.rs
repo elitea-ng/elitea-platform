@@ -3,8 +3,8 @@
 //!
 //! A **profile** names the child (`display_name`), gives it a short `soul`
 //! in place of the fixed role text, narrows its tools (`tools`, #1613) and
-//! names its `model` (only `"inherit"` today, #1825) and `avatar` (a key,
-//! stored only).
+//! names its `model` (`"inherit"`, or a model of the run's catalogue that the
+//! host lets a child use, #1825) and `avatar` (a key, stored only).
 //!
 //! A **brief** is everything the creator passes the child beside the task:
 //! `excerpts` of messages in the creator's own view, `attachments` it can
@@ -37,8 +37,13 @@ pub const MAX_BRIEF_ITEMS: usize = 20;
 pub const MAX_BRIEF_TEXT_CHARS: usize = 500;
 /// The longest id a brief names, in bytes.
 pub const MAX_BRIEF_ID_BYTES: usize = 64;
-/// The only model a child may name today (#1825).
+/// The model a child names to use its creator's model (the default).
 pub const INHERIT_MODEL: &str = "inherit";
+/// The longest model name `profile.model` may give, in bytes.
+pub const MAX_MODEL_NAME_BYTES: usize = 256;
+/// A `profile.model` the host does not let a child use (#1825): not in the
+/// run's catalogue, or not one the parent may use.
+pub const SUBAGENT_MODEL_NOT_ALLOWED: &str = "SUBAGENT_MODEL_NOT_ALLOWED";
 
 /// An excerpt that does not quote a message in the creator's own view.
 pub const BRIEF_EXCERPT_NOT_VISIBLE: &str = "BRIEF_EXCERPT_NOT_VISIBLE";
@@ -56,6 +61,9 @@ pub struct Profile {
     pub display_name: Option<String>,
     pub soul: Option<String>,
     pub tools: Option<Vec<RequestedTool>>,
+    /// The model the child runs on; `None` is [`INHERIT_MODEL`] (its
+    /// creator's model).
+    pub model: Option<String>,
     pub avatar: Option<String>,
 }
 
@@ -66,11 +74,13 @@ impl Profile {
         self.display_name.is_none()
             && self.soul.is_none()
             && self.tools.is_none()
+            && self.model.is_none()
             && self.avatar.is_none()
     }
 
     /// The SHA-256 of the profile as the record keeps it: the keys it set,
-    /// the tools canonical and sorted.
+    /// the tools canonical and sorted, and the model (`"inherit"` when the
+    /// profile names none, so such a profile keeps the digest it had).
     #[must_use]
     pub fn digest(&self) -> String {
         let mut tools: Option<Vec<String>> = self
@@ -86,7 +96,7 @@ impl Profile {
             "display_name": self.display_name,
             "soul": self.soul,
             "tools": tools,
-            "model": INHERIT_MODEL,
+            "model": self.model.as_deref().unwrap_or(INHERIT_MODEL),
             "avatar": self.avatar,
         }))
     }
@@ -325,13 +335,20 @@ pub fn parse_profile(args: &Value) -> Result<Profile, String> {
             }
         })
         .transpose()?;
-    if let Some(model) = optional_text(profile, "model")?
-        && model != INHERIT_MODEL
-    {
-        return Err(
-            "`profile.model` may only be \"inherit\" here: a sub-agent uses your model.".to_owned(),
-        );
-    }
+    // A name of the run's catalogue, checked by the host at spawn
+    // (`SubAgentHost::bind_model`); "inherit" is the creator's model.
+    let model = optional_text(profile, "model")?
+        .map(|model| {
+            if model.len() > MAX_MODEL_NAME_BYTES || model.chars().any(char::is_control) {
+                Err(format!(
+                    "`profile.model` must be \"inherit\" or a model name of at most {MAX_MODEL_NAME_BYTES} bytes."
+                ))
+            } else {
+                Ok(model)
+            }
+        })
+        .transpose()?
+        .filter(|model| model != INHERIT_MODEL);
     let avatar = optional_text(profile, "avatar")?
         .map(|avatar| {
             if avatar.len() > MAX_AVATAR_BYTES || avatar.chars().any(char::is_control) {
@@ -345,6 +362,7 @@ pub fn parse_profile(args: &Value) -> Result<Profile, String> {
         display_name,
         soul,
         tools: profile_tools(profile)?,
+        model,
         avatar,
     })
 }

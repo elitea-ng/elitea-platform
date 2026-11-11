@@ -58,6 +58,7 @@ fn ledger() -> Arc<EphemeralAgentLedger> {
             RequestedTool::parse("GitHub/Read_File").expect("tool"),
             RequestedTool::parse("search/*").expect("tool"),
         ]),
+        model: None,
         avatar: None,
     };
     ledger.started(
@@ -66,6 +67,8 @@ fn ledger() -> Arc<EphemeralAgentLedger> {
             parent_call_id: "call-1".to_owned(),
             label: Some("Researcher".to_owned()),
             ordinal: 1,
+            depth: 1,
+            parent_agent_id: None,
             record: SpawnRecord::new(&profile, &Brief::default()),
         },
         1,

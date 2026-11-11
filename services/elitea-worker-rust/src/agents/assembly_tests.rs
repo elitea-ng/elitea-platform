@@ -111,6 +111,42 @@ fn summary_model_admission_keeps_limits_separate_and_rejects_authored_controls()
     }
 }
 
+/// #1825 review: a frozen sub-agent model this agent cannot admit is left
+/// out of the policy, and the turn still runs; the others stay.
+#[test]
+fn an_unadmittable_subagent_model_is_dropped_not_the_turn() {
+    use super::request::{ModelContextLimits, SubAgentPolicy, SummaryModelSnapshot};
+    let model = |name: &str, max_tokens: u32| SummaryModelSnapshot {
+        llm_settings: object(json!({
+            "model_name": name, "model_project_id": 3, "max_tokens": max_tokens,
+            "openai_compatible": true,
+        })),
+        model_context_limits: ModelContextLimits {
+            context_window_tokens: 32_000,
+            max_output_tokens: 4_000,
+            context_window_fallback: false,
+            max_output_fallback: false,
+            max_input_tokens: None,
+        },
+        model_reasoning: None,
+    };
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    request.payload.subagent_policy = Some(SubAgentPolicy {
+        max_depth: 2,
+        // 9000 is above the model's 4000 output limit: not admittable.
+        models: vec![model("small", 1024), model("too-big", 9_000)],
+    });
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("the turn runs");
+    let policy = profile.subagent_policy();
+    assert_eq!(policy.max_depth, 2);
+    let names: Vec<&str> = policy
+        .models
+        .iter()
+        .map(|model| model.model_name.as_str())
+        .collect();
+    assert_eq!(names, ["small"]);
+}
+
 pub(crate) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionRequest {
     let (llm, application) = match kind {
         AgentExecutionKind::Application => (
@@ -207,6 +243,7 @@ pub(crate) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionReques
             floor: None,
             tool_envelope: None,
             current_message_id: None,
+            subagent_policy: None,
             context_view_history: None,
             recalled_memory: Vec::new(),
         },

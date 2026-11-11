@@ -469,6 +469,7 @@ fn printer_resume_payload(input: &str) -> AgentExecutionPayload {
         floor: None,
         tool_envelope: None,
         current_message_id: None,
+        subagent_policy: None,
         context_view_history: None,
         recalled_memory: Vec::new(),
     }
