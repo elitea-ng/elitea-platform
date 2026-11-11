@@ -397,7 +397,7 @@ func (h *StartHandler) runTool(w http.ResponseWriter, r *http.Request, projectID
 	}
 	outcome, err := h.toolRuns.RunTool(r.Context(), request)
 	if err != nil {
-		toolkitrun.WriteError(w, err)
+		toolkitrun.WriteRequestError(w, r, err)
 		return
 	}
 	toolkitrun.WriteOutcome(w, outcome)

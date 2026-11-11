@@ -23,19 +23,19 @@
 //! entry (temporary file + `renameat`), so it never writes through a link
 //! into a file elsewhere.
 
+use crate::sys::fd::OwnedFd;
+use crate::sys::os::MetadataExt;
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::fd::OwnedFd;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::sys::fs::{AtFlags, FileType, Mode, OFlags};
+use crate::sys::io::Errno;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
-use rustix::fs::{AtFlags, FileType, Mode, OFlags};
-use rustix::io::Errno;
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
@@ -59,13 +59,22 @@ pub const PROTECTED_DIR: &str = ".git";
 /// name the same directory there. Lowercasing everywhere costs nothing on a
 /// case-sensitive file system (no agent needs to write a `.GIT`).
 #[must_use]
+///
+/// NTFS adds its own aliases (git's `is_ntfs_dotgit`): the 8.3 short name
+/// `git~1`, trailing dots and spaces (`.git.`, `.git `), and a stream
+/// suffix (`.git::$INDEX_ALLOCATION`). They are refused everywhere: no
+/// agent needs to write one, and a checkout copied to Windows keeps them.
 pub fn is_protected_name(name: &str) -> bool {
     let folded: String = name
         .nfc()
         .filter(|c| !is_hfs_ignorable(*c))
         .flat_map(char::to_lowercase)
         .collect();
-    folded == PROTECTED_DIR
+    // A stream suffix names the same file: `.git::$INDEX_ALLOCATION`.
+    let folded = folded.split(':').next().unwrap_or_default();
+    // NTFS drops trailing dots and spaces.
+    let folded = folded.trim_end_matches(['.', ' ']);
+    folded == PROTECTED_DIR || folded == "git~1"
 }
 
 /// Code points HFS+ drops when comparing names (git's `is_hfs_dotgit` list).
@@ -222,6 +231,7 @@ fn push_components(out: &mut Vec<String>, path: &Path) -> ToolResult<()> {
 }
 
 /// Lexically normalise an absolute path (no file system access).
+#[cfg(not(windows))]
 fn normalise_absolute(path: &Path) -> Option<PathBuf> {
     let mut out = PathBuf::from("/");
     for component in path.components() {
@@ -235,6 +245,99 @@ fn normalise_absolute(path: &Path) -> Option<PathBuf> {
         }
     }
     Some(out)
+}
+
+/// Lexically normalise an absolute path (no file system access). Windows:
+/// the drive or share prefix is kept (`..` never climbs above it), and a
+/// `\\?\` spelling is simplified first where it can be (what `read_link`
+/// answers for some links). A path without a drive is not absolute.
+#[cfg(windows)]
+fn normalise_absolute(path: &Path) -> Option<PathBuf> {
+    let path = dunce::simplified(path);
+    let mut out = PathBuf::new();
+    let (mut prefixed, mut rooted) = (false, false);
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) if !prefixed => {
+                out.push(prefix.as_os_str());
+                prefixed = true;
+            }
+            Component::RootDir if prefixed && !rooted => {
+                out.push(Component::RootDir.as_os_str());
+                rooted = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if out.parent().is_some() {
+                    out.pop();
+                }
+            }
+            Component::Normal(name) if rooted => out.push(name),
+            _ => return None,
+        }
+    }
+    rooted.then_some(out)
+}
+
+#[cfg(test)]
+mod protected_name_tests {
+    use super::is_protected_name;
+
+    #[test]
+    fn every_spelling_of_git_is_protected() {
+        for name in [
+            ".git",
+            ".GIT",
+            ".g\u{200c}it",
+            "git~1",
+            "GIT~1",
+            ".git.",
+            ".git ",
+            ".git. .",
+            ".git::$INDEX_ALLOCATION",
+            ".GIT:stream",
+        ] {
+            assert!(is_protected_name(name), "{name:?}");
+        }
+        for name in [
+            ".github",
+            "git",
+            ".gitignore",
+            "git~2",
+            ".git-blame",
+            "a.git",
+        ] {
+            assert!(!is_protected_name(name), "{name:?}");
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{Intent, Workspace, normalise_absolute};
+
+    #[test]
+    fn normalise_keeps_the_drive_and_never_climbs_above_it() {
+        let norm = |text: &str| normalise_absolute(Path::new(text));
+        assert_eq!(norm(r"C:\a\.\b\..\c"), Some(PathBuf::from(r"C:\a\c")));
+        assert_eq!(norm(r"C:\..\..\a"), Some(PathBuf::from(r"C:\a")));
+        assert_eq!(norm(r"\\?\C:\a\b"), Some(PathBuf::from(r"C:\a\b")));
+        assert_eq!(norm(r"\a"), None, "no drive: not absolute");
+        assert_eq!(norm(r"a\b"), None);
+    }
+
+    #[test]
+    fn a_workspace_writes_reads_and_refuses_the_outside() {
+        let dir = tempfile::tempdir().expect("dir");
+        let ws = Workspace::open(dir.path(), &[]).expect("workspace");
+        let path = ws.resolve(r"new\dir\a.txt", Intent::Write).expect("path");
+        ws.write(&path, b"one\r\n", None).expect("write");
+        assert_eq!(ws.read(&path, 1024).expect("read").bytes, b"one\r\n");
+        assert!(ws.resolve(r"..\outside.txt", Intent::Read).is_err());
+        assert!(ws.resolve(r"C:\Windows\win.ini", Intent::Read).is_err());
+    }
 }
 
 /// What [`Workspace::stat`] reports about one entry.
@@ -325,14 +428,14 @@ impl Workspace {
     /// When `root` is not a directory, is the file system root, or a pattern
     /// is not a valid glob.
     pub fn open(root: &Path, path_deny: &[String]) -> ToolResult<Self> {
-        let canonical = std::fs::canonicalize(root)
+        let canonical = crate::sys::canonicalize(root)
             .map_err(|error| ToolError::io("cannot open the workspace", &error))?;
         if canonical.parent().is_none() {
             return Err(ToolError::invalid(
                 "the file system root cannot be a workspace",
             ));
         }
-        let root_fd = rustix::fs::open(
+        let root_fd = crate::sys::fs::open(
             &canonical,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
@@ -491,7 +594,7 @@ impl Workspace {
     /// The target of the symlink `name` in `dir` (at workspace path
     /// `dir_path`), as a workspace path.
     fn symlink_target(&self, dir: &OwnedFd, dir_path: &[String], name: &str) -> ToolResult<WsPath> {
-        let target = rustix::fs::readlinkat(dir, name, Vec::new())?;
+        let target = crate::sys::fs::readlinkat(dir, name, Vec::new())?;
         let target = target
             .to_str()
             .map_err(|_| ToolError::invalid("a symlink target is not UTF-8"))?;
@@ -552,7 +655,7 @@ impl Workspace {
                     return Ok((dir, WsPath(done)));
                 }
             } else {
-                match rustix::fs::openat(
+                match crate::sys::fs::openat(
                     &dir,
                     name.as_str(),
                     OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -570,7 +673,11 @@ impl Workspace {
                         let mut created = done.clone();
                         created.push(name.clone());
                         self.check(&WsPath(created), Intent::Write)?;
-                        match rustix::fs::mkdirat(&dir, name.as_str(), Mode::from_raw_mode(0o755)) {
+                        match crate::sys::fs::mkdirat(
+                            &dir,
+                            name.as_str(),
+                            Mode::from_raw_mode(0o755),
+                        ) {
                             Ok(()) | Err(Errno::EXIST) => {}
                             Err(errno) => return Err(errno.into()),
                         }
@@ -649,7 +756,7 @@ impl Workspace {
     /// When the walk fails for any reason other than absence.
     pub fn stamp(&self, path: &WsPath) -> ToolResult<Option<EntryStamp>> {
         let stat = if path.is_root() {
-            rustix::fs::fstat(&self.root_fd)?
+            crate::sys::fs::fstat(&self.root_fd)?
         } else {
             let (dir, resolved) = match self.locate(path, false, false) {
                 Ok(found) => found,
@@ -657,7 +764,7 @@ impl Workspace {
                 Err(error) => return Err(error),
             };
             let name = resolved.file_name().unwrap_or_default();
-            match rustix::fs::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+            match crate::sys::fs::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW) {
                 Ok(stat) => stat,
                 Err(Errno::NOENT) => return Ok(None),
                 Err(errno) => return Err(errno.into()),
@@ -689,7 +796,7 @@ impl Workspace {
         self.check(path, Intent::Read)?;
         let mut dir = self.root_dir()?;
         for name in path.components() {
-            dir = match rustix::fs::openat(
+            dir = match crate::sys::fs::openat(
                 &dir,
                 name.as_str(),
                 OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -722,7 +829,7 @@ impl Workspace {
         self.check(&resolved, Intent::Read)?;
         let name = resolved.file_name().unwrap_or_default();
         // O_NONBLOCK: opening a FIFO must not hang the tool.
-        let fd = match rustix::fs::openat(
+        let fd = match crate::sys::fs::openat(
             &dir,
             name,
             OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
@@ -803,7 +910,8 @@ impl Workspace {
         let (dir, resolved) = self.locate(path, true, true)?;
         self.check(&resolved, Intent::Write)?;
         let name = resolved.file_name().unwrap_or_default().to_owned();
-        let existing = match rustix::fs::statat(&dir, name.as_str(), AtFlags::SYMLINK_NOFOLLOW) {
+        let existing = match crate::sys::fs::statat(&dir, name.as_str(), AtFlags::SYMLINK_NOFOLLOW)
+        {
             Ok(stat) => {
                 if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
                     return Err(ToolError::invalid(format!("`{resolved}` is a directory")));
@@ -819,7 +927,7 @@ impl Workspace {
             std::process::id(),
             TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
-        let fd = rustix::fs::openat(
+        let fd = crate::sys::fs::openat(
             &dir,
             temp.as_str(),
             OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -827,17 +935,17 @@ impl Workspace {
         )?;
         let written = (|| -> ToolResult<()> {
             let mut file = File::from(fd);
-            file.set_permissions(std::fs::Permissions::from_mode(permissions))
+            crate::sys::set_file_mode(&file, permissions)
                 .map_err(|error| ToolError::io("cannot set the file mode", &error))?;
             file.write_all(bytes)
                 .map_err(|error| ToolError::io("cannot write the file", &error))?;
             file.flush()
                 .map_err(|error| ToolError::io("cannot write the file", &error))?;
-            rustix::fs::renameat(&dir, temp.as_str(), &dir, name.as_str())?;
+            crate::sys::fs::renameat(&dir, temp.as_str(), &dir, name.as_str())?;
             Ok(())
         })();
         if written.is_err() {
-            let _ = rustix::fs::unlinkat(&dir, temp.as_str(), AtFlags::empty());
+            let _ = crate::sys::fs::unlinkat(&dir, temp.as_str(), AtFlags::empty());
         }
         written.map(|()| resolved)
     }
@@ -858,7 +966,7 @@ impl Workspace {
         };
         // A symlink on the way may have led into `.git` or a denied path.
         self.check(&resolved, Intent::Write)?;
-        match rustix::fs::unlinkat(
+        match crate::sys::fs::unlinkat(
             &dir,
             resolved.file_name().unwrap_or_default(),
             AtFlags::empty(),
@@ -889,7 +997,7 @@ impl Workspace {
             Err(error) => return Err(error),
         };
         self.check(&resolved, Intent::Write)?;
-        match rustix::fs::unlinkat(
+        match crate::sys::fs::unlinkat(
             &dir,
             resolved.file_name().unwrap_or_default(),
             AtFlags::REMOVEDIR,
@@ -904,18 +1012,18 @@ impl Workspace {
 /// Permission and type bits as `u32` (`mode_t` is `u16` on macOS and `u32`
 /// on Linux, where this conversion is the identity).
 #[allow(clippy::useless_conversion)]
-pub(crate) fn mode_bits(raw: rustix::fs::RawMode) -> u32 {
+pub(crate) fn mode_bits(raw: crate::sys::fs::RawMode) -> u32 {
     u32::from(raw)
 }
 
 fn is_symlink(dir: &OwnedFd, name: &str) -> bool {
-    rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
+    crate::sys::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
         .is_ok_and(|stat| FileType::from_raw_mode(stat.st_mode) == FileType::Symlink)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
-    use std::os::unix::fs::symlink;
+    use crate::sys::os::symlink;
 
     use super::{EntryKind, Intent, Workspace, WsPath};
     use crate::error::ErrorCode;

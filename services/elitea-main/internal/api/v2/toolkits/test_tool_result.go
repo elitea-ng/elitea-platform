@@ -54,7 +54,7 @@ func (h *Handler) TestToolResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		toolkitrun.WriteError(w, err)
+		toolkitrun.WriteRequestError(w, r, err)
 		return
 	}
 	if pending {

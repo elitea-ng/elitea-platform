@@ -312,7 +312,7 @@ pub fn apply(
     config.validate()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

@@ -17,8 +17,11 @@ import { EditApplication } from './EditApplication';
 import { renderAgentsRoute } from './__tests__/testRouter';
 
 // Under CI's coverage shards this file runs ~5x slower than locally (241 s for
-// 36 tests on 2026-11-06), and the Persona tab (#1604) made the editor heavier;
-// 15 s per test left too little headroom. One file-wide ceiling, as AdminApp has.
+// 36 tests on 2026-11-06, 313 s on 2026-11-11, single tests up to 24 s), and the
+// Persona tab (#1604) made the editor heavier. One file-wide ceiling, as AdminApp
+// has; no test sets a lower one. Element queries wait up to 15 s (below): a 5 s
+// first paint wait missed the toolbar's buttons on 2026-11-11 while the page was
+// still fetching, so the wait, not the page, failed.
 vi.setConfig({ testTimeout: 30_000 });
 
 /**
@@ -62,7 +65,7 @@ installCodeMirrorTestPolyfills();
  * says so — `pages/pipelines/EditPipeline.test.tsx:21-30`. Same remedy, same
  * numbers, so the two composition-root suites cannot drift apart.
  */
-configure({ asyncUtilTimeout: 5_000 });
+configure({ asyncUtilTimeout: 15_000 });
 vi.setConfig({ testTimeout: 30_000 });
 
 const globals = globalThis as unknown as Record<string, unknown>;
@@ -218,7 +221,7 @@ describe('EditApplication', () => {
     // out" raced for the same clock. Scoped to 15s below, same pattern as
     // the rename test, so the query still fails with a named element when
     // one is genuinely missing, well before the test budget would.
-    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('My Agent'), { timeout: 5_000 });
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('My Agent'), { timeout: 15_000 });
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
   });
@@ -237,8 +240,8 @@ describe('EditApplication', () => {
     // test budget, so a scoped 15s budget (the pattern the rename test
     // fixed first) is needed here too — see that test's comment for why an
     // equal timeout/budget pair flakes on a slow-but-correct CI run.
-    const panel = await screen.findByTestId('edit-application-configuration-tab-panel', {}, { timeout: 5_000 });
-    expect(await screen.findByTestId('agent-name-input', {}, { timeout: 5_000 })).toBeInTheDocument();
+    const panel = await screen.findByTestId('edit-application-configuration-tab-panel', {}, { timeout: 15_000 });
+    expect(await screen.findByTestId('agent-name-input', {}, { timeout: 15_000 })).toBeInTheDocument();
     expect(panel).toContainElement(screen.getByTestId('agent-name-input'));
     expect(panel).toContainElement(screen.getByTestId('agent-description-input'));
   });
@@ -252,7 +255,7 @@ describe('EditApplication', () => {
     // The not-found state renders only after the detail fetch settles and
     // the version list is resolved; under CI coverage instrumentation that
     // takes longer than Testing Library's 1 s default (shard 2 on 26ad27cc).
-    expect(await screen.findByText('Version not found', {}, { timeout: 5_000 })).toBeInTheDocument();
+    expect(await screen.findByText('Version not found', {}, { timeout: 15_000 })).toBeInTheDocument();
   });
 
   it('skips the not-found check when isFromCreation=true', async () => {
@@ -265,7 +268,7 @@ describe('EditApplication', () => {
     // string, which this fixture found does NOT reliably populate
     // `location.search` for a cold `initialEntries` string.
     const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42/999', { projectId: '9' });
-    await waitFor(() => expect(screen.getByText('Version not found')).toBeInTheDocument(), { timeout: 5_000 });
+    await waitFor(() => expect(screen.getByText('Version not found')).toBeInTheDocument(), { timeout: 15_000 });
 
     await router.navigate({
       to: '/agents/$tab/$agentId/$version',
@@ -327,7 +330,7 @@ describe('EditApplication', () => {
     // vitest's 5s default test budget (the same class the rename test's
     // comment documents), so a slow-but-correct mount could red as "Test
     // timed out" instead of naming a missing element.
-    await user.click(await screen.findByTestId('version-selector-trigger', {}, { timeout: 5_000 }));
+    await user.click(await screen.findByTestId('version-selector-trigger', {}, { timeout: 15_000 }));
 
     const items = await screen.findAllByRole('menuitem');
     // #147 put two COMMAND items ("Set as default", "Delete version") in the
@@ -357,14 +360,14 @@ describe('EditApplication', () => {
     // Two full mounts in this one test, each carrying a 5s query timeout
     // that used to equal vitest's 5s default test budget. Scoped 15s budget
     // below gives both mounts room, same pattern the rename test fixed.
-    expect(await owner.findByRole('button', { name: /save as version/i }, { timeout: 5_000 })).toBeInTheDocument();
+    expect(await owner.findByRole('button', { name: /save as version/i }, { timeout: 15_000 })).toBeInTheDocument();
     owner.unmount();
 
     setPublicProjectId('9');
     const viewer = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', {
       projectId: '9',
     });
-    await viewer.findByTestId('version-selector-trigger', {}, { timeout: 5_000 });
+    await viewer.findByTestId('version-selector-trigger', {}, { timeout: 15_000 });
     expect(viewer.queryByRole('button', { name: /save as version/i })).not.toBeInTheDocument();
   });
 
@@ -473,7 +476,7 @@ describe('EditApplication', () => {
     // 5s query timeout used to equal vitest's 5s default test budget — see
     // the rename test's comment for why that pairing flakes on a
     // slow-but-correct CI run. Scoped 15s budget below fixes it here too.
-    const welcomeInput = await screen.findByTestId('agent-welcome-message-input', {}, { timeout: 5_000 });
+    const welcomeInput = await screen.findByTestId('agent-welcome-message-input', {}, { timeout: 15_000 });
     // The whole form renders `disabled` while the detail fetch is in flight,
     // and the panel mounts before it settles — typing into it at that point
     // is silently dropped. Wait for a field the response populates, which is
@@ -561,7 +564,7 @@ describe('EditApplication', () => {
     // 5s query timeout used to equal vitest's 5s default test budget — see
     // the rename test's comment for why that pairing flakes on a
     // slow-but-correct CI run. Scoped 15s budget below fixes it here too.
-    const starterInput = await screen.findByTestId('agent-conversation-starter-input', {}, { timeout: 5_000 });
+    const starterInput = await screen.findByTestId('agent-conversation-starter-input', {}, { timeout: 15_000 });
     await waitFor(() => expect(screen.getByTestId('agent-name-input')).toHaveValue('My Agent'));
     // Seeded from the fixture — proof the editor READS the version, before
     // anything is proved about writing it.
@@ -593,7 +596,7 @@ describe('EditApplication', () => {
     // 5s query timeout used to equal vitest's 5s default test budget — see
     // the rename test's comment for why that pairing flakes on a
     // slow-but-correct CI run. Scoped 15s budget below fixes it here too.
-    await screen.findByTestId('agent-conversation-starter-add', {}, { timeout: 5_000 });
+    await screen.findByTestId('agent-conversation-starter-add', {}, { timeout: 15_000 });
     await waitFor(() => expect(screen.getByTestId('agent-name-input')).toHaveValue('My Agent'));
     await user.click(screen.getByTestId('agent-conversation-starter-add'));
     await user.type(screen.getAllByTestId('agent-conversation-starter-input')[1]!, 'Second');
@@ -618,7 +621,7 @@ describe('EditApplication', () => {
     // 5s query timeout used to equal vitest's 5s default test budget — see
     // the rename test's comment for why that pairing flakes on a
     // slow-but-correct CI run. Scoped 15s budget below fixes it here too.
-    expect(await screen.findByRole('button', { name: /export agent/i }, { timeout: 5_000 })).toBeVisible();
+    expect(await screen.findByRole('button', { name: /export agent/i }, { timeout: 15_000 })).toBeVisible();
     expect(screen.getByRole('button', { name: /delete entity/i })).toBeVisible();
     // #147 moved version-delete INTO the version menu, where the baseline
     // puts it, so the menu has to be opened to see it. That the page still
@@ -660,7 +663,7 @@ describe('EditApplication', () => {
     // 5s query timeout used to equal vitest's 5s default test budget — see
     // the rename test's comment for why that pairing flakes on a
     // slow-but-correct CI run. Scoped 15s budget below fixes it here too.
-    const card = await screen.findByTestId('agent-toolkit-card', {}, { timeout: 5_000 });
+    const card = await screen.findByTestId('agent-toolkit-card', {}, { timeout: 15_000 });
     // Visible, not merely present: the panel this page shipped before #307
     // was a self-closing empty Box that satisfied toBeInTheDocument().
     expect(card).toBeVisible();
@@ -686,11 +689,11 @@ describe('EditApplication', () => {
       projectId: '9',
     });
 
-    const panel = await screen.findByTestId('edit-application-configuration-tab-panel', {}, { timeout: 5_000 });
+    const panel = await screen.findByTestId('edit-application-configuration-tab-panel', {}, { timeout: 15_000 });
     // The label proves the control itself is mounted; the chip proves it is
     // bound to the version's stored tags rather than rendering empty.
-    expect(await screen.findByLabelText('Tags', {}, { timeout: 5_000 })).toBeInTheDocument();
-    const chip = await screen.findByText('finance', {}, { timeout: 5_000 });
+    expect(await screen.findByLabelText('Tags', {}, { timeout: 15_000 })).toBeInTheDocument();
+    const chip = await screen.findByText('finance', {}, { timeout: 15_000 });
     expect(chip).toBeVisible();
     expect(panel).toContainElement(chip);
   });
@@ -710,7 +713,7 @@ describe('EditApplication', () => {
     });
     const user = userEvent.setup();
 
-    const tagsInput = await screen.findByLabelText('Tags', {}, { timeout: 5_000 });
+    const tagsInput = await screen.findByLabelText('Tags', {}, { timeout: 15_000 });
     // Same "wait for a field the response populates" gate the welcome-message
     // test documents: the whole form is `disabled` until the detail settles.
     await waitFor(() => expect(screen.getByTestId('agent-name-input')).toHaveValue('My Agent'));
@@ -755,7 +758,7 @@ describe('EditApplication', () => {
     });
 
     // Same scoped-budget fix as the sibling test above.
-    await screen.findByTestId('agent-toolkit-card', {}, { timeout: 5_000 });
+    await screen.findByTestId('agent-toolkit-card', {}, { timeout: 15_000 });
     expect(screen.queryByTestId('agent-add-toolkit-button')).not.toBeInTheDocument();
     expect(screen.getByTestId('agent-toolkit-delete-button')).toBeDisabled();
   });
@@ -773,7 +776,7 @@ describe('EditApplication', () => {
       projectId: '9',
     });
 
-    expect(await screen.findByText('GPT-4o', {}, { timeout: 5_000 })).toBeVisible();
+    expect(await screen.findByText('GPT-4o', {}, { timeout: 15_000 })).toBeVisible();
   });
 
   it('reads a stored model back onto the picker instead of the project default', async () => {
@@ -796,7 +799,7 @@ describe('EditApplication', () => {
       projectId: '9',
     });
 
-    expect(await screen.findByText('Qwen 3.5', {}, { timeout: 5_000 })).toBeVisible();
+    expect(await screen.findByText('Qwen 3.5', {}, { timeout: 15_000 })).toBeVisible();
   });
 
   it('sends a newly picked model in the version PUT body, with a NUMERIC model_project_id', async () => {
@@ -808,7 +811,7 @@ describe('EditApplication', () => {
     });
     const user = userEvent.setup();
 
-    await screen.findByText('GPT-4o', {}, { timeout: 5_000 });
+    await screen.findByText('GPT-4o', {}, { timeout: 15_000 });
     // The whole form renders `disabled` until the detail fetch settles, so a
     // click before then is dropped — wait for a field the response populates.
     await waitFor(() => expect(screen.getByTestId('agent-name-input')).toHaveValue('My Agent'));
@@ -820,7 +823,7 @@ describe('EditApplication', () => {
     expect(settings?.['model_name']).toBe('qwen3.5');
     expect(settings?.['model_project_id']).toBe(9);
     expect(typeof settings?.['model_project_id']).toBe('number');
-  }, 20_000);
+  });
 
   it('leaves llm_settings off the PUT body for a version that names no model and was not re-pointed', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -831,7 +834,7 @@ describe('EditApplication', () => {
     });
     const user = userEvent.setup();
 
-    await screen.findByText('GPT-4o', {}, { timeout: 5_000 });
+    await screen.findByText('GPT-4o', {}, { timeout: 15_000 });
     await waitFor(() => expect(screen.getByTestId('agent-name-input')).toHaveValue('My Agent'));
     // elitea_issues #5107/#5922/#5987 — Save is now gated on `isDirty` too;
     // an UNRELATED edit (never touching the model picker) is what this test
@@ -845,7 +848,7 @@ describe('EditApplication', () => {
     // `llm_settings` is what leaves the platform's own fallback in charge,
     // and that fallback is why agent chat works today.
     expect(bodies[0]).not.toHaveProperty('llm_settings');
-  }, 20_000);
+  });
 
   it('arms the unsaved-changes guard when only the model is changed (#133)', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -854,14 +857,14 @@ describe('EditApplication', () => {
     });
     const user = userEvent.setup();
 
-    await screen.findByText('GPT-4o', {}, { timeout: 5_000 });
+    await screen.findByText('GPT-4o', {}, { timeout: 15_000 });
     await waitFor(() => expect(screen.getByTestId('agent-name-input')).toHaveValue('My Agent'));
     expect(useNavBlockerStore.getState().isBlockNav).toBe(false);
 
     await chooseModel(user, 'Qwen 3.5');
 
     await waitFor(() => expect(useNavBlockerStore.getState().isBlockNav).toBe(true));
-  }, 20_000);
+  });
 
   /*
    * #846 — the Information accordion. `features/agents/ui/
@@ -881,8 +884,8 @@ describe('EditApplication', () => {
     server.use(getGetApplicationMockHandler(detail()));
     renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
-    const panel = await screen.findByTestId('edit-application-configuration-tab-panel', {}, { timeout: 5_000 });
-    const information = await screen.findByTestId('agent-information-section', {}, { timeout: 5_000 });
+    const panel = await screen.findByTestId('edit-application-configuration-tab-panel', {}, { timeout: 15_000 });
+    const information = await screen.findByTestId('agent-information-section', {}, { timeout: 15_000 });
     // `toContainElement`, not merely "on screen": the defect was a missing
     // mount point in THIS panel, and a section rendered anywhere else in the
     // page would satisfy a bare presence check.
@@ -896,7 +899,7 @@ describe('EditApplication', () => {
     // flight (the agent id comes from the URL, the version id from the
     // server), so a synchronous read here passes on the id the URL already
     // knew and never waits for the one the panel is being tested for.
-    expect(await within(information).findByText('Version ID:', {}, { timeout: 5_000 })).toBeInTheDocument();
+    expect(await within(information).findByText('Version ID:', {}, { timeout: 15_000 })).toBeInTheDocument();
     expect(within(information).getByText('Agent ID:')).toBeInTheDocument();
     expect(within(information).getByTestId('copy-id')).toHaveTextContent('42');
     expect(within(information).getByText('1')).toBeInTheDocument();
@@ -926,9 +929,9 @@ describe('EditApplication', () => {
     );
     renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
-    const information = await screen.findByTestId('agent-information-section', {}, { timeout: 5_000 });
-    expect(await within(information).findByText('Forked from:', {}, { timeout: 5_000 })).toBeInTheDocument();
-    expect(await within(information).findByText('Origin Agent', {}, { timeout: 5_000 })).toBeInTheDocument();
+    const information = await screen.findByTestId('agent-information-section', {}, { timeout: 15_000 });
+    expect(await within(information).findByText('Forked from:', {}, { timeout: 15_000 })).toBeInTheDocument();
+    expect(await within(information).findByText('Origin Agent', {}, { timeout: 15_000 })).toBeInTheDocument();
   });
 });
 
@@ -944,7 +947,7 @@ describe('leaving the editor', () => {
     const user = userEvent.setup();
     const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
-    const description = await screen.findByTestId('agent-description-input', {}, { timeout: 5_000 });
+    const description = await screen.findByTestId('agent-description-input', {}, { timeout: 15_000 });
     await user.type(description, ' edited');
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     // The dialog's confirm is 'Discard'; the tab bar's own trigger is
@@ -967,7 +970,7 @@ describe('leaving the editor', () => {
     // The form's inputs render before the detail fetch settles, but the
     // toolbar (and its Cancel) waits for `!isFetching` — await the BUTTON,
     // not a form field, or this races the fetch.
-    await user.click(await screen.findByRole('button', { name: 'Cancel' }, { timeout: 5_000 }));
+    await user.click(await screen.findByRole('button', { name: 'Cancel' }, { timeout: 15_000 }));
     await screen.findByText('Are you sure you want to discard changes?');
     // Two 'Cancel' buttons exist now — the tab bar's own trigger and the
     // dialog's dismiss. The dialog renders in a portal at the END of the
@@ -1010,7 +1013,7 @@ describe('talking to the agent', () => {
     const user = userEvent.setup();
     const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
-    await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 5_000 }));
+    await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 15_000 }));
 
     await waitFor(() => {
       expect(participantBodies).toHaveLength(1);
@@ -1048,7 +1051,7 @@ describe('talking to the agent', () => {
     const user = userEvent.setup();
     const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
-    await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 5_000 }));
+    await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 15_000 }));
 
     expect(await screen.findByText(reason)).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/agents/all/42');
@@ -1062,7 +1065,7 @@ describe('talking to the agent', () => {
     const user = userEvent.setup();
     const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
 
-    await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 5_000 }));
+    await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 15_000 }));
 
     expect(await screen.findByText('Failed to open a chat with this agent.')).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/agents/all/42');
@@ -1100,12 +1103,12 @@ describe('talking to the agent', () => {
       { projectId: '9' },
     );
 
-    await screen.findByText('GPT-4o', {}, { timeout: 5_000 });
+    await screen.findByText('GPT-4o', {}, { timeout: 15_000 });
     await waitFor(() => expect(screen.getByTestId('agent-name-input')).toHaveValue('My Agent'));
     await chooseModel(user, 'Qwen 3.5');
     await waitFor(() => expect(useNavBlockerStore.getState().isBlockNav).toBe(true));
 
-    await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 5_000 }));
+    await user.click(await screen.findByTestId('chat-with-agent-button', {}, { timeout: 15_000 }));
 
     // The conversation + participant IS created — the Chat action's own work
     // completed; only the navigation itself is what the guard intercepts.

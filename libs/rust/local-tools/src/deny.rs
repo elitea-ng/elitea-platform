@@ -36,9 +36,10 @@ use crate::workspace::CASE_INSENSITIVE_FS;
 
 /// The host app's directories under its identifier `app_id` in the default
 /// layouts: macOS (`~/Library`: Application Support, Caches, Logs, the
-/// webview's `WebKit` and `HTTPStorages`, saved window state, preferences) and
-/// Linux XDG defaults (`~/.config`, `~/.local/share`, `~/.cache`). Both
-/// layouts, whatever the OS: they are fallbacks for directories the host did
+/// webview's `WebKit` and `HTTPStorages`, saved window state, preferences),
+/// Linux XDG defaults (`~/.config`, `~/.local/share`, `~/.cache`) and
+/// Windows (`~/AppData/Roaming`, `~/AppData/Local`). Every layout, whatever
+/// the OS: they are fallbacks for directories the host did
 /// not resolve, never the authority. Empty for an identifier that is not a
 /// plain name (empty, `.`, `..`, or holding `/`, `\` or NUL).
 #[must_use]
@@ -58,6 +59,10 @@ pub fn app_paths(home: &Path, app_id: &str) -> Vec<PathBuf> {
         format!("Library/HTTPStorages/{app_id}.binarycookies"),
         format!("Library/Saved Application State/{app_id}.savedState"),
         format!("Library/Preferences/{app_id}.plist"),
+        // Windows (#1828): Tauri's app data, config, cache and the
+        // WebView2 profile (`AppData/Local/<id>/EBWebView`).
+        format!("AppData/Roaming/{app_id}"),
+        format!("AppData/Local/{app_id}"),
     ]
     .iter()
     .map(|relative| home.join(relative))
@@ -83,7 +88,7 @@ fn resolve_existing(path: &Path) -> Option<PathBuf> {
     let mut rest = Vec::new();
     let mut current = path;
     loop {
-        if let Ok(canonical) = std::fs::canonicalize(current) {
+        if let Ok(canonical) = crate::sys::canonicalize(current) {
             let mut out = canonical;
             for name in rest.iter().rev() {
                 out.push(name);
@@ -135,7 +140,8 @@ impl DenyList {
     #[must_use]
     pub fn reopening(mut self, dirs: impl IntoIterator<Item = PathBuf>) -> Self {
         for dir in dirs {
-            let text = fold(dir.to_string_lossy().trim_end_matches('/'));
+            let text = fold(&dir.to_string_lossy());
+            let text = text.trim_end_matches('/').to_owned();
             if !text.is_empty() && !self.reopened.contains(&text) {
                 self.reopened.push(text);
             }
@@ -173,9 +179,7 @@ impl DenyList {
     /// that gave no list gets.
     #[must_use]
     pub fn env_home_credentials() -> Self {
-        let home = std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(PathBuf::from);
+        let home = crate::sys::home_dir();
         Self::for_session(home.as_deref(), None, true, Vec::new())
     }
 
@@ -201,15 +205,12 @@ impl DenyList {
             let spellings = paths
                 .iter()
                 .map(|path| {
-                    let text = path.to_string_lossy();
+                    let text = fold(&path.to_string_lossy());
                     let (text, prefix) = match text.strip_suffix('*') {
                         Some(stem) => (stem.to_owned(), true),
                         None => (text.trim_end_matches('/').to_owned(), false),
                     };
-                    Spelling {
-                        text: fold(&text),
-                        prefix,
-                    }
+                    Spelling { text, prefix }
                 })
                 .collect();
             (paths, spellings)
@@ -254,11 +255,19 @@ impl DenyList {
     }
 }
 
+/// `text` as entries and paths are compared: lowercase where the file
+/// system folds case, and on Windows with `\` written `/` (an entry joined
+/// from the home folder and `.config/gh` mixes both).
 fn fold(text: &str) -> String {
+    let text = if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.to_owned()
+    };
     if CASE_INSENSITIVE_FS {
         text.to_lowercase()
     } else {
-        text.to_owned()
+        text
     }
 }
 
@@ -284,6 +293,8 @@ mod tests {
             "Library/HTTPStorages/com.example.app.binarycookies",
             "Library/Saved Application State/com.example.app.savedState",
             "Library/Preferences/com.example.app.plist",
+            "AppData/Roaming/com.example.app",
+            "AppData/Local/com.example.app",
         ] {
             assert!(paths.contains(&home.join(relative)), "{relative}");
         }
@@ -292,18 +303,37 @@ mod tests {
         }
     }
 
+    /// The Windows profile's credentials and the app's own data are in
+    /// every list (#1828).
+    #[test]
+    fn windows_profile_locations_are_denied() {
+        let home = Path::new("/h");
+        let list = DenyList::for_session(Some(home), Some("ai.elitea.desktop"), true, Vec::new());
+        for relative in [
+            "AppData/Roaming/GitHub CLI/hosts.yml",
+            "AppData/Local/Google/Chrome/User Data/Default/Login Data",
+            "AppData/Roaming/Microsoft/Credentials/x",
+            "AppData/Roaming/ai.elitea.desktop/session.json",
+            "AppData/Local/ai.elitea.desktop/EBWebView/Default/Cookies",
+        ] {
+            assert!(list.covers(&home.join(relative)), "{relative}");
+        }
+        assert!(!list.covers(&home.join("AppData/Local/Temp/build.log")));
+    }
+
     /// Both spellings through a symlinked intermediate directory, for
     /// existing entries, missing ones and prefixes alike; a missing entry
     /// under a symlink is covered once created.
+    #[cfg(unix)]
     #[test]
     fn both_spellings_through_a_symlinked_config() {
         let dir = tempfile::tempdir().expect("dir");
-        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let base = crate::sys::canonicalize(dir.path()).expect("canonical");
         let home = base.join("home");
         let real = base.join("dotfiles/config");
         std::fs::create_dir_all(real.join("gh")).expect("gh");
         std::fs::create_dir_all(&home).expect("home");
-        std::os::unix::fs::symlink(&real, home.join(".config")).expect("symlink");
+        crate::sys::os::symlink(&real, home.join(".config")).expect("symlink");
         let list = DenyList::for_session(Some(&home), Some("com.example.app"), true, Vec::new());
         for path in [
             home.join(".config/gh"),

@@ -402,16 +402,16 @@ fn refused(path: &Path, why: &str) -> ToolError {
 /// another user's, or one group or others can read or write;
 /// [`ErrorCode::InvalidArgument`] when it does not parse; otherwise I/O.
 pub fn load(path: &Path) -> ToolResult<McpConfig> {
-    use rustix::fs::{Mode, OFlags};
-    let fd = match rustix::fs::open(
+    use crate::sys::fs::{Mode, OFlags};
+    let fd = match crate::sys::fs::open(
         path,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
         Mode::empty(),
     ) {
         Ok(fd) => fd,
-        Err(rustix::io::Errno::NOENT) => return Ok(McpConfig::default()),
+        Err(crate::sys::io::Errno::NOENT) => return Ok(McpConfig::default()),
         // O_NOFOLLOW on a symlink: ELOOP (Linux, macOS).
-        Err(rustix::io::Errno::LOOP) => return Err(refused(path, "is a symbolic link")),
+        Err(crate::sys::io::Errno::LOOP) => return Err(refused(path, "is a symbolic link")),
         Err(errno) => return Err(ToolError::io("cannot open mcp.json", &errno.into())),
     };
     let mut file = fs::File::from(fd);
@@ -422,8 +422,8 @@ pub fn load(path: &Path) -> ToolResult<McpConfig> {
         return Err(refused(path, "is not a regular file"));
     }
     {
-        use std::os::unix::fs::MetadataExt as _;
-        if meta.uid() != rustix::process::geteuid().as_raw() {
+        use crate::sys::os::MetadataExt as _;
+        if meta.uid() != crate::sys::process::geteuid().as_raw() {
             return Err(refused(path, "belongs to another user"));
         }
         if meta.mode() & 0o077 != 0 {
@@ -443,7 +443,7 @@ pub fn load(path: &Path) -> ToolResult<McpConfig> {
 /// Create `dir` (and missing parents) `0700`; refuse a symlink, a
 /// non-directory or another user's.
 fn private_dir(dir: &Path) -> ToolResult<()> {
-    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
+    use crate::sys::os::{DirBuilderExt as _, MetadataExt as _};
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
@@ -454,7 +454,7 @@ fn private_dir(dir: &Path) -> ToolResult<()> {
     if meta.file_type().is_symlink() || !meta.is_dir() {
         return Err(refused(dir, "is not a directory"));
     }
-    if meta.uid() != rustix::process::geteuid().as_raw() {
+    if meta.uid() != crate::sys::process::geteuid().as_raw() {
         return Err(refused(dir, "belongs to another user"));
     }
     if meta.mode() & 0o077 != 0 {
@@ -471,7 +471,7 @@ fn private_dir(dir: &Path) -> ToolResult<()> {
 /// [`ErrorCode::InvalidArgument`] when it breaks a bound; the folder is
 /// refused; otherwise I/O.
 pub fn save(path: &Path, config: &McpConfig) -> ToolResult<()> {
-    use std::os::unix::fs::OpenOptionsExt as _;
+    use crate::sys::os::OpenOptionsExt as _;
     config.validate()?;
     let dir = path
         .parent()
@@ -497,7 +497,7 @@ pub fn save(path: &Path, config: &McpConfig) -> ToolResult<()> {
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
+        .custom_flags(crate::sys::fs::OFlags::NOFOLLOW.bits().cast_signed())
         .open(&temp)
         .map_err(|error| ToolError::io("cannot write mcp.json", &error))?;
     let written = file
@@ -543,7 +543,7 @@ pub fn merged(user: &McpConfig, workspace: &McpConfig) -> BTreeMap<String, (Scop
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -631,7 +631,7 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("chmod");
         load(&path).expect("owner-only");
         let link = dir.path().join("link.json");
-        std::os::unix::fs::symlink(&path, &link).expect("symlink");
+        crate::sys::os::symlink(&path, &link).expect("symlink");
         let error = load(&link).expect_err("symlink");
         assert_eq!(error.code(), ErrorCode::Denied);
         assert!(
@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn saved_files_are_owner_only_and_load_back() {
-        use std::os::unix::fs::MetadataExt as _;
+        use crate::sys::os::MetadataExt as _;
         let dir = tempfile::tempdir().expect("dir");
         let folder = dir.path().join("config");
         let path = folder.join(FILE_NAME);

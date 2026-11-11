@@ -10,7 +10,14 @@ export interface SubAgentStartedPayload {
   parent_call_id: string;
   /** Its place among the turn's sub-agents, from 1. */
   ordinal: number;
+  /** The `label`, else the profile's display name. */
   label?: string;
+  /** The spawn's profile and brief (#1827): never the soul, a quote or a fact. */
+  display_name?: string;
+  avatar?: string;
+  profile_digest?: string;
+  brief_digest?: string;
+  brief_refs?: { message_ids: string[]; attachments: string[]; memory_entries: string[]; facts: number };
 }
 
 /** A sub-agent's own event, inside `subagent_event`: the turn event's payload with its `kind` beside it. */

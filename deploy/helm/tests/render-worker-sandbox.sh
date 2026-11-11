@@ -54,6 +54,7 @@ worker:
         image_digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
         policy_revision: rust-v1
         timeout_seconds: 120
+        codeSlots: 4
 YAML
 args=(-f deploy/helm/elitea/values-standalone.yaml -f "$work/profiles.yaml"
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
@@ -65,9 +66,15 @@ python3 - "$work/config.yaml" "$work/profiles.yaml" <<'PY'
 import json,sys,yaml
 config=json.loads(yaml.safe_load(open(sys.argv[1]))['data']['runtime.json'])
 values=yaml.safe_load(open(sys.argv[2]))['worker']['runtime']
-assert config['sandbox_runtimes']==values['sandboxRuntimes']
+expected=[{k: v for k, v in entry.items() if k != 'codeSlots'} for entry in values['sandboxRuntimes']]
+expected[1]['code_slots']=4
+assert config['sandbox_runtimes']==expected, config['sandbox_runtimes']
 assert config['sandbox_runtimes'][0]['preparation']==values['sandboxRuntimes'][0]['preparation']
 assert 'preparation' not in config['sandbox_runtimes'][1]
+# W3-1: codeSlots is written only when set, as an integer code_slots.
+assert 'code_slots' not in config['sandbox_runtimes'][0]
+assert type(config['sandbox_runtimes'][1]['code_slots']) is int
+assert 'codeSlots' not in config['sandbox_runtimes'][1]
 assert config['agent_model_checkpoint_recovery'] is True
 assert config['agent_node_recovery'] is True
 assert config['consumer_id'].endswith('__ELITEA_POD_NAME__')
@@ -77,6 +84,33 @@ if helm template test deploy/helm/elitea "${args[@]}" --set worker.implementatio
   exit 1
 fi
 grep -Fq 'is no longer supported' "$work/error"
+# W3-1: codeSlots outside 1..1024, or not a whole number, refuses the render.
+# (A values file, not --set-json on a list index, which helm v4 cannot coalesce.)
+slots_case() {
+  python3 - "$work/profiles.yaml" "$1" > "$work/slots.yaml" <<'PY'
+import sys,yaml
+values=yaml.safe_load(open(sys.argv[1]))
+values['worker']['runtime']['sandboxRuntimes'][1]['codeSlots']=yaml.safe_load(sys.argv[2])
+print(yaml.safe_dump({'worker':{'runtime':{'sandboxRuntimes':values['worker']['runtime']['sandboxRuntimes']}}}))
+PY
+}
+for bad in 0 1025 2.5 '"four"'; do
+  slots_case "$bad"
+  if helm template test deploy/helm/elitea "${args[@]}" -f "$work/slots.yaml" \
+    --show-only templates/worker/configmap-runtime.yaml > "$work/error" 2>&1; then
+    echo "codeSlots=$bad rendered" >&2
+    exit 1
+  fi
+  grep -Fq 'codeSlots must be a whole number from 1 to 1024' "$work/error"
+done
+slots_case 1024
+helm template test deploy/helm/elitea "${args[@]}" -f "$work/slots.yaml" \
+  --show-only templates/worker/configmap-runtime.yaml > "$work/edge.yaml"
+python3 - "$work/edge.yaml" <<'PY'
+import json,sys,yaml
+config=json.loads(yaml.safe_load(open(sys.argv[1]))['data']['runtime.json'])
+assert config['sandbox_runtimes'][1]['code_slots']==1024
+PY
 if helm template test deploy/helm/elitea "${args[@]}" --set main.runtime.codeOwnerRecovery.enabled=false \
   --set main.runtime.codeOwnerRecovery.mainWorkloadIdentity= --set 'main.runtime.codeOwnerRecovery.supervisors=null' \
   > "$work/error" 2>&1; then

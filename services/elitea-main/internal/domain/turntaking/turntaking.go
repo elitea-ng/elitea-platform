@@ -50,6 +50,9 @@ const (
 const (
 	CauseHumanMessage = "human_message"
 	CauseAgentMention = "agent_mention"
+	// CauseHeartbeat is a run that a proactive agent's heartbeat started
+	// (ADR-0050 decision 2). Nobody waits on it.
+	CauseHeartbeat = "heartbeat"
 )
 
 // Guard limits (ADR-0050 decision 7d).

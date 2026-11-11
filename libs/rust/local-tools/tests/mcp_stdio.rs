@@ -13,6 +13,7 @@
 //! Elsewhere (Linux CI without a sandbox helper) the session allows
 //! unenforced sandboxes, so each start is asked and approved.
 
+#![cfg(unix)]
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

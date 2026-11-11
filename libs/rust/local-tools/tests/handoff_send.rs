@@ -2,6 +2,7 @@
 //! the exclusions on tracked files, the person's repository byte-identical
 //! afterwards, the orphan base and upstream, the shadow repository, the
 //! scan and the caps, and the segment read back.
+#![cfg(unix)]
 #![cfg(feature = "handoff")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::format_push_string)]
 

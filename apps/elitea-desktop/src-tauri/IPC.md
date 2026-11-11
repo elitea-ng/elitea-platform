@@ -315,7 +315,7 @@ names instead of retrying. A rule imported from a repository leaves the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "auto" \| "off" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[], bypass_approvals?: boolean, unattended?: UnattendedGrant}` (**Unattended turns**, below) (`reasoning_effort` `"none"`, from an older client or a kept choice, is read as `"off"`) | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "auto" \| "off" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[], bypass_approvals?: boolean, unattended?: UnattendedGrant, addressed_to?: number[], cloud_agent?: boolean}` (**Unattended turns**, **Several agents in a thread**, below) (`reasoning_effort` `"none"`, from an older client or a kept choice, is read as `"off"`) | `{turn_id, execution_id}` |
 | `attachment_add` | `{workspace_id, path}` | `{token, name, mime, bytes, width, height, thumbnail}` — attaches the image file at the **absolute** `path` (a `files_dropped` path, or a picked file) to the workspace's next turn ("Image input", below). Blocking work runs off the async workers. Rejects `path_denied`, `not_found`, `image_too_large`, `invalid_request` (not PNG/JPEG/WebP/GIF, a relative path, a link, not a regular file), `workspace_unknown`, `local_work_disabled`, `not_signed_in`. |
 | `attachment_add_bytes` | `{workspace_id, mime, data, name?}` | The same answer for a pasted image: `data` is base64, at most 10 MiB decoded; `mime` is what the clipboard said and is ignored (the type is sniffed from the bytes); `name` defaults to `pasted-image`. Rejects `image_too_large`, `invalid_request`, `workspace_unknown`, `local_work_disabled`. |
 | `attachment_remove` | `{workspace_id, token}` | `null`. Forgets an image the person took off the composer (an unknown token is not an error). |
@@ -730,6 +730,22 @@ cap. An approval a child's read needs (a workspace rule that asks) is the
 turn's own prompt. The turn's end, its cancel and a cloud handoff stop
 every child (`subagent_finished` `cancelled`); none outlives the turn.
 
+`spawn_agent` also takes the runtime's `profile` and `context` brief
+(#1614, #1827; `d0/brief.rs`). `subagent_started` adds `profile_digest`
+(always), `display_name` and `avatar` (when the profile names them; the
+display name is the `label` when none is given), and `brief_digest` and
+`brief_refs` (`{message_ids, attachments, memory_entries, facts}`; a
+non-empty brief only). It never carries the soul, a quote or a fact. A
+brief is checked against what the agent saw. An excerpt must quote a
+message of the model's last request, by the id on its `[message m-…]`
+line. The person's message carries that line (the id of the turn's
+`question_id`), and so does each user-role message of a session seeded
+from the server (the group's uuid), with the text after it neutralized
+(steering messages are neutralized too). An attachment must be one of the
+turn's images, which the message names as `[Attachment att-…: "name"]` in
+a second text part. A memory entry is always refused (no `recall` on the
+desktop). A refusal is the `spawn_agent` result.
+
 **Nested agents** (#1239). An agent tool of the agent (an `application`
 tool whose agent is not a pipeline) is offered as one tool named after it,
 `{task}` (at most 8000 characters), and runs in the cloud as a child turn:
@@ -818,6 +834,50 @@ the Anthropic route, which does not exist yet, issue 1227), never on the
 OpenAI-compatible chat route. Reasoning text is stored only in the server
 transcript, the thread history and the session (the same owner-only files)
 and never logged.
+
+**Several agents in a thread** (ADR-0050 decision 7f, #1806; `src/d0/floor.rs`).
+A thread may hold several agent participants. `addressed_to` is the agent
+participants a message names ("@Name"), in the text's order (at most 16,
+no repeats; client-core `addressedTo`); the UI starts the turn on the first
+of them. The host sends it to `startLocalTurn`; a message that names no
+agent, in a thread of several, is sent addressed to the composer's agent
+(`[participant_id]`: the pick is an address, ADR-0050 decision 7c, so a lead
+conversation does not route past it). Main routes the message
+by the conversation's floor and answers the order (`floor: {question_id,
+position, targets, agents: {participant_id, name, executor}[]}`) and the
+answering agent's `executor`. The host refuses a start Main routed to
+another agent first (`floor_routed_elsewhere`) or whose agent runs elsewhere
+than `cloud_agent` said (`agent_executor_changed`).
+
+- **The order.** When the message has a next agent, the turn's `done`
+  carries `continuing: true` and `floor_next {participant_id, agent_name,
+  position}`. Once the commit lands, the host starts that agent's turn
+  itself (`floor_turn {question_id, position}`, user text "The person's
+  message above is addressed to you as well. Answer it."), one at a time,
+  and the finished turn sends `turn_continued` with `kind: "floor"`,
+  `participant_id`, `agent_name` and `executor`. When it does not start
+  (a newer message superseded it, `floor_turn_superseded`; Main refused it,
+  `floor_turn_refused`; or the commit did not land, `commit_failed`), the
+  finished turn sends `floor_stopped {code, message}` instead. A turn's
+  `status` `running` carries `floor {position, targets, participant_id,
+  agent_name, executor}`. A later agent's turn is never unattended; an
+  unattended turn's chain does not follow the floor.
+- **Local and cloud agents.** An agent participant runs where its mapping
+  says (`entity_settings.executor`). `local` (the default) runs here, with
+  the workspace and its `AGENTS.md` and `SOUL.md`. `cloud` (`cloud_agent:
+  true` on the first turn) runs in the cloud: the host relays the
+  conversation's text (its newest 50 messages, each under its author's
+  name, oldest dropped first to stay under 120 KiB) and the turn's prompt as
+  a child turn of the agent's own version (`startLocalChildTurn`), never the
+  workspace, its files or the thread's tools, and commits the answer (Main
+  marks it `executed_by: cloud`). A cloud agent's turn refuses `plan_mode`,
+  `unattended`, `compact`, `model`, `command`, `mentions`, `skills` and
+  `images` before any request (`cloud_agent_text_only`).
+- **Sessions.** With two or more agents in the thread, each agent keeps a
+  session of its own (**Agent session memory**: the key adds the agent's
+  participant id), seeded from the server with that agent as the reader.
+  Take-back reseeds and thread deletes cover every agent's session.
+- Agent-to-agent hand-off (`hand_floor`) is not offered to a desktop turn.
 
 **Remote tools.** A credentialed toolkit (`remote_toolkit`) and a platform
 MCP server (`platform_mcp`, `mcp_elitea_internal_*`, when the resolved
@@ -2962,9 +3022,10 @@ order. Kinds and payloads:
 | `steer_dropped` | `{steer_id, text, reason: "removed" \| "turn_ended"}` — the message does not wait any more: the person removed it, or the turn ended before a safe point (the UI sends it as the next turn) |
 | `error` | `{code, message}` |
 | `resume_offered` | `{workspace_id, conversation_id}` — after an app start, on a turn that ran when the app stopped and that the host does not continue by itself: the UI may offer **Continue** (`agent_turn_resume`) (**Resume after restart**) |
-| `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number, continuing?: true}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one; `continuing` says the host starts the unattended chain's next turn by itself (**Unattended turns**) |
+| `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number, continuing?: true, floor_next?: {participant_id, agent_name, position}}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one; `continuing` says the host starts the unattended chain's next turn, or the message's next agent (`floor_next`), by itself (**Unattended turns**, **Several agents in a thread**) |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
-| `turn_continued` | `{next_turn_id, execution_id, continuation_index, chain_root_execution_id, kind: "step_limit" \| "tool_call_cap" \| "goal_not_met" \| "resume", resumed_after_restart?: true}` — after `done` and the commit of an unattended turn: the host started the next turn of the chain; with `kind` `resume` (and `resumed_after_restart`), on the turn that ran when the app stopped, after the next start (**Resume after restart**) (**Unattended turns**); its events come under `next_turn_id` |
+| `turn_continued` | `{next_turn_id, execution_id, continuation_index, chain_root_execution_id, kind: "step_limit" \| "tool_call_cap" \| "goal_not_met" \| "resume", resumed_after_restart?: true}` — after `done` and the commit of an unattended turn: the host started the next turn of the chain; with `kind` `resume` (and `resumed_after_restart`), on the turn that ran when the app stopped, after the next start (**Resume after restart**) (**Unattended turns**); its events come under `next_turn_id`. With `kind: "floor"` (no `chain_root_execution_id`; `continuation_index` is the agent's position, and `participant_id`, `agent_name`, `executor`): the host started the message's next agent (**Several agents in a thread**) |
+| `floor_stopped` | `{code, message}` — after `done` of a turn whose `floor_next` does not answer: `floor_turn_superseded`, `floor_turn_refused`, `commit_failed`, or the start's refusal (**Several agents in a thread**) |
 | `chain_ended` | `{outcome: "completed" \| "failed" \| "waiting" \| "limit_reached" \| "cancelled", limit?: "continuations" \| "spend" \| "deadline", message?, goal?: {outcome: "met" \| "not_met" \| "blocked" \| "not_checked", met: number, total: number, reason?}}` — after `done`: the unattended chain ends with this turn; `goal` is the last goal check's summary, when one was made |
 | `run_brief` | `{turn_id, chain_root_execution_id, state: "ready" \| "failed" \| "off" \| "none", brief?}` — on the chain's first turn (possibly after its `done`), when the platform answered the run brief (**Run brief and goal check**, under **Unattended turns**) |
 | `goal_checked` | `{turn_id, outcome: "met" \| "not_met" \| "blocked" \| "not_checked", conditions: {id, text, verdict, reason}[], met, total, reason?}` — after `done` of a turn that would end its chain, before `turn_continued` or `chain_ended` |

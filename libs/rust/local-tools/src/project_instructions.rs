@@ -243,7 +243,7 @@ fn load_soul(workspace: &Workspace, out: &mut ProjectInstructions) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::fs;
 
@@ -342,14 +342,14 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         fs::write(outside.path().join("AGENTS.md"), "OUTSIDE").unwrap();
         let dir = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink(
+        crate::sys::os::symlink(
             outside.path().join("AGENTS.md"),
             dir.path().join("AGENTS.md"),
         )
         .unwrap();
         fs::create_dir_all(dir.path().join("src")).unwrap();
         fs::write(dir.path().join("src/a.rs"), "x").unwrap();
-        std::os::unix::fs::symlink(outside.path(), dir.path().join("src/vendor")).unwrap();
+        crate::sys::os::symlink(outside.path(), dir.path().join("src/vendor")).unwrap();
         let found = load(
             &open(&dir, &[]),
             &["src/vendor/AGENTS.md".into(), "src/vendor/".into()],

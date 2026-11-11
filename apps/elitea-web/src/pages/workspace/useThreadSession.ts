@@ -92,6 +92,7 @@ function slotLabel(slot: TurnSlot | undefined, prompts: readonly string[]): stri
   if (slot === undefined) return '';
   if ('prompt' in slot) return prompts[slot.prompt] ?? '';
   if ('resumed' in slot) return t('workspace.chain.resumedAfterRestart', 'Resumed after restart');
+  if ('floor' in slot) return t('workspace.floor.answeredBy', 'Answered by {{name}}', { name: slot.floor });
   return t('workspace.chain.continued', 'Continued automatically ({{n}})', { n: String(slot.continuation) });
 }
 

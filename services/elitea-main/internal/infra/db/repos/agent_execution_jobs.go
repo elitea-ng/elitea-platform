@@ -785,6 +785,9 @@ WHERE execution_id = $1 AND generation = $2`,
 		if err := admitFloor(ctx, tx, *turn, admission.Floor, admission.Record.Job.ID); err != nil {
 			return executionapp.AdmissionOutcome{}, nil, err
 		}
+		if err := recordContextView(ctx, tx, turn.ResponseMessageID, turn.ContextView); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
 	} else if admission.CurrentAdhocTurn != nil {
 		turn := admission.CurrentAdhocTurn
 		if err := insertCurrentAdhocTurn(
@@ -798,6 +801,9 @@ WHERE execution_id = $1 AND generation = $2`,
 		notices, err = supersedeEarlierTurnInterrupts(ctx, pgxExecutor{queryer: tx}, turn.ProjectID,
 			turn.ConversationUUID, turn.ResponseMessageID, turn.ActorUserID)
 		if err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
+		if err := recordContextView(ctx, tx, turn.ResponseMessageID, turn.ContextView); err != nil {
 			return executionapp.AdmissionOutcome{}, nil, err
 		}
 	} else if admission.CurrentRegenerateTurn != nil {
@@ -814,6 +820,9 @@ WHERE execution_id = $1 AND generation = $2`,
 		// card of the response in the same transaction that resets it
 		// (fanout-interrupt-decisions §5), so a late ACK meets a closed card.
 		regenerate := admission.CurrentRegenerateTurn
+		if err := recordContextView(ctx, tx, regenerate.ResponseMessageID, regenerate.ContextView); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
 		_, notice, err := closeOpenExecutionInterrupts(ctx, pgxExecutor{queryer: tx}, regenerate.ResponseMessageID,
 			interruptdomain.StateSuperseded, interruptdomain.Closer{ActorUserID: regenerate.ActorUserID})
 		if err != nil {

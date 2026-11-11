@@ -331,6 +331,19 @@ impl Attention {
 
     fn show(&self, title: &str, body: &str) {
         use tauri_plugin_notification::NotificationExt as _;
+        // Installed from the MSIX: the toast goes under the package's AUMID
+        // (`crate::aumid`); the plugin knows only the config identifier.
+        #[cfg(windows)]
+        if let Some(app_id) = crate::aumid::packaged() {
+            if let Err(error) = tauri_winrt_notification::Toast::new(app_id)
+                .title(title)
+                .text1(body)
+                .show()
+            {
+                log::warn!("could not show a notification: {error}");
+            }
+            return;
+        }
         if let Err(error) = self
             .app
             .notification()

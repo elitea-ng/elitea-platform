@@ -77,7 +77,7 @@ fn fixture_opts(
     unconfined_hooks: bool,
 ) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
-    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let base = crate::sys::canonicalize(dir.path()).unwrap();
     let root = base.join("workspace");
     let home = base.join("home");
     let data = base.join("app-data");

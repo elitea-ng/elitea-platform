@@ -49,7 +49,9 @@ export type NotificationEventType =
   | 'moderation_rejected'
   | 'moderation_approved'
   /** ADR-0045 decision 5: a chain of runs ended. The meta is content-free (outcome and ids only). */
-  | 'run_finished';
+  | 'run_finished'
+  /** ADR-0050 decision 2: a proactive agent wrote to its owner. `meta.message` links to the conversation. */
+  | 'agent_heartbeat';
 
 /**
  * Freeform per-event-type payload (`notification.helpers.js:10-54`,

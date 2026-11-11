@@ -41,6 +41,7 @@ import { createFakeCompactionIpc } from '@/shared/desktop/compactionSettings.fak
 import { PERMISSION_GROUPS, PERMISSIONS } from '@/shared/lib/permissions';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { AppIpcProvider, DesktopFrame, useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
+import { floorAnswer, floorHarness } from './devHarnessFloor';
 
 const FOLDERS: Workspace[] = [
   { id: 'w1', path: '/Users/me/code/elitea-platform', name: 'elitea-platform', project_id: 42, is_git: true },
@@ -147,9 +148,11 @@ const API: [string, RegExp, unknown][] = [
 ];
 
 function installApiStub(): void {
-  const answer = (method: string, url: string): Response => {
+  const answer = (method: string, url: string, body?: unknown): Response => {
     const parsed = new URL(url, window.location.origin);
     const path = parsed.pathname;
+    const floor = floorAnswer(method, path, body); // several agents in a thread (`devHarnessFloor.ts`)
+    if (floor !== undefined) return floor;
     if (method === 'GET' && parsed.searchParams.get('archived') === 'only') {
       return new Response(JSON.stringify(ARCHIVED_CHATS), { status: 200, headers: { 'content-type': 'application/json' } });
     }
@@ -163,7 +166,7 @@ function installApiStub(): void {
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : undefined;
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    return Promise.resolve(answer((init?.method ?? request?.method ?? 'GET').toUpperCase(), url));
+    return Promise.resolve(answer((init?.method ?? request?.method ?? 'GET').toUpperCase(), url, init?.body));
   };
 }
 
@@ -301,6 +304,7 @@ export function mountDesktopHarness(container: HTMLElement): void {
     indexIpc,
     handoffIpc,
     compaction,
+    ...floorHarness((event) => ipc.emit(event), turnId),
     /** The host summarized a thread in the background while it was idle. */
     compactIdle: (workspaceId = 'w1', conversationId = '71') =>
       compaction.compact({ workspace_id: workspaceId, conversation_id: conversationId, reason: 'idle', before_tokens: 120_000, after_tokens: 24_000 }),

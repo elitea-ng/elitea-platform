@@ -24,6 +24,15 @@
 //! local tools of a session of its own there, writing ones included; its
 //! approvals are asked in the parent's turn. Its work stays in the worktree
 //! (the person reviews and merges it from the parallel agents panel).
+//!
+//! A `spawn_agent` brief (#1827) is checked against what the turn's agent
+//! itself saw ([`super::brief`]): its excerpts against the model's last
+//! request (the transport's [`super::model::RequestCapture`]), its
+//! attachments against the turn's images; a memory entry is refused (the
+//! desktop has no `recall`). A child's `profile` (its display name, its
+//! soul in place of the role text, `model: "inherit"`) is the runtime's;
+//! `subagent_started` carries the display name, the avatar and the spawn's
+//! two digests and brief references for the lane and the thread history.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -31,10 +40,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use adk_core::{Event, Llm, Part, Toolset};
 use async_trait::async_trait;
 use elitea_agent_runtime::host::{HostError, ModelRequest, ModelTransport};
-use elitea_agent_runtime::subagents::{ChildIdentity, ChildReport, MAX_CHILD_STEPS, SubAgentHost};
+use elitea_agent_runtime::subagents::{
+    Brief, CheckedBrief, ChildIdentity, ChildReport, MAX_CHILD_STEPS, SubAgentHost,
+};
 use elitea_agent_runtime::text::clip_bytes;
 use serde_json::{Map, Value, json};
 
+use super::brief::BriefView;
 use super::events::TurnEvents;
 use super::model::GatewayTransport;
 use super::recorder::Recorder;
@@ -134,6 +146,8 @@ pub struct DesktopSubAgents {
     lineages: std::sync::Mutex<Vec<Arc<ChildLineage>>>,
     /// Checkouts for `isolation: "worktree"`; `None`: children only read.
     checkouts: Option<Arc<dyn ChildCheckouts>>,
+    /// What a brief may name besides the model's last request (#1827).
+    view: BriefView,
 }
 
 impl DesktopSubAgents {
@@ -153,7 +167,15 @@ impl DesktopSubAgents {
             recorder,
             lineages: std::sync::Mutex::new(Vec::new()),
             checkouts: None,
+            view: BriefView::default(),
         }
+    }
+
+    /// Check briefs against `view` (the turn's images) too (#1827).
+    #[must_use]
+    pub fn with_brief_view(mut self, view: BriefView) -> Self {
+        self.view = view;
+        self
     }
 
     /// Offer `isolation: "worktree"` through `checkouts`.
@@ -244,14 +266,40 @@ impl SubAgentHost for DesktopSubAgents {
         Ok(self.observed(child, &toolsets))
     }
 
+    /// #1827: against what the parent's model read in its last request
+    /// (the one that asked for the spawn) and this turn's images.
+    fn check_brief(
+        &self,
+        _child: &ChildIdentity,
+        brief: &Brief,
+    ) -> Result<CheckedBrief, &'static str> {
+        match self.transport.capture.as_ref() {
+            Some(capture) => capture.with_contents(|contents| self.view.check(contents, brief)),
+            None => self.view.check(&[], brief),
+        }
+    }
+
     fn started(&self, child: &ChildIdentity) {
         let mut payload = json!({
             "agent_id": child.agent_id,
             "parent_call_id": child.parent_call_id,
             "ordinal": child.ordinal,
+            // The spawn's record (#1614, #1827): never the soul, a quote or
+            // a fact.
+            "profile_digest": child.record.profile_digest,
         });
         if let Some(label) = &child.label {
             payload["label"] = json!(label);
+        }
+        if let Some(name) = &child.record.display_name {
+            payload["display_name"] = json!(name);
+        }
+        if let Some(avatar) = &child.record.avatar {
+            payload["avatar"] = json!(avatar);
+        }
+        if let Some(digest) = &child.record.brief_digest {
+            payload["brief_digest"] = json!(digest);
+            payload["brief_refs"] = child.record.brief_refs.clone();
         }
         self.events.send("subagent_started", payload);
     }

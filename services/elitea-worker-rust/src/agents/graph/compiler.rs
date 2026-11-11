@@ -312,6 +312,11 @@ pub(crate) struct PipelineNodeRuntimes {
     application_scope_path: String,
     application_scopes:
         Option<Arc<crate::agents::pipeline::scoped_applications::PipelineApplicationScopeRegistry>>,
+    /// ADR-0050 decision 9 (#1668): the root pipeline's own context view, as
+    /// graph-state messages, seeded into `chat_history` on a first
+    /// invocation only. A saved child pipeline has none: its parent maps
+    /// what it reads.
+    context_view: Option<Arc<Vec<serde_json::Value>>>,
 }
 
 impl PipelineNodeRuntimes {
@@ -488,7 +493,17 @@ impl PipelineNodeRuntimes {
             parallel: None,
             parallel_authority_bound: false,
             application_scope_path: String::new(),
+            context_view: None,
         }
+    }
+
+    /// ADR-0050 decision 9 (#1668): the reader's view, already admitted and
+    /// shaped by `assembly::pipeline_state_history`, for the root graph's
+    /// first invocation. An empty view seeds nothing.
+    #[must_use]
+    pub(crate) fn with_context_view(mut self, view: Vec<serde_json::Value>) -> Self {
+        self.context_view = (!view.is_empty()).then(|| Arc::new(view));
+        self
     }
 }
 
@@ -1555,8 +1570,12 @@ impl PipelineDefinition {
                 builder,
                 node_checkpointer,
                 state_schema,
-                self.state_defaults.clone(),
-                Arc::clone(&self.state_reducers),
+                InitialState {
+                    defaults: self.state_defaults.clone(),
+                    reducers: Arc::clone(&self.state_reducers),
+                    context_view: runtimes.context_view.clone(),
+                    declares_messages: self.state.contains_key("messages"),
+                },
                 self.entry_point.clone(),
             );
         }
@@ -1646,6 +1665,7 @@ impl PipelineDefinition {
         let mut channels = BTreeSet::from([
             "input".to_owned(),
             "messages".to_owned(),
+            "chat_history".to_owned(),
             "output".to_owned(),
             "result".to_owned(),
             "router_output".to_owned(),
@@ -2469,7 +2489,7 @@ fn select_last_assistant_message(messages: Option<&serde_json::Value>) -> Option
             matches!(
                 message.get("role").and_then(serde_json::Value::as_str),
                 Some("assistant" | "ai")
-            )
+            ) && !seeded_context_message(message)
         })
         .filter_map(|message| message.get("content"))
         .filter_map(assistant_message_text)
@@ -2541,7 +2561,7 @@ pub(super) fn merge_or_clear_object(
 
 fn runtime_channel_default(channel: &str) -> serde_json::Value {
     match channel {
-        "messages" | "hitl_decisions" => json!([]),
+        "messages" | "chat_history" | "hitl_decisions" => json!([]),
         "parallel_tasks"
         | "state_types"
         | HITL_RESUME_STATE_KEY
@@ -2571,22 +2591,24 @@ fn with_initial_checkpoint(
     builder: GraphAgentBuilder,
     checkpointer: Arc<dyn Checkpointer>,
     schema: StateSchema,
-    defaults: BTreeMap<String, serde_json::Value>,
-    reducers: Arc<BTreeMap<String, StateReducer>>,
+    initial: InitialState,
     entry_point: String,
 ) -> GraphAgentBuilder {
+    let initial = Arc::new(initial);
     builder
         .before_agent_callback(move |context| {
             let checkpointer = checkpointer.clone();
             let schema = schema.clone();
-            let defaults = defaults.clone();
-            let reducers = Arc::clone(&reducers);
+            let initial = Arc::clone(&initial);
             let entry_point = entry_point.clone();
             async move {
                 if checkpointer.load(context.session_id()).await?.is_none() {
                     let mut state = schema.initialize_state();
-                    for (key, value) in invocation_state(context.as_ref(), Some(&defaults), None) {
-                        if reducers.contains_key(&key) {
+                    let mut first =
+                        invocation_state(context.as_ref(), Some(&initial.defaults), None);
+                    initial.seed_context_view(&mut first);
+                    for (key, value) in first {
+                        if initial.reducers.contains_key(&key) {
                             state.insert(key, value);
                         } else {
                             schema.apply_update(&mut state, &key, value);
@@ -2600,6 +2622,49 @@ fn with_initial_checkpoint(
             }
         })
         .input_mapper(|_| State::new())
+}
+
+/// What a root pipeline's first frontier is built from.
+struct InitialState {
+    defaults: BTreeMap<String, serde_json::Value>,
+    reducers: Arc<BTreeMap<String, StateReducer>>,
+    /// The reader's context view as graph-state messages (#1668).
+    context_view: Option<Arc<Vec<serde_json::Value>>>,
+    /// The pipeline declares `messages` in its own state.
+    declares_messages: bool,
+}
+
+impl InitialState {
+    /// ADR-0050 decision 9 (#1668): the pipeline's view becomes `chat_history`
+    /// and, as the SDK did when a pipeline declares no `messages` of its own,
+    /// the head of `messages` before this turn's question. It runs only where
+    /// the first frontier is built, so a resumed or recovered run, whose
+    /// checkpoint already holds its state, is never seeded again.
+    fn seed_context_view(&self, state: &mut State) {
+        let Some(view) = self.context_view.as_deref() else {
+            return;
+        };
+        state.insert("chat_history".to_owned(), json!(view));
+        if self.declares_messages {
+            return;
+        }
+        // Without a question (a wake) `messages` stays unset: an LLM node
+        // reading it takes its last entry as the task.
+        if let Some(serde_json::Value::Array(question)) = state.get_mut("messages") {
+            let mut messages = view.clone();
+            messages.append(question);
+            *question = messages;
+        }
+    }
+}
+
+/// A graph-state message seeded from the reader's context view (#1668): an
+/// earlier turn's text, never an answer of this run.
+fn seeded_context_message(message: &serde_json::Value) -> bool {
+    message
+        .get("additional_kwargs")
+        .and_then(|additional| additional.get(crate::agents::assembly::CONTEXT_VIEW_MARKER_KEY))
+        .is_some_and(|marker| marker == &serde_json::Value::Bool(true))
 }
 
 fn invocation_state(
@@ -2810,6 +2875,12 @@ fn validate_node_state(
         }
     }
     for key in node.output_keys().iter().chain(node.cleaned_keys()) {
+        // The reader's context view (#1668) is read, never written.
+        if key == "chat_history" {
+            return Err(PipelineConfigurationError::Invalid(
+                "a node cannot write the chat_history context view",
+            ));
+        }
         if !builtin_state_key(key) && !state.contains_key(key) {
             return Err(PipelineConfigurationError::Invalid(
                 "a node output or clean key is not declared in pipeline state",
@@ -3170,6 +3241,8 @@ fn builtin_state_key(key: &str) -> bool {
         key,
         "input"
             | "messages"
+            // The reader's context view (#1668): read by name, never declared.
+            | "chat_history"
             | "output"
             | "result"
             | "router_output"

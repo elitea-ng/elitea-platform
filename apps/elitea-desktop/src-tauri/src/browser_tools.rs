@@ -1123,7 +1123,7 @@ impl ToolProvider for BrowserToolProvider {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::time::Duration;
 

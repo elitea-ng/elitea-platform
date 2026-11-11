@@ -5,7 +5,7 @@ description: "For partners who ship ELITEA under their own name: a brand reposit
 
 A partner ships ELITEA under its own name from a **brand repository**: a small repository that holds one brand folder and builds a released ELITEA tag with it. It carries **no patches** to ELITEA's code (ADR-0052 decision 6). Everything a brand may change is a field of its manifest. See [Brands](/development/brands) for the manifest itself.
 
-The template is `docs/brand-template/` in this repository. It will become the repository `elitea-ng/elitea-brand-template`.
+The template is the private template repository `elitea-ng/elitea-brand-template` (ask EPAM for access). Its source is `docs/brand-template/` in this repository: changes land here first and are then copied to the template repository.
 
 | Path | What it is |
 | --- | --- |
@@ -18,7 +18,7 @@ The template is `docs/brand-template/` in this repository. It will become the re
 
 ## Set it up
 
-1. Create a repository from the template, or copy `docs/brand-template/` into a new one.
+1. Create a repository from the template (GitHub › `elitea-ng/elitea-brand-template` › Use this template), or copy `docs/brand-template/` into a new one.
 2. Rename `brand/acme` to your brand id, and set `BRAND_DIR` in `build.yml` to `brand/<id>`. The folder name must equal the manifest's `id`.
 3. Fill in `brand.json`: the names, the ids, the URLs, the hue, and your EAS project (`eas.projectId`, `eas.owner`). See the field table in [Brands](/development/brands#brandjson).
 4. Add `assets/`. To start from placeholders, check out the pinned release next to the brand (`git clone --depth 1 --branch <tag> https://github.com/elitea-ng/elitea-platform elitea`) and run `node elitea/scripts/brand/placeholder-assets.mjs brand/<id> --fg '#rrggbb' --bg '#rrggbb'`.

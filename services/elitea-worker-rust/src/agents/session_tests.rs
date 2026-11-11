@@ -3712,6 +3712,395 @@ async fn a_session_seeded_without_references_is_reconciled_without_duplicates() 
     }
 }
 
+/// One turn of a reader whose history Main built under the context view
+/// `view` (#1672), the sub-agent tools bound when `tagging` (#1865).
+struct ViewTurn<'a> {
+    question: &'a str,
+    question_id: Option<&'a str>,
+    view: Option<&'a str>,
+    tagging: bool,
+    regenerate: bool,
+}
+
+impl<'a> ViewTurn<'a> {
+    const fn new(question: &'a str, view: Option<&'a str>) -> Self {
+        Self {
+            question,
+            question_id: None,
+            view,
+            tagging: false,
+            regenerate: false,
+        }
+    }
+}
+
+async fn view_turn(
+    sessions: &Arc<InMemorySessionService>,
+    turn: &ViewTurn<'_>,
+    history: &[Value],
+    refs: &[super::request::ChatHistoryRef],
+) -> Vec<(String, String)> {
+    let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+    request.payload.chat_history = history.to_vec();
+    request.payload.chat_history_refs = refs.to_vec();
+    request.payload.context_view_history = turn.view.map(str::to_owned);
+    request.payload.current_message_id = turn.question_id.map(str::to_owned);
+    request.payload.is_regenerate = turn.regenerate;
+    request.payload.user_input = UserInput::Text(turn.question.to_owned());
+    let profile = if turn.regenerate {
+        OrdinaryNoToolProfile::validate_regeneration(&request)
+    } else {
+        OrdinaryNoToolProfile::validate(&request)
+    }
+    .expect("ordinary profile");
+    let mut plan = OrdinaryNativeAgentPlan::from_authorized(
+        &request,
+        &profile,
+        &AuthorizedNativeCommandBinding::fixture(),
+        &request.payload.input_attachments,
+    )
+    .expect("native plan");
+    if turn.tagging {
+        let _ = plan.tag_message_refs();
+    }
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let model = FixtureBoundModel {
+        model: Arc::new(CapturingFinalLlm {
+            requests: Arc::clone(&captured),
+            calls: Arc::new(AtomicUsize::new(0)),
+        }),
+        completed: format!("answer to {}", turn.question),
+    };
+    let shared: Arc<dyn SessionService> = sessions.clone();
+    let assembled = assemble_ordinary_native_with_sessions(
+        model,
+        plan,
+        Vec::new(),
+        SensitiveToolCatalog::default(),
+        shared,
+    )
+    .await
+    .expect("assembly");
+    let (mut run, _projector, completion) = assembled.start().expect("run");
+    while run.next_event().await.expect("event").is_some() {}
+    completion.select().await.expect("completion");
+    let requests = captured.lock().expect("captured request");
+    role_texts(&requests.first().expect("one model request").contents)
+}
+
+/// The three-agent fixture of #1672: the person, the reader and two peers.
+struct ThreeAgents {
+    entries: Vec<(&'static str, Value, super::request::ChatHistoryRef)>,
+}
+
+impl ThreeAgents {
+    const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    fn id(n: usize) -> String {
+        format!("00000000-0000-4000-8000-0000000002{n:02}")
+    }
+
+    fn push(
+        &mut self,
+        label: &'static str,
+        role: &str,
+        author: Option<&str>,
+        text: &str,
+        own: bool,
+    ) {
+        let kwargs = author.map_or_else(
+            || json!({}),
+            |name| json!({"elitea_author": {"kind": "agent", "name": name}}),
+        );
+        let entry = json!({"role": role, "content": [{"type": "text", "text": text}], "additional_kwargs": kwargs});
+        let reference = history_ref(&Self::id(self.entries.len() + 1), own);
+        self.entries.push((label, entry, reference));
+    }
+
+    /// The view of the entries whose labels `keep` names, in transcript order.
+    fn view(&self, keep: &[&str]) -> (Vec<Value>, Vec<super::request::ChatHistoryRef>) {
+        self.entries
+            .iter()
+            .filter(|(label, ..)| keep.contains(label))
+            .map(|(_, entry, reference)| (entry.clone(), reference.clone()))
+            .unzip()
+    }
+}
+
+fn texts_in(turn: &[(String, String)]) -> Vec<String> {
+    turn.iter().map(|(_, text)| text.clone()).collect()
+}
+
+/// #1672: after a mode change the reader's next model context is exactly
+/// its current view plus its own turns, in transcript order; a turn that
+/// changes nothing sends the same prefix; widening the mode never appends
+/// older messages after newer ones.
+#[tokio::test]
+async fn a_context_view_change_reseeds_the_readers_session_in_transcript_order() {
+    let mut chat = ThreeAgents::new();
+    chat.push(
+        "kickoff",
+        "user",
+        None,
+        "kickoff before the reader joined",
+        false,
+    );
+    chat.push(
+        "early",
+        "user",
+        Some("Planner"),
+        "early planner note",
+        false,
+    );
+    let sessions = Arc::new(InMemorySessionService::new());
+    let (history, refs) = chat.view(&["kickoff", "early"]);
+    let first = view_turn(
+        &sessions,
+        &ViewTurn::new("first question", Some("full")),
+        &history,
+        &refs,
+    )
+    .await;
+    assert_eq!(first.len(), 3, "{first:?}");
+
+    chat.push("q1", "user", None, "first question", true);
+    chat.push("a1", "assistant", None, "answer to first question", true);
+    chat.push(
+        "late",
+        "user",
+        Some("Reviewer"),
+        "late reviewer finding",
+        false,
+    );
+    // Narrowed to `since_joined`: the pre-join messages leave the session.
+    let (history, refs) = chat.view(&["q1", "a1", "late"]);
+    let second = view_turn(
+        &sessions,
+        &ViewTurn::new("second question", Some("since_joined")),
+        &history,
+        &refs,
+    )
+    .await;
+    assert_eq!(second.len(), 4, "{second:?}");
+    assert_eq!(second[0], ("user".to_owned(), "first question".to_owned()));
+    assert_eq!(
+        second[1],
+        ("model".to_owned(), "answer to first question".to_owned())
+    );
+    assert!(second[2].1.contains("late reviewer finding"), "{second:?}");
+    assert_eq!(second[3], ("user".to_owned(), "second question".to_owned()));
+    for gone in ["kickoff", "early planner note"] {
+        assert!(
+            !texts_in(&second).iter().any(|text| text.contains(gone)),
+            "{gone}: {second:?}"
+        );
+    }
+
+    chat.push("q2", "user", None, "second question", true);
+    chat.push("a2", "assistant", None, "answer to second question", true);
+    // The same mode: no re-seed, the earlier request is the prefix.
+    let (history, refs) = chat.view(&["q1", "a1", "late", "q2", "a2"]);
+    let third = view_turn(
+        &sessions,
+        &ViewTurn::new("third question", Some("since_joined")),
+        &history,
+        &refs,
+    )
+    .await;
+    assert_eq!(third.len(), 6, "{third:?}");
+    assert_eq!(third[..4], second[..], "{third:?}");
+
+    chat.push("q3", "user", None, "third question", true);
+    chat.push("a3", "assistant", None, "answer to third question", true);
+    // Widened to `full`: the older messages come back BEFORE the later ones.
+    let all = [
+        "kickoff", "early", "q1", "a1", "late", "q2", "a2", "q3", "a3",
+    ];
+    let (history, refs) = chat.view(&all);
+    let fourth = view_turn(
+        &sessions,
+        &ViewTurn::new("fourth question", Some("full")),
+        &history,
+        &refs,
+    )
+    .await;
+    assert_eq!(fourth.len(), 10, "{fourth:?}");
+    let positions = user_positions(
+        &fourth,
+        &[
+            "kickoff",
+            "early planner note",
+            "first question",
+            "late reviewer finding",
+            "second question",
+            "third question",
+            "fourth question",
+        ],
+    );
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "{positions:?} {fourth:?}"
+    );
+    assert_eq!(positions[3], 4, "{fourth:?}");
+}
+
+/// Where each of `needles` is among the user-role entries of `turn`.
+fn user_positions(turn: &[(String, String)], needles: &[&str]) -> Vec<usize> {
+    needles
+        .iter()
+        .map(|needle| {
+            turn.iter()
+                .position(|(role, text)| role == "user" && text.contains(needle))
+                .unwrap_or_else(|| panic!("{needle}: {turn:?}"))
+        })
+        .collect()
+}
+
+/// #1672: a session seeded before the view was recorded (#1609) and holding
+/// side talk between two other agents is re-seeded on its first turn after
+/// the upgrade, and only then.
+#[tokio::test]
+async fn a_session_from_before_the_view_is_reseeded_once() {
+    let mut chat = ThreeAgents::new();
+    chat.push(
+        "side",
+        "user",
+        Some("Planner"),
+        "planner to reviewer side talk",
+        false,
+    );
+    chat.push("kickoff", "user", None, "kickoff", false);
+    let sessions = Arc::new(InMemorySessionService::new());
+    // The old worker: references, but no view.
+    let (history, refs) = chat.view(&["side", "kickoff"]);
+    let first = view_turn(
+        &sessions,
+        &ViewTurn::new("first question", None),
+        &history,
+        &refs,
+    )
+    .await;
+    assert!(
+        texts_in(&first)
+            .iter()
+            .any(|text| text.contains("side talk")),
+        "{first:?}"
+    );
+
+    chat.push("q1", "user", None, "first question", true);
+    chat.push("a1", "assistant", None, "answer to first question", true);
+    // Main now leaves out side talk the reader is no party to.
+    let (history, refs) = chat.view(&["kickoff", "q1", "a1"]);
+    let second = view_turn(
+        &sessions,
+        &ViewTurn::new("second question", Some("full")),
+        &history,
+        &refs,
+    )
+    .await;
+    assert!(
+        !texts_in(&second)
+            .iter()
+            .any(|text| text.contains("side talk")),
+        "{second:?}"
+    );
+    assert_eq!(second.len(), 4, "{second:?}");
+
+    chat.push("q2", "user", None, "second question", true);
+    chat.push("a2", "assistant", None, "answer to second question", true);
+    let (history, refs) = chat.view(&["kickoff", "q1", "a1", "q2", "a2"]);
+    let third = view_turn(
+        &sessions,
+        &ViewTurn::new("third question", Some("full")),
+        &history,
+        &refs,
+    )
+    .await;
+    assert_eq!(third[..4], second[..], "re-seeded once: {third:?}");
+}
+
+/// #1865: a session holding messages without their `[message m-…]` ids is
+/// re-seeded on the first turn the sub-agent tools are bound, and once it
+/// holds ids it keeps them without another re-seed; a regeneration, which
+/// asks its question again without an id, makes the next turn re-seed.
+#[tokio::test]
+async fn a_session_with_untagged_messages_is_reseeded_when_subagents_are_bound() {
+    use elitea_agent_runtime::subagents::message_ref::message_ref;
+    let tagged = |turn: &[(String, String)], id: &str| {
+        let line = format!("[message {}]", message_ref(id));
+        turn.iter()
+            .filter(|(_, text)| text.starts_with(&line))
+            .count()
+    };
+    let mut chat = ThreeAgents::new();
+    chat.push("kickoff", "user", None, "kickoff", false);
+    let sessions = Arc::new(InMemorySessionService::new());
+    let (history, refs) = chat.view(&["kickoff"]);
+    let q1 = ThreeAgents::id(2);
+    let mut turn = ViewTurn::new("first question", Some("full"));
+    turn.question_id = Some(&q1);
+    view_turn(&sessions, &turn, &history, &refs).await;
+
+    chat.push("q1", "user", None, "first question", true);
+    chat.push("a1", "assistant", None, "answer to first question", true);
+    let (history, refs) = chat.view(&["kickoff", "q1", "a1"]);
+    let q2 = ThreeAgents::id(4);
+    let mut turn = ViewTurn::new("second question", Some("full"));
+    turn.question_id = Some(&q2);
+    turn.tagging = true;
+    let second = view_turn(&sessions, &turn, &history, &refs).await;
+    for id in [ThreeAgents::id(1), q1.clone(), q2.clone()] {
+        assert_eq!(tagged(&second, &id), 1, "{id}: {second:?}");
+    }
+
+    chat.push("q2", "user", None, "second question", true);
+    chat.push("a2", "assistant", None, "answer to second question", true);
+    let (history, refs) = chat.view(&["kickoff", "q1", "a1", "q2", "a2"]);
+    let mut turn = ViewTurn::new("third question", Some("full"));
+    turn.tagging = true;
+    turn.regenerate = true;
+    let third = view_turn(&sessions, &turn, &history, &refs).await;
+    assert_eq!(tagged(&third, &q2), 1, "{third:?}");
+    assert!(
+        third
+            .last()
+            .is_some_and(|(_, text)| text == "third question"),
+        "{third:?}"
+    );
+
+    // The regenerated question was stored without an id: the next tagged
+    // turn re-seeds from the history, where it has one.
+    let q3 = ThreeAgents::id(6);
+    chat.push("q3", "user", None, "third question", true);
+    chat.push("a3", "assistant", None, "answer to third question", true);
+    let (history, refs) = chat.view(&["kickoff", "q1", "a1", "q2", "a2", "q3", "a3"]);
+    let q4 = ThreeAgents::id(8);
+    let mut turn = ViewTurn::new("fourth question", Some("full"));
+    turn.question_id = Some(&q4);
+    turn.tagging = true;
+    let fourth = view_turn(&sessions, &turn, &history, &refs).await;
+    for id in [&q3, &q4] {
+        assert_eq!(tagged(&fourth, id), 1, "{id}: {fourth:?}");
+    }
+    assert_eq!(fourth.len(), 8, "{fourth:?}");
+
+    // Nothing changed: the same bytes, no re-seed.
+    chat.push("q4", "user", None, "fourth question", true);
+    chat.push("a4", "assistant", None, "answer to fourth question", true);
+    let all = ["kickoff", "q1", "a1", "q2", "a2", "q3", "a3", "q4", "a4"];
+    let (history, refs) = chat.view(&all);
+    let q5 = ThreeAgents::id(10);
+    let mut turn = ViewTurn::new("fifth question", Some("full"));
+    turn.question_id = Some(&q5);
+    turn.tagging = true;
+    let fifth = view_turn(&sessions, &turn, &history, &refs).await;
+    assert_eq!(fifth[..8], fourth[..], "{fifth:?}");
+}
+
 /// A browser session that records its ends (ADR-0049 decision 8).
 #[derive(Default)]
 struct EndRecordingBrowser {
