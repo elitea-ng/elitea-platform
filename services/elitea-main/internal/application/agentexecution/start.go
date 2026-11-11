@@ -684,7 +684,7 @@ func currentApplicationInputWithView(
 	}
 	subagentPolicy, err := currentFrozenSubagentPolicy(version)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	// ADR-0050 decision 9 (issue 1609): the history is this reader's view.
 	view, err := BuildReaderView(

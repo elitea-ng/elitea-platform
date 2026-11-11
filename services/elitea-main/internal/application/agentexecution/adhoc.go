@@ -484,7 +484,7 @@ func currentAdhocInputWithView(
 	}
 	subagentPolicy, err := currentFrozenSubagentPolicy(snapshot)
 	if err != nil {
-		return nil, err
+		return nil, ReaderView{}, err
 	}
 	// ADR-0050 decision 9 (issue 1609): a model participant has no version,
 	// so its view is the default one (every visible message, side talk only

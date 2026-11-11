@@ -257,6 +257,8 @@ fn capture() -> BTreeMap<&'static str, Value> {
         parent_call_id: "call-spawn".to_owned(),
         label: Some("callers".to_owned()),
         ordinal: 1,
+        depth: 1,
+        parent_agent_id: None,
         record: elitea_agent_runtime::subagents::profile::SpawnRecord::new(
             &elitea_agent_runtime::subagents::profile::Profile {
                 display_name: Some("Owl".to_owned()),
