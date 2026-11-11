@@ -102,6 +102,15 @@ type CurrentIdleCompactionTurn struct {
 	// ApplicationID is the source's agent (0 for an ad hoc chat), so the
 	// kill switch, the gateway throttle and spend see the agent.
 	ApplicationID int64
+	// ApplicationVersionID is the agent version the source ran (its frozen
+	// application.version_id; 0 for an ad hoc chat). It selects the agent
+	// identity binding (ADR-0039) of the idle run's security context, as it
+	// does for the source (issue 1776).
+	ApplicationVersionID int64
+	// Release is the agent release the source executed (its
+	// agent_execution_jobs.release_id), nil for none: a release run binds
+	// the binding of the release's own version row, so the idle run does too.
+	Release *ReleaseRun
 }
 
 func (turn CurrentIdleCompactionTurn) Validate() error {
@@ -112,7 +121,10 @@ func (turn CurrentIdleCompactionTurn) Validate() error {
 		turn.ExecutionGeneration == "" || len(turn.ExecutionGeneration) > 256 ||
 		strings.ContainsAny(turn.ExecutionGeneration, "\x00\r\n") ||
 		turn.ThreadID == "" || len(turn.ThreadID) > 256 || strings.ContainsRune(turn.ThreadID, '\x00') ||
-		turn.ApplicationID < 0 || turn.ApplicationID > math.MaxInt32 {
+		turn.ApplicationID < 0 || turn.ApplicationID > math.MaxInt32 ||
+		turn.ApplicationVersionID < 0 || turn.ApplicationVersionID > math.MaxInt32 ||
+		(turn.ApplicationID > 0) != (turn.ApplicationVersionID > 0) ||
+		(turn.Release != nil && (turn.ApplicationID == 0 || turn.Release.ID <= 0 || turn.Release.ApplicationVersionID <= 0)) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -123,6 +135,7 @@ func (turn *CurrentIdleCompactionTurn) Clone() *CurrentIdleCompactionTurn {
 		return nil
 	}
 	clone := *turn
+	clone.Release = turn.Release.Clone()
 	return &clone
 }
 

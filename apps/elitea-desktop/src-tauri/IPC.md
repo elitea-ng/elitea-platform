@@ -730,6 +730,22 @@ cap. An approval a child's read needs (a workspace rule that asks) is the
 turn's own prompt. The turn's end, its cancel and a cloud handoff stop
 every child (`subagent_finished` `cancelled`); none outlives the turn.
 
+`spawn_agent` also takes the runtime's `profile` and `context` brief
+(#1614, #1827; `d0/brief.rs`). `subagent_started` adds `profile_digest`
+(always), `display_name` and `avatar` (when the profile names them; the
+display name is the `label` when none is given), and `brief_digest` and
+`brief_refs` (`{message_ids, attachments, memory_entries, facts}`; a
+non-empty brief only). It never carries the soul, a quote or a fact. A
+brief is checked against what the agent saw. An excerpt must quote a
+message of the model's last request, by the id on its `[message m-…]`
+line. The person's message carries that line (the id of the turn's
+`question_id`), and so does each user-role message of a session seeded
+from the server (the group's uuid), with the text after it neutralized
+(steering messages are neutralized too). An attachment must be one of the
+turn's images, which the message names as `[Attachment att-…: "name"]` in
+a second text part. A memory entry is always refused (no `recall` on the
+desktop). A refusal is the `spawn_agent` result.
+
 **Nested agents** (#1239). An agent tool of the agent (an `application`
 tool whose agent is not a pipeline) is offered as one tool named after it,
 `{task}` (at most 8000 characters), and runs in the cloud as a child turn:

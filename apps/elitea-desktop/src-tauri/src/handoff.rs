@@ -3627,6 +3627,6 @@ pub async fn handoff_erase(
     state.0.erase(&conversation_uuid, project_id).await
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "handoff_tests.rs"]
 mod tests;

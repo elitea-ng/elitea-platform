@@ -83,7 +83,7 @@ struct Fixture {
 /// the network on.
 fn fixture(action: &'static str, policy: LocalWorkPolicy) -> Fixture {
     let dir = tempfile::tempdir().expect("dir");
-    let base = std::fs::canonicalize(dir.path()).expect("canonical");
+    let base = crate::sys::canonicalize(dir.path()).expect("canonical");
     let remote = base.join("origin.git");
     std::fs::create_dir_all(&remote).expect("remote");
     git(&remote, &["init", "-q", "--bare"]);

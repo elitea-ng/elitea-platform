@@ -66,7 +66,9 @@ The desktop app reaches people only through the organization's device management
 | macOS 12 or later, Apple silicon and Intel | `<Name>-<version>-universal.pkg` | Developer ID Installer; the app inside with Developer ID Application. Both notarised and stapled. |
 | Windows 10 2004 or later, x64 | `.msi` and `.msix` | Azure Artifact Signing or the organization's code-signing certificate, timestamped |
 
-Windows packages are built once the desktop host runs on Windows; until then only the macOS package is available.
+The desktop host builds and passes its tests on Windows. The Windows package job is not on yet, so only the macOS package is available for now. On Windows, local commands that need a sandbox are refused: see **Local work on Windows** in [Features and configuration](/admin/features-and-configuration).
+
+Windows shows a notification only for an app that its Start Menu shortcut or its package names. The `.msi` shortcut sets `System.AppUserModel.ID` to the brand's desktop identifier, and the app sends its notifications under that identifier. The `.msix` app sends them under its package identity (`<PackageFamilyName>!App`).
 
 ### IT support contact
 

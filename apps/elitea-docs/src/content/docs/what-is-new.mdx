@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Watch cloud sub-agents work
+
+A sub-agent that a cloud run starts with `spawn_agent` now shows as a temporary participant under that call, live and after a reload. Its row has the sub-agent's name, a dashed avatar ring, a **Temporary** badge and its status. Opened, it shows the sub-agent's own tool calls, its text and its final answer. Arguments and results are short summaries, and secrets are masked. The web app, the desktop app and the mobile app show it. A reload shows the lanes once Main is upgraded too. See [Watch a sub-agent work](/how-tos/agents-pipelines/sub-agent-profiles#watch-a-sub-agent-work).
+
 ## Several agents in a desktop thread
 
 A **Local work** thread in the desktop app can now hold more than one agent. Add agents from the composer's agent chip, under **Also in this thread**, to run on this computer or in the cloud, and write **@Name** to address a message: the agents you name answer one after another, in your order, and each answer says which agent gave it and where it ran. An agent in the cloud gets the conversation's text only, never your folder, its files or the thread's tools. **Run the migrations.** See [Use several agents in a thread (desktop)](/how-tos/chat-conversations/desktop-multi-agent/).
@@ -31,7 +35,7 @@ An agent version can now have its own avatar for each state: a still, and an ima
 
 ## Sub-agent profiles and briefs
 
-`spawn_agent` now takes a `profile`: a display name, a short role (the soul), the tools, the model (`inherit`) and an avatar key. It also takes a `context` brief: quotes of messages, this turn's attachments, facts and recalled memory entries. The platform checks that the agent itself sees each reference, and refuses the call when it does not. Each spawn of a cloud run is recorded once, by digest, never by its text. See [Sub-agent profiles and briefs](/how-tos/agents-pipelines/sub-agent-profiles/).
+`spawn_agent` now takes a `profile`: a display name, a short role (the soul), the tools, the model (`inherit`) and an avatar key. It also takes a `context` brief: quotes of messages, this turn's attachments, facts and recalled memory entries. The platform checks that the agent itself sees each reference, and refuses the call when it does not. Each spawn of a cloud run is recorded once, by digest, never by its text. A local turn in the desktop app now checks a brief too: it accepts quotes of the messages its agent read and the images attached to the current message. It still refuses memory entries. See [Sub-agent profiles and briefs](/how-tos/agents-pipelines/sub-agent-profiles/#in-the-desktop-app).
 
 ## Limit an agent's tools
 

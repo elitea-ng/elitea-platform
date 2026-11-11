@@ -492,7 +492,11 @@ pub fn parse_tree(
             by_language.entry(language).or_default().push((path, bytes));
         }
     }
-    let prefix = format!("{}/", root.display());
+    // The keys are the prefix and the relative path, so the prefix always
+    // comes off again: `root.join(path)` writes `\` between them on
+    // Windows, and the citations then kept the absolute path (#1828).
+    let root_text = root.display().to_string();
+    let prefix = format!("{}/", root_text.trim_end_matches('/'));
     let mut parsed = BTreeMap::new();
     for (language, paths) in by_language {
         if stop() {
@@ -504,7 +508,7 @@ pub fn parse_tree(
         let mut absolute = Vec::with_capacity(paths.len());
         let mut contents = BTreeMap::new();
         for (path, bytes) in paths {
-            let key = root.join(path).display().to_string();
+            let key = format!("{prefix}{path}");
             contents.insert(key.clone(), bytes);
             absolute.push(key);
         }

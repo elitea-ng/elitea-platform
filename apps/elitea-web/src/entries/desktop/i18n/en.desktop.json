@@ -1158,5 +1158,6 @@
   "workspace.floor.local": "on this computer",
   "workspace.floor.note": "Write @Name to address an agent; the cloud ones get the conversation text only.",
   "workspace.floor.stopped": "The next agent this message addressed did not answer: {{message}}",
-  "workspace.floor.superseded": "A newer message took the floor: the other agents this message addressed do not answer it."
+  "workspace.floor.superseded": "A newer message took the floor: the other agents this message addressed do not answer it.",
+  "workspace.subagent.temporary": "Temporary"
 }

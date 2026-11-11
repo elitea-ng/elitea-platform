@@ -55,6 +55,7 @@
 pub mod api;
 pub mod approvals;
 pub mod attachments;
+pub mod brief;
 pub mod cache;
 pub mod catalogue;
 pub mod child_agent;
@@ -84,5 +85,5 @@ pub mod tools;
 pub mod turn;
 pub mod unattended;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) mod tests;

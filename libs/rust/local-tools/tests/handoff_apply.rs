@@ -3,6 +3,7 @@
 //! renames, binaries and modes, excluded paths never deleted, a preflight
 //! that leaves the folder and every ref byte-identical, the re-check before
 //! apply, a tampered segment, and the checkpoint that undoes it all.
+#![cfg(unix)]
 #![cfg(feature = "handoff")]
 #![allow(
     clippy::unwrap_used,

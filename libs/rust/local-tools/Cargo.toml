@@ -45,7 +45,8 @@ lsp-types = "0.97.0"
 # through adk-tool, over the child's pipes (MIT; no new crate).
 rmcp = { version = "3.8.0", default-features = false, features = ["client", "transport-async-rw"] }
 # Background processes on a pseudo-terminal (`process`, #1223): wezterm's
-# PTY spawn for macOS and Linux (MIT; no serde, no TLS).
+# PTY spawn, a Unix PTY on macOS and Linux and ConPTY on Windows (MIT; no
+# serde, no TLS).
 portable-pty = "0.9.0"
 # run_tests' junit reports (pytest, Surefire, Gradle). No default features:
 # no serde, no encoding; it expands no DTD entity.
@@ -73,6 +74,16 @@ rustix = { version = "1.1.5", features = ["fs", "process"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"
+
+# Windows (#1828, src/sys/windows.rs): a command's process tree is a Job
+# Object with kill-on-close (win32job: safe bindings, MIT OR Apache-2.0),
+# file links are counted through winapi-util, and paths are canonicalised
+# without the `\\?\` prefix (dunce). winapi-util and dunce are already in
+# the tree (ignore, tauri); this crate keeps `unsafe_code = "forbid"`.
+[target.'cfg(windows)'.dependencies]
+dunce = "1.0.5"
+winapi-util = "0.1.11"
+win32job = "2.0.3"
 
 [dev-dependencies]
 elitea-workspace-store = { path = "../workspace-store" }

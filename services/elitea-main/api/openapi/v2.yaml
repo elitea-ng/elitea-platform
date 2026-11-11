@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.47"
+  x-elitea-client-contract: "1.48"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -1814,7 +1814,7 @@ components:
       properties:
         trigger_origin:
           type: string
-          description: How the runs started. One of schedule, webhook or index.
+          description: How the runs started. One of schedule, webhook, index or idle_compaction (an agent's idle compaction run, ADR-0050 decision 9b2).
         executions:
           type: integer
           format: int64
@@ -1899,7 +1899,7 @@ components:
         capability_id: { type: string }
         trigger_origin:
           type: string
-          description: How the run started. One of manual, api, schedule, webhook or index.
+          description: How the run started. One of manual, api, schedule, webhook, index or idle_compaction.
         actor_user_id: { type: string }
         state: { type: string }
         admitted_at: { type: string, format: date-time }
@@ -3094,6 +3094,130 @@ components:
             message's `addressed_to`. Empty is everyone. Present with
             `participant_id`.
 
+    SubAgentLaneItem:
+      type: object
+      description: >-
+        Client contract 1.48. One of a sub-agent's own tool calls (`tool`) or
+        one of its texts (`text`). Untrusted text: render it as plain text.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [tool, text]
+        call_id: { type: string, description: 'The child''s own call id (`tool`).' }
+        tool: { type: string, maxLength: 120 }
+        args_summary:
+          type: string
+          maxLength: 240
+          description: The call's arguments as one short line, secrets masked.
+        ok:
+          type: boolean
+          description: Set once the call returned; false when it failed.
+        summary:
+          type: string
+          maxLength: 240
+          description: The first characters of the call's result or error.
+        text: { type: string, maxLength: 600 }
+
+    SubAgentLane:
+      type: object
+      description: >-
+        Client contract 1.48 (ADR-0050 decision 4). A temporary sub-agent a
+        cloud run started with `spawn_agent`, as the answer keeps it
+        (`metadata.subagents_v1`). Untrusted text: render it as plain text.
+      required: [agent_id, parent_call_id, ordinal, status, items]
+      properties:
+        agent_id: { type: string }
+        parent_call_id:
+          type: string
+          description: The `tool_run_id` of the `spawn_agent` call that started it.
+        ordinal: { type: integer, minimum: 1 }
+        label: { type: string, maxLength: 120 }
+        display_name:
+          type: string
+          maxLength: 120
+          description: The profile's display name; absent when the spawn named none.
+        avatar:
+          type: string
+          maxLength: 120
+          description: The profile's avatar key (`default:<name>`); display only.
+        status:
+          type: string
+          enum: [running, completed, failed, budget_exhausted, cancelled]
+          description: >-
+            `running` on a lane whose answer is still streaming; a settled
+            answer's children are settled (a child the run's end stopped is
+            `cancelled`).
+        items:
+          type: array
+          maxItems: 96
+          items:
+            $ref: '#/components/schemas/SubAgentLaneItem'
+        steps: { type: integer }
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        result:
+          type: string
+          maxLength: 2000
+          description: Its final text (or the text it had when it stopped).
+        error:
+          type: string
+          description: Why it stopped short (`subagent_failed`, `subagent_cancelled`, ...).
+
+    ClientFrameAgentSubAgent:
+      description: >-
+        Client contract 1.48 (ADR-0050 decision 4). One step of a temporary
+        sub-agent a cloud run started with `spawn_agent`:
+        `response_metadata.subagent_v1.kind` is `started` (with its
+        `parent_call_id`, `ordinal`, `label`, `display_name` and `avatar`),
+        `resumed`, `tool_start` (`call_id`, `tool`, `args_summary`),
+        `tool_end` (`call_id`, `ok`, `summary`), `text` or `finished`
+        (`status`, `steps`, tokens, `result`, `error`). Fold them into one
+        lane per `agent_id` under the `spawn_agent` row; the answer keeps the
+        same lanes as `metadata.subagents_v1`. A client that does not know
+        the frame ignores it. Not terminal. Untrusted text: render it as
+        plain text.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the lane entry
+                (services/elitea-worker-rust/src/agents/subagent_lane.rs).
+              required: [subagent_v1]
+              properties:
+                subagent_v1:
+                  type: object
+                  required: [kind, agent_id]
+                  properties:
+                    kind:
+                      type: string
+                      enum: [started, resumed, tool_start, tool_end, text, finished]
+                    agent_id: { type: string }
+                    parent_call_id: { type: string }
+                    ordinal: { type: integer }
+                    label: { type: string }
+                    display_name: { type: string }
+                    avatar: { type: string }
+                    call_id: { type: string }
+                    tool: { type: string }
+                    args_summary: { type: string }
+                    ok: { type: boolean }
+                    summary: { type: string }
+                    text: { type: string }
+                    status:
+                      type: string
+                      enum: [running, completed, failed, budget_exhausted, cancelled]
+                    steps: { type: integer }
+                    input_tokens: { type: integer }
+                    output_tokens: { type: integer }
+                    result: { type: string }
+                    error: { type: string }
+
     ClientFrameAgentState:
       description: >-
         Client contract 1.38: the participant moved to a new state. The
@@ -3911,6 +4035,18 @@ components:
                 otherwise.
             grounding:
               $ref: '#/components/schemas/GroundingIndicator'
+            subagents_v1:
+              type: array
+              maxItems: 24
+              items:
+                $ref: '#/components/schemas/SubAgentLane'
+              description: >-
+                Client contract 1.48 (ADR-0050 decision 4). On a cloud answer
+                whose agent started temporary sub-agents (`spawn_agent`): one
+                lane per child, as its `agent_subagent` frames left it. Show
+                each under the `spawn_agent` tool row whose call id is its
+                `parent_call_id`, with its display name and a "temporary"
+                badge. Absent when the answer started none.
         message_items:
           type: array
           description: Omitted, not empty, for a group with no attachments.
@@ -7158,6 +7294,71 @@ components:
           enum: [-1, 1]
           description: '-1 = dislike, 1 = like.'
         comment: { type: string }
+
+    MessageContextView:
+      type: object
+      description: >
+        The view one agent answer was given (ADR-0050 decision 9, issue
+        1669): what Main sent the answering agent as the conversation on that
+        turn. `history` is the mode after the participant's own mode;
+        `participant_history` is the participant's own setting ("share
+        history from: now" is `since_joined`), null when unset. `compaction`
+        is the answer's last context measurement, null when the runtime
+        reported none.
+        NOTE(W2): internal/infra/db/repos/context_views.go:63 (`ContextView`).
+      required: [message_id, reader_participant_id, reader_name, history, include_side_talk,
+        participant_history, window_tokens, digest, recorded_at, entries, compaction]
+      properties:
+        message_id: { type: string, format: uuid }
+        reader_participant_id: { type: integer, format: int64 }
+        reader_name: { type: string, nullable: true }
+        history:
+          type: string
+          description: "`full`, `since_joined`, `addressed_only` or `none`."
+        include_side_talk:
+          type: string
+          description: "`party` or `none`."
+        participant_history: { type: string, nullable: true }
+        window_tokens: { type: integer, format: int64 }
+        digest: { type: string, description: The lowercase hex SHA-256 view digest. }
+        recorded_at: { type: string, format: date-time }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/MessageContextViewEntry' }
+        compaction:
+          allOf:
+            - $ref: '#/components/schemas/MessageContextViewCompaction'
+          nullable: true
+
+    MessageContextViewEntry:
+      type: object
+      description: >
+        One visible message of the conversation, in transcript order.
+        `reason` is null when the message was in the view, else
+        `side_talk_of_others`, `side_talk_off`, `history_none`,
+        `before_joined` or `not_addressed`. The author fields are null when
+        the message was deleted after the turn. No message body.
+        NOTE(W2): internal/infra/db/repos/context_views.go:42 (`ContextViewEntry`).
+      required: [message_id, reason, author_name, author_kind, created_at]
+      properties:
+        message_id: { type: string, format: uuid }
+        reason: { type: string, nullable: true }
+        author_name: { type: string, nullable: true }
+        author_kind: { type: string, nullable: true }
+        created_at: { type: string, format: date-time, nullable: true }
+
+    MessageContextViewCompaction:
+      type: object
+      description: >
+        The answer's last context measurement (`meta.runtime_context`):
+        `phase` is `measured`, `compacting` or `compacted`.
+        NOTE(W2): internal/infra/db/repos/context_views.go:55 (`ContextViewCompaction`).
+      required: [phase, estimated_input_tokens, usable_input_tokens, compaction_trigger_tokens]
+      properties:
+        phase: { type: string }
+        estimated_input_tokens: { type: integer, format: int64 }
+        usable_input_tokens: { type: integer, format: int64 }
+        compaction_trigger_tokens: { type: integer, format: int64 }
 
     MessageFeedbackSummary:
       type: object
@@ -21048,6 +21249,7 @@ x-elitea-client-frames:
   mcp_authorization_required: '#/components/schemas/ClientFrameMcpAuthorizationRequired'
   agent_requires_confirmation: '#/components/schemas/ClientFrameRequiresConfirmation'
   agent_state: '#/components/schemas/ClientFrameAgentState'
+  agent_subagent: '#/components/schemas/ClientFrameAgentSubAgent'
 
 paths:
   /.well-known/elitea-client:
@@ -36521,6 +36723,54 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/message_context_view/prompt_lib/{project_id}/{message_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: message_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: >
+          The agent answer's message-GROUP uuid, the same `{messageID}`
+          GetMessage reads.
+    get:
+      operationId: getMessageContextView
+      summary: What the agent saw for one answer
+      description: |
+        internal/api/v2/contextviews/handler.go's Get (ADR-0050 decision 9,
+        issue 1669). The view Main sent the answering agent on that turn,
+        recorded with the answer (tenant/0167_chat_message_context_views.sql):
+        the mode, the model window, the digest the worker checked, and every
+        visible message the conversation projected, in order, each with the
+        rule that dropped it or no reason when it was in the view. Gated on
+        `models.chat.messages.details`, and the conversation's read rule is
+        applied to the message first, so a message the caller cannot read is
+        a 404. Only the answer's own reader's view is ever answered, and no
+        message body, tool call, tool result or thinking step is in it. An
+        answer admitted before the record existed answers 404.
+      tags: [chat]
+      responses:
+        '200':
+          description: The recorded view.
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: Always `no-store`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageContextView'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The database is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   # ==========================================================================
   # PREDICT — one stateless LLM turn

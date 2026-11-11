@@ -64,6 +64,12 @@ func (r *AgentFloorRepository) ConversationFloor(
 	return readConversationFloor(ctx, r.pool, projectID, conversationUUID)
 }
 
+// floorAgentNameSQL is an agent's name in the conversation: its persona's
+// display name, else the participant's own name, else its entity's.
+const floorAgentNameSQL = `COALESCE(NULLIF(btrim(mapping.persona ->> 'display_name'), ''),
+                NULLIF(btrim(participant.meta ->> 'name'), ''),
+                NULLIF(btrim(participant.entity_meta ->> 'name'), ''), '')`
+
 type floorQueryer interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -96,9 +102,7 @@ func readConversationFloor(
 	}
 	rows, err := queryer.Query(ctx, fmt.Sprintf(`
 SELECT participant.id,
-       COALESCE(NULLIF(btrim(mapping.persona ->> 'display_name'), ''),
-                NULLIF(btrim(participant.meta ->> 'name'), ''),
-                NULLIF(btrim(participant.entity_meta ->> 'name'), ''), ''),
+       `+floorAgentNameSQL+`,
        COALESCE(NULLIF(btrim(mapping.persona ->> 'role'), ''), '')
 FROM %[1]s.chat_conversations AS conversation
 JOIN %[1]s.chat_participant_mapping AS mapping ON mapping.conversation_id = conversation.id
@@ -244,15 +248,11 @@ type floorExchangeRow struct {
 	newest        bool
 }
 
-// lockRunExchange locks the exchange the run is a turn of: the exchange of
-// its question (its first turn), or the one with a turn of its execution.
-// A run of an unattended chain is a turn of the exchange of any run of its
-// chain: a step-limit or output-limit continuation of a turn continues that
-// turn.
-func lockRunExchange(ctx context.Context, tx pgx.Tx, run floorRun, executionID string) (floorExchangeRow, bool, error) {
-	var row floorExchangeRow
-	var stopped *string
-	err := tx.QueryRow(ctx, `
+// runExchangeMatch selects the exchanges ($1 project, $2 conversation) a
+// run ($3 participant, $4 execution) is a turn of: the exchange of its
+// question (its first turn), or one with a turn of its execution or of any
+// run of its unattended chain. The caller adds the order, limit and lock.
+const runExchangeMatch = `
 WITH runs AS (
     SELECT $4::text AS execution_id
     UNION
@@ -266,10 +266,7 @@ WITH runs AS (
     JOIN elitea_runtime.agent_execution_jobs AS binding ON binding.execution_id = runs.execution_id
     WHERE binding.participant_id = $3
 )
-SELECT e.question_id::text, e.owner_user_id, e.trigger_origin, e.first_participant_id, e.stopped,
-       NOT EXISTS (SELECT 1 FROM elitea_runtime.agent_floor_exchanges AS newer
-                   WHERE newer.project_id = e.project_id AND newer.conversation_uuid = e.conversation_uuid
-                     AND newer.created_at > e.created_at)
+SELECT %s
 FROM elitea_runtime.agent_floor_exchanges AS e
 WHERE e.project_id = $1 AND e.conversation_uuid = $2::uuid
   AND (EXISTS (SELECT 1 FROM facts
@@ -277,7 +274,19 @@ WHERE e.project_id = $1 AND e.conversation_uuid = $2::uuid
        OR EXISTS (SELECT 1 FROM elitea_runtime.agent_floor_turns AS t
                   JOIN facts ON facts.execution_id = t.execution_id
                   WHERE t.project_id = e.project_id AND t.conversation_uuid = e.conversation_uuid
-                    AND t.question_id = e.question_id))
+                    AND t.question_id = e.question_id))`
+
+// lockRunExchange locks the exchange the run is a turn of (runExchangeMatch),
+// the newest when several match. A run of an unattended chain is a turn of
+// the exchange of any run of its chain: a step-limit or output-limit
+// continuation of a turn continues that turn.
+func lockRunExchange(ctx context.Context, tx pgx.Tx, run floorRun, executionID string) (floorExchangeRow, bool, error) {
+	var row floorExchangeRow
+	var stopped *string
+	err := tx.QueryRow(ctx, fmt.Sprintf(runExchangeMatch, `e.question_id::text, e.owner_user_id, e.trigger_origin, e.first_participant_id, e.stopped,
+       NOT EXISTS (SELECT 1 FROM elitea_runtime.agent_floor_exchanges AS newer
+                   WHERE newer.project_id = e.project_id AND newer.conversation_uuid = e.conversation_uuid
+                     AND newer.created_at > e.created_at)`)+`
 ORDER BY e.created_at DESC
 LIMIT 1
 FOR UPDATE OF e`, run.projectID, run.conversationUUID, run.participantID, executionID).Scan(
@@ -297,21 +306,48 @@ FOR UPDATE OF e`, run.projectID, run.conversationUUID, run.participantID, execut
 	return row, true, nil
 }
 
+// runHasExchange is FloorSettle's pre-check (issue 1804): one read, with no
+// transaction and no lock, of whether the run is an agent turn with a
+// participant and any exchange matches it (runExchangeMatch). Most settled
+// runs (a conversation with one agent, an ad hoc chat, an index ingest)
+// have none and never open the settle transaction. The transaction rechecks
+// under the lock, so a stale true costs one empty transaction and a stale
+// false cannot happen: the exchange is written in the run's own admission.
+func runHasExchange(ctx context.Context, queryer rowQueryer, executionID string) (floorRun, bool, error) {
+	run, ok, err := readFloorRun(ctx, queryer, executionID)
+	if err != nil || !ok {
+		return floorRun{}, false, err
+	}
+	var exists bool
+	err = queryer.QueryRow(ctx, `SELECT EXISTS (`+fmt.Sprintf(runExchangeMatch, `1`)+`)`,
+		run.projectID, run.conversationUUID, run.participantID, executionID).Scan(&exists)
+	if err != nil {
+		if undefinedColumnOrTable(err) {
+			return floorRun{}, false, nil
+		}
+		return floorRun{}, false, fmt.Errorf("agent floor: find the run's exchange: %w", err)
+	}
+	return run, exists, nil
+}
+
 /* ── after settle ───────────────────────────────────────────────────────── */
 
 // FloorSettle marks a settled run's floor turn DONE and answers what the
 // floor hook needs: the exchange, the run's outcome facts, whether another
 // turn of the exchange runs, and its next QUEUED turn. It answers false for
-// a run that is no turn of an exchange.
+// a run that is no turn of an exchange; such a run is told apart by a
+// read before any transaction is opened (runHasExchange).
 func (r *AgentFloorRepository) FloorSettle(ctx context.Context, executionID string) (agentexecutionapp.FloorSettleView, bool, error) {
+	// The run's binding is immutable once admitted, so the pre-check's read
+	// of it stands inside the transaction; only the exchange is rechecked.
+	run, exists, err := runHasExchange(ctx, r.pool, executionID)
+	if err != nil || !exists {
+		return agentexecutionapp.FloorSettleView{}, false, err
+	}
 	var view agentexecutionapp.FloorSettleView
 	found := false
-	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
 		view, found = agentexecutionapp.FloorSettleView{}, false
-		run, ok, err := readFloorRun(ctx, tx, executionID)
-		if err != nil || !ok {
-			return err
-		}
 		exchange, ok, err := lockRunExchange(ctx, tx, run, executionID)
 		if err != nil || !ok {
 			return err
@@ -387,17 +423,41 @@ ORDER BY position LIMIT 1`, key.ProjectID, key.ConversationUUID, key.QuestionID)
 		next.Message = *message
 	}
 	if next.FromParticipantID > 0 {
-		floor, err := readConversationFloor(ctx, tx, key.ProjectID, key.ConversationUUID)
+		name, err := readFloorAgentName(ctx, tx, key.ProjectID, key.ConversationUUID, next.FromParticipantID)
 		if err != nil {
 			return agentexecutionapp.QueuedFloorTurn{}, false, err
 		}
-		for _, agent := range floor.Agents {
-			if agent.ParticipantID == next.FromParticipantID {
-				next.FromName = agent.Name
-			}
-		}
+		next.FromName = name
 	}
 	return next, true, nil
+}
+
+// readFloorAgentName is the name readConversationFloor gives one agent of
+// the conversation (issue 1804: the next turn names only the agent that
+// handed it the floor, so only that participant is joined). An agent that
+// left the conversation has no name ("").
+func readFloorAgentName(ctx context.Context, queryer rowQueryer, projectID int64, conversationUUID string, participantID int64) (string, error) {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return "", err
+	}
+	var name string
+	err = queryer.QueryRow(ctx, fmt.Sprintf(`
+SELECT `+floorAgentNameSQL+`
+FROM %[1]s.chat_conversations AS conversation
+JOIN %[1]s.chat_participant_mapping AS mapping
+  ON mapping.conversation_id = conversation.id AND mapping.participant_id = $2
+JOIN %[1]s.chat_participants AS participant
+  ON participant.id = mapping.participant_id AND participant.entity_name = 'application'
+WHERE conversation.uuid = $1::uuid
+LIMIT 1`, schema), conversationUUID, participantID).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("agent floor: read the handing agent: %w", err)
+	}
+	return name, nil
 }
 
 // SkipFloorTurns skips the exchange's QUEUED turns with code.

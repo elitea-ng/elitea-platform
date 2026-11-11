@@ -125,18 +125,14 @@ pub fn detected(workspace: &Workspace, language: Language) -> bool {
 /// is run as.
 #[must_use]
 pub fn find_on_path(name: &str, search: &[PathBuf]) -> Option<PathBuf> {
-    use std::os::unix::fs::PermissionsExt as _;
     search
         .iter()
         .filter(|dir| dir.is_absolute())
-        .map(|dir| dir.join(name))
-        .find(|path| {
-            path.metadata()
-                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-        })
+        .flat_map(|dir| crate::sys::program_candidates(dir, name))
+        .find(|path| crate::sys::is_executable(path))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

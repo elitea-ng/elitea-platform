@@ -6,6 +6,7 @@ import type { ApplicationCreatedResponse } from '@/shared/api/generated/model';
 import { readOutputContract } from '@/shared/ui/OutputContractField';
 
 import { setFieldValueAtPath } from './agentFieldChange';
+import { contextBlockForSave, readContextBlock } from './contextBlock';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 
 import type { AgentDraftValues, AgentFieldChange } from '../model/types';
@@ -160,6 +161,15 @@ function draftOutputContract(meta: NonNullable<AgentDraftValues['version_details
   return contract === null ? citations : { output_contract: contract, ...citations };
 }
 
+/**
+ * `meta.context` (ADR-0050 decision 9), the Conversation history field the
+ * create form shows. Spread, so the default (no block) sends no key.
+ */
+function draftContextBlock(meta: NonNullable<AgentDraftValues['version_details']>['meta']) {
+  const block = contextBlockForSave(readContextBlock(meta?.['context']));
+  return block === null ? {} : { context: { ...block } };
+}
+
 /** `submit`'s request-body construction, extracted purely to keep `useAgentEditorCreate` under the oxlint complexity budget. */
 function buildCreateDraft(values: AgentDraftValues): ApplicationDraftInput {
   const versionDetails = values.version_details;
@@ -179,7 +189,7 @@ function buildCreateDraft(values: AgentDraftValues): ApplicationDraftInput {
       ...optionalCreateVersionFields(versionDetails),
       conversationStarters: draftConversationStarters(versionDetails),
       variables: (versionDetails?.variables ?? []).map((variable) => ({ name: variable.name, value: variable.value })),
-      meta: { step_limit: meta?.step_limit ?? 25, internal_tools: resolveInternalTools(meta), ...draftOutputContract(meta) },
+      meta: { step_limit: meta?.step_limit ?? 25, internal_tools: resolveInternalTools(meta), ...draftOutputContract(meta), ...draftContextBlock(meta) },
       // Whatever the model picker wrote into the form, or `undefined` when
       // the user left it alone — `toVersionWriteRequest` then omits the key
       // and the new agent runs on the project's catalogue default.

@@ -15,11 +15,13 @@ package repos
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -39,6 +41,10 @@ import (
 // AgentIdleCompactionsRepository is the PostgreSQL store of idle checks.
 type AgentIdleCompactionsRepository struct {
 	pool *pgxpool.Pool
+	now  func() time.Time
+
+	retireMu   sync.Mutex
+	lastRetire time.Time
 }
 
 // NewAgentIdleCompactionsRepository builds the repository.
@@ -46,7 +52,7 @@ func NewAgentIdleCompactionsRepository(pool *pgxpool.Pool) (*AgentIdleCompaction
 	if pool == nil {
 		return nil, errors.New("idle compaction repository requires a pool")
 	}
-	return &AgentIdleCompactionsRepository{pool: pool}, nil
+	return &AgentIdleCompactionsRepository{pool: pool, now: time.Now}, nil
 }
 
 var (
@@ -350,7 +356,7 @@ type claimedIdleCompaction struct {
 // attempts exceed maxAttempts ends SKIPPED (admission_exhausted); a row whose
 // source can never be admitted ends SKIPPED (source_input_invalid). Each
 // pass also retires ADMITTED rows whose idle job is terminal (a lost
-// after-settle hook).
+// after-settle hook), at most once a minute on this replica.
 func (r *AgentIdleCompactionsRepository) ClaimIdleCompactions(ctx context.Context, limit int, lease time.Duration, maxAttempts int) ([]agentexecutionapp.IdleCompactionTarget, error) {
 	if r == nil || r.pool == nil || limit < 1 || limit > agentexecutionapp.IdleCompactionSweepBatch ||
 		lease <= 0 || maxAttempts < 1 || maxAttempts > 1000 {
@@ -420,7 +426,16 @@ RETURNING row.idempotency_key, row.project_id, row.conversation_uuid::text, row.
 
 // retireSettledIdleRuns ends ADMITTED rows whose idle job reached a
 // terminal state without its projection or its settle hook ending the row.
+// QUARANTINED is terminal here: nothing moves a job out of it (claims.go
+// answers retry-later), so its row is ended like a FAILED one and the
+// participant's check slot is freed.
+//
+// It is a backstop for a lost after-settle hook, so it runs at most once per
+// retireInterval on each replica, not on every sweep pass.
 func (r *AgentIdleCompactionsRepository) retireSettledIdleRuns(ctx context.Context, limit int) error {
+	if !r.retireDue() {
+		return nil
+	}
 	if _, err := r.pool.Exec(ctx, `
 WITH settled AS (
   SELECT row.id, job.state
@@ -439,9 +454,36 @@ SET state = CASE WHEN settled.state = 'SUCCEEDED' THEN 'DONE' ELSE 'SKIPPED' END
 FROM settled
 WHERE row.id = settled.id`, limit, agentexecutionapp.IdleCompactionSkipRunCancelled,
 		agentexecutionapp.IdleCompactionSkipRunFailed); err != nil {
+		r.retireFailed()
 		return fmt.Errorf("retire settled idle runs: %w", err)
 	}
 	return nil
+}
+
+// retireInterval is the lost-hook backstop's period on one replica.
+const retireInterval = time.Minute
+
+// retireDue reports whether this replica's backstop is due, and if so marks
+// it run now.
+func (r *AgentIdleCompactionsRepository) retireDue() bool {
+	r.retireMu.Lock()
+	defer r.retireMu.Unlock()
+	now := time.Now()
+	if r.now != nil {
+		now = r.now()
+	}
+	if !r.lastRetire.IsZero() && now.Sub(r.lastRetire) < retireInterval {
+		return false
+	}
+	r.lastRetire = now
+	return true
+}
+
+// retireFailed lets the next pass retry a backstop that failed.
+func (r *AgentIdleCompactionsRepository) retireFailed() {
+	r.retireMu.Lock()
+	r.lastRetire = time.Time{}
+	r.retireMu.Unlock()
 }
 
 // loadIdleCompactionTarget reads the source's job, binding and exact
@@ -451,11 +493,15 @@ func (r *AgentIdleCompactionsRepository) loadIdleCompactionTarget(ctx context.Co
 	var target agentexecutionapp.IdleCompactionTarget
 	var triggerOrigin, threadID string
 	var resourceProject, projectionProject int32
-	var applicationID *int64
+	var applicationID, releaseID, releaseVersionID *int64
+	var releaseDigest []byte
+	// The source's release (shared 0198) with its version row and digest:
+	// the idle run binds the agent identity the source bound (issue 1776).
 	err := r.pool.QueryRow(ctx, `
 SELECT job.tenant_id, job.resource_project_id, job.projection_project_id, job.actor_id, job.capability_id,
        job.trigger_origin, binding.client_stream_id, binding.client_message_id, binding.client_execution_generation,
-       binding.application_id, entry.content_bytes, entry.content_digest
+       binding.application_id, entry.content_bytes, entry.content_digest,
+       binding.release_id, release.application_version_id, release.definition_digest
 FROM elitea_runtime.execution_jobs AS job
 JOIN elitea_runtime.agent_execution_jobs AS binding
   ON binding.execution_id = job.execution_id AND binding.generation = job.generation
@@ -463,13 +509,17 @@ JOIN elitea_runtime.agent_execution_jobs AS binding
 JOIN elitea_runtime.input_bundle_entries AS entry
   ON entry.input_bundle_id = job.input_bundle_id AND entry.entry_id = binding.request_entry_id
  AND entry.semantic_role = '`+executiondomain.AgentExecutionRequestRole+`'
+LEFT JOIN elitea_lifecycle.application_releases AS release
+  ON release.id = binding.release_id AND release.tenant_project_id = job.resource_project_id
+ AND release.application_id = binding.application_id
 WHERE job.execution_id = $1 AND job.generation = $2
   AND job.resource_project_id = $3 AND job.projection_project_id = $3
   AND binding.client_stream_id = $4 AND binding.participant_id = $5`,
 		row.sourceExecution, row.sourceGeneration, row.projectID, row.conversationUUID, row.participantID).Scan(
 		&target.TenantID, &resourceProject, &projectionProject, &target.ActorID, &target.CapabilityID,
 		&triggerOrigin, &target.Turn.ConversationUUID, &target.Turn.ResponseMessageID,
-		&target.Turn.ExecutionGeneration, &applicationID, &target.FrozenInput, &target.FrozenInputDigest)
+		&target.Turn.ExecutionGeneration, &applicationID, &target.FrozenInput, &target.FrozenInputDigest,
+		&releaseID, &releaseVersionID, &releaseDigest)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return target, agentexecutionapp.IdleCompactionSkipSourceInvalid, nil
 	}
@@ -488,6 +538,21 @@ WHERE job.execution_id = $1 AND job.generation = $2
 		(target.CapabilityID != executiondomain.AgentApplicationCapability && target.CapabilityID != executiondomain.AgentAdhocCapability) {
 		return target, agentexecutionapp.IdleCompactionSkipSourceInvalid, nil
 	}
+	versionID, ok := idleSourceVersion(target.FrozenInput, application)
+	if !ok {
+		return target, agentexecutionapp.IdleCompactionSkipSourceInvalid, nil
+	}
+	if releaseID != nil {
+		// A release whose row is gone, or whose digest is malformed, is a
+		// source the idle run cannot bind the same identity for.
+		if releaseVersionID == nil || *releaseVersionID <= 0 || len(releaseDigest) != sha256.Size || application == 0 {
+			return target, agentexecutionapp.IdleCompactionSkipSourceInvalid, nil
+		}
+		target.Turn.Release = &agentexecutionapp.ReleaseRun{
+			ID: *releaseID, ApplicationVersionID: *releaseVersionID, DefinitionDigest: [32]byte(releaseDigest),
+		}
+	}
+	target.Turn.ApplicationVersionID = versionID
 	// The thread the worker's session lives under: the one the answer
 	// recorded (as a fan-out wake reads it), else the frozen request's. A
 	// source with neither has no session to compact.
@@ -534,6 +599,30 @@ WHERE response.uuid = $1::uuid AND conversation.uuid = $2::uuid`, schema),
 		return target, agentexecutionapp.IdleCompactionSkipSourceInvalid, nil
 	}
 	return target, "", nil
+}
+
+// idleSourceVersion reads the agent version the source ran from its frozen
+// request (application.id and application.version_id, as start.go freezes
+// them). An ad hoc source (application 0) has none; an agent source whose
+// frozen application does not name a positive version of the same agent is
+// not a source an idle run can bind (false).
+func idleSourceVersion(frozen []byte, application int64) (int64, bool) {
+	if application == 0 {
+		return 0, true
+	}
+	var input runtimev1.AgentExecutionInputV1
+	if proto.Unmarshal(frozen, &input) != nil {
+		return 0, false
+	}
+	var app struct {
+		ID        int64 `json:"id"`
+		VersionID int64 `json:"version_id"`
+	}
+	if json.Unmarshal(input.GetApplication(), &app) != nil || app.ID != application ||
+		app.VersionID <= 0 || app.VersionID > math.MaxInt32 {
+		return 0, false
+	}
+	return app.VersionID, true
 }
 
 // SkipIdleCompaction ends a QUEUED row SKIPPED with code. A row that is no
@@ -601,8 +690,9 @@ FOR UPDATE`, agentexecutionapp.IdleCompactionIdempotencyKey(turn.SourceExecution
 	if busy {
 		return agentexecutionapp.ErrIdleCompactionAgentBusy
 	}
-	// Authorization inside the effect transaction, after the locks.
-	if err := checkInterruptPermission(ctx, tx, turn.ProjectID, turn.ActorUserID, interruptdomain.PermissionDecide); err != nil {
+	// Authorization inside the effect transaction, after the locks: the
+	// permission an ordinary chat turn of the actor needs (issue 1776).
+	if err := checkInterruptPermission(ctx, tx, turn.ProjectID, turn.ActorUserID, agentexecutionapp.ChatTurnPermission); err != nil {
 		if errors.Is(err, interruptdomain.ErrNotAllowed) {
 			return agentexecutionapp.ErrIdleCompactionActorNotAllowed
 		}

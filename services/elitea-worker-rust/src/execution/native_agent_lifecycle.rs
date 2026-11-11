@@ -504,6 +504,8 @@ where
     let steps = RunSteps::bind(&control, &run, clock.as_ref());
     projector.attach_run_steps(Arc::clone(&steps.recorder));
 
+    // #1823: the cloud sub-agents' live lane, when this run binds them.
+    let lane = control.ephemeral_agent_ledger(run.trace_execution_id(), run.trace_generation());
     let mut probe = run.lease_state_probe();
     let mut pauses = AgentPauseAccumulator::default();
     let wrap_up = completion_selector.wrap_up();
@@ -518,11 +520,36 @@ where
         NativeStreamStops {
             wrap_up,
             step_limit: step_limit.clone(),
+            lane: lane.clone(),
         },
         clock.as_ref(),
         &steps,
     ))
     .await;
+    // #1823: the lane's last entries, and an end for each child the run's
+    // end stopped, go out before the terminal while the claim is live. A
+    // pause sends none after its cards (a client shows a lane of a settled
+    // answer that never ended as stopped).
+    let stream = match (stream, lane.as_deref()) {
+        (outcome @ (NativeStreamOutcome::Eos | NativeStreamOutcome::Failure(_)), Some(ledger)) => {
+            ledger.lane().close_running();
+            match Box::pin(publish_lane(
+                &mut run,
+                &projector,
+                ledger,
+                &mut pauses,
+                clock.as_ref(),
+            ))
+            .await
+            {
+                BatchPublication::RecoveryRequired { code, retryable } => {
+                    NativeStreamOutcome::RecoveryRequired { code, retryable }
+                }
+                BatchPublication::Acknowledged | BatchPublication::Rejected => outcome,
+            }
+        }
+        (outcome, _) => outcome,
+    };
     tracing::info!(
         event = "agent_event_stream_completed",
         stream_disposition = stream_disposition(&stream),
@@ -840,6 +867,7 @@ where
     let NativeStreamStops {
         wrap_up,
         step_limit,
+        lane,
     } = stream_stops;
     let mut failure = None;
     // ADR-0034 take back: the lease poll's `workspace_wrap_up` asks the turn
@@ -890,6 +918,26 @@ where
                     wrap.mark_stopped();
                 }
                 let _requested = native.request_stop();
+            }
+            () = async {
+                if let Some(ledger) = &lane {
+                    ledger.lane().notified().await;
+                }
+            }, if lane.is_some() && failure.is_none() => {
+                // #1823: a child moved while the parent waits on it.
+                if let Some(ledger) = lane.as_deref() {
+                    match Box::pin(publish_lane(run, projector, ledger, pauses, clock)).await {
+                        BatchPublication::Acknowledged => {}
+                        BatchPublication::Rejected => {
+                            failure = Some(RuntimeFailureKind::Cancelled);
+                            let _requested = native.request_stop();
+                        }
+                        BatchPublication::RecoveryRequired { code, retryable } => {
+                            let _requested = native.request_stop();
+                            return NativeStreamOutcome::RecoveryRequired { code, retryable };
+                        }
+                    }
+                }
             }
             event = native.next_event() => {
                 let event = match event {
@@ -951,10 +999,28 @@ where
                         // projection fault must not overwrite the real reason.
                         if failure.is_none()
                             && let Some(requirement) = error.delegated_authorization()
-                            && publish_authorization_notice(run, projector, &requirement, clock)
-                                .await
                         {
-                            return NativeStreamOutcome::Eos;
+                            // #1823: the notice is the turn's result, and no
+                            // progress may follow an acknowledged result, so
+                            // the lane (and an end for each child still
+                            // running) goes out first.
+                            if let Some(ledger) = lane.as_deref() {
+                                ledger.lane().close_running();
+                                if let BatchPublication::RecoveryRequired { code, retryable } =
+                                    Box::pin(publish_lane(run, projector, ledger, pauses, clock))
+                                        .await
+                                {
+                                    return NativeStreamOutcome::RecoveryRequired {
+                                        code,
+                                        retryable,
+                                    };
+                                }
+                            }
+                            if publish_authorization_notice(run, projector, &requirement, clock)
+                                .await
+                            {
+                                return NativeStreamOutcome::Eos;
+                            }
                         }
                         tracing::error!(
                             execution_id = %run.trace_execution_id(),
@@ -989,7 +1055,12 @@ where
                         continue;
                     }
                 };
-                match Box::pin(publish_batch(run, batch, pauses, clock)).await {
+                let mut publication = Box::pin(publish_batch(run, batch, pauses, clock)).await;
+                // #1823: what the sub-agents did meanwhile follows the event.
+                if let (BatchPublication::Acknowledged, Some(ledger)) = (&publication, lane.as_deref()) {
+                    publication = Box::pin(publish_lane(run, projector, ledger, pauses, clock)).await;
+                }
+                match publication {
                     BatchPublication::Acknowledged => {
                         // A full batch of step records goes out under the
                         // live claim now rather than waiting for settlement.
@@ -1097,6 +1168,51 @@ struct NativeStreamStops {
     wrap_up: Option<Arc<crate::workspace_run::wrap_up::WrapUp>>,
     /// The step-limit stop of an unattended run (ADR-0045).
     step_limit: Option<Arc<crate::agents::unattended::StepLimitStop>>,
+    /// The run's sub-agent ledger, whose lane is projected live (#1823).
+    lane: Option<Arc<crate::protocol::ephemeral_agents::EphemeralAgentLedger>>,
+}
+
+/// Publish what the sub-agent lane has queued (#1823), every batch of it.
+async fn publish_lane<C, K>(
+    run: &mut CursorBoundAuthorizedAgentRun<C>,
+    projector: &AgentEventProjector,
+    ledger: &crate::protocol::ephemeral_agents::EphemeralAgentLedger,
+    pauses: &mut AgentPauseAccumulator,
+    clock: &K,
+) -> BatchPublication
+where
+    C: AgentProgressConnector,
+    K: UnixMillisClock,
+{
+    loop {
+        let entries = ledger.lane().drain();
+        if entries.is_empty() {
+            return BatchPublication::Acknowledged;
+        }
+        // A pause card or a node-recovery suspension is the turn's last
+        // progress: nothing follows it, so the lane's later entries are
+        // dropped (the stored lane keeps what went out before it; Main
+        // refuses frames once the node is suspended).
+        if projector.is_paused() || projector.is_node_recovery_paused() {
+            continue;
+        }
+        let Ok((_, occurred_at)) = sampled_time(clock) else {
+            return BatchPublication::RecoveryRequired {
+                code: "agent_lifecycle.invalid_clock",
+                retryable: false,
+            };
+        };
+        // A lane entry that cannot be projected is dropped, never the run:
+        // the lane is display data.
+        let Ok(batch) = projector.project_subagent_entries(entries, occurred_at) else {
+            tracing::warn!(event = "subagent_lane_projection_failed");
+            continue;
+        };
+        match Box::pin(publish_batch(run, batch, pauses, clock)).await {
+            BatchPublication::Acknowledged => {}
+            other => return other,
+        }
+    }
 }
 
 enum BatchPublication {

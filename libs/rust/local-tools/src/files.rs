@@ -1295,7 +1295,7 @@ fn collect(
 
 /// [`collect`] on one thread, file by file (the reference the batched
 /// search is checked against).
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn collect_serial(
     workspace: &Workspace,
     base: &WsPath,
@@ -1618,7 +1618,7 @@ fn fuzzy_rank(pattern: &str, paths: impl Iterator<Item = WsPath>) -> Vec<(WsPath
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use serde_json::json;
 
@@ -1925,7 +1925,7 @@ mod tests {
     /// is not the next one's input), and the file is written once.
     #[test]
     fn multi_edit_applies_against_original() {
-        use std::os::unix::fs::MetadataExt;
+        use crate::sys::os::MetadataExt;
         let (dir, ws, ledger) = setup(&[]);
         seed(&dir, "a.rs", "fn a() {}\nfn b() {}\nfn c() {}\n");
         read(&ws, &ledger, json!({ "path": "a.rs" })).expect("read");
@@ -2224,7 +2224,7 @@ mod tests {
     fn a_path_repeated_in_one_patch_is_refused() {
         let (dir, ws, ledger) = setup(&[]);
         seed(&dir, "a.txt", "1\n2\n3\n");
-        std::os::unix::fs::symlink("a.txt", dir.path().join("alias.txt")).expect("link");
+        crate::sys::os::symlink("a.txt", dir.path().join("alias.txt")).expect("link");
         read(&ws, &ledger, json!({ "path": "a.txt" })).expect("read");
         for second in ["a.txt", "alias.txt"] {
             let diff = format!(
@@ -2425,8 +2425,8 @@ mod tests {
         seed(&outside, "passwords.rs", "");
         let (dir, ws, _ledger) = setup(&[]);
         seed(&dir, "src/lib.rs", "");
-        std::os::unix::fs::symlink(outside.path(), dir.path().join("escape")).expect("link");
-        std::os::unix::fs::symlink(
+        crate::sys::os::symlink(outside.path(), dir.path().join("escape")).expect("link");
+        crate::sys::os::symlink(
             outside.path().join("passwords.rs"),
             dir.path().join("src/link.rs"),
         )
@@ -2444,7 +2444,7 @@ mod tests {
     #[test]
     fn search_never_reads_deny_list_paths() {
         let dir = tempfile::tempdir().expect("dir");
-        let home = std::fs::canonicalize(dir.path()).expect("canonical");
+        let home = crate::sys::canonicalize(dir.path()).expect("canonical");
         let plant = |path: &str, content: &str| {
             let path = home.join(path);
             std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");

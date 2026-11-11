@@ -2514,6 +2514,17 @@ impl<R> AgentControlClient<R> {
         self
     }
 
+    /// The execution generation's sub-agent ledger, when its run binds
+    /// sub-agents (#1823: the live lane).
+    #[must_use]
+    pub(crate) fn ephemeral_agent_ledger(
+        &self,
+        execution_id: &str,
+        generation: u64,
+    ) -> Option<Arc<super::ephemeral_agents::EphemeralAgentLedger>> {
+        self.ephemeral_agents.existing(execution_id, generation)
+    }
+
     /// The step recorder of one command (ADR-0042, #1499): the same instance
     /// for every path of the command, created on first use.
     #[must_use]

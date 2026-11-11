@@ -72,13 +72,15 @@ export function executionEventsPath(projectId: string | number, executionId: str
 /**
  * Clear what the seed drew for the turn, so a replay from cursor 0 rebuilds it
  * once. The seed shows "..." for a streaming row; folding the replayed chunks
- * onto it would print "...answer", and the tool rows would appear twice.
+ * onto it would print "...answer", and the tool rows would appear twice. The
+ * seeded sub-agent lanes (`meta.subagents_v1`) go too: the replay folds them
+ * again, and a lane's text entries would otherwise show twice.
  */
 export function resetTurnForReplay(history: readonly ChatMessage[], messageId: string): readonly ChatMessage[] {
   const index = history.findIndex((message) => message.id === messageId);
   if (index === -1) return history;
   const next = [...history];
-  next[index] = { ...history[index], content: '', messageItems: [], toolActions: [], isStreaming: true, isLoading: true } as ChatMessage;
+  next[index] = { ...history[index], content: '', messageItems: [], toolActions: [], subAgents: undefined, isStreaming: true, isLoading: true } as ChatMessage;
   return next;
 }
 

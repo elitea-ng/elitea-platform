@@ -33,17 +33,17 @@
 //! when its local history is deleted ([`forget_conversation_outputs`]).
 //! A gone id answers [`ErrorCode::OutputExpired`]: re-run the tool.
 
+use crate::sys::fd::OwnedFd;
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read as _, Seek as _, SeekFrom, Write as _};
-use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-use rustix::fs::{AtFlags, Mode, OFlags};
+use crate::sys::fs::{AtFlags, Mode, OFlags};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -376,17 +376,17 @@ fn expired(id: &str) -> ToolError {
 /// Refuse a directory or file that is not this user's, or that group or
 /// others may use.
 fn check_private(fd: &OwnedFd, directory: bool) -> ToolResult<()> {
-    let stat = rustix::fs::fstat(fd)?;
-    let kind = rustix::fs::FileType::from_raw_mode(stat.st_mode);
+    let stat = crate::sys::fs::fstat(fd)?;
+    let kind = crate::sys::fs::FileType::from_raw_mode(stat.st_mode);
     let expected = if directory {
-        rustix::fs::FileType::Directory
+        crate::sys::fs::FileType::Directory
     } else {
-        rustix::fs::FileType::RegularFile
+        crate::sys::fs::FileType::RegularFile
     };
     if kind != expected {
         return Err(spill_error("not a directory or regular file"));
     }
-    if stat.st_uid != rustix::process::geteuid().as_raw() {
+    if stat.st_uid != crate::sys::process::geteuid().as_raw() {
         return Err(spill_error("owned by another user"));
     }
     if crate::workspace::mode_bits(stat.st_mode) & 0o077 != 0 {
@@ -398,8 +398,8 @@ fn check_private(fd: &OwnedFd, directory: bool) -> ToolResult<()> {
 /// Create (or open) the owner-only directory `name` under `parent`,
 /// without following a symlink.
 fn private_dir(parent: &OwnedFd, name: &str) -> ToolResult<OwnedFd> {
-    match rustix::fs::mkdirat(parent, name, Mode::RWXU) {
-        Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+    match crate::sys::fs::mkdirat(parent, name, Mode::RWXU) {
+        Ok(()) | Err(crate::sys::io::Errno::EXIST) => {}
         Err(errno) => return Err(errno.into()),
     }
     open_private_dir(parent, name)
@@ -408,7 +408,7 @@ fn private_dir(parent: &OwnedFd, name: &str) -> ToolResult<OwnedFd> {
 /// Open the owner-only directory `name` under `parent` (never creating
 /// it), without following a symlink.
 fn open_private_dir(parent: &OwnedFd, name: &str) -> ToolResult<OwnedFd> {
-    let fd = rustix::fs::openat(
+    let fd = crate::sys::fs::openat(
         parent,
         name,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -421,7 +421,7 @@ fn open_private_dir(parent: &OwnedFd, name: &str) -> ToolResult<OwnedFd> {
 
 /// A private regular file `name` under `dir`, opened for reading.
 fn open_private_file(dir: &OwnedFd, name: &str) -> Option<File> {
-    let fd = rustix::fs::openat(
+    let fd = crate::sys::fs::openat(
         dir,
         name,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -434,14 +434,14 @@ fn open_private_file(dir: &OwnedFd, name: &str) -> Option<File> {
 
 /// Write `bytes` to the new private file `name` under `dir`.
 fn create_private_file(dir: &OwnedFd, name: &str, bytes: &[u8]) -> ToolResult<()> {
-    let fd = rustix::fs::openat(
+    let fd = crate::sys::fs::openat(
         dir,
         name,
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::RUSR | Mode::WUSR,
     )?;
     if let Err(error) = File::from(fd).write_all(bytes) {
-        let _ = rustix::fs::unlinkat(dir, name, AtFlags::empty());
+        let _ = crate::sys::fs::unlinkat(dir, name, AtFlags::empty());
         return Err(ToolError::io("cannot write the output", &error));
     }
     Ok(())
@@ -625,9 +625,9 @@ impl SpillStore {
             std::fs::create_dir_all(&self.data_dir)
                 .map_err(|error| ToolError::io("cannot create the data directory", &error))?;
         }
-        let data = std::fs::canonicalize(&self.data_dir)
+        let data = crate::sys::canonicalize(&self.data_dir)
             .map_err(|error| ToolError::io("cannot resolve the data directory", &error))?;
-        let base = rustix::fs::open(
+        let base = crate::sys::fs::open(
             &data,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
             Mode::empty(),
@@ -673,7 +673,7 @@ impl SpillStore {
             if !is_dir || !valid_scope(name) {
                 // An older layout's file directly under `out/`.
                 if !is_dir {
-                    let _ = rustix::fs::unlinkat(&out, name, AtFlags::empty());
+                    let _ = crate::sys::fs::unlinkat(&out, name, AtFlags::empty());
                 }
                 continue;
             }
@@ -717,11 +717,11 @@ impl SpillStore {
                             .iter()
                             .any(|entry| entry.scope == name && entry.id == id)
                     {
-                        let _ = rustix::fs::unlinkat(&dir, file_name, AtFlags::empty());
+                        let _ = crate::sys::fs::unlinkat(&dir, file_name, AtFlags::empty());
                     }
                 }
             }
-            let _ = rustix::fs::unlinkat(&out, name, AtFlags::REMOVEDIR);
+            let _ = crate::sys::fs::unlinkat(&out, name, AtFlags::REMOVEDIR);
         }
         found.sort_by(|a, b| a.at.cmp(&b.at).then_with(|| a.id.cmp(&b.id)));
         found.into()
@@ -795,7 +795,7 @@ impl SpillStore {
         let id = self.next_id(&scope);
         create_private_file(&dir, &format!("{id}.txt"), kept.as_bytes())?;
         if let Err(error) = create_private_file(&dir, &format!("{id}.idx"), &index) {
-            let _ = rustix::fs::unlinkat(&dir, format!("{id}.txt"), AtFlags::empty());
+            let _ = crate::sys::fs::unlinkat(&dir, format!("{id}.txt"), AtFlags::empty());
             return Err(error);
         }
         let size = (kept.len() + index.len()) as u64;
@@ -938,8 +938,8 @@ impl SpillStore {
 
 /// Remove one output and its index.
 fn remove_output(dir: &OwnedFd, id: &str) {
-    let _ = rustix::fs::unlinkat(dir, format!("{id}.txt"), AtFlags::empty());
-    let _ = rustix::fs::unlinkat(dir, format!("{id}.idx"), AtFlags::empty());
+    let _ = crate::sys::fs::unlinkat(dir, format!("{id}.txt"), AtFlags::empty());
+    let _ = crate::sys::fs::unlinkat(dir, format!("{id}.idx"), AtFlags::empty());
 }
 
 /// What a spill of `id` into `scope` evicts: anything past the retention,
@@ -1098,7 +1098,7 @@ pub(crate) fn read_output(spill: &SpillStore, args: Value, max_bytes: usize) -> 
     Ok(page)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, SystemTime};
@@ -1328,7 +1328,7 @@ mod tests {
         // A symlink planted in place of our file is not followed.
         let file = ours.conversation_dir().join(format!("{id}.txt"));
         std::fs::remove_file(&file).expect("rm");
-        std::os::unix::fs::symlink("/etc/hosts", &file).expect("link");
+        crate::sys::os::symlink("/etc/hosts", &file).expect("link");
         assert!(read_output(&ours, json!({ "output_id": id }), 4096).is_err());
     }
 

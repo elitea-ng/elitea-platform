@@ -383,7 +383,10 @@ impl SteeringInjector {
     pub async fn inject(&self, invocation_id: &str) -> Vec<Content> {
         let mut contents = Vec::new();
         for pending in self.steering.take() {
-            let content = Content::new("user").with_text(pending.text);
+            // No message shows another message's id line (#1827).
+            let text = elitea_agent_runtime::subagents::message_ref::neutralize(&pending.text)
+                .into_owned();
+            let content = Content::new("user").with_text(text);
             let mut event = Event::new(invocation_id);
             USER_AUTHOR.clone_into(&mut event.author);
             event.llm_response.content = Some(content.clone());

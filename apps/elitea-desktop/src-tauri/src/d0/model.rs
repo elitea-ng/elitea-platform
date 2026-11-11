@@ -143,6 +143,13 @@ impl RequestCapture {
     pub fn last(&self) -> Option<CapturedRequest> {
         self.slot().clone()
     }
+
+    /// `read` over the last request's contents (empty without one), under
+    /// the slot's lock and without copying the request.
+    pub fn with_contents<T>(&self, read: impl FnOnce(&[Content]) -> T) -> T {
+        let slot = self.slot();
+        read(slot.as_ref().map_or(&[][..], |captured| &captured.contents))
+    }
 }
 
 /// The turn's volatile context (#1227: the environment's date and git

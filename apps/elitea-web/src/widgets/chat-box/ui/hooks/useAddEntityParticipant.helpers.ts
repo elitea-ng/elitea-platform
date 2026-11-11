@@ -157,6 +157,19 @@ async function withResolvedVersion(
   return { ...candidate, ...details };
 }
 
+/**
+ * "Share history from" (ADR-0050 decision 9b, issue 1669): an agent added to
+ * a conversation that already has messages reads it from the start (the
+ * version's own mode) or only from now on, which the server stores as
+ * `entity_settings.context_history = since_joined` and dates from the add.
+ */
+export type ShareHistoryFrom = 'start' | 'now';
+
+function withShareFrom(input: ParticipantInput | undefined, shareFrom: ShareHistoryFrom): ParticipantInput | undefined {
+  if (input === undefined || shareFrom === 'start') return input;
+  return { ...input, entity_settings: { ...input.entity_settings, context_history: 'since_joined' } };
+}
+
 /** Everything one selection needs, read fresh off a ref so the hook's callback keeps two dependencies. */
 export interface ParticipantSelectionRuntime {
   readonly projectId: string | number | undefined;
@@ -210,6 +223,7 @@ export async function applyParticipantSelection(
   selection: unknown,
   existing: Participant | undefined,
   runtime: ParticipantSelectionRuntime,
+  shareFrom: ShareHistoryFrom,
 ): Promise<void> {
   const { projectId } = runtime;
   if (projectId === undefined) return;
@@ -221,7 +235,7 @@ export async function applyParticipantSelection(
   // Resolved before the conversation is created, so a failing detail fetch
   // leaves no empty conversation behind.
   const resolved = await withResolvedVersion(selection, runtime.fetchDetails, projectId);
-  const participantInput = selectedParticipantInput(resolved);
+  const participantInput = withShareFrom(selectedParticipantInput(resolved), shareFrom);
   if (!participantInput) return;
   const conversation = await conversationForSelection(runtime);
   if (conversation === undefined) return;

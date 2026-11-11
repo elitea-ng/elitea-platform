@@ -43,6 +43,14 @@ apps/elitea-desktop/src-tauri (Rust host) <--IPC--> the bundled webview
 
 macOS first; Linux and Windows build and degrade as noted.
 
+- **Local work on Windows (#1828)**: the local tools run on Windows through
+  `elitea_local_tools::sys` (Job Objects for process trees, ConPTY for
+  terminals, no owner or mode-bit checks). There is no OS sandbox yet: a
+  command that must be confined is refused (`sandbox_unavailable`); only
+  `full-access` with the network on runs. Toasts use the AUMID that the MSI
+  shortcut sets (the brand's desktop identifier), or `<PackageFamilyName>!App`
+  under MSIX (`src/aumid.rs`).
+
 - **Window chrome (macOS)**: no title bar of its own (`TitleBarStyle::Overlay`,
   hidden title); the traffic lights sit inside the sidebar's top area
   (`trafficLightPosition` 18, 22). The window is transparent over the
@@ -397,7 +405,7 @@ management:
   `/Applications` with no UI, signed with the Developer ID Installer identity,
   notarised and stapled. The workflow verifies both with `codesign`,
   `spctl -a -vv`, `pkgutil --check-signature` and `stapler validate`.
-- **Windows:** an MSI and an MSIX, once the host builds on Windows (#1828).
+- **Windows:** an MSI and an MSIX. The host builds and passes its tests on Windows since #1828; #1699 turns the package job on.
 
 `scripts/desktop-package.mjs` decides, for each platform, whether the workflow signs:
 
@@ -439,7 +447,7 @@ fixed names:
 | `APPLE_API_ISSUER` | the **Issuer ID** (UUID) shown above that key list | same page |
 | `APPLE_API_PRIVATE_KEY` | base64 of the downloaded `AuthKey_<KEYID>.p8` | `base64 -i AuthKey_<KEYID>.p8 \| pbcopy` (it can be downloaded once) |
 
-Windows (the job is off until #1828; the repository variable
+Windows (the job is off until #1699; the repository variable
 `DESKTOP_WINDOWS_PACKAGE=true` switches it on). Set **one** of the two sets.
 `WINDOWS_PUBLISHER` is the certificate's subject (`CN=…, O=…, C=…`), and the
 MSIX `Publisher` must equal it.

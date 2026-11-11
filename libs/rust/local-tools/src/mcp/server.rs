@@ -30,6 +30,9 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+// tokio's `process_group` is Unix-only; Windows gets the stand-in.
+#[cfg(windows)]
+use crate::sys::os::CommandExt as _;
 
 use rmcp::ServiceExt as _;
 use rmcp::model::{CallToolRequestParams, Tool as McpToolInfo};
@@ -120,7 +123,7 @@ impl Ring {
 pub struct Running {
     service: RunningService<RoleClient, ()>,
     tools: Vec<McpToolInfo>,
-    group: Option<rustix::process::Pid>,
+    group: Option<crate::sys::process::Group>,
     exited: Arc<AtomicBool>,
     exit: Arc<Mutex<Option<String>>>,
     changed: Arc<tokio::sync::Notify>,
@@ -177,11 +180,11 @@ impl Running {
             .map_err(|_| ToolError::new(ErrorCode::Io, "the MCP server's answer is not JSON"))
     }
 
-    fn signal(&self, signal: rustix::process::Signal) {
-        if let Some(group) = self.group
+    fn signal(&self, signal: crate::sys::process::Signal) {
+        if let Some(group) = &self.group
             && !self.exited()
         {
-            let _ = rustix::process::kill_process_group(group, signal);
+            group.signal(signal);
         }
     }
 
@@ -191,7 +194,7 @@ impl Running {
         if self.exited() {
             return;
         }
-        self.signal(rustix::process::Signal::TERM);
+        self.signal(crate::sys::process::Signal::TERM);
         let this = Arc::clone(self);
         let _ = std::thread::Builder::new()
             .name("elitea-mcp-stop".to_owned())
@@ -200,14 +203,14 @@ impl Running {
                 while !this.exited() && Instant::now() < deadline {
                     std::thread::sleep(Duration::from_millis(20));
                 }
-                this.signal(rustix::process::Signal::KILL);
+                this.signal(crate::sys::process::Signal::KILL);
             });
     }
 
     async fn stop(&self) {
-        self.signal(rustix::process::Signal::TERM);
+        self.signal(crate::sys::process::Signal::TERM);
         if !self.wait_exit(TERM_GRACE).await {
-            self.signal(rustix::process::Signal::KILL);
+            self.signal(crate::sys::process::Signal::KILL);
             let _ = self.wait_exit(TERM_GRACE).await;
         }
     }
@@ -466,11 +469,11 @@ impl McpServers {
     pub async fn stop_all(&self) {
         let running = self.take_running();
         for server in &running {
-            server.signal(rustix::process::Signal::TERM);
+            server.signal(crate::sys::process::Signal::TERM);
         }
         for server in &running {
             if !server.wait_exit(TERM_GRACE).await {
-                server.signal(rustix::process::Signal::KILL);
+                server.signal(crate::sys::process::Signal::KILL);
             }
         }
         self.reset_stopped();
@@ -482,7 +485,7 @@ impl McpServers {
     pub fn terminate_all(&self) -> Vec<Arc<Running>> {
         let running = self.take_running();
         for server in &running {
-            server.signal(rustix::process::Signal::TERM);
+            server.signal(crate::sys::process::Signal::TERM);
         }
         running
     }
@@ -491,7 +494,7 @@ impl McpServers {
     /// that are still there.
     pub fn kill_left(&self, running: &[Arc<Running>]) {
         for server in running {
-            server.signal(rustix::process::Signal::KILL);
+            server.signal(crate::sys::process::Signal::KILL);
         }
         self.reset_stopped();
     }
@@ -600,18 +603,13 @@ impl Launch {
         }
         // Resolved once: what runs is this file, whatever the name points
         // at later.
-        let command = std::fs::canonicalize(&config.command).map_err(|_| {
+        let command = crate::sys::canonicalize(&config.command).map_err(|_| {
             ToolError::new(
                 ErrorCode::NotFound,
                 format!("`{}` does not exist", config.command),
             )
         })?;
-        let executable = {
-            use std::os::unix::fs::PermissionsExt as _;
-            command
-                .metadata()
-                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-        };
+        let executable = crate::sys::is_executable(&command);
         if !executable {
             return Err(ToolError::invalid(format!(
                 "`{}` is not an executable file",
@@ -640,7 +638,7 @@ impl Launch {
         let shell = session.shell_config();
         let temp = shell.temp_dir.join("mcp").join(name);
         {
-            use std::os::unix::fs::DirBuilderExt as _;
+            use crate::sys::os::DirBuilderExt as _;
             std::fs::DirBuilder::new()
                 .recursive(true)
                 .mode(0o700)
@@ -649,7 +647,7 @@ impl Launch {
                     ToolError::io("cannot create the server's temporary folder", &error)
                 })?;
         }
-        let temp = std::fs::canonicalize(&temp).map_err(|error| {
+        let temp = crate::sys::canonicalize(&temp).map_err(|error| {
             ToolError::io("cannot resolve the server's temporary folder", &error)
         })?;
         let request = session.sandbox_request(mode, network)?;
@@ -689,10 +687,7 @@ impl Launch {
                 String::new(),
             )
         })?;
-        let group = child
-            .id()
-            .and_then(|pid| i32::try_from(pid).ok())
-            .and_then(rustix::process::Pid::from_raw);
+        let group = crate::sys::process::Group::of_tokio(&child);
         let (Some(stdin), Some(stdout), Some(mut stderr)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
@@ -731,8 +726,8 @@ impl Launch {
             });
         }
         let kill = |why: String| {
-            if let Some(group) = group {
-                let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+            if let Some(group) = &group {
+                group.signal(crate::sys::process::Signal::KILL);
             }
             (why, lock(&ring).tail())
         };
@@ -768,7 +763,7 @@ impl Launch {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

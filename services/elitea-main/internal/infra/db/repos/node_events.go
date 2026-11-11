@@ -384,6 +384,10 @@ SELECT COALESCE((SELECT cursor FROM updated_state LIMIT 1), 0),
 				if err := projectUnattendedApproval(ctx, tx, projectionProjectID, frame); err != nil {
 					return err
 				}
+				// #1823: a cloud sub-agent's lane, kept on its answer for a reload.
+				if err := projectSubAgentLane(ctx, tx, projectionProjectID, frame); err != nil {
+					return err
+				}
 			}
 			outcome = outputapp.ProjectionOutcome{Inserted: true, Cursor: uint64(cursor), CommittedSequence: frame.Sequence}
 			return nil

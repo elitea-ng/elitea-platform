@@ -243,7 +243,7 @@ describe('useEditApplicationForm', () => {
     // `notes` rides in the same blob (#898 — the field has no column, by
     // design), and an empty string is a real value there: it is what an
     // emptied Editor Notes box sends, and the patch merge cannot delete a key.
-    expect(versionBody['meta']).toEqual({ category: 'support', step_limit: 40, internal_tools: [], notes: '', output_contract: null, citations: null });
+    expect(versionBody['meta']).toEqual({ category: 'support', step_limit: 40, internal_tools: [], notes: '', output_contract: null, citations: null, context: null });
   });
 
   it('sends the output contract through `meta.output_contract` (#1500)', async () => {

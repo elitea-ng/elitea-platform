@@ -247,7 +247,9 @@ fn dir_bytes(path: &Path) -> u64 {
 enum Health {
     Missing,
     Healthy,
-    /// Ours, but group or others can read it (they cannot write it).
+    /// Ours, but group or others can read it (they cannot write it). Never
+    /// on Windows: there are no mode bits to read (#1828).
+    #[cfg_attr(windows, allow(dead_code))]
     Loose(u32),
     /// Not to be read as data: why.
     Untrusted(&'static str),
@@ -1729,7 +1731,7 @@ pub async fn doctor_fix(
         .map(|message| FixOutcome { message })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

@@ -1338,6 +1338,10 @@ impl PipelineNativeAgentAssembler {
             if recovery {
                 assembly.content_controls().untrusted().record_read();
             }
+            // ADR-0050 decision 9 (#1668): the pipeline's own view of the
+            // conversation, seeded into graph state on its first invocation.
+            let context_view =
+                super::assembly::pipeline_state_history(&assembly.request().payload.chat_history)?;
             // #606, the pipeline twin of the ordinary path's read. `platform`
             // is optional here only because the injected-state test constructor
             // has none; a stored pipeline that runs for real always does, and a
@@ -1492,6 +1496,7 @@ impl PipelineNativeAgentAssembler {
                     state.node_recovery_authority(),
                 )
                 .await?;
+            node_runtimes.nodes = node_runtimes.nodes.with_context_view(context_view);
             if let (Some(factory), Some(authority), Some(deadline)) =
                 (&self.sandbox, sandbox_authority, code_deadline)
             {
