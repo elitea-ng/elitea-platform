@@ -36,6 +36,7 @@ fn factory(items: usize) -> CompilerParallelBranches {
         llm: None,
         code: None,
         code_recovery: false,
+        saved_code: std::collections::BTreeMap::new(),
         events: None,
         root_session: None,
         delegated_servers: Arc::default(),

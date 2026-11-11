@@ -304,6 +304,12 @@ pub(crate) struct PipelineNodeRuntimes {
     saved_child_scope_provider: Option<
         Arc<dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider>,
     >,
+    /// W3-2b: the saved pipeline Main froze for a root-level Agent node; its
+    /// Code nodes name it, per use, as their owner scope.
+    saved_code_owner: Option<Arc<crate::agents::pipeline::saved_code_child::SavedCodeOwner>>,
+    /// W3-2b: the root fan-out member running that Agent node, if any.
+    saved_code_member:
+        Option<Arc<crate::agents::pipeline::saved_code_child::SavedCodeFanoutMember>>,
     checkpoint_catalog:
         Option<Arc<crate::agents::pipeline::composition::PipelineCheckpointCatalog>>,
     composition_definitions: Option<Arc<BTreeMap<String, PipelineDefinition>>>,
@@ -348,6 +354,46 @@ impl PipelineNodeRuntimes {
         &Arc<dyn crate::agents::pipeline::saved_child_scope_provider::SavedChildScopeProvider>,
     > {
         self.saved_child_scope_provider.as_ref()
+    }
+
+    /// W3-2b: these runtimes compile a saved pipeline a root-level Agent node
+    /// runs; Main froze and captured it as `owner`.
+    pub(crate) fn with_saved_code_owner(
+        mut self,
+        owner: crate::agents::pipeline::saved_code_child::SavedCodeOwner,
+    ) -> Self {
+        self.saved_code_owner = Some(Arc::new(owner));
+        self
+    }
+
+    /// W3-2b: the saved pipeline runs inside root fan-out `member`.
+    pub(crate) fn with_saved_code_member(
+        mut self,
+        member: crate::agents::pipeline::saved_code_child::SavedCodeFanoutMember,
+    ) -> Self {
+        self.saved_code_member = Some(Arc::new(member));
+        self
+    }
+
+    pub(crate) const fn has_saved_code_owner(&self) -> bool {
+        self.saved_code_owner.is_some()
+    }
+
+    /// W3-2b: the runtimes of one use of the saved pipeline, by the Agent
+    /// node `agent_node_id`: its Code nodes name that use's owner scope. A
+    /// saved pipeline without an owner (below another saved pipeline, or run
+    /// as an Agent's tool) is unchanged and its Code has no scope.
+    pub(crate) fn for_saved_code_use(mut self, agent_node_id: &str) -> Self {
+        if let Some(owner) = self.saved_code_owner.clone() {
+            self.saved_child_scope_provider = Some(Arc::new(
+                crate::agents::pipeline::saved_code_child::SavedCodeChildScopeProvider::new(
+                    owner,
+                    agent_node_id,
+                    self.saved_code_member.clone(),
+                ),
+            ));
+        }
+        self
     }
 
     pub(crate) fn with_application_scope_path(mut self, path: String) -> Self {
@@ -487,6 +533,8 @@ impl PipelineNodeRuntimes {
             node_recovery: None,
             direct_tool_recovery: None,
             saved_child_scope_provider: None,
+            saved_code_owner: None,
+            saved_code_member: None,
             checkpoint_catalog: None,
             composition_definitions: None,
             application_scopes: None,
@@ -1118,6 +1166,40 @@ impl PipelineDefinition {
         self.is_unowned_direct_tool(&self.entry_point)
     }
 
+    /// Whether `id` is a Code node no fan-out owns: the leaf a recovery walk
+    /// may stop at when a saved child the root's Agent node runs was lost
+    /// inside that node's journaled attempt (W3-2b).
+    pub(crate) fn is_unowned_code(&self, id: &str) -> bool {
+        !self.parallel_owned_nodes.contains(id)
+            && !self.map_owned_nodes.contains(id)
+            && self
+                .nodes
+                .iter()
+                .any(|node| node.id() == id && matches!(node, PipelineNodeDefinition::Code(_)))
+    }
+
+    /// The aliases the Agent nodes a Map or Parallel owns select (W3-2b C2).
+    pub(crate) fn fanout_owned_application_aliases(&self) -> BTreeSet<&str> {
+        self.nodes
+            .iter()
+            .filter_map(|node| match node {
+                PipelineNodeDefinition::Application(agent)
+                    if self.parallel_owned_nodes.contains(agent.id())
+                        || self.map_owned_nodes.contains(agent.id()) =>
+                {
+                    Some(agent.selection().alias())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether the graph starts at an unowned Code node: a saved child lost
+    /// inside that first attempt has saved no row yet (W3-2b).
+    pub(crate) fn starts_at_code(&self) -> bool {
+        self.is_unowned_code(&self.entry_point)
+    }
+
     /// The configuration digest Agent node `id` stamps on its child rows
     /// (PM-2 recovery walk).
     pub(crate) fn application_config_digest(&self, id: &str) -> Option<[u8; 32]> {
@@ -1397,6 +1479,30 @@ impl PipelineDefinition {
         self.nodes
             .iter()
             .any(|node| matches!(node, PipelineNodeDefinition::Code(_)))
+    }
+
+    /// The ids of the Code nodes this definition declares (W3-2b).
+    #[must_use]
+    pub(crate) fn code_node_ids(&self) -> BTreeSet<String> {
+        self.nodes
+            .iter()
+            .filter(|node| matches!(node, PipelineNodeDefinition::Code(_)))
+            .map(|node| node.id().to_owned())
+            .collect()
+    }
+
+    /// Q2 (W3-2b): the language and platform-client flag of each Code node
+    /// this definition declares, each node once.
+    pub(super) fn code_languages(&self) -> Vec<(super::code::CodeLanguage, bool)> {
+        self.nodes
+            .iter()
+            .filter_map(|node| match node {
+                PipelineNodeDefinition::Code(code) => {
+                    Some((code.language(), code.platform_client()))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     #[must_use]
@@ -1827,22 +1933,29 @@ impl PipelineDefinition {
             .ok_or(PipelineConfigurationError::Unsupported(
                 "Code execution requires an admitted sandbox backend",
             ))?;
-        let runtime = match runtimes.saved_child_scope_provider() {
-            Some(provider) => {
-                if runtimes.node_recovery.is_none() {
-                    return Err(PipelineConfigurationError::Unsupported(
-                        "Scoped Code requires its current fenced node writer",
-                    ));
-                }
-                runtime
+        // W3-2b: a saved child's Code journals through the run's (or its
+        // fan-out member's) family, scoped to the child's visit, as its
+        // direct tool nodes do (FU-248). C1: with node recovery off there are
+        // no journals; the Code then compiles as before W3-2b, with no owner
+        // scope, and fails readably only if it is reached.
+        let scoped = runtimes.saved_child_scope_provider().zip(
+            runtimes
+                .node_recovery
+                .clone()
+                .or_else(|| runtimes.direct_tool_recovery.clone()),
+        );
+        let (runtime, journals) = match scoped {
+            Some((provider, journals)) => {
+                let runtime = runtime
                     .bind_saved_child_scope(provider.clone())
                     .map_err(|_| {
                         PipelineConfigurationError::Unsupported(
                             "Scoped Code runtime authority is unavailable",
                         )
-                    })?
+                    })?;
+                (runtime, Some(journals))
             }
-            None => runtime,
+            None => (runtime, runtimes.node_recovery.clone()),
         };
         let mut bound = node.clone();
         bound.refresh_debug_compiler_digest(self.definition_digest);
@@ -1851,7 +1964,7 @@ impl PipelineDefinition {
         })?;
         let executable = executable.with_events(runtimes.events.clone());
         let binding = self.recovery.get(node.id());
-        let mut next = if let Some(authority) = runtimes.node_recovery.clone() {
+        let mut next = if let Some(authority) = journals {
             let policy = binding
                 .map(|binding| binding.policy.clone())
                 .unwrap_or_default();
@@ -3536,8 +3649,6 @@ pub(crate) enum FanoutChildRefusal {
     /// A Router as the direct child: it routes inside a child pipeline
     /// (W3-2, brief D1). The same code as [`Self::Kind`], its own text.
     Router,
-    /// The child is a saved pipeline that contains a Code node.
-    ContainsCode,
     /// A saved child pipeline contains a Parallel node, which binds its
     /// checkpoint authority to the started root only (FU-249).
     ContainsParallel,
@@ -3545,7 +3656,7 @@ pub(crate) enum FanoutChildRefusal {
     /// pipeline's checkpoint threads are not admitted to the member (FU-291).
     AgentCallsPipeline,
     /// A Code worker or branch of a Map or Parallel inside a saved child
-    /// pipeline: its visit scope is the run root's only (R4, W3-2b).
+    /// pipeline: its visit scope is the run root's only (R4, W3-2b; FU-317).
     CodeBelowRoot,
 }
 
@@ -3554,7 +3665,6 @@ impl FanoutChildRefusal {
     pub(crate) const fn code(self) -> &'static str {
         match self {
             Self::Kind | Self::Router => "graph.fanout.child_kind_unsupported",
-            Self::ContainsCode => "graph.fanout.child_contains_code",
             Self::ContainsParallel => "graph.fanout.parallel_in_child_pipeline",
             Self::AgentCallsPipeline => "graph.fanout.agent_calls_saved_pipeline",
             Self::CodeBelowRoot => elitea_faults::codes::GRAPH_FANOUT_CODE_BELOW_ROOT.as_str(),
@@ -3567,7 +3677,6 @@ impl FanoutChildRefusal {
         [
             Self::Kind,
             Self::Router,
-            Self::ContainsCode,
             Self::ContainsParallel,
             Self::AgentCallsPipeline,
             Self::CodeBelowRoot,
@@ -3584,7 +3693,6 @@ impl std::fmt::Display for FanoutChildRefusal {
             Self::Router => {
                 "a Router runs inside a child pipeline, not as a Parallel branch or Map worker"
             }
-            Self::ContainsCode => "a saved pipeline with a Code node cannot run as a fan-out child",
             Self::ContainsParallel => {
                 "a saved pipeline with a Parallel node runs only as the started pipeline"
             }
@@ -3632,7 +3740,6 @@ impl PipelineConfigurationError {
             Self::FanoutChildUnsupported { refusal, .. } => Some(match refusal {
                 FanoutChildRefusal::Kind => "fanout_child_kind",
                 FanoutChildRefusal::Router => "fanout_child_router",
-                FanoutChildRefusal::ContainsCode => "fanout_child_code",
                 FanoutChildRefusal::ContainsParallel => "parallel_in_child_pipeline",
                 FanoutChildRefusal::AgentCallsPipeline => "fanout_agent_calls_pipeline",
                 FanoutChildRefusal::CodeBelowRoot => "fanout_code_below_root",

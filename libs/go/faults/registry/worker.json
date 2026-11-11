@@ -106,6 +106,22 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "pipeline.saved_code.nested",
+      "sentence": "A Code node sits in a saved pipeline that another saved pipeline runs, so the pipeline was refused before it started: Code runs only in a saved pipeline the started pipeline runs directly, for now.",
+      "action": "Nothing on the platform; the author moves the Code into the saved pipeline the started pipeline runs, or runs that saved pipeline directly from the started pipeline.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.saved_code.unscoped",
+      "sentence": "A conversation an older Worker paused continues on the unscoped resolver, where a saved pipeline's Code run as a Map worker or Parallel branch has no owner scope, so the pipeline was refused before it started.",
+      "action": "Nothing on the platform; the user starts a new conversation, which runs on the scoped resolver.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "pipeline.code.deadline_insufficient",
       "sentence": "A Code attempt was refused before it started because the run's remaining time is shorter than the Code timeout plus the observation margin.",
       "action": "Nothing when the run was near its end; when cause is slot_wait, the Worker was full, so raise code_slots together with the Supervisor's concurrency.",

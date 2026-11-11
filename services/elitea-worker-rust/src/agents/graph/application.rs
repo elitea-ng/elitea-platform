@@ -386,6 +386,16 @@ pub(crate) trait PipelineApplicationResolver: Send + Sync {
         false
     }
 
+    /// W3-2b: the same frozen resolver whose root-level saved pipelines run
+    /// inside one root fan-out member; their Code names that member in its
+    /// owner scope. `None` keeps this resolver.
+    fn for_saved_code_member(
+        &self,
+        _member: &crate::agents::pipeline::saved_code_child::SavedCodeFanoutMember,
+    ) -> Option<Arc<dyn PipelineApplicationResolver>> {
+        None
+    }
+
     /// Rebind the existing frozen resolver to one exact branch event sender.
     fn for_parallel_events(
         &self,

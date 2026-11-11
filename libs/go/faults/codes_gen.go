@@ -56,6 +56,10 @@ const (
 	PipelineCodeSupervisorBusy Code = "pipeline.code.supervisor_busy"
 	// A Code item of a Map or Parallel was interrupted after it may have started and no owner proof showed its effect, so it ended typed and was not run again.
 	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
+	// A Code node sits in a saved pipeline that another saved pipeline runs, so the pipeline was refused before it started: Code runs only in a saved pipeline the started pipeline runs directly, for now.
+	PipelineSavedCodeNested Code = "pipeline.saved_code.nested"
+	// A conversation an older Worker paused continues on the unscoped resolver, where a saved pipeline's Code run as a Map worker or Parallel branch has no owner scope, so the pipeline was refused before it started.
+	PipelineSavedCodeUnscoped Code = "pipeline.saved_code.unscoped"
 	// A background runner failed its pass and will try again.
 	RunnerCycleFailed Code = "runner.cycle_failed"
 	// A background runner stopped on a dependency failure and is being restarted.

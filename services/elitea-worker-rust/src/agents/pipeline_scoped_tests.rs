@@ -1598,3 +1598,61 @@ async fn a_three_level_graph_gate_approves_once_and_continues_both_parents() {
 async fn a_three_level_graph_gate_rejects_and_the_parents_read_the_rejection() {
     graph_root_three_level_gate("reject", "REJECTED Summarize the release").await;
 }
+
+/// W3-2b review C2: a conversation continued on the unscoped resolver an
+/// older Worker paused with names no saved-pipeline Code owner. It refuses,
+/// before the run starts, a saved pipeline with Code run as a Map worker
+/// (`pipeline.saved_code.unscoped`) and Code nested below a second saved
+/// pipeline (`pipeline.saved_code.nested`).
+#[tokio::test(flavor = "current_thread")]
+async fn an_unscoped_continuation_refuses_saved_code_it_cannot_own_before_the_run() {
+    let code_child = "state:\n  input: str\n  messages: list\n  answer: str\nentry_point: validate\nnodes:\n  - id: validate\n    type: code\n    code: 'print(1)'\n    input: [input]\n    output: [answer]\n    transition: END\n";
+    let map_root = "state:\n  items: {type: list, value: []}\n  answer: {type: str, value: ''}\n  mapped: {type: list, value: []}\n  messages: {type: list, value: []}\nentry_point: each\nnodes:\n  - {id: each, type: map, worker: silver, source: items, item: entity, index: item_index, outputs: [answer], destination: mapped, max_items: 4, max_concurrency: 2, reduction: ordered_collection, transition: END}\n  - {id: silver, type: agent, tool: child-flow, input: [entity, item_index], input_mapping: {task: {type: fixed, value: partition}}, output: [answer]}\n";
+    let cases = [
+        (
+            BTreeMap::from([(
+                (3, 4),
+                saved_version("pipeline", code_child, &json!({}), Vec::new()),
+            )]),
+            root_request(map_root, vec![reference((3, 4), "pipeline", "child-flow")]),
+            elitea_faults::codes::PIPELINE_SAVED_CODE_UNSCOPED.as_str(),
+        ),
+        (
+            BTreeMap::from([
+                (
+                    (3, 4),
+                    saved_version(
+                        "pipeline",
+                        &child_pipeline_yaml("inner-flow"),
+                        &json!({}),
+                        vec![reference((5, 6), "pipeline", "inner-flow")],
+                    ),
+                ),
+                (
+                    (5, 6),
+                    saved_version("pipeline", code_child, &json!({}), Vec::new()),
+                ),
+            ]),
+            root_request(
+                &root_yaml("child-flow"),
+                vec![reference((3, 4), "pipeline", "child-flow")],
+            ),
+            elitea_faults::codes::PIPELINE_SAVED_CODE_NESTED.as_str(),
+        ),
+    ];
+    for (versions, request, code) in cases {
+        let (sessions, checkpointer) = state();
+        let (older, _, _) = process(&sessions, &checkpointer, &versions, Vec::new());
+        let older = older.with_fresh_start_continuation(ApplicationContinuation::LegacyUnscoped);
+        let Err(error) = older.assemble(authorized(&request)).await else {
+            panic!("{code}: the unscoped continuation assembled saved Code it cannot own");
+        };
+        assert_eq!(
+            error
+                .cause()
+                .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code),
+            Some(code),
+            "{error}"
+        );
+    }
+}

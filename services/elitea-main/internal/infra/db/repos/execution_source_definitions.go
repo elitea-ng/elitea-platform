@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 
@@ -54,8 +55,12 @@ func readCapturedRootSource(ctx context.Context, tx sqlExecutor, ref scope.Sourc
 		return scope.SourceDefinition{}, scope.ErrDenied
 	}
 	var raw, definition []byte
-	if tx.QueryRow(ctx, `SELECT r.canonical_wire,d.definition_bytes FROM elitea_runtime.execution_definition_source_refs r JOIN elitea_runtime.execution_captured_definitions d USING(resource_project_id,application_id,version_id,definition_sha256) WHERE r.source_id=$1 AND r.revision=$2 AND r.digest_sha256=$3 AND r.resource_project_id=$4 AND r.actor_id=$5 AND r.definition_sha256=$6 AND r.application_id=$7 AND r.version_id=$8 FOR SHARE OF r,d`, ref.SourceID, ref.Revision, ref.DigestSHA256, project, actor, ref.SourceDefinitionSHA256, ref.ApplicationID, ref.VersionID).Scan(&raw, &definition) != nil {
+	// R2: only an absent source is a refusal; a failed read is a dependency
+	// failure its caller answers retryable.
+	if err := tx.QueryRow(ctx, `SELECT r.canonical_wire,d.definition_bytes FROM elitea_runtime.execution_definition_source_refs r JOIN elitea_runtime.execution_captured_definitions d USING(resource_project_id,application_id,version_id,definition_sha256) WHERE r.source_id=$1 AND r.revision=$2 AND r.digest_sha256=$3 AND r.resource_project_id=$4 AND r.actor_id=$5 AND r.definition_sha256=$6 AND r.application_id=$7 AND r.version_id=$8 FOR SHARE OF r,d`, ref.SourceID, ref.Revision, ref.DigestSHA256, project, actor, ref.SourceDefinitionSHA256, ref.ApplicationID, ref.VersionID).Scan(&raw, &definition); errors.Is(err, pgx.ErrNoRows) {
 		return scope.SourceDefinition{}, scope.ErrDenied
+	} else if err != nil {
+		return scope.SourceDefinition{}, err
 	}
 	return scope.DecodeSourceWire(raw, definition, ref, project, actor)
 }

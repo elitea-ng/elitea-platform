@@ -674,3 +674,47 @@ fn no_fanout_activation_or_child_path_takes_a_code_slot() {
     let remote = include_str!("code_remote.rs");
     assert_eq!(remote.matches("code_attempt_scope(").count(), 4);
 }
+
+/// B6 (W3-2b): a saved pipeline child's Code time (Q2) sums its Code nodes'
+/// timeouts, each node once. A Router loop that re-enters a Code node runs
+/// more attempts than that sum assumed: the activation is admitted at exactly
+/// its window; attempts run while the run's time left holds each one's own
+/// `timeout + margin`, and the first that cannot is refused typed by that
+/// per-attempt check, before any effect, never overrun past the run's
+/// deadline. The refusal holds no slot.
+#[tokio::test(start_paused = true)]
+async fn a_router_loop_beyond_the_saved_child_code_time_is_refused_per_attempt() {
+    let slots = CodeSlots::new(1);
+    let now = tokio::time::Instant::now();
+    let deadline = now + Duration::from_secs(60) + CODE_OBSERVATION_MARGIN;
+    // validate and normalize: 2 Python Code nodes, 30 s each, one item.
+    let runtime = raw_runtime(deadline, &slots);
+    let request = FanoutCodeAdmission {
+        node_id: "map_partitions",
+        children: vec![vec![(CodeLanguage::Python, false); 2]],
+        concurrency: 1,
+    };
+    assert!(runtime.admit_fanout(&request).is_ok(), "exactly the window");
+    // validate → route_quality → normalize → route_quality → validate → …:
+    // each attempt takes 10 s of its 30 s timeout.
+    let mut admitted = 0;
+    let refused = loop {
+        let outcome = runtime.execute_tool(invocation()).await.unwrap_err();
+        if outcome == super::super::code_runtime::ToolCodeError::DeadlineInsufficient {
+            break tokio::time::Instant::now();
+        }
+        admitted += 1;
+        assert!(admitted < 16, "the loop was never refused");
+        tokio::time::advance(Duration::from_secs(10)).await;
+    };
+    assert_eq!(
+        admitted, 3,
+        "more attempts than the 2 Code nodes Q2 counted"
+    );
+    assert!(
+        deadline - refused < required(),
+        "refused only once the attempt's own window no longer fits"
+    );
+    assert!(refused < deadline, "refused before the run's deadline");
+    assert_eq!(slots.available(), 1, "a refused attempt holds no slot");
+}

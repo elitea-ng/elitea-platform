@@ -874,35 +874,6 @@ fn a_map_without_its_fanout_binding_is_refused_readably() {
     }
 }
 
-/// C1: a saved worker pipeline that holds Code is refused by the worker's
-/// name with the fan-out child code (Wave 3), as a Parallel branch is.
-#[test]
-fn a_map_worker_whose_saved_pipeline_contains_code_is_refused_typed() {
-    let yaml = PIPELINE.replace(
-        "type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ entity }}-{{ item_index }}'",
-        "type: agent, tool: selected, input: [entity, item_index], input_mapping: {task: {type: fixed, value: render}}, output: [item_result]",
-    );
-    let definition = PipelineDefinition::from_yaml(&yaml).unwrap();
-    let child = PipelineDefinition::from_yaml(
-        "entry_point: execute\nstate:\n  messages: list\nnodes:\n  - id: execute\n    type: code\n    code: {type: fixed, value: 'result = 1'}\n    input: [messages]\n    output: [messages]\n    structured_output: false\n    transition: END\n",
-    )
-    .expect("saved worker pipeline with Code");
-    let authority = Arc::new(MemoryAuthority::default());
-    let (checkpointer, runtimes) = bound(&authority);
-    let runtimes = runtimes.with_composition_definitions(std::collections::BTreeMap::from([(
-        "render".to_owned(),
-        child,
-    )]));
-    match definition.compile_subgraph_with_runtime(checkpointer, &runtimes) {
-        Err(error @ PipelineConfigurationError::FanoutChildUnsupported { .. }) => {
-            assert_eq!(error.code(), "graph.fanout.child_contains_code");
-            assert!(error.to_string().contains("render"), "{error}");
-        }
-        Err(other) => panic!("expected a typed Code refusal, got {other:?}"),
-        Ok(_) => panic!("a Map worker with Code compiled"),
-    }
-}
-
 struct UnprovedResolver;
 
 impl PipelineApplicationResolver for UnprovedResolver {
