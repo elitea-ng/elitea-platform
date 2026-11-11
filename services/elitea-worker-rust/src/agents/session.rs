@@ -161,23 +161,27 @@ fn ordinary_user_content(
 
 /// The uuid of this turn's question (#1831): Main's `current_message_id`,
 /// which it sets only on a turn that writes its own question. An output
-/// continuation or a resume of any kind runs on an earlier question, so
-/// none even if the input named one.
-fn current_message_id(
+/// continuation or a resume of any kind runs on an earlier question
+/// (`writes_question` false), so none even if the input named one.
+fn current_message_id(request: &AgentExecutionRequest, writes_question: bool) -> Option<String> {
+    (writes_question && !request.payload.is_regenerate)
+        .then(|| request.payload.current_message_id.clone())
+        .flatten()
+}
+
+/// Whether this turn asks a question of its own: not an output continuation
+/// and not a resume of any kind, which run on an earlier question. A
+/// regeneration asks its question again.
+fn writes_own_question(
     request: &AgentExecutionRequest,
     output_continuation: bool,
     pipeline_resume: Option<(bool, bool)>,
-) -> Option<String> {
+) -> bool {
     let payload = &request.payload;
-    if payload.is_regenerate
-        || payload.should_continue
+    !(payload.should_continue
         || payload.hitl_resume
         || output_continuation
-        || pipeline_resume.is_some_and(|(should_continue, hitl)| should_continue || hitl)
-    {
-        return None;
-    }
-    payload.current_message_id.clone()
+        || pipeline_resume.is_some_and(|(should_continue, hitl)| should_continue || hitl))
 }
 
 /// The short id of the message `message_id` (#1831), over its canonical
@@ -1005,6 +1009,15 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     /// `current_message_id`. `None` on a regeneration, a continuation, a
     /// resume or an addressed agent's reused question.
     current_message_id: Option<String>,
+    /// The context view mode Main built `chat_history` under (#1672), or
+    /// `None` for an input from before the view.
+    context_view_history: Option<String>,
+    /// This turn writes a question of its own (not a continuation or a
+    /// resume): the session will hold it as this turn's user content.
+    writes_question: bool,
+    /// [`Self::tag_message_refs`] ran: the history and the question carry
+    /// their `[message m-…]` ids (#1831, #1865).
+    tags_messages: bool,
     context_management: ContextManagementPlan,
     step_compaction: Option<super::context_management::CompactionPolicy>,
     capability_id: &'static str,
@@ -1115,6 +1128,7 @@ impl OrdinaryNativeAgentPlan {
     /// on every turn and the provider prompt cache still matches. Called
     /// only when the sub-agent tools are bound.
     pub(crate) fn tag_message_refs(&mut self) -> Vec<(String, String, String)> {
+        self.tags_messages = true;
         let mut view = Vec::new();
         if self.chat_history_refs.len() == self.chat_history.len() {
             for (reference, content) in self.chat_history_refs.iter().zip(&mut self.chat_history) {
@@ -1136,6 +1150,27 @@ impl OrdinaryNativeAgentPlan {
             }
         }
         view
+    }
+
+    /// What this turn binds the reader's durable session to (#1672, #1865):
+    /// the context view mode, and whether every quotable message the
+    /// session holds after this turn's question carries its id.
+    fn history_binding(&self) -> HistoryBinding {
+        HistoryBinding {
+            // A view is bound only with a reference per entry: without them
+            // the session could never record it and would re-seed every turn.
+            view: self
+                .context_view_history
+                .clone()
+                .filter(|_| self.chat_history_refs.len() == self.chat_history.len()),
+            fresh: self.writes_question,
+            tagging: self.tags_messages,
+            // Only a regeneration asks a quotable question again without its
+            // id. An addressed agent's turn has no id either, but its user
+            // content is Main's note, not a message; the person's question is
+            // in its tagged history.
+            tagged: self.tags_messages && !(self.writes_question && self.regenerate),
+        }
     }
 
     /// `attachments` is the RESOLVED chunk list for this turn — see
@@ -1178,6 +1213,7 @@ impl OrdinaryNativeAgentPlan {
         )
     }
 
+    #[allow(clippy::too_many_lines)] // One linear projection of the request onto the plan's fields.
     fn from_authorized_mode(
         request: &AgentExecutionRequest,
         profile: &OrdinaryNoToolProfile,
@@ -1190,6 +1226,7 @@ impl OrdinaryNativeAgentPlan {
             UserInput::Text(text) => text.clone(),
             UserInput::ContentBlocks(_) => return Err(invalid_input()),
         };
+        let writes_question = writes_own_question(request, output_continuation, pipeline_resume);
         let thread_id = request
             .payload
             .thread_id
@@ -1270,7 +1307,10 @@ impl OrdinaryNativeAgentPlan {
             thread_id,
             chat_history: profile.chat_history().to_vec(),
             chat_history_refs: request.payload.chat_history_refs.clone(),
-            current_message_id: current_message_id(request, output_continuation, pipeline_resume),
+            current_message_id: current_message_id(request, writes_question),
+            context_view_history: request.payload.context_view_history.clone(),
+            writes_question,
+            tags_messages: false,
             context_management: profile.context_management(),
             step_compaction: profile.step_compaction(),
             capability_id,
@@ -3127,6 +3167,9 @@ pub(super) async fn assemble_pipeline_native(
         chat_history: _,
         chat_history_refs: _,
         current_message_id: _,
+        context_view_history: _,
+        writes_question: _,
+        tags_messages: _,
         context_management: _,
         step_compaction: _,
         capability_id: _,
@@ -3250,9 +3293,31 @@ async fn resolve_pipeline_start(
             None
         }
         PipelineNativeStart::Fresh | PipelineNativeStart::Regenerate => {
-            let (session, created) =
+            let binding = plan.history_binding();
+            let (mut session, mut created) =
                 restore_or_create_session(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
                     .await?;
+            // #1672: a session seeded under another view starts again from
+            // this one. Only a fresh start re-seeds: a resume keeps the frontier.
+            if !created && needs_reseed(session.as_ref(), &binding) {
+                state
+                    .checkpointer
+                    .delete(plan.session_id.as_ref())
+                    .await
+                    .map_err(|_| dependency_unavailable())?;
+                reset_session_for_regeneration(
+                    state.sessions.as_ref(),
+                    &plan.user_id,
+                    &plan.session_id,
+                )
+                .await?;
+                (session, created) = restore_or_create_session(
+                    state.sessions.as_ref(),
+                    &plan.user_id,
+                    &plan.session_id,
+                )
+                .await?;
+            }
             let identity = session
                 .try_identity()
                 .map_err(|_| invalid_configuration())?;
@@ -3263,6 +3328,7 @@ async fn resolve_pipeline_start(
                     plan.chat_history.clone(),
                     &plan.chat_history_refs,
                     plan.definition_digest,
+                    &binding,
                 )
                 .await?;
             } else {
@@ -3273,6 +3339,14 @@ async fn resolve_pipeline_start(
                     &plan.chat_history,
                     &plan.chat_history_refs,
                     plan.definition_digest,
+                    &binding,
+                )
+                .await?;
+                record_history_binding(
+                    state.sessions.as_ref(),
+                    &identity,
+                    session.as_ref(),
+                    &binding,
                 )
                 .await?;
             }
@@ -3702,6 +3776,7 @@ where
     M: BoundOrdinaryAgentModel,
 {
     let root_identity = plan.session_identity()?;
+    let binding = plan.history_binding();
     let event_source = runtime.event_source.clone();
     let OrdinaryNativeAgentPlan {
         user_id,
@@ -3714,6 +3789,9 @@ where
         chat_history,
         chat_history_refs,
         current_message_id: _,
+        context_view_history: _,
+        writes_question: _,
+        tags_messages: _,
         context_management,
         step_compaction,
         capability_id: _,
@@ -3783,7 +3861,7 @@ where
     if regenerate {
         reset_session_for_regeneration(sessions.as_ref(), &user_id, &session_id).await?;
     }
-    let (session, created) = if checkpoint_recovery {
+    let (mut session, mut created) = if checkpoint_recovery {
         let session = sessions
             .get(GetRequest {
                 app_name: APP_NAME.to_owned(),
@@ -3798,6 +3876,14 @@ where
     } else {
         restore_or_create_session(sessions.as_ref(), &user_id, &session_id).await?
     };
+    // #1672: a session seeded under another view starts a fresh lineage
+    // from this one, as a regeneration does; its compaction root goes with it.
+    let reseeded = !created && !checkpoint_recovery && needs_reseed(session.as_ref(), &binding);
+    if reseeded {
+        reset_session_for_regeneration(sessions.as_ref(), &user_id, &session_id).await?;
+        (session, created) =
+            restore_or_create_session(sessions.as_ref(), &user_id, &session_id).await?;
+    }
     let identity = session
         .try_identity()
         .map_err(|_| invalid_configuration())?;
@@ -3808,6 +3894,7 @@ where
             chat_history,
             &chat_history_refs,
             definition_digest,
+            &binding,
         )
         .await?;
         // #866/#973: a fresh session is exactly where `seed_frozen_history`
@@ -3824,15 +3911,19 @@ where
             &chat_history,
             &chat_history_refs,
             definition_digest,
+            &binding,
         )
         .await?;
+        record_history_binding(sessions.as_ref(), &identity, session.as_ref(), &binding).await?;
     }
-    tracing::Span::current().record(
-        "session_bootstrap",
-        if created { "seeded" } else { "restored" },
-    );
+    let bootstrap = match (reseeded, created) {
+        (true, _) => "reseeded",
+        (false, true) => "seeded",
+        (false, false) => "restored",
+    };
+    tracing::Span::current().record("session_bootstrap", bootstrap);
     tracing::debug!(
-        session_bootstrap = if created { "seeded" } else { "restored" },
+        session_bootstrap = bootstrap,
         "prepared the ADK session for the native agent runner"
     );
     let durable_context = durable_context_plan
@@ -4430,6 +4521,9 @@ where
         chat_history: _,
         chat_history_refs: _,
         current_message_id: _,
+        context_view_history: _,
+        writes_question: _,
+        tags_messages: _,
         context_management,
         // A direct resume has no model checkpoint to prepare requests in:
         // it keeps the Runner composition of the plan.
@@ -4582,7 +4676,12 @@ async fn seed_frozen_history(
     chat_history: Vec<Content>,
     refs: &[super::request::ChatHistoryRef],
     definition_digest: [u8; 32],
+    binding: &HistoryBinding,
 ) -> Result<(), NativeAgentAssemblyError> {
+    // A view of no messages (`none`, or a first turn) is still bound to its
+    // mode (#1672); history without references never is, as its entries are
+    // named by ordinal and a marker would make the next turn append them again.
+    let marked = refs.len() == chat_history.len() && (!refs.is_empty() || binding.view.is_some());
     for (ordinal, content) in chat_history.into_iter().enumerate() {
         // ADR-0050 decision 9c: with references, each seeded event is named
         // by its message, so a later turn's reconciliation knows it is here.
@@ -4595,8 +4694,8 @@ async fn seed_frozen_history(
         };
         append_history_event(sessions, identity, id, content).await?;
     }
-    if !refs.is_empty() {
-        append_reconciliation_marker(sessions, identity, &[]).await?;
+    if marked {
+        append_reconciliation_marker(sessions, identity, &[], binding).await?;
     }
     Ok(())
 }
@@ -4627,7 +4726,78 @@ async fn append_history_event(
 /// (ADR-0050 decision 9c). Its value lists the messages a session seeded
 /// before field 71 holds under ordinal ids (`fh-`), so they are never
 /// appended again. A session seeded with references lists none.
+///
+/// #1672: `view` is the context view mode the session was seeded under, and
+/// `tagged` says every quotable message it holds carries its `[message m-…]`
+/// id (#1865). A session without `view` was seeded before either.
 const HISTORY_RECONCILED_KEY: &str = "elitea.history.reconciled.v1";
+
+/// What a turn binds the reader's durable session to (#1672, #1865).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct HistoryBinding {
+    /// The context view mode of this turn's history; `None` for an input
+    /// from before the view, which never re-seeds.
+    view: Option<String>,
+    /// This turn asks its own question. A continuation or a resume runs on
+    /// the session it paused in and never re-seeds it.
+    fresh: bool,
+    /// The sub-agent tools are bound: this turn's history carries ids.
+    tagging: bool,
+    /// After this turn, every quotable message the session holds from it
+    /// (history and question) carries its id.
+    tagged: bool,
+}
+
+/// Whether a restored session must start a fresh lineage from this turn's
+/// view (#1672): it was seeded under another mode, or before the mode was
+/// recorded (it may hold side talk the view now leaves out, or hold entries
+/// in an order a widened view does not have). With the sub-agent tools
+/// bound, a session holding untagged messages is also re-seeded (#1865), so
+/// every message the brief view offers is one the model saw with its id.
+fn needs_reseed(session: &dyn adk_rust::session::Session, binding: &HistoryBinding) -> bool {
+    let Some(view) = binding.view.as_deref().filter(|_| binding.fresh) else {
+        return false;
+    };
+    let marker = session.state().get(HISTORY_RECONCILED_KEY);
+    let field = |key: &str| marker.as_ref().and_then(|marker| marker.get(key).cloned());
+    if field("view").as_ref().and_then(Value::as_str) != Some(view) {
+        return true;
+    }
+    binding.tagging && field("tagged").as_ref().and_then(Value::as_bool) != Some(true)
+}
+
+/// After a restored session's turn: record that a turn without ids made it
+/// hold an untagged message. Written only on that change, so a turn that
+/// changes nothing appends nothing.
+async fn record_history_binding(
+    sessions: &dyn SessionService,
+    identity: &AdkIdentity,
+    session: &dyn adk_rust::session::Session,
+    binding: &HistoryBinding,
+) -> Result<(), NativeAgentAssemblyError> {
+    if binding.view.is_none() || binding.tagged {
+        return Ok(());
+    }
+    let Some(marker) = session.state().get(HISTORY_RECONCILED_KEY) else {
+        return Ok(());
+    };
+    if marker.get("tagged").and_then(Value::as_bool) != Some(true) {
+        return Ok(());
+    }
+    // The session stays bound to the view it was seeded under: a turn that
+    // does not re-seed (a continuation, a resume) never records its own
+    // view, or a narrowed mode would read as already applied.
+    let recorded = HistoryBinding {
+        view: marker
+            .get("view")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        ..binding.clone()
+    };
+    let covered = covered_messages(&marker);
+    let covered = covered.iter().map(String::as_str).collect::<Vec<_>>();
+    append_reconciliation_marker(sessions, identity, &covered, &recorded).await
+}
 
 /// A content-less event that sets [`HISTORY_RECONCILED_KEY`]; the model
 /// history skips events without content.
@@ -4635,13 +4805,19 @@ async fn append_reconciliation_marker(
     sessions: &dyn SessionService,
     identity: &AdkIdentity,
     covered: &[&str],
+    binding: &HistoryBinding,
 ) -> Result<(), NativeAgentAssemblyError> {
     let mut event = Event::new("frozen-current-history");
     "elitea-history".clone_into(&mut event.author);
-    event.actions.state_delta.insert(
-        HISTORY_RECONCILED_KEY.to_owned(),
-        serde_json::json!({"version": 1, "covered": covered}),
-    );
+    let mut marker = serde_json::json!({"version": 1, "covered": covered});
+    if let Some(view) = &binding.view {
+        marker["view"] = Value::from(view.as_str());
+        marker["tagged"] = Value::from(binding.tagged);
+    }
+    event
+        .actions
+        .state_delta
+        .insert(HISTORY_RECONCILED_KEY.to_owned(), marker);
     sessions
         .append_event_for_identity(AppendEventRequest {
             identity: identity.clone(),
@@ -4667,6 +4843,7 @@ async fn reconcile_history(
     chat_history: &[Content],
     refs: &[super::request::ChatHistoryRef],
     definition_digest: [u8; 32],
+    binding: &HistoryBinding,
 ) -> Result<(), NativeAgentAssemblyError> {
     if refs.is_empty() || refs.len() != chat_history.len() {
         return Ok(());
@@ -4711,7 +4888,13 @@ async fn reconcile_history(
     }
     if marker.is_none() {
         let covered = covered.iter().map(String::as_str).collect::<Vec<_>>();
-        append_reconciliation_marker(sessions, identity, &covered).await?;
+        // #1672: only a fresh turn, which re-seeds a session of another
+        // view, may bind one. A continuation that first reaches a session
+        // from before the view leaves it unbound, so the next fresh turn
+        // still re-seeds it.
+        let unbound = HistoryBinding::default();
+        let recorded = if binding.fresh { binding } else { &unbound };
+        append_reconciliation_marker(sessions, identity, &covered, recorded).await?;
     }
     Ok(())
 }
@@ -5529,5 +5712,115 @@ mod message_ref_tests {
         ] {
             assert_eq!(short_message_ref(form), canonical, "{form}");
         }
+    }
+}
+
+#[cfg(test)]
+mod history_binding_tests {
+    use super::{
+        APP_NAME, HISTORY_RECONCILED_KEY, HistoryBinding, append_reconciliation_marker,
+        needs_reseed, reconcile_history, record_history_binding,
+    };
+    use adk_rust::Content;
+    use adk_rust::session::{
+        CreateRequest, GetRequest, InMemorySessionService, Session, SessionService,
+    };
+    use std::collections::HashMap;
+
+    fn binding(view: &str, fresh: bool, tagging: bool, tagged: bool) -> HistoryBinding {
+        HistoryBinding {
+            view: Some(view.to_owned()),
+            fresh,
+            tagging,
+            tagged,
+        }
+    }
+
+    async fn restored(sessions: &InMemorySessionService) -> Box<dyn Session> {
+        sessions
+            .get(GetRequest {
+                app_name: APP_NAME.to_owned(),
+                user_id: "u".to_owned(),
+                session_id: "s".to_owned(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+            .expect("session")
+    }
+
+    async fn created(sessions: &InMemorySessionService) -> Box<dyn Session> {
+        sessions
+            .create(CreateRequest {
+                app_name: APP_NAME.to_owned(),
+                user_id: "u".to_owned(),
+                session_id: Some("s".to_owned()),
+                state: HashMap::new(),
+            })
+            .await
+            .expect("created")
+    }
+
+    /// #1672 review: a turn that does not re-seed (an output continuation
+    /// with untagged content) keeps the view the session was seeded under,
+    /// so a narrowed mode still re-seeds on the next fresh turn.
+    #[tokio::test]
+    async fn a_continuation_never_records_its_own_view() {
+        let sessions = InMemorySessionService::new();
+        let identity = created(&sessions).await.try_identity().expect("identity");
+        append_reconciliation_marker(
+            &sessions,
+            &identity,
+            &[],
+            &binding("full", true, true, true),
+        )
+        .await
+        .expect("seeded under full");
+        let continuation = binding("none", false, false, false);
+        let session = restored(&sessions).await;
+        assert!(!needs_reseed(session.as_ref(), &continuation));
+        record_history_binding(&sessions, &identity, session.as_ref(), &continuation)
+            .await
+            .expect("recorded");
+        let session = restored(&sessions).await;
+        let marker = session.state().get(HISTORY_RECONCILED_KEY).expect("marker");
+        assert_eq!(marker["view"], "full");
+        assert_eq!(marker["tagged"], false);
+        assert!(needs_reseed(
+            session.as_ref(),
+            &binding("none", true, false, false)
+        ));
+    }
+
+    /// #1672 review: a continuation that first reaches a session from before
+    /// the view leaves it unbound, so the next fresh turn re-seeds it once.
+    #[tokio::test]
+    async fn a_continuation_leaves_an_old_session_unbound() {
+        let sessions = InMemorySessionService::new();
+        let session = created(&sessions).await;
+        let identity = session.try_identity().expect("identity");
+        let history = [Content::new("user").with_text("kickoff")];
+        let refs = [super::super::request::ChatHistoryRef {
+            message_id: "00000000-0000-4000-8000-000000000301".to_owned(),
+            readers_own: false,
+        }];
+        reconcile_history(
+            &sessions,
+            &identity,
+            session.as_ref(),
+            &history,
+            &refs,
+            [0; 32],
+            &binding("full", false, false, false),
+        )
+        .await
+        .expect("reconciled");
+        let session = restored(&sessions).await;
+        let marker = session.state().get(HISTORY_RECONCILED_KEY).expect("marker");
+        assert!(marker.get("view").is_none(), "{marker}");
+        assert!(needs_reseed(
+            session.as_ref(),
+            &binding("full", true, false, true)
+        ));
     }
 }

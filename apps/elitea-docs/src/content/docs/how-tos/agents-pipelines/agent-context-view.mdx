@@ -40,7 +40,7 @@ context:
 | `full` (default) | Every visible message it may see. |
 | `since_joined` | What was said after it joined the conversation, and its own answers. |
 | `addressed_only` | Messages addressed to it, its own answers, and the messages those replied to. |
-| `none` | No other messages: only the current message and the agent's own earlier exchanges with the person asking, which its own session keeps. |
+| `none` | No other messages: only the current message and the agent's own exchanges with the person asking since the mode was set, which its own session keeps. |
 
 `include_side_talk: none` leaves out even the side talk the agent took part in.
 
@@ -80,11 +80,21 @@ The inspector never shows a message's text. It never shows another agent's tool 
 
 The endpoint is `GET /api/v2/elitea_core/message_context_view/prompt_lib/{project_id}/{message_id}`. Its response is not cached.
 
-The inspector shows what Main sent on that turn. Until the agent's own session is reset as well (issue 1672), the session may still hold messages it received on earlier turns. See below.
+The inspector shows what Main sent on that turn. When the agent's mode has changed, the agent's own session is started again from that view, so the model holds no message the view left out. See below.
 
-## What the filter does not undo
+## When the mode changes
 
-The view decides what is sent to the agent on each turn. The agent's own session keeps what it already received. If an agent's mode is narrowed later, or a conversation started before this release, the session can still hold messages it saw earlier. Start a new conversation when that matters.
+The agent's own session is bound to the mode it was started under. On the agent's first turn after its mode changes (a new version with another `context.history`, or "share history from: now" set on its participant), the worker starts the session again from the current view. The model then sees exactly that view and the agent's own turns from then on, in conversation order:
+
+- **Narrowed:** messages the new mode leaves out are gone from the session, not only from what is sent.
+- **Widened:** the older messages the new mode lets in appear where they were said, not after the recent turns.
+- **Nothing changed:** the session is kept and the model gets the same bytes as before, so the provider's prompt cache still matches.
+
+Starting again costs one turn without the prompt cache, and drops the session's own compaction summary; the agent's compaction summarises the new view again if it is longer than the model's window. Changing to `none` also drops the agent's earlier exchanges with the person asking, as `none` sends no earlier messages.
+
+A session started before this check (and so possibly holding side talk it is no party to) is started again once, on its first turn after the upgrade.
+
+When the agent can start sub-agents, a session holding messages without their short `[message m-…]` ids (from before the ids, or a regenerated question) is started again too, so every message a brief can quote is one the agent saw under its id.
 
 ## How the worker checks it
 
