@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/changesync"
@@ -239,7 +238,7 @@ func (repository *CurrentNotificationRepository) listParams(
 		if word == "" || len(word) > 256 {
 			return 0, sqlcgen.ListCurrentNotificationsParams{}, ErrInvalidCurrentNotificationOperation
 		}
-		words = append(words, currentNotificationLIKEWord(word))
+		words = append(words, escapeLike(word))
 	}
 	return user, sqlcgen.ListCurrentNotificationsParams{
 		UserID:      user,
@@ -289,11 +288,6 @@ func currentNotificationSortValid(field, order string) bool {
 		return false
 	}
 	return order == "asc" || order == "desc"
-}
-
-func currentNotificationLIKEWord(value string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return replacer.Replace(value)
 }
 
 func currentNotificationFromRow(

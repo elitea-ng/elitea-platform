@@ -2757,7 +2757,7 @@ func (r *ConversationsRepo) ListMessages(ctx context.Context, projectID, convers
 	// escape the escapes added after it.
 	filter, filterArgs := "", []any{}
 	if query.Query != "" {
-		pattern := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(query.Query)
+		pattern := escapeLike(query.Query)
 		filter = fmt.Sprintf(` AND EXISTS (
 			SELECT 1 FROM %s.chat_message_items mi
 			JOIN %s.chat_messages_text mt ON mt.id = mi.id

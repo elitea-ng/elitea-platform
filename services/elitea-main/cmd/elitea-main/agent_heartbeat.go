@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -110,24 +109,17 @@ func startAgentHeartbeatRunner(ctx context.Context, deps agentHeartbeatDeps) err
 	return nil
 }
 
-// ownerCanRun re-reads the owner's run permission at every act, as a
-// pipeline schedule re-reads its run identity's.
+// ownerCanRun re-reads the owner's run permission at every act, through the
+// same check a pipeline schedule uses for its run identity (#1868).
 func ownerCanRun(permissions auth.PermissionResolver) heartbeat.RunPermission {
 	return func(ctx context.Context, projectID, userID int64) (bool, error) {
-		id := strconv.FormatInt(userID, 10)
-		resolution, err := permissions.ResolvePermissions(ctx, auth.User{ID: id, UserID: id},
-			v2pipelinetriggers.RunPermissionMode, strconv.FormatInt(projectID, 10))
+		allowed, err := v2pipelinetriggers.HoldsRunPermission(ctx, permissions, projectID, userID)
 		if err != nil {
 			// No decision is not "allowed", and it is not "refused" either:
 			// the act fails and the owner is not told they lost a
 			// permission they still have.
 			return false, fmt.Errorf("heartbeat: resolve the owner's run permission: %w", err)
 		}
-		for _, permission := range resolution.Permissions {
-			if permission == v2pipelinetriggers.RunPermission {
-				return true, nil
-			}
-		}
-		return false, nil
+		return allowed, nil
 	}
 }

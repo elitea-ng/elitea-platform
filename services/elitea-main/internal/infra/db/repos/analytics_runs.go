@@ -59,7 +59,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -446,8 +445,7 @@ LIMIT `+strconv.Itoa(errorCodeRowsLimit), args...)
 // likePrefix escapes a prefix for `LIKE … ESCAPE '\'`. An id may hold `_`,
 // which LIKE reads as "any character".
 func likePrefix(prefix string) string {
-	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return replacer.Replace(prefix) + "%"
+	return escapeLike(prefix) + "%"
 }
 
 // lifetimeOnLog bounds the log rows (alias l) by a run's lifetime: $3 is
