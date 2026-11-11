@@ -176,7 +176,8 @@ failures retried then retryable; a pause inside a durable nested pipeline is ref
 | Worker × nested direct toolkit/MCP node, call started | F (journal Started; never repeated, typed to the Agent) | F; the nested node still journals | T1e kills (Map, Parallel) |
 | Worker × call recorded, nested thread admitted, waiting for the shared tool | R: replay, fresh nested start | F | T4 kill |
 | Worker × nested pipeline completed, Agent not answered | R: stored result, never re-run | F | `…killed_after_…` (Map, Parallel) |
-| Main restart / lease loss × above | as the Worker rows (takeover re-derives `NT`; a superseded reclaim runs nothing) | F | admission takeover test; T2 kill |
+| Lease loss / takeover × above | as the Worker rows (takeover re-derives `NT`; a superseded reclaim runs nothing) | F | admission takeover test; T2 kill |
+| Main restart × a model request sent while Main is down | **F**: the member's node fails `model_gateway.transport` (pre-existing for every model node, **FU-334**); calls already streaming survive | F | browser chats 888, 893 (fails), 890, 892 (survives) |
 | PostgreSQL × admission or read | retryable dependency failure | same | T6 tests |
 | Supervisor | n/a (no Code in scope) | n/a | — |
 | Root Agent node × pipeline tool | F `RECOVERY_FRONTIER_UNSUPPORTED` (#1933) | F | FU-323 |
@@ -376,7 +377,32 @@ the ledger before the activation, so an activated writer is always registered an
 
 ## Real-browser evidence
 
-Pending (orchestrating session).
+**Setup.**
+- **Stack:** a disposable stack `f291` with the production profile (recovery and node recovery on). verify-profile:
+  50 passed, 0 failed.
+- **Images:** Main and Worker `fu291-ab5c03796`, built from this branch's head. Both binaries were extracted
+  (`docker create` + `docker cp`). The Worker contains the branch-only `pipeline.tool_thread_total_limit`,
+  `tool_thread_unbound` and `pt1=ledger`; Main contains the new `holds a Code or Agent node` text. Web is
+  `rf-8608b6c04` (no Web change here).
+- **Browser:** Chrome, main-chat conversations, each checked after a reload.
+
+**Fixtures.**
+- Pipelines and Agents were created through the app's own API from the signed-in page: `fu_summarize` 170 (LLM, then
+  State Modifier), `fu_summarizer` 171, the Map 172, the Parallel 173, and the Code shapes 174, 175 and 176.
+- Every tool attachment was made in the UI (TOOLS, then Agent / Pipeline / MCP) and checked in `entity_tool_mapping`.
+
+| Case | Chat / execution | Result |
+|---|---|---|
+| Map of 4 topics at concurrency 2: worker is an Agent node running `fu_summarizer`, which calls `fu_summarize` | 887 / `a42e4d96d90c9fc324fb9fae6a7203dc` | Reloaded mid-run and after. 4 ordered `succeeded` results persist. 4 durable nested threads plus 4 member ledgers. |
+| Parallel of 2 branches (tides, auroras), same Agent | 894 / `13b8b8b034ff8edce387c17bfc6484d4` | 2 branches succeeded and persist. 2 nested threads plus 2 ledgers. |
+| Map of 4: `docker kill` of the Worker once 2 members had admitted their nested pipeline threads (inside the nested LLM node) | 889 / `d704e2bb248e43380a3c404956ac1559` | The reclaim (about 60 s, the command bus's AckWait) re-entered the run. All 4 completed, ordered, and persist. **Exactly 4 nested threads**: the 2 admitted before the kill were re-entered, not recreated. No WARN or ERROR beyond FU-336, 0 advisory locks. |
+| The same kill, then `docker restart` of Main mid-recovery | 888 / `9bba3d9c11e5ab1cab23193758d71688` | **Fails, through a pre-existing defect (FU-334, HIGH):** the recovered members' new model requests sent during Main's restart failed with `model_gateway.transport`, and the run ended with the typed Map-failure text. Controls with no FU-291 code fail or pass the same way: chat 893 (8 sequential inline LLM items, Main restart, items 2–7 fail in 40 ms); chats 890 and 892 (calls already streaming survive). Plan case 4 is therefore blocked by FU-334. |
+| Refused shape: the Agent's pipeline tool holds Code | 895 / `28d06540ffa2f027145e2f7f70265dd0` | Refused before the run with the precise text ("…saved pipeline tool holds a Code or Agent node…"). 0 items admitted, 0 model requests, 0 nested threads. |
+| A nested direct MCP node killed mid-call | 896–899 | **Not run.** The fixture (a saved Agent holding the MCP toolkit and the pipeline that uses it) is refused `DELEGATION_GRANT_MISSING` at assembly even with the toolkit attached at every level. It is refused the same way at a root Agent node with no fan-out (chat 899), so FU-291 does not cause it: FU-335. The case is covered by the two-process real-PG T1e. |
+| Root saved-Agent node (plan case 5) | — | Out of scope here: a root saved-Agent node is not a recovery frontier (FU-323); #1933 makes it end typed, with its own browser proof. |
+
+No Supervisor kill: no Code is in scope. Every run logged only the pre-existing WARN
+`agent_session_terminal_completion_unavailable`, once per member Agent completion (FU-336).
 
 ## Follow-ups
 
@@ -388,3 +414,6 @@ Pending (orchestrating session).
 - **FU-331 (perf, polish)**: a shared pipeline tool's members run their calls one at a time, because each call drains
   the tool's node-event channel (`node_events.rs:620`).
 - **FU-332**: an Agent node inside a pipeline tool (D4 b), refused here before the run.
+- **FU-334 (HIGH)**: a model request sent while Main restarts fails its node instead of waiting (browser case 4).
+- **FU-335**: a delegated saved Agent's toolkit grant is refused even when every caller holds it; generic texts.
+- **FU-336**: a WARN on every saved Agent's normal completion.
