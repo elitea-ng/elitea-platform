@@ -36,7 +36,7 @@
   `W/protocol/output.rs` (one existing test extended), `M/transport/runtimegrpc/output/recovery_frontier_agent_step_test.go`
   (new).
 - Docs: `services/elitea-worker-rust/docs/recovery-guarantees.md` (one row), this mapping, the README entry,
-  `docs/upgrading/2026-11-11-0-root-saved-agent-frontier-typed.md`.
+  `docs/upgrading/2026-11-11-1933-root-saved-agent-frontier-typed.md`.
 
 ## Design as built
 
