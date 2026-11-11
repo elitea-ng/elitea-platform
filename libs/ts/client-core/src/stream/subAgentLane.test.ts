@@ -9,6 +9,13 @@ function fold(entries: unknown[]): readonly CloudSubAgentLane[] {
   return entries.reduce<readonly CloudSubAgentLane[]>((lanes, entry) => foldSubAgentEntry(lanes, entry), []);
 }
 
+/** The lane at `index`, failing the test when there is none. */
+function laneAt(lanes: readonly CloudSubAgentLane[], index = 0): CloudSubAgentLane {
+  const lane = lanes[index];
+  assert.ok(lane, `no lane ${String(index)}`);
+  return lane;
+}
+
 describe('foldSubAgentEntry', () => {
   it('folds a child from its start to its end', () => {
     const lanes = fold([
@@ -19,7 +26,7 @@ describe('foldSubAgentEntry', () => {
       { kind: 'finished', agent_id: 'a_1', status: 'completed', steps: 2, input_tokens: 10, output_tokens: 3, result: 'Two callers.' },
     ]);
     assert.equal(lanes.length, 1);
-    const [lane] = lanes;
+    const lane = laneAt(lanes);
     assert.equal(lane.displayName, 'Owl');
     assert.equal(lane.avatar, 'default:owl');
     assert.equal(lane.status, 'completed');
@@ -47,14 +54,14 @@ describe('foldSubAgentEntry', () => {
 
   it('drops control characters and bounds text', () => {
     const lanes = fold([started, { kind: 'text', agent_id: 'a_1', text: `a\u0007b${'x'.repeat(2000)}` }]);
-    const item = lanes[0].items[0];
-    assert.ok(item.type === 'text' && item.text.startsWith('ab') && [...item.text].length === 600);
+    const item = laneAt(lanes).items[0];
+    assert.ok(item?.type === 'text' && item.text.startsWith('ab') && [...item.text].length === 600);
   });
 
   it('a continued child runs again', () => {
     const lanes = fold([started, { kind: 'finished', agent_id: 'a_1', status: 'completed', result: 'r' }, { kind: 'resumed', agent_id: 'a_1' }]);
-    assert.equal(lanes[0].status, 'running');
-    assert.equal(lanes[0].result, undefined);
+    assert.equal(laneAt(lanes).status, 'running');
+    assert.equal(laneAt(lanes).result, undefined);
   });
 });
 
@@ -74,14 +81,14 @@ describe('parseSubAgentLanes', () => {
       'nope',
     ]);
     assert.equal(lanes.length, 1);
-    assert.equal(lanes[0].status, 'failed');
-    assert.deepEqual(lanes[0].items, [{ type: 'tool', callId: 'c', tool: 't', ok: false }]);
+    assert.equal(laneAt(lanes).status, 'failed');
+    assert.deepEqual(laneAt(lanes).items, [{ type: 'tool', callId: 'c', tool: 't', ok: false }]);
     assert.deepEqual(parseSubAgentLanes({}), []);
   });
 
   it('a settled answer stops a lane left running', () => {
     const lanes = fold([started]);
-    assert.equal(settleSubAgentLanes(lanes)[0].status, 'cancelled');
+    assert.equal(laneAt(settleSubAgentLanes(lanes)).status, 'cancelled');
     const done = fold([started, { kind: 'finished', agent_id: 'a_1', status: 'completed' }]);
     assert.equal(settleSubAgentLanes(done), done);
   });

@@ -91,7 +91,7 @@ function toolItem(action: RawAction, index: number): TranscriptItem | undefined 
  * decision 4) as the local lanes: under the `spawn_agent` row whose call id
  * started them, with their profile name and a "temporary" badge.
  */
-export function laneOf(lane: CloudSubAgentLane): SubAgentLane {
+function laneOf(lane: CloudSubAgentLane): SubAgentLane {
   const items: TranscriptItem[] = lane.items.map((item, index) =>
     item.type === 'tool'
       ? {
