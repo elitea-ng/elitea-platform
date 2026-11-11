@@ -119,13 +119,28 @@ pub fn check_request(request: &TurnRequest) -> Result<(), TurnError> {
     Ok(())
 }
 
-/// The `addressed_to` a start sends: only the agents the person addressed
-/// (ADR-0050 decision 7c). A message that names no agent sends none, so a
-/// lead conversation routes it to its lead; a later agent's turn sends none
-/// (it is the message's, `check_request`).
+/// The `addressed_to` a start sends: the agents the person addressed
+/// (ADR-0050 decision 7c; a composer pick is not an address, #1917). A
+/// message that names no agent sends none, so a lead conversation routes
+/// it to its lead; a later agent's turn sends none (it is the message's,
+/// `check_request`). A turn the host continues by itself (an unattended
+/// chain's continuation or a resumed chain, ADR-0045) is the same agent's
+/// work, not a new message: in a thread of several agents it addresses the
+/// agent it continues, so the floor routes it back to that agent and not
+/// to the lead.
 #[must_use]
-pub fn addressed(request: &TurnRequest) -> &[i64] {
-    &request.addressed_to
+pub fn addressed(request: &TurnRequest, answering: &super::api::AnsweringParticipant) -> Vec<i64> {
+    if !request.addressed_to.is_empty() {
+        return request.addressed_to.clone();
+    }
+    let continued = request
+        .unattended
+        .as_ref()
+        .is_some_and(|turn| turn.chain_root_execution_id.is_some());
+    if !continued || request.floor_turn.is_some() || answering.agents < 2 {
+        return Vec::new();
+    }
+    vec![answering.id]
 }
 
 /// The name a conversation participant goes by in a relayed transcript.
@@ -293,6 +308,69 @@ pub fn status(started: &super::api::LocalTurnStarted) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn answering(agents: usize) -> super::super::api::AnsweringParticipant {
+        super::super::api::AnsweringParticipant {
+            id: 77,
+            application_id: 5,
+            conversation_uuid: "99999999-2222-4333-8444-555555555555".into(),
+            numeric_id: Some(42),
+            message_count: None,
+            agents,
+            cloud: false,
+            answer_only: false,
+        }
+    }
+
+    fn turn(unattended: Option<super::super::unattended::UnattendedTurn>) -> TurnRequest {
+        TurnRequest {
+            workspace_id: "w1".into(),
+            project_id: 1,
+            conversation_id: json!(42),
+            application_id: 5,
+            version_id: 9,
+            prompt: "Continue".into(),
+            plan_mode: false,
+            bypass: false,
+            mentions: Vec::new(),
+            skills: Vec::new(),
+            compact: false,
+            model: None,
+            project_skills: Vec::new(),
+            command: None,
+            images: Vec::new(),
+            unattended,
+            addressed_to: Vec::new(),
+            floor_turn: None,
+            cloud: false,
+        }
+    }
+
+    /// A person's message that names no agent carries no address (#1917),
+    /// but a turn the host continues by itself (an unattended chain's next
+    /// turn, a resumed chain) addresses the agent it continues: in a lead
+    /// thread it would otherwise route to the lead and be refused, ending
+    /// the chain after its first turn.
+    #[test]
+    fn only_a_continued_chain_addresses_its_own_agent() {
+        use super::super::unattended::{UnattendedGrant, UnattendedTurn};
+        let root = UnattendedTurn::root(UnattendedGrant::default());
+        let next = root.next("exec-1");
+        assert!(addressed(&turn(None), &answering(2)).is_empty());
+        assert!(addressed(&turn(Some(root)), &answering(2)).is_empty());
+        assert_eq!(
+            addressed(&turn(Some(next.clone())), &answering(2)),
+            vec![77]
+        );
+        // A thread of one agent sends no address, as before.
+        assert!(addressed(&turn(Some(next.clone())), &answering(1)).is_empty());
+        // The person's own addressees win.
+        let named = TurnRequest {
+            addressed_to: vec![88],
+            ..turn(Some(next))
+        };
+        assert_eq!(addressed(&named, &answering(2)), vec![88]);
+    }
 
     #[test]
     fn a_cloud_agent_gets_the_conversation_text_under_each_authors_name() {

@@ -847,7 +847,11 @@ decision 7c, #1804, #1917): a message that names no agent goes out with no
 answers the order (`floor: {question_id, position, targets, agents:
 {participant_id, name, executor}[]}`) and the answering agent's `executor`.
 Under `lead`, Main routes an unaddressed message to the lead, whichever
-agent the composer shows.
+agent the composer shows. A turn the host continues by itself (an
+unattended chain's next turn, a resumed chain, ADR-0045) is the same
+agent's work, not a new message: in a thread of several agents the host
+addresses it to the agent it continues (`addressed_to: [participant_id]`),
+so a lead thread's chain stays on its agent.
 
 - **The UI starts the message on the routed agent** (#1917). The UI reads
   the thread (its agents and `meta.floor`) and starts a message on the
