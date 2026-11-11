@@ -147,7 +147,8 @@ export function PackAvatar({
     ownMotion = true;
     drawn =
       stateMedia.kind === 'video' ? (
-        <PackVideo uri={stateMedia.uri} poster={posterMedia?.kind === 'image' ? posterMedia.uri : stillUri} size={edge} />
+        // Keyed by the file: another state's video is a new player, with its poster up until its first frame.
+        <PackVideo key={stateMedia.uri} uri={stateMedia.uri} poster={posterMedia?.kind === 'image' ? posterMedia.uri : stillUri} size={edge} />
       ) : (
         <PackImage uri={stateMedia.uri} size={edge} play />
       );

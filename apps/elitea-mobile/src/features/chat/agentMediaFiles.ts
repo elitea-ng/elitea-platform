@@ -64,9 +64,18 @@ export const agentMediaFiles: AgentMediaFiles = {
       if (file === null) return null;
       const directory = mediaDirectory(origin);
       if (!directory.exists) directory.create({ intermediates: true });
-      if (file.exists) file.delete();
-      file.create();
-      file.write(bytes);
+      // Written beside it under a temporary name, then moved into place: `cached` trusts any file
+      // with the final name, so a write cut short (the app killed, the disk full) must never
+      // leave one there.
+      const part = new File(directory, `${file.name}.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.part`);
+      try {
+        part.create();
+        part.write(bytes);
+        part.moveSync(file, { overwrite: true });
+      } catch (error) {
+        if (part.exists) part.delete();
+        throw error;
+      }
       return file.uri;
     } catch (error) {
       log.info('agent media not stored', { error });

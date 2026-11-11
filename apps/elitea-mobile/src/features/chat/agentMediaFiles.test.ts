@@ -51,11 +51,23 @@ jest.mock('expo-file-system', () => {
     delete() {
       files.delete(this.uri);
     }
+    get name() {
+      return this.uri.slice(this.uri.lastIndexOf('/') + 1);
+    }
+    moveSync(destination: { uri: string }) {
+      const bytes = files.get(this.uri);
+      if (bytes === undefined) throw new Error('no such file');
+      if (failMoves.value) throw new Error('disk full');
+      files.delete(this.uri);
+      files.set(destination.uri, bytes);
+      this.uri = destination.uri;
+    }
   }
-  return { __files: files, Directory, File, Paths: { cache: 'file:///cache/' } };
+  const failMoves = { value: false };
+  return { __files: files, __failMoves: failMoves, Directory, File, Paths: { cache: 'file:///cache/' } };
 });
 
-const files = jest.requireMock<{ __files: Map<string, Uint8Array> }>('expo-file-system').__files;
+const { __files: files, __failMoves: failMoves } = jest.requireMock<{ __files: Map<string, Uint8Array>; __failMoves: { value: boolean } }>('expo-file-system');
 const fake = jest.requireMock<FakeSecureStore>('expo-secure-store');
 
 const OTHER = 'bbbbbbbbbbbb';
@@ -66,6 +78,7 @@ const BYTES = new Uint8Array([1, 2, 3]);
 beforeEach(() => {
   __resetRegistryForTests();
   files.clear();
+  failMoves.value = false;
   fake.values.clear();
   jest.spyOn(console, 'info').mockImplementation(() => {});
   jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -87,6 +100,16 @@ it('stores checked bytes once and finds them again by the url', () => {
   expect(files.get(stored!)).toEqual(BYTES);
   expect(agentMediaFiles.cached(uri)).toBe(stored);
   expect(agentMediaFiles.store(`${FIXTURE_ORIGIN}/icons/x.png`, BYTES)).toBeNull();
+  // Only the final file is left: the temporary one was moved into place.
+  expect([...files.keys()]).toEqual([stored]);
+});
+
+it('leaves no file under the final name when the write fails, so the next read downloads again', () => {
+  const uri = `${FIXTURE_ORIGIN}${STILL}`;
+  failMoves.value = true;
+  expect(agentMediaFiles.store(uri, BYTES)).toBeNull();
+  expect(agentMediaFiles.cached(uri)).toBeNull();
+  expect(files.size).toBe(0);
 });
 
 it("deletes a removed workspace's pack media and keeps the active one's", async () => {

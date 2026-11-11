@@ -257,6 +257,28 @@ describe('PackAvatar', () => {
     expect(poster()).toBe(uriOf(STILL));
   });
 
+  it("shows the next state's poster until that video's own first frame", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const at = (motion: 'working' | 'waking') => (
+      <QueryClientProvider client={client}>
+        <PackAvatar projectId={7} pack={FULL} motion={motion} name="Mira" imageUri={null} mark fetchMedia={served()} />
+      </QueryClientProvider>
+    );
+    const view = await render(at('working'));
+    await waitFor(() => expect(poster()).toBe(uriOf(WORKING_POSTER)));
+    await act(async () => video()?.props.onFirstFrameRender());
+    expect(poster()).toBeNull();
+    await view.rerender(at('waking'));
+    await waitFor(() => expect((video()?.props.player as { source: unknown }).source).toBe(uriOf(WAKING_WEBM)));
+    expect(poster()).toBe(uriOf(STILL));
+    await act(async () => video()?.props.onFirstFrameRender());
+    // Back to a state whose files are already loaded: the switch is immediate, and still a new
+    // player with its poster up.
+    await view.rerender(at('working'));
+    expect((video()?.props.player as { source: unknown }).source).toBe(uriOf(WORKING_MP4));
+    expect(poster()).toBe(uriOf(WORKING_POSTER));
+  });
+
   it('keeps the still and the default motion for a state with no slot, or one whose file is refused', async () => {
     const view = await withQueries(<PackAvatar projectId={7} pack={FULL} motion="waiting" name="Mira" imageUri={null} mark fetchMedia={served()} />);
     await waitFor(() => expect(shown()).toBe(uriOf(STILL)));
