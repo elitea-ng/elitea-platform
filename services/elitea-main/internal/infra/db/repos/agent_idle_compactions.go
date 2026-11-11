@@ -7,8 +7,7 @@ package repos
 //   - ArmIdleCompaction: the after-settle arm of an agent's answered turn;
 //   - ClaimIdleCompactions / SkipIdleCompaction / DeferIdleCompaction: the
 //     admitter's store (agentexecution.IdleCompactionAdmitter);
-//   - admitCurrentIdleCompaction / cancelParticipantIdleCompactions
-//     (cancelApplicationIdleCompactions for a turn with no participant): the
+//   - admitCurrentIdleCompaction / cancelParticipantIdleCompactions: the two
 //     steps inside the agent admission transaction;
 //   - isIdleCompactionRun / projectIdleCompactionContext /
 //     settleIdleCompactionRun: the quiet projections of an idle run;
@@ -427,10 +426,9 @@ RETURNING row.idempotency_key, row.project_id, row.conversation_uuid::text, row.
 
 // retireSettledIdleRuns ends ADMITTED rows whose idle job reached a
 // terminal state without its projection or its settle hook ending the row.
-// A QUARANTINED job is not retired (issue 1776): it can still be recovered
-// and run, and its measurement and settle hook then need the ADMITTED row.
-// One that is never recovered is ended by the agent's next turn
-// (cancelParticipantIdleCompactions), which frees the participant's check.
+// QUARANTINED is terminal here: nothing moves a job out of it (claims.go
+// answers retry-later), so its row is ended like a FAILED one and the
+// participant's check slot is freed.
 //
 // It is a backstop for a lost after-settle hook, so it runs at most once per
 // retireInterval on each replica, not on every sweep pass.
@@ -443,7 +441,7 @@ WITH settled AS (
   SELECT row.id, job.state
   FROM elitea_runtime.agent_idle_compactions AS row
   JOIN elitea_runtime.execution_jobs AS job ON job.execution_id = row.idle_execution_id
-  WHERE row.state = 'ADMITTED' AND job.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+  WHERE row.state = 'ADMITTED' AND job.state IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'QUARANTINED')
   ORDER BY row.id
   LIMIT $1
   FOR UPDATE OF row SKIP LOCKED
@@ -470,7 +468,10 @@ const retireInterval = time.Minute
 func (r *AgentIdleCompactionsRepository) retireDue() bool {
 	r.retireMu.Lock()
 	defer r.retireMu.Unlock()
-	now := r.now()
+	now := time.Now()
+	if r.now != nil {
+		now = r.now()
+	}
 	if !r.lastRetire.IsZero() && now.Sub(r.lastRetire) < retireInterval {
 		return false
 	}
@@ -733,27 +734,6 @@ FROM ended
 WHERE job.execution_id = ended.idle_execution_id
   AND job.desired_state IN ('RUNNING', 'SUSPENDED')
   AND job.state IN `+nonTerminalJobStates, projectID, conversationUUID, participantID,
-		string(idlecompaction.SkipSuperseded)); err != nil {
-		return fmt.Errorf("cancel the agent's idle compaction: %w", err)
-	}
-	return nil
-}
-
-// cancelApplicationIdleCompactions runs in the admission transaction of an
-// agent turn that names no participant (issue 1776), after the conversation
-// lock: every QUEUED check in the conversation whose source ran the same
-// agent ends CANCELLED. Only QUEUED rows: without a participant the turn
-// cannot tell which of several participants of one agent it answers as, and
-// a running idle run is fenced by the session lease (WriterNotCurrent). A
-// check of another agent, or of an ad hoc chat, is never touched.
-func cancelApplicationIdleCompactions(ctx context.Context, tx sqlExecutor, projectID int64, conversationUUID string, applicationID int64) error {
-	if _, err := tx.Exec(ctx, `
-UPDATE elitea_runtime.agent_idle_compactions AS row
-SET state = 'CANCELLED', skip_code = $4, lease_until = NULL, updated_at = clock_timestamp()
-FROM elitea_runtime.agent_execution_jobs AS source
-WHERE row.project_id = $1 AND row.conversation_uuid = $2::uuid AND row.state = 'QUEUED'
-  AND source.execution_id = row.source_execution_id AND source.generation = row.source_generation
-  AND source.application_id = $3`, projectID, conversationUUID, applicationID,
 		string(idlecompaction.SkipSuperseded)); err != nil {
 		return fmt.Errorf("cancel the agent's idle compaction: %w", err)
 	}

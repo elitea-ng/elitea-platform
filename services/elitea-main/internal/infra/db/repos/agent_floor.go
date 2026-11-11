@@ -338,17 +338,16 @@ func runHasExchange(ctx context.Context, queryer rowQueryer, executionID string)
 // a run that is no turn of an exchange; such a run is told apart by a
 // read before any transaction is opened (runHasExchange).
 func (r *AgentFloorRepository) FloorSettle(ctx context.Context, executionID string) (agentexecutionapp.FloorSettleView, bool, error) {
-	if _, exists, err := runHasExchange(ctx, r.pool, executionID); err != nil || !exists {
+	// The run's binding is immutable once admitted, so the pre-check's read
+	// of it stands inside the transaction; only the exchange is rechecked.
+	run, exists, err := runHasExchange(ctx, r.pool, executionID)
+	if err != nil || !exists {
 		return agentexecutionapp.FloorSettleView{}, false, err
 	}
 	var view agentexecutionapp.FloorSettleView
 	found := false
-	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
 		view, found = agentexecutionapp.FloorSettleView{}, false
-		run, ok, err := readFloorRun(ctx, tx, executionID)
-		if err != nil || !ok {
-			return err
-		}
 		exchange, ok, err := lockRunExchange(ctx, tx, run, executionID)
 		if err != nil || !ok {
 			return err

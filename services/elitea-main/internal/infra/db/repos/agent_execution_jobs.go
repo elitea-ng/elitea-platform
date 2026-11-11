@@ -876,20 +876,12 @@ WHERE execution_id = $1 AND generation = $2`,
 	// A turn of an agent participant ends that agent's idle compaction in
 	// this conversation (ADR-0050 decision 9b2): its QUEUED check, or its
 	// running idle run, which is asked to stop. A peer's or a person's turn
-	// never reaches here with this participant.
+	// never reaches here with this participant. Every agent turn names its
+	// participant (each Validate requires TargetParticipantID; issue 1776
+	// item 2), so no turn of an agent admits without one.
 	if participantID := admission.ParticipantID(); participantID > 0 && participantID <= math.MaxInt32 && currentProjectID > 0 {
 		if err := cancelParticipantIdleCompactions(ctx, pgxExecutor{queryer: tx}, currentProjectID,
 			admission.Binding.ClientStreamID, participantID); err != nil {
-			return executionapp.AdmissionOutcome{}, nil, err
-		}
-	} else if applicationID := admission.ApplicationID(); participantID == 0 && admission.CurrentIdleCompactionTurn == nil &&
-		applicationID > 0 && applicationID <= math.MaxInt32 && currentProjectID > 0 {
-		// A turn of an agent that names no participant (an ad hoc path, an
-		// old client; issue 1776): the QUEUED checks of that agent in this
-		// conversation end, found by the agent their source ran. A running
-		// idle run is left to the session lease.
-		if err := cancelApplicationIdleCompactions(ctx, pgxExecutor{queryer: tx}, currentProjectID,
-			admission.Binding.ClientStreamID, applicationID); err != nil {
 			return executionapp.AdmissionOutcome{}, nil, err
 		}
 	}

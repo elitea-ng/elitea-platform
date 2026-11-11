@@ -1,9 +1,9 @@
 package repos
 
 // Idle compaction follow-ups against a real PostgreSQL (issue 1776): the idle
-// run binds its source's agent identity (ADR-0039), an agent turn that names
-// no participant cancels the agent's QUEUED check, and the request-log
-// analytics tag an idle run's calls. Requires ELITEA_TEST_DATABASE_URL; every
+// run binds its source's agent identity (ADR-0039), and the request-log
+// analytics tag an idle run's calls. (Item 2 needs no code: every agent turn
+// names its participant, so cancelParticipantIdleCompactions covers it.) Requires ELITEA_TEST_DATABASE_URL; every
 // test skips without it.
 
 import (
@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -133,37 +132,6 @@ func TestIdleCompactionSkipsASourceOfAnotherVersion(t *testing.T) {
 	require.Equal(t, "SKIPPED:"+agentexecutionapp.IdleCompactionSkipSourceInvalid, h.checkState(other))
 }
 
-// Item 2: a turn of the agent that names no participant cancels the agent's
-// QUEUED check in the conversation; another agent's turn, a turn in another
-// conversation and an ADMITTED row are left alone.
-func TestIdleCompactionCancelledByAnUntargetedTurnOfTheAgent(t *testing.T) {
-	h := newIdleHarness(t)
-	source := h.settledAnswer(h.newResponse(), h.agent) // application 7
-	require.True(t, h.arm(source))
-	cancel := func(conversation string, application int64) {
-		t.Helper()
-		require.NoError(t, pgx.BeginFunc(t.Context(), h.pool, func(tx pgx.Tx) error {
-			return cancelApplicationIdleCompactions(t.Context(), pgxExecutor{queryer: tx}, 1, conversation, application)
-		}))
-	}
-	cancel(h.conversation, 2)
-	require.Equal(t, "QUEUED", h.checkState(source), "another agent's turn")
-	cancel("00000000-0000-4000-8000-000000000001", 7)
-	require.Equal(t, "QUEUED", h.checkState(source), "a turn in another conversation")
-	cancel(h.conversation, 7)
-	require.Equal(t, "CANCELLED:superseded_by_agent_turn", h.checkState(source))
-
-	// An ADMITTED idle run is left to the session lease.
-	second := h.settledAnswer(h.newResponse(), h.agent)
-	require.True(t, h.arm(second))
-	h.makeDue(second)
-	created, err := h.admitter.Sweep(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, 1, created)
-	cancel(h.conversation, 7)
-	require.Equal(t, "ADMITTED", h.checkState(second))
-}
-
 // Item 3: an idle run's calls are tagged idle_compaction. They stay in the
 // call and token totals, leave the active-user figures, and are their own
 // automated bucket; the execution read names the origin.
@@ -223,10 +191,10 @@ VALUES (1, gen_random_uuid(), 1, $1, 1, $3, 300, $3, 'idle-compaction/' || $1, '
 	require.Equal(t, "manual", source.TriggerOrigin)
 }
 
-// Items 5 and 6: the lost-hook backstop leaves a QUARANTINED idle job's row
-// ADMITTED (it can still be recovered), retires a FAILED one, and runs at
-// most once a minute on a replica.
-func TestIdleCompactionBackstopSkipsQuarantinedAndRunsOncePerMinute(t *testing.T) {
+// Item 6: the lost-hook backstop retires FAILED and QUARANTINED idle jobs'
+// rows (nothing moves a job out of QUARANTINED, claims.go), and runs at most
+// once a minute on a replica.
+func TestIdleCompactionBackstopRetiresTerminalRunsOncePerMinute(t *testing.T) {
 	h := newIdleHarness(t)
 	clock := time.Now()
 	h.idle.now = func() time.Time { return clock }
@@ -254,15 +222,11 @@ func TestIdleCompactionBackstopSkipsQuarantinedAndRunsOncePerMinute(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, "ADMITTED", h.checkState(failedSource), "the backstop ran twice within a minute")
 
-	// After it, the FAILED row is retired; the QUARANTINED one stays.
+	// After it, both terminal rows are retired, which frees each
+	// participant's check slot.
 	clock = clock.Add(31 * time.Second)
 	_, err = h.admitter.Sweep(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, "SKIPPED:"+agentexecutionapp.IdleCompactionSkipRunFailed, h.checkState(failedSource))
-	require.Equal(t, "ADMITTED", h.checkState(quarantinedSource))
-
-	// A recovered quarantined job settles its row through the hook.
-	h.exec(`UPDATE elitea_runtime.execution_jobs SET state = 'SUCCEEDED', settled_at = clock_timestamp() WHERE execution_id = $1`, quarantined)
-	require.NoError(t, h.idle.SettleIdleCompactionRun(t.Context(), quarantined, "SUCCEEDED"))
-	require.Equal(t, "DONE", h.checkState(quarantinedSource))
+	require.Equal(t, "SKIPPED:"+agentexecutionapp.IdleCompactionSkipRunFailed, h.checkState(quarantinedSource))
 }

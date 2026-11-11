@@ -41,7 +41,7 @@ const (
 	CurrentOutputLimitContinuationContract   = "agent.continue.output-limit.v1"
 	CurrentStaticContinuationContract        = "agent.continue.static.v1"
 	CurrentApplicationStartMode              = auth.PermissionModeDefault
-	CurrentApplicationStartPermission        = "models.chat.messages.create"
+	CurrentApplicationStartPermission        = agentexecutionapp.ChatTurnPermission
 	CurrentRegenerationPermission            = "models.chat.conversations.regenerate"
 	maxCurrentApplicationStartBody           = int64(512 * 1024)
 )

@@ -64,7 +64,6 @@ Conversations on the platform are compacted while idle too, once per agent. When
 - **Quiet.** The summary adds nothing to the conversation: no message, no notification. It uses no tools.
 - **Billed to the agent.** The summary request is the agent's own model call, recorded under its own run, so it shows in the agent's usage like any other call. Project analytics count it in the call and token totals and report it as `idle_compaction` activity: no person made it, so it doesn't make the person whose turn it summarizes an active user.
 - **Same identity.** The summary runs as the agent version and release that wrote the answer, with that version's agent identity.
-- **Cancelled by the agent's next turn**, also a turn that names no participant (an older client): every pending check of that agent in the conversation is dropped.
 
 The platform also marks the end of the conversation for the provider's prompt cache. Each request then reads everything up to the previous request from the cache, not only the system prompt. That's what keeps a long conversation cheap, and what makes the idle summary cost about a tenth of re-reading the history.
 

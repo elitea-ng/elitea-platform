@@ -3,8 +3,8 @@
 - **What changed.**
   - **Idle compaction runs as the agent.** An idle compaction run (ADR-0050 decision 9b2) now carries the application
     version of the answer it summarizes, so that version's governed agent identity (ADR-0039) and release apply to it.
-  - **Cancelled by any turn of the agent.** A turn of the same agent that names no participant (an older client, an
-    ad hoc path) now cancels the agent's pending idle checks in the conversation.
+  - **Lost-hook backstop.** An idle run whose job ends QUARANTINED is retired like a FAILED one, at most once a minute
+    per replica, which frees the agent's next idle check.
   - **Analytics.** The run's model call is reported with `trigger_origin` `idle_compaction` in project analytics. It
     still counts in call, token and cost totals, but no longer makes the person whose turn it summarizes an active
     user. The `trigger_origin` descriptions in the API now list `idle_compaction`.
