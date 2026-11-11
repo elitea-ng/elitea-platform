@@ -1527,7 +1527,8 @@ impl ApplicationPipelineTool {
         let runtimes = self
             .runtimes
             .clone()
-            .with_tool_journals(admitted.writer.clone(), visit);
+            .with_tool_journals(admitted.writer.clone(), visit)
+            .with_member_llm_recovery();
         let graph = self
             .definition
             .compile_with_runtime(&self.name, Arc::clone(&checkpointer), None, &runtimes)

@@ -7118,16 +7118,26 @@ async fn postgres_a_saved_child_lost_inside_a_later_code_attempt_is_recovered_by
 
 const TOOL_PIPELINE_TEST: &str =
     "agents::pipeline_tests::fanout_effect_pg_tests::postgres_member_pipeline_tool_child";
-/// `map` (one Map item) or `parallel` (two Parallel branches).
+/// `map` (one Map item), `parallel` (two Parallel branches) or `map8` (eight
+/// Map items at concurrency 4, T4).
 const TOOL_PIPELINE_SHAPE_ENV: &str = "ELITEA_FU291_PG_SHAPE";
-/// `nested_llm`: killed inside the nested LLM node (T1a/T1c); `completed`:
-/// killed after the nested pipeline finished, before the Agent answered (T1f).
+/// Where the crash process dies:
+/// - `nested_llm`: inside the nested LLM node's model call (T1a/T1c);
+/// - `completed`: after the nested pipeline finished, before the Agent
+///   answered (T1f);
+/// - `llm_tool_effect` / `llm_tool_read`: inside the nested LLM node's own
+///   effectful / read-only tool (T1d);
+/// - `direct_started`: inside the nested direct toolkit node's call, once its
+///   journal's Started record is durable (T1e);
+/// - `takeover`: as `nested_llm`; the recovery's claim is superseded between
+///   its inspect and its assembly, and a newer claim completes (T2).
 const TOOL_PIPELINE_MODE_ENV: &str = "ELITEA_FU291_PG_MODE";
 const NESTED_SYSTEM: &str = "Answer the topic you are given.";
 
 fn tool_pipeline_topics(shape: &str) -> Vec<String> {
     match shape {
         "map" => vec!["topic-k00x".to_owned()],
+        "map8" => (0..8).map(|index| format!("topic-k{index:02}x")).collect(),
         _ => vec!["topic-left".to_owned(), "topic-right".to_owned()],
     }
 }
@@ -7135,15 +7145,346 @@ fn tool_pipeline_topics(shape: &str) -> Vec<String> {
 fn tool_pipeline_yaml(shape: &str) -> String {
     match shape {
         "map" => saved_agent_map_yaml(&tool_pipeline_topics(shape), 1),
+        "map8" => saved_agent_map_yaml(&tool_pipeline_topics(shape), 4),
         _ => SAVED_AGENT_PARALLEL_YAML.to_owned(),
     }
 }
 
-/// One process per phase of the FU-291 member kill: `crash` dies once every
-/// member is inside its nested pipeline's LLM node (its Agent chose the call,
-/// the call batch is recorded, its nested thread admitted and its frontier
-/// saved, the nested model request held in flight); `recover` is the
-/// production reclaim with model-checkpoint recovery on.
+/// Members inside their nested pipeline when the crash process dies.
+fn tool_pipeline_in_flight(shape: &str) -> usize {
+    match shape {
+        "map8" => 4,
+        other => tool_pipeline_topics(other).len(),
+    }
+}
+
+/// The nested saved pipeline whose LLM node may call the effectful MCP tool.
+fn helper_tool_pipeline() -> Value {
+    let mut pipeline = effectful_agent();
+    pipeline["agent_type"] = json!("pipeline");
+    pipeline["instructions"] = json!(
+        "state:\n  input: str\n  messages: list\n  answer: str\nentry_point: answer\nnodes:\n  - id: answer\n    type: llm\n    tool_names:\n      release intelligence: [\"lookup_release\"]\n    input: [input]\n    input_mapping:\n      system: {type: fixed, value: 'Answer the topic you are given.'}\n      task: {type: variable, value: input}\n    output: [answer]\n    transition: END\n"
+    );
+    pipeline
+}
+
+fn helper_for_mode(mode: &str) -> Value {
+    match mode {
+        "llm_tool_effect" | "llm_tool_read" => helper_tool_pipeline(),
+        "direct_started" => direct_effect_pipeline(),
+        _ => helper_pipeline(),
+    }
+}
+
+/// Only a nested LLM node's request carries its system text right before the
+/// member's own topic as its task.
+fn nested_marker(topic: &str) -> &'static str {
+    Box::leak(format!("given.\",\"role\":\"system\"}},{{\"content\":\"{topic}\"").into_boxed_str())
+}
+
+/// Only a member Agent's report carries its nested pipeline's answer.
+fn report_marker(topic: &str) -> &'static str {
+    Box::leak(format!("nested answer for {topic}").into_boxed_str())
+}
+
+fn topic_marker(topic: &str) -> &'static str {
+    Box::leak(topic.to_owned().into_boxed_str())
+}
+
+/// The MCP tool of the crash process: every member's call enters it (its
+/// boundary or journal Started record is durable before it runs), and once
+/// `members` are in, the process dies.
+struct EnteringMcpConnector {
+    entered: Arc<AtomicUsize>,
+    members: usize,
+    read_only: bool,
+}
+
+#[async_trait]
+impl McpConnector for EnteringMcpConnector {
+    async fn connect(
+        &self,
+        _config: &RemoteMcpConfig,
+    ) -> Result<Arc<dyn Toolset>, McpMaterializationError> {
+        Ok(Arc::new(BasicToolset::new(
+            "fixture_mcp",
+            vec![Arc::new(EnteringMcpTool {
+                inner: PipelineMcpTool {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    read_only: self.read_only,
+                },
+                entered: Arc::clone(&self.entered),
+                members: self.members,
+            })],
+        )))
+    }
+}
+
+struct EnteringMcpTool {
+    inner: PipelineMcpTool,
+    entered: Arc<AtomicUsize>,
+    members: usize,
+}
+
+#[async_trait]
+impl Tool for EnteringMcpTool {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+    fn description(&self) -> &str {
+        self.inner.description()
+    }
+    fn parameters_schema(&self) -> Option<Value> {
+        self.inner.parameters_schema()
+    }
+    fn is_read_only(&self) -> bool {
+        self.inner.is_read_only()
+    }
+    async fn execute(
+        &self,
+        _context: Arc<dyn ToolContext>,
+        _arguments: Value,
+    ) -> adk_rust::Result<Value> {
+        self.entered.fetch_add(1, Ordering::SeqCst);
+        while self.entered.load(Ordering::SeqCst) < self.members {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        std::process::exit(CRASH_EXIT_CODE)
+    }
+}
+
+/// The crash process's model outcomes and its death condition.
+fn crash_plan(
+    mode: &str,
+    shape: &str,
+    topics: &[String],
+    pool: &sqlx::PgPool,
+    members: usize,
+) -> Vec<TestModelGatewayOutcome> {
+    let held = Arc::new(tokio::sync::Notify::new());
+    let mut outcomes = Vec::new();
+    for topic in topics {
+        let nested = match mode {
+            "completed" => TestModelGatewayOutcome::ResponseForRequest {
+                marker: nested_marker(topic),
+                response: pipeline_text_response(&format!("nested answer for {topic}")),
+            },
+            "llm_tool_effect" | "llm_tool_read" => TestModelGatewayOutcome::ResponseForRequest {
+                marker: nested_marker(topic),
+                response: pipeline_mcp_tool_call_response(),
+            },
+            _ => TestModelGatewayOutcome::ResponseForRequestAfter {
+                marker: nested_marker(topic),
+                gate: Arc::clone(&held),
+                response: pipeline_text_response("never served"),
+            },
+        };
+        outcomes.push(nested);
+    }
+    if mode == "completed" {
+        for topic in topics {
+            outcomes.push(TestModelGatewayOutcome::ResponseForRequestAfter {
+                marker: report_marker(topic),
+                gate: Arc::clone(&held),
+                response: pipeline_text_response("never served"),
+            });
+        }
+    }
+    for (index, topic) in topics.iter().enumerate() {
+        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+            marker: topic_marker(topic),
+            response: nested_agent_call_response(&format!("call_item_{index}"), topic),
+        });
+    }
+    let frontier = match mode {
+        // The tool kills the process itself, once every member is inside it.
+        "llm_tool_effect" | "llm_tool_read" | "direct_started" => return outcomes,
+        // The nested run finished; the Agent's report request is held.
+        "completed" => {
+            "SELECT count(DISTINCT thread_id) FROM elitea_runtime.agent_graph_checkpoints \
+             WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text = '[]'"
+        }
+        // T4: the items' calls of one shared pipeline tool run one at a time
+        // (its node-event channel); four in flight are four admitted nested
+        // threads, one of them inside its nested LLM node.
+        _ if shape == "map8" => {
+            "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoint_writers w \
+             WHERE w.thread_id LIKE '%/pt1:%' AND EXISTS (\
+               SELECT 1 FROM elitea_runtime.agent_graph_checkpoints c \
+               WHERE c.thread_id LIKE '%/pt1:%' AND c.pending_nodes::text LIKE '%answer%')"
+        }
+        _ => {
+            "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+             WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'"
+        }
+    };
+    let watcher = pool.clone();
+    let members = i64::try_from(members).expect("members");
+    tokio::spawn(async move {
+        loop {
+            let durable = sqlx::query_scalar::<_, i64>(frontier)
+                .fetch_one(&watcher)
+                .await
+                .unwrap_or_default();
+            if durable >= members {
+                std::process::exit(CRASH_EXIT_CODE);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+    outcomes
+}
+
+/// The recovery's model outcomes, routed by what each request carries: a
+/// nested node's, a member Agent's report (it holds the nested answer), and
+/// last an Agent's first request (only a member that had not chosen its call
+/// before the kill makes one). An effectful nested call that may have started
+/// leaves the Agent a typed failure to report, routed by its topic.
+fn recovery_plan(mode: &str, topics: &[String]) -> Vec<TestModelGatewayOutcome> {
+    let mut outcomes = Vec::new();
+    if matches!(mode, "llm_tool_effect" | "direct_started") {
+        for topic in topics {
+            outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+                marker: topic_marker(topic),
+                response: pipeline_text_response(&format!("outer answer for {topic}")),
+            });
+        }
+        return outcomes;
+    }
+    if mode == "llm_tool_read" {
+        // The replayed read's result reaches only the nested node's next
+        // request (its replayed history shapes the task message otherwise);
+        // the Agent's report then carries its topic.
+        for _ in topics {
+            outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+                marker: "call_mcp",
+                response: pipeline_text_response("nested answer"),
+            });
+        }
+        for topic in topics {
+            outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+                marker: topic_marker(topic),
+                response: pipeline_text_response(&format!("outer answer for {topic}")),
+            });
+        }
+        return outcomes;
+    }
+    if mode != "completed" {
+        for topic in topics {
+            outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+                marker: nested_marker(topic),
+                response: pipeline_text_response(&format!("nested answer for {topic}")),
+            });
+        }
+    }
+    for topic in topics {
+        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+            marker: report_marker(topic),
+            response: pipeline_text_response(&format!("outer answer for {topic}")),
+        });
+    }
+    for (index, topic) in topics.iter().enumerate() {
+        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+            marker: topic_marker(topic),
+            response: nested_agent_call_response(&format!("call_item_{index}"), topic),
+        });
+    }
+    outcomes
+}
+
+/// T2: the reclaim of claim 2 is authorized at inspect, then claim 3 takes
+/// the run before claim 2 assembles. Claim 2 runs nothing (no model request,
+/// no nested row); claim 3 completes.
+async fn superseded_then_recovered(
+    assembler: &PipelineNativeAgentAssembler,
+    request: &super::super::request::AgentExecutionRequest,
+    pool: &sqlx::PgPool,
+    captured: &CapturedModelRequests,
+) -> AssembledNativeAgentInvocation<PipelineAgentCompletion> {
+    let inspect = |attempt: u8| async move {
+        let evidence = crate::agents::runtime::NativeAgentAssembler::inspect_checkpoint(
+            assembler,
+            request,
+            &AuthorizedNativeCommandBinding::fixture_for_execution(EXECUTION),
+            test_session_authority_for_reclaim(EXECUTION, GENERATION, attempt),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("recover: inspect claim {attempt}: {error}"));
+        let (authorizer, control) = crate::protocol::control::test_checkpoint_authorizer(
+            EXECUTION,
+            GENERATION,
+            evidence.digest(),
+        );
+        authorizer
+            .authorize(&control, evidence)
+            .await
+            .unwrap_or_else(|_| panic!("recover: authorize claim {attempt}"))
+    };
+    let assemble = |attempt: u8| async move {
+        assembler
+            .assemble_checkpoint(AuthorizedNativeAssembly::from_authorized(
+                request,
+                test_runtime_context_authority(),
+                test_session_authority_for_reclaim(EXECUTION, GENERATION, attempt),
+                Arc::new(TestStateWriterLease::current()),
+                AuthorizedNativeCommandBinding::fixture_for_execution(EXECUTION),
+            ))
+            .await
+            .map_err(|error| format!("assemble claim {attempt}: {error}"))
+    };
+    let nested_rows = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+             WHERE thread_id LIKE '%/pt1:%'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("nested rows")
+    };
+    let stale = inspect(2).await;
+    let newer = inspect(3).await;
+    let before = nested_rows().await;
+    let outcome = match assemble(2).await {
+        Ok(pending) => {
+            let (_, _, _, _, permit) = stale.into_lifecycle_parts();
+            match pending.authorize_lifecycle(permit) {
+                Ok(invocation) => run_to_end(invocation).await.map(|_| ()),
+                Err(error) => Err(format!("authorize the lifecycle of claim 2: {error}")),
+            }
+        }
+        Err(error) => Err(error),
+    };
+    let error = outcome.expect_err("recover: the superseded claim runs to an end");
+    // The newer claim's inspect took the run's session writer: the older
+    // claim's assembly is refused before anything is built.
+    assert!(
+        error.contains("assemble claim 2")
+            && (error.contains("session is unavailable") || error.contains("writer_not_current")),
+        "recover: the superseded claim is fenced at its assembly: {error}"
+    );
+    assert_eq!(
+        model_requests(captured),
+        0,
+        "recover: claim 2 asked no model"
+    );
+    assert_eq!(
+        nested_rows().await,
+        before,
+        "recover: claim 2 wrote no nested row"
+    );
+    let pending = assemble(3)
+        .await
+        .unwrap_or_else(|error| panic!("recover: {error}"));
+    let (_, _, _, _, permit) = newer.into_lifecycle_parts();
+    pending
+        .authorize_lifecycle(permit)
+        .unwrap_or_else(|error| panic!("recover: authorize the lifecycle of claim 3: {error}"))
+}
+
+/// One process per phase of a FU-291 member kill (`TOOL_PIPELINE_MODE_ENV`):
+/// `crash` dies as the mode says; `recover` is the production reclaim with
+/// model-checkpoint recovery on.
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::too_many_lines)] // One child process per phase and mode: crash, then recover with its assertions.
 async fn postgres_member_pipeline_tool_child() {
@@ -7157,75 +7498,53 @@ async fn postgres_member_pipeline_tool_child() {
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_')
     );
     let shape = std::env::var(TOOL_PIPELINE_SHAPE_ENV).expect("shape");
-    let completed = std::env::var(TOOL_PIPELINE_MODE_ENV).expect("mode") == "completed";
+    let mode = std::env::var(TOOL_PIPELINE_MODE_ENV).expect("mode");
     let topics = tool_pipeline_topics(&shape);
-    let pool = connect(&database).await;
+    // Four members inside their nested pipelines at once (T4) need more than
+    // the four connections the other shapes share.
+    let pool = if shape == "map8" {
+        crate::test_pg::pool_options()
+            .max_connections(16)
+            .connect_with(
+                crate::test_pg::connect_options(
+                    &crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL")
+                        .expect("database URL"),
+                )
+                .expect("parse database URL")
+                .database(&database),
+            )
+            .await
+            .expect("connect isolated database")
+    } else {
+        connect(&database).await
+    };
     let mut request = request("continue");
     request.payload.application["version_details"]["instructions"] =
         json!(tool_pipeline_yaml(&shape));
     let mut config = test_model_gateway_config();
     config.response_header_timeout = Duration::from_secs(60);
-    let connector = || {
-        Arc::new(PipelineMcpConnector {
-            connections: Arc::new(AtomicUsize::new(0)),
-            tool_calls: Arc::new(AtomicUsize::new(0)),
-            read_only: false,
-        })
-    };
+    let read_only = mode == "llm_tool_read";
     if std::env::var(PHASE_ENV).expect("phase") == "crash" {
-        // Each member's Agent chooses its call; each nested LLM request is
-        // held. Once every member's nested frontier is durable, the process
-        // dies: every member is inside its nested pipeline's LLM node.
-        let held = Arc::new(tokio::sync::Notify::new());
-        let mut outcomes = Vec::new();
-        for (index, topic) in topics.iter().enumerate() {
-            let marker: &'static str = Box::leak(topic.clone().into_boxed_str());
-            outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
-                marker,
-                response: nested_agent_call_response(&format!("call_item_{index}"), topic),
-            });
-            if completed {
-                outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
-                    marker,
-                    response: pipeline_text_response(&format!("nested answer for {topic}")),
-                });
-            }
-            outcomes.push(TestModelGatewayOutcome::ResponseForRequestAfter {
-                marker,
-                gate: Arc::clone(&held),
-                response: pipeline_text_response("never served"),
-            });
-        }
-        let watcher = pool.clone();
-        let members = i64::try_from(topics.len()).expect("members");
-        let frontier = if completed {
-            // The nested run finished; the Agent's report request is held.
-            "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
-             WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text = '[]'"
-        } else {
-            "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
-             WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'"
-        };
-        tokio::spawn(async move {
-            loop {
-                let durable = sqlx::query_scalar::<_, i64>(frontier)
-                    .fetch_one(&watcher)
-                    .await
-                    .unwrap_or_default();
-                if durable >= members {
-                    std::process::exit(CRASH_EXIT_CODE);
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        });
+        let outcomes = crash_plan(
+            &mode,
+            &shape,
+            &topics,
+            &pool,
+            tool_pipeline_in_flight(&shape),
+        );
         let runtime = saved_runtime_on(
             outcomes,
             pipeline_delegating_agent(),
-            Some(helper_pipeline()),
+            Some(helper_for_mode(&mode)),
             None,
             config,
         );
-        let (assembler, _) = assembler_on(&pool, runtime, connector());
+        let connector = Arc::new(EnteringMcpConnector {
+            entered: Arc::new(AtomicUsize::new(0)),
+            members: tool_pipeline_in_flight(&shape),
+            read_only,
+        });
+        let (assembler, _) = assembler_on(&pool, runtime, connector);
         let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
         let invocation = assembler
             .with_fanout_decisions_for_tests(ledger.client(1))
@@ -7233,84 +7552,177 @@ async fn postgres_member_pipeline_tool_child() {
             .await
             .unwrap_or_else(|error| panic!("crash: assemble: {error}"));
         let outcome = run_to_end(invocation).await;
-        panic!("crash: the process outlived the nested model call: {outcome:?}");
-    }
-    let mut outcomes = Vec::new();
-    for topic in &topics {
-        let marker: &'static str = Box::leak(topic.clone().into_boxed_str());
-        if !completed {
-            outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
-                marker,
-                response: pipeline_text_response(&format!("nested answer for {topic}")),
-            });
-        }
-        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
-            marker,
-            response: pipeline_text_response(&format!("outer answer for {topic}")),
-        });
+        panic!("crash: the process outlived its crash point: {outcome:?}");
     }
     let runtime = saved_runtime_on(
-        outcomes,
+        recovery_plan(&mode, &topics),
         pipeline_delegating_agent(),
-        Some(helper_pipeline()),
+        Some(helper_for_mode(&mode)),
         None,
         config,
     );
-    let (assembler, captured) = assembler_on(&pool, runtime, connector());
+    let tool_calls = Arc::new(AtomicUsize::new(0));
+    let connector = Arc::new(PipelineMcpConnector {
+        connections: Arc::new(AtomicUsize::new(0)),
+        tool_calls: Arc::clone(&tool_calls),
+        read_only,
+    });
+    let (assembler, captured) = assembler_on(&pool, runtime, connector);
     let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
     let assembler = assembler.with_fanout_decisions_for_tests(ledger.client(2));
-    let invocation = recovered(&assembler, &request, EXECUTION, 2)
-        .await
-        .unwrap_or_else(|error| panic!("recover: the reclaim recovers: {error}"));
+    let invocation = if mode == "takeover" {
+        superseded_then_recovered(&assembler, &request, &pool, &captured).await
+    } else {
+        recovered(&assembler, &request, EXECUTION, 2)
+            .await
+            .unwrap_or_else(|error| panic!("recover: the reclaim recovers: {error}"))
+    };
     run_to_end(invocation)
         .await
         .unwrap_or_else(|error| panic!("recover: the members complete: {error}"));
-    // C2: no member's Agent asked the model again for its call. Each member's
-    // first request after the kill is its nested LLM node's; then its report.
     let bodies = captured
         .lock()
         .expect("captured")
         .iter()
         .map(|request| String::from_utf8_lossy(&request.body).into_owned())
         .collect::<Vec<_>>();
-    if completed {
+    let mine = |topic: &str| {
+        bodies
+            .iter()
+            .filter(|body| body.contains(topic))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    match mode.as_str() {
         // C3 (T1f): the finished nested thread answers its stored result; its
         // LLM node never runs again and the Agent reads exactly that result.
-        assert_eq!(bodies.len(), topics.len(), "recover: {bodies:?}");
-        for topic in &topics {
-            let mine = bodies
-                .iter()
-                .filter(|body| body.contains(topic.as_str()))
-                .collect::<Vec<_>>();
-            assert_eq!(mine.len(), 1, "recover: {topic}");
-            assert!(!mine[0].contains(NESTED_SYSTEM), "recover: no nested run");
-            assert!(
-                mine[0].contains(&format!("nested answer for {topic}")),
-                "recover: the Agent reads the stored result"
-            );
+        "completed" => {
+            assert_eq!(bodies.len(), topics.len(), "recover: {bodies:?}");
+            for topic in &topics {
+                let mine = mine(topic);
+                assert_eq!(mine.len(), 1, "recover: {topic}");
+                assert!(!mine[0].contains(NESTED_SYSTEM), "recover: no nested run");
+                assert!(
+                    mine[0].contains(&format!("nested answer for {topic}")),
+                    "recover: the Agent reads the stored result"
+                );
+            }
         }
-        return;
-    }
-    assert_eq!(bodies.len(), 2 * topics.len(), "recover: {bodies:?}");
-    for topic in &topics {
-        let mine = bodies
-            .iter()
-            .filter(|body| body.contains(topic.as_str()))
-            .collect::<Vec<_>>();
-        assert_eq!(mine.len(), 2, "recover: {topic}");
-        assert!(
-            mine[0].contains(NESTED_SYSTEM),
-            "recover: {topic}'s first request is the nested node's"
-        );
-        assert!(!mine[1].contains(NESTED_SYSTEM), "recover: then the report");
+        // T1d effectful / T1e started: the call may have run; it is never
+        // repeated, the nested model is not asked again, and the Agent reads
+        // a typed failure instead of a result.
+        "llm_tool_effect" | "direct_started" => {
+            assert_eq!(
+                tool_calls.load(Ordering::SeqCst),
+                0,
+                "recover: not repeated"
+            );
+            assert_eq!(bodies.len(), topics.len(), "recover: {bodies:?}");
+            for topic in &topics {
+                let mine = mine(topic);
+                assert_eq!(mine.len(), 1, "recover: {topic}");
+                assert!(
+                    !mine[0].contains(NESTED_SYSTEM),
+                    "recover: no nested model call"
+                );
+                assert!(
+                    mine[0].contains("RECOVERY_REFUSED") || mine[0].contains("may already"),
+                    "recover: the Agent reads the typed may-have-started failure: {}",
+                    mine[0]
+                );
+            }
+        }
+        // T1d read-only: the nested node's stored call batch is replayed (no
+        // nested model call chose it again) and its read-only tool runs once
+        // more; then the nested node answers and the Agent reports.
+        "llm_tool_read" => {
+            assert_eq!(
+                tool_calls.load(Ordering::SeqCst),
+                topics.len(),
+                "recover: each read-only call runs once more"
+            );
+            assert_eq!(bodies.len(), 2 * topics.len(), "recover: {bodies:?}");
+            for topic in &topics {
+                let mine = mine(topic);
+                assert_eq!(mine.len(), 2, "recover: {topic}");
+                assert!(mine[0].contains(NESTED_SYSTEM) && mine[0].contains("lookup_release"));
+                assert!(!mine[1].contains(NESTED_SYSTEM), "recover: then the report");
+            }
+        }
+        // T4: the four killed members (one inside its nested LLM node, three
+        // admitted with their call recorded, waiting for the shared tool)
+        // replay their call and run or re-enter the nested node (2 requests:
+        // nested, report); the four that had not started run whole (3).
+        _ if shape == "map8" => {
+            let mut resumed = 0;
+            for topic in &topics {
+                let mine = mine(topic);
+                match mine.len() {
+                    2 => {
+                        resumed += 1;
+                        assert!(mine[0].contains(NESTED_SYSTEM), "recover: {topic}");
+                    }
+                    3 => assert!(!mine[0].contains(NESTED_SYSTEM), "recover: {topic}"),
+                    other => panic!("recover: {topic} made {other} requests"),
+                }
+                for body in &mine {
+                    for other in topics.iter().filter(|other| *other != topic) {
+                        assert!(
+                            !body.contains(other.as_str()),
+                            "recover: {topic} saw {other}"
+                        );
+                    }
+                }
+            }
+            assert_eq!(resumed, 4, "recover: the four killed members resumed");
+        }
+        // C2: no member's Agent asked the model again for its call. Each
+        // member's first request after the kill is its nested LLM node's.
+        _ => {
+            assert_eq!(bodies.len(), 2 * topics.len(), "recover: {bodies:?}");
+            for topic in &topics {
+                let mine = mine(topic);
+                assert_eq!(mine.len(), 2, "recover: {topic}");
+                assert!(
+                    mine[0].contains(NESTED_SYSTEM),
+                    "recover: {topic}'s first request is the nested node's"
+                );
+                assert!(!mine[1].contains(NESTED_SYSTEM), "recover: then the report");
+            }
+        }
     }
 }
 
-/// FU-291 T1a/T1c (Map item, Parallel branches): a Worker killed inside the
-/// nested pipeline's LLM node of a member's pipeline tool call. The reclaim
-/// replays the stored call batch with no new model completion (C2), re-enters
-/// the same nested thread (no second writer, the same name), runs the nested
-/// node once more and lands one answer per member.
+/// The nested thread rows at the crash, by mode.
+async fn crashed_frontier(pool: &sqlx::PgPool, mode: &str) -> usize {
+    let query = match mode {
+        "completed" => {
+            "SELECT count(DISTINCT thread_id) FROM elitea_runtime.agent_graph_checkpoints \
+             WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text = '[]'"
+        }
+        "direct_started" => {
+            "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+             WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%rev%'"
+        }
+        _ => {
+            "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+             WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'"
+        }
+    };
+    usize::try_from(
+        sqlx::query_scalar::<_, i64>(query)
+            .fetch_one(pool)
+            .await
+            .expect("nested rows"),
+    )
+    .expect("rows")
+}
+
+/// FU-291 two-process member kills: a Worker killed as `mode` says inside a
+/// member's pipeline tool call, then the production reclaim. Each killed call's
+/// nested thread was admitted and its frontier saved before its first effect;
+/// the reclaim re-enters the same nested threads (no new writer); every member
+/// lands one answer, its own.
 async fn member_pipeline_tool_kill(url: &str, shape: &str, mode: &str) {
     let db = IsolatedPostgres::create(url).await;
     install_schema(&db.pool).await;
@@ -7341,33 +7753,39 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str, mode: &str) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let in_flight = tool_pipeline_in_flight(shape);
     let crashed = nested_tool_threads(&db.pool).await;
     assert_eq!(
         crashed.len(),
-        tool_pipeline_topics(shape).len(),
+        in_flight,
         "each killed call's nested thread was admitted before its first effect"
     );
-    let durable = sqlx::query_scalar::<_, i64>(if mode == "completed" {
-        "SELECT count(DISTINCT thread_id) FROM elitea_runtime.agent_graph_checkpoints \
-         WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text = '[]'"
-    } else {
-        "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
-         WHERE thread_id LIKE '%/pt1:%' AND pending_nodes::text LIKE '%answer%'"
-    })
-    .fetch_one(&db.pool)
-    .await
-    .expect("nested rows");
+    assert_eq!(
+        crashed_frontier(&db.pool, mode).await,
+        if shape == "map8" { 1 } else { in_flight },
+        "each nested thread inside its pipeline has a durable frontier"
+    );
+    match mode {
+        "llm_tool_effect" => assert_eq!(
+            phase_boundaries(&db.pool, "claim-1", "tool_may_have_started")
+                .await
+                .len(),
+            in_flight,
+            "each nested LLM node's effectful call left its boundary"
+        ),
+        "direct_started" => assert_eq!(
+            journal_threads(&db.pool).await.len(),
+            in_flight,
+            "each nested direct node's journal recorded its start"
+        ),
+        _ => {}
+    }
     let nested_rows = sqlx::query_scalar::<_, i64>(
         "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints WHERE thread_id LIKE '%/pt1:%'",
     )
     .fetch_one(&db.pool)
     .await
     .expect("nested rows");
-    assert_eq!(
-        usize::try_from(durable).expect("rows"),
-        tool_pipeline_topics(shape).len(),
-        "each nested thread's frontier is durable"
-    );
     let output = run_phase("recover", phase("recover"));
     assert!(
         output.status.success(),
@@ -7381,9 +7799,9 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str, mode: &str) {
         tool_pipeline_topics(shape).len(),
         "one nested thread per member: {recovered:?}"
     );
-    assert_eq!(
-        crashed, recovered,
-        "the same nested threads before and after the kill"
+    assert!(
+        crashed.iter().all(|thread| recovered.contains(thread)),
+        "the same nested threads before and after the kill: {crashed:?} {recovered:?}"
     );
     if mode == "completed" {
         let after = sqlx::query_scalar::<_, i64>(
@@ -7398,55 +7816,137 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str, mode: &str) {
             "a completed nested thread is never written"
         );
     }
+    if mode == "takeover" {
+        let owners = sqlx::query_scalar::<_, String>(
+            "SELECT DISTINCT writer_claim_id FROM elitea_runtime.agent_graph_checkpoint_writers \
+             WHERE thread_id LIKE '%/pt1:%'",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .expect("nested writers");
+        assert_eq!(
+            owners,
+            ["claim-3"],
+            "the newer claim owns the nested writers"
+        );
+    }
     let entries = joined(&db.pool).await.expect("joined entries");
-    assert_eq!(
-        entries.len(),
-        tool_pipeline_topics(shape).len(),
-        "{entries:?}"
-    );
+    let topics = tool_pipeline_topics(shape);
+    assert_eq!(entries.len(), topics.len(), "{entries:?}");
     for entry in &entries {
         assert_eq!(entry["status"], "succeeded", "{entries:?}");
+        let answer = entry["outputs"]
+            .as_object()
+            .and_then(|outputs| outputs.values().next())
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            topics
+                .iter()
+                .any(|topic| answer == format!("outer answer for {topic}")),
+            "each member lands its own answer: {entries:?}"
+        );
+    }
+    if shape == "map8" {
+        for (index, (entry, topic)) in entries.iter().zip(&topics).enumerate() {
+            assert_eq!(entry["index"], index, "{entries:?}");
+            assert_eq!(
+                entry["outputs"]["answer"],
+                format!("outer answer for {topic}"),
+                "no state crosses items: {entries:?}"
+            );
+        }
     }
     db.pool.close().await;
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn postgres_a_map_item_killed_inside_its_pipeline_tool_resumes_on_the_same_nested_thread() {
-    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
-        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 kill proof");
-        return;
+macro_rules! member_pipeline_tool_kill_test {
+    ($(#[$doc:meta])* $name:ident, $shape:literal, $mode:literal) => {
+        $(#[$doc])*
+        #[tokio::test(flavor = "current_thread")]
+        async fn $name() {
+            let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+                eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 kill proof");
+                return;
+            };
+            member_pipeline_tool_kill(&url, $shape, $mode).await;
+        }
     };
-    member_pipeline_tool_kill(&url, "map", "nested_llm").await;
 }
 
-/// FU-291 T1f/C3: killed after the nested pipeline finished, before the
-/// member's Agent answered: the reclaim returns the stored result, the nested
-/// pipeline never runs again and its thread is never written.
-#[tokio::test(flavor = "current_thread")]
-async fn postgres_a_map_item_killed_after_its_pipeline_tool_finished_reads_the_stored_result() {
-    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
-        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 kill proof");
-        return;
-    };
-    member_pipeline_tool_kill(&url, "map", "completed").await;
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn postgres_parallel_branches_killed_after_their_pipeline_tools_finished_read_the_stored_results()
- {
-    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
-        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 kill proof");
-        return;
-    };
-    member_pipeline_tool_kill(&url, "parallel", "completed").await;
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn postgres_parallel_branches_killed_inside_their_pipeline_tools_resume_on_the_same_nested_threads()
- {
-    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
-        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 kill proof");
-        return;
-    };
-    member_pipeline_tool_kill(&url, "parallel", "nested_llm").await;
-}
+member_pipeline_tool_kill_test!(
+    /// T1a/T1c: killed inside the nested LLM node; resumes on the same thread.
+    postgres_a_map_item_killed_inside_its_pipeline_tool_resumes_on_the_same_nested_thread,
+    "map",
+    "nested_llm"
+);
+member_pipeline_tool_kill_test!(
+    postgres_parallel_branches_killed_inside_their_pipeline_tools_resume_on_the_same_nested_threads,
+    "parallel",
+    "nested_llm"
+);
+member_pipeline_tool_kill_test!(
+    /// T1f/C3: killed after the nested pipeline finished, before the member's
+    /// Agent answered: the reclaim returns the stored result, the nested
+    /// pipeline never runs again and its thread is never written.
+    postgres_a_map_item_killed_after_its_pipeline_tool_finished_reads_the_stored_result,
+    "map",
+    "completed"
+);
+member_pipeline_tool_kill_test!(
+    postgres_parallel_branches_killed_after_their_pipeline_tools_finished_read_the_stored_results,
+    "parallel",
+    "completed"
+);
+member_pipeline_tool_kill_test!(
+    /// T1d: killed inside the nested LLM node's effectful tool: F, the call is
+    /// never repeated and the Agent reads a typed failure.
+    postgres_a_map_item_killed_inside_its_nested_llm_effectful_tool_never_repeats_it,
+    "map",
+    "llm_tool_effect"
+);
+member_pipeline_tool_kill_test!(
+    postgres_parallel_branches_killed_inside_their_nested_llm_effectful_tools_never_repeat_them,
+    "parallel",
+    "llm_tool_effect"
+);
+member_pipeline_tool_kill_test!(
+    /// T1d: killed inside the nested LLM node's read-only tool: I, the stored
+    /// call is replayed and the read runs once more.
+    postgres_a_map_item_killed_inside_its_nested_llm_read_only_tool_replays_it,
+    "map",
+    "llm_tool_read"
+);
+member_pipeline_tool_kill_test!(
+    postgres_parallel_branches_killed_inside_their_nested_llm_read_only_tools_replay_them,
+    "parallel",
+    "llm_tool_read"
+);
+member_pipeline_tool_kill_test!(
+    /// T1e: killed inside the nested direct toolkit node once its lent
+    /// journal's Started record is durable: F, never repeated.
+    postgres_a_map_item_killed_inside_its_nested_direct_tool_never_repeats_it,
+    "map",
+    "direct_started"
+);
+member_pipeline_tool_kill_test!(
+    postgres_parallel_branches_killed_inside_their_nested_direct_tools_never_repeat_them,
+    "parallel",
+    "direct_started"
+);
+member_pipeline_tool_kill_test!(
+    /// T2: killed inside the nested LLM node; the reclaim's claim is superseded
+    /// between its inspect and its assembly and runs nothing; the newer claim
+    /// re-enters the same nested thread and completes.
+    postgres_a_superseded_reclaim_runs_nothing_and_the_newer_claim_resumes_the_nested_thread,
+    "map",
+    "takeover"
+);
+member_pipeline_tool_kill_test!(
+    /// T4: eight Map items at concurrency 4, killed with four inside their
+    /// nested LLM nodes: eight distinct nested threads, the four resume, the
+    /// four others run whole, no state crosses items.
+    postgres_eight_map_items_killed_with_four_in_flight_keep_their_own_nested_threads,
+    "map8",
+    "nested_llm"
+);

@@ -505,6 +505,21 @@ impl PipelineNodeRuntimes {
         self
     }
 
+    /// FU-291 D2 in a durable nested pipeline: its LLM nodes resume their own
+    /// model step and replay a read-only call batch, as an inline fan-out LLM
+    /// branch does; a tool past its boundary is refused typed. Its events
+    /// still stream to the member.
+    pub(crate) fn with_member_llm_recovery(mut self) -> Self {
+        if let Some(llm) = self
+            .llm
+            .as_ref()
+            .and_then(|factory| factory.for_member_recovery())
+        {
+            self.llm = Some(llm);
+        }
+        self
+    }
+
     /// A fan-out member's saved child, and every saved pipeline beneath it,
     /// journal their direct tool nodes through the member's branch family
     /// (FU-248 at the first level, FU-264 below it): this level's journals

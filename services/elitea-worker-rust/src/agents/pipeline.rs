@@ -880,6 +880,7 @@ impl PipelineNativeAgentAssembler {
         let llm_factory = context.zip(model_facade).map(|(context, model_facade)| {
             Arc::new(NativePipelineLlmAgentFactory {
                 fanout_branch: false,
+                member_recovery: false,
                 profile: profile.shell().clone(),
                 context,
                 model_facade,
@@ -1533,6 +1534,9 @@ impl PipelineNativeAgentAssembler {
 struct NativePipelineLlmAgentFactory {
     /// An inline fixed Parallel LLM branch (`for_fanout_branch`).
     fanout_branch: bool,
+    /// FU-291: an LLM node of a fan-out member's durable nested pipeline
+    /// (`for_member_recovery`): D2 recovery, its events still stream.
+    member_recovery: bool,
     profile: OrdinaryNoToolProfile,
     context: Arc<ClaimScopedEliteaContext>,
     model_facade: Arc<ModelFacade>,
@@ -1922,7 +1926,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
         // resumes its own model step and replays a read-only batch; a tool
         // past its boundary is refused typed.
         let scopes = self.model_scopes.for_node(scope.identity());
-        let scopes = if self.fanout_branch && replay.is_none() {
+        let scopes = if (self.fanout_branch || self.member_recovery) && replay.is_none() {
             scopes.with_pending_model_recovery().with_read_only_replay()
         } else {
             scopes
@@ -2052,6 +2056,12 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
     fn for_fanout_branch(&self) -> Option<Arc<dyn PipelineLlmAgentFactory>> {
         let mut factory = self.clone();
         factory.fanout_branch = true;
+        Some(Arc::new(factory))
+    }
+
+    fn for_member_recovery(&self) -> Option<Arc<dyn PipelineLlmAgentFactory>> {
+        let mut factory = self.clone();
+        factory.member_recovery = true;
         Some(Arc::new(factory))
     }
 }
@@ -2828,6 +2838,7 @@ async fn bind_saved_pipeline_runtimes(
     let llm_factory = profile.definition().has_llm_nodes().then(|| {
         Arc::new(NativePipelineLlmAgentFactory {
             fanout_branch: false,
+            member_recovery: false,
             profile: profile.shell().clone(),
             context: Arc::clone(&runtime.context),
             model_facade: Arc::clone(&runtime.model_facade),
