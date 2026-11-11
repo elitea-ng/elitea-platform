@@ -6179,5 +6179,10 @@
   "widgets.chatBox.shareHistory.now": "Now",
   "widgets.chatBox.shareHistory.start": "The start",
   "widgets.chatBox.shareHistory.title": "Share history from",
-  "features.chatMessages.contextView.compactionLabel": "Context"
+  "features.chatMessages.contextView.compactionLabel": "Context",
+  "features.agentTeams.edit.moreAgents": "Showing {{shown}} of {{total}} agents. Type to narrow the list.",
+  "features.agentTeams.edit.noAgents": "No agents match.",
+  "features.agentTeams.edit.searchAgents": "Search the project's agents",
+  "features.agentTeams.loadMore": "Show more",
+  "features.agentTeams.shownOf": "Showing {{shown}} of {{total}} teams"
 }

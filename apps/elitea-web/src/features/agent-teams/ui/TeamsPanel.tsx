@@ -86,7 +86,7 @@ function TeamsList({
     });
   };
 
-  const teams = list.data?.rows ?? [];
+  const teams = list.rows;
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }} data-testid="agent-teams-panel">
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
@@ -118,6 +118,16 @@ function TeamsList({
           onDelete={abilities.canDelete ? () => { setDeleteError(undefined); setDeleting(team); } : undefined}
         />
       ))}
+      {list.hasMore && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <Typography variant="bodySmall" color="text.secondary" data-testid="agent-teams-count">
+            {t('features.agentTeams.shownOf', 'Showing {{shown}} of {{total}} teams', { shown: teams.length, total: list.total })}
+          </Typography>
+          <BaseBtn variant="outlined" disabled={list.loadingMore} onClick={list.loadMore} data-testid="agent-teams-more">
+            {t('features.agentTeams.loadMore', 'Show more')}
+          </BaseBtn>
+        </Box>
+      )}
       <TeamEditDialog projectId={projectId} open={editing !== undefined} team={editing?.team} onClose={() => setEditing(undefined)} />
       <DeleteEntityModal
         open={deleting !== undefined}

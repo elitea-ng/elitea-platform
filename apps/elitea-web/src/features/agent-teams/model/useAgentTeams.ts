@@ -8,7 +8,7 @@
  */
 import { useMemo } from 'react';
 
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import { getListAgentTeamsQueryKey, getListConversationsQueryKey } from '@/shared/api/generated/chat/chat';
@@ -34,16 +34,43 @@ function teamsKey(projectId: string): readonly unknown[] {
   return getListAgentTeamsQueryKey(projectId);
 }
 
-/** One page of the project's teams. */
+/** The route's largest page (`limit` max in the contract). */
+const TEAM_PAGE_SIZE = 200;
+
+/** Where the next page starts, or undefined once every team is loaded. */
+function nextTeamOffset(pages: readonly AgentTeamList[]): number | undefined {
+  const loaded = pages.reduce((sum, page) => sum + page.rows.length, 0);
+  const last = pages.at(-1);
+  if (last === undefined || last.rows.length === 0 || loaded >= last.total) return undefined;
+  return loaded;
+}
+
+/**
+ * The project's teams, a page at a time (#1847): `rows` is every team loaded
+ * so far, `total` the project's count, and `loadMore` fetches the next page.
+ */
 export function useAgentTeamList(projectId: string | undefined, query: string, enabled = true) {
-  const params = { query: query.trim() === '' ? undefined : query.trim(), limit: 200 };
-  return useQuery<AgentTeamList>({
-    queryKey: [...teamsKey(projectId ?? ''), params],
-    queryFn: () => fetchAgentTeams(projectId ?? '', params),
+  const params = { query: query.trim() === '' ? undefined : query.trim(), limit: TEAM_PAGE_SIZE };
+  const list = useInfiniteQuery({
+    queryKey: [...teamsKey(projectId ?? ''), params, 'pages'],
+    queryFn: ({ pageParam }) => fetchAgentTeams(projectId ?? '', { ...params, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (_last, pages) => nextTeamOffset(pages),
     enabled: enabled && projectId !== undefined && projectId !== '',
     placeholderData: keepPreviousData,
     retry: false,
   });
+  const pages = list.data?.pages ?? [];
+  return {
+    rows: pages.flatMap((page) => page.rows),
+    total: pages.at(-1)?.total ?? 0,
+    isSuccess: list.isSuccess,
+    isError: list.isError,
+    error: list.error,
+    hasMore: list.hasNextPage,
+    loadingMore: list.isFetchingNextPage,
+    loadMore: () => void list.fetchNextPage(),
+  };
 }
 
 /** What the caller may do with teams in this project. */

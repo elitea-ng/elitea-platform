@@ -53,6 +53,36 @@ describe('TeamsPanel', () => {
     expect(screen.queryByTestId('agent-team-delete-3')).not.toBeInTheDocument();
   });
 
+  // #1847: past one page the list says how many there are and loads the rest.
+  it('pages past the first 200 teams', async () => {
+    grant('models.teams.list');
+    const offsets: string[] = [];
+    const row = (id: number) => ({ ...TEAM_ROW, id, name: `Team ${id}` });
+    server.use(
+      http.get(TEAMS, ({ request }) => {
+        const offset = Number(new URL(request.url).searchParams.get('offset') ?? '0');
+        offsets.push(String(offset));
+        const rows = offset === 0 ? Array.from({ length: 200 }, (_, i) => row(i + 1)) : [row(201)];
+        return HttpResponse.json({ rows, total: 201 });
+      }),
+    );
+    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    expect(await screen.findByTestId('agent-teams-count')).toHaveTextContent('Showing 200 of 201 teams');
+    expect(screen.queryByTestId('agent-team-name-201')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('agent-teams-more'));
+    expect(await screen.findByTestId('agent-team-name-201')).toHaveTextContent('Team 201');
+    expect(screen.queryByTestId('agent-teams-more')).not.toBeInTheDocument();
+    expect(offsets).toEqual(['0', '200']);
+  });
+
+  it('offers no more when every team is shown', async () => {
+    grant('models.teams.list');
+    server.use(http.get(TEAMS, () => HttpResponse.json({ rows: [TEAM_ROW], total: 1 })));
+    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    await screen.findByTestId('agent-team-name-3');
+    expect(screen.queryByTestId('agent-teams-more')).not.toBeInTheDocument();
+  });
+
   it('starts a conversation and hands it to the page', async () => {
     grant('models.teams.list');
     let started = '';
