@@ -118,6 +118,31 @@ fn an_excerpt_of_a_message_the_model_read_is_accepted() {
         .check(&contents, &excerpt(&short, "ship on Friday   after"))
         .unwrap();
     assert!(checked.attachments.is_empty() && checked.memory_entries.is_empty());
+    // The record names the chat message, not the model's short id (#1908).
+    assert_eq!(checked.message_ids, vec![(short, QUESTION.to_owned())]);
+}
+
+/// A seeded message, given in another form of its uuid, is named by the
+/// canonical form; a short id this process never showed resolves to none
+/// (the record keeps it as the brief gave it).
+#[test]
+fn a_quoted_message_resolves_to_its_chat_message_uuid() {
+    let content =
+        Content::new("user").with_text(tagged(&EARLIER.to_ascii_uppercase(), "Use staging."));
+    let short = short_message_ref(EARLIER);
+    let checked = BriefView::default()
+        .check(&[content], &excerpt(&short, "staging"))
+        .unwrap();
+    assert_eq!(
+        checked.message_ids,
+        vec![(short.clone(), EARLIER.to_owned())]
+    );
+    let mut record = elitea_agent_runtime::subagents::SpawnRecord {
+        brief_refs: json!({ "message_ids": [short] }),
+        ..Default::default()
+    };
+    record.resolve_messages(&checked);
+    assert_eq!(record.brief_refs["message_ids"], json!([EARLIER]));
 }
 
 #[test]
@@ -336,4 +361,17 @@ fn only_a_whole_id_line_is_stripped() {
         assert_eq!(strip_tag(text), None, "{text}");
         assert_eq!(without_tag(text), text);
     }
+}
+
+#[test]
+fn the_message_registry_forgets_its_oldest_short_id_first() {
+    let mut known = KnownMessages::default();
+    known.remember("m-a", "a".into(), 2);
+    known.remember("m-b", "b".into(), 2);
+    known.remember("m-a", "a2".into(), 2);
+    known.remember("m-c", "c".into(), 2);
+    assert!(!known.by_short.contains_key("m-a"), "the oldest goes first");
+    assert_eq!(known.by_short.get("m-b").map(String::as_str), Some("b"));
+    assert_eq!(known.by_short.get("m-c").map(String::as_str), Some("c"));
+    assert_eq!(known.order.len(), 2);
 }

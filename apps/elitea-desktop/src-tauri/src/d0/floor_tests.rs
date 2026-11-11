@@ -254,6 +254,13 @@ async fn a_local_then_a_cloud_agent_answer_one_message_in_turn() {
     );
     assert_eq!(starts[1]["floor_turn"]["position"], 1);
     assert!(starts[1].get("addressed_to").is_none());
+    // The later turn's `done` names the message's own question, the one Main
+    // wrote, not the later start's id (#1887).
+    assert_eq!(
+        settled_done(&h, &next)["message_ids"][0],
+        starts[0]["question_id"]
+    );
+    assert_ne!(starts[1]["question_id"], starts[0]["question_id"]);
 
     // Only the local agent called the model here.
     assert_eq!(seen(&h.server, "/llm/v1/chat/completions").len(), 1);
@@ -314,6 +321,29 @@ async fn a_superseded_message_stops_its_remaining_agents() {
         )
         .is_empty()
     );
+}
+
+/// A commit job that panics after a `done` that named the message's next
+/// agent still answers it: the UI hears `floor_stopped` and stops waiting
+/// (#1886), and the next agent never starts.
+#[tokio::test]
+async fn a_panicked_commit_stops_the_messages_remaining_agents() {
+    let server = serve(floor_platform(Later::Started)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.panic_next_commit();
+    let started = h.host.start(addressed(&h)).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    assert_eq!(settled_done(&h, &started.turn_id)["continuing"], true);
+    let stopped = first_event(&h, "floor_stopped").await;
+    assert_eq!(stopped.turn_id, started.turn_id);
+    assert_eq!(stopped.payload["code"], "commit_failed");
+    assert!(
+        h.emitter
+            .all()
+            .iter()
+            .all(|event| event.kind != "turn_continued")
+    );
+    assert_eq!(starts_of(&h).len(), 1);
 }
 
 /// A cloud agent's turn takes only text: the host refuses what only a

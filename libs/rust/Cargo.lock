@@ -2060,6 +2060,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-general-category",
+ "uuid",
  "zeroize",
  "zip",
 ]

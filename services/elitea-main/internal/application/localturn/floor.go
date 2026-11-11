@@ -30,7 +30,6 @@ package localturn
 // turn yet; the guards it needs (turntaking.Hand) stay with the cloud.
 
 import (
-	"context"
 	"errors"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/turntaking"
@@ -86,18 +85,13 @@ type ConversationFloor struct {
 	Agents   []FloorAgent
 }
 
-// FloorReader reads a conversation's floor (*repos.LocalTurnsRepo). A
-// conversation the caller cannot see answers ErrNotFound or an empty floor;
-// the start's own target check refuses it either way.
-type FloorReader interface {
-	LocalTurnFloor(ctx context.Context, projectID, actorUserID int64, conversationUUID string) (ConversationFloor, error)
-}
-
-// WithFloor turns the floor on. Nil leaves it off: every start answers on
-// the participant it names, as before.
-func (s *Service) WithFloor(reader FloorReader) *Service {
+// WithFloor turns the floor on: the store reads the conversation's floor
+// inside the start's transaction and the start is routed by it
+// (StartRecord.Admit). Off, every start answers on the participant it
+// names, as before, and a start that addresses agents is refused.
+func (s *Service) WithFloor() *Service {
 	if s != nil {
-		s.floor = reader
+		s.routes = true
 	}
 	return s
 }
@@ -121,27 +115,12 @@ type floorPlan struct {
 	agents      []FloorAgent
 }
 
-// planFloor routes a person's message, or checks the shape of a later
-// turn. It answers the participant that answers this turn: the request's
-// own when the floor does not apply.
-func (s *Service) planFloor(ctx context.Context, request StartRequest) (floorPlan, error) {
+// routeFloor routes a person's message on the conversation's floor (as
+// the start's transaction read it), or checks the shape of a later turn. It
+// answers the participant that answers this turn: the request's own when
+// the floor does not apply.
+func routeFloor(request StartRequest, conversation ConversationFloor) (floorPlan, error) {
 	plan := floorPlan{participant: request.ParticipantID}
-	if s.floor == nil {
-		if len(request.AddressedTo) > 0 || request.FloorTurn != nil {
-			// A client that addresses agents is told the deployment cannot
-			// route, rather than having its address dropped.
-			return floorPlan{}, ErrAddressee
-		}
-		return plan, nil
-	}
-	conversation, err := s.floor.LocalTurnFloor(ctx, request.ProjectID, request.ActorUserID, request.ConversationUUID)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalid) {
-			return floorPlan{}, err
-		}
-		s.logger.ErrorContext(ctx, "local turn: floor unreadable", "err", err)
-		return floorPlan{}, ErrUnavailable
-	}
 	plan.agents = conversation.Agents
 	ids := make([]int64, 0, len(conversation.Agents))
 	for _, agent := range conversation.Agents {

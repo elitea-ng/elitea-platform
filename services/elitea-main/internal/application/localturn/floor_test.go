@@ -1,12 +1,15 @@
 package localturn
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
 
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/turntaking"
 )
 
@@ -14,10 +17,19 @@ import (
 // order it was asked to store, as the repository does.
 type floorFakeStore struct {
 	commitFakeStore
+	// reader is the floor the start's transaction reads (Admit).
+	reader *floorFakeReader
 	starts []StartRecord
 }
 
-func (s *floorFakeStore) StartLocalTurn(_ context.Context, record StartRecord) (StartedTurn, error) {
+func (s *floorFakeStore) StartLocalTurn(ctx context.Context, record StartRecord) (StartedTurn, error) {
+	record, err := record.Admit(ctx, func() (ConversationFloor, error) {
+		s.reader.calls++
+		return s.reader.floor, s.reader.err
+	})
+	if err != nil {
+		return StartedTurn{}, err
+	}
 	s.starts = append(s.starts, record)
 	turn := StartedTurn{
 		ExecutionID: record.ExecutionID, ParticipantID: record.ParticipantID, Created: true,
@@ -39,22 +51,77 @@ type floorFakeReader struct {
 	calls int
 }
 
-func (r *floorFakeReader) LocalTurnFloor(context.Context, int64, int64, string) (ConversationFloor, error) {
-	r.calls++
-	return r.floor, r.err
+func floorService(t *testing.T, store *floorFakeStore, reader *floorFakeReader) *Service {
+	t.Helper()
+	return floorServiceWith(t, store, reader, commitFakeMemories{})
 }
 
-func floorService(t *testing.T, store Store, reader FloorReader) *Service {
+func floorServiceWith(t *testing.T, store *floorFakeStore, reader *floorFakeReader, memories agentexecutionapp.CurrentMemoryRecallResolver) *Service {
 	t.Helper()
-	service, err := NewService(store, commitFakePolicy{allowed: true}, commitFakeMemories{}, commitFakeAudit{},
+	service, err := NewService(store, commitFakePolicy{allowed: true}, memories, commitFakeAudit{},
 		func() (string, error) { return strings.Repeat("c", 32), nil }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	store.reader = reader
 	if reader != nil {
-		service.WithFloor(reader)
+		service.WithFloor()
 	}
 	return service
+}
+
+// countingMemories counts the recalls a start asks for.
+type countingMemories struct {
+	commitFakeMemories
+	recalls *int
+}
+
+func (m countingMemories) ResolveCurrentMemoryRecall(ctx context.Context, projectID, userID int64, input string) (agentexecutionapp.CurrentMemoryRecall, error) {
+	*m.recalls++
+	return agentexecutionapp.CurrentMemoryRecall{Text: "recalled", Count: 2, IDs: []string{"a", "b"}}, nil
+}
+
+// The routing comes first, inside the start's transaction (issue 1888): a
+// refused routing pays for no recall, and an admitted start stores the
+// recall's count and answers its text.
+func TestStartRoutesBeforeTheRecall(t *testing.T) {
+	recalls := 0
+	memories := countingMemories{recalls: &recalls}
+	reader := &floorFakeReader{floor: ConversationFloor{Settings: turntaking.Default, Agents: agents(11, 12)}}
+	refused := floorStart()
+	refused.ParticipantID, refused.AddressedTo = 11, []int64{11, 99}
+	store := &floorFakeStore{}
+	if _, err := floorServiceWith(t, store, reader, memories).Start(context.Background(), refused); !errors.Is(err, ErrAddressee) {
+		t.Fatalf("Start = %v, want ErrAddressee", err)
+	}
+	if recalls != 0 || reader.calls != 1 {
+		t.Fatalf("recalls %d, floor reads %d; want 0 and 1", recalls, reader.calls)
+	}
+	admitted := floorStart()
+	admitted.ParticipantID, admitted.AddressedTo = 11, []int64{12}
+	outcome, err := floorServiceWith(t, store, reader, memories).Start(context.Background(), admitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recalls != 1 || reader.calls != 2 {
+		t.Fatalf("recalls %d, floor reads %d; want 1 and 2", recalls, reader.calls)
+	}
+	if got := store.starts[0]; got.ParticipantID != 12 || got.MemoriesUsed != 2 {
+		t.Fatalf("stored %+v", got)
+	}
+	if outcome.Recall.Text != "recalled" || outcome.Recall.Count != 2 || outcome.Floor == nil {
+		t.Fatalf("outcome %+v", outcome)
+	}
+	// Without the floor nothing is read, and the recall still runs.
+	plain := floorStart()
+	plain.ParticipantID = 11
+	unrouted := &floorFakeStore{}
+	if _, err := floorServiceWith(t, unrouted, nil, memories).Start(context.Background(), plain); err != nil {
+		t.Fatal(err)
+	}
+	if recalls != 2 || unrouted.starts[0].MemoriesUsed != 2 {
+		t.Fatalf("recalls %d, stored %+v", recalls, unrouted.starts[0])
+	}
 }
 
 func floorStart() StartRequest {
@@ -221,5 +288,25 @@ func TestStartWithoutAReadableFloor(t *testing.T) {
 	missing := &floorFakeReader{err: ErrNotFound}
 	if _, err := floorService(t, &floorFakeStore{}, missing).Start(context.Background(), plain); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing conversation: %v, want ErrNotFound", err)
+	}
+}
+
+// An unreadable floor is logged with its cause: the answer is a bare 503.
+func TestAnUnreadableFloorIsLogged(t *testing.T) {
+	var logs bytes.Buffer
+	store := &floorFakeStore{reader: &floorFakeReader{err: errors.New("db down")}}
+	service, err := NewService(store, commitFakePolicy{allowed: true}, commitFakeMemories{}, commitFakeAudit{},
+		func() (string, error) { return strings.Repeat("c", 32), nil }, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.WithFloor()
+	request := floorStart()
+	request.ParticipantID = 11
+	if _, err := service.Start(context.Background(), request); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("unreadable floor: %v, want ErrUnavailable", err)
+	}
+	if !strings.Contains(logs.String(), "floor unreadable") || !strings.Contains(logs.String(), "db down") {
+		t.Fatalf("log = %q, want the floor's read error", logs.String())
 	}
 }

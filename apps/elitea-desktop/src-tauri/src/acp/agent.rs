@@ -761,6 +761,7 @@ impl Connection {
                 &uuid,
                 target.application_id,
                 target.version_id,
+                None,
             )
             .await
             .map_err(api_refusal)?;
@@ -1175,6 +1176,7 @@ impl Connection {
                 images: input.images,
                 unattended: None,
                 addressed_to: Vec::new(),
+                participant_id: None,
                 floor_turn: None,
                 cloud: false,
             })

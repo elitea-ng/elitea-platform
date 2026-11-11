@@ -222,7 +222,8 @@ pub async fn call(
 /// Relay a turn of a desktop thread's CLOUD agent (ADR-0050 decision 7f):
 /// its own agent `spec`, run in the cloud as a child of the turn, given
 /// `input` (the conversation's text, never the workspace). Its answer, at
-/// most [`RELAY_RESULT_BYTES`], or the call's error result.
+/// most [`RELAY_RESULT_BYTES`] and marked [`RELAY_CUT_NOTE`] when it was cut,
+/// or the call's error result.
 ///
 /// # Errors
 ///
@@ -235,13 +236,28 @@ pub async fn relay(
 ) -> Result<String, Value> {
     let result = call_bounded(context, spec, call_id, input, RELAY_RESULT_BYTES).await;
     if result.get("status").and_then(Value::as_str) == Some("ok") {
-        return Ok(result
-            .get("result")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned());
+        return Ok(relayed_answer(&result));
     }
     Err(result)
+}
+
+/// What a relayed answer cut at [`RELAY_RESULT_BYTES`] ends with: the person
+/// and the thread's later agents read that it is not the whole answer
+/// (#1889).
+pub const RELAY_CUT_NOTE: &str =
+    "\n\n[The cloud agent's answer was cut here: it was longer than a desktop thread keeps.]";
+
+/// The answer of a completed relay, marked when it was cut (`truncated`).
+fn relayed_answer(result: &Value) -> String {
+    let mut text = result
+        .get("result")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    if result.get("truncated") == Some(&Value::Bool(true)) {
+        text.push_str(RELAY_CUT_NOTE);
+    }
+    text
 }
 
 async fn call_bounded(
@@ -748,5 +764,22 @@ impl Drop for CancelOnDrop {
             }
             Child::None => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A relayed answer cut at the bound says so; a whole one is as it was
+    /// (#1889).
+    #[test]
+    fn a_cut_relayed_answer_is_marked() {
+        let whole = json!({"status": "ok", "result": "Reviewed."});
+        assert_eq!(relayed_answer(&whole), "Reviewed.");
+        let cut = json!({"status": "ok", "result": "Reviewed", "truncated": true});
+        let text = relayed_answer(&cut);
+        assert!(text.starts_with("Reviewed"));
+        assert!(text.ends_with(RELAY_CUT_NOTE));
     }
 }
