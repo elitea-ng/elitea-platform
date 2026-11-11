@@ -32,6 +32,13 @@ func FanoutCodeChildOwner(instructions, kind, nodeID, ownedNodeID string, ordina
 
 // FanoutCodeChildOwner is the package function on the parsed document.
 func (d *SavedCodeDocument) FanoutCodeChildOwner(kind, nodeID, ownedNodeID string, ordinal, itemCount uint32) error {
+	return d.fanoutChildOwner(kind, nodeID, ownedNodeID, "code", ordinal, itemCount)
+}
+
+// fanoutChildOwner is FanoutCodeChildOwner for an owned node of ownedType:
+// `code` (a direct Code child) or `agent` (an Agent node running a saved
+// pipeline, W3-2b).
+func (d *SavedCodeDocument) fanoutChildOwner(kind, nodeID, ownedNodeID, ownedType string, ordinal, itemCount uint32) error {
 	if itemCount == 0 || itemCount > maxFanoutChildren || ordinal >= itemCount || !codeDebugNodeID(nodeID) || !codeDebugNodeID(ownedNodeID) || nodeID == ownedNodeID {
 		return ErrContentUnauthorized
 	}
@@ -65,7 +72,7 @@ func (d *SavedCodeDocument) FanoutCodeChildOwner(kind, nodeID, ownedNodeID strin
 	if owner == nil || owned == nil {
 		return ErrContentUnauthorized
 	}
-	if ownedType, err := savedCodeScalar(owned["type"]); err != nil || ownedType != "code" {
+	if declared, err := savedCodeScalar(owned["type"]); err != nil || declared != ownedType {
 		return ErrContentUnauthorized
 	}
 	ownerType, err := savedCodeScalar(owner["type"])

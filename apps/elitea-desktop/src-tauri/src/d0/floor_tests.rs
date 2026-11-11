@@ -53,6 +53,26 @@ enum Later {
 }
 
 fn floor_platform(later: Later) -> impl Fn(&Req) -> Res {
+    lead_platform(later, None)
+}
+
+/// Main's routed order for a person's message (`turntaking.Route`): the
+/// addressees (the start's participant first when it is one), else the
+/// lead, else the start's participant.
+fn route(lead: Option<i64>, participant: i64, addressed: &[i64]) -> Vec<i64> {
+    if !addressed.is_empty() {
+        let mut targets: Vec<i64> = Vec::new();
+        if addressed.contains(&participant) {
+            targets.push(participant);
+        }
+        targets.extend(addressed.iter().filter(|id| **id != participant));
+        return targets;
+    }
+    vec![lead.unwrap_or(participant)]
+}
+
+/// The thread's Main, with a lead (`meta.floor.policy: lead`) or none.
+fn lead_platform(later: Later, lead: Option<i64>) -> impl Fn(&Req) -> Res {
     let first_question = Mutex::new(FIRST_QUESTION.to_owned());
     move |req: &Req| {
         let path = req.path.as_str();
@@ -88,11 +108,12 @@ fn floor_platform(later: Later) -> impl Fn(&Req) -> Res {
             let question = body["question_id"].as_str().unwrap_or_default().to_owned();
             if body["participant_id"] == 77 {
                 first_question.lock().unwrap().clone_from(&question);
-                // Main routes by the address: the composer's pick alone is one target.
-                let targets = body
+                let addressed: Vec<i64> = body
                     .get("addressed_to")
-                    .cloned()
-                    .unwrap_or_else(|| json!([77, 88]));
+                    .and_then(Value::as_array)
+                    .map(|ids| ids.iter().filter_map(Value::as_i64).collect())
+                    .unwrap_or_default();
+                let targets = json!(route(lead, 77, &addressed));
                 return Res::json(
                     200,
                     &json!({
@@ -316,30 +337,33 @@ async fn a_cloud_agents_turn_refuses_workspace_inputs() {
     assert!(seen(&h.server, &format!("/local_turn/prompt_lib/1/{UUID}")).is_empty());
 }
 
-/// A message that names no agent, in a thread of several: the composer's
-/// pick is sent as the address (ADR-0050 decision 7c), so a lead
-/// conversation cannot route it past the agent the person chose. Only that
-/// agent answers.
-#[tokio::test]
-async fn the_composers_pick_is_the_address_when_the_message_names_no_one() {
-    let server = serve(floor_platform(Later::Started)).await;
-    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
-    let started = h
-        .host
-        .start(TurnRequest {
-            prompt: "Fix the flaky test".into(),
-            ..request(&h.workspace_id)
-        })
-        .await
-        .unwrap();
-    until_done_of(&h, &started.turn_id).await;
-    let starts = bodies(
+fn starts_of(h: &Harness) -> Vec<Value> {
+    bodies(
         &h.server,
         &format!("/api/v2/elitea_core/local_turn/prompt_lib/1/{UUID}"),
-    );
+    )
+}
+
+fn unaddressed(h: &Harness) -> TurnRequest {
+    TurnRequest {
+        prompt: "Fix the flaky test".into(),
+        ..request(&h.workspace_id)
+    }
+}
+
+/// A composer pick is not an address (ADR-0050 decision 7c, #1917): a
+/// message that names no agent goes out with no `addressed_to`, on the
+/// composer's agent as the sticky target. With no lead, that agent answers.
+#[tokio::test]
+async fn an_unaddressed_message_carries_no_address() {
+    let server = serve(floor_platform(Later::Started)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(unaddressed(&h)).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let starts = starts_of(&h);
     assert_eq!(starts.len(), 1, "{starts:?}");
     assert_eq!(starts[0]["participant_id"], 77);
-    assert_eq!(starts[0]["addressed_to"], json!([77]));
+    assert!(starts[0].get("addressed_to").is_none(), "{}", starts[0]);
     let done = settled_done(&h, &started.turn_id);
     assert!(done.get("floor_next").is_none(), "{done}");
     assert!(
@@ -348,4 +372,55 @@ async fn the_composers_pick_is_the_address_when_the_message_names_no_one() {
             .iter()
             .all(|event| event.kind != "turn_continued" && event.kind != "error")
     );
+}
+
+/// Under `lead`, Main routes an unaddressed message to the lead. The UI
+/// starts it on the lead; a start on another agent (the lead changed since
+/// the UI read the thread) is refused before any agent runs: the composer's
+/// agent never answers in the lead's place, and nothing is committed.
+#[tokio::test]
+async fn a_start_main_routes_to_the_lead_runs_no_other_agent() {
+    let server = serve(lead_platform(Later::Started, Some(88))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let refused = h.host.start(unaddressed(&h)).await.unwrap_err();
+    assert_eq!(refused.code, "floor_routed_elsewhere");
+    let starts = starts_of(&h);
+    assert_eq!(starts.len(), 1, "{starts:?}");
+    assert!(starts[0].get("addressed_to").is_none());
+    assert!(seen(&h.server, "/llm/v1/chat/completions").is_empty());
+    assert!(
+        h.server
+            .seen()
+            .iter()
+            .all(|req| !req.path.contains("/local_turn_commit/"))
+    );
+}
+
+/// The lead answers the message the UI started on it; an address still
+/// beats the lead.
+#[tokio::test]
+async fn the_lead_answers_and_an_address_beats_it() {
+    let server = serve(lead_platform(Later::Started, Some(77))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(unaddressed(&h)).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    assert_eq!(settled_done(&h, &started.turn_id)["commit"], "committed");
+
+    let server = serve(lead_platform(Later::Started, Some(88))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h
+        .host
+        .start(TurnRequest {
+            prompt: "@Coder fix the flaky test".into(),
+            addressed_to: vec![77],
+            ..request(&h.workspace_id)
+        })
+        .await
+        .unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let starts = starts_of(&h);
+    assert_eq!(starts.len(), 1, "{starts:?}");
+    assert_eq!(starts[0]["addressed_to"], json!([77]));
+    assert_eq!(seen(&h.server, "/llm/v1/chat/completions").len(), 1);
+    assert_eq!(settled_done(&h, &started.turn_id)["commit"], "committed");
 }

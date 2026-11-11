@@ -6627,5 +6627,303 @@ async fn postgres_a_parallel_of_code_branches_starts_each_branch_through_assembl
     db.pool.close().await;
 }
 
+// ---------------------------------------------------------------------------
+// W3-2b: a Code node inside a saved pipeline the root's Agent node runs, lost
+// inside its journaled attempt. The production assembler binds a real
+// `CodeRuntimeFactory`; Main's content service is a fake that answers the
+// attempt's original visit (`register_code_visit`), the boundary at which the
+// crash process dies once its journal's Started record is durable. The
+// reclaim's assembly-time recovery walk must stop at the saved child's Code
+// node (a leaf its visit-scoped journal decides), not refuse the frontier.
+// ---------------------------------------------------------------------------
+
+const SAVED_CODE_TEST: &str =
+    "agents::pipeline_tests::fanout_effect_pg_tests::postgres_saved_child_code_process";
+
+/// The saved pipeline (app 3, version 4): `validate` (Code), first or after a
+/// State Modifier (`leaf`: the child saved a row pending `validate`).
+fn saved_code_pipeline(leaf: bool) -> Value {
+    let mut pipeline = direct_effect_pipeline();
+    pipeline["instructions"] = json!(if leaf {
+        "state:\n  input: str\n  messages: list\n  answer: str\nentry_point: prep\nnodes:\n  - id: prep\n    type: state_modifier\n    input: [input]\n    output: [answer]\n    template: 'p'\n    transition: validate\n  - id: validate\n    type: code\n    language: python\n    code: 'return 41'\n    input: [answer]\n    output: [answer]\n    transition: END\n"
+    } else {
+        "state:\n  input: str\n  messages: list\n  answer: str\nentry_point: validate\nnodes:\n  - id: validate\n    type: code\n    language: python\n    code: 'return 41'\n    input: [input]\n    output: [answer]\n    transition: END\n"
+    });
+    pipeline
+}
+
+/// Root → `delegate` → the saved pipeline with Code.
+fn saved_code_request() -> super::super::request::AgentExecutionRequest {
+    let mut request = child_parallel_request();
+    request.payload.application["version_details"]["instructions"] = json!(
+        "state:\n  answer: str\n  messages: list\nentry_point: delegate\nnodes:\n  - id: delegate\n    type: agent\n    tool: \"release-agent\"\n    input_mapping:\n      task: {type: fixed, value: 'Validate the partition'}\n    output: [answer]\n    transition: END\n"
+    );
+    request
+}
+
+/// Main's content service for the Code attempt: the crash phase dies at the
+/// original visit once the attempt's Started record is durable and the visit
+/// names its saved-child owner scope; the recover phase refuses the visit.
+struct SavedCodeMain {
+    pool: sqlx::PgPool,
+    crash: bool,
+}
+
+#[tonic::async_trait]
+impl crate::transport::input_content::content_fake::ContentFake for SavedCodeMain {
+    async fn register_code_visit(
+        &self,
+        request: tonic::Request<crate::protocol::elitea::runtime::v1::RegisterCodeVisitRequestV1>,
+    ) -> Result<
+        tonic::Response<crate::protocol::elitea::runtime::v1::RegisterCodeVisitResponseV1>,
+        tonic::Status,
+    > {
+        let body: Value = serde_json::from_slice(&request.into_inner().visit_json)
+            .map_err(|_| tonic::Status::invalid_argument("visit"))?;
+        let scoped = body["saved_child_scope"]["schema"]
+            == crate::agents::pipeline::saved_code_child::SAVED_CODE_CHILD_SCOPE_SCHEMA
+            && body["saved_child_scope"]["agent_node_id"] == "delegate"
+            && body["saved_child_scope"]["code_node_id"] == "validate";
+        if self.crash {
+            let started = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+                 WHERE thread_id LIKE 'n1:%' AND writer_claim_id = 'claim-1'",
+            )
+            .fetch_one(&self.pool)
+            .await
+            .unwrap_or_default();
+            std::process::exit(if started > 0 && scoped {
+                CRASH_EXIT_CODE
+            } else {
+                MARKER_MISSING_EXIT_CODE
+            });
+        }
+        assert!(
+            scoped,
+            "the reclaimed attempt names its owner scope: {body}"
+        );
+        Err(tonic::Status::permission_denied("refused"))
+    }
+}
+
+fn saved_code_assembler(
+    pool: &sqlx::PgPool,
+    leaf: bool,
+    crash: bool,
+) -> PipelineNativeAgentAssembler {
+    let control = Arc::new(
+        crate::protocol::control::AgentControlClient::from_channel(
+            tonic::transport::Endpoint::from_static("https://127.0.0.1:1").connect_lazy(),
+            crate::transport::control_grpc::ControlGrpcConfig {
+                deadline: Duration::from_secs(1),
+                workload_session_id: "workload-1".into(),
+                producer_id: "worker-1".into(),
+            },
+        )
+        .unwrap(),
+    );
+    let config: crate::config::SandboxRuntimeConfig = serde_json::from_value(json!({
+        "language": "python", "target": "sandbox.internal:9446", "audience": "sandbox-python",
+        "image_digest": format!("sha256:{}", "a".repeat(64)),
+        "policy_revision": "isolated-v1", "timeout_seconds": 30
+    }))
+    .unwrap();
+    let client = crate::sandbox::client::SandboxClient::from_channel(
+        tonic::transport::Endpoint::from_static("https://127.0.0.1:1").connect_lazy(),
+        config.audience.clone(),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let content = Arc::new(
+        crate::transport::InputContentClient::with_original_code_visit_fixture_rpc_deadline(
+            SavedCodeMain {
+                pool: pool.clone(),
+                crash,
+            },
+            Duration::from_secs(5),
+        ),
+    );
+    let factory = Arc::new(
+        crate::agents::graph::CodeRuntimeFactory::new(
+            control,
+            vec![(config, client, None)],
+            pool.clone(),
+        )
+        .with_code_intents(content),
+    );
+    let (assembler, _) = assembler_on(
+        pool,
+        saved_runtime(Vec::new(), saved_code_pipeline(leaf)),
+        pipeline_connector(),
+    );
+    assembler.with_sandbox(Some(factory))
+}
+
+/// One phase of [`saved_code_scenario`], in its own process.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_saved_child_code_process() {
+    let Ok(database) = std::env::var(DATABASE_ENV) else {
+        return;
+    };
+    assert!(
+        database.starts_with("elitea_rust_session_")
+            && database
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    );
+    let leaf = std::env::var(MODE_ENV).expect("mode") == "leaf";
+    let pool = connect(&database).await;
+    let request = saved_code_request();
+    let sandbox = || {
+        Arc::new(
+            crate::protocol::control::ClaimBoundSandboxAuthority::original_code_visit_conformance_fixture(),
+        )
+    };
+    if std::env::var(PHASE_ENV).expect("phase") == "crash" {
+        let invocation = saved_code_assembler(&pool, leaf, true)
+            .assemble(claim(&request, 1).with_sandbox_for_tests(sandbox()))
+            .await
+            .unwrap_or_else(|error| panic!("crash: assemble: {error}"));
+        let outcome = run_to_end(invocation).await;
+        panic!("crash: the process outlived its crash point: {outcome:?}");
+    }
+    let assembler = saved_code_assembler(&pool, leaf, false);
+    let evidence = crate::agents::runtime::NativeAgentAssembler::inspect_checkpoint(
+        &assembler,
+        &request,
+        &AuthorizedNativeCommandBinding::fixture_for_execution(EXECUTION),
+        test_session_authority_for_reclaim(EXECUTION, GENERATION, 2),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("recover: inspect: {error} [{:?}]", error.cause()));
+    let (authorizer, control) = crate::protocol::control::test_checkpoint_authorizer(
+        EXECUTION,
+        GENERATION,
+        evidence.digest(),
+    );
+    let authorization = authorizer
+        .authorize(&control, evidence)
+        .await
+        .unwrap_or_else(|_| panic!("recover: authorize"));
+    // Before W3-2b the walk refused this frontier here
+    // (`pipeline.recovery.child_not_parked` / `child_missing`).
+    let pending = assembler
+        .assemble_checkpoint(
+            AuthorizedNativeAssembly::from_authorized(
+                &request,
+                test_runtime_context_authority(),
+                test_session_authority_for_reclaim(EXECUTION, GENERATION, 2),
+                Arc::new(TestStateWriterLease::current()),
+                AuthorizedNativeCommandBinding::fixture_for_execution(EXECUTION),
+            )
+            .with_sandbox_for_tests(sandbox()),
+        )
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "recover: the walk stops at the saved child's Code: {error} [{:?}]",
+                error
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+            )
+        });
+    let (_, _, _, _, permit) = authorization.into_lifecycle_parts();
+    let invocation = pending
+        .authorize_lifecycle(permit)
+        .unwrap_or_else(|error| panic!("recover: lifecycle: {error}"));
+    // The reclaimed attempt re-enters the same journaled attempt and asks
+    // Main again (here refused): it ends typed, never re-run blind.
+    let error = run_to_end(invocation)
+        .await
+        .expect_err("recover: the refused visit ends the run typed");
+    assert!(
+        error.contains("pipeline.code_authorization_failed"),
+        "recover: {error}"
+    );
+}
+
+/// W3-2b two-process proof: the crash process dies inside the saved child's
+/// Code attempt (its Started record durable, its visit naming its owner
+/// scope); the reclaim's walk admits the frontier and the attempt re-enters
+/// its own visit-scoped journal (the same journal thread, no second one).
+async fn saved_code_scenario(url: &str, mode: &str) {
+    let db = IsolatedPostgres::create(url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    for migration in [
+        include_str!(
+            "../../../elitea-main/migrations/agentstate/0007_sandbox_dispatch_journal.sql"
+        ),
+        include_str!(
+            "../../../elitea-main/migrations/agentstate/0014_sandbox_dispatch_submission_marker.sql"
+        ),
+    ] {
+        sqlx::raw_sql(migration)
+            .execute(&db.pool)
+            .await
+            .expect("apply the dispatch journal");
+    }
+    let phase = |phase: &'static str| {
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
+            .args([
+                "--exact",
+                SAVED_CODE_TEST,
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(DATABASE_ENV, &db.database_name)
+            .env(MODE_ENV, mode)
+            .env(PHASE_ENV, phase);
+        command
+    };
+    let output = run_phase("crash", phase("crash"));
+    assert_eq!(
+        output.status.code(),
+        Some(CRASH_EXIT_CODE),
+        "crash: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let journals = journal_threads(&db.pool).await;
+    assert_eq!(
+        journals.len(),
+        1,
+        "one journal for the one attempt: {journals:?}"
+    );
+    let output = run_phase("recover", phase("recover"));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "recover: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(journal_threads(&db.pool).await, journals, "{mode}");
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_saved_child_lost_inside_its_first_code_attempt_is_recovered_by_its_journal() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the saved-child Code PostgreSQL proof");
+        return;
+    };
+    saved_code_scenario(&url, "entry").await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_saved_child_lost_inside_a_later_code_attempt_is_recovered_by_its_journal() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the saved-child Code PostgreSQL proof");
+        return;
+    };
+    saved_code_scenario(&url, "leaf").await;
+}
+
 #[path = "root_saved_agent_frontier_pg_tests.rs"]
 mod root_saved_agent_frontier;

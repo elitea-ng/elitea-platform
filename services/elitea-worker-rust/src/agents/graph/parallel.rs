@@ -2678,10 +2678,12 @@ fn graph_error_code(error: &GraphError) -> &'static str {
     // when an inner node's failure wraps it.
     if let GraphError::NodeExecutionFailed { message, .. } = error {
         let inner = unwrap_node_failures(message);
+        // W3-2b: a saved child's own node failure is its bare code (an
+        // Agent member's inner node), a Code child's carries its sentence.
         let names = |code: &str| {
             inner
                 .strip_prefix(code)
-                .is_some_and(|rest| rest.starts_with(": "))
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(": "))
         };
         if names(crate::agents::pipeline::scoped_runtime::CALL_MAY_HAVE_STARTED_CODE) {
             return BRANCH_MAY_HAVE_STARTED_CODE;

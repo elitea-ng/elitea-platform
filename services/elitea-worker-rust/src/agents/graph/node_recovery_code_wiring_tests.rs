@@ -66,6 +66,15 @@ struct MainCalls {
     intent_dispatches: Vec<String>,
     /// Every original visit call, answered or not.
     visit_calls: usize,
+    /// The owner scope each admitted original visit named (W3-2b).
+    visit_scopes: Vec<serde_json::Value>,
+}
+impl MainCalls {
+    /// One admitted original visit: its attempt and the owner scope it named.
+    fn admitted(&mut self, attempt: u64, body: &serde_json::Value) {
+        self.visit_attempts.push(attempt);
+        self.visit_scopes.push(body["saved_child_scope"].clone());
+    }
 }
 struct FakeMain {
     script: MainScript,
@@ -161,7 +170,7 @@ impl FakeMain {
                 return Err(Status::unavailable("Node recovery control is busy"));
             }
             if let Some(attempt) = body["attempt"].as_u64() {
-                self.calls.lock().unwrap().visit_attempts.push(attempt);
+                self.calls.lock().unwrap().admitted(attempt, &body);
             }
             if self.script.refuse_visit {
                 return json_response(true, &serde_json::json!({}));

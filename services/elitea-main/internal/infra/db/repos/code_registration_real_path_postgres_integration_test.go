@@ -60,6 +60,13 @@ func newRealPathWorld(t *testing.T, execution, claimID string, fence byte) *real
 
 func newRealPathWorldWith(t *testing.T, execution, claimID string, fence byte, fanoutInstructions string) *realPathWorld {
 	t.Helper()
+	return newRealPathWorldWithVersion(t, execution, claimID, fence, fanoutInstructions, nil)
+}
+
+// newRealPathWorldWithVersion also captures the root version's tools (the
+// saved applications its Agent nodes select).
+func newRealPathWorldWithVersion(t *testing.T, execution, claimID string, fence byte, fanoutInstructions string, tools []map[string]any) *realPathWorld {
+	t.Helper()
 	w := newEffectsWorld(t)
 	project := w.project()
 	// RBAC: the actor holds the permission the visit and intent check.
@@ -73,7 +80,11 @@ CREATE TABLE IF NOT EXISTS public.auth_core__project_role_permission (id serial 
 	w.exec(`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES ($1, $2, 9201)`, project, realPathActor)
 
 	// The captured root source the run was admitted with.
-	version, _ := json.Marshal(map[string]any{"instructions": fanoutInstructions, "agent_type": "pipeline"})
+	root := map[string]any{"instructions": fanoutInstructions, "agent_type": "pipeline"}
+	if tools != nil {
+		root["tools"] = tools
+	}
+	version, _ := json.Marshal(root)
 	wire, err := scope.NewSourceWire(project, realPathActor, 17, 19, version)
 	if err != nil {
 		t.Fatal(err)

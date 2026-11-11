@@ -44,6 +44,9 @@ pub(super) struct AdmittedSavedPipeline {
     pub(super) profile: PipelineExecutionProfile,
     pub(super) children: BTreeMap<String, Arc<AdmittedSavedPipeline>>,
     pub(super) revision: PipelineCheckpointRevision,
+    /// Main's frozen definition digest of this version (the one its freeze
+    /// captured for the run), when Main served one (W3-2b).
+    pub(super) frozen_definition_sha256: Option<[u8; 32]>,
     /// The pipeline's declared data classes (its agent registry row; ADR-0044
     /// decision 3). Empty declares none.
     pub(super) data_classes: BTreeSet<String>,
@@ -54,8 +57,9 @@ pub(super) struct AdmittedPipelineComposition {
     pub(super) checkpoint_paths: Vec<String>,
 }
 
-/// One loaded frozen version and its declared data classes.
-type LoadedVersion = (Map<String, Value>, BTreeSet<String>);
+/// One loaded frozen version, its declared data classes and Main's frozen
+/// definition digest.
+type LoadedVersion = (Map<String, Value>, BTreeSet<String>, Option<[u8; 32]>);
 
 struct CompositionAdmission<'a> {
     platform: &'a PlatformClient,
@@ -108,30 +112,34 @@ impl CompositionAdmission<'_> {
                 ));
             }
             let result = async {
-                let (version, data_classes) = if let Some(loaded) = self.versions.get(&identity) {
-                    loaded.clone()
-                } else {
-                    let (version, data_classes) = self
-                        .platform
-                        .resolve_application_version(self.authority, identity.0, identity.1)
-                        .await
-                        .map_err(NativeAgentAssemblyError::from)?
-                        .into_parts();
-                    self.version_bytes = self
-                        .version_bytes
-                        .checked_add(
-                            serde_json::to_vec(&version)
-                                .map_err(|_| invalid_pipeline_tool_scope())?
-                                .len(),
-                        )
-                        .ok_or_else(composition_size)?;
-                    if self.version_bytes > MAX_COMPOSITION_VERSION_BYTES {
-                        return Err(composition_size());
-                    }
-                    self.versions
-                        .insert(identity, (version.clone(), data_classes.clone()));
-                    (version, data_classes)
-                };
+                let (version, data_classes, frozen_definition_sha256) =
+                    if let Some(loaded) = self.versions.get(&identity) {
+                        loaded.clone()
+                    } else {
+                        let resolved = self
+                            .platform
+                            .resolve_application_version(self.authority, identity.0, identity.1)
+                            .await
+                            .map_err(NativeAgentAssemblyError::from)?;
+                        let frozen = resolved
+                            .saved_agent_fingerprint()
+                            .map(|fingerprint| fingerprint.definition_digest());
+                        let (version, data_classes) = resolved.into_parts();
+                        self.version_bytes = self
+                            .version_bytes
+                            .checked_add(
+                                serde_json::to_vec(&version)
+                                    .map_err(|_| invalid_pipeline_tool_scope())?
+                                    .len(),
+                            )
+                            .ok_or_else(composition_size)?;
+                        if self.version_bytes > MAX_COMPOSITION_VERSION_BYTES {
+                            return Err(composition_size());
+                        }
+                        self.versions
+                            .insert(identity, (version.clone(), data_classes.clone(), frozen));
+                        (version, data_classes, frozen)
+                    };
                 let mut profile =
                     PipelineExecutionProfile::from_nested_version(&version, fallback)?;
                 let frozen = FrozenToolSnapshot::from_version_details(&version)
@@ -149,6 +157,7 @@ impl CompositionAdmission<'_> {
                     profile,
                     children,
                     revision,
+                    frozen_definition_sha256,
                     data_classes,
                 }))
             }
@@ -375,6 +384,63 @@ impl crate::agents::session::FrozenRecoveryLevel for BTreeMap<String, Arc<Admitt
     }
 }
 
+/// B4 (W3-2b): a Code node of a saved pipeline that another saved pipeline
+/// runs has no owner scope Main can prove from the run root (a saved
+/// pipeline's Code owner is a root-level Agent node), so the run is refused
+/// before it starts, readably (`pipeline.saved_code.nested`); it is never
+/// resolved by a capture alone.
+pub(super) fn refuse_nested_saved_code(
+    definition: &PipelineDefinition,
+    children: &BTreeMap<String, Arc<AdmittedSavedPipeline>>,
+) -> Result<(), NativeAgentAssemblyError> {
+    if composition_definitions_for(definition, children)
+        .iter()
+        .any(|(path, child)| path.contains('/') && child.has_code_nodes())
+    {
+        return Err(saved_code_refusal(
+            elitea_faults::codes::PIPELINE_SAVED_CODE_NESTED.as_str(),
+            "the saved pipeline runs Code below another saved pipeline",
+        ));
+    }
+    Ok(())
+}
+
+/// C2 (W3-2b): a conversation continued on the unscoped resolver an older
+/// Worker paused with names no saved-pipeline Code owner, so a saved pipeline
+/// with Code run as a Map worker or Parallel branch is refused before the
+/// run starts (`pipeline.saved_code.unscoped`), as `ContainsCode` refused it
+/// before W3-2b; nested Code is refused as on the scoped path.
+pub(super) fn refuse_unscoped_saved_code(
+    definition: &PipelineDefinition,
+    children: &BTreeMap<String, Arc<AdmittedSavedPipeline>>,
+) -> Result<(), NativeAgentAssemblyError> {
+    refuse_nested_saved_code(definition, children)?;
+    if definition
+        .fanout_owned_application_aliases()
+        .into_iter()
+        .filter_map(|alias| children.get(alias))
+        .any(|child| child.profile.definition().has_code_nodes())
+    {
+        return Err(saved_code_refusal(
+            elitea_faults::codes::PIPELINE_SAVED_CODE_UNSCOPED.as_str(),
+            "the saved pipeline's Code has no owner in this continued conversation",
+        ));
+    }
+    Ok(())
+}
+
+fn saved_code_refusal(code: &'static str, message: &'static str) -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(NativeAgentAssemblyErrorCode::UnsupportedCapability, message)
+        .with_cause(code, None)
+}
+
+/// Whether `code` is a saved-pipeline Code refusal, fixed by editing the
+/// pipeline (or, unscoped, by a new conversation).
+pub(crate) fn is_saved_code_refusal(code: &str) -> bool {
+    code == elitea_faults::codes::PIPELINE_SAVED_CODE_NESTED.as_str()
+        || code == elitea_faults::codes::PIPELINE_SAVED_CODE_UNSCOPED.as_str()
+}
+
 pub(super) fn composition_definitions(
     admitted: &AdmittedSavedPipeline,
 ) -> BTreeMap<String, PipelineDefinition> {
@@ -543,6 +609,7 @@ mod tests {
                 version,
                 children: BTreeMap::new(),
                 data_classes: BTreeSet::new(),
+                frozen_definition_sha256: None,
                 revision: PipelineCheckpointRevision {
                     application_id: 5,
                     version_id: 6,
@@ -638,6 +705,50 @@ mod tests {
             NativeAgentAssemblyErrorCode::ResourceExhausted
         );
         assert_eq!(reads.load(Ordering::SeqCst), 3);
+    }
+
+    /// B4 (W3-2b): Code in a saved pipeline a root-level Agent node runs is
+    /// admitted; Code in a saved pipeline below it is refused readably, by the
+    /// path of the Code node, with its registry code.
+    #[test]
+    fn code_below_a_second_saved_pipeline_is_refused_by_its_path() {
+        let admitted =
+            |version: Map<String, Value>,
+             children: BTreeMap<String, Arc<AdmittedSavedPipeline>>| {
+                Arc::new(AdmittedSavedPipeline {
+                    profile: PipelineExecutionProfile::from_nested_version(&version, &fallback())
+                        .expect("saved profile"),
+                    version,
+                    children,
+                    data_classes: BTreeSet::new(),
+                    frozen_definition_sha256: Some([7; 32]),
+                    revision: PipelineCheckpointRevision {
+                        application_id: 9,
+                        version_id: 10,
+                        definition_digest: [7; 32],
+                    },
+                })
+            };
+        let code = json!({"agent_type":"pipeline","instructions":"state: {answer: str}\nentry_point: validate\nnodes:\n  - id: validate\n    type: code\n    code: 'print(1)'\n    input: [answer]\n    output: [answer]\n    transition: END\n","meta":{},"variables":[],"tools":[],"llm_settings":null})
+            .as_object().unwrap().clone();
+        let root = PipelineDefinition::from_yaml("state: {answer: str}\nentry_point: a0\nnodes:\n  - id: a0\n    type: agent\n    tool: child_0\n    input_mapping: {task: {type: fixed, value: work}}\n    output: [answer]\n    transition: END\n").expect("root");
+        let direct = BTreeMap::from([(
+            "child_0".to_owned(),
+            admitted(code.clone(), BTreeMap::new()),
+        )]);
+        refuse_nested_saved_code(&root, &direct).expect("Code one level down is admitted");
+        let middle = admitted(
+            branches(&[(9, 10)], 1),
+            BTreeMap::from([("child_0".to_owned(), admitted(code, BTreeMap::new()))]),
+        );
+        let nested = BTreeMap::from([("child_0".to_owned(), middle)]);
+        let refusal = refuse_nested_saved_code(&root, &nested).expect_err("refused");
+        let cause = refusal.cause().expect("a typed cause");
+        // C7: a non-fan-out refusal with its own code.
+        assert_eq!(
+            cause.code(),
+            elitea_faults::codes::PIPELINE_SAVED_CODE_NESTED.as_str()
+        );
     }
 
     fn fallback() -> OrdinaryNoToolProfile {

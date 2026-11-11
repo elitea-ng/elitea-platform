@@ -50,6 +50,9 @@ func (reader *CodeDefinitionSourceAdapter) readOriginalCodeSource(ctx context.Co
 	if child, ok := decodeFanoutCodeChildScope(rawScope); ok {
 		return reader.readFanoutCodeChildSource(ctx, tx, original, access, child, thread, node)
 	}
+	if child, ok := decodeSavedCodeChildScope(rawScope); ok {
+		return reader.readSavedCodeChildSource(ctx, tx, execution, generation, original, access, child, thread, node)
+	}
 	var reference scope.Reference
 	if code.Decode(rawScope, &reference, 8192) != nil || reference.Validate() != nil {
 		return scope.SourceDefinition{}, code.ErrRejected

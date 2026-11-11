@@ -2000,8 +2000,14 @@ impl PipelineStateServices {
                 // resume from there: that call's visit-scoped journal decides
                 // it. Before assembly the first level's absence is bound as is
                 // and assembly decides with the frozen definition.
+                // W3-2b: the same for a saved child the root's Agent node runs
+                // that starts at an unowned Code node: its attempt's journal,
+                // scoped to this visit, decides it.
                 if validates
-                    && level.is_some_and(|(definition, _)| definition.starts_at_direct_tool())
+                    && level.is_some_and(|(definition, _)| {
+                        definition.starts_at_direct_tool()
+                            || depth == 0 && definition.starts_at_code()
+                    })
                 {
                     return Ok(bound.unwrap_or(serde_json::Value::Null));
                 }
@@ -2052,6 +2058,14 @@ impl PipelineStateServices {
             // a committed result replays, a started call ends typed and is
             // never repeated, a call that never started runs once.
             if child_definition.is_unowned_direct_tool(pending) {
+                return bound.ok_or_else(invalid_configuration);
+            }
+            // W3-2b: a saved child the root's Agent node runs, lost inside an
+            // unowned Code node's attempt, is a leaf too: the attempt's journal,
+            // scoped to this visit, re-attaches (R), re-runs a lost runtime
+            // once (I), reconciles from owner proof (C) or ends typed, never
+            // repeated. Only at the first level: deeper Code is refused (B4).
+            if depth == 0 && child_definition.is_unowned_code(pending) {
                 return bound.ok_or_else(invalid_configuration);
             }
             let aliases = child_level.admitted_aliases();

@@ -1963,6 +1963,7 @@ pub(crate) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
                 // FU-247), is fixed by editing the pipeline.
                 cause.code() == crate::agents::pipeline::UNSERVED_DIRECT_TOOLKIT_CODE
                     || crate::agents::graph::compiler::FanoutChildRefusal::is_code(cause.code())
+                    || crate::agents::pipeline::composition::is_saved_code_refusal(cause.code())
             }) =>
         {
             RuntimeFailureKind::PipelineNodeTypeNotAvailable

@@ -193,7 +193,20 @@ func (r *CodeIntentRepository) originalSource(ctx context.Context, tx sqlExecuto
 		return scope.SourceDefinition{}, code.ErrRejected
 	}
 	source, err := r.sources.readOriginalCodeSource(ctx, tx, claim.ExecutionID, claim.Generation, a, v.Scope, purpose, v.Thread, v.Node)
-	if err != nil || source.Reference.Validate() != nil || source.ResourceProjectID != a.project || source.ActorID != a.actorID || source.Reference.YAMLSHA256 != v.YAML || code.Digest([]byte(source.Instructions)) != v.YAML {
+	if err != nil {
+		// R2: a dependency failure stays one (answered retryable, its stage
+		// kept); only a refusal becomes the Code authority refusal, keeping
+		// the step that refused it, for Main's fault line.
+		if !codeRefusal(err) {
+			return scope.SourceDefinition{}, err
+		}
+		var labelled *codeRegistrationStage
+		if errors.As(err, &labelled) {
+			return scope.SourceDefinition{}, staged(labelled.stage, code.ErrRejected)
+		}
+		return scope.SourceDefinition{}, code.ErrRejected
+	}
+	if source.Reference.Validate() != nil || source.ResourceProjectID != a.project || source.ActorID != a.actorID || source.Reference.YAMLSHA256 != v.YAML || code.Digest([]byte(source.Instructions)) != v.YAML {
 		return scope.SourceDefinition{}, code.ErrRejected
 	}
 	verified, err := scope.DecodeSourceWire(source.CanonicalWire, source.PreRedemptionVersion, source.Reference, a.project, a.actorID)
@@ -360,10 +373,20 @@ func (r *CodeIntentRepository) readVisit(ctx context.Context, tx sqlExecutor, cl
 		return v, storage.SavedCodeDeclaration{}, code.ErrRejected
 	}
 	d, err := r.declaration(ctx, tx, claim, a, v, purpose)
+	if err != nil && !codeRefusal(err) {
+		// R2: the stored visit's source could not be read: retryable.
+		return v, d, err
+	}
 	if err != nil || d.PlatformClient != v.PlatformClient {
 		return v, d, code.ErrRejected
 	}
 	return v, d, nil
+}
+
+// codeRefusal reports whether err refuses a Code registration (fail closed,
+// Aborted). Any other error is a dependency failure, answered retryable (R2).
+func codeRefusal(err error) bool {
+	return errors.Is(err, code.ErrRejected) || errors.Is(err, storage.ErrContentUnauthorized) || errors.Is(err, storage.ErrContentRejected) || errors.Is(err, scope.ErrDenied)
 }
 func (r *CodeIntentRepository) ReadOriginalCodeVisit(ctx context.Context, tx sqlExecutor, claim storage.ContentClaim, ref code.OriginalVisitRef, purpose string) (storage.OriginalCodeVisit, error) {
 	a, err := r.lockAccess(ctx, tx, claim, "RUNNING")

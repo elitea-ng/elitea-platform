@@ -58,6 +58,10 @@ const (
 	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
 	// A checkpoint reclaim met a root Agent node running a saved Agent, which cannot resume yet, so the run ended typed and nothing after that node ran.
 	PipelineRecoverySavedAgentFrontier Code = "pipeline.recovery.saved_agent_frontier"
+	// A Code node sits in a saved pipeline that another saved pipeline runs, so the pipeline was refused before it started: Code runs only in a saved pipeline the started pipeline runs directly, for now.
+	PipelineSavedCodeNested Code = "pipeline.saved_code.nested"
+	// A conversation an older Worker paused continues on the unscoped resolver, where a saved pipeline's Code run as a Map worker or Parallel branch has no owner scope, so the pipeline was refused before it started.
+	PipelineSavedCodeUnscoped Code = "pipeline.saved_code.unscoped"
 	// A background runner failed its pass and will try again.
 	RunnerCycleFailed Code = "runner.cycle_failed"
 	// A background runner stopped on a dependency failure and is being restarted.
