@@ -1,0 +1,809 @@
+//! FU-323a: a root Agent node running a saved Agent as a recovery frontier.
+//!
+//! The inspect step proves where that Agent stopped from two durable records
+//! the run already owns, both read under this claim's fenced authority:
+//!
+//! 1. the root row's call receipt for the node (`scope_receipts.rs`), which
+//!    must be this pipeline's own call of its frozen saved Agent at the
+//!    pending step;
+//! 2. the Agent's own model scope (`model_scope.rs` `inspect_agent_scope`).
+//!
+//! Every state that cannot be proven is refused typed, with an operator cause
+//! per check and nothing repeated. The proof is bound into the evidence Main
+//! authorizes (`recovery.v3`), and assembly re-enters the node only for the
+//! proven `(node, step, call_id)` (`scoped_runtime.rs` `RootAgentReentry`).
+
+use std::collections::BTreeMap;
+
+use adk_rust::graph::{Checkpoint, GraphError};
+use serde_json::{Value, json};
+
+use super::{
+    NativeAgentAssemblyError, NativeAgentAssemblyErrorCode, OrdinaryNativeAgentPlan,
+    PipelineDefinition, PipelineStateServices, dependency_unavailable, invalid_configuration,
+};
+use crate::agents::model_scope::{AgentScopeRefusal, AgentScopeState};
+use crate::agents::pipeline::scope_receipts::{GraphCallOutcome, receipt_for_node};
+use crate::agents::pipeline::scoped_applications::PipelineApplicationScope;
+
+/// The frozen saved Agent an admitted root Agent node runs: its alias and the
+/// application version Main froze into the command (`(application, version)`).
+pub(crate) type FrozenAgents = BTreeMap<String, (u64, u64)>;
+
+/// Where one root saved-Agent node stopped, as the inspect step proved it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AgentFrontierProof {
+    node: String,
+    alias: String,
+    application: (u64, u64),
+    step: usize,
+    /// The receipt's activation call id; `None` before the node prepared its
+    /// call at this step.
+    call_id: Option<String>,
+    /// The saved Agent definition digest the receipt was stamped with when
+    /// the call started (review (b)); `None` when it carries none.
+    agent_definition: Option<[u8; 32]>,
+    class: AgentFrontierClass,
+}
+
+/// The proven class of a root saved-Agent node's stop.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AgentFrontierClass {
+    /// No receipt at this step: the node never started its Agent. It runs
+    /// once, fresh.
+    NotStarted,
+    /// The receipt is complete: the result is served from it.
+    Completed,
+    /// The receipt started and the Agent persisted no model step: nothing was
+    /// sent, so the Agent runs fresh.
+    Fresh,
+    /// An unfinished model step of this execution (its checkpoint digest):
+    /// the restored request is re-issued once.
+    Restorable([u8; 32]),
+    /// The Agent's answer is persisted with its receipt (the event id): it is
+    /// served without a model call.
+    Answered(String),
+}
+
+impl AgentFrontierProof {
+    /// The re-entry this proof admits: a started receipt whose Agent can
+    /// continue from its own scope.
+    pub(crate) fn reentry(&self) -> Option<(&str, usize, &str)> {
+        match self.class {
+            AgentFrontierClass::Fresh
+            | AgentFrontierClass::Restorable(_)
+            | AgentFrontierClass::Answered(_) => self
+                .call_id
+                .as_deref()
+                .map(|call_id| (self.node.as_str(), self.step, call_id)),
+            AgentFrontierClass::NotStarted | AgentFrontierClass::Completed => None,
+        }
+    }
+
+    /// The saved Agent definition digest the call started with, if stamped.
+    pub(crate) const fn agent_definition(&self) -> Option<[u8; 32]> {
+        self.agent_definition
+    }
+
+    /// Whether the re-entry serves the Agent's stored answer (runs no model).
+    pub(crate) const fn serves_answer(&self) -> bool {
+        matches!(self.class, AgentFrontierClass::Answered(_))
+    }
+
+    /// The evidence of this proof Main's grant binds (`recovery.v3`): ids,
+    /// the class and a checkpoint digest or event id. No content. The started
+    /// definition stamp is bound already: it is in the receipt the root row's
+    /// evidence carries.
+    pub(crate) fn evidence(&self) -> Value {
+        let (class, bound) = match &self.class {
+            AgentFrontierClass::NotStarted => ("not_started", Value::Null),
+            AgentFrontierClass::Completed => ("completed", Value::Null),
+            AgentFrontierClass::Fresh => ("fresh", Value::Null),
+            AgentFrontierClass::Restorable(digest) => ("restorable", json!(digest)),
+            AgentFrontierClass::Answered(event_id) => ("answered", json!(event_id)),
+        };
+        json!({
+            "node": self.node,
+            "alias": self.alias,
+            "application": [self.application.0, self.application.1],
+            "step": self.step,
+            "call_id": self.call_id,
+            "class": class,
+            "bound": bound,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        node: &str,
+        step: usize,
+        call_id: Option<&str>,
+        class: AgentFrontierClass,
+    ) -> Self {
+        Self {
+            node: node.to_owned(),
+            alias: "release-agent".to_owned(),
+            application: (3, 4),
+            step,
+            call_id: call_id.map(str::to_owned),
+            agent_definition: Some([9; 32]),
+            class,
+        }
+    }
+}
+
+/// The ids-only operator line of an Agent-frontier refusal.
+fn log_refusal(plan: &OrdinaryNativeAgentPlan, node: &str, code: elitea_faults::Code) {
+    log_refusal_for(plan.execution_ids(), node, code);
+}
+
+fn log_refusal_for((execution_id, generation): (&str, u64), node: &str, code: elitea_faults::Code) {
+    elitea_faults::fault!(
+        tracing::Level::WARN,
+        code = code,
+        event = "pipeline_recovery_frontier_refused",
+        execution_id = execution_id,
+        generation = generation,
+        node_id = node,
+        support_ref = execution_id
+    );
+}
+
+/// A typed Agent-frontier refusal with its ids-only operator line, for the
+/// checks that run at assembly (the saved Agent's definition, delta 1c).
+pub(crate) fn agent_frontier_refusal(
+    ids: (&str, u64),
+    node: &str,
+    code: elitea_faults::Code,
+) -> NativeAgentAssemblyError {
+    log_refusal_for(ids, node, code);
+    invalid_configuration().with_cause(code.as_str(), None)
+}
+
+/// A typed Agent-frontier refusal with its operator line.
+fn refused(
+    plan: &OrdinaryNativeAgentPlan,
+    node: &str,
+    code: elitea_faults::Code,
+) -> NativeAgentAssemblyError {
+    log_refusal(plan, node, code);
+    invalid_configuration().with_cause(code.as_str(), None)
+}
+
+impl PipelineStateServices {
+    /// Prove where the root Agent node `node`, running the saved Agent
+    /// `application` under `alias`, stopped in `checkpoint` (this execution's
+    /// own latest root row). Read only; a refusal logs ids and the cause only.
+    pub(super) async fn prove_agent_frontier(
+        &self,
+        plan: &OrdinaryNativeAgentPlan,
+        definition: &PipelineDefinition,
+        checkpoint: &Checkpoint,
+        node: &str,
+        alias: &str,
+        application: (u64, u64),
+    ) -> Result<AgentFrontierProof, NativeAgentAssemblyError> {
+        let refuse = |code: elitea_faults::Code| refused(plan, node, code);
+        let mut proof = AgentFrontierProof {
+            node: node.to_owned(),
+            alias: alias.to_owned(),
+            application,
+            step: checkpoint.step,
+            call_id: None,
+            agent_definition: None,
+            class: AgentFrontierClass::NotStarted,
+        };
+        let receipt = receipt_for_node(checkpoint, node)
+            .map_err(|_| refuse(elitea_faults::codes::PIPELINE_RECOVERY_AGENT_RECEIPT_MISMATCH))?;
+        // No receipt, or one of an earlier visit of the node: this visit has
+        // not prepared its call, so its Agent never started here.
+        let Some(receipt) =
+            receipt.filter(|receipt| receipt.activation().step() == checkpoint.step)
+        else {
+            return Ok(proof);
+        };
+        let agent_name = crate::agents::application_tools::application_tool_name(application);
+        let own = PipelineApplicationScope::new(String::new(), definition, None)
+            .and_then(|scope| scope.activate(&checkpoint.thread_id, node, checkpoint.step))
+            .is_ok_and(|expected| *receipt.activation() == expected)
+            && receipt
+                .original_start()
+                .tool_calls()
+                .first()
+                .is_some_and(|call| call.name == agent_name);
+        if !own {
+            return Err(refuse(
+                elitea_faults::codes::PIPELINE_RECOVERY_AGENT_RECEIPT_MISMATCH,
+            ));
+        }
+        proof.call_id = Some(receipt.activation().call_id().to_owned());
+        proof.agent_definition = receipt.agent_definition();
+        proof.class = match receipt.outcome() {
+            GraphCallOutcome::Completed { .. } => AgentFrontierClass::Completed,
+            GraphCallOutcome::Paused { .. } | GraphCallOutcome::Resuming { .. } => {
+                return Err(refuse(
+                    elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_PAUSED,
+                ));
+            }
+            GraphCallOutcome::Started => {
+                self.prove_started_agent(plan, checkpoint, &receipt, &agent_name)
+                    .await?
+            }
+        };
+        Ok(proof)
+    }
+
+    /// The Agent's own model scope of a started call (D-3 step 3).
+    async fn prove_started_agent(
+        &self,
+        plan: &OrdinaryNativeAgentPlan,
+        checkpoint: &Checkpoint,
+        receipt: &crate::agents::pipeline::scope_receipts::PipelineGraphCallReceipt,
+        agent_name: &str,
+    ) -> Result<AgentFrontierClass, NativeAgentAssemblyError> {
+        let child = crate::agents::application_tools::child_instruction_session_id(
+            &checkpoint.thread_id,
+            receipt.activation().call_id(),
+            agent_name,
+        );
+        // Round 1 #2: the restore's own predicate. The Agent compacts exactly
+        // when the run's admitted context plan does (a nested Agent takes the
+        // pipeline shell's plan, `assembly.rs` `context_management:
+        // fallback.context_management`), the same for the crash and the reclaim.
+        let compacts = matches!(
+            plan.context_management,
+            super::ContextManagementPlan::Summarize(_)
+        );
+        let state = self
+            .model_scopes
+            .inspect_agent_scope(plan.session_identity()?, &child, agent_name, compacts)
+            .await
+            // Round 1 #1: classified exactly as the session's activation is.
+            .map_err(|error| store_failure(error.code))?;
+        Ok(match state {
+            AgentScopeState::Absent => AgentFrontierClass::Fresh,
+            AgentScopeState::Restorable(digest) => AgentFrontierClass::Restorable(digest),
+            AgentScopeState::Answered(event_id) => AgentFrontierClass::Answered(event_id),
+            AgentScopeState::MayHaveStarted => {
+                log_refusal(
+                    plan,
+                    receipt.activation().node_name(),
+                    elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_MAY_HAVE_STARTED,
+                );
+                // The registered "may have started, not repeated" end.
+                return Err(NativeAgentAssemblyError::new(
+                    NativeAgentAssemblyErrorCode::UnsupportedCapability,
+                    "a tool call of the agent may have started",
+                )
+                .with_cause(
+                    crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+                    None,
+                ));
+            }
+            AgentScopeState::Refused(refusal) => {
+                return Err(refused(plan, receipt.activation().node_name(), match refusal {
+                    AgentScopeRefusal::Invalid => {
+                        elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_INVALID
+                    }
+                    AgentScopeRefusal::ForeignExecution => {
+                        elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_FOREIGN_EXECUTION
+                    }
+                    AgentScopeRefusal::SessionWithoutCheckpoint => {
+                        elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_SESSION_WITHOUT_CHECKPOINT
+                    }
+                }));
+            }
+        })
+    }
+}
+
+/// The causes an Agent-frontier refusal carries: each ends the run with the
+/// Agent-step text (`RuntimeFailureKind::RecoveryFrontierAgentStep`).
+pub(crate) fn is_agent_frontier_cause(code: &str) -> bool {
+    [
+        elitea_faults::codes::PIPELINE_RECOVERY_AGENT_RECEIPT_MISMATCH,
+        elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_PAUSED,
+        elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_INVALID,
+        elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_FOREIGN_EXECUTION,
+        elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_SESSION_WITHOUT_CHECKPOINT,
+        elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_CHANGED,
+        elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_UNPROVEN,
+    ]
+    .iter()
+    .any(|cause| cause.as_str() == code)
+}
+
+/// The internal cause of a transient store failure (connection, timeout,
+/// serialization or deadlock, lock not available: the stores' own
+/// `storage_unavailable`). It changes no terminal; only the reclaim inspect
+/// turns it into the retained cause ([`reclaim_inspect_failure`], round 1 #5).
+pub(super) const STORAGE_UNAVAILABLE_CAUSE: &str = "agent_state.storage_unavailable";
+
+/// The one classifier of a store failure carried as a code string (a scope
+/// open's `AdkError`, a graph checkpoint read): a session code is classified
+/// exactly as `session_activation_error` classifies that session error (a
+/// writer loss or invalid scope is a lost writer); any other code is the
+/// terminal `DependencyUnavailable` it always was. A transient failure of
+/// either store carries [`STORAGE_UNAVAILABLE_CAUSE`].
+pub(super) fn store_failure(code: &str) -> NativeAgentAssemblyError {
+    let session = match code {
+        "session.invalid_configuration" => Some(NativeAgentAssemblyErrorCode::InvalidConfiguration),
+        "session.invalid_scope" | "session.writer_not_current" => {
+            Some(NativeAgentAssemblyErrorCode::AuthorizationFailed)
+        }
+        "session.resource_exhausted" => Some(NativeAgentAssemblyErrorCode::ResourceExhausted),
+        "session.corrupt_state" | "session.event_conflict" => {
+            Some(NativeAgentAssemblyErrorCode::InvalidResult)
+        }
+        "session.storage_unavailable" | "session.storage_failure" => {
+            Some(NativeAgentAssemblyErrorCode::DependencyUnavailable)
+        }
+        _ => None,
+    };
+    let failure = session.map_or_else(dependency_unavailable, |kind| {
+        NativeAgentAssemblyError::new(kind, "the claim-bound native agent session is unavailable")
+    });
+    if matches!(
+        code,
+        "session.storage_unavailable" | "checkpoint.storage_unavailable"
+    ) {
+        failure.with_cause(STORAGE_UNAVAILABLE_CAUSE, None)
+    } else {
+        failure
+    }
+}
+
+/// [`store_failure`] for a graph checkpoint read: the checkpointer puts its
+/// stable code first in the message (`postgres_checkpointer.rs`).
+pub(super) fn checkpoint_load_failure(error: &GraphError) -> NativeAgentAssemblyError {
+    match error {
+        GraphError::CheckpointError(message) => {
+            store_failure(message.split(':').next().unwrap_or_default())
+        }
+        _ => dependency_unavailable(),
+    }
+}
+
+/// D-6 (C2), the reclaim inspect only: a transient store failure becomes the
+/// retained cause, its message unchanged; any other error is returned as is.
+pub(crate) fn reclaim_inspect_failure(error: NativeAgentAssemblyError) -> NativeAgentAssemblyError {
+    if error.code() == NativeAgentAssemblyErrorCode::DependencyUnavailable
+        && error
+            .cause()
+            .is_some_and(|cause| cause.code() == STORAGE_UNAVAILABLE_CAUSE)
+    {
+        error.with_cause(
+            elitea_faults::codes::PIPELINE_RECOVERY_INSPECT_TRANSIENT.as_str(),
+            None,
+        )
+    } else {
+        error
+    }
+}
+
+/// Whether `error` is a transient inspect failure the reclaim retains.
+pub(crate) fn is_transient_inspect_failure(error: &NativeAgentAssemblyError) -> bool {
+    error.code() == NativeAgentAssemblyErrorCode::DependencyUnavailable
+        && error.cause().is_some_and(|cause| {
+            cause.code() == elitea_faults::codes::PIPELINE_RECOVERY_INSPECT_TRANSIENT.as_str()
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::recovery_evidence_digest;
+    use super::*;
+    use crate::agents::pipeline::scoped_runtime::RootAgentReentry;
+    use crate::protocol::output::RuntimeFailureKind;
+
+    fn row() -> Checkpoint {
+        serde_json::from_value(json!({
+            "thread_id": "root-thread",
+            "checkpoint_id": "cp-1",
+            "state": {"answer": "x"},
+            "step": 2,
+            "pending_nodes": ["delegate"],
+            "metadata": {"elitea.pipeline.execution.v1": ["execution-1", 3]},
+            "created_at": "2026-11-11T00:00:00Z"
+        }))
+        .expect("a root row")
+    }
+
+    /// The evidence formula of `main` before FU-323a (`session.rs`
+    /// `recovery_evidence` at b6633e6e6), restated here: v1 and v2 must stay
+    /// byte-identical (D1 a, U3).
+    fn base_digest(checkpoint: &Checkpoint, children: &[Value]) -> [u8; 32] {
+        let value = serde_json::to_value(checkpoint).expect("row value");
+        let bytes = if children.is_empty() {
+            serde_json::to_vec(&("elitea.pipeline.recovery.v1", [7_u8; 32], value))
+        } else {
+            serde_json::to_vec(&("elitea.pipeline.recovery.v2", [7_u8; 32], value, children))
+        }
+        .expect("bytes");
+        ring::digest::digest(&ring::digest::SHA256, &bytes)
+            .as_ref()
+            .try_into()
+            .expect("32 bytes")
+    }
+
+    fn digest(children: &[Value], agents: &[AgentFrontierProof]) -> [u8; 32] {
+        recovery_evidence_digest(
+            "execution-1".to_owned(),
+            3,
+            [7; 32],
+            &row(),
+            children.to_vec(),
+            agents,
+        )
+        .expect("evidence")
+        .digest()
+    }
+
+    fn hex(bytes: [u8; 32]) -> String {
+        bytes.iter().fold(String::new(), |mut out, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+    }
+
+    #[test]
+    fn v1_and_v2_evidence_digests_are_unchanged() {
+        let child = [json!({"thread_id": "root-thread/delegate", "step": 1})];
+        assert_eq!(digest(&[], &[]), base_digest(&row(), &[]));
+        assert_eq!(digest(&child, &[]), base_digest(&row(), &child));
+        // Golden values: a change to the v1/v2 inputs fails here.
+        assert_eq!(hex(digest(&[], &[])), GOLDEN_V1);
+        assert_eq!(hex(digest(&child, &[])), GOLDEN_V2);
+    }
+
+    const GOLDEN_V1: &str = "f753e5d98700420543cd1d2fbe1fca2582dce5b2b5f7cb5e6d1f454ee9825c23";
+    const GOLDEN_V2: &str = "35b91e61b6154a76b3393cfe492b5c9aed110131c79ab0865520792e1c9955ef";
+
+    #[test]
+    fn v3_evidence_binds_every_field_of_the_agent_proof() {
+        let proof = |step, call: Option<&str>, class| {
+            AgentFrontierProof::for_tests("delegate", step, call, class)
+        };
+        let base = proof(2, Some("call-1"), AgentFrontierClass::Restorable([1; 32]));
+        let reference = digest(&[], std::slice::from_ref(&base));
+        assert_eq!(reference, digest(&[], std::slice::from_ref(&base)));
+        assert_ne!(reference, digest(&[], &[]), "v3 is not v1");
+        let mut changed = vec![
+            proof(3, Some("call-1"), AgentFrontierClass::Restorable([1; 32])),
+            proof(2, Some("call-2"), AgentFrontierClass::Restorable([1; 32])),
+            proof(2, Some("call-1"), AgentFrontierClass::Restorable([2; 32])),
+            proof(
+                2,
+                Some("call-1"),
+                AgentFrontierClass::Answered("event-1".into()),
+            ),
+            proof(2, Some("call-1"), AgentFrontierClass::Fresh),
+            proof(2, None, AgentFrontierClass::NotStarted),
+            proof(2, Some("call-1"), AgentFrontierClass::Completed),
+        ];
+        let mut other_agent = base.clone();
+        other_agent.application = (3, 5);
+        changed.push(other_agent);
+        let mut other_alias = base.clone();
+        other_alias.alias = "other-agent".into();
+        changed.push(other_alias);
+        let mut other_node = base.clone();
+        other_node.node = "other".into();
+        changed.push(other_node);
+        for proof in &changed {
+            assert_ne!(
+                digest(&[], std::slice::from_ref(proof)),
+                reference,
+                "{proof:?}"
+            );
+        }
+    }
+
+    /// U5 / C1: only a started receipt whose Agent can continue admits a
+    /// re-entry, and each proven re-entry is taken once.
+    #[test]
+    fn a_root_reentry_is_proof_bound_and_taken_once() {
+        let proofs = [
+            AgentFrontierProof::for_tests(
+                "delegate",
+                2,
+                Some("call-1"),
+                AgentFrontierClass::Restorable([1; 32]),
+            ),
+            AgentFrontierProof::for_tests("second", 2, None, AgentFrontierClass::NotStarted),
+            AgentFrontierProof::for_tests(
+                "third",
+                2,
+                Some("call-3"),
+                AgentFrontierClass::Completed,
+            ),
+        ];
+        let reentry = RootAgentReentry::from_proofs(&proofs, ("execution-1", 3))
+            .expect("one admitted re-entry");
+        assert!(!reentry.take("delegate", 3, "call-1"), "another step");
+        assert!(!reentry.take("delegate", 2, "call-9"), "another call");
+        assert!(!reentry.take("third", 2, "call-3"), "a completed receipt");
+        assert!(reentry.take("delegate", 2, "call-1"));
+        assert!(
+            !reentry.take("delegate", 2, "call-1"),
+            "a second re-entry within the claim takes today's refusal"
+        );
+        for class in [
+            AgentFrontierClass::Fresh,
+            AgentFrontierClass::Answered("event-1".into()),
+        ] {
+            let proof = AgentFrontierProof::for_tests("delegate", 2, Some("call-1"), class);
+            assert!(RootAgentReentry::from_proofs(&[proof], ("execution-1", 3)).is_some());
+        }
+        assert!(RootAgentReentry::from_proofs(&proofs[1..], ("execution-1", 3)).is_none());
+        assert!(RootAgentReentry::from_proofs(&[], ("execution-1", 3)).is_none());
+    }
+
+    /// C2: only the stores' transient failure is retained; everything else
+    /// stays the terminal it was.
+    #[test]
+    fn only_a_transient_storage_failure_is_retained() {
+        assert!(!is_transient_inspect_failure(&store_failure(
+            "session.storage_unavailable"
+        )));
+        assert!(is_transient_inspect_failure(&reclaim_inspect_failure(
+            store_failure("session.storage_unavailable")
+        )));
+        for code in [
+            "session.storage_failure",
+            "session.corrupt_state",
+            "session.invalid_scope",
+            "session.writer_not_current",
+            "checkpoint.corrupt_state",
+        ] {
+            let error = reclaim_inspect_failure(store_failure(code));
+            assert!(!is_transient_inspect_failure(&error), "{code}");
+        }
+        assert!(is_transient_inspect_failure(&reclaim_inspect_failure(checkpoint_load_failure(
+            &GraphError::CheckpointError(
+                "checkpoint.storage_unavailable: PostgreSQL checkpoint storage is temporarily unavailable"
+                    .to_owned()
+            )
+        ))));
+        for error in [
+            GraphError::CheckpointError("checkpoint.corrupt_state: malformed".to_owned()),
+            GraphError::CheckpointError("checkpoint.storage_failure: failed".to_owned()),
+            GraphError::CheckpointError("checkpoint.writer_not_current: lost".to_owned()),
+        ] {
+            assert!(!is_transient_inspect_failure(&checkpoint_load_failure(
+                &error
+            )));
+        }
+        // A refusal is never retained, whatever its cause.
+        assert!(!is_transient_inspect_failure(
+            &invalid_configuration().with_cause(
+                elitea_faults::codes::PIPELINE_RECOVERY_INSPECT_TRANSIENT.as_str(),
+                None
+            )
+        ));
+    }
+
+    /// Round 1 #5: an activation's storage-unavailable failure keeps its own
+    /// store's message and no reclaim cause; only the reclaim inspect adds
+    /// the retained cause.
+    #[test]
+    fn activation_failures_keep_their_message_and_carry_no_reclaim_cause() {
+        let session = || {
+            super::super::session_activation_error(
+                &crate::state::PostgresSessionError::StorageUnavailable {
+                    source: sqlx::Error::PoolTimedOut,
+                },
+            )
+        };
+        let checkpoint = || {
+            super::super::checkpoint_activation_error(
+                &crate::state::PostgresCheckpointError::StorageUnavailable {
+                    source: sqlx::Error::PoolTimedOut,
+                },
+            )
+        };
+        let cases: [(&dyn Fn() -> NativeAgentAssemblyError, &str); 2] = [
+            (
+                &session,
+                "the claim-bound native agent session is unavailable",
+            ),
+            (
+                &checkpoint,
+                "the claim-bound pipeline checkpoint is unavailable",
+            ),
+        ];
+        for (error, message) in cases {
+            let activation = error();
+            assert_eq!(
+                activation.code(),
+                NativeAgentAssemblyErrorCode::DependencyUnavailable
+            );
+            assert_eq!(activation.to_string(), message);
+            assert!(!is_transient_inspect_failure(&activation), "{message}");
+            // Only the reclaim inspect retains it, message unchanged.
+            let reclaim = reclaim_inspect_failure(error());
+            assert!(is_transient_inspect_failure(&reclaim), "{message}");
+            assert_eq!(reclaim.to_string(), message);
+        }
+        // Any other activation failure is not marked transient.
+        let failed = super::super::session_activation_error(
+            &crate::state::PostgresSessionError::StorageFailure {
+                source: sqlx::Error::RowNotFound,
+            },
+        );
+        assert!(!is_transient_inspect_failure(&reclaim_inspect_failure(
+            failed
+        )));
+    }
+
+    /// Delta 3: the string classifier and the activation's exhaustive match
+    /// agree on every session error.
+    #[test]
+    fn the_string_classifier_agrees_with_the_session_activation() {
+        use crate::state::PostgresSessionError as E;
+        for error in [
+            E::InvalidConfiguration,
+            E::InvalidScope,
+            E::ResourceExhausted,
+            E::WriterNotCurrent,
+            E::EventConflict,
+            E::CorruptStoredState,
+            E::StorageUnavailable {
+                source: sqlx::Error::PoolTimedOut,
+            },
+            E::StorageFailure {
+                source: sqlx::Error::RowNotFound,
+            },
+        ] {
+            let by_code = store_failure(error.code());
+            let by_variant = super::super::session_activation_error(&error);
+            assert_eq!(by_code.code(), by_variant.code(), "{}", error.code());
+            assert_eq!(
+                by_code.to_string(),
+                by_variant.to_string(),
+                "{}",
+                error.code()
+            );
+            assert_eq!(
+                by_code
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code),
+                by_variant
+                    .cause()
+                    .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code),
+                "{}",
+                error.code()
+            );
+        }
+    }
+
+    /// Delta 1: an Answered re-entry is never refused for an edit; a missing
+    /// stamp or digest is unproven, a different digest changed.
+    #[test]
+    fn the_definition_check_spares_answers_and_names_unproven_apart() {
+        use crate::agents::pipeline::scoped_runtime::RootAgentReentry;
+        let mut restorable = AgentFrontierProof::for_tests(
+            "delegate",
+            2,
+            Some("call-1"),
+            AgentFrontierClass::Restorable([1; 32]),
+        );
+        let started = restorable.agent_definition;
+        let cause = |proof: &AgentFrontierProof, current| {
+            RootAgentReentry::from_proofs(std::slice::from_ref(proof), ("execution-1", 3))
+                .expect("a re-entry")
+                .require_unchanged_agent("delegate", current)
+                .err()
+                .and_then(|error| {
+                    error
+                        .cause()
+                        .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+                })
+        };
+        assert_eq!(cause(&restorable, started), None);
+        assert_eq!(
+            cause(&restorable, Some([2; 32])),
+            Some(elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_CHANGED.as_str())
+        );
+        assert_eq!(
+            cause(&restorable, None),
+            Some(elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_UNPROVEN.as_str())
+        );
+        restorable.agent_definition = None;
+        assert_eq!(
+            cause(&restorable, Some([2; 32])),
+            Some(elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_UNPROVEN.as_str())
+        );
+        let mut answered = AgentFrontierProof::for_tests(
+            "delegate",
+            2,
+            Some("call-1"),
+            AgentFrontierClass::Answered("event-1".into()),
+        );
+        assert_eq!(cause(&answered, Some([2; 32])), None);
+        answered.agent_definition = None;
+        assert_eq!(cause(&answered, None), None);
+    }
+
+    /// Round 1 #1: a scope open's writer loss or invalid scope is a lost
+    /// writer, exactly as the session's activation classifies it.
+    #[test]
+    fn a_scope_open_failure_is_classified_as_the_session_activation() {
+        for (code, expected) in [
+            (
+                "session.writer_not_current",
+                NativeAgentAssemblyErrorCode::AuthorizationFailed,
+            ),
+            (
+                "session.invalid_scope",
+                NativeAgentAssemblyErrorCode::AuthorizationFailed,
+            ),
+            (
+                "session.invalid_configuration",
+                NativeAgentAssemblyErrorCode::InvalidConfiguration,
+            ),
+            (
+                "session.resource_exhausted",
+                NativeAgentAssemblyErrorCode::ResourceExhausted,
+            ),
+            (
+                "session.corrupt_state",
+                NativeAgentAssemblyErrorCode::InvalidResult,
+            ),
+            (
+                "session.event_conflict",
+                NativeAgentAssemblyErrorCode::InvalidResult,
+            ),
+            (
+                "session.storage_failure",
+                NativeAgentAssemblyErrorCode::DependencyUnavailable,
+            ),
+        ] {
+            assert_eq!(store_failure(code).code(), expected, "{code}");
+        }
+        assert!(is_transient_inspect_failure(&reclaim_inspect_failure(
+            store_failure("session.storage_unavailable")
+        )));
+    }
+
+    /// D5: every Agent-step refusal ends with the Agent-step text; the
+    /// "may have started" one with the registered recovery-refused text.
+    #[test]
+    fn every_agent_frontier_refusal_ends_with_its_registered_kind() {
+        for code in [
+            elitea_faults::codes::PIPELINE_RECOVERY_AGENT_RECEIPT_MISMATCH,
+            elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_PAUSED,
+            elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_INVALID,
+            elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_FOREIGN_EXECUTION,
+            elitea_faults::codes::PIPELINE_RECOVERY_AGENT_STEP_SESSION_WITHOUT_CHECKPOINT,
+            elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_CHANGED,
+            elitea_faults::codes::PIPELINE_RECOVERY_AGENT_DEFINITION_UNPROVEN,
+        ] {
+            assert!(is_agent_frontier_cause(code.as_str()));
+            assert_eq!(
+                crate::execution::assembly_failure(
+                    &invalid_configuration().with_cause(code.as_str(), None)
+                ),
+                RuntimeFailureKind::RecoveryFrontierAgentStep,
+                "{code:?}"
+            );
+        }
+        assert!(!is_agent_frontier_cause(
+            elitea_faults::codes::PIPELINE_RECOVERY_INSPECT_TRANSIENT.as_str()
+        ));
+        assert_eq!(
+            crate::execution::assembly_failure(
+                &NativeAgentAssemblyError::new(
+                    NativeAgentAssemblyErrorCode::UnsupportedCapability,
+                    "a tool call of the agent may have started",
+                )
+                .with_cause(
+                    crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+                    None
+                )
+            ),
+            RuntimeFailureKind::RecoveryRefused
+        );
+    }
+}

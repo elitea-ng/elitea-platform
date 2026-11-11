@@ -1401,6 +1401,9 @@ impl NativeAgentAssembler for OrdinaryNativeAgentAssembler {
         self.sessions
             .inspect_model_checkpoint(session, state_writer_lease, &plan)
             .await
+            // FU-323a D-6 (C2): a direct agent's reclaim inspect retains a
+            // transient store failure as a pipeline's does.
+            .map_err(super::session::reclaim_inspect_failure)
     }
 
     async fn assemble_checkpoint(

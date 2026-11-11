@@ -24,6 +24,7 @@
 //! the line says `"backtrace":"rate-limited"`). A panic raised inside the
 //! operator stream's own code gets the stderr line only.
 
+pub(crate) mod cycle;
 pub(crate) mod failure;
 #[cfg(test)]
 mod runtime_log_safety_tests;

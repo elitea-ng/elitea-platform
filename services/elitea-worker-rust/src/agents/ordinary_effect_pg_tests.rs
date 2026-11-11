@@ -982,3 +982,54 @@ async fn postgres_root_effect_child() {
     }
     pool.close().await;
 }
+
+/// FU-323a delta review 4: a direct agent's reclaim inspect retains a
+/// transient `PostgreSQL` failure (a held root session writer row makes the
+/// activation fail `lock_timeout`), as a pipeline's does; the command deadline
+/// bounds it.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_transient_read_failure_at_a_direct_agent_reclaim_inspect_is_retained() {
+    const EXECUTION: &str = "execution-transient-inspect";
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the direct agent transient proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    let (assembler, _, _) = worker(&db.pool, Vec::new(), false);
+    let request = request();
+    let binding = AuthorizedNativeCommandBinding::fixture_for_execution(EXECUTION);
+    let inspect = |claim| {
+        crate::agents::runtime::NativeAgentAssembler::inspect_checkpoint(
+            &assembler,
+            &request,
+            &binding,
+            test_session_authority_for_claim(EXECUTION, GENERATION, claim),
+            Arc::new(TestStateWriterLease::current()),
+        )
+    };
+    // Claim 1 activates the root session writer row (no checkpoint yet).
+    let first = inspect(1).await.err().expect("no checkpoint to inspect");
+    assert!(!crate::agents::session::is_transient_inspect_failure(
+        &first
+    ));
+    let mut holder = db.pool.begin().await.expect("lock holder");
+    let held = sqlx::query("SELECT 1 FROM elitea_runtime.agent_session_writers FOR UPDATE")
+        .fetch_all(&mut *holder)
+        .await
+        .expect("hold the writer row");
+    assert!(!held.is_empty());
+    let error = inspect(2)
+        .await
+        .err()
+        .expect("the held row blocks the activation");
+    assert!(
+        crate::agents::session::is_transient_inspect_failure(&error),
+        "{error} {:?}",
+        error
+            .cause()
+            .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code)
+    );
+    holder.rollback().await.expect("release the row");
+    db.pool.close().await;
+}

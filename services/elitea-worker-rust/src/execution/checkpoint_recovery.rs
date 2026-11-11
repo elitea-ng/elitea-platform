@@ -150,6 +150,19 @@ where
             .await
         {
             Ok(Ok(evidence)) => evidence,
+            // D-6 (C2): a transient read failure is not a refusal. The
+            // delivery is kept and reclaimed again, bounded by the command's
+            // deadline (`agent_preparation.rs` `check_checkpoint_deadline`
+            // runs before every inspect); one line per window reports it.
+            Ok(Err(error)) if crate::agents::session::is_transient_inspect_failure(&error) => {
+                return retain(
+                    lease,
+                    kind,
+                    elitea_faults::codes::PIPELINE_RECOVERY_INSPECT_TRANSIENT.as_str(),
+                    true,
+                )
+                .await;
+            }
             Ok(Err(error)) => {
                 return self
                     .terminal(AgentFailureTerminal {

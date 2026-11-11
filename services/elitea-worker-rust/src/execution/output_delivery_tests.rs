@@ -7998,3 +7998,148 @@ fn progress_fault_codes_match_the_legacy_code_strings() {
         assert_eq!(error.fault_retryable(), Some(error.retryable()));
     }
 }
+
+/// FU-323a D-6 (C2): an inspect that fails with a scripted error.
+struct FailingInspectLifecycle {
+    trace: Arc<Mutex<Vec<&'static str>>>,
+    transient: bool,
+}
+
+impl AuthorizedAgentLifecycle for FailingInspectLifecycle {
+    fn inspect_checkpoint<'a>(
+        &'a self,
+        _: &'a crate::agents::AgentExecutionRequest,
+        _: &'a crate::agents::session::AuthorizedNativeCommandBinding,
+        _: crate::protocol::control::ClaimBoundSessionAuthority,
+        _: Arc<dyn crate::state::StateWriterLease>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crate::agents::session::ValidatedModelCheckpoint,
+                        crate::agents::runtime::NativeAgentAssemblyError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            self.trace.lock().expect("trace").push("checkpoint_inspect");
+            let error = NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::DependencyUnavailable,
+                "the scripted inspect read failed",
+            );
+            Err(if self.transient {
+                error.with_cause(
+                    elitea_faults::codes::PIPELINE_RECOVERY_INSPECT_TRANSIENT.as_str(),
+                    None,
+                )
+            } else {
+                error
+            })
+        })
+    }
+
+    fn run(
+        &self,
+        _run: super::agent_preparation::AuthorizedAgentRun,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = AgentAuthorizedLifecycleCompletion> + Send + 'static>,
+    > {
+        panic!("a failed inspect never runs the lifecycle");
+    }
+}
+
+/// FU-323a T9 (C2): a reclaim whose inspect hit a transient `PostgreSQL`
+/// failure keeps the delivery (no terminal published, nothing retired, so
+/// it is redelivered); any other dependency failure still ends typed.
+#[tokio::test]
+async fn a_transient_inspect_failure_keeps_the_checkpoint_delivery_for_the_next_reclaim() {
+    for transient in [true, false] {
+        let trace = Arc::new(Mutex::new(Vec::new()));
+        let (_temporary, output_root) = root();
+        let output = preflight(output_root.clone(), "worker-1");
+        let control = Arc::new(
+            AgentControlClient::new(
+                RecoveryControl {
+                    trace: trace.clone(),
+                    claim_fixture: "checkpoint",
+                    settlement_fails: false,
+                    authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
+                    authorize_unavailable: false,
+                    renew_fail_after: None,
+                    renew_fail_switch: None,
+                    renew_attempts: AtomicUsize::new(0),
+                    wrap_up: false,
+                    observe_states: Mutex::new(VecDeque::new()),
+                },
+                ControlGrpcConfig {
+                    deadline: Duration::from_secs(1),
+                    workload_session_id: "workload-1".to_owned(),
+                    producer_id: "worker-1".to_owned(),
+                },
+            )
+            .expect("control"),
+        );
+        let admission = InvocationAdmission::new(
+            InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("admission"),
+        );
+        let retirer = Arc::new(recovery_retirer(trace.clone(), Ok(())));
+        let state = FakeProgressState::new([], [ReplayProgressAction::Acknowledge]);
+        let replay = Arc::new(FakeProgressConnector {
+            state: state.clone(),
+        });
+        let lifecycle = Arc::new(FailingInspectLifecycle {
+            trace: trace.clone(),
+            transient,
+        });
+        let clock = Arc::new(|| NOW);
+        let coordinator = super::agent_coordinator::AgentInvocationCoordinator::new(
+            admission.clone(),
+            control.clone(),
+            retirer.clone(),
+            replay.clone(),
+            clock.clone(),
+            recovery_config(1),
+            lifecycle,
+        );
+        let processor = super::agent_delivery_processor::AgentDeliveryProcessor::new(
+            Arc::new(TestOnlyConformanceHmacAuthenticator),
+            output,
+            control,
+            retirer,
+            replay,
+            Arc::new(ValidAgentInput {
+                trace: trace.clone(),
+            }),
+            clock,
+            admission.clone(),
+            AgentPreparationConfig::new(Duration::from_secs(10)).expect("preparation"),
+            recovery_config(1),
+            coordinator,
+        )
+        .with_checkpoint_recovery(true);
+        let raw = bytes("signed_command");
+        let verified =
+            parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
+                .expect("verified");
+        processor
+            .process_verified_delivery(bus_delivery(raw), verified)
+            .await;
+        processor.close().await.expect("drain");
+        let events = trace.lock().expect("trace");
+        assert!(events.contains(&"checkpoint_inspect"), "{events:?}");
+        assert_eq!(
+            events.contains(&"settlement"),
+            !transient,
+            "transient {transient}: {events:?}"
+        );
+        assert_eq!(
+            events.contains(&"retire"),
+            !transient,
+            "transient {transient}: {events:?}"
+        );
+        assert!(!events.contains(&"authorized"), "{events:?}");
+        assert_eq!(admission.available_capacity(), 1);
+    }
+}

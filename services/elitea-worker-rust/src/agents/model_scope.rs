@@ -53,6 +53,12 @@ impl Toolset for ReadOnlyRecordingToolset {
 
 const COMPLETION_KEY: &str = "elitea.model.completion.v1";
 
+/// Marks an answer served from the Agent's completion receipt (round 1 #3):
+/// its original was already forwarded when it was persisted, so the parent
+/// never forwards this copy again (`application_tools.rs` `drain_child`).
+/// In-process only: the copy is never appended to a session.
+pub(super) const COMPLETION_REPLAY_METADATA_KEY: &str = "elitea.model.completion_replayed.v1";
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ModelCompletion {
@@ -227,15 +233,30 @@ impl ModelScopeSessions {
     }
 
     fn identity(&self, context: &dyn ReadonlyContext) -> adk_rust::Result<AdkIdentity> {
-        let mut identity = context.try_identity()?;
+        self.scoped_identity(
+            context.try_identity()?,
+            context.session_id(),
+            context.agent_name(),
+        )
+    }
+
+    /// The model-scope session of agent `agent_name` running in child session
+    /// `session_id`, under `identity`'s app and user: the one derivation both
+    /// a running child and the FU-323a inspect step use.
+    fn scoped_identity(
+        &self,
+        mut identity: AdkIdentity,
+        session_id: &str,
+        agent_name: &str,
+    ) -> adk_rust::Result<AdkIdentity> {
         // Existing child session identity already contains parent, call, and
         // saved version identity. Separate executions even if a provider reuses a call ID.
         let source = serde_json::to_string(&(
             "elitea.model.scope.v1",
             &self.execution_id,
             self.generation,
-            context.session_id(),
-            context.agent_name(),
+            session_id,
+            agent_name,
         ))
         .map_err(|_| invalid_scope())?;
         let source = if let Some(node_scope) = &self.node_scope {
@@ -279,6 +300,118 @@ impl ModelScopeSessions {
     }
 }
 
+/// FU-323a: what a root saved-Agent node's own model scope proves about where
+/// that Agent stopped. Read by the inspect step before assembly, without a
+/// model, a tool or a Runner (`session_agent_frontier.rs`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum AgentScopeState {
+    /// No model step was persisted: no session, or a session created right
+    /// before its first checkpoint write, with no event. Nothing was sent.
+    Absent,
+    /// An unfinished model step of this execution, which restore re-issues
+    /// once: the digest of its validated checkpoint.
+    Restorable([u8; 32]),
+    /// The Agent's final answer is persisted with its completion receipt: the
+    /// receipt's event id. It is served without a model call.
+    Answered(String),
+    /// A tool crossed its boundary without a receipt: never repeated.
+    MayHaveStarted,
+    /// Anything that cannot prove an unfinished step.
+    Refused(AgentScopeRefusal),
+}
+
+/// Why an Agent's model scope cannot prove where it stopped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AgentScopeRefusal {
+    /// The checkpoint or completion receipt does not validate for this
+    /// execution, generation and definition.
+    Invalid,
+    /// The checkpoint names another execution.
+    ForeignExecution,
+    /// The session holds events but no checkpoint.
+    SessionWithoutCheckpoint,
+}
+
+impl ModelScopeSessions {
+    /// Classify the model scope of agent `agent_name` in child session
+    /// `child_session`, under `base`'s app and user (FU-323a, read only).
+    ///
+    /// The reads go through the claim-fenced session service: the scope's
+    /// writer row is activated for this claim (as the run itself does first),
+    /// so a stale claim's write after this point fails `writer_not_current`.
+    /// `Err` is a storage failure only; its code keeps whether it is transient
+    /// (`session.storage_unavailable`).
+    pub(super) async fn inspect_agent_scope(
+        &self,
+        base: AdkIdentity,
+        child_session: &str,
+        agent_name: &str,
+        allow_context_preparation: bool,
+    ) -> Result<AgentScopeState, AdkError> {
+        let identity = self.scoped_identity(base, child_session, agent_name)?;
+        let sessions: Arc<dyn SessionService> = Arc::new(
+            super::session::RunnerSessionService::new(self.sessions.open(&identity).await?, None)
+                .with_history_scope(self.definition_digest, agent_name),
+        );
+        let session = match sessions
+            .get(GetRequest {
+                app_name: identity.app_name.to_string(),
+                user_id: identity.user_id.to_string(),
+                session_id: identity.session_id.to_string(),
+                num_recent_events: None,
+                after: None,
+            })
+            .await
+        {
+            Ok(session) => session,
+            Err(error) if error.code == "session.not_found" => return Ok(AgentScopeState::Absent),
+            Err(error) => return Err(error),
+        };
+        match completed_answer(self, session.as_ref(), agent_name) {
+            Ok(Some((event_id, _))) => return Ok(AgentScopeState::Answered(event_id)),
+            Ok(None) => {}
+            Err(_) => return Ok(AgentScopeState::Refused(AgentScopeRefusal::Invalid)),
+        }
+        let Some(value) = session.state().get(super::model_checkpoint::CHECKPOINT_KEY) else {
+            return Ok(if session.events().is_empty() {
+                AgentScopeState::Absent
+            } else {
+                AgentScopeState::Refused(AgentScopeRefusal::SessionWithoutCheckpoint)
+            });
+        };
+        if value
+            .get("execution_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(self.execution_id.as_str())
+        {
+            return Ok(AgentScopeState::Refused(
+                AgentScopeRefusal::ForeignExecution,
+            ));
+        }
+        // The restore's own predicate (round 1 #2): a context-preparation
+        // step is restorable only where the Agent compacts, which the run's
+        // admitted context plan decides for the crash and the reclaim alike.
+        Ok(
+            match ModelCheckpointWriter::new(
+                sessions,
+                self.execution_id.clone(),
+                self.generation,
+                self.definition_digest,
+            )
+            .inspect(session.as_ref(), allow_context_preparation)
+            {
+                Ok(Some(validated)) => AgentScopeState::Restorable(validated.digest()),
+                Err(error)
+                    if error.code == crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE =>
+                {
+                    AgentScopeState::MayHaveStarted
+                }
+                Ok(None) | Err(_) => AgentScopeState::Refused(AgentScopeRefusal::Invalid),
+            },
+        )
+    }
+}
+
 /// One instance per child invocation. Repeated calls do not share mutable state.
 pub(super) struct ScopedModelCheckpoint {
     storage: ModelScopeSessions,
@@ -312,53 +445,67 @@ impl ScopedModelCheckpoint {
         session: &dyn adk_rust::session::Session,
         agent_name: &str,
     ) -> adk_rust::Result<Option<Content>> {
-        let Some(value) = session.state().get(COMPLETION_KEY) else {
-            return Ok(None);
-        };
-        let receipt: ModelCompletion =
-            serde_json::from_value(value.clone()).map_err(|_| invalid_scope())?;
-        if receipt.version != 1
-            || receipt.execution_id != self.storage.execution_id
-            || receipt.generation != self.storage.generation
-            || receipt.definition_digest != self.storage.definition_digest
-            || receipt.agent_name != agent_name
-        {
-            return Err(invalid_scope());
-        }
-        let events = session.events().all();
-        let index = events
-            .iter()
-            .rposition(|event| {
-                event.id == receipt.event_id
-                    && event.invocation_id == receipt.invocation_id
-                    && event.actions.state_delta.get(COMPLETION_KEY) == Some(&value)
-            })
-            .ok_or_else(invalid_scope)?;
-        // A later request supersedes this receipt. It must recover its own boundary.
-        if events[index + 1..].iter().any(|event| {
-            event
-                .actions
-                .state_delta
-                .contains_key(super::model_checkpoint::CHECKPOINT_KEY)
-                || event.llm_response.content.is_some()
-        }) {
-            return Ok(None);
-        }
-        let event = &events[index];
-        if !successful_terminal(event, agent_name) {
-            return Err(invalid_scope());
-        }
-        let content = event
-            .llm_response
-            .content
-            .as_ref()
-            .ok_or_else(invalid_scope)?;
-        if content.role != "model" || content.parts.is_empty() {
-            return Err(invalid_scope());
-        }
-        Ok(Some(content.clone()))
+        completed_answer(&self.storage, session, agent_name)
+            .map(|answer| answer.map(|(_, content)| content))
     }
+}
 
+/// The completion receipt's event id and answer, when `session` holds a valid
+/// one no later request supersedes; a receipt of another execution, version or
+/// agent is refused.
+fn completed_answer(
+    storage: &ModelScopeSessions,
+    session: &dyn adk_rust::session::Session,
+    agent_name: &str,
+) -> adk_rust::Result<Option<(String, Content)>> {
+    let Some(value) = session.state().get(COMPLETION_KEY) else {
+        return Ok(None);
+    };
+    let receipt: ModelCompletion =
+        serde_json::from_value(value.clone()).map_err(|_| invalid_scope())?;
+    if receipt.version != 1
+        || receipt.execution_id != storage.execution_id
+        || receipt.generation != storage.generation
+        || receipt.definition_digest != storage.definition_digest
+        || receipt.agent_name != agent_name
+    {
+        return Err(invalid_scope());
+    }
+    let events = session.events().all();
+    let index = events
+        .iter()
+        .rposition(|event| {
+            event.id == receipt.event_id
+                && event.invocation_id == receipt.invocation_id
+                && event.actions.state_delta.get(COMPLETION_KEY) == Some(&value)
+        })
+        .ok_or_else(invalid_scope)?;
+    // A later request supersedes this receipt. It must recover its own boundary.
+    if events[index + 1..].iter().any(|event| {
+        event
+            .actions
+            .state_delta
+            .contains_key(super::model_checkpoint::CHECKPOINT_KEY)
+            || event.llm_response.content.is_some()
+    }) {
+        return Ok(None);
+    }
+    let event = &events[index];
+    if !successful_terminal(event, agent_name) {
+        return Err(invalid_scope());
+    }
+    let content = event
+        .llm_response
+        .content
+        .as_ref()
+        .ok_or_else(invalid_scope)?;
+    if content.role != "model" || content.parts.is_empty() {
+        return Err(invalid_scope());
+    }
+    Ok(Some((event.id.clone(), content.clone())))
+}
+
+impl ScopedModelCheckpoint {
     async fn completed_event(
         &self,
         context: &dyn ReadonlyContext,
@@ -371,6 +518,9 @@ impl ScopedModelCheckpoint {
             context.branch().clone_into(&mut event.branch);
             event.set_content(content.clone());
             event.llm_response.turn_complete = true;
+            event
+                .provider_metadata
+                .insert(COMPLETION_REPLAY_METADATA_KEY.to_owned(), "1".to_owned());
             event
         }))
     }
