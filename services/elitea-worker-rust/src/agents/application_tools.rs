@@ -3348,7 +3348,7 @@ async fn materialize_pipeline_children(
             dependencies.materialization.clone(),
         )
         .await;
-        let (definition, runtimes, child_tools, delegation) = match built {
+        let (definition, runtimes, child_tools, delegation, definition_sha256) = match built {
             Ok(Ok(built)) => built,
             // ADR-0044 decision 3: offered, and its call answers the refusal.
             Ok(Err(refused)) => {
@@ -3406,6 +3406,7 @@ async fn materialize_pipeline_children(
                 event_sender: dependencies.event_sender.clone(),
                 resume: dependencies.resume.clone(),
             },
+            definition_sha256,
         ));
         tools.push(MaterializedApplicationTool {
             alias: reference.alias,

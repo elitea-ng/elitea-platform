@@ -60,6 +60,10 @@ const (
 	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
 	// A checkpoint reclaim met a root Agent node running a saved Agent, which cannot resume yet, so the run ended typed and nothing after that node ran.
 	PipelineRecoverySavedAgentFrontier Code = "pipeline.recovery.saved_agent_frontier"
+	// A Map item or Parallel branch was interrupted inside a saved pipeline its Agent called, and that pipeline was edited before the run resumed, so the call was not continued and nothing in it ran again.
+	PipelineRecoveryToolPipelineDefinitionChanged Code = "pipeline.recovery.tool_pipeline_definition_changed"
+	// A saved pipeline called by an Agent in a Map item or Parallel branch had no recorded version digest, so it could not be proven unchanged and was not run.
+	PipelineRecoveryToolPipelineDefinitionUnproven Code = "pipeline.recovery.tool_pipeline_definition_unproven"
 	// A Code node sits in a saved pipeline that another saved pipeline runs, so the pipeline was refused before it started: Code runs only in a saved pipeline the started pipeline runs directly, for now.
 	PipelineSavedCodeNested Code = "pipeline.saved_code.nested"
 	// A conversation an older Worker paused continues on the unscoped resolver, where a saved pipeline's Code run as a Map worker or Parallel branch has no owner scope, so the pipeline was refused before it started.

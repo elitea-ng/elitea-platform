@@ -240,9 +240,18 @@ impl crate::transport::input_content::content_fake::ContextRoutes for SavedAgent
             .as_ref()
             .filter(|_| call.route.ends_with("/5/versions/6"))
         {
+            // FU-338: Main's digest covers the version's whole content, so an
+            // edit of any field (nodes, tools, `llm_settings`) changes it.
+            let digest = <sha2::Sha256 as sha2::Digest>::digest(
+                serde_json::to_vec(second).expect("second version bytes"),
+            );
             json!({"schema_version":"elitea.runtime.application-version.v1","project_id":17,
-                "application_id":5,"version_id":6,"version_details":second,
-                "frozen_definition_sha256":"cd".repeat(32)})
+            "application_id":5,"version_id":6,"version_details":second,
+            "frozen_definition_sha256":digest.iter().fold(String::new(), |mut hex, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            })})
         } else if let Some(third) = self
             .third
             .as_ref()
@@ -7130,7 +7139,10 @@ const TOOL_PIPELINE_SHAPE_ENV: &str = "ELITEA_FU291_PG_SHAPE";
 /// - `direct_started`: inside the nested direct toolkit node's call, once its
 ///   journal's Started record is durable (T1e);
 /// - `takeover`: as `nested_llm`; the recovery's claim is superseded between
-///   its inspect and its assembly, and a newer claim completes (T2).
+///   its inspect and its assembly, and a newer claim completes (T2);
+/// - `edited` / `edited_settings` / `completed_edited`: as `nested_llm` /
+///   `nested_llm` / `completed`; the reclaim is served the edited pipeline
+///   (FU-338, `recovered_helper`).
 const TOOL_PIPELINE_MODE_ENV: &str = "ELITEA_FU291_PG_MODE";
 const NESTED_SYSTEM: &str = "Answer the topic you are given.";
 
@@ -7173,6 +7185,43 @@ fn helper_for_mode(mode: &str) -> Value {
         "llm_tool_effect" | "llm_tool_read" => helper_tool_pipeline(),
         "direct_started" => direct_effect_pipeline(),
         _ => helper_pipeline(),
+    }
+}
+
+/// FU-338: the kill a definition-edit mode reproduces before the edit:
+/// `edited` / `edited_settings` die inside the nested LLM node,
+/// `completed_edited` after the nested pipeline finished.
+fn crash_mode(mode: &str) -> &str {
+    match mode {
+        "edited" | "edited_settings" => "nested_llm",
+        "completed_edited" => "completed",
+        other => other,
+    }
+}
+
+const EDITED_SYSTEM: &str = "Answer the edited topic.";
+
+/// FU-338: what the platform serves the reclaim. `edited` and
+/// `completed_edited` changed the nested pipeline's node; `edited_settings`
+/// changed only its `llm_settings`. Each edit is a new Main digest.
+fn recovered_helper(mode: &str) -> Value {
+    match mode {
+        "edited" | "completed_edited" => {
+            let mut pipeline = helper_pipeline();
+            pipeline["instructions"] = json!(
+                pipeline["instructions"]
+                    .as_str()
+                    .expect("instructions")
+                    .replace(NESTED_SYSTEM, EDITED_SYSTEM)
+            );
+            pipeline
+        }
+        "edited_settings" => {
+            let mut pipeline = helper_pipeline();
+            pipeline["llm_settings"]["temperature"] = json!(0.7);
+            pipeline
+        }
+        other => helper_for_mode(other),
     }
 }
 
@@ -7342,7 +7391,10 @@ fn crash_plan(
 /// leaves the Agent a typed failure to report, routed by its topic.
 fn recovery_plan(mode: &str, topics: &[String]) -> Vec<TestModelGatewayOutcome> {
     let mut outcomes = Vec::new();
-    if matches!(mode, "llm_tool_effect" | "direct_started") {
+    if matches!(
+        mode,
+        "llm_tool_effect" | "direct_started" | "edited" | "edited_settings" | "completed_edited"
+    ) {
         for topic in topics {
             outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
                 marker: topic_marker(topic),
@@ -7369,7 +7421,7 @@ fn recovery_plan(mode: &str, topics: &[String]) -> Vec<TestModelGatewayOutcome> 
         }
         return outcomes;
     }
-    if mode != "completed" {
+    if crash_mode(mode) != "completed" {
         for topic in topics {
             outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
                 marker: nested_marker(topic),
@@ -7525,8 +7577,9 @@ async fn postgres_member_pipeline_tool_child() {
     config.response_header_timeout = Duration::from_secs(60);
     let read_only = mode == "llm_tool_read";
     if std::env::var(PHASE_ENV).expect("phase") == "crash" {
+        let mode = crash_mode(&mode);
         let outcomes = crash_plan(
-            &mode,
+            mode,
             &shape,
             &topics,
             &pool,
@@ -7535,7 +7588,7 @@ async fn postgres_member_pipeline_tool_child() {
         let runtime = saved_runtime_on(
             outcomes,
             pipeline_delegating_agent(),
-            Some(helper_for_mode(&mode)),
+            Some(helper_for_mode(mode)),
             None,
             config,
         );
@@ -7557,7 +7610,7 @@ async fn postgres_member_pipeline_tool_child() {
     let runtime = saved_runtime_on(
         recovery_plan(&mode, &topics),
         pipeline_delegating_agent(),
-        Some(helper_for_mode(&mode)),
+        Some(recovered_helper(&mode)),
         None,
         config,
     );
@@ -7601,10 +7654,33 @@ async fn postgres_member_pipeline_tool_child() {
             for topic in &topics {
                 let mine = mine(topic);
                 assert_eq!(mine.len(), 1, "recover: {topic}");
-                assert!(!mine[0].contains(NESTED_SYSTEM), "recover: no nested run");
+                assert!(
+                    !mine[0].contains(NESTED_SYSTEM) && !mine[0].contains(EDITED_SYSTEM),
+                    "recover: no nested run"
+                );
                 assert!(
                     mine[0].contains(&format!("nested answer for {topic}")),
                     "recover: the Agent reads the stored result"
+                );
+            }
+        }
+        // FU-338 (a)/(b)/(c): the nested thread's pipeline changed after the
+        // kill (its node, or only its `llm_settings`), whether the thread was
+        // pending or had finished: refused typed before any nested work; no
+        // nested model call, and the Agent reads the registered refusal.
+        "edited" | "edited_settings" | "completed_edited" => {
+            assert_eq!(bodies.len(), topics.len(), "recover: {bodies:?}");
+            for topic in &topics {
+                let mine = mine(topic);
+                assert_eq!(mine.len(), 1, "recover: {topic}");
+                assert!(
+                    !mine[0].contains(NESTED_SYSTEM) && !mine[0].contains(EDITED_SYSTEM),
+                    "recover: no nested model call"
+                );
+                assert!(
+                    mine[0].contains("pipeline.recovery.tool_pipeline_definition_changed"),
+                    "recover: the Agent reads the typed refusal: {}",
+                    mine[0]
                 );
             }
         }
@@ -7762,7 +7838,7 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str, mode: &str) {
         "each killed call's nested thread was admitted before its first effect"
     );
     assert_eq!(
-        crashed_frontier(&db.pool, mode).await,
+        crashed_frontier(&db.pool, crash_mode(mode)).await,
         if shape == "map8" { 1 } else { in_flight },
         "each nested thread inside its pipeline has a durable frontier"
     );
@@ -7804,7 +7880,12 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str, mode: &str) {
         crashed.iter().all(|thread| recovered.contains(thread)),
         "the same nested threads before and after the kill: {crashed:?} {recovered:?}"
     );
-    if mode == "completed" {
+    // C3, and FU-338: a completed nested thread, or a pending one whose
+    // pipeline changed, is never written.
+    if matches!(
+        mode,
+        "completed" | "completed_edited" | "edited" | "edited_settings"
+    ) {
         let after = sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
              WHERE thread_id LIKE '%/pt1:%'",
@@ -7812,10 +7893,7 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str, mode: &str) {
         .fetch_one(&db.pool)
         .await
         .expect("nested rows");
-        assert_eq!(
-            after, nested_rows,
-            "a completed nested thread is never written"
-        );
+        assert_eq!(after, nested_rows, "the nested thread is never written");
     }
     if mode == "takeover" {
         let owners = sqlx::query_scalar::<_, String>(
@@ -7898,6 +7976,34 @@ member_pipeline_tool_kill_test!(
     postgres_parallel_branches_killed_after_their_pipeline_tools_finished_read_the_stored_results,
     "parallel",
     "completed"
+);
+member_pipeline_tool_kill_test!(
+    /// FU-338 (a): the nested pipeline was edited between the kill and the
+    /// reclaim (Main serves the new content and digest): the pending nested
+    /// thread's re-entry is refused typed; no nested model call, no nested row.
+    postgres_a_map_item_whose_pipeline_tool_was_edited_after_the_kill_is_refused_typed,
+    "map",
+    "edited"
+);
+member_pipeline_tool_kill_test!(
+    postgres_parallel_branches_whose_pipeline_tools_were_edited_after_the_kill_are_refused_typed,
+    "parallel",
+    "edited"
+);
+member_pipeline_tool_kill_test!(
+    /// FU-338 (b): only the nested pipeline's `llm_settings` changed: refused too.
+    postgres_a_map_item_whose_pipeline_tool_settings_changed_after_the_kill_is_refused_typed,
+    "map",
+    "edited_settings"
+);
+member_pipeline_tool_kill_test!(
+    /// FU-338 (c): the nested pipeline finished before the kill and was edited
+    /// later: its stored result was projected by the old definition, so it is
+    /// refused typed too; nothing nested runs or is written. Unchanged, the
+    /// stored result is served (`…killed_after_…_reads_the_stored_result`).
+    postgres_a_map_item_whose_finished_pipeline_tool_was_edited_later_is_refused_typed,
+    "map",
+    "completed_edited"
 );
 member_pipeline_tool_kill_test!(
     /// T1d: killed inside the nested LLM node's effectful tool: F, the call is

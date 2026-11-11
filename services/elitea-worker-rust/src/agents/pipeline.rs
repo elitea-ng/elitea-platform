@@ -2224,7 +2224,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
         materialization,
         node_recovery: None,
     };
-    let (definition, bound) = match admit_saved_pipeline_child(
+    let (definition, bound, definition_sha256) = match admit_saved_pipeline_child(
         platform,
         runtime_context,
         &runtime,
@@ -2330,6 +2330,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
         bound.runtimes,
         bound.presentations,
         bound.delegation,
+        definition_sha256,
     )))
 }
 
@@ -2489,6 +2490,8 @@ pub(super) type SavedPipelineTool = Result<
         PipelineNodeRuntimes,
         ApplicationToolPresentationCatalog,
         Option<DelegationEvidence>,
+        // FU-338: Main's frozen definition digest of the version, when served.
+        Option<[u8; 32]>,
     ),
     RefusedDelegation,
 >;
@@ -2508,7 +2511,7 @@ async fn admit_saved_pipeline_child(
     identity: (u64, u64),
     project_id: Option<u64>,
 ) -> Result<
-    Result<(PipelineDefinition, BoundSavedPipeline), RefusedDelegation>,
+    Result<(PipelineDefinition, BoundSavedPipeline, Option<[u8; 32]>), RefusedDelegation>,
     NativeAgentAssemblyError,
 > {
     let admitted = composition::admit_tool_composition(
@@ -2533,7 +2536,11 @@ async fn admit_saved_pipeline_child(
         return Ok(Err(refused));
     }
     let bound = bind_admitted_saved_pipeline(admitted.as_ref(), runtime, String::new()).await?;
-    Ok(Ok((admitted.profile.definition().clone(), bound)))
+    Ok(Ok((
+        admitted.profile.definition().clone(),
+        bound,
+        admitted.frozen_definition_sha256,
+    )))
 }
 
 /// Bind the invocation-owned node runtimes of one saved pipeline participant.

@@ -12,6 +12,9 @@
       saved child's do: a call that never started runs once; one that may have started ends typed and is never
       repeated.
     - A member's 9th pipeline call is answered to its Agent as a tool error naming the limit; nothing runs.
+    - If the pipeline is edited while such a call is interrupted (running or already finished), the call is neither
+      resumed nor answered: its Agent reads `pipeline.recovery.tool_pipeline_definition_changed` and nothing in the
+      call runs again (FU-338).
     - If the Agent calls the pipeline again after a typed failure, the new call is a new call: it runs on a new
       thread, and the pipeline's effects may run again. This is today's behaviour for an Agent's tools (FU-291 D6).
   - **Still refused, readably, before the run starts**, with the new code `graph.fanout.agent_tool_pipeline_unsupported`

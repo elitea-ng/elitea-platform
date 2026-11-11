@@ -1188,6 +1188,47 @@ fn tool_thread_unavailable() -> adk_rust::AdkError {
     )
 }
 
+/// FU-338: whether a nested thread stamped `stamp` may run the definition
+/// Main digests as `current`: the registered refusal code when it may not.
+fn definition_refusal(
+    stamp: Option<[u8; 32]>,
+    current: Option<[u8; 32]>,
+) -> Option<elitea_faults::Code> {
+    match (stamp, current) {
+        (Some(stamp), Some(current)) if stamp == current => None,
+        (Some(_), Some(_)) => {
+            Some(elitea_faults::codes::PIPELINE_RECOVERY_TOOL_PIPELINE_DEFINITION_CHANGED)
+        }
+        _ => Some(elitea_faults::codes::PIPELINE_RECOVERY_TOOL_PIPELINE_DEFINITION_UNPROVEN),
+    }
+}
+
+/// FU-338: the refused nested pipeline call, answered to the model as a tool
+/// error naming its registered code. Nothing of the call ran again.
+fn tool_definition_refusal_result(tool_name: &str, code: elitea_faults::Code) -> Value {
+    let changed = code.as_str()
+        == elitea_faults::codes::PIPELINE_RECOVERY_TOOL_PIPELINE_DEFINITION_CHANGED.as_str();
+    let message = if changed {
+        format!(
+            "The pipeline '{tool_name}' was not continued: it was edited after this call started, so the interrupted call cannot resume or answer on it. Nothing was repeated; earlier steps of that call may have had effects."
+        )
+    } else {
+        format!(
+            "The pipeline '{tool_name}' was not run: its saved version could not be proven unchanged for this call. Nothing was repeated."
+        )
+    };
+    json!({
+        "error": message,
+        "failure": {
+            "code": code.as_str(),
+            "message": message,
+            "recoverable": changed,
+            "retryable": false,
+            "recovery_action": if changed { "revise_task" } else { "ask_administrator" },
+        }
+    })
+}
+
 /// D3: the member's nested pipeline bound, answered to the model as a tool
 /// error naming the limit it reached (review 5: the per-member calls or the
 /// member's shared thread total).
@@ -1234,6 +1275,11 @@ pub(super) struct ApplicationPipelineTool {
     conversation_thread_id: String,
     event_sender: Option<ApplicationEventSender>,
     resume: Option<ApplicationResumeCoordinator>,
+    /// FU-338: Main's frozen definition digest of this saved pipeline version
+    /// (its nodes, tools, `llm_settings` and toolkit references as the run uses
+    /// them), when Main served one. A fan-out member's nested thread stamps it
+    /// at its first admission and is re-entered only under the same digest.
+    definition_sha256: Option<[u8; 32]>,
 }
 
 /// What one pipeline child needs from the parent that calls it.
@@ -1253,6 +1299,7 @@ impl ApplicationPipelineTool {
         runtimes: PipelineNodeRuntimes,
         node_events: PipelineNodeEventReceiver,
         parent: PipelineToolParentBinding,
+        definition_sha256: Option<[u8; 32]>,
     ) -> Self {
         Self {
             name,
@@ -1263,6 +1310,7 @@ impl ApplicationPipelineTool {
             conversation_thread_id: parent.conversation_thread_id,
             event_sender: parent.event_sender,
             resume: parent.resume,
+            definition_sha256,
         }
     }
 }
@@ -1476,7 +1524,9 @@ impl ApplicationPipelineTool {
         loop {
             attempt += 1;
             let read = async {
-                let admitted = admission.admit_tool_pipeline(agent_thread, lineage).await?;
+                let admitted = admission
+                    .admit_tool_pipeline(agent_thread, lineage, self.definition_sha256)
+                    .await?;
                 let latest = admitted.writer.load(&admitted.thread_id).await?;
                 Ok::<_, adk_rust::graph::GraphError>((admitted, latest))
             }
@@ -1561,6 +1611,21 @@ impl ApplicationPipelineTool {
             Err(refused) => return Ok(refused),
         };
         tracing::Span::current().record("resumed", latest.is_some());
+        // FU-338: a thread runs, and a finished thread answers, only under the
+        // definition its first admission stamped: compared before any nested
+        // work and before a stored result is projected (the projection is the
+        // definition's result policy, so only the same definition reproduces
+        // the uninterrupted call's answer byte for byte).
+        if let Some(code) = definition_refusal(admitted.definition_sha256, self.definition_sha256) {
+            elitea_faults::fault!(
+                tracing::Level::WARN,
+                code = code,
+                event = "nested_pipeline_definition_refused",
+                function_call_id = %ctx.function_call_id(),
+                resumed = latest.is_some()
+            );
+            return Ok(tool_definition_refusal_result(&self.name, code));
+        }
         if let Some(finished) = latest.as_ref().filter(|row| row.pending_nodes.is_empty()) {
             // C3: receipt before repeat.
             let text = self.definition.completed_text(&finished.state);

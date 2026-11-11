@@ -316,6 +316,9 @@ fn harness_named(yaml: &str, tool_name: &str) -> Harness {
     harness_with_runtimes(yaml, tool_name, PipelineNodeRuntimes::default())
 }
 
+/// Main's frozen definition digest the harness's pipeline was served with.
+const HARNESS_DEFINITION: [u8; 32] = [0x5d; 32];
+
 fn harness_with_runtimes(yaml: &str, tool_name: &str, runtimes: PipelineNodeRuntimes) -> Harness {
     let definition = PipelineDefinition::from_yaml(yaml).expect("pipeline definition");
     let (node_sender, node_receiver) = pipeline_node_event_channel();
@@ -333,6 +336,7 @@ fn harness_with_runtimes(yaml: &str, tool_name: &str, runtimes: PipelineNodeRunt
             event_sender: Some(sender),
             resume: Some(resume.clone()),
         },
+        Some(HARNESS_DEFINITION),
     );
     Harness {
         tool,
@@ -1770,7 +1774,14 @@ mod durable_member_calls {
         /// What the first `transient` admissions fail with.
         failure: &'static str,
         limit: bool,
+        /// FU-338: the stamp the ledger holds for the thread, when set;
+        /// otherwise the admission stamps the digest it is given.
+        stamp: std::sync::Mutex<Option<Held>>,
     }
+
+    /// The stamp a ledger holds: a digest, or none.
+    #[derive(Clone, Copy)]
+    struct Held(Option<[u8; 32]>);
 
     fn admission(transient: usize, limit: bool) -> Arc<Admission> {
         admission_on(2, transient, "checkpoint.storage_unavailable: held", limit)
@@ -1792,6 +1803,7 @@ mod durable_member_calls {
             transient: AtomicUsize::new(transient),
             failure,
             limit,
+            stamp: std::sync::Mutex::new(None),
         })
     }
 
@@ -1804,6 +1816,7 @@ mod durable_member_calls {
             &self,
             agent_thread: &str,
             lineage: &crate::agents::application_pipeline::PipelineToolCallLineage,
+            definition_sha256: Option<[u8; 32]>,
         ) -> Result<AdmittedToolPipeline, GraphError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if self
@@ -1821,13 +1834,18 @@ mod durable_member_calls {
                 )));
             }
             let thread_id = tool_pipeline_thread(agent_thread, lineage)?;
-            if let Some(admitted) = self.threads.admitted(&thread_id, agent_thread) {
+            let held = *self.stamp.lock().unwrap();
+            if let Some(mut admitted) = self.threads.admitted(&thread_id, agent_thread) {
+                if let Some(Held(stamp)) = held {
+                    admitted.definition_sha256 = stamp;
+                }
                 return Ok(admitted);
             }
             let admitted = AdmittedToolPipeline {
                 thread_id,
                 agent_thread: agent_thread.to_owned(),
                 writer: self.store.clone(),
+                definition_sha256: held.map_or(definition_sha256, |Held(stamp)| stamp),
             };
             self.threads.check_room()?;
             self.threads.register(admitted.clone());
@@ -1953,6 +1971,87 @@ mod durable_member_calls {
         assert_eq!(result["failure"]["retryable"], false);
         assert_eq!(admission.store.saves.load(Ordering::SeqCst), 0);
         assert!(persisted(&mut harness.events).is_empty());
+    }
+
+    /// FU-338: a nested thread whose first admission stamped another
+    /// definition (the pipeline was edited) is refused with its registered
+    /// code before any nested work: no row, no event; a thread without a
+    /// stamp is refused with its own code.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_nested_thread_stamped_for_another_definition_is_refused_before_any_nested_work() {
+        for (stamp, code, recoverable) in [
+            (
+                Some([0xed; 32]),
+                "pipeline.recovery.tool_pipeline_definition_changed",
+                true,
+            ),
+            (
+                None,
+                "pipeline.recovery.tool_pipeline_definition_unproven",
+                false,
+            ),
+        ] {
+            let mut harness = harness(PLAIN_PIPELINE);
+            harness
+                .resume
+                .observe_call_lineage(&root_call_event())
+                .await
+                .unwrap();
+            let admission = admission(0, false);
+            *admission.stamp.lock().unwrap() = Some(Held(stamp));
+            let result = call(&harness, &admission).await.unwrap();
+            assert_eq!(result["failure"]["code"], code, "{result}");
+            assert_eq!(result["failure"]["recoverable"], recoverable);
+            assert_eq!(result["failure"]["retryable"], false);
+            assert_eq!(admission.store.saves.load(Ordering::SeqCst), 0, "{code}");
+            assert!(
+                admission
+                    .store
+                    .load(&nested_thread())
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "{code}: no nested row"
+            );
+            assert!(persisted(&mut harness.events).is_empty(), "{code}");
+        }
+    }
+
+    /// FU-338: a completed nested thread whose pipeline changed is refused
+    /// typed, since its stored state was projected by the old definition;
+    /// nothing nested runs or is written. Unchanged it serves its stored result
+    /// (`a_completed_nested_thread_answers_its_stored_result_and_is_never_written`).
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_completed_nested_thread_whose_pipeline_changed_is_refused_typed() {
+        for (stamp, code) in [
+            (
+                Some([0xed; 32]),
+                "pipeline.recovery.tool_pipeline_definition_changed",
+            ),
+            (None, "pipeline.recovery.tool_pipeline_definition_unproven"),
+        ] {
+            let mut harness = harness(PLAIN_PIPELINE);
+            harness
+                .resume
+                .observe_call_lineage(&root_call_event())
+                .await
+                .unwrap();
+            let admission = admission(0, false);
+            let first = call(&harness, &admission).await.unwrap();
+            assert_eq!(first, json!({"response": "HANDLED ship it"}));
+            let saves = admission.store.saves.load(Ordering::SeqCst);
+            let rows = admission.store.list(&nested_thread()).await.unwrap().len();
+            persisted(&mut harness.events);
+            *admission.stamp.lock().unwrap() = Some(Held(stamp));
+            let again = call(&harness, &admission).await.unwrap();
+            assert_eq!(again["failure"]["code"], code, "{again}");
+            assert_eq!(admission.store.saves.load(Ordering::SeqCst), saves);
+            assert_eq!(
+                admission.store.list(&nested_thread()).await.unwrap().len(),
+                rows
+            );
+            assert!(persisted(&mut harness.events).is_empty(), "nothing re-ran");
+        }
     }
 
     /// C2/D-3: a call whose lineage was never captured from its model event
@@ -2142,6 +2241,7 @@ mod durable_member_calls {
             &self,
             _: &str,
             _: &crate::agents::application_pipeline::PipelineToolCallLineage,
+            _: Option<[u8; 32]>,
         ) -> Result<AdmittedToolPipeline, GraphError> {
             Err(GraphError::CheckpointError(
                 "checkpoint.invalid_scope: not admitted".to_owned(),

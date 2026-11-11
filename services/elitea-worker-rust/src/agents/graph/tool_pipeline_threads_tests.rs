@@ -64,6 +64,7 @@ pub(crate) fn admitted(
         thread_id: tool_pipeline_thread(agent_thread, lineage).unwrap(),
         agent_thread: agent_thread.to_owned(),
         writer: Arc::new(StubWriter(MemoryCheckpointer::new())),
+        definition_sha256: None,
     }
 }
 
@@ -298,5 +299,5 @@ fn the_nested_thread_its_visit_and_the_ledger_name_are_pinned() {
         format!("m1:member-a{TOOL_LEDGER_SEGMENT}"),
         "m1:member-a/pt1=ledger"
     );
-    assert_eq!(TOOL_LEDGER_KEY, "elitea.pipeline.tool-threads.v1");
+    assert_eq!(TOOL_LEDGER_KEY, "elitea.pipeline.tool-threads.v2");
 }

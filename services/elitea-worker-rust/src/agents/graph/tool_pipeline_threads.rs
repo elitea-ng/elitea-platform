@@ -45,8 +45,11 @@ pub(crate) const THREAD_SEGMENT: &str = "/pt1:";
 /// `<member>/pt1=ledger`. `=` is no graph-id byte and the name holds no
 /// `/pt1:`, so it is neither an admitted path nor a nested thread.
 pub(crate) const TOOL_LEDGER_SEGMENT: &str = "/pt1=ledger";
-/// The ledger row's state key: the admitted nested threads, in order.
-pub(crate) const TOOL_LEDGER_KEY: &str = "elitea.pipeline.tool-threads.v1";
+/// The ledger row's state key: the admitted nested threads, in order, each
+/// with the definition digest stamped at its first admission (FU-338).
+pub(crate) const TOOL_LEDGER_KEY: &str = "elitea.pipeline.tool-threads.v2";
+/// The FU-291 ledger key, before the stamp: a row holding it is refused.
+pub(crate) const TOOL_LEDGER_KEY_UNSTAMPED: &str = "elitea.pipeline.tool-threads.v1";
 const MAX_RECEIPT_BYTES: usize = 4096;
 /// The stable code of a refused admission the model reads as a tool error.
 pub(crate) const TOOL_PIPELINE_LIMIT_CODE: &str = "pipeline.tool_thread_limit";
@@ -174,6 +177,10 @@ pub(crate) struct AdmittedToolPipeline {
     pub(crate) thread_id: String,
     pub(crate) agent_thread: String,
     pub(crate) writer: Arc<dyn ToolPipelineWriter>,
+    /// FU-338: Main's frozen definition digest of the saved pipeline, stamped
+    /// in the member's ledger at this thread's first admission, before its
+    /// writer existed; `None` when that admission had none.
+    pub(crate) definition_sha256: Option<[u8; 32]>,
 }
 
 /// The append-only, bounded set of one member's admitted nested threads.
@@ -260,10 +267,13 @@ pub(crate) trait ToolPipelineAdmission: Send + Sync {
 
     /// D-3: activate the fenced writer of the nested thread of `lineage`, called
     /// by the Agent on `agent_thread`, before the nested graph's first effect.
+    /// FU-338: a first admission stamps `definition_sha256` durably before the
+    /// writer; a re-admission returns the stamp it holds, never replaced.
     async fn admit_tool_pipeline(
         &self,
         agent_thread: &str,
         lineage: &PipelineToolCallLineage,
+        definition_sha256: Option<[u8; 32]>,
     ) -> Result<AdmittedToolPipeline, GraphError>;
 }
 

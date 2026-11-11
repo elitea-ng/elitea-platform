@@ -177,7 +177,9 @@ failures retried then retryable; a pause inside a durable nested pipeline is ref
 | Worker × nested LLM node's own tool in flight | I read-only (replayed) / F effectful (never repeated, typed to the Agent) | F | T1d kills (Map, Parallel) |
 | Worker × nested direct toolkit/MCP node, call started | F (journal Started; never repeated, typed to the Agent) | F; the nested node still journals | T1e kills (Map, Parallel) |
 | Worker × call recorded, nested thread admitted, waiting for the shared tool | R: replay, fresh nested start | F | T4 kill |
-| Worker × nested pipeline completed, Agent not answered | R: stored result, never re-run | F | `…killed_after_…` (Map, Parallel) |
+| Worker × nested pipeline completed, Agent not answered | R: stored result, never re-run, when its stamped definition is unchanged (FU-338) | F | `…killed_after_…` (Map, Parallel) |
+| Worker × nested pipeline pending or completed, pipeline edited before the reclaim (FU-338) | F: `pipeline.recovery.tool_pipeline_definition_changed`, compared before any nested work and before a stored result is projected; no nested model call, no nested row; the Agent reads the typed refusal | F | `…was_edited_after_the_kill_is_refused_typed` (Map, Parallel); `…settings_changed_after_the_kill_is_refused_typed`; `…finished_pipeline_tool_was_edited_later_is_refused_typed` |
+| Worker × nested thread with no stamp, or Main served no digest (FU-338) | F: `pipeline.recovery.tool_pipeline_definition_unproven`, before any nested work or stored result | F | `a_nested_thread_stamped_for_another_definition_is_refused_before_any_nested_work`; `a_completed_nested_thread_whose_pipeline_changed_is_refused_typed` |
 | Lease loss / takeover × above | as the Worker rows (takeover re-derives `NT`; a superseded reclaim runs nothing) | F | admission takeover test; T2 kill |
 | Main restart × a model request sent while Main is down | **F**: the member's node fails `model_gateway.transport` (pre-existing for every model node, **FU-334**); calls already streaming survive | F | browser chats 888, 893 (fails), 890, 892 (survives) |
 | PostgreSQL × admission or read | retryable dependency failure | same | T6 tests |
@@ -412,6 +414,76 @@ the ledger before the activation, so an activated writer is always registered an
   - `graph.fanout.agent_calls_saved_pipeline` is deleted from `legacy-codes.txt`, since that list only shrinks; the
     wire kind keeps its own code string.
   - `go test` of `libs/go/faults` passes.
+
+### FU-338: a pending nested thread runs only its stamped definition, 2026-11-11
+
+**Defect.** On a member's recovery the nested saved pipeline was resolved live and its current definition ran on the
+stored nested thread. Nothing tied `NT` to a definition: `NT` hashes the call, not the pipeline; the member Agent's
+digest covers its tools only as references; a saved version can be edited in place. An edit between the kill and the
+reclaim re-entered the old frontier on the new nodes, tools or `llm_settings`.
+
+**Fix.**
+- **Digest coverage.** Main's frozen definition digest of the version (`frozen_definition_sha256`, over the frozen
+  version details: nodes, tools, `llm_settings` and toolkit references, before materialization;
+  `M/internal/infra/storage/runtime_application_version.go:239`). Not the Worker's structural `definition_digest`.
+  It travels from the composition admission (`W/agents/pipeline.rs:2542`) through `SavedPipelineTool` to
+  `ApplicationPipelineTool::definition_sha256` (`W/agents/application_pipeline.rs:1284`, set at
+  `W/agents/application_tools.rs:3409`).
+- **Stamp, on the ledger entry.** Each member-ledger entry is now `{thread, definition_sha256}` under the key
+  `elitea.pipeline.tool-threads.v2` (`W/agents/graph/tool_pipeline_threads.rs:50`; `LedgerEntry`,
+  `W/state/postgres_checkpointer/application_children.rs:452`). The stamp is written in the same CAS append that
+  reserves the slot, before the nested writer is activated, so before the nested graph's first effect
+  (`reserve_in_ledger`, `:541`, called at `:634`). A re-admission, in process or after a takeover, reads the stamp
+  back and never replaces it. A malformed stamp, a foreign thread or a row holding the unstamped v1 key is
+  `CorruptStoredState` (`ledger_entries`, `:491`, v1 refused at `:498`). The format changed because nothing has
+  shipped; the browser-evidence stack's rows were v1.
+- **Compare on re-entry, completed threads included.** `invoke_durable` loads the nested thread's latest row, then
+  compares the stamp with Main's current digest (`W/agents/application_pipeline.rs:1619`, `definition_refusal`
+  `:1193`) before compiling and before projecting a stored result, so before any nested model call, tool call or row:
+  - equal and completed → its stored result (C3, `:1630`); the projection (`completed_text`, the definition's result
+    policy) is the uninterrupted call's byte for byte because the definition is the same;
+  - equal and pending → re-entry at its frontier;
+  - different → `pipeline.recovery.tool_pipeline_definition_changed`, also for a completed thread: its stored state
+    was projected by the old definition's result keys, and nothing of the call is repeated, so refusing is safe;
+  - no stamp or no current digest → `pipeline.recovery.tool_pipeline_definition_unproven`. Main always serves the
+    digest (`runtime_application_version.go:277`); an older Main would make a first call refused rather than run
+    unprovably.
+  - The refusal is a typed tool result to the member's Agent (`tool_definition_refusal_result`, `:1208`), the shape of
+    the D3 limit and the nested "may have started" failure, plus one registered fault line
+    (`nested_pipeline_definition_refused`, ids only). The writer's claim is re-fenced by the admission (no row).
+- **Registry.** Both codes in `libs/go/faults/registry/worker.json` (audience both, with user and operator texts),
+  `go generate` (`codes_gen.go`, `docs/errors/README.md`); the Worker uses the generated constants. They are not
+  runtime failure kinds and reach the user only through the Agent's answer, so Main's runtime-error allowlist is
+  unchanged.
+
+**Tests, failing first.**
+- Real PG, two processes (`member_pipeline_tool_kill`; the fake Main now digests the nested version's whole content,
+  so any edit is a new digest):
+  - (a) `postgres_a_map_item_whose_pipeline_tool_was_edited_after_the_kill_is_refused_typed`,
+    `postgres_parallel_branches_whose_pipeline_tools_were_edited_after_the_kill_are_refused_typed`;
+  - (b) `postgres_a_map_item_whose_pipeline_tool_settings_changed_after_the_kill_is_refused_typed` (only
+    `llm_settings`);
+  - (c) `postgres_a_map_item_whose_finished_pipeline_tool_was_edited_later_is_refused_typed` (completed before the
+    kill, edited later).
+  - Each asserts: no nested model request (neither system text), the Agent read the registered code, the nested
+    checkpoint rows unchanged, the same nested writers, and each member lands its own answer.
+  - Unchanged definition, completed: `…killed_after_its_pipeline_tool_finished_reads_the_stored_result` (Map,
+    Parallel) now runs with matching stamps (the fake Main's content digest is the same in both processes) and
+    serves the stored result with no nested run and no nested row.
+  - **First run, before the fix:** (a) Map and Parallel and (b) failed. The reclaim re-entered the old thread on the
+    edited pipeline and made a nested model request the plan does not serve (`recover: the members complete: …
+    graph.fanout.member_failed`). (c) failed after the spec change (completed threads compare too): the reclaim
+    served the stored result instead of the refusal (`recover: the Agent reads the typed refusal`).
+- Real PG, `tool_pipeline_admission`: `a_first_admission_stamps_its_definition_before_its_writer_and_keeps_it` (the
+  ledger row's JSON, `null` for no digest, kept across a takeover re-admitted with another digest); the takeover test
+  also asserts the stamp is the first admission's.
+- Unit: `a_nested_thread_stamped_for_another_definition_is_refused_before_any_nested_work` (both codes, no save, no
+  row, no event), `a_completed_nested_thread_whose_pipeline_changed_is_refused_typed` (both codes; failed first: it
+  served `HANDLED ship it`), `a_ledger_row_reads_back_its_stamps_and_refuses_anything_else`; the golden test pins
+  the v2 key; `a_completed_nested_thread_answers_its_stored_result_and_is_never_written` is the unchanged case.
+
+**Recovery rows:** see the three FU-338 rows above. **Browser:** the evidence below predates this delta (images
+`fu291-ab5c03796`); no new browser pass was taken for it.
 
 ## Real-browser evidence
 

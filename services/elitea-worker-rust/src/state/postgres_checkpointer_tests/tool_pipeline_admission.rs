@@ -45,6 +45,11 @@ async fn writers(pool: &PgPool, thread_pattern: &str) -> i64 {
     .expect("count checkpoint writers")
 }
 
+/// Main's frozen definition digest of the called pipeline (FU-338).
+const DEFINITION: [u8; 32] = [0x5d; 32];
+/// The same pipeline's digest after an edit.
+const EDITED: [u8; 32] = [0xed; 32];
+
 fn lineage(call: &str) -> PipelineToolCallLineage {
     PipelineToolCallLineage::for_test(
         "batch-1",
@@ -129,7 +134,7 @@ async fn a_member_admits_its_agent_nested_pipeline_thread_under_its_claim() {
     assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 0);
 
     let admitted = admission
-        .admit_tool_pipeline(&agent, &call)
+        .admit_tool_pipeline(&agent, &call, Some(DEFINITION))
         .await
         .expect("admit the nested thread");
     assert_eq!(admitted.thread_id, expected);
@@ -141,7 +146,10 @@ async fn a_member_admits_its_agent_nested_pipeline_thread_under_its_claim() {
             .is_some(),
         "the projector's set holds exactly what the checkpointer admitted"
     );
-    let again = admission.admit_tool_pipeline(&agent, &call).await.unwrap();
+    let again = admission
+        .admit_tool_pipeline(&agent, &call, Some(DEFINITION))
+        .await
+        .unwrap();
     assert_eq!(again.thread_id, expected);
     assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 1);
 
@@ -186,7 +194,10 @@ async fn a_member_refuses_every_agent_thread_that_is_not_its_own() {
         "p1:another-member/fetch_short".to_owned(),
     ] {
         assert!(
-            admission.admit_tool_pipeline(&agent, &call).await.is_err(),
+            admission
+                .admit_tool_pipeline(&agent, &call, Some(DEFINITION))
+                .await
+                .is_err(),
             "{agent} admitted a nested thread"
         );
     }
@@ -210,12 +221,12 @@ async fn a_member_activates_8_nested_threads_and_refuses_the_9th_without_a_row()
     let agent = format!("{}/fetch_short", member.thread_id);
     for call in 0..MAX_TOOL_PIPELINE_THREADS_PER_MEMBER {
         admission
-            .admit_tool_pipeline(&agent, &lineage(&format!("call-{call}")))
+            .admit_tool_pipeline(&agent, &lineage(&format!("call-{call}")), Some(DEFINITION))
             .await
             .expect("admit within the bound");
     }
     let Err(refused) = admission
-        .admit_tool_pipeline(&agent, &lineage("call-8"))
+        .admit_tool_pipeline(&agent, &lineage("call-8"), Some(DEFINITION))
         .await
     else {
         panic!("the 9th nested call was admitted");
@@ -240,7 +251,7 @@ async fn a_takeover_re_admits_the_same_nested_thread_and_fences_the_older_claim(
     let admission_1 = member_1.tool_pipelines.clone().unwrap();
     let agent = format!("{}/fetch_short", member_1.thread_id);
     let older = admission_1
-        .admit_tool_pipeline(&agent, &lineage("call-1"))
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(DEFINITION))
         .await
         .expect("claim 1 admits");
 
@@ -250,7 +261,7 @@ async fn a_takeover_re_admits_the_same_nested_thread_and_fences_the_older_claim(
         .await
         .expect("claim 2 takes the run");
     let Err(denied) = admission_1
-        .admit_tool_pipeline(&agent, &lineage("call-2"))
+        .admit_tool_pipeline(&agent, &lineage("call-2"), Some(DEFINITION))
         .await
     else {
         panic!("a superseded claim admitted a nested thread");
@@ -269,13 +280,16 @@ async fn a_takeover_re_admits_the_same_nested_thread_and_fences_the_older_claim(
         .tool_pipelines
         .clone()
         .unwrap()
-        .admit_tool_pipeline(&agent, &lineage("call-1"))
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(EDITED))
         .await
         .expect("claim 2 re-admits");
     assert_eq!(
         newer.thread_id, older.thread_id,
         "the nested thread re-derives"
     );
+    // FU-338: the stamp is the first admission's, never the re-admission's.
+    assert_eq!(older.definition_sha256, Some(DEFINITION));
+    assert_eq!(newer.definition_sha256, Some(DEFINITION));
     assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 1);
     let mut stale = Checkpoint::new(&older.thread_id, State::new(), 0, Vec::new());
     stale.checkpoint_id = "stale".to_owned();
@@ -286,6 +300,75 @@ async fn a_takeover_re_admits_the_same_nested_thread_and_fences_the_older_claim(
         fenced.to_string().contains("writer_not_current"),
         "{fenced}"
     );
+}
+
+/// FU-338: each first admission stamps the called pipeline's definition
+/// digest in the member ledger, in the same append that reserves the slot and
+/// before the nested writer exists. A re-admission, in this process or after
+/// a takeover, reads that stamp back and never replaces it; an admission
+/// without a digest stamps `null`, read back as no stamp.
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn a_first_admission_stamps_its_definition_before_its_writer_and_keeps_it() {
+    let database = database().await;
+    let family_1 = root(database.pool.clone(), 1)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("activate the root family");
+    let member_1 = member(&family_1).await;
+    let admission_1 = member_1.tool_pipelines.clone().unwrap();
+    let agent = format!("{}/fetch_short", member_1.thread_id);
+    let stamped = admission_1
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(DEFINITION))
+        .await
+        .expect("admit a stamped call");
+    let unstamped = admission_1
+        .admit_tool_pipeline(&agent, &lineage("call-2"), None)
+        .await
+        .expect("admit a call without a digest");
+    assert_eq!(stamped.definition_sha256, Some(DEFINITION));
+    assert_eq!(unstamped.definition_sha256, None);
+    let again = admission_1
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(EDITED))
+        .await
+        .unwrap();
+    assert_eq!(again.definition_sha256, Some(DEFINITION), "in process");
+
+    let ledger: String = sqlx::query_scalar(
+        "SELECT state FROM elitea_runtime.agent_graph_checkpoints \
+         WHERE thread_id = $1 ORDER BY step DESC LIMIT 1",
+    )
+    .bind(format!("{}{TOOL_LEDGER_SEGMENT}", member_1.thread_id))
+    .fetch_one(&database.pool)
+    .await
+    .expect("the ledger row");
+    let ledger: serde_json::Value = serde_json::from_str(&ledger).expect("ledger state");
+    assert_eq!(
+        ledger["elitea.pipeline.tool-threads.v2"],
+        json!([
+            {"thread": stamped.thread_id, "definition_sha256": "5d".repeat(32)},
+            {"thread": unstamped.thread_id, "definition_sha256": null},
+        ]),
+        "the stamps are durable in the ledger: {ledger}"
+    );
+
+    let family_2 = root(database.pool.clone(), 2)
+        .await
+        .with_application_children(["fetch_short", "fetch_long"].into_iter())
+        .await
+        .expect("claim 2 takes the run");
+    let admission_2 = member(&family_2).await.tool_pipelines.unwrap();
+    for (call, stamp) in [("call-1", Some(DEFINITION)), ("call-2", None)] {
+        let readmitted = admission_2
+            .admit_tool_pipeline(&agent, &lineage(call), Some(EDITED))
+            .await
+            .expect("claim 2 re-admits");
+        assert_eq!(
+            readmitted.definition_sha256, stamp,
+            "after takeover: {call}"
+        );
+    }
 }
 
 /// T6, C5: a writer table held locked during admission is a retryable
@@ -311,7 +394,7 @@ async fn a_locked_writer_table_answers_retryable_and_admits_once_released() {
     .await
     .expect("hold the run root writer row");
     let Err(blocked) = admission
-        .admit_tool_pipeline(&agent, &lineage("call-1"))
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(DEFINITION))
         .await
     else {
         panic!("admission ran behind a held run root writer");
@@ -326,7 +409,7 @@ async fn a_locked_writer_table_answers_retryable_and_admits_once_released() {
     assert_eq!(admission.tool_threads().len(), 0);
     holder.rollback().await.expect("release the holder");
     admission
-        .admit_tool_pipeline(&agent, &lineage("call-1"))
+        .admit_tool_pipeline(&agent, &lineage("call-1"), Some(DEFINITION))
         .await
         .expect("the same admission succeeds once released");
     assert_eq!(writers(&database.pool, &format!("{agent}/pt1:%")).await, 1);
@@ -374,7 +457,7 @@ async fn the_per_call_nested_admission_cost_is_within_the_child_overhead_budget(
             call += 1;
             let started = std::time::Instant::now();
             let admitted = admission
-                .admit_tool_pipeline(&agent, &lineage)
+                .admit_tool_pipeline(&agent, &lineage, Some(DEFINITION))
                 .await
                 .expect("admit");
             let latest = admitted
@@ -426,8 +509,14 @@ async fn a_nested_thread_never_collides_with_the_members_own_graph_paths() {
     );
     let admission = member_1.tool_pipelines.clone().unwrap();
     let call = lineage("call-1");
-    let nested = admission.admit_tool_pipeline(&agent, &call).await.unwrap();
-    let below_inner = admission.admit_tool_pipeline(&inner, &call).await.unwrap();
+    let nested = admission
+        .admit_tool_pipeline(&agent, &call, Some(DEFINITION))
+        .await
+        .unwrap();
+    let below_inner = admission
+        .admit_tool_pipeline(&inner, &call, Some(DEFINITION))
+        .await
+        .unwrap();
     for thread in [&nested.thread_id, &below_inner.thread_id] {
         assert!(!graph.contains(thread), "{thread} is a graph path");
     }
@@ -465,7 +554,7 @@ async fn a_nested_thread_never_collides_with_the_members_own_graph_paths() {
         .tool_pipelines
         .clone()
         .unwrap()
-        .admit_tool_pipeline(&agent, &call)
+        .admit_tool_pipeline(&agent, &call, Some(DEFINITION))
         .await
     else {
         panic!("a nested thread that is an admitted graph path was admitted");
@@ -512,19 +601,19 @@ async fn the_durable_bound_child() {
     if first {
         for call in 0..MAX_TOOL_PIPELINE_THREADS_PER_MEMBER {
             admission
-                .admit_tool_pipeline(&agent, &lineage(&format!("call-{call}")))
+                .admit_tool_pipeline(&agent, &lineage(&format!("call-{call}")), Some(DEFINITION))
                 .await
                 .expect("admit within the bound");
         }
     } else {
         // An admitted call re-derives and re-admits after the takeover.
         admission
-            .admit_tool_pipeline(&agent, &lineage("call-3"))
+            .admit_tool_pipeline(&agent, &lineage("call-3"), Some(DEFINITION))
             .await
             .expect("an admitted call re-admits");
     }
     let Err(refused) = admission
-        .admit_tool_pipeline(&agent, &lineage("call-8"))
+        .admit_tool_pipeline(&agent, &lineage("call-8"), Some(DEFINITION))
         .await
     else {
         panic!("the 9th call was admitted (first: {first})");
@@ -583,7 +672,7 @@ async fn two_admissions_racing_for_the_last_slot_admit_exactly_one() {
     let admission = first.tool_pipelines.clone().unwrap();
     for call in 0..MAX_TOOL_PIPELINE_THREADS_PER_MEMBER - 1 {
         admission
-            .admit_tool_pipeline(&agent, &lineage(&format!("call-{call}")))
+            .admit_tool_pipeline(&agent, &lineage(&format!("call-{call}")), Some(DEFINITION))
             .await
             .expect("admit within the bound");
     }
@@ -591,8 +680,8 @@ async fn two_admissions_racing_for_the_last_slot_admit_exactly_one() {
     let right = member(&family).await.tool_pipelines.unwrap();
     let (call_a, call_b) = (lineage("call-a"), lineage("call-b"));
     let (a, b) = tokio::join!(
-        left.admit_tool_pipeline(&agent, &call_a),
-        right.admit_tool_pipeline(&agent, &call_b),
+        left.admit_tool_pipeline(&agent, &call_a, Some(DEFINITION)),
+        right.admit_tool_pipeline(&agent, &call_b, Some(DEFINITION)),
     );
     let outcomes = [a, b];
     assert_eq!(
@@ -667,7 +756,7 @@ async fn the_bound_is_read_through_an_index_condition_on_one_thread() {
         .tool_pipelines
         .clone()
         .unwrap()
-        .admit_tool_pipeline(&agent, &lineage("call-0"))
+        .admit_tool_pipeline(&agent, &lineage("call-0"), Some(DEFINITION))
         .await
         .expect("admit");
     let mut connection = database.pool.acquire().await.expect("connection");
@@ -751,7 +840,11 @@ async fn twelve_concurrent_admissions_of_one_member_admit_exactly_eight() {
             tokio::spawn(async move {
                 start.wait().await;
                 admission
-                    .admit_tool_pipeline(&agent, &lineage(&format!("call-{call}")))
+                    .admit_tool_pipeline(
+                        &agent,
+                        &lineage(&format!("call-{call}")),
+                        Some(DEFINITION),
+                    )
                     .await
                     .map(|_| ())
             })
