@@ -1090,6 +1090,8 @@ impl PipelineApplicationScopeRegistry {
         node: &str,
         projection: std::sync::Arc<ApplicationRuntimeProjection>,
         events: crate::agents::graph::PipelineNodeEventSender,
+        root_reentry: Option<std::sync::Arc<super::scoped_runtime::RootAgentReentry>>,
+        agent_definition: Option<[u8; 32]>,
     ) -> Result<
         std::sync::Arc<super::scoped_runtime::PipelineApplicationNodeRuntime>,
         NativeAgentAssemblyError,
@@ -1110,7 +1112,8 @@ impl PipelineApplicationScopeRegistry {
                 projection,
                 events,
                 runtime.prepare_gate.clone(),
-            ),
+            )
+            .with_root_reentry(root_reentry, agent_definition),
         ))
     }
 
@@ -1826,7 +1829,7 @@ impl PipelineCheckpointFamilyView for RootApplicationCheckpointFamily {
     }
 }
 
-fn hex_digest(bytes: &[u8]) -> String {
+pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut value = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

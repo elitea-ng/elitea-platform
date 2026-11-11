@@ -1310,6 +1310,9 @@ pub(crate) enum ScopedCallKind {
     Node,
     FanoutChild,
     FanoutChildRecovery,
+    /// FU-323a: a root Agent node re-entering the started call its claim's
+    /// inspect step proved (`scoped_runtime.rs` `RootAgentReentry`).
+    RootAgentRecovery,
 }
 
 pub(crate) fn scoped_pipeline_tool_context(
@@ -1343,7 +1346,11 @@ pub(crate) fn scoped_pipeline_tool_context(
             .get_mut(PIPELINE_APPLICATION_NODE_METADATA_KEY)
             .and_then(Value::as_object_mut)
     {
-        marker.insert("fanout".to_owned(), Value::Bool(true));
+        if kind == ScopedCallKind::RootAgentRecovery {
+            marker.insert("root_recovery".to_owned(), Value::Bool(true));
+        } else {
+            marker.insert("fanout".to_owned(), Value::Bool(true));
+        }
         if kind == ScopedCallKind::FanoutChildRecovery {
             marker.insert("recover_started".to_owned(), Value::Bool(true));
         }
