@@ -106,6 +106,21 @@ func agentLifecycleSection() map[string]any {
 		"section": section,
 		"default": string(defaults.LapseAction),
 	})
+	tierNames := make([]string, 0, len(agentlifecycle.Tiers))
+	for _, tier := range agentlifecycle.Tiers {
+		tierNames = append(tierNames, string(tier))
+	}
+	fields = append(fields, map[string]any{
+		"key":   platformconfig.KeyMemoryAutoMaxTier,
+		"type":  "string",
+		"enum":  tierNames,
+		"title": "Highest Tier for Automatic Agent Memory",
+		"description": "An agent above this risk tier cannot save a version with memory write set to auto: " +
+			"it keeps auto_attended or review. Auto lets an agent save notes from unattended runs and tool " +
+			"output straight to active.",
+		"section": section,
+		"default": string(platformconfig.DefaultMemoryAutoMaxTier),
+	})
 	return map[string]any{
 		"id":    section,
 		"title": "Agent Lifecycle",
@@ -126,6 +141,12 @@ func agentLifecycleSection() map[string]any {
 func validateAgentLifecycleValues(section string, values map[string]any) string {
 	if section != platformconfig.SectionAgentLifecycle {
 		return ""
+	}
+	if raw, present := values[platformconfig.KeyMemoryAutoMaxTier]; present {
+		text, _ := raw.(string)
+		if !agentlifecycle.Tier(text).Valid() {
+			return fmt.Sprintf("%q must be one of: low, medium, high, critical", platformconfig.KeyMemoryAutoMaxTier)
+		}
 	}
 	for _, tier := range agentlifecycle.Tiers {
 		floor := agentlifecycle.Floors[tier]

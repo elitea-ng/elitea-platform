@@ -3755,6 +3755,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					appHandler := v2apps.NewHandler(cfg.AppsRepo, cfg.Pool).
 						WithRunCapsChecker(runCaps.checker).
 						WithReasoningModels(chatDefaults{models: reasoningModels})
+					// A nil gate stays out of the interface: a typed nil would
+					// read as a gate.
+					if gate := newMemoryAutoGate(cfg.Pool); gate != nil {
+						appHandler.WithMemoryAutoGate(gate)
+					}
 					r.With(projectPermission("models.applications.applications.list")).
 						Get("/applications/prompt_lib/{projectID}", appHandler.List)
 					r.With(projectPermission("models.applications.applications.create")).

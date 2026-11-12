@@ -36,6 +36,9 @@ type Handler struct {
 	// reasoningModels reads the catalogue for the save-time thinking rules
 	// (reasoning.go); nil applies the value check only.
 	reasoningModels ReasoningModelCatalog
+	// memoryAuto limits meta.memory.write auto to the agent's risk tier
+	// (memory_auto.go); nil accepts it for every tier.
+	memoryAuto MemoryAutoGate
 }
 
 func NewHandler(repo applications.Repository, pool ...*pgxpool.Pool) *Handler {
@@ -576,7 +579,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 				apierr.Write(w, notesErr)
 				return
 			}
-			if !h.checkRunCaps(w, r, projectID, "", vBody) {
+			if !h.checkRunCaps(w, r, projectID, "", vBody) || !h.checkMemoryAuto(w, r, projectID, "", vBody) {
 				return
 			}
 			if !checkOutputContracts(w, vBody, bodyAgentType(vBody, "")) {
@@ -1239,7 +1242,7 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, notesErr)
 		return
 	}
-	if !h.checkRunCaps(w, r, projectID, applicationID, body) {
+	if !h.checkRunCaps(w, r, projectID, applicationID, body) || !h.checkMemoryAuto(w, r, projectID, applicationID, body) {
 		return
 	}
 	if !checkOutputContracts(w, body, bodyAgentType(body, h.storedApplicationAgentType(r.Context(), projectID, applicationID, body))) {
@@ -1424,7 +1427,7 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if meta, ok := body["meta"].(map[string]any); ok {
-		if !h.checkRunCaps(w, r, projectID, applicationID, body) {
+		if !h.checkRunCaps(w, r, projectID, applicationID, body) || !h.checkMemoryAuto(w, r, projectID, applicationID, body) {
 			return
 		}
 		v.Meta = meta
