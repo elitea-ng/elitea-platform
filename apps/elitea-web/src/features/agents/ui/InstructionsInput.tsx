@@ -22,6 +22,7 @@ import { useInstructionsSkillMention } from '../lib/hooks/useInstructionsSkillMe
 import type { FilteredSkillMentionItem } from '../lib/hooks/useInstructionsSkillMention.hooks';
 
 import { InstructionsFullscreenButton } from './InstructionsFullscreenButton';
+import { instructionsSizingExtension } from './InstructionsInput.sizing';
 import { InstructionsSlashSuggestionList } from './InstructionsSlashSuggestionList';
 
 /**
@@ -282,7 +283,7 @@ export function InstructionsInput({
   );
 
   const extensions = useMemo(
-    () => [...mention.codeMirrorExtensions, ...skillMention.codeMirrorExtensions, viewCaptureExtension, keydownExtension],
+    () => [...mention.codeMirrorExtensions, ...skillMention.codeMirrorExtensions, viewCaptureExtension, keydownExtension, instructionsSizingExtension],
     [mention.codeMirrorExtensions, skillMention.codeMirrorExtensions, viewCaptureExtension, keydownExtension],
   );
 
@@ -333,7 +334,9 @@ export function InstructionsInput({
             onChange={handleChange}
             extensions={extensions}
             readOnly={disabled}
-            minHeight="8rem"
+            // #1979: grows with its content like a text input; the default height was calc(100vh - 220px).
+            height="auto"
+            minHeight="4.5rem"
             aria-label={t('features.agents.instructionsInput.ariaLabel', 'Instructions')}
           />
           {activeSuggestionList}

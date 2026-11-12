@@ -1849,7 +1849,6 @@
   "pages.admin.users.title": "使用者",
   "pages.agents.applications.tabsAriaLabel": "代理",
   "pages.agents.chatWithAgent.defaultName": "新建聊天",
-  "pages.agents.chatWithAgent.label": "聊天",
   "pages.agents.chatWithAgent.starting": "正在開啟聊天…",
   "pages.agents.createApplication.error": "建立代理失敗。",
   "pages.agents.createApplication.fieldError.description": "描述：{{message}}",

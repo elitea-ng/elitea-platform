@@ -1849,7 +1849,6 @@
   "pages.admin.users.title": "ユーザー",
   "pages.agents.applications.tabsAriaLabel": "エージェント",
   "pages.agents.chatWithAgent.defaultName": "新しいチャット",
-  "pages.agents.chatWithAgent.label": "チャット",
   "pages.agents.chatWithAgent.starting": "チャットを開いています…",
   "pages.agents.createApplication.error": "エージェントを作成できませんでした。",
   "pages.agents.createApplication.fieldError.description": "説明: {{message}}",

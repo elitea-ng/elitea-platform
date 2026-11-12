@@ -11,6 +11,7 @@ import type { MentionableTool } from '../lib/hooks/useInstructionsMention.hooks'
 import { renderWithProviders } from '../__tests__/testUtils';
 
 import { InstructionsInput } from './InstructionsInput';
+import { INSTRUCTIONS_MAX_HEIGHT } from './InstructionsInput.sizing';
 
 installCodeMirrorTestPolyfills();
 
@@ -185,5 +186,23 @@ describe('InstructionsInput', () => {
     await waitFor(() => {
       expect(onInstructionsChange).toHaveBeenCalledWith('~Summarizer ');
     });
+  });
+});
+
+describe('InstructionsInput sizing (#1979)', () => {
+  it('is a compact auto-growing field rather than a viewport-tall code editor', () => {
+    renderWithProviders(
+      <InstructionsInput
+        instructions="one line"
+        onInstructionsChange={vi.fn()}
+      />,
+    );
+    // CodeMirror injects its themes as <style> rules; the editor's own height and the sizing theme are in them.
+    const css = Array.from(document.querySelectorAll('style'))
+      .map((style) => style.textContent ?? '')
+      .join('\n');
+    expect(css, 'the viewport-tall default must not apply').not.toContain('100vh - 220px');
+    expect(css, 'growth is capped, then scrolls').toContain(INSTRUCTIONS_MAX_HEIGHT);
+    expect(css, 'no line-number gutter beside prose').toMatch(/\.cm-gutters[^{]*\{[^}]*display:\s*none/);
   });
 });

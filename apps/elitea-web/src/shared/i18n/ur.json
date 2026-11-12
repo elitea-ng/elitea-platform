@@ -1849,7 +1849,6 @@
   "pages.admin.users.title": "صارفین",
   "pages.agents.applications.tabsAriaLabel": "ایجنٹس",
   "pages.agents.chatWithAgent.defaultName": "نئی چیٹ",
-  "pages.agents.chatWithAgent.label": "چیٹ",
   "pages.agents.chatWithAgent.starting": "چیٹ کھل رہی ہے…",
   "pages.agents.createApplication.error": "ایجنٹ نہیں بن سکا۔",
   "pages.agents.createApplication.fieldError.description": "تفصیل: {{message}}",
