@@ -343,6 +343,16 @@ export function useChatPipelineConfig({
     [draft, onFieldChange, projectId, tagValue, onTagsChange, entityType],
   );
 
+  // What the save carries over from the stored version: its name, and for an
+  // agent its stored `meta` (the version PUT replaces `meta` wholesale).
+  const storedVersion = useMemo(
+    () => ({
+      name: version?.name,
+      meta: entityType === 'application' ? (version?.meta as Record<string, unknown> | undefined) : undefined,
+    }),
+    [version?.name, version?.meta, entityType],
+  );
+
   const onSaveVersion = useCallback(
     (onSuccess: (saved: unknown) => void) => {
       if (projectId === undefined || applicationId === undefined || versionId === undefined) return;
@@ -350,11 +360,7 @@ export function useChatPipelineConfig({
         projectId,
         applicationId,
         versionId,
-        version: toVersionBody(
-          draft,
-          version?.name,
-          entityType === 'application' ? (version?.meta as Record<string, unknown> | undefined) : undefined,
-        ),
+        version: toVersionBody(draft, storedVersion.name, storedVersion.meta),
         applicationName: draft.name,
         applicationDescription: draft.description,
       }).then((result) => {
@@ -368,7 +374,7 @@ export function useChatPipelineConfig({
         }
       });
     },
-    [projectId, applicationId, versionId, onSave, draft, version?.name, version?.meta, refetch, entityType],
+    [projectId, applicationId, versionId, onSave, draft, storedVersion, refetch],
   );
 
   return {
