@@ -207,12 +207,12 @@ describe('CreateApplication', () => {
    * POST body: the editor keeps no state of its own, so "the text is on
    * screen" would prove only that the page echoed it back.
    */
-  // 15s, not the 5s default: this one test types into three fields (starter,
-  // name, description) and `user.type` is per-keystroke — it passed alone and
-  // timed out when the whole `pages/agents` + `features/agents` suite ran in
-  // parallel on this machine.
-  it('sends a conversation starter typed on the create form in the create POST body', { timeout: 15_000 }, async () => {
-    const user = userEvent.setup();
+  // This test types into three fields (starter, name, description). With the
+  // default per-keystroke delay it timed out at 15 s on a loaded coverage
+  // shard (CI job 131163429639); `delay: null` drops the timers between
+  // keystrokes — the same setup the welcome-message test below uses.
+  it('sends a conversation starter typed on the create form in the create POST body', { timeout: 20_000 }, async () => {
+    const user = userEvent.setup({ delay: null });
     const bodies: Record<string, unknown>[] = [];
     server.use(
       http.post('*/elitea_core/applications/prompt_lib/:projectId', async ({ request }) => {
