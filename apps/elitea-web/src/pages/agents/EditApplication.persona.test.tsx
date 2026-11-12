@@ -73,14 +73,16 @@ describe('EditApplication — the Persona tab', () => {
     const bodies: Record<string, unknown>[] = [];
     captureVersionSave(bodies);
     renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
 
     await user.click(await screen.findByTestId('edit-application-tab-persona', {}, { timeout: 5_000 }));
     const name = await screen.findByTestId('persona-displayName');
     await waitFor(() => expect(name).toHaveValue('Ada'));
     expect(screen.getByTestId('persona-voice')).toHaveValue('dry\nbrief');
 
-    await user.type(screen.getByTestId('persona-role'), 'Release reviewer');
+    // One paste, not a keystroke per character (see the third case).
+    await user.click(screen.getByTestId('persona-role'));
+    await user.paste('Release reviewer');
     await waitFor(() => expect(screen.getByTestId('agent-save-button')).toBeEnabled());
     await user.click(screen.getByTestId('agent-save-button'));
 
@@ -93,10 +95,11 @@ describe('EditApplication — the Persona tab', () => {
     const bodies: Record<string, unknown>[] = [];
     captureVersionSave(bodies);
     renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
 
     await waitFor(() => expect(screen.getByTestId('agent-name-input')).toHaveValue('My Agent'), { timeout: 5_000 });
-    await user.type(screen.getByTestId('agent-description-input'), '!');
+    await user.click(screen.getByTestId('agent-description-input'));
+    await user.paste('!');
     await waitFor(() => expect(screen.getByTestId('agent-save-button')).toBeEnabled());
     await user.click(screen.getByTestId('agent-save-button'));
 
@@ -107,7 +110,7 @@ describe('EditApplication — the Persona tab', () => {
   it('holds Save back while a Persona field holds what Main would refuse', async () => {
     server.use(getGetApplicationMockHandler(detail(null)));
     renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
 
     await user.click(await screen.findByTestId('edit-application-tab-persona', {}, { timeout: 5_000 }));
     // One paste, not a keystroke per character: each keystroke re-renders the

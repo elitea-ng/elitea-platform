@@ -6197,5 +6197,8 @@
   "features.agents.generateAgentModal.personaRemove": "Do not add a persona",
   "features.agents.generateAgentModal.personaRole": "Role",
   "features.agents.generateAgentModal.personaValues": "Values",
-  "features.agents.generateAgentModal.personaVoice": "Voice"
+  "features.agents.generateAgentModal.personaVoice": "Voice",
+  "chat-participants.users.lessLabel": "Show less",
+  "chat-participants.users.showLess": "Hide additional participants",
+  "chat-participants.users.showMore": "Show {{count}} more participants"
 }

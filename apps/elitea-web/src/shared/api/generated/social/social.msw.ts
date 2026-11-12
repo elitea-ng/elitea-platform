@@ -49,6 +49,7 @@ import type {
   CreateFeedbackResponse,
   CurrentAvatarResponse,
   FeedbackListResponse,
+  LanguagePreference,
   OkResponse,
   SocialAuthorProfile,
   SocialAuthorSummary,
@@ -83,6 +84,26 @@ export const getUpdateCurrentAuthorThemeResponseMock = (
   overrideResponse: Partial<Extract<ThemePreference, object>> = {},
 ): ThemePreference => ({
   theme_mode: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getGetCurrentAuthorLanguageResponseMock = (
+  overrideResponse: Partial<Extract<LanguagePreference, object>> = {},
+): LanguagePreference => ({
+  language: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getUpdateCurrentAuthorLanguageResponseMock = (
+  overrideResponse: Partial<Extract<LanguagePreference, object>> = {},
+): LanguagePreference => ({
+  language: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
@@ -285,6 +306,58 @@ export const getUpdateCurrentAuthorThemeMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getUpdateCurrentAuthorThemeResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetCurrentAuthorLanguageMockHandler = (
+  overrideResponse?:
+    | LanguagePreference
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<LanguagePreference> | LanguagePreference),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/social/author/language",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetCurrentAuthorLanguageResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateCurrentAuthorLanguageMockHandler = (
+  overrideResponse?:
+    | LanguagePreference
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<LanguagePreference> | LanguagePreference),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/social/author/language",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateCurrentAuthorLanguageResponseMock(),
         { status: 200 },
       );
     },
@@ -608,6 +681,8 @@ export const getSocialMock = () => [
   getUpdateCurrentAuthorMockHandler(),
   getGetCurrentAuthorThemeMockHandler(),
   getUpdateCurrentAuthorThemeMockHandler(),
+  getGetCurrentAuthorLanguageMockHandler(),
+  getUpdateCurrentAuthorLanguageMockHandler(),
   getListSocialAuthorsMockHandler(),
   getGetCurrentSocialAvatarMockHandler(),
   getUploadCurrentSocialAvatarMockHandler(),

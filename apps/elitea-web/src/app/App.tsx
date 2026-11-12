@@ -36,6 +36,9 @@ function sessionRetryDelay(attempt: number): number {
  */
 const ThemePreferenceSync = lazy(() => import('./ThemePreferenceSync'));
 
+/** The same for the server-stored language (`./LanguageSync`). */
+const LanguageSync = lazy(() => import('./LanguageSync'));
+
 /**
  * App shell (spec §9.3 units F1/F3/R1/R2).
  *
@@ -285,6 +288,7 @@ export function App() {
       {sessionUserId !== undefined && (
         <Suspense fallback={null}>
           <ThemePreferenceSync key={sessionUserId} userId={String(sessionUserId)} />
+          <LanguageSync key={`lang-${String(sessionUserId)}`} />
         </Suspense>
       )}
       <RealtimeStatusContext.Provider value={realtimeStatus}>

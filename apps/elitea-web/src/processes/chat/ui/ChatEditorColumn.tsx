@@ -27,6 +27,7 @@ import { ToolkitEditor } from '@/features/toolkits';
 import { toCreatedResult } from './ChatWithEditors.helpers';
 import { renderAgentEditorShell, renderPipelineEditorShell, renderToolkitEditorShell } from './EditorShell';
 import { renderPipelineCreateForm } from './PipelineCreateForm';
+import type { UseChatAgentConfigResult } from './useChatAgentConfig';
 import type { UseChatPipelineConfigResult } from './useChatPipelineConfig';
 
 /**
@@ -42,6 +43,8 @@ interface AgentEditorGroup {
   readonly agentForEditor: Parameters<typeof AgentEditor>[0]['agent'];
   readonly editAgent: { readonly isCreateMode: boolean; readonly onCloseAgentEditor: () => void };
   readonly agentCreation: { readonly onAgentCreated: (result: ReturnType<typeof toCreatedResult>) => unknown };
+  /** Edit mode's form body and its Save (#1972) — see `./useChatAgentConfig.tsx`. */
+  readonly config: UseChatAgentConfigResult;
 }
 
 interface PipelineEditorGroup {
@@ -97,7 +100,12 @@ export function ChatEditorColumn({ agent, pipeline, toolkit }: ChatEditorColumnP
           isCreateMode={agent.editAgent.isCreateMode}
           onCloseAgentEditor={agent.editAgent.onCloseAgentEditor}
           onAgentCreated={(result) => void agent.agentCreation.onAgentCreated(toCreatedResult(result))}
-          deps={{ renderShell: renderAgentEditorShell }}
+          deps={{
+            renderShell: renderAgentEditorShell,
+            renderConfigurationForm: agent.config.renderConfigurationForm,
+            ...(agent.config.onSaveVersion !== undefined ? { onSaveVersion: agent.config.onSaveVersion } : {}),
+            isSavingVersion: agent.config.isSavingVersion,
+          }}
         />
       )}
 

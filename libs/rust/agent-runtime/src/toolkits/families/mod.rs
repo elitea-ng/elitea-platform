@@ -113,9 +113,39 @@ pub(crate) enum UnsupportedSetting {
     BucketName,
     /// A governed run (#1120) and a toolkit no credential adapter governs.
     ToolkitNotGovernable,
+    /// A `github` toolkit saved with no repository, or one that is not
+    /// `owner/name` (#1978).
+    GitHubRepository,
+    /// A `github` toolkit with no usable credential configuration (#1978).
+    GitHubCredential,
+    /// A `github` credential whose base URL is not a usable `https://` URL
+    /// (#1978).
+    GitHubBaseUrl,
+    /// A `github` credential whose token, username/password or GitHub App
+    /// parts are incomplete (#1978).
+    GitHubAuthentication,
+    /// Any other unusable `github` toolkit setting — a non-text value, a
+    /// branch name or selected tool the runtime cannot use (#1978).
+    GitHubSettings,
 }
 
 impl UnsupportedSetting {
+    /// A setting that is missing or malformed rather than deliberately
+    /// unsupported: a caller that cannot report a left-out toolkit keeps
+    /// the `InvalidConfiguration` code for it, so status handling still
+    /// reads it as user-fixable configuration, not a missing capability.
+    #[must_use]
+    pub(crate) const fn is_invalid_configuration(self) -> bool {
+        matches!(
+            self,
+            Self::GitHubRepository
+                | Self::GitHubCredential
+                | Self::GitHubBaseUrl
+                | Self::GitHubAuthentication
+                | Self::GitHubSettings
+        )
+    }
+
     /// The reason, as the user and the model read it. Carries no
     /// configuration value.
     #[must_use]
@@ -141,6 +171,21 @@ impl UnsupportedSetting {
             }
             Self::BucketName => {
                 "the toolkit has no usable bucket: set its bucket to a name of lowercase letters, digits and hyphens that starts with a letter, then save it again"
+            }
+            Self::GitHubRepository => {
+                "the GitHub toolkit has no usable repository: set it to owner/name (for example EliteaAI/elitea-platform) or the repository URL, then save the toolkit again"
+            }
+            Self::GitHubCredential => {
+                "the GitHub toolkit has no usable GitHub credential: select a GitHub configuration in the toolkit, then save it again"
+            }
+            Self::GitHubBaseUrl => {
+                "the GitHub credential's base URL is not a valid https:// URL: use https://api.github.com or your GitHub Enterprise API URL, then save the configuration again"
+            }
+            Self::GitHubAuthentication => {
+                "the GitHub credential is incomplete: provide an access token, a username with its password, or a GitHub App id with its private key, then save the configuration again"
+            }
+            Self::GitHubSettings => {
+                "a GitHub toolkit setting is not usable: check the repository, the branch names and the selected tools in the toolkit, and the GitHub credential it uses, then save them again"
             }
             Self::ToolkitNotGovernable => {
                 "this run is governed by the enterprise credential profile, and this toolkit has no governed credential adapter yet, so its tools were left out"
