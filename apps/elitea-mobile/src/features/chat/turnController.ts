@@ -11,6 +11,7 @@ import {
   prepareTurn,
   startRegeneration,
   startTurn,
+  isPostedMessage,
   type RegenerationRequest,
   type ContinueContract,
   type PreparedTurn,
@@ -736,9 +737,12 @@ export class TurnController {
       const abort = new AbortController();
       this.sendAbort = abort;
       try {
-        return this.deps.start
+        const started = this.deps.start
           ? await this.postContinuation(this.deps.start)
           : await startTurn(this.prepared, { client: this.deps.client, signal: abort.signal });
+        // A turn is only built for a message with an answerer; a stored people-only message has no stream to follow.
+        if (isPostedMessage(started)) throw new TurnStartError({ kind: 'bad_response' });
+        return started;
       } catch (error) {
         if (generation !== this.generation) return null;
         if (isUnreachable(error) && (await this.tryHandOff(generation, error))) return null;

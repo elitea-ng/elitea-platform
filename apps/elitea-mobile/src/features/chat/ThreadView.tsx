@@ -6,7 +6,7 @@ import { AccessibilityInfo, ActivityIndicator, Alert, FlatList, Pressable, Style
 import { isConversationRef, useConversation } from '@/api/queries/conversation';
 import { forkStillInScope, runFork } from '@/api/queries/forkConversation';
 import { useModels } from '@/api/queries/models';
-import type { TurnModel } from '@/api/queries/sendMessage';
+import { isPeopleOnlyTurn, type TurnModel } from '@/api/queries/sendMessage';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
 import { usePalette } from '@/constants/use-palette';
@@ -514,7 +514,9 @@ export function ThreadView({
     if (scanBusy) return 'The scan is still being prepared. Send once it is in the tray.';
     // Issue #1624: several agents and nothing chosen: a message that names none asks who it is
     // for (the sheet opens, the text stays); one that names some goes to the first of them.
-    const needsChoice = target.ok && target.kind === 'agent' && target.needsChoice;
+    // A message for people alone (mentions, no agent) has no agent to choose: it starts no turn.
+    const forPeople = isPeopleOnlyTurn({ mentions, addressedTo });
+    const needsChoice = target.ok && target.kind === 'agent' && target.needsChoice && !forPeople;
     if (needsChoice && addressedTo.length === 0) {
       setChipOpen(true);
       return TURN_TAKING_COPY.chooseAgentFirst;

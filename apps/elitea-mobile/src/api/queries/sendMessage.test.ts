@@ -1,7 +1,11 @@
 import {
   MAX_MENTION_IDS,
   TurnInputError,
+  executionContractOf,
+  isPeopleOnlyTurn,
+  isPostedMessage,
   prepareTurn,
+  startTurn,
   restorePreparedTurn,
   type TurnRequest,
 } from '@/api/queries/sendMessage';
@@ -31,10 +35,10 @@ describe('prepareTurn body bytes (ChatSendRequest)', () => {
 
   it('adds user_ids (deduped, in order) and is_mentioning_everyone only when true', () => {
     expect(prepareTurn(request({ mentions: { userIds: [42, 9, 42], everyone: false } })).bodyJson).toBe(
-      `{"payload":{"user_input":"hello"},"project_id":7,"participant_id":3,"conversation_uuid":"${UUID}","question_id":"${Q}","user_ids":[42,9]}`,
+      `{"payload":{"user_input":"hello"},"project_id":7,"conversation_uuid":"${UUID}","question_id":"${Q}","user_ids":[42,9]}`,
     );
     expect(prepareTurn(request({ mentions: { userIds: [], everyone: true } })).bodyJson).toBe(
-      `{"payload":{"user_input":"hello"},"project_id":7,"participant_id":3,"conversation_uuid":"${UUID}","question_id":"${Q}","is_mentioning_everyone":true}`,
+      `{"payload":{"user_input":"hello"},"project_id":7,"conversation_uuid":"${UUID}","question_id":"${Q}","is_mentioning_everyone":true}`,
     );
     expect(prepareTurn(request({ mentions: { userIds: [], everyone: false } })).bodyJson).toBe(prepareTurn(request()).bodyJson);
   });
@@ -52,7 +56,7 @@ describe('prepareTurn body bytes (ChatSendRequest)', () => {
     );
   });
 
-  it('keeps mentions and attachments on a model (adhoc) turn too', () => {
+  it('keeps mentions and attachments on a people-only message (no model settings)', () => {
     const body = JSON.parse(
       prepareTurn(
         request({
@@ -67,8 +71,8 @@ describe('prepareTurn body bytes (ChatSendRequest)', () => {
       user_ids: [5],
       is_mentioning_everyone: true,
       payload: { attachments: [{ filepath: `/b/${UUID}/x.md` }] },
-      llm_settings: { model_name: 'gpt-5', stream: true },
     });
+    expect(body).not.toHaveProperty('llm_settings');
   });
 });
 
@@ -124,5 +128,40 @@ describe('restorePreparedTurn with mentions and attachments', () => {
       '/b/11111111-2222-4333-8444-555555555555/',
     );
     expect(() => restorePreparedTurn(tampered)).toThrow(TurnInputError);
+  });
+});
+
+describe('a message for people alone (contract 1.51)', () => {
+  const people = { userIds: [42], everyone: false };
+
+  it('carries no participant and no model settings, whatever the conversation binds', () => {
+    const prepared = prepareTurn(request({ participantId: 3, mentions: people, model: { name: 'gpt', projectId: null } }));
+    const body = JSON.parse(prepared.bodyJson) as Record<string, unknown>;
+    expect(body).toMatchObject({ user_ids: [42] });
+    expect(body).not.toHaveProperty('participant_id');
+    expect(body).not.toHaveProperty('llm_settings');
+    expect(executionContractOf(prepared.request)).toBe('agent.execute.application.v1');
+  });
+
+  it('needs no participant at all, and survives the outbox round trip', () => {
+    const prepared = prepareTurn(request({ participantId: 0, mentions: { userIds: [], everyone: true } }));
+    expect(restorePreparedTurn(prepared.bodyJson).bodyJson).toBe(prepared.bodyJson);
+  });
+
+  it('an addressed agent keeps the turn: participant and addressed_to are sent', () => {
+    const body = JSON.parse(prepareTurn(request({ mentions: people, addressedTo: [3] })).bodyJson) as Record<string, unknown>;
+    expect(body).toMatchObject({ participant_id: 3, addressed_to: [3], user_ids: [42] });
+    expect(isPeopleOnlyTurn({ mentions: people, addressedTo: [3] })).toBe(false);
+    expect(isPeopleOnlyTurn({ mentions: null, addressedTo: null })).toBe(false);
+  });
+
+  it('startTurn reads the 201 as a stored message, not a turn to stream', async () => {
+    const POST = jest.fn(async () => ({
+      data: { message_id: Q, created: true, turn_started: false },
+      response: new Response(null, { status: 201 }),
+    }));
+    const started = await startTurn(prepareTurn(request({ mentions: people })), { client: { POST } as never });
+    expect(isPostedMessage(started)).toBe(true);
+    expect(started).toEqual({ posted: true, messageId: Q, created: true });
   });
 });

@@ -5,6 +5,7 @@ import { queryKeys } from '@/api/queries/keys';
 import type { components } from '@/api/generated/elitea.gen';
 import {
   TurnInputError,
+  isPeopleOnlyTurn,
   prepareTurn,
   type ContinueContract,
   type PreparedTurn,
@@ -14,6 +15,7 @@ import {
 } from '@/api/queries/sendMessage';
 import { stopErrorText } from '@/api/queries/stopTurn';
 import { answerRegenerated } from '@/features/chat/messageModel';
+import { sendPeopleMessage } from '@/features/chat/peopleMessage';
 import { log } from '@/lib/log';
 import { network } from '@/lib/network';
 import { handOffToOutbox, mustQueueBehindOutbox, queueSend, shouldQueue } from '@/sync/appOutbox';
@@ -301,9 +303,30 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
         attachments: extras.attachments && extras.attachments.length > 0 ? extras.attachments : null,
         addressedTo: extras.addressedTo && extras.addressedTo.length > 0 ? extras.addressedTo : null,
       };
-      const participantId = extras.participantId ?? boundParticipant;
+      // A message for people alone (contract 1.51) has no answerer: nothing of the live turn applies to it.
+      const forPeople = isPeopleOnlyTurn(fields);
+      const participantId = extras.participantId ?? boundParticipant ?? (forPeople ? 0 : null);
       if (projectId === null || !conversationUuid || participantId === null || key === null) {
         return 'This conversation cannot be messaged from mobile.';
+      }
+      if (forPeople) {
+        let prepared: PreparedTurn;
+        try {
+          prepared = prepareTurn({ projectId, conversationUuid, participantId, userInput: text, ...fields, questionId: extras.questionId ?? newQuestionId() });
+        } catch (error) {
+          if (error instanceof TurnInputError) return inputErrorText(error);
+          throw error;
+        }
+        if (shouldQueue() || (await mustQueueBehindOutbox(projectId, conversationUuid))) {
+          try {
+            await queueSend(prepared, conversationRef);
+          } catch (error) {
+            log.warn('could not queue the message', { error });
+            return 'This message could not be saved to send later. Try again.';
+          }
+          return null;
+        }
+        return sendPeopleMessage(prepared, { conversationRef, onStored: () => void refreshTranscript(queryClient, projectId, conversationRef) });
       }
       const running = getLiveTurn(key);
       if (steering && running?.isActive) {
