@@ -5,6 +5,7 @@ import type { Participant } from '@/entities/participant';
 
 import { pipelineErrorMessage } from './pipelineErrorMessage';
 import { buildLlmSettingsFallback } from './pipelineChat.helpers';
+import { NAME_MAX_LENGTH, clipToLimit } from '@/shared/lib/textLimits';
 import type {
   ChatConversation,
   ChatConversationAdapter,
@@ -134,7 +135,7 @@ async function createConversationOnFirstMessage(
   try {
     const result = await adapter.createConversation({
       is_private: true,
-      name: `Chat with ${pipelineName ?? ''}`,
+      name: clipToLimit(`Chat with ${pipelineName ?? ''}`, NAME_MAX_LENGTH),
       source,
       meta: { single_participant: pipelineParticipant, internal_tools: pipelineVersionDetails?.meta?.internal_tools },
       participants: [pipelineParticipant],

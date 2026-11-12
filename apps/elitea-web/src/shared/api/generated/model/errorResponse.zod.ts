@@ -45,6 +45,18 @@ import * as zod from "zod";
 export const ErrorResponse = zod
   .object({
     error: zod.string().describe("Human-readable error message"),
+    field: zod
+      .string()
+      .optional()
+      .describe(
+        "Only on a 400 for a text property over its length limit (client contract 1.51): the request property, e.g. `name` or `description`.\n",
+      ),
+    max_length: zod
+      .int()
+      .optional()
+      .describe(
+        "Only with `field`: the limit in characters. An entity name is at most 128 characters and a description at most 2000.\n",
+      ),
   })
   .describe(
     'NOTE(W2): wire truth from pkg/apierr/apierr.go:47-59 (apierr.Write encodes `{"error": message}`) and the handlers\' inline `map[string]any{"error": ...}` writes. No operation documented in this spec emits the compatibility `ok` field via THIS schema; the five social/handler.go 500 sites (:268, 301, 321, 341, 419) use the named `SocialActionErrorResponse` schema instead (see there), and five more UNDOCUMENTED sites remain on toolkits/handler.go (:286, 312, 324, 350, 362).\n',

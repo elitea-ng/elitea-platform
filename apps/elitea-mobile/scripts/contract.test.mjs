@@ -316,6 +316,15 @@ describe('client contract 1.50', () => {
     assert.deepEqual(lane.depth.enum, [1, 2]);
     assert.equal(lane.children.items.$ref, '#/components/schemas/SubAgentLaneChild');
     assert.equal(doc.components.schemas.SubAgentLaneChild.properties.children, undefined);
-    assert.equal(doc.info['x-elitea-client-contract'], '1.50');
+  });
+});
+
+describe('client contract 1.51', () => {
+  it('states the name and description limits (issue 1968)', () => {
+    const { doc } = buildContract();
+    assert.equal(doc.info['x-elitea-client-contract'], '1.51');
+    const error = doc.components.schemas.ErrorResponse.properties;
+    assert.equal(error.field.type, 'string');
+    assert.equal(error.max_length.type, 'integer');
   });
 });

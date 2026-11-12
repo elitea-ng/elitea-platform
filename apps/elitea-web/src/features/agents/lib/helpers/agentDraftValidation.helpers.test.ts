@@ -35,9 +35,9 @@ describe('validateAgentDraft', () => {
     expect(validateAgentDraft({ name: 'n' }).description).toBe('Description is required');
   });
 
-  it('rejects a description over MAX_DESCRIPTION_LENGTH (2304)', () => {
+  it('rejects a description over MAX_DESCRIPTION_LENGTH (2000)', () => {
     const errors = validateAgentDraft({ name: 'n', description: 'x'.repeat(2305) });
-    expect(errors.description).toBe('Description must be 2304 characters or less');
+    expect(errors.description).toBe('Description must be 2000 characters or less');
   });
 
   it('rejects a welcome message over MAX_WELCOME_MESSAGE_LENGTH (768)', () => {

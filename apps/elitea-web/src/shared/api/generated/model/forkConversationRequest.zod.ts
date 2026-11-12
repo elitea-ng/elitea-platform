@@ -54,7 +54,7 @@ export const ForkConversationRequest = zod
       .string()
       .optional()
       .describe(
-        'The new conversation\'s name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 256 characters or with a control character answers 400.\n',
+        'The new conversation\'s name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 128 characters or with a control character answers 400.\n',
       ),
     mode: zod
       .string()

@@ -50,11 +50,14 @@ import { VersionMeta } from "./versionMeta.zod";
 import { VersionTag } from "./versionTag.zod";
 import { VersionVariable } from "./versionVariable.zod";
 
+export const versionWriteRequestNameMax = 128;
+
 export const versionWriteRequestNotesMax = 1000;
 
 export const VersionWriteRequest = zod.object({
   name: zod
     .string()
+    .max(versionWriteRequestNameMax)
     .optional()
     .describe(
       "Omit the key to leave the stored name alone. An explicit empty string is REFUSED with a 400 on the PUT: the column is NOT NULL and unique per application, and the create paths substitute the default version name for an empty value, so a blank name is not a state the platform can read back (issue 824).\n",

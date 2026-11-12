@@ -43,13 +43,16 @@
 import * as zod from "zod";
 import { TokenExpiration } from "./tokenExpiration.zod";
 
+export const personalAccessTokenCreateRequestNameMax = 128;
+
 export const PersonalAccessTokenCreateRequest = zod
   .object({
     name: zod
       .string()
+      .max(personalAccessTokenCreateRequestNameMax)
       .nullable()
       .describe(
-        "Required as a KEY. An absent `name` is a 400; an explicit null is stored and read back as null. Longer than 768 bytes is a 400.\n",
+        "Required as a KEY. An absent `name` is a 400; an explicit null is stored and read back as null. Longer than 128 characters is a 400.\n",
       ),
     expires: zod
       .union([TokenExpiration, zod.null()])

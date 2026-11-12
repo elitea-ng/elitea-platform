@@ -4,7 +4,7 @@
  * (byte-for-byte validation logic). Limits now come from this app's
  * `shared/lib/limits.ts` (unit S3) instead of `common/constants.js` — same
  * values (verified: `shared/lib/limits.test.ts` asserts
- * `MAX_NAME_LENGTH === 32`, `MAX_DESCRIPTION_LENGTH === 2304`,
+ * `MAX_NAME_LENGTH === 32`, `MAX_DESCRIPTION_LENGTH === 2000`,
  * `MAX_CONVERSATION_STARTERS === 4`, `MAX_CONVERSATION_STARTER_LENGTH ===
  * 768`, `MAX_WELCOME_MESSAGE_LENGTH === 768`, matching
  * `apps/elitea-ui/src/common/constants.js:66-76`).

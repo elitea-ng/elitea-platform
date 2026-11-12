@@ -115,7 +115,7 @@ describe('ApplicationEditForm', () => {
     const input = await screen.findByTestId('agent-description-input');
     // #848 — the counter's line is now reserved always (never unmounted),
     // so the SAME node is found before focus too; only its visibility toggles.
-    const counter = screen.getByText(`${2304 - 'Does things'.length} characters left`);
+    const counter = screen.getByText(`${2000 - 'Does things'.length} characters left`);
     expect(counter).not.toBeVisible();
     await userEvent.setup().click(input);
     expect(counter).toBeVisible();
@@ -203,7 +203,7 @@ describe('ApplicationEditForm', () => {
     await user.click(input);
     // #848 — the same node persists across blur (never unmounted); only its
     // visibility toggles back to hidden.
-    const counter = screen.getByText(`${2304 - 'Does things'.length} characters left`);
+    const counter = screen.getByText(`${2000 - 'Does things'.length} characters left`);
     expect(counter).toBeVisible();
     await user.tab();
     expect(counter).not.toBeVisible();
