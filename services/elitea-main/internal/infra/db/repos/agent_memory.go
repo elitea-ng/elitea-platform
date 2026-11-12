@@ -825,6 +825,78 @@ func (s *AgentMemory) SubjectOptedOut(ctx context.Context, projectID, applicatio
 	return opted, err
 }
 
+// PurgeDeletedAgents is the retention sweep of agent memory (ADR-0042, issue
+// 1658). It records the agents of the project whose memory has no agent any
+// more (a delete before tenant/0171 wrote no row), forgets a record whose
+// agent exists again, then deletes the entries, versions and opt-outs of up
+// to limit agents recorded before cutoff that no active legal hold covers
+// (the project's, or the agent's). Each agent is one transaction and one
+// agent.memory.cleared audit event. It answers how many agents it cleared.
+func (s *AgentMemory) PurgeDeletedAgents(ctx context.Context, projectID int64, cutoff time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	schema, err := tenantschema.QuoteInt(projectID)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.pool.Exec(ctx, fmt.Sprintf(`
+INSERT INTO %[1]s.agent_memory_orphans (application_id)
+SELECT held.application_id
+FROM (SELECT application_id FROM %[1]s.agent_memory_entries
+      UNION
+      SELECT application_id FROM %[1]s.agent_memory_subject_optouts) AS held
+WHERE NOT EXISTS (SELECT 1 FROM %[1]s.applications AS agent WHERE agent.id = held.application_id)
+ON CONFLICT (application_id) DO NOTHING`, schema)); err != nil {
+		return 0, fmt.Errorf("agent memory: record agents without an application: %w", err)
+	}
+	if _, err := s.pool.Exec(ctx, fmt.Sprintf(`
+DELETE FROM %[1]s.agent_memory_orphans AS orphan
+WHERE EXISTS (SELECT 1 FROM %[1]s.applications AS agent WHERE agent.id = orphan.application_id)`, schema)); err != nil {
+		return 0, fmt.Errorf("agent memory: forget restored agents: %w", err)
+	}
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+SELECT orphan.application_id
+FROM %[1]s.agent_memory_orphans AS orphan
+WHERE orphan.first_seen_at < $2
+  AND NOT EXISTS (
+      SELECT 1 FROM elitea_runtime.legal_holds AS hold
+      WHERE hold.released_at IS NULL
+        AND ((hold.scope = 'project' AND hold.project_id = $1)
+          OR (hold.scope = 'agent' AND hold.project_id = $1 AND hold.agent_id = orphan.application_id)))
+ORDER BY orphan.first_seen_at, orphan.application_id
+LIMIT $3`, schema), projectID, cutoff, limit)
+	if err != nil {
+		return 0, fmt.Errorf("agent memory: list the agents due for a purge: %w", err)
+	}
+	due, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		return 0, fmt.Errorf("agent memory: list the agents due for a purge: %w", err)
+	}
+	cleared := 0
+	for _, applicationID := range due {
+		err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+			if err := lockAgent(ctx, tx, projectID, applicationID); err != nil {
+				return err
+			}
+			for _, table := range []string{"agent_memory_entries", "agent_memory_subject_optouts"} {
+				if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.%s WHERE application_id = $1`, schema, table), applicationID); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.agent_memory_orphans WHERE application_id = $1`, schema), applicationID); err != nil {
+				return err
+			}
+			return s.append(ctx, tx, projectID, "agent.memory.cleared", 0, applicationID, 0, "retention_after_deletion", "")
+		})
+		if err != nil {
+			return cleared, fmt.Errorf("agent memory: purge the memory of agent %d: %w", applicationID, err)
+		}
+		cleared++
+	}
+	return cleared, nil
+}
+
 // IsAgentOwner reports whether userID is a registry owner of the agent.
 func (s *AgentMemory) IsAgentOwner(ctx context.Context, projectID, applicationID, userID int64) (bool, error) {
 	var owner bool

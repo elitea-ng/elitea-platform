@@ -1398,7 +1398,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// sub-agent lane (chat_message_subagent_lanes), replacing the
 	// whole-array rewrite of chat_message_group.meta.subagents_v1 (#1823
 	// follow-up, issue 1923). No data, no permission.
-	require.EqualValues(t, 170, Head(tenant))
+	//
+	// 171: tenant/0171_agent_memory_orphans.sql, when an agent's memory
+	// lost its agent, so the retention sweep can purge it after the
+	// retention period (ADR-0042, issue 1658). No data, no permission.
+	require.EqualValues(t, 171, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
