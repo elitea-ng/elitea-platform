@@ -7,7 +7,10 @@ import { exceedsLimit, TextField } from '@/ui';
 /** True when `draft` is a name worth saving: not blank and not the current name. */
 export function canSaveName(draft: string, current: string | null | undefined): boolean {
   const name = cleanConversationName(draft);
-  return name !== null && !exceedsLimit(name, CONVERSATION_NAME_MAX) && name !== (current ?? '').trim();
+  // The limit is judged on what the person typed: cleanConversationName clips
+  // to the limit for the queue, so checking its result would let an
+  // over-limit draft through and save a cut name.
+  return name !== null && !exceedsLimit(draft.trim(), CONVERSATION_NAME_MAX) && name !== (current ?? '').trim();
 }
 
 /**
