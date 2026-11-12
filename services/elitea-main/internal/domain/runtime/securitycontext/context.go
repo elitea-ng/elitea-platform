@@ -51,6 +51,11 @@ var (
 	ErrInvalidContext = errors.New("execution security context is invalid")
 	// ErrDigestMismatch is stored bytes that do not hash to the reference.
 	ErrDigestMismatch = errors.New("execution security context digest mismatch")
+	// ErrNotInheritable is a parent context a child may not inherit from (it
+	// is another project's). It is a governed denial, not a fault: the child
+	// takes a context that binds no agent, and the broker denies it before
+	// any secret is read.
+	ErrNotInheritable = errors.New("the parent execution security context is not inheritable")
 )
 
 // Caller names how the subject reached Elitea.
@@ -385,7 +390,7 @@ func hasUnknown(message protoreflect.Message) bool {
 // its own agent session.
 func InheritedFrom(parent *runtimev1.ExecutionSecurityContextV1, policyRevisionID string, policyDigest runtimedomain.Digest, tenantProjectID int64, issuedAt time.Time) (Context, error) {
 	if parent == nil || parent.GetTenantProjectId() != tenantProjectID {
-		return Context{}, fmt.Errorf("%w: the parent context is not this project's", ErrInvalidContext)
+		return Context{}, fmt.Errorf("%w: the parent context is not this project's", ErrNotInheritable)
 	}
 	out := Context{
 		PolicyRevisionID:    policyRevisionID,

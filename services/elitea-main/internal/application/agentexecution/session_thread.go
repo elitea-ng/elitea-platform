@@ -1,9 +1,6 @@
 package agentexecution
 
-import (
-	"context"
-	"strconv"
-)
+import "strconv"
 
 // The worker keys an agent's durable session by the frozen request's thread
 // id (with the actor and the project). A turn of a single-agent conversation,
@@ -41,18 +38,19 @@ func IsParticipantSessionThread(threadID, conversationUUID string) bool {
 		threadID[len(conversationUUID)] == ':'
 }
 
-// conversationHasSeveralAgents reports whether the conversation has two or
-// more agent participants, the condition for per-participant session
-// threads. A service without a floor store reads none, as planFloor does.
-func (service *CurrentApplicationStartService) conversationHasSeveralAgents(
-	ctx context.Context, projectID int64, conversationUUID string,
-) (bool, error) {
-	if service.floor == nil {
-		return false, nil
+// sessionThreadID is the thread a start freezes for participantID. The floor
+// plan is non-nil exactly when the conversation has several agents (planFloor),
+// so this is the one place a start decides per-participant threads.
+func (plan *floorPlan) sessionThreadID(conversationUUID string, participantID int64) string {
+	return SessionThreadID(conversationUUID, participantID, plan != nil)
+}
+
+// regenerationSessionThread is the thread a regeneration freezes: the one its
+// answer persisted, else (an answer from before the thread was recorded) the
+// conversation's.
+func regenerationSessionThread(target CurrentRegenerationTarget) string {
+	if target.ThreadID != "" {
+		return target.ThreadID
 	}
-	conversation, err := service.floor.ConversationFloor(ctx, projectID, conversationUUID)
-	if err != nil {
-		return false, err
-	}
-	return len(conversation.Agents) >= 2, nil
+	return target.ConversationUUID
 }

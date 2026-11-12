@@ -145,6 +145,26 @@ struct SensitiveToolEntry {
 }
 
 impl SensitiveToolEntry {
+    /// The tool is in `external_send` or `payment`: the categories the grant
+    /// admission withholds or gates behind a `hitl` node, by the agent's tier.
+    fn is_withholdable_category(&self) -> bool {
+        use elitea_agent_runtime::approval_policy::ApprovalRule;
+        use elitea_agent_runtime::tool_category::{ToolCategory, declared_category};
+        let category = match self.policy.rule() {
+            ApprovalRule::Policy { category, .. }
+            | ApprovalRule::UntrustedReadThenAct { category } => Some(category),
+            ApprovalRule::Platform | ApprovalRule::Builtin => {
+                declared_category(self.policy.toolkit_type(), self.policy.action_name())
+            }
+        };
+        matches!(
+            category,
+            Some(ToolCategory::ExternalSend | ToolCategory::Payment)
+        )
+    }
+}
+
+impl SensitiveToolEntry {
     /// A "read untrusted, then act" candidate (ADR-0043 decision 4): a
     /// conditional entry whose call has an effect outside the run, so an
     /// approved call that may have started is never run again.
@@ -211,12 +231,34 @@ impl SensitiveToolCatalog {
     /// to it. Call this before `bind_provider_names`, because the provider
     /// names copy the scoped entries.
     #[must_use]
-    pub(crate) fn with_unattended_grant(mut self, grant: Option<&UnattendedGrant>) -> Self {
+    pub(crate) fn with_unattended_grant(self, grant: Option<&UnattendedGrant>) -> Self {
+        self.apply_unattended_grant(grant, false)
+    }
+
+    /// `with_unattended_grant` for a nested agent. Main admitted the grant
+    /// against the ROOT agent's toolkits: the withheld categories (default
+    /// `payment`) and the tier rule that requires a `hitl` node for
+    /// `external_send` and `payment` tools were checked for the root's tool
+    /// of that name. A nested agent's tool of the same name is another
+    /// toolkit, and the worker holds neither setting, so the nested agent
+    /// does not take the grant for a tool in those two categories (fail
+    /// closed): the call pauses for the person as before (ADR-0045
+    /// decisions 1 and 2). Its other limits already hold: the run's tier,
+    /// caps and delegation depth are the root's and are enforced run-wide.
+    #[must_use]
+    pub(crate) fn with_nested_unattended_grant(self, grant: Option<&UnattendedGrant>) -> Self {
+        self.apply_unattended_grant(grant, true)
+    }
+
+    fn apply_unattended_grant(mut self, grant: Option<&UnattendedGrant>, nested: bool) -> Self {
         let Some(grant) = grant.filter(|grant| grant.has_sensitive_tools()) else {
             return self;
         };
         self.unattended_grant = Some(Arc::new(grant.clone()));
         for (identity, entry) in &mut self.scoped_entries {
+            if nested && entry.is_withholdable_category() {
+                continue;
+            }
             if !entry.conditional && grant.names_tool(&identity.toolkit_name, &identity.tool_name) {
                 entry.granted = Some(GrantedApproval::new(
                     Arc::clone(grant.grant_id()),
@@ -1015,6 +1057,50 @@ mod tests {
                 .with_workspace_command()
                 .is_err()
         );
+    }
+
+    /// #1560 review: a nested agent takes the run's grant for an ordinary
+    /// tool but not for an `external_send` one, whose withheld-category and
+    /// tier checks Main ran against the root agent's toolkits. The root agent
+    /// itself keeps both.
+    #[test]
+    fn a_nested_agent_never_takes_the_grant_for_a_send_or_payment_tool() {
+        let runtime = json!({"toolkit_security": {"sensitive_tools": {
+            "slack": ["send_message"], "jira": ["create_issue"]}}});
+        let policy =
+            super::ToolAdmissionPolicy::from_runtime_config(runtime.as_object().expect("object"))
+                .expect("policy");
+        for (toolkit_type, tool, nested_granted) in [
+            ("slack", "send_message", false),
+            ("jira", "create_issue", true),
+        ] {
+            let grant = UnattendedGrant::fixture(&[("fixture", tool)], false);
+            let entry = || {
+                SensitiveToolCatalog::fixture(
+                    tool,
+                    policy
+                        .sensitive_tool(toolkit_type, "Kit", tool)
+                        .expect("policy"),
+                    false,
+                )
+                .expect("catalog")
+            };
+            assert!(
+                entry()
+                    .with_unattended_grant(Some(&grant))
+                    .granted_for(tool)
+                    .is_some(),
+                "{tool}: the root agent takes the grant"
+            );
+            assert_eq!(
+                entry()
+                    .with_nested_unattended_grant(Some(&grant))
+                    .granted_for(tool)
+                    .is_some(),
+                nested_granted,
+                "{tool}: nested"
+            );
+        }
     }
 
     /// ADR-0034 decision 10 (amended 2026-10-26): `open_pull_request` is

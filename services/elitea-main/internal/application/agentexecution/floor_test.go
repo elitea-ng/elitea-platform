@@ -276,3 +276,31 @@ func TestSessionThreadHelpers(t *testing.T) {
 		}
 	}
 }
+
+// Issue 1869: a regeneration reuses the thread its answer persisted, so start
+// and regenerate cannot disagree and no conversation read decides it again.
+func TestRegenerationSessionThreadReusesThePersistedThread(t *testing.T) {
+	const conversation = "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1a01"
+	target := CurrentRegenerationTarget{ConversationUUID: conversation, TargetParticipantID: 21}
+	if got := regenerationSessionThread(target); got != conversation {
+		t.Fatalf("an answer with no thread = %q, want the conversation's", got)
+	}
+	target.ThreadID = conversation + ":21"
+	if got := regenerationSessionThread(target); got != conversation+":21" {
+		t.Fatalf("persisted thread = %q", got)
+	}
+}
+
+// A start names its agent: participant 0 is refused before any thread is
+// chosen, so no multi-agent start can fall back to the shared thread.
+func TestStartWithoutAParticipantIsRefusedBeforeAThreadIsChosen(t *testing.T) {
+	request := validCurrentApplicationStartRequest()
+	request.TargetParticipantID = 0
+	service, admissions := floorStartService(t, twoAgentFloor())
+	if _, err := service.StartCurrentApplication(context.Background(), request); err == nil {
+		t.Fatal("a start with no participant was admitted")
+	}
+	if len(admissions.requests) != 0 {
+		t.Fatal("a start with no participant reached admission")
+	}
+}

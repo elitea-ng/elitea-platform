@@ -491,6 +491,11 @@ LIMIT 1`, facts.tenantProjectID, built.AgentBindingID, userID, facts.admittedAt)
 	return nil
 }
 
+// ErrParentSecurityContextMissing is a governed parent run that has no stored
+// security context: its child cannot inherit, and admission fails loudly
+// rather than record an unbound context.
+var ErrParentSecurityContextMissing = errors.New("the governed parent run has no stored security context")
+
 // admitChildExecutionProfile is admitExecutionProfile for a child that runs
 // inside another execution: a code-sandbox toolkit call made from a code job
 // (issue 1557). A governed child inherits the parent run's binding and frozen
@@ -535,7 +540,19 @@ SELECT context_bytes, digest, content_id, schema_revision
 FROM elitea_runtime.execution_security_contexts
 WHERE execution_id = $1`, parentExecutionID).Scan(&parentBytes, &parentDigest, &parentContent, &parentSchema)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// The parent run is not governed: nothing to inherit.
+		// A parent that is not governed has nothing to inherit. A governed
+		// parent with no context row is a fault: recording an unbound child
+		// would read as "not governed" and hide it.
+		var governed bool
+		if err := rows(ctx, `
+SELECT EXISTS (SELECT 1 FROM elitea_runtime.execution_admission_profiles
+               WHERE execution_id = $1 AND profile = 'elitea.credential-profile.governed.v1')`,
+			parentExecutionID).Scan(&governed); err != nil {
+			return securitycontext.Reference{}, fmt.Errorf("read the parent run's admission profile: %w", err)
+		}
+		if governed {
+			return securitycontext.Reference{}, ErrParentSecurityContextMissing
+		}
 		return recordSecurityContext(ctx, tx, rows, pin.executionID, facts)
 	}
 	if err != nil {
@@ -551,6 +568,11 @@ WHERE execution_id = $1`, parentExecutionID).Scan(&parentBytes, &parentDigest, &
 		return securitycontext.Reference{}, fmt.Errorf("verify the parent run's security context: %w", err)
 	}
 	built, err := securitycontext.InheritedFrom(message, *revisionID, runtimedomain.Digest(digestArray(digest)), facts.tenantProjectID, facts.admittedAt)
+	if errors.Is(err, securitycontext.ErrNotInheritable) {
+		// Another project's parent: nothing is inherited, so the child binds
+		// no agent and the broker denies it (credential_reference_not_frozen).
+		return recordSecurityContext(ctx, tx, rows, pin.executionID, facts)
+	}
 	if err != nil {
 		return securitycontext.Reference{}, err
 	}

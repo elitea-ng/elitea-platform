@@ -87,7 +87,7 @@ const idleRunExclusion = `NOT EXISTS (SELECT 1 FROM elitea_runtime.agent_idle_co
 // check. A peer's running turn on a shared session defers the check to the
 // next sweep; it never cancels it, and it never stops the agent's own
 // settled turn from arming one. $1 conversation uuid text, $2 participant,
-// $3 projection project, $4 an execution to leave out ('' for none), $5 the
+// $3 projection project, $4 an execution to leave out (” for none), $5 the
 // sweep/admission form, $6 the session is conversation-wide. Index
 // agent_execution_jobs_current_correlation_idx leads with client_stream_id.
 const participantLatestSQL = `

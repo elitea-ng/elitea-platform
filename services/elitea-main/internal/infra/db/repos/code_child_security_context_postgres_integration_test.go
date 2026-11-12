@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -105,15 +106,48 @@ VALUES ($1, $2, $3, $4, $5)`, "code-parent-exec", ref.ContentID, ref.SchemaRevis
 		t.Fatalf("a call outside a run bound an agent: %+v", outside)
 	}
 
-	// A parent from another project is refused.
+	// A parent from another project is not inherited: a clean governed
+	// denial (the child binds no agent), not an admission fault.
+	var foreign securitycontext.Reference
 	err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
-		_, err := admitChildExecutionProfile(ctx, tx, pgxRows(tx), admission,
+		var err error
+		foreign, err = admitChildExecutionProfile(ctx, tx, pgxRows(tx), admission,
 			admissionPin{executionID: "code-child-other-project"},
 			securityContextFacts{tenantProjectID: 8, actorID: "5", admittedAt: now}, "code-parent-exec")
 		return err
 	})
-	if err == nil {
-		t.Fatal("a parent context of another project was inherited")
+	if err != nil {
+		t.Fatalf("a parent of another project failed admission: %v", err)
+	}
+	var foreignBytes []byte
+	if err := pool.QueryRow(ctx, `SELECT context_bytes FROM elitea_runtime.execution_security_contexts WHERE execution_id = $1`,
+		"code-child-other-project").Scan(&foreignBytes); err != nil {
+		t.Fatal(err)
+	}
+	foreignMessage, err := securitycontext.Verify(foreignBytes, foreign)
+	if err != nil || foreignMessage.GetAgentBindingId() != "" || len(foreignMessage.GetCredentialReferences()) != 0 {
+		t.Fatalf("a foreign parent was inherited: %+v %v", foreignMessage, err)
+	}
+
+	// A governed parent whose context row is missing fails loudly; a parent
+	// that was never governed gives the child an unbound context.
+	if err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		return pinExecutionAdmission(ctx, tx, admission, admissionPin{executionID: "governed-parent-no-context"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		_, err := admitChildExecutionProfile(ctx, tx, pgxRows(tx), admission,
+			admissionPin{executionID: "code-child-orphan"},
+			securityContextFacts{tenantProjectID: 7, actorID: "5", admittedAt: now}, "governed-parent-no-context")
+		return err
+	})
+	if !errors.Is(err, ErrParentSecurityContextMissing) {
+		t.Fatalf("a governed parent with no context: %v", err)
+	}
+	ungoverned := stored("code-child-ungoverned-parent", admit("code-child-ungoverned-parent", "never-admitted-parent"))
+	if ungoverned.AgentBindingID != "" || len(ungoverned.CredentialReferences) != 0 {
+		t.Fatalf("an ungoverned parent bound an agent: %+v", ungoverned)
 	}
 }
 
