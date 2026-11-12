@@ -35,6 +35,22 @@ describe('LanguageSync', () => {
     expect(createStorage('local').get('lang')).toBe('de');
   });
 
+  it('does not reload when the cache refuses the value (no reload loop)', async () => {
+    server.use(http.get(URL, () => HttpResponse.json({ language: 'de' })));
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('blocked', 'SecurityError');
+    });
+    const reload = vi.fn<() => void>();
+    try {
+      render(<LanguageSync reload={reload} />);
+      await waitFor(() => expect(setItem).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
   it('leaves the page alone when the server already agrees', async () => {
     let reads = 0;
     server.use(

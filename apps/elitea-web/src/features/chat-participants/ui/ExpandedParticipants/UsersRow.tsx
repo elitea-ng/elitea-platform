@@ -16,7 +16,7 @@
  * stylesheet alone would also reveal it under a stray pointer during a
  * scroll.
  */
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
@@ -111,6 +111,11 @@ export const UsersRow = memo(function UsersRow({
 }: UsersRowProps): ReactNode {
   const [expanded, setExpanded] = useState(false);
   const canExpand = hiddenUsers.length > 0;
+  // Nothing hidden any more (people removed, the row grew): fold away, so a
+  // later overflow starts collapsed rather than already open.
+  useEffect(() => {
+    if (!canExpand) setExpanded(false);
+  }, [canExpand]);
   return (
     <Box sx={vertical ? styles.usersColumn : styles.usersRow()} data-testid="users-section">
       <Box sx={vertical ? styles.usersColumn : styles.usersDisplay}>

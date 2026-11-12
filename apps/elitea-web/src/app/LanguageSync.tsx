@@ -38,7 +38,10 @@ export default function LanguageSync({ reload = reloadPage }: LanguageSyncProps)
         await saveLanguagePreference(action.locale);
       } else if (action.kind === 'apply') {
         saveLocale(action.locale);
-        reload();
+        // Only reload when the cache took the value: with storage refused the
+        // next boot would read the old language, decide `apply` again and
+        // reload forever. The language then stays as it is on this device.
+        if (storedLocale() === action.locale) reload();
       }
     })();
     return () => {

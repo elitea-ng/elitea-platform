@@ -24,4 +24,11 @@ void applyStartLocale()
         <App />
       </StrictMode>,
     );
+  })
+  .catch((error: unknown) => {
+    // The app chunk did not load (a stale deploy, a network blip). With the
+    // static import this failed loudly; a dynamic one would leave a blank
+    // page, so say so and let a reload fetch the current build.
+    console.error('elitea-web: the application failed to load', error);
+    container.textContent = 'The application failed to load. Reload the page to try again.';
   });

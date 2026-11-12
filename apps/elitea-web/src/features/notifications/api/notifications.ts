@@ -205,7 +205,9 @@ export async function deleteNotification(
  * the UI carries ids as strings (`normalize.ts`), so a string id sent as-is is a 400.
  */
 function toWireIds(ids: readonly (string | number)[]): number[] {
-  return ids.map((id) => Number(id));
+  // An id that is not an integer cannot name a notification; sending it
+  // would serialise as null and fail the whole call.
+  return ids.map((id) => Number(id)).filter((id) => Number.isInteger(id));
 }
 
 export async function bulkDeleteNotifications(
