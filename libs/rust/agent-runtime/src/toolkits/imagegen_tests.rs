@@ -1044,10 +1044,11 @@ async fn the_internal_tool_defaults_and_auto_leave_size_and_quality_to_the_model
 async fn an_unknown_model_passes_a_free_quality_through() {
     let (host, tools) = internal_tool(FakeHost::default(), Some("my-flux"), Ok("conv")).await;
     run_internal(&tools, json!({"prompt": "x", "quality": "ultra", "n": 3})).await;
-    let asked = host.generated.lock().expect("generated");
-    assert_eq!(asked[0].quality.as_deref(), Some("ultra"));
-    assert_eq!(asked[0].count, 3);
-    drop(asked);
+    {
+        let asked = host.generated.lock().expect("generated");
+        assert_eq!(asked[0].quality.as_deref(), Some("ultra"));
+        assert_eq!(asked[0].count, 3);
+    }
     // The conservative size list: only `auto`.
     let out = run_internal(&tools, json!({"prompt": "x", "size": "1024x1024"})).await;
     let (reason, message, retryable) = failure(&out);
