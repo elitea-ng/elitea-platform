@@ -73,13 +73,11 @@ func TestParseMentionedUserIDsRefusesAnUnboundedAudience(t *testing.T) {
 	}
 }
 
-// A model (ad-hoc) chat carries the mention list to its use case too. Before
-// client contract 1.1 the route parsed `user_ids` and then dropped it for
-// this contract, so a person tagged in a model chat was never told.
-func TestCurrentAdhocStartRouteCarriesMentionsToTheUseCase(t *testing.T) {
-	useCase := &currentStartUseCaseStub{outcome: agentexecutionapp.CurrentApplicationStartOutcome{
-		ExecutionID: "execution-adhoc", CommandID: "command-adhoc",
-	}}
+// A mention with no addressed agent is a message for those people alone: the
+// ad-hoc contract does not start a model turn for it either, and the people it
+// names reach the use case that stores the message and notifies them.
+func TestCurrentAdhocStartRoutePostsAPeopleOnlyMessageWithoutATurn(t *testing.T) {
+	useCase := &currentStartUseCaseStub{}
 	route := newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
 	body := strings.Replace(validCurrentAdhocStartBody(), `"project_id":7,`,
 		`"project_id":7,"user_ids":[12,13,12],"is_mentioning_everyone":true,`, 1)
@@ -87,13 +85,79 @@ func TestCurrentAdhocStartRouteCarriesMentionsToTheUseCase(t *testing.T) {
 	response := httptest.NewRecorder()
 	route.ServeHTTP(response, currentAdhocStartRequest(body))
 
-	if response.Code != http.StatusOK || useCase.adhocCalls != 1 {
-		t.Fatalf("status=%d adhoc_calls=%d body=%s", response.Code, useCase.adhocCalls, response.Body.String())
+	if response.Code != http.StatusCreated || useCase.postedCalls != 1 || useCase.adhocCalls != 0 || useCase.calls != 0 {
+		t.Fatalf("status=%d posted=%d adhoc=%d app=%d body=%s", response.Code, useCase.postedCalls, useCase.adhocCalls, useCase.calls, response.Body.String())
 	}
-	if got := useCase.adhocRequest.MentionedUserIDs; !reflect.DeepEqual(got, []int64{12, 13}) {
+	if got := useCase.postedRequest.MentionedUserIDs; !reflect.DeepEqual(got, []int64{12, 13}) {
 		t.Fatalf("mentions = %v, want the deduplicated [12 13]", got)
 	}
-	if !useCase.adhocRequest.MentionsEveryone {
+	if !useCase.postedRequest.MentionsEveryone {
 		t.Fatal("is_mentioning_everyone was dropped")
+	}
+	var answer map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &answer); err != nil {
+		t.Fatal(err)
+	}
+	if answer["turn_started"] != false || answer["created"] != true || answer["message_id"] != "ee92ccbd-3312-4c72-b20b-fddf224e7c0e" {
+		t.Fatalf("answer = %v", answer)
+	}
+	if _, has := answer["events_url"]; has {
+		t.Fatalf("a message with no turn has no events_url: %v", answer)
+	}
+}
+
+// The people-only decision is made on the mentions and the addressed agents
+// alone: a participant_id (what a client fills in for any unaddressed message)
+// and the application contract do not start the picked or last-addressed
+// agent, and a message with no mention is unchanged.
+func TestCurrentApplicationStartRouteDecidesWhoAnswersFromTheMentionsAndAddressees(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		extra      string
+		wantPosted bool
+		wantTurn   bool
+	}{
+		{name: "people only, with a sticky participant", extra: `"user_ids":[12],`, wantPosted: true},
+		{name: "camelCase mention list", extra: `"userIds":[12],`, wantPosted: true},
+		{name: "everyone", extra: `"is_mentioning_everyone":true,`, wantPosted: true},
+		{name: "people and an addressed agent", extra: `"user_ids":[12],"addressed_to":[21],`, wantTurn: true},
+		{name: "no mention", extra: ``, wantTurn: true},
+		{name: "an empty mention list", extra: `"user_ids":[],`, wantTurn: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useCase := &currentStartUseCaseStub{outcome: agentexecutionapp.CurrentApplicationStartOutcome{
+				ExecutionID: "execution-1", CommandID: "command-1", ResponseMessageID: "response-1", Created: true,
+			}}
+			route := newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
+			body := strings.Replace(validCurrentStartBody(), `"project_id":7,`, `"project_id":7,`+tc.extra, 1)
+
+			response := httptest.NewRecorder()
+			route.ServeHTTP(response, currentStartRequest(body))
+
+			if (useCase.postedCalls == 1) != tc.wantPosted || (useCase.calls == 1) != tc.wantTurn {
+				t.Fatalf("posted=%d turns=%d body=%s", useCase.postedCalls, useCase.calls, response.Body.String())
+			}
+			if tc.wantTurn {
+				if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "events_url") {
+					t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+				}
+				if strings.Contains(tc.extra, "addressed_to") && !reflect.DeepEqual(useCase.request.MentionedUserIDs, []int64{12}) {
+					t.Fatalf("a mixed message still notifies its people: %v", useCase.request.MentionedUserIDs)
+				}
+			}
+		})
+	}
+}
+
+func TestCurrentApplicationStartRouteRefusesAPeopleOnlyMessageTheServiceCannotStore(t *testing.T) {
+	useCase := &currentStartUseCaseStub{err: agentexecutionapp.ErrPeopleMessagesUnavailable}
+	route := newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
+	body := strings.Replace(validCurrentStartBody(), `"project_id":7,`, `"project_id":7,"user_ids":[12],`, 1)
+
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentStartRequest(body))
+
+	if response.Code != http.StatusUnprocessableEntity || useCase.calls != 0 {
+		t.Fatalf("status=%d turns=%d body=%s", response.Code, useCase.calls, response.Body.String())
 	}
 }

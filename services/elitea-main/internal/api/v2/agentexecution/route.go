@@ -57,6 +57,11 @@ type StartUseCase interface {
 		context.Context,
 		agentexecutionapp.CurrentAdhocStartRequest,
 	) (agentexecutionapp.CurrentApplicationStartOutcome, error)
+	// PostPeopleMessage stores a message for people alone and starts no turn.
+	PostPeopleMessage(
+		context.Context,
+		agentexecutionapp.CurrentApplicationStartRequest,
+	) (agentexecutionapp.PostedMessage, error)
 	RegenerateCurrentAgent(
 		context.Context,
 		agentexecutionapp.CurrentRegenerationRequest,
@@ -336,6 +341,40 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 		return
 	}
 	origin := startTriggerOrigin(user)
+	// A message for people alone starts no turn (people_message.go). Decided
+	// here, on the mentions and the addressed agents, before any participant
+	// or contract rule: `participant_id` is what a client fills in for any
+	// unaddressed message, so it cannot say an agent was addressed.
+	if agentexecutionapp.PeopleOnly(mentioned, body.SendingToEveryone, body.AddressedTo) {
+		posted, err := handler.useCase.PostPeopleMessage(
+			request.Context(),
+			agentexecutionapp.CurrentApplicationStartRequest{
+				ProjectID: projectID, ActorUserID: actorUserID,
+				ConversationUUID: conversationID,
+				QuestionID:       body.QuestionID, UserInput: body.Payload.UserInput,
+				InteractionUUID:  body.InteractionUUID,
+				Attachments:      attachments,
+				MentionedUserIDs: mentioned,
+				MentionsEveryone: body.SendingToEveryone,
+				TriggerOrigin:    origin,
+			},
+		)
+		if err != nil {
+			slog.Error("people-only message post failed", "err", err)
+			if errors.Is(err, agentexecutionapp.ErrPeopleMessagesUnavailable) {
+				writeUnsupported(writer)
+				return
+			}
+			writeStartError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusCreated, map[string]any{
+			"message_id":   posted.MessageID,
+			"created":      posted.Created,
+			"turn_started": false,
+		})
+		return
+	}
 	var outcome agentexecutionapp.CurrentApplicationStartOutcome
 	switch contract {
 	case CurrentApplicationStartContract:

@@ -29,6 +29,21 @@ type currentStartUseCaseStub struct {
 	adhocCalls          int
 	regenerationCalls   int
 	continuationCalls   int
+	postedCalls         int
+	postedRequest       agentexecutionapp.CurrentApplicationStartRequest
+	posted              agentexecutionapp.PostedMessage
+}
+
+func (stub *currentStartUseCaseStub) PostPeopleMessage(
+	_ context.Context,
+	request agentexecutionapp.CurrentApplicationStartRequest,
+) (agentexecutionapp.PostedMessage, error) {
+	stub.postedCalls++
+	stub.postedRequest = request
+	if stub.posted == (agentexecutionapp.PostedMessage{}) {
+		return agentexecutionapp.PostedMessage{MessageID: request.QuestionID, Created: true}, stub.err
+	}
+	return stub.posted, stub.err
 }
 
 func (stub *currentStartUseCaseStub) ContinueCurrentAgent(
