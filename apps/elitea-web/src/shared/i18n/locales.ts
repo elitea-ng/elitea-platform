@@ -67,7 +67,7 @@ function cataloguesOf(locale: Locale): Array<() => Promise<Catalogue>> {
     .map(([, load]) => load);
 }
 
-function isLocale(value: unknown): value is Locale {
+export function isLocale(value: unknown): value is Locale {
   return LOCALES.some(({ code }) => code === value);
 }
 
@@ -104,7 +104,7 @@ export function detectLocale(languages: readonly string[]): Locale {
 }
 
 /** The person's own choice, if they made one on this device. */
-function storedLocale(): Locale | undefined {
+export function storedLocale(): Locale | undefined {
   try {
     const value = createStorage('local').get(LOCALE_STORAGE_KEY);
     return isLocale(value) ? value : undefined;
