@@ -219,6 +219,21 @@ describe('InstructionsInput sizing (#1979)', () => {
     expect(css, 'the viewport-tall default must not apply').not.toContain('100vh - 220px');
   });
 
+  it('keeps line numbers for a pipeline\'s YAML instructions, still capped', () => {
+    const { container } = renderWithProviders(
+      <InstructionsInput
+        instructions={'state:\n  input: str'}
+        onInstructionsChange={vi.fn()}
+        lineNumbers
+      />,
+    );
+    const editor = container.querySelector('.cm-editor');
+    const gutters = container.querySelector('.cm-gutters');
+    expect(gutters).toBeInstanceOf(HTMLElement);
+    expect(getComputedStyle(gutters as HTMLElement).display, 'YAML keeps its line numbers').not.toBe('none');
+    expect(getComputedStyle(editor as HTMLElement).maxHeight).toBe('384px');
+  });
+
   it('shows the "/" mention list in full, outside the capped editor, so the compact field cannot clip it', async () => {
     const user = userEvent.setup();
     const { container } = renderWithProviders(

@@ -22,7 +22,7 @@ import { useInstructionsSkillMention } from '../lib/hooks/useInstructionsSkillMe
 import type { FilteredSkillMentionItem } from '../lib/hooks/useInstructionsSkillMention.hooks';
 
 import { InstructionsFullscreenButton } from './InstructionsFullscreenButton';
-import { instructionsSizingExtension } from './InstructionsInput.sizing';
+import { instructionsProseExtension, instructionsSizingExtension } from './InstructionsInput.sizing';
 import { InstructionsSlashSuggestionList } from './InstructionsSlashSuggestionList';
 
 /**
@@ -94,6 +94,7 @@ export interface InstructionsInputProps {
   readonly tools?: readonly MentionableTool[] | undefined;
   /** See `useInstructionsMention`'s own doc comment, deviation 2 — optional injected MCP-login-state predicate. Omit to treat every MCP tool as logged in (no additional filtering). */
   readonly isToolLoggedIn?: ((tool: MentionableTool) => boolean) | undefined;
+  readonly lineNumbers?: boolean | undefined; // keep the gutter: a pipeline's YAML (agent prose hides it)
 }
 
 /** Presentational "~" skill-mention dropdown — ported inline from the baseline's `features/skill/ui/MentionSkillList.jsx` (no `features/skill` slice exists in this app yet to host a standalone port; this cluster owns `InstructionsInput.tsx`, not a new file). Structurally identical to `InstructionsSlashSuggestionList`'s own "items" branch, minus the tools drill-down phase skills don't have. */
@@ -182,6 +183,7 @@ export function InstructionsInput({
   versionId,
   tools,
   isToolLoggedIn,
+  lineNumbers = false,
 }: InstructionsInputProps): ReactNode {
   const theme = useTheme();
   const highlightColor = theme.vars.palette.text.info;
@@ -283,8 +285,8 @@ export function InstructionsInput({
   );
 
   const extensions = useMemo(
-    () => [...mention.codeMirrorExtensions, ...skillMention.codeMirrorExtensions, viewCaptureExtension, keydownExtension, instructionsSizingExtension],
-    [mention.codeMirrorExtensions, skillMention.codeMirrorExtensions, viewCaptureExtension, keydownExtension],
+    () => [...mention.codeMirrorExtensions, ...skillMention.codeMirrorExtensions, viewCaptureExtension, keydownExtension, instructionsSizingExtension, ...(lineNumbers ? [] : [instructionsProseExtension])],
+    [mention.codeMirrorExtensions, skillMention.codeMirrorExtensions, viewCaptureExtension, keydownExtension, lineNumbers],
   );
 
   // `InstructionsSlashSuggestionList.onSelectItem` is typed against its own narrow

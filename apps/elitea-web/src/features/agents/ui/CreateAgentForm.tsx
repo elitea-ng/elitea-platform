@@ -357,6 +357,7 @@ export function CreateAgentForm({
             instructions={versionDetails?.instructions}
             onInstructionsChange={state.onInstructionsChange}
             disabled={disabled}
+            lineNumbers={entityType === 'pipeline'}
           />
         </Box>
       )}

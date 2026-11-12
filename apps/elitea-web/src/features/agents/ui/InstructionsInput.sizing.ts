@@ -16,5 +16,9 @@ export const INSTRUCTIONS_MAX_HEIGHT = '24rem';
 export const instructionsSizingExtension = EditorView.theme({
   '&': { maxHeight: INSTRUCTIONS_MAX_HEIGHT },
   '.cm-scroller': { overflow: 'auto' },
+});
+
+/** Hides the line-number gutter for prose instructions; a pipeline's YAML keeps it. */
+export const instructionsProseExtension = EditorView.theme({
   '.cm-gutters': { display: 'none' },
 });
