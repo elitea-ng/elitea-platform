@@ -83,6 +83,13 @@ inputs:
     description: Newline-separated key prefixes to fall back to on a miss.
     required: false
     default: ""
+  save:
+    description: >-
+      `false` makes a run on main restore only, like a pull request. It can
+      only turn writing OFF: the main-run gate stays literal on the writer
+      steps, so no value of this input lets a pull request write.
+    required: false
+    default: "true"
 outputs:
   cache-hit:
     description: "'true' on an exact-key hit."
@@ -127,7 +134,7 @@ runs:
         echo "${marker}=${KEY}" >> "$GITHUB_ENV"
     - name: Restore, and save at job end (run on main) — go slot
       id: writer-go
-      if: inputs.slot == 'go' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      if: inputs.slot == 'go' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false'
       uses: actions/cache@v6
       with:
         # LITERAL: the post step evaluates this again without `inputs`.
@@ -138,7 +145,7 @@ runs:
         restore-keys: ${{ inputs.restore-keys }}
     - name: Restore, and save at job end (run on main) — npm slot
       id: writer-npm
-      if: inputs.slot == 'npm' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      if: inputs.slot == 'npm' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false'
       uses: actions/cache@v6
       with:
         # LITERAL: the post step evaluates this again without `inputs`.
@@ -147,7 +154,7 @@ runs:
         restore-keys: ${{ inputs.restore-keys }}
     - name: Restore only (pull requests and every other run)
       id: reader
-      if: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request') }}
+      if: ${{ !(github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false') }}
       uses: actions/cache/restore@v6
       with:
         path: ${{ inputs.path }}
@@ -159,7 +166,7 @@ runs:
         HIT: ${{ steps.writer-go.outputs.cache-hit || steps.writer-npm.outputs.cache-hit || steps.reader.outputs.cache-hit }}
         MATCHED: ${{ steps.writer-go.outputs.cache-matched-key || steps.writer-npm.outputs.cache-matched-key || steps.reader.outputs.cache-matched-key }}
         KEY: ${{ inputs.key }}
-        WRITES: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        WRITES: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.save != 'false' }}
       run: |
         if [ -n "$MATCHED" ]; then
           echo "cache: restored '$MATCHED' (exact hit: ${HIT:-false}) for key '$KEY'; this run writes: $WRITES"

@@ -1111,7 +1111,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// idle_compaction, an idle compaction run's own marker for the
 	// analytics (ADR-0050 decision 9b2, issue 1921). Backfilled from
 	// agent_idle_compactions; no permission.
-	require.EqualValues(t, 240, Head(shared))
+	//
+	// 241: shared/0241_agent_teams_keyset_index.sql, the (project_id,
+	// lower(name), id) index behind the Teams list's keyset paging (issue
+	// 1955). No data, no permission.
+	require.EqualValues(t, 241, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -36428,9 +36428,13 @@ paths:
       description: |
         internal/api/v2/agentteams/handler.go's List (ADR-0050 decision 8,
         issue 1620). A saved team is a project's roster of agents with its
-        floor policy and lead. Gated on `models.teams.list`. Most recently
-        updated first; `query` filters by a case-insensitive substring of the
-        name.
+        floor policy and lead. Gated on `models.teams.list`. Ordered by
+        lower-cased name, then id; `query` filters by a case-insensitive
+        substring of the name. Page by `offset`, or, stable under concurrent
+        writes, by keyset: pass the last team's `name` and `id` as
+        `after_name` and `after_id` (both or neither; `offset` is then
+        ignored), so a team created or deleted between pages cannot shift
+        the window.
       tags: [chat]
       parameters:
         - name: query
@@ -36446,6 +36450,16 @@ paths:
           in: query
           required: false
           schema: { type: integer, minimum: 0, default: 0 }
+        - name: after_name
+          in: query
+          required: false
+          schema: { type: string, maxLength: 128 }
+          description: Keyset cursor, the `name` of the last team held. Goes with `after_id`.
+        - name: after_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+          description: Keyset cursor, the `id` of the last team held. Goes with `after_name`.
       responses:
         '200':
           description: One page of the project's teams.
@@ -36454,7 +36468,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AgentTeamList'
         '400':
-          description: limit, offset or query is not valid.
+          description: limit, offset, query or the keyset cursor is not valid.
           content:
             application/json:
               schema:

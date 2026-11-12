@@ -22421,9 +22421,13 @@ export const getListAgentTeamsUrl = (
 /**
  * internal/api/v2/agentteams/handler.go's List (ADR-0050 decision 8,
  * issue 1620). A saved team is a project's roster of agents with its
- * floor policy and lead. Gated on `models.teams.list`. Most recently
- * updated first; `query` filters by a case-insensitive substring of the
- * name.
+ * floor policy and lead. Gated on `models.teams.list`. Ordered by
+ * lower-cased name, then id; `query` filters by a case-insensitive
+ * substring of the name. Page by `offset`, or, stable under concurrent
+ * writes, by keyset: pass the last team's `name` and `id` as
+ * `after_name` and `after_id` (both or neither; `offset` is then
+ * ignored), so a team created or deleted between pages cannot shift
+ * the window.
  * @summary List the project's saved teams of agents
  */
 export const listAgentTeams = async (

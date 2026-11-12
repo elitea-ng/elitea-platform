@@ -34,6 +34,15 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/turntaking"
 )
 
+// ListCursor is the keyset position of a teams page: the name and id of the
+// last team the caller holds. The list is ordered by lower(name), then id, so
+// the next page is every team after that pair, and a team created or deleted
+// between pages cannot shift the window (issue 1955).
+type ListCursor struct {
+	Name string
+	ID   int64
+}
+
 // The permissions (shared 0233).
 const (
 	ListPermission   = "models.teams.list"

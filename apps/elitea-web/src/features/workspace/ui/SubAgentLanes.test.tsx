@@ -45,6 +45,26 @@ describe('SubAgentLanes', () => {
   });
 });
 
+describe('SubAgentLanes brief refs (#1953)', () => {
+  it('shows what the spawn brief named, in one line, leaving out empty counts', () => {
+    const base = view('running');
+    const withRefs: TurnView = {
+      ...base,
+      subAgents: (base.subAgents ?? []).map((lane) => ({
+        ...lane,
+        briefRefs: { message_ids: ['m1', 'm2'], attachments: ['a1'], memory_entries: [], facts: 4 },
+      })),
+    };
+    renderWithTheme(<TurnTranscript view={withRefs} busy />);
+    expect(screen.getByTestId('subagent-brief-refs')).toHaveTextContent('Brief named: messages 2, attachments 1, facts 4');
+  });
+
+  it('shows no line for a brief that named nothing', () => {
+    renderWithTheme(<TurnTranscript view={view('running')} busy />);
+    expect(screen.queryByTestId('subagent-brief-refs')).toBeNull();
+  });
+});
+
 describe('SubAgentLanes for a cloud temporary child (client contract 1.48)', () => {
   const cloud = (displayName: string): TurnView => {
     const base = view('running');

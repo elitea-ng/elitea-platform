@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   LATEST_VERSION_NAME,
+  defaultRunVersionId,
   isSetDefaultDisabled,
   isVersionNotFound,
   selectDefaultVersion,
@@ -88,5 +89,22 @@ describe('isVersionNotFound', () => {
 
   it('is true for an empty version list', () => {
     expect(isVersionNotFound('1', [])).toBe(true);
+  });
+});
+
+describe('defaultRunVersionId (issue 1941)', () => {
+  it('prefers meta.default_version_id, then base, then the first usable version', () => {
+    expect(defaultRunVersionId([{ id: 3, name: 'base' }, { id: '5', name: 'v5' }], 5)).toBe(5);
+    expect(defaultRunVersionId([{ id: 2, name: 'draft' }, { id: 3, name: 'base' }], undefined)).toBe(3);
+    expect(defaultRunVersionId([{ id: 0, name: 'base' }, { id: 7, name: 'x' }], '')).toBe(7);
+    expect(defaultRunVersionId([], 1)).toBeUndefined();
+  });
+
+  it('ignores is_default: a disagreeing flag does not beat meta.default_version_id', () => {
+    const versions = [
+      { id: 4, name: 'v2', is_default: true },
+      { id: 5, name: 'v3' },
+    ];
+    expect(defaultRunVersionId(versions, 5)).toBe(5);
   });
 });

@@ -4404,6 +4404,7 @@
   "features.toolkits.testToolPane.resultRequestId": "Request reference:",
   "settings.memory.summarization.additionalGuidance": "Additional summary guidance (optional)",
   "settings.memory.summarization.compactionDescription": "Compact older history at 90% of usable input, retaining recent messages and authoritative instructions.",
+  "settings.models.saveFailed": "The default model could not be saved. Try again.",
   "settings.memory.summaryModel.inherit": "Use the chat model",
   "settings.memory.summaryModel.label": "Summarization model",
   "settings.memory.summaryModel.unavailable": "{{model}} — unavailable in this project",
