@@ -2,8 +2,8 @@ import type { ApplicationCreationInput, ApplicationVersionDraft } from '@/entiti
 import type { VersionSummary } from '@/entities/version';
 import { toAgentLlmSettings, toLlmSettingsBody, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationDetail, ApplicationVersionDetail, ApplicationVersionSummary, VersionWriteRequest } from '@/shared/api/generated/model';
+import { soulWriteField } from '@/shared/lib/agentSoulDraft';
 
-import { soulWriteField } from './agentSoulDraft';
 import { avatarPackWriteField } from './avatarPackDraft';
 import type { EditApplicationVersionFields } from './useEditApplicationVersionFields';
 

@@ -26,7 +26,15 @@ describe('sub-agent lane avatars', () => {
     const lane = screen.getByTestId('subagent-lane');
     expect(lane).toHaveTextContent('Reviewer');
     expect(within(lane).getByTestId('chat-message-avatar')).toBeInTheDocument();
+    expect(within(lane).getByTestId('default-avatar')).toHaveAttribute('data-avatar-name', 'owl');
     expect(within(lane).queryByTestId('subagent-temporary')).toBeNull();
+  });
+
+  it('draws the brand mark for a key outside the default set', () => {
+    renderWithTheme(<TurnTranscript view={view({ displayName: 'Reviewer', avatar: 'default:dragon' })} busy subAgentAvatar={ProfileAvatar} />);
+    const lane = screen.getByTestId('subagent-lane');
+    expect(within(lane).getByTestId('chat-message-avatar')).toBeInTheDocument();
+    expect(within(lane).queryByTestId('default-avatar')).toBeNull();
   });
 
   it('draws no avatar for a local child whose profile named none', () => {
@@ -38,6 +46,13 @@ describe('sub-agent lane avatars', () => {
 
   it("draws a cloud child's dashed ring whatever its profile", () => {
     renderWithTheme(<TurnTranscript view={view({})} busy subAgentAvatar={TemporaryAvatar} />);
-    expect(within(screen.getByTestId('subagent-lane')).getByTestId('chat-message-avatar')).toBeInTheDocument();
+    const lane = screen.getByTestId('subagent-lane');
+    expect(within(lane).getByTestId('chat-message-avatar')).toBeInTheDocument();
+    expect(within(lane).queryByTestId('default-avatar')).toBeNull();
+  });
+
+  it("draws the image of a cloud child's avatar key inside the ring", () => {
+    renderWithTheme(<TurnTranscript view={view({ avatar: 'default:fox' })} busy subAgentAvatar={TemporaryAvatar} />);
+    expect(within(screen.getByTestId('subagent-lane')).getByTestId('default-avatar')).toHaveAttribute('data-avatar-name', 'fox');
   });
 });

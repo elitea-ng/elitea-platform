@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 use super::child::{self, Child, InputRefused};
 use super::profile::{
     self, BRIEF_ATTACHMENT_NOT_READABLE, BRIEF_EXCERPT_NOT_VISIBLE, BRIEF_MEMORY_NOT_RECALLED,
-    Brief, MAX_AVATAR_BYTES, MAX_BRIEF_ITEMS, MAX_BRIEF_TEXT_CHARS, MAX_DISPLAY_NAME_CHARS,
-    MAX_PROFILE_TOOLS, MAX_SOUL_BYTES, Profile, SUBAGENT_MODEL_NOT_ALLOWED, SpawnRecord,
+    Brief, MAX_BRIEF_ITEMS, MAX_BRIEF_TEXT_CHARS, MAX_DISPLAY_NAME_CHARS, MAX_PROFILE_TOOLS,
+    MAX_SOUL_BYTES, Profile, SUBAGENT_MODEL_NOT_ALLOWED, SpawnRecord,
 };
 use super::{
     CHILD_AGENT_PREFIX, CLOSE_AGENT, ChildIdentity, DEFAULT_WAIT_SECONDS, DEPTH_EXCEEDED,
@@ -208,8 +208,8 @@ fn spawn_schema() -> Value {
                     },
                     "avatar": {
                         "type": "string",
-                        "maxLength": MAX_AVATAR_BYTES,
-                        "description": "An avatar key of at most 128 bytes, such as \"default:owl\""
+                        "enum": profile::DEFAULT_AVATAR_KEYS,
+                        "description": "One of the default avatar keys, such as \"default:owl\"; any other key is ignored and the sub-agent has no avatar"
                     }
                 },
                 "additionalProperties": false

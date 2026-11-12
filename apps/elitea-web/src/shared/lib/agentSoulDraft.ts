@@ -49,6 +49,36 @@ function splitLines(text: string): string[] {
     .filter((line) => line !== '');
 }
 
+const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+const isOptionalText = (value: unknown): boolean => value === undefined || typeof value === 'string';
+const isOptionalStrings = (value: unknown): boolean => value === undefined || isStrings(value);
+
+/**
+ * Narrows an untrusted value (a model's persona) to the soul shape
+ * `soulToDraft` reads: an object whose text fields are strings, whose list
+ * fields are string lists and whose relationships are `{agent, stance}`
+ * pairs. Anything else is `undefined`, so a caller renders nothing instead of
+ * throwing.
+ */
+export function readSoul(value: unknown): AgentSoulV1 | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const soul = value as Record<string, unknown>;
+  const relationships = soul['relationships'];
+  const relationshipsOk =
+    relationships === undefined ||
+    (Array.isArray(relationships) &&
+      relationships.every((entry: unknown) => {
+        if (typeof entry !== 'object' || entry === null) return false;
+        const pair = entry as Record<string, unknown>;
+        return typeof pair['agent'] === 'string' && typeof pair['stance'] === 'string';
+      }));
+  const ok =
+    ['display_name', 'pronouns', 'role', 'body'].every((key) => isOptionalText(soul[key])) &&
+    ['voice', 'values', 'boundaries', 'proactive_goals'].every((key) => isOptionalStrings(soul[key])) &&
+    relationshipsOk;
+  return ok ? (soul as unknown as AgentSoulV1) : undefined;
+}
+
 /** The stored soul -> the draft the tab edits. `null`/absent is the empty draft. */
 export function soulToDraft(soul: AgentSoulV1 | null | undefined): AgentSoulDraft {
   if (soul === null || soul === undefined) return EMPTY_SOUL_DRAFT;

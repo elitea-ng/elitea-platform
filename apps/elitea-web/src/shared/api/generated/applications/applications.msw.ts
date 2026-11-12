@@ -4573,6 +4573,25 @@ export const getGenerateApplicationDraftResponseMock = (
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
   ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  soul: faker.helpers.arrayElement([
+    {
+      ...{
+        schema: "elitea.soul/v1",
+        display_name: "Mira",
+        pronouns: "they/them",
+        role: "Release coordinator",
+        voice: ["concise", "warm", "direct"],
+        values: ["safety before speed", "cite sources"],
+        boundaries: ["never merges without a green CI"],
+        relationships: [
+          { agent: "ci-doctor", stance: "delegate failing builds" },
+        ],
+        proactive_goals: ["watch release branches for red CI"],
+        body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+      },
+    },
+    undefined,
+  ]),
   suggested_toolkits: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,

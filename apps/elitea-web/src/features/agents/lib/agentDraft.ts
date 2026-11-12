@@ -50,6 +50,14 @@ export interface AgentDraft {
   readonly instructions: string;
   readonly welcome_message: string;
   readonly conversation_starters: readonly string[];
+  /**
+   * The persona the model proposed (`AgentSoulV1`, issue 1644). The review
+   * form shows it and the create body sends it as the version's `soul`;
+   * removing it in the form clears this key.
+   */
+  readonly soul?: Readonly<Record<string, unknown>> | undefined;
+  /** Set when the reviewer removed the persona: a refinement then asks for none and keeps none. */
+  readonly soul_declined?: boolean | undefined;
   readonly suggested_toolkits: readonly SuggestedResource[];
   readonly suggested_mcp: readonly SuggestedResource[];
   readonly suggested_pipelines: readonly SuggestedResource[];

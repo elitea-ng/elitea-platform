@@ -379,6 +379,67 @@ func TestApplicationDraftRefusesAnAnswerMissingARequiredField(t *testing.T) {
 	}
 }
 
+// Issue 1644: a persona the model proposes is checked like a version write and
+// returned, so the review form can show it and the create body can send it.
+func TestApplicationDraftReturnsAProposedSoul(t *testing.T) {
+	completer := &stubCompleter{content: `{
+		"name":"Incident Triager","description":"Triages incidents","instructions":"Sort by severity",
+		"soul":{"display_name":"Mira","role":"Incident lead","voice":["calm","brief"],"values":["safety first"],"boundaries":["never pages at night"],"body":"Speak plainly."}
+	}`}
+	recorder := serve(t, routes[1], completer, `{"user_description":"an agent that triages incidents"}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+	}
+	draft := decode[v2drafts.ApplicationDraft](t, recorder)
+	var soul map[string]any
+	if err := json.Unmarshal(draft.Soul, &soul); err != nil {
+		t.Fatalf("soul = %s: %v", draft.Soul, err)
+	}
+	// The schema key is added: the version is fixed, the model need not write it.
+	if soul["schema"] != "elitea.soul/v1" || soul["display_name"] != "Mira" || soul["role"] != "Incident lead" {
+		t.Errorf("soul = %v", soul)
+	}
+}
+
+func TestApplicationDraftWithoutASoulOmitsTheKey(t *testing.T) {
+	for _, answer := range []string{
+		`{"name":"A","description":"B","instructions":"C"}`,
+		`{"name":"A","description":"B","instructions":"C","soul":null}`,
+		`{"name":"A","description":"B","instructions":"C","soul":{}}`,
+	} {
+		recorder := serve(t, routes[1], &stubCompleter{content: answer}, `{"user_description":"x"}`)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+		}
+		if strings.Contains(recorder.Body.String(), `"soul"`) {
+			t.Errorf("body = %s, want no soul key", recorder.Body.String())
+		}
+	}
+}
+
+// The persona is optional: a proposal that fails the soul rules is dropped
+// and the rest of the draft is kept, never refused.
+func TestApplicationDraftDropsAnInvalidSoulAndKeepsTheDraft(t *testing.T) {
+	for name, soul := range map[string]string{
+		"capability key":     `{"role":"Lead","tools":["github"]}`,
+		"nested capability":  `{"role":"Lead","relationships":[{"agent":"x","stance":"y","permissions":["all"]}]}`,
+		"unknown key":        `{"role":"Lead","mood":"bold"}`,
+		"not an object":      `"be nice"`,
+		"over the text size": `{"body":"` + strings.Repeat("x", 20000) + `"}`,
+	} {
+		completer := &stubCompleter{content: `{"name":"A","description":"B","instructions":"C","soul":` + soul + `}`}
+		recorder := serve(t, routes[1], completer, `{"user_description":"x"}`)
+		if recorder.Code != http.StatusOK {
+			t.Errorf("%s: status = %d, want 200; body=%s", name, recorder.Code, recorder.Body.String())
+			continue
+		}
+		draft := decode[v2drafts.ApplicationDraft](t, recorder)
+		if draft.Name != "A" || draft.Instructions != "C" || len(draft.Soul) != 0 {
+			t.Errorf("%s: draft = %+v, want the draft without a soul", name, draft)
+		}
+	}
+}
+
 func TestProjectContextDraftReturnsTheBackground(t *testing.T) {
 	completer := &stubCompleter{content: `{"project_background":"## Stack\nGo monorepo, React SPA."}`}
 	recorder := serve(t, routes[2], completer, `{"user_description":"a Go monorepo behind a React SPA"}`)

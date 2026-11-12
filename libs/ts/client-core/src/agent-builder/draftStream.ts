@@ -34,6 +34,11 @@ export interface StreamedAgentDraft {
   readonly instructions: string;
   readonly welcome_message: string;
   readonly conversation_starters: readonly string[];
+  /**
+   * The persona the model proposed (ADR-0050 decision 1a): an `AgentSoulV1`
+   * document the server already checked. Absent when it proposed none.
+   */
+  readonly soul?: Readonly<Record<string, unknown>> | undefined;
   readonly suggested_toolkits: readonly DraftSuggestion[];
   readonly suggested_mcp: readonly DraftSuggestion[];
   readonly suggested_pipelines: readonly DraftSuggestion[];
@@ -77,18 +82,22 @@ export type DraftStreamEvent =
 
 const list = (value: unknown): DraftSuggestion[] => (Array.isArray(value) ? (value as DraftSuggestion[]) : []);
 const text = (value: unknown): string => (typeof value === 'string' ? value : '');
+const soulOf = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 
 /** The draft in a `draft.complete` frame or a one-shot `ApplicationDraft` answer, or undefined when it is not one. */
 export function readDraft(data: unknown): StreamedAgentDraft | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
   const raw = data as Record<string, unknown>;
   if (typeof raw['name'] !== 'string' || typeof raw['instructions'] !== 'string') return undefined;
+  const soul = soulOf(raw['soul']);
   return {
     name: raw['name'],
     description: text(raw['description']),
     instructions: raw['instructions'],
     welcome_message: text(raw['welcome_message']),
     conversation_starters: Array.isArray(raw['conversation_starters']) ? raw['conversation_starters'].filter((s): s is string => typeof s === 'string') : [],
+    ...(soul === undefined ? {} : { soul }),
     suggested_toolkits: list(raw['suggested_toolkits']),
     suggested_mcp: list(raw['suggested_mcp']),
     suggested_pipelines: list(raw['suggested_pipelines']),
@@ -195,12 +204,16 @@ export interface CurrentDraft {
   readonly instructions: string;
   readonly welcome_message?: string;
   readonly conversation_starters?: readonly string[];
+  /** The persona under review, so a refinement keeps or changes it. */
+  readonly soul?: Readonly<Record<string, unknown>> | undefined;
 }
 
 export interface DraftRequestInput {
   readonly request: string;
   readonly history?: readonly DraftTurn[];
   readonly current?: CurrentDraft | undefined;
+  /** True when the reviewer removed the persona: the server then never proposes one. */
+  readonly soulDeclined?: boolean | undefined;
 }
 
 /** The route's request body: the newest turns only, and the current draft when one is being revised. */
@@ -210,6 +223,7 @@ export function draftRequestBody(input: DraftRequestInput): Record<string, unkno
     user_description: input.request,
     ...(history.length > 0 ? { conversation_history: history.map((turn) => ({ role: turn.role, content: turn.content })) } : {}),
     ...(input.current === undefined ? {} : { current_draft: input.current }),
+    ...(input.soulDeclined === true ? { soul_declined: true } : {}),
   };
 }
 

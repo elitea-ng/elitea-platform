@@ -75,8 +75,15 @@ export function useAgentDraftGenerator(projectId: string | undefined): AgentDraf
           instructions: current.instructions,
           welcome_message: current.welcome_message,
           conversation_starters: current.conversation_starters,
+          soul: current.soul,
         },
+        soulDeclined: current.soul_declined,
       });
+      // A declined persona stays declined, whatever the model wrote.
+      if (draft !== undefined && current.soul_declined === true) {
+        const { soul: _dropped, ...rest } = draft;
+        return remember(turns, request, { ...rest, soul_declined: true });
+      }
       return remember(turns, request, draft);
     },
     [streaming, streamGenerate],

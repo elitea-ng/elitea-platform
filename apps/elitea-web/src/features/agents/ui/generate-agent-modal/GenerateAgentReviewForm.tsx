@@ -22,6 +22,7 @@ import { PlusIcon } from '@/shared/ui/icons/plus-icon';
 
 import { validateAgentDraft } from '../../lib/helpers/agentDraftValidation.helpers';
 import type { AgentDraft } from '../../lib/agentDraft';
+import { GenerateAgentPersona } from './GenerateAgentPersona';
 import { ResourceSuggestions } from './ResourceSuggestions';
 
 /**
@@ -247,6 +248,10 @@ export function GenerateAgentReviewForm({ draft, onChange, onValidationChange, s
             </Box>
           </Box>
         </Box>
+      )}
+
+      {draft.soul !== undefined && (
+        <GenerateAgentPersona soul={draft.soul} onRemove={() => onChange({ ...draft, soul: undefined, soul_declined: true })} />
       )}
 
       <ResourceSuggestions

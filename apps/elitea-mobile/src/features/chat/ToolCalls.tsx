@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, View } from 'react-native';
 
+import { DefaultAvatarGlyph } from '@/features/chat/DefaultAvatarGlyph';
 import { FONT_SCALE } from '@/constants/typeScale';
 import type { ToolStep } from '@/features/chat/toolActivity';
 import { useDesign } from '@/design/DesignProvider';
@@ -107,12 +108,12 @@ export function toolsSummary(steps: readonly ToolStep[]): string {
 }
 
 /** Steps grouped by the sub-agent that ran them (null: the answering agent), first-seen order. */
-export function groupByAgent(steps: readonly ToolStep[]): { agent: string | null; steps: ToolStep[] }[] {
-  const groups: { agent: string | null; steps: ToolStep[] }[] = [];
+export function groupByAgent(steps: readonly ToolStep[]): { agent: string | null; avatar: string | null; steps: ToolStep[] }[] {
+  const groups: { agent: string | null; avatar: string | null; steps: ToolStep[] }[] = [];
   for (const step of steps) {
     const group = groups.find((g) => g.agent === step.parentAgent);
     if (group) group.steps.push(step);
-    else groups.push({ agent: step.parentAgent, steps: [step] });
+    else groups.push({ agent: step.parentAgent, avatar: step.parentAvatar ?? null, steps: [step] });
   }
   return groups;
 }
@@ -160,9 +161,12 @@ export function ToolActivity({
         ? groupByAgent(steps).map((group) => (
             <View key={group.agent ?? '-'} style={[styles.group, { borderTopColor: colors.separator }]}>
               {group.agent ? (
-                <Text variant="caption" tone="secondary" maxFontSizeMultiplier={FONT_SCALE.control} numberOfLines={1} style={styles.agent}>
-                  {group.agent}
-                </Text>
+                <View style={styles.agentRow}>
+                  {group.avatar !== null ? <DefaultAvatarGlyph avatarKey={group.avatar} /> : null}
+                  <Text variant="caption" tone="secondary" maxFontSizeMultiplier={FONT_SCALE.control} numberOfLines={1} style={styles.agentName}>
+                    {group.agent}
+                  </Text>
+                </View>
               ) : null}
               {group.steps.map((step) => (
                 <Pressable
@@ -219,7 +223,8 @@ const styles = StyleSheet.create({
   card: { overflow: 'hidden', marginTop: 2, borderCurve: 'continuous' },
   summaryRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44, paddingHorizontal: 12, paddingVertical: 8 },
   group: { borderTopWidth: StyleSheet.hairlineWidth },
-  agent: { fontWeight: '600', paddingHorizontal: 12, paddingTop: 8 },
+  agentRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 8 },
+  agentName: { fontWeight: '600', flex: 1 },
   step: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44, paddingHorizontal: 12, paddingVertical: 6 },
   flex: { flex: 1 },
 });

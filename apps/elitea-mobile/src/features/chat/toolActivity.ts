@@ -38,6 +38,8 @@ export interface ToolStep {
   toolkit: string | null;
   /** The sub-agent that ran it (`metadata.parent_agent_name`). */
   parentAgent: string | null;
+  /** The avatar key (`default:<name>`) of the sub-agent profile that ran it, when it named one (issue 1870). */
+  parentAvatar?: string | null;
   status: ToolStatus;
   /** Set while `waiting`: what the call waits for. */
   waitingFor?: ToolWait;

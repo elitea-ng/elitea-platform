@@ -19682,6 +19682,9 @@
                   }
                 }
               },
+              "soul_declined": {
+                "type": "boolean"
+              },
               "user_description": {
                 "type": "string"
               }

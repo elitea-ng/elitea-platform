@@ -35,7 +35,7 @@ An agent with the `subagents` internal tool starts a sub-agent with `spawn_agent
 | `soul` | A short role and style, at most 2 KiB. It replaces the default role text. The safety sentence stays: a soul never widens what the sub-agent may do. |
 | `tools` | Only these of the agent's tools, as `toolkit/tool` or `toolkit/*`. See [Sub-agent tools](/how-tos/agents-pipelines/agent-tool-envelope#sub-agent-tools). A tool that writes still needs the agent's `subagent_tools`. |
 | `model` | `inherit` (the default): the sub-agent uses the model of the agent that starts it. Or the name of another model of the project catalogue that the agent may use, at most 256 bytes. See [The model](#the-model). |
-| `avatar` | An avatar key, at most 128 bytes. The platform stores it. |
+| `avatar` | A default avatar key: `default:owl`, `default:hawk`, `default:fox`, `default:wolf`, `default:bear`, `default:otter`, `default:heron` or `default:lynx`. Any other key is ignored: the sub-agent has no avatar and the clients draw the brand mark. Each client draws the key as an image, and draws the brand mark for a key it does not know. |
 
 An unknown key or a value out of its bounds refuses the call with `invalid_arguments`.
 
