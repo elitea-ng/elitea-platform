@@ -282,7 +282,14 @@ test('a mention typed into the composer reaches the start route', async ({ page 
     });
     const sendButton = await fillComposer(page, '@Everyone please take a look at this.');
     await sendButton.click();
-    expect((await started).status(), 'a turn carrying a composed mention must be admitted').toBe(200);
+    // #1970: `@Everyone` addresses people and no agent, so the message is
+    // stored and notified with NO agent turn behind it — 201
+    // ChatMessagePosted (`turn_started: false`), not 200 with an execution.
+    const startedResponse = await started;
+    expect(startedResponse.status(), 'a people-only composed mention must be posted, not run').toBe(201);
+    const posted = (await startedResponse.json()) as { turn_started?: unknown; message_id?: unknown };
+    expect(posted.turn_started, 'a people-only message starts no agent turn (#1970)').toBe(false);
+    expect(String(posted.message_id ?? ''), 'the posted message must be stored').not.toBe('');
 
     expect(sentBody, 'the app must have POSTed a start body').not.toBe('');
     const sent = JSON.parse(sentBody) as Record<string, unknown>;
@@ -298,11 +305,6 @@ test('a mention typed into the composer reaches the start route', async ({ page 
     for (const id of (sent['user_ids'] as readonly unknown[] | undefined) ?? []) {
       expect(typeof id, `user_ids must be numeric: ${sentBody.slice(0, 400)}`).toBe('number');
     }
-
-    await expectStoredAssistantAnswer(page, projectId, conversationId, {
-      timeout: 180_000,
-      message: 'the turn carrying a composed mention produced no answer',
-    });
   } finally {
     if (conversationId !== '') await deleteConversation(page.request, conversationId, projectId).catch(() => undefined);
     if (agentId !== '') await deleteAgent(page.request, agentId).catch(() => undefined);
