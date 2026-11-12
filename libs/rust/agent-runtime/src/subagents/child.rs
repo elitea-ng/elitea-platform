@@ -527,6 +527,14 @@ async fn filtered_toolsets(
     requested: Option<Arc<Vec<RequestedTool>>>,
     ancestors: &[Arc<Vec<RequestedTool>>],
 ) -> Result<Vec<ChildToolset>, &'static str> {
+    // One listing per spawn (#1819): a spawn with `profile.tools` lists each
+    // toolset once, checks the keys against that listing and hands the same
+    // frozen tools to the child, which would otherwise list them again.
+    let toolsets = if requested.is_some() {
+        freeze_for_check(toolsets).await?
+    } else {
+        toolsets
+    };
     let filtered: Vec<ChildToolset> = toolsets
         .into_iter()
         .map(|toolset| {
@@ -546,6 +554,23 @@ async fn filtered_toolsets(
         .into_iter()
         .map(|toolset| toolset.with_requested(requested.clone()))
         .collect())
+}
+
+/// List every toolset once and keep what it listed as a static toolset.
+async fn freeze_for_check(
+    toolsets: Vec<Arc<dyn Toolset>>,
+) -> Result<Vec<Arc<dyn Toolset>>, &'static str> {
+    let ctx: Arc<dyn ReadonlyContext> =
+        Arc::new(adk_tool::SimpleToolContext::new("subagent_tool_grant"));
+    let mut frozen: Vec<Arc<dyn Toolset>> = Vec::with_capacity(toolsets.len());
+    for toolset in toolsets {
+        let tools = toolset
+            .tools(Arc::clone(&ctx))
+            .await
+            .map_err(|_| "subagent_tools_unavailable")?;
+        frozen.push(Arc::new(adk_tool::BasicToolset::new(toolset.name(), tools)));
+    }
+    Ok(frozen)
 }
 
 /// ADR-0050 decision 4: every tool `spawn_agent` asks for must be one the

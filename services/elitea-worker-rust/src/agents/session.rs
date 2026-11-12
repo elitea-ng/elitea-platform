@@ -3452,9 +3452,10 @@ async fn resolve_pipeline_start(
     >,
 ) -> Result<Option<super::graph::resume::PipelineResume>, NativeAgentAssemblyError> {
     if matches!(start, PipelineNativeStart::Regenerate) {
+        // The frontier goes first, whether or not a session exists; the
+        // session itself is re-created by `open_history_session` below, on
+        // its one read (#1943).
         delete_pipeline_frontier(state, plan).await?;
-        reset_session_for_regeneration(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
-            .await?;
     }
     // FU-269: with Main's paused writer the row was proven and the session
     // restored once (`continuation_entry`); the arms read that session. A
@@ -3487,7 +3488,15 @@ async fn resolve_pipeline_start(
                 &plan.chat_history,
                 plan.definition_digest,
                 &binding,
-                async || delete_pipeline_frontier(state, plan).await,
+                matches!(start, PipelineNativeStart::Regenerate),
+                // A regeneration deleted the frontier above.
+                async || {
+                    if matches!(start, PipelineNativeStart::Regenerate) {
+                        Ok(())
+                    } else {
+                        delete_pipeline_frontier(state, plan).await
+                    }
+                },
             )
             .await?;
             let identity = session
@@ -4034,9 +4043,6 @@ where
         return Err(invalid_configuration());
     }
     let notices = FreshSessionNotices::from_runtime(&runtime);
-    if regenerate {
-        reset_session_for_regeneration(sessions.as_ref(), &user_id, &session_id).await?;
-    }
     let HistorySession {
         session,
         created,
@@ -4071,6 +4077,7 @@ where
             &chat_history,
             definition_digest,
             &binding,
+            regenerate,
             async || Ok(()),
         )
         .await?
@@ -4828,29 +4835,6 @@ async fn restore_or_create_session(
     }
 }
 
-async fn reset_session_for_regeneration(
-    sessions: &dyn SessionService,
-    user_id: &UserId,
-    session_id: &SessionId,
-) -> Result<(), NativeAgentAssemblyError> {
-    let user_id = user_id.to_string();
-    let session_id = session_id.to_string();
-    match sessions
-        .get(GetRequest {
-            app_name: APP_NAME.to_owned(),
-            user_id: user_id.clone(),
-            session_id: session_id.clone(),
-            num_recent_events: Some(0),
-            after: None,
-        })
-        .await
-    {
-        Ok(_) => delete_present_session(sessions, &user_id, &session_id).await,
-        Err(error) if error.code == "session.not_found" => Ok(()),
-        Err(_) => Err(dependency_unavailable()),
-    }
-}
-
 /// Delete a session this turn has just read (#1904): no probe first.
 async fn delete_present_session(
     sessions: &dyn SessionService,
@@ -4912,6 +4896,7 @@ async fn open_history_session(
     history: &[Content],
     definition_digest: [u8; 32],
     binding: &HistoryBinding,
+    regenerate: bool,
     restart: impl AsyncFnOnce() -> Result<(), NativeAgentAssemblyError>,
 ) -> Result<HistorySession, NativeAgentAssemblyError> {
     let (session, created) = restore_or_create_session(sessions, user_id, session_id).await?;
@@ -4923,7 +4908,15 @@ async fn open_history_session(
             rebound: false,
         });
     }
-    match history_decision(session.as_ref(), binding, refs, history, definition_digest) {
+    // #1943: a regeneration always starts a new lineage, on the read above:
+    // one read, one delete, one create. It is not a re-seed of another view,
+    // so it is reported as the seed it is.
+    let decision = if regenerate {
+        HistoryDecision::Reseed
+    } else {
+        history_decision(session.as_ref(), binding, refs, history, definition_digest)
+    };
+    match decision {
         HistoryDecision::Keep => Ok(HistorySession {
             session,
             created,
@@ -4948,7 +4941,7 @@ async fn open_history_session(
             Ok(HistorySession {
                 session: create_session(sessions, user_id, session_id).await?,
                 created: true,
-                reseeded: true,
+                reseeded: !regenerate,
                 rebound: false,
             })
         }

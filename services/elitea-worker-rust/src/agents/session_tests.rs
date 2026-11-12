@@ -616,6 +616,53 @@ async fn durable_session_projects_the_previous_assistant_turn_into_the_next_mode
     );
 }
 
+/// A session store that counts the reads, deletes and creates it serves.
+struct CountingSessions {
+    inner: Arc<dyn SessionService>,
+    gets: AtomicUsize,
+    deletes: AtomicUsize,
+    creates: AtomicUsize,
+}
+
+#[async_trait]
+impl SessionService for CountingSessions {
+    async fn create(
+        &self,
+        req: adk_rust::session::CreateRequest,
+    ) -> adk_rust::Result<Box<dyn adk_rust::session::Session>> {
+        self.creates.fetch_add(1, Ordering::SeqCst);
+        self.inner.create(req).await
+    }
+
+    async fn get(&self, req: GetRequest) -> adk_rust::Result<Box<dyn adk_rust::session::Session>> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+        self.inner.get(req).await
+    }
+
+    async fn list(
+        &self,
+        req: adk_rust::session::ListRequest,
+    ) -> adk_rust::Result<Vec<Box<dyn adk_rust::session::Session>>> {
+        self.inner.list(req).await
+    }
+
+    async fn delete(&self, req: adk_rust::session::DeleteRequest) -> adk_rust::Result<()> {
+        self.deletes.fetch_add(1, Ordering::SeqCst);
+        self.inner.delete(req).await
+    }
+
+    async fn append_event(&self, session_id: &str, event: adk_rust::Event) -> adk_rust::Result<()> {
+        self.inner.append_event(session_id, event).await
+    }
+
+    async fn append_event_for_identity(
+        &self,
+        req: adk_rust::session::AppendEventRequest,
+    ) -> adk_rust::Result<()> {
+        self.inner.append_event_for_identity(req).await
+    }
+}
+
 #[tokio::test]
 async fn regeneration_rebuilds_the_session_without_the_replaced_assistant_turn() {
     let mut first_request = ordinary_request(AgentExecutionKind::Adhoc);
@@ -665,7 +712,13 @@ async fn regeneration_rebuilds_the_session_without_the_replaced_assistant_turn()
         }),
         completed: "replacement answer".to_owned(),
     };
-    let regeneration_sessions: Arc<dyn SessionService> = sessions;
+    let counting = Arc::new(CountingSessions {
+        inner: sessions,
+        gets: AtomicUsize::new(0),
+        deletes: AtomicUsize::new(0),
+        creates: AtomicUsize::new(0),
+    });
+    let regeneration_sessions: Arc<dyn SessionService> = counting.clone();
     let regenerated = assemble_ordinary_native_with_sessions(
         regeneration_model,
         regeneration_plan,
@@ -675,6 +728,10 @@ async fn regeneration_rebuilds_the_session_without_the_replaced_assistant_turn()
     )
     .await
     .expect("regeneration assembly");
+    // #1943: one read, one delete and one create.
+    assert_eq!(counting.gets.load(Ordering::SeqCst), 1, "one read");
+    assert_eq!(counting.deletes.load(Ordering::SeqCst), 1, "one delete");
+    assert_eq!(counting.creates.load(Ordering::SeqCst), 1, "one create");
     let (mut regeneration_run, _projector, regeneration_completion) =
         regenerated.start().expect("regeneration run");
     while regeneration_run

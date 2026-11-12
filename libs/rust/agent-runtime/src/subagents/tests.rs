@@ -1292,5 +1292,47 @@ async fn isolation_is_refused_where_the_host_gives_no_checkout() {
     assert_eq!(host.write.0.load(Ordering::SeqCst), 0);
 }
 
+/// A toolset that counts how many times it is listed.
+struct CountedToolset(Arc<AtomicUsize>);
+
+#[async_trait]
+impl Toolset for CountedToolset {
+    fn name(&self) -> &str {
+        "counted"
+    }
+
+    async fn tools(
+        &self,
+        _ctx: Arc<dyn adk_core::ReadonlyContext>,
+    ) -> adk_core::Result<Vec<Arc<dyn Tool>>> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![Arc::new(Look) as Arc<dyn Tool>])
+    }
+}
+
+/// #1819: a spawn with `profile.tools` lists a host toolset once: the key
+/// check and the child share one listing.
+#[tokio::test]
+async fn a_spawn_with_profile_tools_lists_each_toolset_once() {
+    let host = TestHost::new();
+    let listings = Arc::new(AtomicUsize::new(0));
+    host.extra
+        .lock()
+        .unwrap()
+        .push(Arc::new(CountedToolset(Arc::clone(&listings))));
+    let children = subagents(&host);
+    let responses = run_parent(
+        "parent",
+        &children,
+        spawn_with_tools(json!(["counted/look"])),
+    )
+    .await;
+    assert_eq!(wait_results(&responses)[0]["status"], "completed");
+    assert_eq!(listings.load(Ordering::SeqCst), 1, "one listing per spawn");
+    for offered in host.model.offered.lock().unwrap().iter() {
+        assert_eq!(offered, &["look".to_owned()]);
+    }
+}
+
 #[path = "depth_model_tests.rs"]
 mod depth_model;

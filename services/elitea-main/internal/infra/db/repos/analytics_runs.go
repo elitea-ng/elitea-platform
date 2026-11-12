@@ -127,9 +127,6 @@ func idleRunJob(sources originSources, alias string) string {
 	row := `EXISTS (
           SELECT 1 FROM elitea_runtime.agent_idle_compactions AS idle_row
           WHERE idle_row.idle_execution_id = ` + alias + `.execution_id)`
-	if !sources.idleMarker {
-		return row
-	}
 	return `(` + alias + `.idle_compaction OR ` + row + `)`
 }
 
@@ -155,12 +152,12 @@ func automatedCall(sources originSources) string {
 
 // originSources is what the trigger-origin reads can tell apart on this
 // database: trigger_origin (shared 0140) and idle compaction runs (shared
-// 0230, read only together with trigger_origin), with the runs' own marker
-// (shared 0240, read only together with the table).
+// 0230, read only together with trigger_origin). The runs' own marker
+// (shared 0240) is not probed: idle compaction admission, the breaker and
+// the run_finished read all name it, so Main requires 0240 as a whole (#1947).
 type originSources struct {
-	origins    bool
-	idle       bool
-	idleMarker bool
+	origins bool
+	idle    bool
 }
 
 // humanCallFilter is the predicate fragment that keeps only the calls a
@@ -185,11 +182,7 @@ func readOriginSources(ctx context.Context, q analyticsQuerier) (originSources, 
 	if err != nil || !idle {
 		return originSources{origins: true}, err
 	}
-	marker, err := columnPresent(ctx, q, "elitea_runtime", "execution_jobs", "idle_compaction")
-	if err != nil {
-		return originSources{}, err
-	}
-	return originSources{origins: true, idle: true, idleMarker: marker}, nil
+	return originSources{origins: true, idle: true}, nil
 }
 
 // triggerOriginReadable probes for the column shared 0140 adds. It is asked
