@@ -57,8 +57,16 @@ fn every_default_avatar_key_is_kept_and_an_unknown_key_is_dropped() {
         let profile = parse_profile(&json!({"profile": {"avatar": key}})).unwrap();
         assert_eq!(profile.avatar.as_deref(), Some(key));
     }
-    for unknown in ["default:dragon", "owl", "default:", "a\nb", &"x".repeat(500)] {
-        let profile = parse_profile(&json!({"profile": {"avatar": unknown, "display_name": "Scout"}})).unwrap();
+    for unknown in [
+        "default:dragon",
+        "owl",
+        "default:",
+        "a\nb",
+        &"x".repeat(500),
+    ] {
+        let profile =
+            parse_profile(&json!({"profile": {"avatar": unknown, "display_name": "Scout"}}))
+                .unwrap();
         assert_eq!(profile.avatar, None, "{unknown}");
         assert_eq!(profile.display_name.as_deref(), Some("Scout"));
     }
@@ -80,7 +88,8 @@ fn default_avatar_keys_match_client_core() {
         .find("export const DEFAULT_AVATAR_NAMES")
         .expect("DEFAULT_AVATAR_NAMES declaration");
     let array = &source[start..];
-    let array = &array[array.find('[').expect("array open")..=array.find(']').expect("array close")];
+    let array =
+        &array[array.find('[').expect("array open")..=array.find(']').expect("array close")];
     let names: Vec<String> = array
         .split('\'')
         .skip(1)
