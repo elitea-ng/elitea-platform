@@ -165,13 +165,10 @@ fn a_memory_entry_is_cited_only_with_the_turn_tag() {
             .check(&memory_brief(&["42"]))
             .is_ok()
     );
-    for refused in ["42·k7f2m6q3xz"] {
-        assert_eq!(
-            view(Some(Arc::clone(&untagged))).check(&memory_brief(&[refused])),
-            Err(BRIEF_MEMORY_NOT_RECALLED),
-            "{refused}"
-        );
-    }
+    assert_eq!(
+        view(Some(Arc::clone(&untagged))).check(&memory_brief(&["42·k7f2m6q3xz"])),
+        Err(BRIEF_MEMORY_NOT_RECALLED)
+    );
 }
 
 /// #1825: a child binds the agent's model for "inherit" or the agent's own
