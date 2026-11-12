@@ -150,8 +150,9 @@ fn a_memory_entry_is_cited_only_with_the_turn_tag() {
             "{refused}"
         );
     }
-    // Without Main's tag (an input from before field 78) the marks show
-    // none, so the seeded entries cannot be cited at all.
+    // Without Main's tag (an input from before field 78, a rolling deploy)
+    // the prompt showed bare ids, so only a bare id cites the entry
+    // (`a_bare_id_cites_only_when_main_sent_no_tag` covers the rest).
     let untagged = Arc::new(RecalledEntries::seeded(
         &[RecalledMemoryEntry {
             entry_id: "42".to_owned(),
@@ -159,7 +160,12 @@ fn a_memory_entry_is_cited_only_with_the_turn_tag() {
         }],
         None,
     ));
-    for refused in ["42", "42·k7f2m6q3xz"] {
+    assert!(
+        view(Some(Arc::clone(&untagged)))
+            .check(&memory_brief(&["42"]))
+            .is_ok()
+    );
+    for refused in ["42·k7f2m6q3xz"] {
         assert_eq!(
             view(Some(Arc::clone(&untagged))).check(&memory_brief(&[refused])),
             Err(BRIEF_MEMORY_NOT_RECALLED),
