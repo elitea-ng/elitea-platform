@@ -1296,7 +1296,10 @@ mod tests {
         assert!(loaded.validate().is_ok());
         value["image_generation_model"] = json!("gpt-image-1");
         let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(loaded.image_generation_model.as_deref(), Some("gpt-image-1"));
+        assert_eq!(
+            loaded.image_generation_model.as_deref(),
+            Some("gpt-image-1")
+        );
         assert!(loaded.validate().is_ok());
         for invalid in [json!(""), json!("a\nb"), json!("m".repeat(257))] {
             value["image_generation_model"] = invalid;

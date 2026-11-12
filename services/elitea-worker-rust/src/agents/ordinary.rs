@@ -62,8 +62,8 @@ use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use elitea_agent_runtime::host::PlatformWriter;
-use elitea_agent_runtime::toolkits::{DataAnalysisAuthority, ImageGenerationAuthority};
 use elitea_agent_runtime::toolkits::governed::GovernedOperationClient;
+use elitea_agent_runtime::toolkits::{DataAnalysisAuthority, ImageGenerationAuthority};
 use sqlx::PgPool;
 
 /// Shared ordinary application/ad-hoc assembler used after `AUTHORIZED_NOW`.

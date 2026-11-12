@@ -1917,7 +1917,10 @@ mod tests {
             on.skipped_tools_notice_text().as_deref(),
             Some("internal tool 'image_generation' is not available on this worker")
         );
-        assert_eq!(on.serving_image_generation().skipped_tools_notice_text(), None);
+        assert_eq!(
+            on.serving_image_generation().skipped_tools_notice_text(),
+            None
+        );
         assert!(on.image_generation_enabled());
     }
     /// The "omitted" warning is for runs that omit the tool: not for a parse
