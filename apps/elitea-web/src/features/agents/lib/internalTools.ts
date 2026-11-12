@@ -24,7 +24,7 @@ import { productName } from '@/shared/brand';
  * internalTools.constants.js`'s `INTERNAL_TOOLS_LIST` — field subset actually
  * read by this sub-unit's owned files (`ApplicationTools`,
  * `AgentInternalToolSwitch`): `name`, `title`, `icon`, `infoTooltip`,
- * `agentOnly`, `requiredToolkitType`. `toolkitNames` (used elsewhere in the
+ * `agentOnly` (the baseline's `requiredToolkitType` gate is gone, #1969). `toolkitNames` (used elsewhere in the
  * baseline for a toolkit<->internal-tool cross-reference outside this
  * sub-unit's scope) is dropped — not read by anything owned here.
  *
