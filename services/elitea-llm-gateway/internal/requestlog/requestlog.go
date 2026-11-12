@@ -108,7 +108,7 @@ type Record struct {
 	Metered *MeteredFields
 	// Image is set for an image request (issue 1969): kind, count, size,
 	// quality and the pricing source. Nil for every other request. Shared
-	// migration 0242.
+	// migration 0243.
 	Image *ImageFields
 	// Guardrails are the guardrail verdicts of the request (ADR-0043
 	// decision 1). A verdict names the detector, the labels, the action and
@@ -129,7 +129,7 @@ type MeteredFields struct {
 }
 
 // ImageFields are the request-log columns of an image request (shared
-// migration 0242). Count is the number of images the provider RETURNED, which
+// migration 0243). Count is the number of images the provider RETURNED, which
 // is what the bill is for, and 0 for a request that failed or was refused.
 // Size and Quality are the request's own values, empty when it named none.
 // PricingSource says which rate paid; empty when nothing was billed.
@@ -142,7 +142,7 @@ type ImageFields struct {
 
 // The values PricingSource can carry. FallbackEstimate means the gateway had
 // no price for the model and billed the flat per-image estimate: an operator
-// must add a price (shared migration 0242 documents it on the column).
+// must add a price (shared migration 0243 documents it on the column).
 const (
 	PricingSourceToken            = "token"
 	PricingSourceCatalogPerImage  = "catalog_per_image"

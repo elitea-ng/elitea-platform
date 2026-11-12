@@ -1,4 +1,4 @@
--- 0242_gateway_image_pricing.sql — per-image prices in the model price catalog,
+-- 0243_gateway_image_pricing.sql — per-image prices in the model price catalog,
 -- and the image columns of the gateway request log (issue 1969).
 --
 -- WHY A SECOND TABLE. gateway.gateway_models holds ONE row per (provider,

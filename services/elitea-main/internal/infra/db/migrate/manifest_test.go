@@ -1115,11 +1115,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 241: shared/0241_agent_teams_keyset_index.sql, the (project_id,
 	// lower(name), id) index behind the Teams list's keyset paging (issue
 	// 1955). No data, no permission.
-	// 242: shared/0242_gateway_image_pricing.sql, the per-image price catalog
+	// 243: shared/0243_gateway_image_pricing.sql, the per-image price catalog
 	// gateway.gateway_model_image_prices and the kind, image_count, image_size,
 	// image_quality and pricing_source columns of gateway.llm_request_logs
 	// (issue 1969). No backfill, no permission.
-	require.EqualValues(t, 242, Head(shared))
+	require.EqualValues(t, 243, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

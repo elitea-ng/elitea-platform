@@ -86,7 +86,7 @@ const reasoningTokensMigrationPath = "shared/0225_model_reasoning_control.sql"
 // 1969): the per-image price catalog and the image columns of the request log.
 // The gateway image billing reads the table and its request-log writer names
 // the columns, so a test database built without it answers 42P01 or 42703.
-const imagePricingMigrationPath = "shared/0242_gateway_image_pricing.sql"
+const imagePricingMigrationPath = "shared/0243_gateway_image_pricing.sql"
 
 // tokenBindingMigrationPath is the access-token project binding (ADR-0018,
 // spec-llm-project-scope §3), inside the LEDGERED corpus.

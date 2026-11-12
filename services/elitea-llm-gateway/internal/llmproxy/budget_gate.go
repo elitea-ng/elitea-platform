@@ -118,7 +118,7 @@ const (
 // perImageFallbackNano is the flat per-image ESTIMATE in nano-USD. It is the
 // LAST step of the image billing order (image_billing.go): it pays only when the
 // provider reported no token usage AND the catalog holds no per-image price for
-// the model (gateway.gateway_model_image_prices, shared migration 0242). It is
+// the model (gateway.gateway_model_image_prices, shared migration 0243). It is
 // recorded as pricing_source "fallback_estimate" on the request-log row, counted
 // on gateway_image_fallback_estimate_total and logged once per model, because it
 // is a guess that an operator must replace with a price. It is also the

@@ -1,7 +1,7 @@
 package requestlog
 
 // image_postgres_integration_test.go runs the image-row INSERT against a REAL
-// PostgreSQL with the SHIPPED DDL (shared migrations 0067, 0099 and 0242), and
+// PostgreSQL with the SHIPPED DDL (shared migrations 0067, 0099 and 0243), and
 // the per-image price statement of internal/cost against the shipped table.
 // A fake execer cannot report a wrong column name, an overflowing VARCHAR or a
 // CHECK a value violates.
@@ -39,7 +39,7 @@ func TestPostgresImageRowAndImagePriceCatalog(t *testing.T) {
 		"0067_gateway_budget_schema.sql", "0099_gateway_request_logs.sql",
 		"0084_budget_usage_dimensions.sql", "0100_gateway_request_log_execution_id.sql",
 		"0139_gateway_request_log_credential_owner_and_cache_tokens.sql",
-		"0225_model_reasoning_control.sql", "0242_gateway_image_pricing.sql",
+		"0225_model_reasoning_control.sql", "0243_gateway_image_pricing.sql",
 	} {
 		path := filepath.Join("..", "..", "..", "elitea-main", "migrations", "shared", file)
 		ddl, err := os.ReadFile(path) //nolint:gosec // a fixed in-repo path

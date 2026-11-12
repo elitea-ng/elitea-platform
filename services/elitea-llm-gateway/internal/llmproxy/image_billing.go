@@ -8,7 +8,7 @@ package llmproxy
 //  1. The provider reported token usage (gpt-image-*, gemini-*-image): the
 //     token rates of the catalog pay it. Unchanged. Source "token".
 //  2. Else the catalog holds a price per image for the request's model, size
-//     and quality (gateway.gateway_model_image_prices, shared migration 0242):
+//     and quality (gateway.gateway_model_image_prices, shared migration 0243):
 //     returned x that price. Source "catalog_per_image".
 //  3. Else the flat per-image ESTIMATE (perImageFallbackNano), recorded as
 //     "fallback_estimate" on the request-log row, counted on

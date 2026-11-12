@@ -49,7 +49,7 @@ func TestGatewayMigrationCutoverColumns(t *testing.T) {
 		// From 0225: pins the last term, whose ledger column the Usage read
 		// selects.
 		"ADD COLUMN IF NOT EXISTS reasoning_tokens",
-		// From 0242: pins the image pricing term.
+		// From 0243: pins the image pricing term.
 		"ADD COLUMN IF NOT EXISTS pricing_source",
 	} {
 		if !strings.Contains(sql, col) {
@@ -73,7 +73,7 @@ func TestGatewayMigrationTables(t *testing.T) {
 		// From 0174 — the metered tool price catalog. It pins the last term,
 		// whose ledger columns the Usage and analytics reads select.
 		"gateway.metered_operation_prices",
-		// From 0242 - the per-image price catalog.
+		// From 0243 - the per-image price catalog.
 		"gateway.gateway_model_image_prices",
 	} {
 		if !strings.Contains(sql, "CREATE TABLE IF NOT EXISTS "+tbl) {

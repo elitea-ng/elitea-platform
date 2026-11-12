@@ -42,7 +42,7 @@ type Store struct {
 	// Zero means "write them". See WriteBatch.
 	meteredUntil atomic.Int64
 	// imageUntil is the unix-nano time before which a batch holding an image
-	// row is written WITHOUT the shared migration 0242 columns. Zero means
+	// row is written WITHOUT the shared migration 0243 columns. Zero means
 	// "write them".
 	imageUntil atomic.Int64
 	// reasoningUntil is the unix-nano time before which the full column list
@@ -159,7 +159,7 @@ func (s *Store) WriteBatch(ctx context.Context, records []Record) error {
 	if s == nil || len(records) == 0 {
 		return nil
 	}
-	// A batch with a metered tool row (0174) or an image row (0242) names those
+	// A batch with a metered tool row (0174) or an image row (0243) names those
 	// columns. A refusal latches the group that owns the missing column and the
 	// batch is tried again without it, so each skew costs only its own columns.
 	useMetered := hasMetered(records) && !s.legacyColumns() && !s.latched(&s.meteredUntil)
@@ -231,14 +231,14 @@ func hasImage(records []Record) bool {
 	return false
 }
 
-// imageColumns are the shared migration 0242 columns, appended after the
+// imageColumns are the shared migration 0243 columns, appended after the
 // metered ones when a batch holds an image row.
 const imageColumns = `kind, image_count, image_size, image_quality, pricing_source`
 
 // imageColumnsPerRow is the number of imageColumns.
 const imageColumnsPerRow = 5
 
-// isMissingImageColumn reports a 42703 that names one of the 0242 columns.
+// isMissingImageColumn reports a 42703 that names one of the 0243 columns.
 func isMissingImageColumn(err error) bool {
 	for _, column := range []string{"kind", "image_count", "image_size", "image_quality", "pricing_source"} {
 		if isMissingColumn(err, column) {
@@ -272,7 +272,7 @@ func nullableText(value string) any {
 }
 
 // writeExtendedBatch writes every record with the full column list plus the
-// 0174 columns (withMetered) and the 0242 columns (withImage). A model row gets
+// 0174 columns (withMetered) and the 0243 columns (withImage). A model row gets
 // operation "llm" and NULL units, unit and cost; the column default would say
 // the same, but one statement binds one shape.
 func (s *Store) writeExtendedBatch(ctx context.Context, records []Record, withMetered, withImage bool) error {

@@ -1,7 +1,7 @@
 package cost
 
 // image_price.go — the per-image price of an image model (issue 1969,
-// shared migration 0242, gateway.gateway_model_image_prices).
+// shared migration 0243, gateway.gateway_model_image_prices).
 //
 // An image model is billed in one of three ways, and this file owns the second:
 //
@@ -94,7 +94,7 @@ func (c *Calculator) ImageUnitNano(ctx context.Context, provider, model, size, q
 			// A database older than this binary: no image price table yet.
 			// Cache the miss so every image request does not pay a refused
 			// query, and say so once per TTL and key.
-			c.logger.Warn("cost: the image price table is missing; apply shared migration 0242. Images bill the flagged estimate",
+			c.logger.Warn("cost: the image price table is missing; apply shared migration 0243. Images bill the flagged estimate",
 				"provider", provider, "model", model)
 			c.storeImage(key, imageEntry{expires: c.now().Add(c.ttl).UnixNano()})
 			return 0, false

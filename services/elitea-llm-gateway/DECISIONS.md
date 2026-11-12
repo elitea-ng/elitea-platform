@@ -9,7 +9,7 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
 - **Image billing order and admission estimate (issue 1969, 2026-11-12).** Images
   are billed on the images the provider RETURNED, in this order: provider token
   usage at the token rates; else the catalog price per image for (model, size,
-  quality) from `gateway.gateway_model_image_prices` (shared 0242); else the flat
+  quality) from `gateway.gateway_model_image_prices` (shared 0243); else the flat
   `perImageFallbackNano` estimate, recorded as `pricing_source =
   fallback_estimate`, counted and logged once per model. A zero price is no
   price. Why a second table and not a column: a price per image depends on size

@@ -59,7 +59,7 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 	}
 
 	// Model rows and image rows go in two transactions. The image table is
-	// shared migration 0242. A scheduler that rolls out ahead of elitea-migrate
+	// shared migration 0243. A scheduler that rolls out ahead of elitea-migrate
 	// gets 42P01 for it, and one transaction would then roll the token prices
 	// back with it. See syncImages.
 	var models, images []NormalizedModelPrice
@@ -166,7 +166,7 @@ const undefinedTableCode = "42P01"
 // syncImages writes the per-image price rows in their own transaction under
 // the same advisory lock.
 //
-// A database without shared migration 0242 answers 42P01 (or 42703). That is
+// A database without shared migration 0243 answers 42P01 (or 42703). That is
 // the "scheduler rolled out ahead of elitea-migrate" skew, and the token prices
 // are already committed, so this pass logs the cause and returns no error: the
 // next pass retries. Any other error is returned.
@@ -190,7 +190,7 @@ func (s *Syncer) syncImages(ctx context.Context, images []NormalizedModelPrice) 
 			var pgErr *pgconn.PgError
 			if errors.As(err, &pgErr) && (pgErr.Code == undefinedTableCode || pgErr.Code == undefinedColumnCode) {
 				s.logger.Error("pricesync: the image price table is missing; apply the pending elitea-main "+
-					"shared migrations (0242_gateway_image_pricing.sql). Image prices were not refreshed this "+
+					"shared migrations (0243_gateway_image_pricing.sql). Image prices were not refreshed this "+
 					"pass; the token prices were. The next pass retries.", "err", err)
 				return 0, nil
 			}

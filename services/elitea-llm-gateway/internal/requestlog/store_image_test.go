@@ -9,9 +9,9 @@ import (
 )
 
 // imageExecer refuses a statement that names pricing_source with 42703 while
-// missing0242 is set: a database shared migration 0242 has not reached.
+// missing0243 is set: a database shared migration 0243 has not reached.
 type imageExecer struct {
-	missing0242 bool
+	missing0243 bool
 	statements  []string
 	args        [][]any
 }
@@ -19,7 +19,7 @@ type imageExecer struct {
 func (e *imageExecer) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	e.statements = append(e.statements, sql)
 	e.args = append(e.args, args)
-	if e.missing0242 && strings.Contains(sql, "pricing_source") {
+	if e.missing0243 && strings.Contains(sql, "pricing_source") {
 		return pgconn.CommandTag{}, &pgconn.PgError{Code: "42703", Message: `column "pricing_source" of relation "llm_request_logs" does not exist`}
 	}
 	return pgconn.CommandTag{}, nil
@@ -40,7 +40,7 @@ func TestRequestLogWritesTheImageColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(db.statements) != 1 || !strings.Contains(db.statements[0], "kind, image_count, image_size, image_quality, pricing_source") {
-		t.Fatalf("statements = %q, want one insert with the 0242 columns", db.statements)
+		t.Fatalf("statements = %q, want one insert with the 0243 columns", db.statements)
 	}
 	args := db.args[0]
 	perRow := columnsPerRow + imageColumnsPerRow
@@ -71,11 +71,11 @@ func TestRequestLogImageColumnsAreNullWhenEmpty(t *testing.T) {
 	}
 }
 
-func TestRequestLogFallsBackWhen0242IsAbsent(t *testing.T) {
-	db := &imageExecer{missing0242: true}
+func TestRequestLogFallsBackWhen0243IsAbsent(t *testing.T) {
+	db := &imageExecer{missing0243: true}
 	store := NewStore(db)
 	if err := store.WriteBatch(context.Background(), imageBatch()); err != nil {
-		t.Fatalf("a missing 0242 must not lose the batch: %v", err)
+		t.Fatalf("a missing 0243 must not lose the batch: %v", err)
 	}
 	if len(db.statements) != 2 || strings.Contains(db.statements[1], "pricing_source") {
 		t.Fatalf("statements = %q, want the image insert and then the plain one", db.statements)
@@ -85,7 +85,7 @@ func TestRequestLogFallsBackWhen0242IsAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(db.statements) != 3 || strings.Contains(db.statements[2], "pricing_source") {
-		t.Fatalf("a latched store tried the 0242 columns again: %q", db.statements)
+		t.Fatalf("a latched store tried the 0243 columns again: %q", db.statements)
 	}
 }
 

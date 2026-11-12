@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Per-image prices (issue 1969, shared migration 0242).
+// Per-image prices (issue 1969, shared migration 0243).
 //
 // The sheet prices an image model in one of three ways, and the catalog's
 // per-1M-token columns hold none of them:

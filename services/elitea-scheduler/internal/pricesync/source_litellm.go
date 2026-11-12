@@ -96,7 +96,7 @@ type litellmEntry struct {
 // mapped here. It prices an image, not a token. Putting it into a per-1M-token
 // column would bill it a million times too low or too high, depending on the
 // direction of the mistake. It goes to the per-image price table instead
-// (parseLiteLLMImagePrices, shared migration 0242).
+// (parseLiteLLMImagePrices, shared migration 0243).
 func (e litellmEntry) tokenRates() (in, out *float64) {
 	if e.Mode == imageGenerationMode {
 		return higherRate(e.InputCostPerToken, e.InputCostPerImageToken),
