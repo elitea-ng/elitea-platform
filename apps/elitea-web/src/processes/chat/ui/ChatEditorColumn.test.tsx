@@ -37,6 +37,7 @@ function baseProps(overrides: Partial<ChatEditorColumnProps> = {}): ChatEditorCo
       agentForEditor: undefined,
       editAgent: { isCreateMode: false, onCloseAgentEditor: vi.fn() },
       agentCreation: { onAgentCreated: vi.fn() },
+      config: { renderConfigurationForm: () => null, onSaveVersion: undefined, isSavingVersion: false },
     },
     pipeline: {
       isEditing: false,
@@ -104,6 +105,7 @@ describe('ChatEditorColumn', () => {
           agentForEditor: undefined,
           editAgent: { isCreateMode: false, onCloseAgentEditor: vi.fn() },
           agentCreation: { onAgentCreated: vi.fn() },
+          config: { renderConfigurationForm: () => null, onSaveVersion: undefined, isSavingVersion: false },
         },
       }),
     );
@@ -113,6 +115,21 @@ describe('ChatEditorColumn', () => {
     // && <AgentEditor .../>` branch executed cleanly.
     expect(await screen.findByTestId('chat-editor-panel')).toBeInTheDocument();
     expect(screen.queryByRole('heading')).not.toBeInTheDocument();
+  });
+
+  it('renders the agent configuration form inside an opened agent (#1972)', async () => {
+    renderColumn(
+      baseProps({
+        agent: {
+          isEditing: true,
+          agentForEditor: { id: '1', entity_meta: { id: '1' }, entity_settings: { version_id: '10' }, meta: { name: 'Clarifier' } },
+          editAgent: { isCreateMode: false, onCloseAgentEditor: vi.fn() },
+          agentCreation: { onAgentCreated: vi.fn() },
+          config: { renderConfigurationForm: () => <div data-testid="agent-config-form" />, onSaveVersion: vi.fn(), isSavingVersion: false },
+        },
+      }),
+    );
+    expect(await screen.findByTestId('agent-config-form')).toBeInTheDocument();
   });
 
   it('mounts the pipeline editor with onSaveVersion omitted from deps when the config hook has none', async () => {
@@ -168,6 +185,7 @@ describe('ChatEditorColumn', () => {
           agentForEditor: undefined,
           editAgent: { isCreateMode: false, onCloseAgentEditor: vi.fn() },
           agentCreation: { onAgentCreated: vi.fn() },
+          config: { renderConfigurationForm: () => null, onSaveVersion: undefined, isSavingVersion: false },
         },
         pipeline: {
           isEditing: true,

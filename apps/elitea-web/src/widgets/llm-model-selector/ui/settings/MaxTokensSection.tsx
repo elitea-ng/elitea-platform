@@ -74,44 +74,61 @@ export const MaxTokensSection = memo(
           items={MODE_ITEMS}
           aria-label={t('widgets.llmModelSelector.maxTokensSection.modeAriaLabel', 'Max tokens mode')}
         />
-        <Box sx={{ display: 'flex', gap: 2, mt: 1 }}>
-          <TextField
-            value={
-              isAuto
-                ? t('widgets.llmModelSelector.maxTokensSection.modeAuto', 'Auto')
-                : String(value)
-            }
-            onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
-            onBlur={onBlur}
-            onFocus={onFocus}
-            size="small"
-            error={!!error}
-            helperText={helperText}
-            sx={{ flex: 1 }}
-            slotProps={{
-              input: {
-                endAdornment: (
-                  <InputAdornment position="end">
-                    {!isAuto && (
-                      <IconButton
-                        size="small"
-                        aria-label={t('widgets.llmModelSelector.maxTokens.clearAriaLabel', 'Clear the max tokens value')}
-                        onClick={handleClear}
-                        edge="end"
-                      >
-                        <ClearIcon fontSize="small" />
-                      </IconButton>
-                    )}
-                  </InputAdornment>
-                ),
-              },
-              htmlInput: {
-                'aria-label': 'max_tokens',
-                readOnly: isAuto,
-                style: { textAlign: 'center' },
-              },
-            }}
-          />
+        <Box sx={{ display: 'flex', gap: 2, mt: 1, alignItems: 'flex-start' }}>
+          <Box sx={{ flex: 1 }}>
+            {/*
+              * Same height as the "Remaining tokens" caption beside it, so the
+              * two inputs sit on one line (#1966): the caption pushed its input
+              * a label-height lower than this one.
+              */}
+            {!isAuto && (
+              <Typography
+                variant="bodySmall"
+                aria-hidden
+                data-testid="max-tokens-input-spacer"
+                sx={{ display: 'block', mb: 0.5, visibility: 'hidden' }}
+              >
+                {t('widgets.llmModelSelector.maxTokensSection.remainingLabel', 'Remaining tokens')}
+              </Typography>
+            )}
+            <TextField
+              value={
+                isAuto
+                  ? t('widgets.llmModelSelector.maxTokensSection.modeAuto', 'Auto')
+                  : String(value)
+              }
+              onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
+              onBlur={onBlur}
+              onFocus={onFocus}
+              size="small"
+              error={!!error}
+              helperText={helperText}
+              fullWidth
+              slotProps={{
+                input: {
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      {!isAuto && (
+                        <IconButton
+                          size="small"
+                          aria-label={t('widgets.llmModelSelector.maxTokens.clearAriaLabel', 'Clear the max tokens value')}
+                          onClick={handleClear}
+                          edge="end"
+                        >
+                          <ClearIcon fontSize="small" />
+                        </IconButton>
+                      )}
+                    </InputAdornment>
+                  ),
+                },
+                htmlInput: {
+                  'aria-label': 'max_tokens',
+                  readOnly: isAuto,
+                  style: { textAlign: 'center' },
+                },
+              }}
+            />
+          </Box>
           {!isAuto && (
             <Box sx={{ flex: 1 }}>
               <Typography

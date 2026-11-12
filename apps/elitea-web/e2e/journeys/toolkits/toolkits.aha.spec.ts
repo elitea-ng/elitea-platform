@@ -328,13 +328,19 @@ test('AHA-3: the Aha Configuration picker offers CREATE + SAVED sections, create
   await refreshed;
 
   // Create a NEW project credential through the picker's own CREATE action —
-  // it navigates to the real create-credential route (credentialPicker.tsx's
-  // disclosed deviation), so this is driven as its own short round trip.
+  // it opens the real create-credential route in a NEW tab so the toolkit
+  // form keeps its unsaved edits (issue 1965), so the round trip is driven in
+  // that tab while this one stays on the form.
   await picker.click();
-  await page.getByText(/New project .*credentials/i).click();
-  await expect(page).toHaveURL(/\/credentials\/create-credential\/aha/, { timeout: 15_000 });
+  const [createTab] = await Promise.all([
+    page.context().waitForEvent('page', { timeout: 15_000 }),
+    page.getByText(/New project .*credentials/i).click(),
+  ]);
+  await expect(createTab).toHaveURL(/\/credentials\/create-credential\/aha/, { timeout: 15_000 });
+  await expect(page, 'the toolkit form tab must stay where it was').not.toHaveURL(/create-credential/);
   const createdProjectName = tag('picker_created_project');
-  const createdId = await fillAndSaveAhaCredential(page, createdProjectName, { shared: true });
+  const createdId = await fillAndSaveAhaCredential(createTab, createdProjectName, { shared: true });
+  await createTab.close();
   const createdRow = await readCredentialRow(page.request, createdId);
   expect(createdRow.shared, 'the credential created via "New project .*credentials" must be shared').toBe(true);
 

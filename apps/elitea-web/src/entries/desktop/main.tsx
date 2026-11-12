@@ -15,10 +15,9 @@
  * (`./computerPanelStart.tsx`), not the shell. Its capability grants nothing
  * those would call.
  */
-import { installRtlStyleCache } from '@/app/providers/BrandThemeProvider';
+import { applyStartLocale } from '@/app/applyStartLocale';
 import { createHostLogger, hostLog, installDiagnostics } from '@/shared/desktop/diagnostics';
 import { tauriInvoke } from '@/shared/desktop/hostBridge';
-import { applyLocale, isRtl, startLocale } from '@/shared/i18n';
 
 import { boot } from './bootPlan';
 import { nativeMenuLabels } from './i18n/nativeMenuLabels';
@@ -31,11 +30,7 @@ void boot(window.location.hash, {
   invoke: tauriInvoke(),
   installHostLog: (invoke) => installDiagnostics(createHostLogger(invoke)),
   log: (level, message) => hostLog(level, message, 'boot'),
-  applyLanguage: async () => {
-    const locale = startLocale();
-    await applyLocale(locale);
-    if (isRtl(locale)) installRtlStyleCache((await import('./rtlStyleCache')).createRtlStyleCache());
-  },
+  applyLanguage: applyStartLocale,
   menuLabels: nativeMenuLabels,
   startShell: async (invoke) => (await import('./start')).start(invoke),
   startPanel: async () => (await import('./computerPanelStart')).startComputerPanel(),
