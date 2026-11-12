@@ -52,10 +52,10 @@ export const ConversationParticipantPersona = zod
       .string()
       .optional()
       .describe(
-        "Deprecated by client contract 1.49: read `avatar_pack_v1`. Reserved by contract 1.38 as a string. Servers 1.46 to 1.48 sent the avatar pack OBJECT here, against its declared type, so a strict codegen client could reject the whole participant (#1881). From 1.49 the server never sends this property. A client that still talks to a 1.46 to 1.48 server may read it as unknown JSON and validate it (`avatarPackOf` in `@elitea/client-core/conversation`). A create request does not set it.",
+        "Deprecated by client contract 1.49: read `avatar_pack_v1`. Reserved by contract 1.38 as a string. Servers 1.46 to 1.48 sent the avatar pack OBJECT here, against its declared type, so a strict codegen client could reject the whole participant (issue 1881). From 1.49 the server never sends this property. A client that still talks to a 1.46 to 1.48 server may read it as unknown JSON and validate it (`avatarPackOf` in `@elitea/client-core/conversation`). A create request does not set it.",
       ),
     avatar_pack_v1: AgentAvatarPackV1.optional().describe(
-      "Client contract 1.49 (ADR-0050 decision 6, #1881): on a read, the avatar pack of the version the agent participant runs, read live from the version on every participants read; absent when the version has none (the client then shows `entity_settings.icon_meta`). Only a participant of the conversation's own project, bound to a version of its own agent, carries it. A client still validates it (`avatarPackOf`) and ignores a value that is not a valid pack. A create request does not set it.",
+      "Client contract 1.49 (ADR-0050 decision 6, issue 1881): on a read, the avatar pack of the version the agent participant runs, read live from the version on every participants read; absent when the version has none (the client then shows `entity_settings.icon_meta`). Only a participant of the conversation's own project, bound to a version of its own agent, carries it. A client still validates it (`avatarPackOf`) and ignores a value that is not a valid pack. A create request does not set it.",
     ),
   })
   .describe(
