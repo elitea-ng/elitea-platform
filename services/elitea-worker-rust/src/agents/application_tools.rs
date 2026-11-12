@@ -3694,7 +3694,15 @@ impl ApplicationAssemblyState<'_> {
         let binding = bind_toolsets(toolsets, &reserved_toolsets, "elitea_nested_tool_binding")
             .await
             .map_err(tool_binding_error)?;
-        let sensitive_tools = sensitive_tools.bind_provider_names(&binding)?;
+        // ADR-0045 decision 2 (#1560): the run's unattended grant reaches a
+        // nested agent too. `sensitive_tools` was built from `frozen`, the
+        // child's grants after ADR-0044 narrowing, so the grant approves only
+        // the pairs that the grant names AND the child still holds, and never
+        // one in a category Main's admission withholds or gates by tier
+        // (`with_nested_unattended_grant`).
+        let sensitive_tools = sensitive_tools
+            .with_nested_unattended_grant(self.fallback_profile.unattended_grant())
+            .bind_provider_names(&binding)?;
         let delegated_authorization = delegated_authorization
             .bind_provider_names(&binding)
             .map_err(|()| invalid_configuration())?;

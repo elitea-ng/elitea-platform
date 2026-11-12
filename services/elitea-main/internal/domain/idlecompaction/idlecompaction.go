@@ -78,8 +78,10 @@ type Check struct {
 	// conversation now.
 	SourceExecution string
 	LatestExecution string
-	// AgentBusy: an agent run of the conversation (the agent's own or a
-	// peer's) runs or waits now; the check waits, it is not cancelled.
+	// AgentBusy: a run that can hold the agent's worker session runs or
+	// waits now; the check waits, it is not cancelled. With a per-participant
+	// session thread (issue 1869) that is the agent's own run only; with the
+	// conversation's thread it is any agent run of the conversation.
 	AgentBusy bool
 }
 

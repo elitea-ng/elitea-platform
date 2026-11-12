@@ -45,6 +45,11 @@ type CurrentRegenerationTarget struct {
 	// worker as this turn's question (issue 1903). False for a later
 	// addressed agent, which answers the person's existing question.
 	QuestionIsOwn bool
+	// ThreadID is the worker session thread the regenerated answer ran in
+	// (issue 1869), "" for an answer that settled none. The regeneration
+	// reuses it, as a continuation does, so the agent's session is the one
+	// its first answer wrote.
+	ThreadID string
 }
 
 func (target CurrentRegenerationTarget) Validate() error {
@@ -342,6 +347,10 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		input.ContextSettings = contextSettings
 		input.IsRegenerate = true
 		input.CurrentMessageId = regeneratedQuestionID(target)
+		// Issue 1869: the regenerated answer runs in the session thread its
+		// first answer ran in; no conversation read decides it again.
+		sessionThread := regenerationSessionThread(target)
+		input.ThreadId = &sessionThread
 		input.RecalledMemory, input.RecalledMemoryTag = recalledMemoryInput(agentMemory, input.GetApplication())
 		turn.ApplicationID = resolved.ApplicationID
 		turn.ApplicationVersionID = resolved.ApplicationVersionID

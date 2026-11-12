@@ -276,8 +276,14 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 	}); err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("insert tool-run command outbox: %w", err)
 	}
-	securityContext, err := admitExecutionProfile(ctx, tx, pgxRows(tx), r.policy.CredentialProfile,
-		admissionPin{executionID: admission.Record.Outbox.ExecutionID}, recordFacts(admission.Record, timing.AdmittedAt, 0))
+	// A code-sandbox child of a governed run inherits the run's binding and
+	// frozen credential references (issue 1557); a call outside any run does not.
+	parentExecutionID := ""
+	if admission.CodeParent != nil {
+		parentExecutionID = admission.CodeParent.Admission.Job.ExecutionID
+	}
+	securityContext, err := admitChildExecutionProfile(ctx, tx, pgxRows(tx), r.policy.CredentialProfile,
+		admissionPin{executionID: admission.Record.Outbox.ExecutionID}, recordFacts(admission.Record, timing.AdmittedAt, 0), parentExecutionID)
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}

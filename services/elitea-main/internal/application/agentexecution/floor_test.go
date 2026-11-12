@@ -229,3 +229,78 @@ func TestFloorTurnQuestionIDIsStable(t *testing.T) {
 		t.Fatalf("unstable id %s", a)
 	}
 }
+
+// Issue 1869: an agent of a conversation with several agents has its own
+// worker session thread; a single-agent conversation, and a service with no
+// floor, keep the conversation's thread so existing sessions keep resolving.
+func TestAgentSessionThreadIsPerParticipantOnlyInAMultiAgentConversation(t *testing.T) {
+	request := validCurrentApplicationStartRequest()
+	request.TargetParticipantID = 21
+	for name, c := range map[string]struct {
+		store FloorStore
+		want  string
+	}{
+		"several agents": {twoAgentFloor(), request.ConversationUUID + ":21"},
+		"a single agent": {&floorStoreStub{floor: ConversationFloor{Agents: []FloorAgent{{ParticipantID: 21}}}}, request.ConversationUUID},
+		"no floor":       {nil, request.ConversationUUID},
+		"another agent":  {twoAgentFloor(), request.ConversationUUID + ":22"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, admissions := floorStartService(t, c.store)
+			r := request
+			if name == "another agent" {
+				r.TargetParticipantID = 22
+			}
+			if _, err := service.StartCurrentApplication(context.Background(), r); err != nil {
+				t.Fatal(err)
+			}
+			if got := admissions.requests[0].Input.GetThreadId(); got != c.want {
+				t.Fatalf("thread = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestSessionThreadHelpers(t *testing.T) {
+	const conversation = "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1a01"
+	if got := SessionThreadID(conversation, 5, false); got != conversation {
+		t.Fatalf("single agent thread = %q", got)
+	}
+	thread := SessionThreadID(conversation, 5, true)
+	if thread != conversation+":5" || !IsParticipantSessionThread(thread, conversation) {
+		t.Fatalf("participant thread = %q", thread)
+	}
+	for _, shared := range []string{conversation, "thread-1", conversation + ":", ""} {
+		if IsParticipantSessionThread(shared, conversation) {
+			t.Fatalf("%q reads as a participant thread", shared)
+		}
+	}
+}
+
+// Issue 1869: a regeneration reuses the thread its answer persisted, so start
+// and regenerate cannot disagree and no conversation read decides it again.
+func TestRegenerationSessionThreadReusesThePersistedThread(t *testing.T) {
+	const conversation = "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1a01"
+	target := CurrentRegenerationTarget{ConversationUUID: conversation, TargetParticipantID: 21}
+	if got := regenerationSessionThread(target); got != conversation {
+		t.Fatalf("an answer with no thread = %q, want the conversation's", got)
+	}
+	target.ThreadID = conversation + ":21"
+	if got := regenerationSessionThread(target); got != conversation+":21" {
+		t.Fatalf("persisted thread = %q", got)
+	}
+}
+
+// A start names its agent: participant 0 is refused before any thread is
+// chosen, so no multi-agent start can fall back to the shared thread.
+func TestStartWithoutAParticipantIsRefusedBeforeAThreadIsChosen(t *testing.T) {
+	request := validCurrentApplicationStartRequest()
+	request.TargetParticipantID = 0
+	service, admissions := floorStartService(t, twoAgentFloor())
+	if _, err := service.StartCurrentApplication(context.Background(), request); err == nil {
+		t.Fatal("a start with no participant was admitted")
+	}
+	if len(admissions.requests) != 0 {
+		t.Fatal("a start with no participant reached admission")
+	}
+}

@@ -2052,7 +2052,10 @@ SELECT conversation.uuid AS conversation_uuid,
                  AND earlier_answer.conversation_id = conversation.id
                  AND earlier_answer.id < response.id
            )
-       )::boolean AS question_is_own
+       )::boolean AS question_is_own,
+       -- #1869: the session thread the answer ran in, so a regeneration keeps it
+       -- ("" for an answer that settled none).
+       COALESCE(response.meta ->> 'thread_id', '')::text AS thread_id
 FROM chat_message_group AS response
 JOIN chat_conversations AS conversation
   ON conversation.id = response.conversation_id
