@@ -119,7 +119,7 @@ A saved agent's editor includes an **Evaluation** tab to define what "good" look
 
 ## History
 
-A saved agent's editor also includes a **History** tab: every past conversation that used this agent, newest first, with its date, a derived duration, and its message count. Select a run to see its recorded trace — the tool calls and thinking steps the runtime logged for that conversation. An agent with no past conversations shows an empty state rather than a blank panel.
+A saved agent's editor also includes a **History** tab: every past conversation that used this agent, newest first, including the chats you had in the editor's own chat panel. Each entry shows the first message you wrote (the conversation's title if there is none), then its start time in your local time, the version, a derived duration, and its message count. Select a run to see the whole exchange, your message included, and below it the recorded trace: the tool calls and thinking steps the runtime logged for that conversation. An agent with no past conversations shows an empty state rather than a blank panel.
 
 <Note>
 Selecting a run in History does not currently reload that conversation into the Test panel above — there is no live restore path from this tab (issue #868, same disclosed gap as pipelines' equivalent History tab).
