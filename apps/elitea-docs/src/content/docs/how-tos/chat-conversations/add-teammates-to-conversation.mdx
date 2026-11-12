@@ -27,6 +27,12 @@ Click **Add**. The people you selected appear in the Users section of the Partic
 
 Type `@` in the message box to open a suggestion list of everyone in the conversation, then pick a name (or select **Everyone**, shown once the conversation has two or more human participants, to notify the whole group). A mention only directs the message at that person — agents and pipelines in the conversation don't treat it as an instruction to act.
 
+### A message to people gets no answer from the AI
+
+A message that mentions people and names no agent is a message to those people. It is posted to the conversation and the people you mention are notified, but **no agent or model answers it** — not the default model, not the agent you last talked to, and not the lead agent. No answer is pending and nothing streams.
+
+To get an answer as well, address an agent in the same message: type `#` or `@` and pick the agent (in a conversation with two or more agents), or pick the agent as the message's target before you send. The message then goes to that agent, and the people you mentioned are still notified. A message with no mention is answered as before. On mobile a conversation with a single agent offers no agent mention, so send the question to the agent as its own message.
+
 ## Remove a teammate
 
 Open the Users list in the Participants panel, hover over the person's name, and click the delete icon that appears, then confirm. You can't remove yourself this way.
