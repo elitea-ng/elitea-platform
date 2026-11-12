@@ -47,7 +47,6 @@ export { CreateApplicationTabBar } from './ui/CreateApplicationTabBar';
 export type { CreateApplicationTabBarProps } from './ui/CreateApplicationTabBar';
 
 export { ApplicationSaveButton } from './ui/ApplicationSaveButton';
-export type { ApplicationSaveButtonProps } from './ui/ApplicationSaveButton';
 
 export { ApplicationValidator } from './ui/ApplicationValidator';
 export type { ApplicationValidatorProps, UseValidateVersion } from './ui/ApplicationValidator';
