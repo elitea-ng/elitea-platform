@@ -229,6 +229,13 @@ export interface AgentExecutionStart {
   readonly task_id?: string;
   readonly execution_id?: string;
   readonly response_message_id?: string;
+  /**
+   * `false` on the 201 a PEOPLE-ONLY message gets (client contract 1.51): the
+   * message was stored and its people notified, and no turn was started, so
+   * there is no `events_url` and nothing to stream. Absent on an admitted turn.
+   */
+  readonly turn_started?: boolean;
+  readonly message_id?: string;
   readonly [key: string]: unknown;
 }
 

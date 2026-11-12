@@ -98,6 +98,18 @@ export function addressedTo(text: string, agents: readonly AddressableAgent[]): 
 }
 
 /**
+ * Whether a message is for people alone, as Main decides it (`agentexecution.PeopleOnly`): it mentions at least one
+ * person (an `@user`, or `@everyone`) and addresses no agent. Such a message is stored and notifies the people it
+ * names; it starts no turn, so a client opens no stream and shows no pending answer. A client uses this only to know
+ * what to render: Main decides from the same fields, whatever a client believes. Note that the picked or last-addressed
+ * agent is NOT an address: a client that means an agent for a message with mentions sends it in `addressed_to`.
+ */
+export function isPeopleOnly(message: { readonly mentionedUserIds?: readonly unknown[] | undefined; readonly mentionsEveryone?: boolean | undefined; readonly addressedTo?: readonly unknown[] | undefined }): boolean {
+  const people = (message.mentionedUserIds?.length ?? 0) > 0 || message.mentionsEveryone === true;
+  return people && (message.addressedTo?.length ?? 0) === 0;
+}
+
+/**
  * Who answers a message first, as Main routes it (`turntaking.Route`): the first agent it addresses, else the lead
  * under policy `lead`, else `fallback` (the sticky or composer's target; 0 for none). Only the conversation's `agents`
  * count: a lead no longer among them is no lead. The one copy of the rule the clients share (#1932). 0 when nobody

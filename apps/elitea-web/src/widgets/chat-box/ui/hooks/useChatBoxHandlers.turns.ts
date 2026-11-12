@@ -20,6 +20,7 @@ import {
   uploadPendingAttachments,
   UPLOAD_FAILED,
 } from "./useChatBoxHandlers.helpers";
+import { addressedWithPick, isPeopleOnlyPayload } from "./useChatBoxSend.floor";
 import type {
   ChatBoxHandlerDeps,
   SendQuestionParams,
@@ -85,6 +86,8 @@ async function deliverTurn(
     ? await deps.startStreamedExecution(params)
     : NO_STREAM_TRANSPORT;
   if (outcome.started) return undefined;
+  // A message for people alone is stored with no turn: delivered, and never a socket turn.
+  if (outcome.reason === "posted") return undefined;
   if (outcome.reason === "rejected") return outcome.message;
   const emitted = tryEmit(
     () =>
@@ -96,6 +99,11 @@ async function deliverTurn(
     "chat_predict",
   );
   return emitted ? undefined : undeliveredText();
+}
+
+/** Shows the turn as pending, unless the message is for people alone: nobody answers it. */
+function markPendingAnswer(deps: ChatBoxHandlerDeps, questionId: string, payload: Record<string, unknown>): void {
+  if (!deps.isStreamingNow && !isPeopleOnlyPayload(payload)) deps.setStreamingInfo(questionId);
 }
 
 export function createSendQuestion(
@@ -144,7 +152,7 @@ export function createSendQuestion(
       userIds,
       isMentioningEveryone,
       projectSkillIds,
-      addressedTo,
+      addressedTo: addressedWithPick(addressedTo, participant, { userIds, everyone: isMentioningEveryone }),
     });
     deps.setChatHistory((prev) => [
       ...prev,
@@ -155,7 +163,7 @@ export function createSendQuestion(
         participantId,
       ),
     ]);
-    if (!deps.isStreamingNow) deps.setStreamingInfo(questionId);
+    markPendingAnswer(deps, questionId, payload);
     const failure = resolvedConversationUuid
       ? await deliverTurn(deps, {
           conversationUuid: resolvedConversationUuid,
