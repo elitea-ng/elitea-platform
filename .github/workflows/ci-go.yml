@@ -355,8 +355,13 @@ jobs:
           cache: false
           go-version-file: go.work
       - name: Restore the Go cache (pull requests read, main writes)
+        id: gocache
         uses: ./.github/actions/go-cache
         with:
+          # Restores only. The save is the last step of this job, so a red
+          # gate above it (a vet finding) still saves the cache it warmed;
+          # the action's own post-step save runs on success only.
+          save: 'false'
           cache-dependency-path: |
             services/elitea-main/go.sum
             services/elitea-scheduler/go.sum
@@ -388,6 +393,20 @@ jobs:
       # in series before the tests (3.5 minutes); here it runs beside them.
       - name: Go vet (workspace)
         run: bash scripts/go/workspace-run.sh vet
+
+      # The nightly run on main saves the Go cache here, not in the cache
+      # action's post step: that step runs only when every step succeeded, so
+      # one red gate above left main without a Go cache until the next green
+      # night. The build cache a failed gate warmed is as good as any other.
+      # A pull request never saves, and an exact hit has nothing to add.
+      - name: Save the Go cache (main, even after a red gate)
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && steps.gocache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.gocache.outputs.key }}
 
   test-shard:
     name: Test (${{ matrix.name }})

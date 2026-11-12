@@ -170,24 +170,30 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 
 // detailVersionID is the id of the version whose details Get embeds: the one
 // flagged is_default (derived from meta.default_version_id), else the one named
-// "base", else the first listed; "" for an empty list.
+// "base", else the first listed; "" for an empty list. Only a version whose id
+// is a positive integer counts, as in the web's defaultRunVersionId and the
+// desktop host's default_version_of, so a row with a blank or non-numeric id
+// is never the answer and the three clients cannot pick different versions.
 func detailVersionID(versions []map[string]any) string {
-	idOf := func(version map[string]any) string {
+	var usable []map[string]any
+	for _, version := range versions {
 		id, _ := version["id"].(string)
-		return id
-	}
-	for _, version := range versions {
-		if isDefault, _ := version["is_default"].(bool); isDefault && idOf(version) != "" {
-			return idOf(version)
+		if n, err := strconv.ParseInt(id, 10, 64); err == nil && n > 0 {
+			usable = append(usable, version)
 		}
 	}
-	for _, version := range versions {
-		if name, _ := version["name"].(string); name == defaultVersionName && idOf(version) != "" {
-			return idOf(version)
+	for _, version := range usable {
+		if isDefault, _ := version["is_default"].(bool); isDefault {
+			return version["id"].(string)
 		}
 	}
-	if len(versions) > 0 {
-		return idOf(versions[0])
+	for _, version := range usable {
+		if name, _ := version["name"].(string); name == defaultVersionName {
+			return version["id"].(string)
+		}
+	}
+	if len(usable) > 0 {
+		return usable[0]["id"].(string)
 	}
 	return ""
 }

@@ -454,3 +454,18 @@ async fn the_lead_answers_and_an_address_beats_it() {
     assert_eq!(seen(&h.server, "/llm/v1/chat/completions").len(), 1);
     assert_eq!(settled_done(&h, &started.turn_id)["commit"], "committed");
 }
+
+#[test]
+fn a_messages_hops_share_default_versions_and_a_new_message_starts_empty() {
+    use super::super::turn::DefaultVersions;
+    let message = DefaultVersions::default();
+    let hop = message.clone();
+    message.keep(5, 9);
+    assert_eq!(hop.get(5), Some(9), "a hop of the same message reuses it");
+    assert_eq!(hop.get(6), None);
+    assert_eq!(
+        DefaultVersions::default().get(5),
+        None,
+        "a new message re-reads"
+    );
+}

@@ -22,4 +22,14 @@ func TestDetailVersionID(t *testing.T) {
 	if got := detailVersionID(nil); got != "" {
 		t.Fatalf("an empty list has none, got %q", got)
 	}
+	// A row without a usable id is never the answer.
+	unusable := []map[string]any{
+		{"id": "", "name": "base", "is_default": true},
+		{"id": "x", "name": "base"},
+		{"id": "0", "name": "v0"},
+		{"id": "7", "name": "v7"},
+	}
+	if got := detailVersionID(unusable); got != "7" {
+		t.Fatalf("only a positive integer id counts, got %q", got)
+	}
 }

@@ -438,6 +438,16 @@ pub struct StartedChain {
     pub chain: Option<Value>,
 }
 
+impl StartedChain {
+    /// A start answer that names no grant id is the start's own: the id the
+    /// request carried is the chain's (the retried start, issue 1563).
+    pub fn fill_grant_id(&mut self, sent: Option<&str>) {
+        if self.grant_id.as_deref().is_none_or(str::is_empty) {
+            self.grant_id = sent.map(str::to_owned);
+        }
+    }
+}
+
 /// How a chain ended: the commit's `chain_outcome` on the chain's last turn.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -752,6 +762,25 @@ pub fn default_wait(kind: &str) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_start_answer_without_a_grant_id_takes_the_one_sent() {
+        let mut omitted = super::StartedChain::default();
+        omitted.fill_grant_id(Some("new"));
+        assert_eq!(omitted.grant_id.as_deref(), Some("new"));
+        let mut empty = super::StartedChain {
+            grant_id: Some(String::new()),
+            ..Default::default()
+        };
+        empty.fill_grant_id(Some("new"));
+        assert_eq!(empty.grant_id.as_deref(), Some("new"));
+        let mut echoed = super::StartedChain {
+            grant_id: Some("main".into()),
+            ..Default::default()
+        };
+        echoed.fill_grant_id(Some("new"));
+        assert_eq!(echoed.grant_id.as_deref(), Some("main"));
+    }
+
     use super::*;
 
     fn grant(value: Value) -> Result<UnattendedGrant, TurnError> {

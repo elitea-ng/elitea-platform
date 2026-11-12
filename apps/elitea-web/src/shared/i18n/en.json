@@ -4218,7 +4218,7 @@
   "entities.runHistory.close": "Close run history",
   "entities.runHistory.empty": "This has not been used in a conversation yet. Attach it to a chat to start its history.",
   "entities.runHistory.emptyTitle": "No runs yet",
-  "entities.runHistory.list.messageCount": "messages {{count}}",
+  "entities.runHistory.list.messageCount": "{{count}} messages",
   "entities.runHistory.list.restore": "Restore",
   "entities.runHistory.selectPrompt": "Select a run to see its trace.",
   "entities.runHistory.title": "Run history",

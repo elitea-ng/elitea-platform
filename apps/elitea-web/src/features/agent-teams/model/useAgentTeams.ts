@@ -45,14 +45,20 @@ export interface TeamCursor {
 
 /**
  * The cursor of the page after `pages`, or undefined once every team is
- * loaded: a full page has more behind it, a short one is the end. The route
- * orders by lower(name), then id, so the cursor is the last row's own
- * name and id and a team created or deleted between pages cannot shift
- * the window (issue 1955).
+ * loaded. `total` decides, not the page's length: a short page is not the
+ * end when the server capped it, and a page that happens to be full is the
+ * end when it holds the last team. The route orders by lower(name), then id,
+ * so the cursor is the last row's own name and id and a team created or
+ * deleted between pages cannot shift the window (issue 1955). An empty page
+ * ends the walk whatever `total` says.
  */
-export function nextTeamCursor(pages: readonly AgentTeamList[], pageSize = TEAM_PAGE_SIZE): TeamCursor | undefined {
-  const last = pages.at(-1)?.rows.at(-1);
-  if (last === undefined || (pages.at(-1)?.rows.length ?? 0) < pageSize) return undefined;
+export function nextTeamCursor(pages: readonly AgentTeamList[]): TeamCursor | undefined {
+  const lastPage = pages.at(-1);
+  const last = lastPage?.rows.at(-1);
+  if (lastPage === undefined || last === undefined) return undefined;
+  // Distinct teams: a page can repeat the last team held (a rename between pages).
+  const loaded = new Set(pages.flatMap((page) => page.rows.map((team) => team.id))).size;
+  if (loaded >= lastPage.total) return undefined;
   return { after_name: last.name, after_id: last.id };
 }
 

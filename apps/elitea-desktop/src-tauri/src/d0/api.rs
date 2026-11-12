@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-use super::cache::{DefaultVersionKey, TurnCaches};
+use super::turn::DefaultVersions;
 use crate::tokens::CLIENT_VERSION_HEADER;
 
 /// How long one platform request may take. A remote toolkit call waits up
@@ -637,8 +637,7 @@ impl PlatformApi {
         project_id: i64,
         conversation_id: &str,
         participant_id: i64,
-        identity: &str,
-        caches: &TurnCaches,
+        defaults: &DefaultVersions,
     ) -> Result<FloorTarget, ApiError> {
         let detail: Value = self
             .send(
@@ -656,14 +655,10 @@ impl PlatformApi {
         if pinned {
             return Ok(target);
         }
-        // An unpinned agent's default version is read once per minute and
-        // session, not once per hop of a routed message (#1942).
-        let key = DefaultVersionKey {
-            identity: identity.to_owned(),
-            project_id,
-            application_id: target.application_id,
-        };
-        if let Some(version_id) = caches.default_version(&key) {
+        // An unpinned agent's default version is read once per message, not
+        // once per hop of its floor chain (#1942); a new message reads it
+        // again, so a default changed since is seen (#1941).
+        if let Some(version_id) = defaults.get(target.application_id) {
             return Ok(FloorTarget {
                 version_id,
                 ..target
@@ -687,7 +682,7 @@ impl PlatformApi {
                 "the next agent of this message has no version to run",
             )
         })?;
-        caches.keep_default_version(key, version_id);
+        defaults.keep(target.application_id, version_id);
         Ok(FloorTarget {
             version_id,
             ..target

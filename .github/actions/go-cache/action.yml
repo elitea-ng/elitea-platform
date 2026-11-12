@@ -36,6 +36,11 @@ outputs:
   cache-hit:
     description: "'true' on an exact-key hit."
     value: ${{ steps.cache.outputs.cache-hit }}
+  key:
+    description: >-
+      The exact cache key, for a caller that saves the cache itself with
+      `save: "false"` plus a final actions/cache/save step.
+    value: go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-${{ steps.go.outputs.hash }}
 runs:
   using: composite
   steps:

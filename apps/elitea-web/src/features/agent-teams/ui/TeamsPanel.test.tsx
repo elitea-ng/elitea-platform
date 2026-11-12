@@ -77,6 +77,23 @@ describe('TeamsPanel', () => {
     expect(cursors).toEqual(['-', 'Team 200 / 200']);
   });
 
+  it('stops at the total, not at a short page: a full last page ends the walk', async () => {
+    grant('models.teams.list');
+    const cursors: string[] = [];
+    const row = (id: number) => ({ ...TEAM_ROW, id, name: `Team ${id}` });
+    server.use(
+      http.get(TEAMS, ({ request }) => {
+        const after = new URL(request.url).searchParams.get('after_id');
+        cursors.push(after ?? '-');
+        return HttpResponse.json({ rows: Array.from({ length: 200 }, (_, i) => row(i + 1)), total: 200 });
+      }),
+    );
+    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    expect(await screen.findByTestId('agent-team-name-200')).toBeInTheDocument();
+    expect(screen.queryByTestId('agent-teams-more')).not.toBeInTheDocument();
+    expect(cursors).toEqual(['-']);
+  });
+
   it('shows a team the next page repeats once', async () => {
     grant('models.teams.list');
     const row = (id: number) => ({ ...TEAM_ROW, id, name: `Team ${id}` });

@@ -27,7 +27,6 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 use super::api::{AnsweringParticipant, ResolvedVersion};
 use super::catalogue::Catalogues;
@@ -64,19 +63,6 @@ pub struct LimitsKey {
     pub model_name: String,
 }
 
-/// An agent whose DEFAULT version was read, as one session read it (#1942).
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct DefaultVersionKey {
-    pub identity: String,
-    pub project_id: i64,
-    pub application_id: i64,
-}
-
-/// How long a read default version is reused: the later turns of one
-/// routed message (one agent hop after another) share one read, and a
-/// default changed since is seen by the next message.
-pub const DEFAULT_VERSION_TTL: Duration = Duration::from_secs(60);
-
 /// A resolved version and the tag that revalidates it.
 #[derive(Clone, Debug)]
 pub struct CachedVersion {
@@ -93,8 +79,6 @@ pub struct TurnCaches {
     versions: Mutex<HashMap<VersionKey, CachedVersion>>,
     participants: Mutex<HashMap<ParticipantKey, AnsweringParticipant>>,
     limits: Mutex<HashMap<LimitsKey, ModelFacts>>,
-    /// The default version of an unpinned agent, with when it was read.
-    defaults: Mutex<HashMap<DefaultVersionKey, (Instant, i64)>>,
     /// The projects' chat models (#1228), each kept for a minute.
     pub catalogues: Catalogues,
 }
@@ -181,27 +165,9 @@ impl TurnCaches {
         bounded_insert(&mut locked(&self.limits), key, facts);
     }
 
-    /// The default version read for `key` less than [`DEFAULT_VERSION_TTL`] ago.
-    #[must_use]
-    pub fn default_version(&self, key: &DefaultVersionKey) -> Option<i64> {
-        locked(&self.defaults)
-            .get(key)
-            .filter(|(read, _)| read.elapsed() < DEFAULT_VERSION_TTL)
-            .map(|(_, version_id)| *version_id)
-    }
-
-    pub fn keep_default_version(&self, key: DefaultVersionKey, version_id: i64) {
-        bounded_insert(
-            &mut locked(&self.defaults),
-            key,
-            (Instant::now(), version_id),
-        );
-    }
-
     /// Sign-out, a new sign-in, another deployment: nothing of the last
     /// session is reused.
     pub fn clear(&self) {
-        locked(&self.defaults).clear();
         locked(&self.versions).clear();
         locked(&self.participants).clear();
         locked(&self.limits).clear();
@@ -240,27 +206,6 @@ mod tests {
         caches.keep_version(version("a"), &resolved(), Some("\"x\""));
         caches.clear();
         assert!(caches.version(&version("a")).is_none());
-    }
-
-    #[test]
-    fn a_default_version_is_kept_per_session_agent_and_cleared() {
-        let caches = TurnCaches::default();
-        let key = |identity: &str, application_id: i64| DefaultVersionKey {
-            identity: identity.into(),
-            project_id: 1,
-            application_id,
-        };
-        assert_eq!(caches.default_version(&key("a", 5)), None);
-        caches.keep_default_version(key("a", 5), 9);
-        assert_eq!(caches.default_version(&key("a", 5)), Some(9));
-        assert_eq!(
-            caches.default_version(&key("b", 5)),
-            None,
-            "another sign-in"
-        );
-        assert_eq!(caches.default_version(&key("a", 6)), None, "another agent");
-        caches.clear();
-        assert_eq!(caches.default_version(&key("a", 5)), None);
     }
 
     fn participant_key(participant_id: Option<i64>) -> ParticipantKey {

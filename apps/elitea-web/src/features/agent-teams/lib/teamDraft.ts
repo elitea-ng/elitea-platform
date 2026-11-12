@@ -79,7 +79,11 @@ export function draftProblem(draft: TeamDraft): TeamDraftProblem | undefined {
   return undefined;
 }
 
-/** The version a new member runs: the agent's default (`meta.default_version_id`), else its `base`, else its first. */
-export function defaultVersionOf(versions: readonly ApplicationVersionSummary[], defaultVersionId?: unknown): number | undefined {
-  return defaultRunVersionId(versions, defaultVersionId);
+/**
+ * The version a new member runs, by the one rule (issue 1941): the version the
+ * server flags `is_default` (derived from the agent's `meta.default_version_id`),
+ * else its `base`, else its first. The rule lives here so the dialog states none.
+ */
+export function defaultVersionOf(versions: readonly ApplicationVersionSummary[]): number | undefined {
+  return defaultRunVersionId(versions, versions.find((version) => version.is_default === true)?.id);
 }

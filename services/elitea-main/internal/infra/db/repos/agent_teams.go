@@ -71,19 +71,25 @@ WHERE team.project_id = $1 AND ($2 = '' OR team.name ILIKE $2)`, projectID, patt
 		return nil, 0, fmt.Errorf("agent teams: count: %w", err)
 	}
 	// A keyset cursor replaces the offset: the page starts after the last
-	// (lower(name), id) the caller holds.
-	var afterName *string
-	var afterID int64
+	// (lower(name), id) the caller holds, and no OFFSET is scanned past.
+	var rows pgx.Rows
+	var err error
 	if after != nil {
-		afterName, afterID, offset = &after.Name, after.ID, 0
-	}
-	rows, err := s.pool.Query(ctx, `
+		rows, err = s.pool.Query(ctx, `
 SELECT `+agentTeamColumns+`
 FROM elitea_chat.agent_teams AS team
 WHERE team.project_id = $1 AND ($2 = '' OR team.name ILIKE $2)
-  AND ($5::text IS NULL OR (lower(team.name), team.id) > (lower($5::text), $6::bigint))
+  AND (lower(team.name), team.id) > (lower($4::text), $5::bigint)
 ORDER BY lower(team.name), team.id
-LIMIT $3 OFFSET $4`, projectID, pattern, limit, offset, afterName, afterID)
+LIMIT $3`, projectID, pattern, limit, after.Name, after.ID)
+	} else {
+		rows, err = s.pool.Query(ctx, `
+SELECT `+agentTeamColumns+`
+FROM elitea_chat.agent_teams AS team
+WHERE team.project_id = $1 AND ($2 = '' OR team.name ILIKE $2)
+ORDER BY lower(team.name), team.id
+LIMIT $3 OFFSET $4`, projectID, pattern, limit, offset)
+	}
 	if err != nil {
 		return nil, 0, fmt.Errorf("agent teams: list: %w", err)
 	}
