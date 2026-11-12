@@ -38,6 +38,9 @@ readsPlatformFlags(test);
 const RUN_ID = String(Date.now()).slice(-6);
 const tag = (label: string): string => `${AUTOTEST_PREFIX}${label}_${RUN_ID}`;
 
+/** Entity names are capped at 128 characters (#1968, `pkg/entitylimits`). */
+const NAME_MAX = 128;
+
 /**
  * The endpoint every credential in this file names.
  *
@@ -247,9 +250,11 @@ test('AHA-1b: the Api Key field offers a Show/Hide toggle', async ({ page }) => 
 test('AHA-2: Display Name accepts special characters, a long value, and Unicode', async ({ page }) => {
   /* onetest: ELITEA-2571, ELITEA-2572, ELITEA-2573 — special characters,
      100+ character names, and Unicode all save successfully and the server
-     keeps the exact string. */
+     keeps the exact string. Names are capped at 128 characters (#1968), so
+     the long value is exactly at the cap. */
   const special = `${tag('special')} Prod@#$%&Test`;
-  const long = `${tag('long')}${'x'.repeat(110)}`;
+  const longPrefix = tag('long');
+  const long = `${longPrefix}${'x'.repeat(NAME_MAX - longPrefix.length)}`;
   const unicode = `${tag('unicode')} 测试 Тест`;
 
   for (const name of [special, long, unicode]) {
@@ -519,38 +524,39 @@ test('AHA-6: an existing credential can be edited and deleted, and both persist'
 });
 
 /**
- * AHA-7: a very long Toolkit Name is accepted (not silently truncated), and
- * Description stays optional.
+ * AHA-7: a Toolkit Name at the 128-character cap is accepted exactly (not
+ * silently truncated), one over the cap is refused by name, and Description
+ * stays optional.
  */
 test('AHA-7: a long Toolkit Name is accepted, and Description stays optional', async ({ page }) => {
-  /* onetest: ELITEA-2578, ELITEA-2579 — a 200+ character Toolkit Name is
-     accepted, not silently dropped; a toolkit saves with Description left
-     empty. */
+  /* onetest: ELITEA-2578, ELITEA-2579 — a long Toolkit Name is accepted, not
+     silently dropped; a toolkit saves with Description left empty. Since
+     #1968 names are capped at 128 characters: the cap itself saves, and one
+     character more never saves (the form blocks it or Main answers 400). */
+  const toolkitPost = (r: { request: () => { method: () => string }; url: () => string }): boolean =>
+    r.request().method() === 'POST' && /\/elitea_core\/tools\/prompt_lib\//.test(r.url());
   await gotoCreateAhaToolkit(page);
   const nameField = page.getByRole('textbox', { name: 'Toolkit Name' });
+  const save = page.getByRole('button', { name: 'Save', exact: true });
 
-  // The unique tag comes FIRST, kept short enough to survive whatever
-  // truncation the field applies to the 200+ character input that follows —
-  // the field carries `maxlength="32"` (measured live), which the legacy
-  // case's own wording accepts ("Field accepts long input OR enforces
-  // character limit").
   const uniquePrefix = tag('ltn');
-  const longName = `${uniquePrefix}${'y'.repeat(210)}`;
-  await nameField.fill(longName);
-  const acceptedName = await nameField.inputValue();
-  expect(acceptedName.startsWith(uniquePrefix), 'the field must not silently drop the typed prefix').toBe(true);
-  expect(acceptedName.length, 'a 200+ character input must not vanish entirely').toBeGreaterThan(uniquePrefix.length - 1);
+  const tooLong = `${uniquePrefix}${'y'.repeat(NAME_MAX + 1 - uniquePrefix.length)}`;
+  await nameField.fill(tooLong);
+  // The form may clip at the cap, disable Save, or let Main refuse it; any of
+  // the three is the contract — only a submitted over-cap value must fail.
+  if ((await nameField.inputValue()).length > NAME_MAX && (await save.isEnabled())) {
+    const [refused] = await Promise.all([page.waitForResponse(toolkitPost, { timeout: 20_000 }), save.click()]);
+    expect(refused.status(), 'a 129-character Toolkit Name must be refused').toBe(400);
+  }
 
-  const [saveResp] = await Promise.all([
-    page.waitForResponse((r) => r.request().method() === 'POST' && /\/elitea_core\/tools\/prompt_lib\//.test(r.url()), {
-      timeout: 20_000,
-    }),
-    page.getByRole('button', { name: 'Save', exact: true }).click(),
-  ]);
-  expect(saveResp.ok(), `saving a toolkit with a long name and no Description answered ${saveResp.status()}`).toBe(true);
+  const atCap = tooLong.slice(0, NAME_MAX);
+  await nameField.fill(atCap);
+  await expect(save).toBeEnabled({ timeout: 15_000 });
+  const [saveResp] = await Promise.all([page.waitForResponse(toolkitPost, { timeout: 20_000 }), save.click()]);
+  expect(saveResp.ok(), `saving a toolkit with a 128-character name and no Description answered ${saveResp.status()}`).toBe(true);
   const saved = (await saveResp.json()) as { id?: string | number; name?: string; settings?: { description?: string } };
   createdToolkitIds.push(String(saved.id ?? ''));
-  expect(saved.name, 'the server must store exactly what the field accepted').toBe(acceptedName);
+  expect(saved.name, 'the server must store the 128-character name exactly').toBe(atCap);
   expect(saved.settings?.description ?? '', 'Description must be allowed to stay empty').toBe('');
 });
 
