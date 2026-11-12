@@ -89,6 +89,8 @@ async function deliverTurn(
   // A message for people alone is stored with no turn: delivered, and never a socket turn.
   if (outcome.reason === "posted") return undefined;
   if (outcome.reason === "rejected") return outcome.message;
+  // A message for people alone must never become a turn: no socket fallback, whatever the REST start answered.
+  if (isPeopleOnlyPayload(params.payload)) return undeliveredText();
   const emitted = tryEmit(
     () =>
       deps.emitSocket("chat_predict", {
@@ -152,7 +154,7 @@ export function createSendQuestion(
       userIds,
       isMentioningEveryone,
       projectSkillIds,
-      addressedTo: addressedWithPick(addressedTo, participant, { userIds, everyone: isMentioningEveryone }),
+      addressedTo: addressedWithPick(addressedTo, participant, { userIds, everyone: isMentioningEveryone }, deps.participants),
     });
     deps.setChatHistory((prev) => [
       ...prev,

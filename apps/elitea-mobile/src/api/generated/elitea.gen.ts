@@ -2862,6 +2862,8 @@ export interface components {
         ChatMessagePosted: {
             /** @description False when the same `question_id` was already stored (a replay); nobody is notified again. */
             created: boolean;
+            /** @description The run inputs the message carried that no turn will read, because nobody was asked to run: `llm_settings`, `mcp_tokens` (when not empty), `skills`, `unattended`, `release_id`. Absent when there were none. A client may say that no agent was asked. */
+            ignored?: ("llm_settings" | "mcp_tokens" | "skills" | "unattended" | "release_id")[];
             /**
              * Format: uuid
              * @description The stored message group's UUID, equal to the request's `question_id`.

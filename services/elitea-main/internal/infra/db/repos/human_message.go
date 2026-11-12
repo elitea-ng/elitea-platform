@@ -88,15 +88,22 @@ LIMIT 1`, conversationID, message.AuthorUserID).Scan(&authorID)
 	if err != nil {
 		return false, fmt.Errorf("resolve human message author: %w", err)
 	}
-	// A replay of the same message id by the same sender stores nothing; the
-	// same id from another sender is a conflict, as for a turn.
-	var existingAuthor int32
+	// The message id is the idempotency key and the group's uuid, which is unique
+	// across conversations: read it WITHOUT the conversation filter, so the same
+	// id used elsewhere is a conflict here and not a unique violation (a 500) at
+	// the insert. Only a replay of this very post by its sender stores nothing;
+	// an id that started a turn (a reply group, an addressee) or belongs to
+	// another sender or conversation is a conflict, never "posted, no turn".
+	var existingAuthor, existingConversation int32
+	var startedTurn bool
 	err = tx.QueryRow(ctx, `
-SELECT author_participant_id FROM chat_message_group
-WHERE uuid = $1::uuid AND conversation_id = $2`, questionID, conversationID).Scan(&existingAuthor)
+SELECT g.author_participant_id, g.conversation_id,
+       g.sent_to_id IS NOT NULL OR EXISTS (SELECT 1 FROM chat_message_group AS reply WHERE reply.reply_to_id = g.id)
+FROM chat_message_group AS g
+WHERE g.uuid = $1::uuid`, questionID).Scan(&existingAuthor, &existingConversation, &startedTurn)
 	switch {
 	case err == nil:
-		if existingAuthor != authorID {
+		if existingAuthor != authorID || existingConversation != conversationID || startedTurn {
 			return false, executionapp.ErrIdempotencyConflict
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -109,8 +116,10 @@ WHERE uuid = $1::uuid AND conversation_id = $2`, questionID, conversationID).Sca
 	}
 	var groupID int32
 	if err := tx.QueryRow(ctx, `
-INSERT INTO chat_message_group (uuid, author_participant_id, conversation_id, meta, is_streaming, created_at)
-VALUES ($1::uuid, $2, $3, $4::jsonb, FALSE, clock_timestamp() AT TIME ZONE 'UTC')
+INSERT INTO chat_message_group (uuid, author_participant_id, conversation_id, meta, is_streaming, created_at,
+                                addressed_to, visibility, cause)
+VALUES ($1::uuid, $2, $3, $4::jsonb, FALSE, clock_timestamp() AT TIME ZONE 'UTC',
+        '{}'::integer[], 'all', 'human_message')
 RETURNING id`, questionID, authorID, conversationID, string(message.Meta)).Scan(&groupID); err != nil {
 		return false, fmt.Errorf("insert human message: %w", err)
 	}

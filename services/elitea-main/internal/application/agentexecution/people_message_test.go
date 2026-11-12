@@ -147,3 +147,30 @@ func TestPostPeopleMessageStoreFailureNotifiesNobody(t *testing.T) {
 		t.Fatalf("notified %+v", writer.rows)
 	}
 }
+
+func TestIsPeopleOnlyUsesTheEffectiveAudience(t *testing.T) {
+	t.Parallel()
+	writer := &peopleMentionWriter{members: []int64{7, 11}}
+	service := (&CurrentApplicationStartService{}).WithMentionNotifications(writer)
+	request := peopleRequest() // sender 7 tags 11 and 12
+	if !service.IsPeopleOnly(context.Background(), request) {
+		t.Fatal("a member other than the sender is somebody to talk to")
+	}
+	request.MentionedUserIDs = []int64{7, 12} // only the sender, and a non-member
+	if service.IsPeopleOnly(context.Background(), request) {
+		t.Fatal("nobody would be told: an ordinary message")
+	}
+	request.MentionedUserIDs = nil
+	request.MentionsEveryone = true
+	if !service.IsPeopleOnly(context.Background(), request) {
+		t.Fatal("@everyone of a project with other members is people-only")
+	}
+	alone := (&CurrentApplicationStartService{}).WithMentionNotifications(&peopleMentionWriter{members: []int64{7}})
+	if alone.IsPeopleOnly(context.Background(), request) {
+		t.Fatal("@everyone with nobody else is an ordinary message")
+	}
+	request.AddressedTo = []int64{21}
+	if service.IsPeopleOnly(context.Background(), request) {
+		t.Fatal("an addressed agent keeps the turn")
+	}
+}

@@ -72,9 +72,11 @@ export function isPeopleOnlyPayload(payload: Readonly<Record<string, unknown>>):
  * keep the turn (Main cannot tell a pick from the sticky `participant_id`). Only an application participant is an
  * agent: a picked model is not addressable and does not turn a message to people into a model turn.
  */
-export function addressedWithPick(addressedTo: readonly number[] | undefined, picked: unknown, mentions: { readonly userIds?: readonly unknown[] | undefined; readonly everyone?: boolean | undefined }): readonly number[] | undefined {
+export function addressedWithPick(addressedTo: readonly number[] | undefined, picked: unknown, mentions: { readonly userIds?: readonly unknown[] | undefined; readonly everyone?: boolean | undefined }, participants: readonly unknown[] | undefined): readonly number[] | undefined {
   const forPeople = isPeopleOnly({ mentionedUserIds: mentions.userIds, mentionsEveryone: mentions.everyone, addressedTo });
-  const pickedAgent = forPeople ? pickedAgentId(picked) : undefined;
+  const id = forPeople ? pickedAgentId(picked) : undefined;
+  // Only an agent of THIS conversation: Main refuses an addressee that is not one (422), which would drop the whole message.
+  const pickedAgent = id !== undefined && (participants ?? []).some((row) => resolvedTarget(row).participantId === id) ? id : undefined;
   return pickedAgent === undefined ? addressedTo : [pickedAgent];
 }
 

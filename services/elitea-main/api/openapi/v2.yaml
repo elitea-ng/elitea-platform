@@ -4620,6 +4620,16 @@ components:
         turn_started:
           type: boolean
           description: Always false; the field lets a client tell this answer from ChatExecutionStarted without reading the status.
+        ignored:
+          type: array
+          description: >-
+            The run inputs the message carried that no turn will read, because
+            nobody was asked to run: `llm_settings`, `mcp_tokens` (when not
+            empty), `skills`, `unattended`, `release_id`. Absent when there
+            were none. A client may say that no agent was asked.
+          items:
+            type: string
+            enum: [llm_settings, mcp_tokens, skills, unattended, release_id]
 
     WorkspaceHandoffError:
       type: object

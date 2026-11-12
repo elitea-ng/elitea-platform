@@ -1126,7 +1126,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		)
 		// A message for people alone is stored without a turn
 		// (people_message.go); the same pool, the same setter idiom.
-		agentStart = agentStart.WithHumanMessages(repos.NewHumanMessageRepo(dependencies.AdmissionPool))
+		var humanMessages agentexecutionapp.HumanMessageStore = repos.NewHumanMessageRepo(dependencies.AdmissionPool)
+		if dependencies.ConversationActivity != nil {
+			humanMessages = activityHumanMessages{next: humanMessages, activity: dependencies.ConversationActivity}
+		}
+		agentStart = agentStart.WithHumanMessages(humanMessages)
 		// An attached IMAGE reaches the model as bytes (#979). Same setter
 		// idiom; the reader is the SAME repository the native runtime's
 		// attachment route uses, so both paths agree about what a chat

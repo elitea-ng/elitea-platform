@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 )
 
 func TestHumanMessageRepoStoresAPeopleOnlyMessageOnceAndWithNoTurn(t *testing.T) {
@@ -95,5 +96,78 @@ WHERE g.uuid = $1::uuid`, message.QuestionID).Scan(&author, &sentTo, &kind, &add
 	stranger.QuestionItemID = "6e2f0d53-1e9c-4a66-9e74-9c1a1d2b3c4d"
 	if _, err := repo.PostHumanMessage(ctx, stranger); !errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart) {
 		t.Fatalf("a non-participant: err=%v", err)
+	}
+}
+
+// The message id is the group's uuid, unique across conversations and shared
+// with a turn's question: the same id elsewhere, or an id that already started a
+// turn, is an idempotency conflict (never a unique violation, never "posted").
+func TestHumanMessageRepoIdempotencyConflicts(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewHumanMessageRepo(pool)
+	ctx := context.Background()
+
+	conversation := func(name string) string {
+		t.Helper()
+		var id int
+		var uuid string
+		if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source, created_at)
+VALUES (gen_random_uuid(), $1, 42, 'agent', now() AT TIME ZONE 'UTC')
+RETURNING id, uuid::text`, name).Scan(&id, &uuid); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `
+WITH participant AS (
+    INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta)
+    VALUES (gen_random_uuid(), 'user', '{"id": 42, "project_id": 1}'::jsonb)
+    RETURNING id
+)
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+SELECT $1, participant.id, '{}'::jsonb, now() AT TIME ZONE 'UTC' FROM participant`, id); err != nil {
+			t.Fatal(err)
+		}
+		return uuid
+	}
+	firstUUID := conversation("first")
+	secondUUID := conversation("second")
+
+	message := agentexecutionapp.HumanMessage{
+		ProjectID: 1, AuthorUserID: 42, ConversationUUID: firstUUID,
+		QuestionID:     "ee92ccbd-3312-4c72-b20b-fddf224e7c0e",
+		QuestionItemID: "31df012a-300d-4722-9be2-521d987c63a8",
+		UserInput:      "hello people",
+		Meta:           []byte(`{}`),
+	}
+	if created, err := repo.PostHumanMessage(ctx, message); err != nil || !created {
+		t.Fatalf("post: created=%v err=%v", created, err)
+	}
+	// The group is stamped as a human message to nobody in particular.
+	var cause, visibility string
+	var addressed int
+	if err := pool.QueryRow(ctx, `SELECT cause, visibility, cardinality(addressed_to) FROM p_1.chat_message_group WHERE uuid = $1::uuid`,
+		message.QuestionID).Scan(&cause, &visibility, &addressed); err != nil {
+		t.Fatal(err)
+	}
+	if cause != "human_message" || visibility != "all" || addressed != 0 {
+		t.Fatalf("cause=%q visibility=%q addressed=%d", cause, visibility, addressed)
+	}
+
+	// The same id in ANOTHER conversation.
+	elsewhere := message
+	elsewhere.ConversationUUID = secondUUID
+	if _, err := repo.PostHumanMessage(ctx, elsewhere); !errors.Is(err, executionapp.ErrIdempotencyConflict) {
+		t.Fatalf("another conversation: err=%v", err)
+	}
+
+	// An id that already started a turn: its question has a reply group.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, reply_to_id, is_streaming, created_at)
+SELECT gen_random_uuid(), g.author_participant_id, g.conversation_id, g.id, FALSE, now() AT TIME ZONE 'UTC'
+FROM p_1.chat_message_group g WHERE g.uuid = $1::uuid`, message.QuestionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.PostHumanMessage(ctx, message); !errors.Is(err, executionapp.ErrIdempotencyConflict) {
+		t.Fatalf("a question that started a turn: err=%v", err)
 	}
 }

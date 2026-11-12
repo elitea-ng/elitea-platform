@@ -37,6 +37,27 @@ func PeopleOnly(mentionedUserIDs []int64, mentionsEveryone bool, addressedTo []i
 	return (len(mentionedUserIDs) > 0 || mentionsEveryone) && len(addressedTo) == 0
 }
 
+// IsPeopleOnly decides a start on its EFFECTIVE audience: the wire rule
+// (PeopleOnly) and at least one person who would really be told, the project
+// members the message names other than its sender (mentionAudience, the rule
+// the notifications use) or `@everyone` of a project that has other members.
+// A message that tags only people who are not members, or only its sender,
+// has no people to talk to and is an ordinary message. When the membership
+// cannot be read the wire rule stands: no turn is started on a doubt.
+func (service *CurrentApplicationStartService) IsPeopleOnly(ctx context.Context, request CurrentApplicationStartRequest) bool {
+	if !PeopleOnly(request.MentionedUserIDs, request.MentionsEveryone, request.AddressedTo) {
+		return false
+	}
+	if service == nil || service.mentions == nil {
+		return true
+	}
+	members, err := service.mentions.ProjectMemberUserIDs(ctx, request.ProjectID)
+	if err != nil {
+		return true
+	}
+	return len(mentionAudience(request, members)) > 0
+}
+
 // HumanMessage is a person's message stored without a turn.
 type HumanMessage struct {
 	ProjectID        int64

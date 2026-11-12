@@ -59,6 +59,31 @@ describe('sendQuestion to people alone', () => {
   });
 });
 
+describe('a people-only message whose REST start did not deliver it never becomes a turn', () => {
+  const outcomes: [string, Partial<ChatBoxHandlerDeps>][] = [
+    ['no transport', { startStreamedExecution: vi.fn(() => Promise.resolve<StreamStartOutcome>({ started: false, reason: 'no-transport' })) }],
+    ['no start function (the socket-less E2E stack)', { startStreamedExecution: undefined }],
+    ['retry-later', { startStreamedExecution: vi.fn(() => Promise.resolve<StreamStartOutcome>({ started: false, reason: 'retry-later' })) }],
+    ['a 422 rejection', { startStreamedExecution: vi.fn(() => Promise.resolve<StreamStartOutcome>({ started: false, reason: 'rejected', message: 'refused' })) }],
+  ];
+  it.each(outcomes)('%s: no chat_predict, a visible failure, the text kept', async (_name, overrides) => {
+    const t = setup(overrides);
+    const result = await t.handlers.sendQuestion({ question: '@Aksana can you see this?', isSendingToUser: true, userIds: ['11'] });
+
+    expect(result.success).toBe(false);
+    expect(t.emitSocket).not.toHaveBeenCalled();
+    expect(t.setStreamingInfo).not.toHaveBeenCalled();
+    expect(t.history().some((message) => message.exception !== undefined)).toBe(true);
+    expect(t.history().some((message) => message.content === '@Aksana can you see this?')).toBe(true);
+  });
+
+  it('a message with an answerer still falls back to the socket', async () => {
+    const t = setup({ startStreamedExecution: vi.fn(() => Promise.resolve<StreamStartOutcome>({ started: false, reason: 'no-transport' })) });
+    await t.handlers.sendQuestion({ question: 'hello' });
+    expect(t.emitSocket).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('sendQuestion that still has an answerer', () => {
   it('an agent addressed with @Agent keeps its turn and shows the pending answer', async () => {
     const t = setup({ startStreamedExecution: vi.fn(() => Promise.resolve<StreamStartOutcome>({ started: true })) });
@@ -67,12 +92,25 @@ describe('sendQuestion that still has an answerer', () => {
   });
 
   it('an agent picked on purpose is an address, so the people it mentions do not turn the message into a people-only one', async () => {
+    const start = vi.fn<NonNullable<ChatBoxHandlerDeps['startStreamedExecution']>>(() => Promise.resolve({ started: true }));
     const t = setup({
       getActiveParticipant: () => ({ id: 901, entity_name: 'application' }),
-      startStreamedExecution: vi.fn(() => Promise.resolve<StreamStartOutcome>({ started: true })),
+      participants: [{ id: 901, entity_name: 'application' }],
+      startStreamedExecution: start,
     });
     await t.handlers.sendQuestion({ question: '@Aksana check this', isSendingToUser: true, userIds: ['11'] });
     expect(t.setStreamingInfo).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0]?.[0].payload).toMatchObject({ addressedTo: [901] });
+  });
+
+  it('a picked agent that is not a participant of this conversation is not an address (Main would 422 the whole message)', async () => {
+    const t = setup({
+      getActiveParticipant: () => ({ id: 777, entity_name: 'application' }),
+      participants: [{ id: 901, entity_name: 'application' }],
+    });
+    await t.handlers.sendQuestion({ question: '@Aksana check this', isSendingToUser: true, userIds: ['11'] });
+    expect(t.setStreamingInfo).not.toHaveBeenCalled();
+    expect(t.startStreamedExecution.mock.calls[0]?.[0].payload).not.toHaveProperty('addressedTo');
   });
 
   it('a picked model is not an address: the message stays people-only', async () => {

@@ -59,6 +59,20 @@ export const ChatMessagePosted = zod
       .describe(
         "Always false; the field lets a client tell this answer from ChatExecutionStarted without reading the status.",
       ),
+    ignored: zod
+      .array(
+        zod.enum([
+          "llm_settings",
+          "mcp_tokens",
+          "skills",
+          "unattended",
+          "release_id",
+        ]),
+      )
+      .optional()
+      .describe(
+        "The run inputs the message carried that no turn will read, because nobody was asked to run: `llm_settings`, `mcp_tokens` (when not empty), `skills`, `unattended`, `release_id`. Absent when there were none. A client may say that no agent was asked.",
+      ),
   })
   .describe(
     "Client contract 1.51. A people-only message that was stored with no turn behind it (sendChatMessage). There is no execution, no `response_message_id` and no `events_url`: a client renders the message and waits for nothing.",

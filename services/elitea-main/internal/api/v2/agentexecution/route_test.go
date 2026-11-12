@@ -32,6 +32,12 @@ type currentStartUseCaseStub struct {
 	postedCalls         int
 	postedRequest       agentexecutionapp.CurrentApplicationStartRequest
 	posted              agentexecutionapp.PostedMessage
+	// noRealAudience: the mentioned people are not members (or only the sender).
+	noRealAudience bool
+}
+
+func (stub *currentStartUseCaseStub) IsPeopleOnly(_ context.Context, request agentexecutionapp.CurrentApplicationStartRequest) bool {
+	return !stub.noRealAudience && agentexecutionapp.PeopleOnly(request.MentionedUserIDs, request.MentionsEveryone, request.AddressedTo)
 }
 
 func (stub *currentStartUseCaseStub) PostPeopleMessage(

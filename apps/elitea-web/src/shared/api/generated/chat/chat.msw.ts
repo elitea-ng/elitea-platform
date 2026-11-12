@@ -1987,6 +1987,16 @@ export const getSendChatMessageResponseMock = (
       message_id: faker.string.uuid(),
       created: faker.datatype.boolean(),
       turn_started: faker.datatype.boolean(),
+      ignored: faker.helpers.arrayElement([
+        faker.helpers.arrayElements([
+          "llm_settings",
+          "mcp_tokens",
+          "skills",
+          "unattended",
+          "release_id",
+        ] as const),
+        undefined,
+      ]),
       ...overrideResponse,
     },
   ]);

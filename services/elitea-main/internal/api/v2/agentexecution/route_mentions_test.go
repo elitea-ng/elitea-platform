@@ -161,3 +161,55 @@ func TestCurrentApplicationStartRouteRefusesAPeopleOnlyMessageTheServiceCannotSt
 		t.Fatalf("status=%d turns=%d body=%s", response.Code, useCase.calls, response.Body.String())
 	}
 }
+
+// Only people who would really be told make a message people-only: when none of
+// the tagged people is a member other than the sender, the message is ordinary.
+func TestCurrentApplicationStartRouteTreatsAMessageToNoRealPeopleAsOrdinary(t *testing.T) {
+	useCase := &currentStartUseCaseStub{noRealAudience: true, outcome: agentexecutionapp.CurrentApplicationStartOutcome{
+		ExecutionID: "execution-1", CommandID: "command-1", ResponseMessageID: "response-1", Created: true,
+	}}
+	route := newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
+	body := strings.Replace(validCurrentStartBody(), `"project_id":7,`, `"project_id":7,"user_ids":[11],`, 1)
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentStartRequest(body))
+	if response.Code != http.StatusOK || useCase.calls != 1 || useCase.postedCalls != 0 {
+		t.Fatalf("status=%d turns=%d posted=%d body=%s", response.Code, useCase.calls, useCase.postedCalls, response.Body.String())
+	}
+
+	// A client that named no participant and no model has nobody to run it: stored, not refused.
+	useCase = &currentStartUseCaseStub{noRealAudience: true}
+	route = newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
+	bare := strings.Replace(body, `"participant_id":21,`, ``, 1)
+	response = httptest.NewRecorder()
+	route.ServeHTTP(response, currentStartRequest(bare))
+	if response.Code != http.StatusCreated || useCase.postedCalls != 1 || useCase.calls != 0 {
+		t.Fatalf("status=%d turns=%d posted=%d body=%s", response.Code, useCase.calls, useCase.postedCalls, response.Body.String())
+	}
+}
+
+// The 201 names the run inputs no turn will read.
+func TestPeopleOnlyAnswerNamesTheIgnoredRunInputs(t *testing.T) {
+	useCase := &currentStartUseCaseStub{}
+	route := newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
+	body := strings.Replace(validCurrentAdhocStartBody(), `"project_id":7,`,
+		`"project_id":7,"user_ids":[12],"unattended":{"sensitive_tools":[]},`, 1)
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentAdhocStartRequest(body))
+	var answer struct {
+		Ignored []string `json:"ignored"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &answer); err != nil || response.Code != http.StatusCreated {
+		t.Fatalf("status=%d err=%v body=%s", response.Code, err, response.Body.String())
+	}
+	if !reflect.DeepEqual(answer.Ignored, []string{"llm_settings", "unattended"}) {
+		t.Fatalf("ignored = %v", answer.Ignored)
+	}
+
+	plain := &currentStartUseCaseStub{}
+	route = newCurrentStartRoute(t, plain, allowCurrentStartPermission())
+	response = httptest.NewRecorder()
+	route.ServeHTTP(response, currentStartRequest(strings.Replace(validCurrentStartBody(), `"project_id":7,`, `"project_id":7,"user_ids":[12],`, 1)))
+	if strings.Contains(response.Body.String(), "ignored") {
+		t.Fatalf("nothing was ignored: %s", response.Body.String())
+	}
+}
