@@ -3059,6 +3059,12 @@ main:
     # throttles, and the boot logs a WARN.
     ELITEA_TRUSTED_PROXY_CIDRS: ""
 
+    # ELITEA_IMAGE_GENERATION_MODEL is the gateway image model the agents'
+    # image_generation internal tool calls (a global shared model). Empty:
+    # filled from global.imageGenerationModel; empty there too, the chat
+    # Image creation toggle is disabled and the worker does not offer the tool.
+    ELITEA_IMAGE_GENERATION_MODEL: ""
+
     # --- Local username/password (Form) sign-in --------------------------------
     # OFF unless "true". A deployment signs people in through OIDC or SAML and
     # provisions them through SCIM; the Form users file
