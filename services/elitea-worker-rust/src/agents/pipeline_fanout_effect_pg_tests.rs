@@ -7786,6 +7786,59 @@ async fn postgres_member_pipeline_tool_child() {
     }
 }
 
+/// The kill of a `completed` / `completed_edited` crash lands once the nested
+/// thread's finished checkpoint is durable, but the member Agent records the
+/// tool's result (and the report request that holds it) right after the tool
+/// returns. A poll that is late by a few milliseconds kills the process after
+/// that record, so the reclaim replays the Agent's own history and never calls
+/// the tool again: the precondition ("finished, not yet answered") would depend
+/// on timing. This trigger parks every insert of an event carrying a nested
+/// answer, so the Agent's record can never commit before the kill.
+async fn hold_the_nested_answer_event(pool: &sqlx::PgPool) {
+    for statement in [
+        "CREATE FUNCTION elitea_runtime.hold_nested_answer() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN \
+              IF NEW.event_payload::text LIKE '%nested answer for%' THEN PERFORM pg_sleep(30); END IF; \
+              RETURN NEW; \
+            END $$",
+        "CREATE TRIGGER hold_nested_answer BEFORE INSERT ON elitea_runtime.agent_session_events \
+         FOR EACH ROW EXECUTE FUNCTION elitea_runtime.hold_nested_answer()",
+    ] {
+        sqlx::query(statement)
+            .execute(pool)
+            .await
+            .expect("hold the nested answer event");
+    }
+}
+
+/// After the kill: the parked insert never committed (so the Agent had not
+/// recorded the tool's result), its orphaned backend is ended, and the trigger
+/// is removed before the reclaim.
+async fn release_the_nested_answer_event(pool: &sqlx::PgPool) {
+    sqlx::query(
+        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+         WHERE datname = current_database() AND pid <> pg_backend_pid() AND state = 'active'",
+    )
+    .execute(pool)
+    .await
+    .expect("end the parked insert");
+    sqlx::query("DROP TRIGGER hold_nested_answer ON elitea_runtime.agent_session_events")
+        .execute(pool)
+        .await
+        .expect("drop the hold trigger");
+    let recorded = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM elitea_runtime.agent_session_events \
+         WHERE event_payload::text LIKE '%nested answer for%'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("recorded nested answers");
+    assert_eq!(
+        recorded, 0,
+        "crash: the Agent had not recorded the finished tool's result"
+    );
+}
+
 /// The nested thread rows at the crash, by mode.
 async fn crashed_frontier(pool: &sqlx::PgPool, mode: &str) -> usize {
     let query = match mode {
@@ -7839,6 +7892,10 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str, mode: &str) {
             .env(PHASE_ENV, phase);
         command
     };
+    let holds_report = matches!(mode, "completed" | "completed_edited");
+    if holds_report {
+        hold_the_nested_answer_event(&db.pool).await;
+    }
     let output = run_phase("crash", phase("crash"));
     assert_eq!(
         output.status.code(),
@@ -7847,6 +7904,9 @@ async fn member_pipeline_tool_kill(url: &str, shape: &str, mode: &str) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    if holds_report {
+        release_the_nested_answer_event(&db.pool).await;
+    }
     let in_flight = tool_pipeline_in_flight(shape);
     let crashed = nested_tool_threads(&db.pool).await;
     assert_eq!(
