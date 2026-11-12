@@ -347,8 +347,8 @@ fn root_chain(count: usize) -> String {
 /// root Code node is `(root9 − root1) / 8`, of one more Code child
 /// `(map9 − map1) / 8`; their difference is the per-child overhead, so the
 /// Map's one-time activation (freeze, join) is not charged to its children.
-/// Each of the four runs of a sample is the minimum of `REPEATS` runs, so a
-/// shared runner's interference does not read as overhead.
+/// Each of the four runs of a sample is the minimum of `REPEATS` runs made in
+/// separate passes, so a shared runner's interference does not read as overhead.
 /// The gate is p99(overhead) ≤ 30 ms (`CHILD_OVERHEAD_P99`).
 #[tokio::test]
 #[ignore = "requires disposable PostgreSQL"]
@@ -379,10 +379,15 @@ async fn real_pg_per_child_code_overhead_is_within_its_budget() {
     let inputs = [1, 1, 1, 9];
     let (mut roots, mut children, mut overheads, mut activations) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    // One warm-up sample is discarded.
-    for sample in 0..=SAMPLES {
-        let mut times = [Duration::MAX; 4];
-        for repeat in 0..REPEATS {
+    // The repeats of one sample run in DIFFERENT passes over all samples, not
+    // back to back: a noisy window on a shared runner (a checkpoint, another
+    // test's burst) lasts a second or two, so it can spoil every repeat of a
+    // sample run consecutively, and with 20 samples p99 is the maximum, so one
+    // such sample failed the gate (overhead p50 1.2 ms, p99 37.1 ms). A pass
+    // takes far longer than such a window, so the minimum filters it.
+    let mut runs = vec![[Duration::MAX; 4]; SAMPLES + 1];
+    for repeat in 0..REPEATS {
+        for (sample, times) in runs.iter_mut().enumerate() {
             for (shape, definition) in shapes.iter().enumerate() {
                 let thread = format!("budget-{sample}-{shape}-{repeat}");
                 let graph = compiled(&h, 1, &thread, definition).await;
@@ -394,9 +399,9 @@ async fn real_pg_per_child_code_overhead_is_within_its_budget() {
                 times[shape] = times[shape].min(started.elapsed());
             }
         }
-        if sample == 0 {
-            continue;
-        }
+    }
+    // One warm-up sample is discarded.
+    for times in runs.iter().skip(1) {
         let root = times[1].saturating_sub(times[0]).as_secs_f64() / 8.0;
         let child = times[3].saturating_sub(times[2]).as_secs_f64() / 8.0;
         roots.push(root);
