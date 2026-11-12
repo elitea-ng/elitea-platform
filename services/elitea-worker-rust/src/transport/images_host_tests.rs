@@ -352,6 +352,7 @@ fn the_images_failure_table_names_each_cause() {
             F::Unreachable,
         ),
         (ImagesError::Transport, F::Unreachable),
+        (ImagesError::ModelNotFound, F::NoModel),
         (ImagesError::UnusableReply("x"), F::ReplyUnusable),
         (ImagesError::ReplyTooLarge, F::ReplyTooLarge),
         (ImagesError::RequestTooLarge, F::TooLarge),

@@ -28,8 +28,9 @@
 
 mod internal_tool;
 pub use internal_tool::{
-    IMAGE_GENERATION_TOOL, IMAGE_QUALITIES, IMAGE_SIZES, ImageArtifactBucket, ImageBucketError,
-    ImageGenerationAuthority, MAX_IMAGES_PER_CALL, build_image_generation_toolset,
+    IMAGE_GENERATION_TOOL, ImageArtifactBucket, ImageBucketError, ImageFamily,
+    ImageGenerationAuthority, MAX_IMAGES_PER_CALL, MODEL_NOT_FOUND_REASON,
+    build_image_generation_toolset,
 };
 
 use std::fmt;
@@ -525,72 +526,17 @@ impl ImageGenToolImpl {
             .ok_or_else(|| "An artifact bucket is not configured for this toolkit".to_owned())
     }
 
-    /// Write every inline image and answer the SDK's `{"artifacts": [...]}`.
-    ///
-    /// The first candidate name is `{prefix}{op}-{i}.png` with `i` the image's
-    /// position in the answer's `data` array (the SDK enumerates it). Unlike
-    /// the SDK, which overwrote, a name that is taken is never replaced: the
-    /// image takes the next free index, so an earlier call's images are kept.
-    /// A write that fails after others succeeded answers what was saved AND
-    /// the failure, so the model never generates again what was billed.
+    /// Write every inline image; see [`save_images`].
     async fn save(&self, images: Vec<Option<Vec<u8>>>, operation: &str) -> Result<Value, String> {
         let bucket = self.bucket()?;
-        let total = images.iter().flatten().count();
-        if total == 0 {
-            return Err("The image generation model returned no image data".to_owned());
-        }
-        let mut saved = Vec::new();
-        let mut remaining = total;
-        let mut next_free = 0_usize;
-        for (position, bytes) in images.into_iter().enumerate() {
-            let Some(bytes) = bytes else { continue };
-            remaining -= 1;
-            let mut index = position.max(next_free);
-            let mut probes = 0;
-            let outcome = loop {
-                let name = format!("{}{operation}-{index}.png", self.settings.name_prefix);
-                match self
-                    .host
-                    .write_object(bucket, &name, "image/png", bytes.clone(), false)
-                    .await
-                {
-                    Ok(written) => break Ok(written),
-                    Err(error)
-                        if error.kind() == OfficeFailure::AlreadyExists
-                            && probes < MAX_NAME_PROBES =>
-                    {
-                        probes += 1;
-                        index += 1;
-                    }
-                    Err(error) => break Err((name, error)),
-                }
-            };
-            match outcome {
-                Ok(written) => {
-                    next_free = index + 1;
-                    saved.push(json!({
-                        "filepath": format!("/{}/{}", written.bucket, written.name),
-                        "filename": file_name(&written.name),
-                    }));
-                }
-                Err((name, error)) => {
-                    let sentence = host_sentence(&format!("save the image `{name}`"), &error);
-                    if saved.is_empty() {
-                        return Err(sentence);
-                    }
-                    let tail = match remaining {
-                        0 => String::new(),
-                        1 => " The 1 image after it was not saved.".to_owned(),
-                        n => format!(" The {n} images after it were not saved."),
-                    };
-                    return Ok(json!({
-                        "artifacts": saved,
-                        "error": format!("saved {} of {total}. {sentence}{tail}", saved.len()),
-                    }));
-                }
-            }
-        }
-        Ok(json!({"artifacts": saved}))
+        save_images(
+            &self.host,
+            bucket,
+            &self.settings.name_prefix,
+            images,
+            operation,
+        )
+        .await
     }
 
     async fn generate(&self, arguments: &Value) -> Result<Value, String> {
@@ -728,6 +674,77 @@ impl ImageGenToolImpl {
         }
         host_sentence(&format!("read `{path}`"), error)
     }
+}
+
+/// Write every inline image and answer the SDK's `{"artifacts": [...]}`.
+///
+/// The first candidate name is `{prefix}{op}-{i}.png` with `i` the image's
+/// position in the answer's `data` array (the SDK enumerates it). Unlike
+/// the SDK, which overwrote, a name that is taken is never replaced: the
+/// image takes the next free index, so an earlier call's images are kept.
+/// A write that fails after others succeeded answers what was saved AND
+/// the failure, so the model never generates again what was billed.
+async fn save_images(
+    host: &SharedOfficeToolHost,
+    bucket: &str,
+    name_prefix: &str,
+    images: Vec<Option<Vec<u8>>>,
+    operation: &str,
+) -> Result<Value, String> {
+    let total = images.iter().flatten().count();
+    if total == 0 {
+        return Err("The image generation model returned no image data".to_owned());
+    }
+    let mut saved = Vec::new();
+    let mut remaining = total;
+    let mut next_free = 0_usize;
+    for (position, bytes) in images.into_iter().enumerate() {
+        let Some(bytes) = bytes else { continue };
+        remaining -= 1;
+        let mut index = position.max(next_free);
+        let mut probes = 0;
+        let outcome = loop {
+            let name = format!("{name_prefix}{operation}-{index}.png");
+            match host
+                .write_object(bucket, &name, "image/png", bytes.clone(), false)
+                .await
+            {
+                Ok(written) => break Ok(written),
+                Err(error)
+                    if error.kind() == OfficeFailure::AlreadyExists && probes < MAX_NAME_PROBES =>
+                {
+                    probes += 1;
+                    index += 1;
+                }
+                Err(error) => break Err((name, error)),
+            }
+        };
+        match outcome {
+            Ok(written) => {
+                next_free = index + 1;
+                saved.push(json!({
+                    "filepath": format!("/{}/{}", written.bucket, written.name),
+                    "filename": file_name(&written.name),
+                }));
+            }
+            Err((name, error)) => {
+                let sentence = host_sentence(&format!("save the image `{name}`"), &error);
+                if saved.is_empty() {
+                    return Err(sentence);
+                }
+                let tail = match remaining {
+                    0 => String::new(),
+                    1 => " The 1 image after it was not saved.".to_owned(),
+                    n => format!(" The {n} images after it were not saved."),
+                };
+                return Ok(json!({
+                    "artifacts": saved,
+                    "error": format!("saved {} of {total}. {sentence}{tail}", saved.len()),
+                }));
+            }
+        }
+    }
+    Ok(json!({"artifacts": saved}))
 }
 
 /// The sentence for an edit whose inputs are over the combined limit.

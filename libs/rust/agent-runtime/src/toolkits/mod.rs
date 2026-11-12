@@ -245,8 +245,8 @@ pub use families::data_analysis::tools::{
     DataAnalysisToolsetError, build_data_analysis_toolset, close_analysis_gate,
 };
 pub use families::imagegen::{
-    IMAGE_GENERATION_TOOL, IMAGE_QUALITIES, IMAGE_SIZES, ImageArtifactBucket, ImageBucketError,
-    ImageGenToolsetError, ImageGenerationAuthority, MAX_IMAGES_PER_CALL,
+    IMAGE_GENERATION_TOOL, ImageArtifactBucket, ImageBucketError, ImageFamily,
+    ImageGenToolsetError, ImageGenerationAuthority, MAX_IMAGES_PER_CALL, MODEL_NOT_FOUND_REASON,
     build_image_generation_toolset,
 };
 pub use families::index_tools::{

@@ -14,7 +14,10 @@ image model is configured for this deployment", until you set the model.
 `image_generation_model` that your LLM gateway serves. The chart passes the value
 to elitea-main (`ELITEA_IMAGE_GENERATION_MODEL`) and to the worker
 (`image_generation_model` in `runtime.json`), so the toggle and the worker agree.
-Leave it empty to keep image generation off.
+The model must be a global shared model (a model of the public project with
+`shared` on). The gateway looks the name up in the catalogue of the project that
+makes the call, so a model that one project owns fails in the other projects.
+Leave the value empty to keep image generation off.
 
 **Limits.** The model is one per deployment. Choosing the project's default image
 model is a follow-up. The desktop app's local agent loop does not offer the tool

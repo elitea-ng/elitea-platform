@@ -158,9 +158,6 @@ data:
   {{- range $key, $value := $env }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
-  {{- if .Values.global.imageGenerationModel }}
-  ELITEA_IMAGE_GENERATION_MODEL: {{ .Values.global.imageGenerationModel | quote }}
-  {{- end }}
   {{- if $mainNatsTLS }}
   # The live-update plane's NATS identity (#1076), mounted by deployment.yaml.
   ELITEA_EVENTS_NATS_TLS_CA_FILE: {{ include "elitea.natsClientFile" (dict "file" "ca.crt" "ctx" $) }}

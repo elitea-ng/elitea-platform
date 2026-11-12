@@ -204,6 +204,10 @@ fn embeddings_error(error: CallError) -> EmbeddingsError {
                 retryable,
             }
         }
+        CallError::ModelNotFound => EmbeddingsError::Refused {
+            code: Refusal::Rejected.code(),
+            retryable: false,
+        },
         CallError::Transport => EmbeddingsError::Transport,
         CallError::TooLarge => EmbeddingsError::TooLarge,
         CallError::Malformed => EmbeddingsError::InvalidResponse("the request is malformed"),

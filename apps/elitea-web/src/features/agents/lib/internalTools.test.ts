@@ -127,6 +127,32 @@ describe('useAvailableInternalTools', () => {
     vi.restoreAllMocks();
   });
 
+  it('shows image_generation disabled while the capabilities query is pending or failed (#1969)', () => {
+    vi.spyOn(isMcpVisibleModule, 'useIsMcpVisible').mockReturnValue(true);
+    vi.spyOn(runtimeCapabilitiesModule, 'useRuntimeCapabilities').mockReturnValue(undefined);
+
+    const { result } = renderHookWithProviders(() => useAvailableInternalTools());
+    const tool = result.current.find((entry) => entry.name === 'image_generation');
+    expect(tool?.available).toBe(false);
+    expect(tool?.unavailableReason).toBe('Image generation availability could not be checked');
+    // Every other tool keeps the "never disable on missing data" rule.
+    expect(result.current.find((entry) => entry.name === 'planner')?.available).toBe(true);
+    vi.restoreAllMocks();
+  });
+
+  it('shows image_generation disabled when the deployment does not name it (#1969)', () => {
+    vi.spyOn(isMcpVisibleModule, 'useIsMcpVisible').mockReturnValue(true);
+    vi.spyOn(runtimeCapabilitiesModule, 'useRuntimeCapabilities').mockReturnValue({
+      worker: 'rust',
+      internal_tools: {},
+      hidden_toolkit_types: [],
+    });
+
+    const { result } = renderHookWithProviders(() => useAvailableInternalTools());
+    expect(result.current.find((entry) => entry.name === 'image_generation')?.available).toBe(false);
+    vi.restoreAllMocks();
+  });
+
   it('keeps the worker reason for the other tools the worker skips', () => {
     vi.spyOn(isMcpVisibleModule, 'useIsMcpVisible').mockReturnValue(true);
     vi.spyOn(runtimeCapabilitiesModule, 'useRuntimeCapabilities').mockReturnValue({

@@ -617,6 +617,10 @@ pub(crate) fn images_failure(error: &ImagesError) -> OfficeHostError {
             Refusal::Conflict => (OfficeFailure::Conflict, "office_host.images_conflict"),
             Refusal::Unavailable => (OfficeFailure::Unreachable, "office_host.images_unavailable"),
         },
+        ImagesError::ModelNotFound => (
+            OfficeFailure::NoModel,
+            elitea_agent_runtime::toolkits::MODEL_NOT_FOUND_REASON,
+        ),
         ImagesError::RequestTooLarge => (
             OfficeFailure::TooLarge,
             "office_host.images_request_too_large",

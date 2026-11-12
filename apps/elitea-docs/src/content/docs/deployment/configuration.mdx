@@ -129,6 +129,16 @@ A smaller, faster process with the platform's native agent runtime (checkpointin
 
 `runtime.json` — the worker's own configuration document — is byte-identical either way; only the process and its capability surface differ.
 
+## Image generation model
+
+The chat **Image creation** module needs one image model for the whole deployment. Set `global.imageGenerationModel` to the registry name of an image model, for example `gpt-image-1` or `dall-e-3`. The chart gives the value to elitea-main (`ELITEA_IMAGE_GENERATION_MODEL`) and to the worker (`image_generation_model` in `runtime.json`), so the Modules toggle and the worker agree. A value you set yourself in `main.env.ELITEA_IMAGE_GENERATION_MODEL` or `worker.runtime.imageGenerationModel` wins over the global one.
+
+<Warning title="The model must be a global shared model">
+The gateway looks the model name up in the catalogue of the project that makes the call. The name works in every project only when it names a global model (a model of the public project with `shared` on, an administrator adds it as a platform model). A model that one project owns works in that project only. In any other project the assistant answers that the deployment's image model is not available there, and asks you to share it as a global model.
+</Warning>
+
+Leave the value empty to keep image generation off: the toggle then shows disabled. Choosing an image model per project is not supported yet. The tool changes its allowed sizes, image count and quality values by the model family (`dall-e-3`, `dall-e-2`, `gpt-image-*`); other models take the image count and the size `auto` only.
+
 ## Object storage and artifacts
 
 `main.env.STORAGE_BACKEND` / `STORAGE_CONTAINER` point at an S3-compatible bucket. It must **exist before the first sync** — the readiness probe tolerates a missing bucket, but the very next boot step (setting the bucket's retention lifecycle) does not, so a missing bucket looks like a green install that then crash-loops. `objectInit.enabled: true` creates it for a self-hosted S3-compatible endpoint you administer directly (RustFS, MinIO); a managed cloud object store almost always withholds `CreateBucket` from an application-scoped credential, so create it out of band there.

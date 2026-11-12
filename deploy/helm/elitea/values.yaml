@@ -110,6 +110,11 @@ global:
   # which the tool asks the gateway for), so the toggle and the worker cannot
   # disagree. Empty: no image generation; the toggle shows disabled. Choosing
   # the model per project is not supported yet.
+  # The model MUST be a GLOBAL shared image model (public project, shared):
+  # the gateway resolves the name against the calling project's catalogue, so
+  # a model that only one project owns fails in every other project.
+  # An explicit main.env.ELITEA_IMAGE_GENERATION_MODEL or
+  # worker.runtime.imageGenerationModel wins over this value.
   imageGenerationModel: ""
 
 # ── cert-manager issuers for the in-cluster mTLS hops (#1460) ───────────────
@@ -7396,6 +7401,10 @@ worker:
     # Separate from the agent's own turns. Empty: the worker default, 200.
     # Written to runtime.json as `toolkit_model_call_cap`; a positive integer.
     toolkitModelCallCap: ""
+    # The image model of the chat Image creation tool (#1969), written to
+    # runtime.json as `image_generation_model`. Filled from
+    # global.imageGenerationModel when empty; see there.
+    imageGenerationModel: ""
     # Indexing only (main.runtime.indexIngestDispatch; ADR-0030 I1, ADR-0031): where
     # the worker finds elitea-vector, as `host:port`, reached with the
     # worker's own runtime mTLS identity (agent-worker-client.crt, issued by

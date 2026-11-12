@@ -31,15 +31,15 @@ The assistant can set these parameters:
 | Parameter | Values |
 | --- | --- |
 | `prompt` | The text that describes the image (required). |
-| `size` | `256x256`, `512x512`, `1024x1024`, `1024x1536`, `1536x1024`, `1792x1024`, `1024x1792`, or `auto` for the model's default. |
-| `n` | How many images, 1 to 4. The default is 1. |
-| `quality` | `low`, `medium`, `high`, `standard`, `hd`, or `auto`, for models that have a quality tier. |
+| `size` | Depends on the model. `gpt-image-*`: `1024x1024`, `1536x1024`, `1024x1536` or `auto`. `dall-e-3`: `1024x1024`, `1792x1024` or `1024x1792`. `dall-e-2`: `256x256`, `512x512` or `1024x1024`. Other models: `auto`. |
+| `n` | How many images. 1 to 4 (`dall-e-3`: 1 only). The default is 1. |
+| `quality` | `gpt-image-*`: `low`, `medium`, `high` or `auto`. `dall-e-3`: `standard` or `hd`. `dall-e-2`: none. A value the model does not take is refused before any image is billed. |
 
 <Warning title="Each image is billed">
 Image generation is billed per image by the LLM gateway, to the project, like every other model call. A budget limit refuses the call, and the assistant tells you so.
 </Warning>
 
-**Enabling it.** The toggle is on when the deployment has an image model. An administrator sets `global.imageGenerationModel` in the Helm values to the registry name of an image model the gateway serves. When it is empty, the toggle shows disabled with the note "No image model is configured for this deployment". The model is chosen for the whole deployment: choosing it per project is not supported yet.
+**Enabling it.** The toggle is on when the deployment has an image model. An administrator sets `global.imageGenerationModel` in the Helm values to the registry name of an image model the gateway serves. When it is empty, the toggle shows disabled with the note "No image model is configured for this deployment". The model is chosen for the whole deployment, and it must be a global shared model: a model that only one project owns is not available in other projects, and the assistant says so. Choosing it per project is not supported yet.
 
 <Note title="Desktop">
 The cloud agent worker runs this tool. The desktop app's local agent loop does not offer it yet.

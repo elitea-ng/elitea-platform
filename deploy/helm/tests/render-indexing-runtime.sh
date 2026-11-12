@@ -280,6 +280,39 @@ PY
   && ok "worker.runtime.toolkitModelCallCap sets toolkit_model_call_cap" \
   || bad "toolkitModelCallCap=50 rendered: $(toolkitcap "$TMP/tcap.yaml")"
 
+imagemodel() {
+  python3 - "$1" <<'PY'
+import json, sys, yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+worker = next(d for d in docs
+              if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "elitea-worker-runtime")
+main = next(d for d in docs
+            if d["kind"] == "ConfigMap" and d["metadata"]["name"].endswith("-config")
+            and "ELITEA_ARTIFACTS_ENABLED" in d.get("data", {}))
+print(json.loads(worker["data"]["runtime.json"]).get("image_generation_model", "-"),
+      main["data"].get("ELITEA_IMAGE_GENERATION_MODEL", "-"))
+PY
+}
+"$HELM" template t "$CHART" "${RENDER[@]}" "${RUST[@]}" \
+  --set global.imageGenerationModel=gpt-image-1 \
+  >"$TMP/img.yaml" 2>"$TMP/img.err" \
+  || bad "global.imageGenerationModel does not render: $(tail -1 "$TMP/img.err")"
+[ "$(imagemodel "$TMP/rust.yaml")" = "- -" ] \
+  && ok "no image model by default" \
+  || bad "default image model leaked: $(imagemodel "$TMP/rust.yaml")"
+[ "$(imagemodel "$TMP/img.yaml")" = "gpt-image-1 gpt-image-1" ] \
+  && ok "global.imageGenerationModel feeds the worker and elitea-main once" \
+  || bad "imageGenerationModel rendered: $(imagemodel "$TMP/img.yaml")"
+"$HELM" template t "$CHART" "${RENDER[@]}" "${RUST[@]}" \
+  --set global.imageGenerationModel=gpt-image-1 \
+  --set main.env.ELITEA_IMAGE_GENERATION_MODEL=dall-e-3 \
+  >"$TMP/img2.yaml" 2>"$TMP/img2.err" \
+  || bad "an explicit main.env image model does not render: $(tail -1 "$TMP/img2.err")"
+[ "$(imagemodel "$TMP/img2.yaml")" = "gpt-image-1 dall-e-3" ] \
+  && ok "an explicit main.env image model wins, with no duplicate key" \
+  || bad "explicit image model rendered: $(imagemodel "$TMP/img2.yaml")"
+
 refuses() {
   local expect="$1"; shift
   local out

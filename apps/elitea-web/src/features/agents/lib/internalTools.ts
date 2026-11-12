@@ -198,8 +198,18 @@ export const INTERNAL_TOOL_ICONS: Readonly<Record<string, SvgIconComponent>> = {
  * worker makes every tool available, but it is answered rather than asserted
  * away.
  */
-function unavailableReasonFor(worker: string | undefined, toolName: string): string {
+function unavailableReasonFor(
+  worker: string | undefined,
+  toolName: string,
+  capabilitiesKnown: boolean,
+): string {
   if (toolName === 'image_generation') {
+    if (!capabilitiesKnown) {
+      return t(
+        'features.agents.internalTools.imageGenerationUnknown',
+        'Image generation availability could not be checked',
+      );
+    }
     return t(
       'features.agents.internalTools.noImageModel',
       'No image model is configured for this deployment',
@@ -240,11 +250,17 @@ export function useAvailableInternalTools(options: UseAvailableInternalToolsOpti
         if (tool.agentOnly && !includeAgentOnly) return false;
         return !(tool.name === 'internal_mcp' && !isMcpVisible);
       }).map((tool) => {
-        const available = isInternalToolAvailable(capabilities, tool.name);
+        // #1969: image generation is the one tool that needs positive proof.
+        // A pending or failed capabilities query (and a deployment that does
+        // not name the tool) reads UNAVAILABLE, never "offered".
+        const available =
+          tool.name === 'image_generation'
+            ? capabilities?.internal_tools?.[tool.name] === true
+            : isInternalToolAvailable(capabilities, tool.name);
         return {
           ...tool,
           available,
-          ...(available ? {} : { unavailableReason: unavailableReasonFor(capabilities?.worker, tool.name) }),
+          ...(available ? {} : { unavailableReason: unavailableReasonFor(capabilities?.worker, tool.name, capabilities !== undefined) }),
         };
       }),
     [includeAgentOnly, isMcpVisible, capabilities],

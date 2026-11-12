@@ -43,6 +43,9 @@ const MIN_IMAGE_TIMEOUT: Duration = Duration::from_mins(5);
 pub(crate) enum ImagesError {
     /// The gateway refused the call.
     Refused { refusal: Refusal },
+    /// The gateway does not know the model for this project (404
+    /// `model_not_found`).
+    ModelNotFound,
     /// The channel could not carry the request or the response.
     Transport,
     /// The gateway answered 2xx but the body is not the images object. The
@@ -67,6 +70,7 @@ impl fmt::Display for ImagesError {
             Self::Refused { refusal } => {
                 write!(formatter, "the model gateway refused: {}", refusal.code())
             }
+            Self::ModelNotFound => formatter.write_str("the model gateway does not know the model"),
             Self::Transport => formatter.write_str("the model gateway transport failed"),
             Self::UnusableReply(reason) => {
                 write!(formatter, "the images response is unusable: {reason}")
@@ -240,6 +244,7 @@ impl ImagesClient {
 fn images_error(error: CallError) -> ImagesError {
     match error {
         CallError::Refused(refusal) => ImagesError::Refused { refusal },
+        CallError::ModelNotFound => ImagesError::ModelNotFound,
         CallError::Transport => ImagesError::Transport,
         CallError::TooLarge => ImagesError::ReplyTooLarge,
         CallError::Malformed => ImagesError::Malformed,
