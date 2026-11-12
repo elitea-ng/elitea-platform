@@ -39,6 +39,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
 	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
@@ -84,9 +85,9 @@ type imageSpec struct {
 
 // newImageSpec reads count, size and quality from a request's parameters and
 // applies the documented provider defaults: DALL-E renders 1024x1024, and
-// DALL-E 3 renders "standard" quality. Other models keep an empty value, which
-// matches any catalog row (the highest price wins, so the estimate never runs
-// low).
+// DALL-E 3 renders "standard" quality. "auto" means unspecified for every
+// model. Other models keep an empty value, which matches any catalog row (the
+// highest price wins, so the estimate never runs low).
 func newImageSpec(model string, n *int, size, quality *string) imageSpec {
 	spec := imageSpec{n: 1}
 	if n != nil && *n > 1 {
@@ -98,11 +99,17 @@ func newImageSpec(model string, n *int, size, quality *string) imageSpec {
 	if quality != nil {
 		spec.quality = strings.ToLower(strings.TrimSpace(*quality))
 	}
+	if spec.size == "auto" {
+		spec.size = ""
+	}
+	if spec.quality == "auto" {
+		spec.quality = ""
+	}
 	lower := strings.ToLower(model)
-	if strings.Contains(lower, "dall-e") && (spec.size == "" || spec.size == "auto") {
+	if strings.Contains(lower, "dall-e") && spec.size == "" {
 		spec.size = "1024x1024"
 	}
-	if strings.Contains(lower, "dall-e-3") && (spec.quality == "" || spec.quality == "auto") {
+	if strings.Contains(lower, "dall-e-3") && spec.quality == "" {
 		spec.quality = "standard"
 	}
 	return spec
@@ -136,35 +143,82 @@ func imageSpecOfVariation(req *schemas.BifrostImageVariationRequest) imageSpec {
 	return newImageSpec(req.Model, req.Params.N, req.Params.Size, nil)
 }
 
-// catalogImageUnit asks the calculator behind bp for the price of one image.
+// TokenPricer reports that the catalog sells a model by the token.
+// *cost.Calculator satisfies it.
+type TokenPricer interface {
+	TokenPriced(ctx context.Context, provider, model string) bool
+}
+
+// imageQuote is the price of one image as the admission found it. Settle reuses
+// it, so a second lookup at settle time cannot fail differently from the first
+// and bill the cheaper estimate (looked is false when no admission ran).
+type imageQuote struct {
+	unit   int64
+	priced bool
+	looked bool
+}
+
+// typedNilCalc reports a nil *cost.Calculator held in the interface.
+func typedNilCalc(calc CostEstimator) bool {
+	c, isCalc := calc.(*cost.Calculator)
+	return isCalc && c == nil
+}
+
+// catalogImageUnit asks the calculator behind bp for the price of one image,
+// under its own deadline. A typed-nil calculator in the interface prices
+// nothing.
 func catalogImageUnit(ctx context.Context, bp *budgetPlane, provider, model string, spec imageSpec) (int64, bool) {
+	if typedNilCalc(bp.calc) {
+		return 0, false
+	}
 	pricer, ok := bp.calc.(ImagePricer)
 	if !ok || pricer == nil {
 		return 0, false
 	}
-	unit, ok := pricer.ImageUnitNano(ctx, provider, model, spec.size, spec.quality)
+	lookupCtx, cancel := context.WithTimeout(ctx, budgetGateTimeout)
+	defer cancel()
+	unit, ok := pricer.ImageUnitNano(lookupCtx, provider, model, spec.size, spec.quality)
 	return unit, ok && unit > 0
 }
 
-// imageEstimate is the admission estimate of the request, in nano-USD.
-func imageEstimate(ctx context.Context, bp *budgetPlane, provider, model string, spec imageSpec) int64 {
+// imageEstimate is the admission estimate of the request, in nano-USD, and the
+// quote it was made from.
+//
+// Without a catalog price per image, a model the catalog sells by the TOKEN
+// (gpt-image-*, gemini-*-image) is estimated at 0: its real cost is unknown
+// before the call, and a flat guess would refuse a request that fits. For such
+// a model admission keeps the pre-1969 rule: refuse only a scope that is
+// already over its ceiling. Every other model without a price is estimated at
+// the flat figure.
+func imageEstimate(ctx context.Context, bp *budgetPlane, provider, model string, spec imageSpec) (int64, imageQuote) {
 	unit, ok := catalogImageUnit(ctx, bp, provider, model, spec)
-	if !ok {
-		unit = perImageFallbackNano
+	quote := imageQuote{unit: unit, priced: ok, looked: true}
+	if ok {
+		return spec.n * unit, quote
 	}
-	return spec.n * unit
+	if tp, isTP := bp.calc.(TokenPricer); isTP && !typedNilCalc(bp.calc) {
+		lookupCtx, cancel := context.WithTimeout(ctx, budgetGateTimeout)
+		defer cancel()
+		if tp.TokenPriced(lookupCtx, provider, model) {
+			return 0, quote
+		}
+	}
+	return spec.n * perImageFallbackNano, quote
 }
 
 // checkImageBudget is checkBudget plus the estimate. It reports the request to
 // the log as an image request first, so a refused request still has its row
-// marked.
-func (h *Handler) checkImageBudget(w http.ResponseWriter, ctx context.Context, provider, model string, spec imageSpec) bool {
+// marked. The quote it returns is what settle bills from.
+func (h *Handler) checkImageBudget(w http.ResponseWriter, ctx context.Context, provider, model string, spec imageSpec) (*imageQuote, bool) {
 	requestlog.FromContext(ctx).SetImage(requestlog.ImageFields{Size: spec.size, Quality: spec.quality})
+	quote := &imageQuote{}
 	v := h.admissionVerdictEstimate(ctx, model, admissionArrival, func(bp *budgetPlane) int64 {
-		return imageEstimate(ctx, bp, provider, model, spec)
+		est, q := imageEstimate(ctx, bp, provider, model, spec)
+		*quote = q
+		return est
 	})
 	if v.allow {
-		return true
+		return quote, true
 	}
 	if v.scope != "" {
 		imageBudgetRefused.Add(1)
@@ -173,13 +227,13 @@ func (h *Handler) checkImageBudget(w http.ResponseWriter, ctx context.Context, p
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(v.retryAfter/time.Second)+1, 10))
 	}
 	writeBudgetRefusal(w, v)
-	return false
+	return quote, false
 }
 
 // billImageResponse bills the images a successful image response carries, in
 // the order the file comment gives, and records the outcome on the request
 // log. It bills nothing for a nil or empty response.
-func (h *Handler) billImageResponse(ctx context.Context, provider, model string, spec imageSpec, resp *schemas.BifrostImageGenerationResponse) {
+func (h *Handler) billImageResponse(ctx context.Context, provider, model string, spec imageSpec, quote *imageQuote, resp *schemas.BifrostImageGenerationResponse) {
 	if resp == nil {
 		return
 	}
@@ -187,7 +241,7 @@ func (h *Handler) billImageResponse(ctx context.Context, provider, model string,
 	fields := requestlog.ImageFields{Count: returned, Size: spec.size, Quality: spec.quality}
 	project, user := identityProjectFromCtx(ctx), identityUserFromCtx(ctx)
 
-	in, out, _ := usageFromImageResponse(resp)
+	in, out := usageFromImageResponse(resp)
 	if in > 0 || out > 0 {
 		fields.PricingSource = requestlog.PricingSourceToken
 		requestlog.FromContext(ctx).SetImage(fields)
@@ -202,7 +256,16 @@ func (h *Handler) billImageResponse(ctx context.Context, provider, model string,
 	// One snapshot prices and bills, so the calculator and the gate are the
 	// pair that shipped together (budget_plane.go).
 	bp := h.budget()
-	unit, priced := catalogImageUnit(ctx, bp, provider, model, spec)
+	unit, priced := int64(0), false
+	if quote != nil && quote.looked {
+		unit, priced = quote.unit, quote.priced
+	} else {
+		// No admission quote: look up under a context that outlives a client
+		// disconnect, so a hang-up cannot turn an HD price into the estimate.
+		billCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), billingCtxTimeout)
+		unit, priced = catalogImageUnit(billCtx, bp, provider, model, spec)
+		cancel()
+	}
 	if priced {
 		fields.PricingSource = requestlog.PricingSourceCatalogPerImage
 	} else {

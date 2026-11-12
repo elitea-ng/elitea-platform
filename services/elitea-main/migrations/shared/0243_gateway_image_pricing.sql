@@ -69,9 +69,13 @@ CREATE TABLE IF NOT EXISTS gateway.gateway_model_image_prices (
     CONSTRAINT gateway_model_image_prices_pk PRIMARY KEY (provider, model_name, size, quality),
     CONSTRAINT gateway_model_image_prices_has_price
         CHECK (usd_per_image IS NOT NULL OR usd_per_1m_pixels IS NOT NULL),
-    CONSTRAINT gateway_model_image_prices_non_negative
-        CHECK ((usd_per_image IS NULL OR usd_per_image >= 0)
-           AND (usd_per_1m_pixels IS NULL OR usd_per_1m_pixels >= 0))
+    -- The gateway reads a price as integer nano-USD (price x 1e9) in a bigint.
+    -- A larger row would fail that cast on EVERY lookup of the model, so the
+    -- bounds sit far below the bigint limit: 100,000 USD per image and
+    -- 1,000,000 USD per 1M pixels.
+    CONSTRAINT gateway_model_image_prices_range
+        CHECK ((usd_per_image IS NULL OR (usd_per_image >= 0 AND usd_per_image <= 100000))
+           AND (usd_per_1m_pixels IS NULL OR (usd_per_1m_pixels >= 0 AND usd_per_1m_pixels <= 1000000)))
 );
 
 ALTER TABLE gateway.llm_request_logs ADD COLUMN IF NOT EXISTS kind VARCHAR(16);

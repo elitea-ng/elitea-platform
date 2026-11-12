@@ -44,14 +44,15 @@ func (h *Handler) ImageEdit(w http.ResponseWriter, r *http.Request) {
 	// FIX #26: enforce the budget gate before calling the image provider.
 	provider, model := providerModelFromImageEditReq(bifReq)
 	spec := imageSpecOfEdit(bifReq)
-	if !h.checkImageBudget(w, ctx, provider, model, spec) {
+	quote, ok := h.checkImageBudget(w, ctx, provider, model, spec)
+	if !ok {
 		return
 	}
 
 	resp, bErr := h.router.ImageEditRequest(ctx, bifReq)
 	h.writeUnary(w, resp, bErr)
 	if bErr == nil && resp != nil {
-		h.billImageResponse(ctx, provider, model, spec, resp)
+		h.billImageResponse(ctx, provider, model, spec, quote, resp)
 	}
 }
 
@@ -81,14 +82,15 @@ func (h *Handler) ImageVariation(w http.ResponseWriter, r *http.Request) {
 	// FIX #26: enforce the budget gate before calling the image provider.
 	provider, model := providerModelFromImageVariationReq(bifReq)
 	spec := imageSpecOfVariation(bifReq)
-	if !h.checkImageBudget(w, ctx, provider, model, spec) {
+	quote, ok := h.checkImageBudget(w, ctx, provider, model, spec)
+	if !ok {
 		return
 	}
 
 	resp, bErr := h.router.ImageVariationRequest(ctx, bifReq)
 	h.writeUnary(w, resp, bErr)
 	if bErr == nil && resp != nil {
-		h.billImageResponse(ctx, provider, model, spec, resp)
+		h.billImageResponse(ctx, provider, model, spec, quote, resp)
 	}
 }
 

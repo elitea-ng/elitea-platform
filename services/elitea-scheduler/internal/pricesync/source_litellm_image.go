@@ -3,6 +3,7 @@ package pricesync
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"regexp"
 	"sort"
@@ -162,6 +163,34 @@ func (e litellmEntry) imagePrice(size, quality string) (perImage, perPixel *floa
 	return nil, pixel
 }
 
+// The limits of gateway.gateway_model_image_prices (shared migration 0243).
+const (
+	maxImageModelLen   = 128
+	maxImageSizeLen    = 16
+	maxImageQualityLen = 32
+	maxUSDPerImage     = 100000.0
+	// maxUSDPerPixel is the per-pixel form of the 1,000,000 USD per 1M pixels
+	// bound.
+	maxUSDPerPixel = 1.0
+)
+
+// imageRowProblem names why a row does not fit the table, or "" when it fits.
+func imageRowProblem(model, size, quality string, perImage, perPixel *float64) string {
+	switch {
+	case len(model) > maxImageModelLen:
+		return "model name longer than the column"
+	case len(size) > maxImageSizeLen:
+		return "size longer than the column"
+	case len(quality) > maxImageQualityLen:
+		return "quality longer than the column"
+	case perImage != nil && *perImage > maxUSDPerImage:
+		return "price per image above the allowed range"
+	case perPixel != nil && *perPixel > maxUSDPerPixel:
+		return "price per pixel above the allowed range"
+	}
+	return ""
+}
+
 // parseLiteLLMImagePrices decodes the per-image prices of the sheet into
 // image RawModelPrices, in a fixed order. Split from parseLiteLLM because the
 // two feed different tables.
@@ -187,6 +216,14 @@ func parseLiteLLMImagePrices(body []byte) ([]RawModelPrice, error) {
 		}
 		perImage, perPixel := e.imagePrice(size, quality)
 		if perImage == nil && perPixel == nil {
+			continue
+		}
+		// One row the table refuses (a value over a column length or over the
+		// range CHECK of shared migration 0243) would roll back the whole
+		// image pass, so it is skipped here and named in the log.
+		if reason := imageRowProblem(model, size, quality, perImage, perPixel); reason != "" {
+			slog.Warn("pricesync: skipping an image price the catalog cannot store",
+				"key", name, "reason", reason)
 			continue
 		}
 		out = append(out, RawModelPrice{

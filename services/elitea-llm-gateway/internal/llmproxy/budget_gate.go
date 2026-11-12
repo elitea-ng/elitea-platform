@@ -1586,25 +1586,15 @@ func usageFromEmbeddingResponse(resp *schemas.BifrostEmbeddingResponse) (int64, 
 	return int64(resp.Usage.PromptTokens), int64(resp.Usage.CompletionTokens)
 }
 
-// usageFromImageResponse extracts (inputTokens, outputTokens, imageCount)
-// from a BifrostImageGenerationResponse.
-//
-// When the provider populates Usage (e.g. OpenAI gpt-image-1), the token
-// counts are returned and imageCount is 0 — the normal cost.Calculator path
-// applies.
-//
-// When Usage is nil (e.g. DALL·E 2, Stability AI), token counts are 0 and
-// imageCount is set to len(resp.Data) so the caller can bill a fixed per-image
-// fallback cost via perImageFallbackNano (Fix round-3 #8). This ensures image
-// models that do not report token usage still get billed.
-func usageFromImageResponse(resp *schemas.BifrostImageGenerationResponse) (inputTokens, outputTokens, imageCount int64) {
-	if resp == nil {
-		return 0, 0, 0
+// usageFromImageResponse extracts (inputTokens, outputTokens) from a
+// BifrostImageGenerationResponse. Both are 0 when the provider reported no
+// usage, or a usage block with no tokens. billImageResponse then bills the
+// images returned (image_billing.go).
+func usageFromImageResponse(resp *schemas.BifrostImageGenerationResponse) (inputTokens, outputTokens int64) {
+	if resp == nil || resp.Usage == nil {
+		return 0, 0
 	}
-	if resp.Usage != nil {
-		return int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens), 0
-	}
-	return 0, 0, int64(len(resp.Data))
+	return int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens)
 }
 
 // providerModelFromImageGenReq extracts provider and model from a

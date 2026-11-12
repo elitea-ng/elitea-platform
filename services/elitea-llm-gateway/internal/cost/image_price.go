@@ -23,6 +23,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -33,10 +34,10 @@ const PixelsPer1M int64 = 1_000_000
 
 // imagePriceSQL picks the ONE row that prices a request.
 //
-// $1 provider, $2 model_name, $3 NanoUSD, $4 the requested size ("WxH" or ''),
-// $5 the requested quality ('' when absent).
+// $1 provider, $2 model_name, $3 NanoUSD, $4 the requested size ("WxH" or ”),
+// $5 the requested quality (” when absent).
 //
-// A '' column of a row matches any request value. A request value that is ''
+// A ” column of a row matches any request value. A request value that is ”
 // matches every row (the caller did not choose, and the model default was
 // already applied). Among the candidates the exact size wins, then the exact
 // quality, then the HIGHEST price, so an ambiguous request is never billed
@@ -68,8 +69,14 @@ type imageEntry struct {
 // at nothing, which is the defect this table removes. The caller then bills
 // its flagged estimate.
 func (c *Calculator) ImageUnitNano(ctx context.Context, provider, model, size, quality string) (int64, bool) {
+	if c == nil {
+		return 0, false
+	}
+	// Size and quality are caller text. Reduce them to a bounded set before
+	// they reach the cache key or the statement: an unknown value becomes ''
+	// ("unspecified"), which takes the highest matching price.
 	size = normalizeImageSize(size)
-	quality = strings.ToLower(strings.TrimSpace(quality))
+	quality = normalizeImageQuality(quality)
 	key := provider + "\x00" + model + "\x00" + size + "\x00" + quality
 	now := c.now().UnixNano()
 	c.mu.RLock()
@@ -99,8 +106,12 @@ func (c *Calculator) ImageUnitNano(ctx context.Context, provider, model, size, q
 			c.storeImage(key, imageEntry{expires: c.now().Add(c.ttl).UnixNano()})
 			return 0, false
 		}
+		// Any other failure (a transient error, or a row too large for bigint)
+		// is cached negatively for a short time, so a bad row or a sick
+		// database is not queried again on every image request.
 		c.logger.Warn("cost: image price lookup failed; billing the flagged estimate",
 			"provider", provider, "model", model, "err", err)
+		c.storeImage(key, imageEntry{expires: c.now().Add(min(c.ttl, imageErrorTTL)).UnixNano()})
 		return 0, false
 	}
 	nano := int64(0)
@@ -118,6 +129,7 @@ func (c *Calculator) ImageUnitNano(ctx context.Context, provider, model, size, q
 		var fits bool
 		nano, fits = costNano(pixels, *per1MPixels, PixelsPer1M)
 		if !fits {
+			c.storeImage(key, imageEntry{expires: c.now().Add(c.ttl).UnixNano()})
 			return 0, false
 		}
 	}
@@ -132,18 +144,74 @@ func (c *Calculator) ImageUnitNano(ctx context.Context, provider, model, size, q
 func (c *Calculator) storeImage(key string, entry imageEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.images == nil {
+	if c.images == nil || len(c.images) >= maxImageCacheEntries {
+		// Bounded: a full cache is dropped whole. It refills from the
+		// database at the cost of one lookup per live key.
 		c.images = make(map[string]imageEntry)
 	}
 	c.images[key] = entry
 }
 
+// maxImageCacheEntries bounds the image price cache.
+const maxImageCacheEntries = 2048
+
+// imageErrorTTL is how long a failed lookup is remembered.
+const imageErrorTTL = 30 * time.Second
+
+// imageQualities are the quality words the catalog and the providers use.
+// "auto" is absent on purpose: it means "unspecified".
+var imageQualities = map[string]bool{
+	"standard": true, "hd": true, "low": true, "medium": true, "high": true,
+}
+
+// normalizeImageQuality returns a known quality, or ” for anything else
+// (including "auto").
+func normalizeImageQuality(quality string) string {
+	quality = strings.ToLower(strings.TrimSpace(quality))
+	if imageQualities[quality] {
+		return quality
+	}
+	return ""
+}
+
 // normalizeImageSize reads "1024x1024", "1024X1024" and "1024-x-1024" as
-// "1024x1024". Anything else (such as "auto") is returned lower-cased, and
-// matches only a row that names it or a '' row.
+// "1024x1024". Anything that is not WIDTHxHEIGHT in digits (such as "auto") is
+// ” ("unspecified"), and the text is capped at 15 characters.
 func normalizeImageSize(size string) string {
 	size = strings.ToLower(strings.TrimSpace(size))
-	return strings.ReplaceAll(size, "-x-", "x")
+	size = strings.ReplaceAll(size, "-x-", "x")
+	if len(size) > 15 {
+		return ""
+	}
+	w, h, found := strings.Cut(size, "x")
+	if !found || !allDigits(w) || !allDigits(h) {
+		return ""
+	}
+	return size
+}
+
+// TokenPriced reports that the catalog itself holds a token output price for
+// the model: the model is sold by the token, and the provider reports the
+// tokens (gpt-image-*, gemini-*-image). The default table and the ultimate
+// fallback do not count, because their prices are guesses.
+func (c *Calculator) TokenPriced(ctx context.Context, provider, model string) bool {
+	if c == nil {
+		return false
+	}
+	p := c.Price(ctx, provider, model)
+	return p.Source == sourceCatalog && p.OutputNanoPer1M > 0 && !p.OutputDerived
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ImagePixels is the pixel count of a "WxH" size. ok is false for any other

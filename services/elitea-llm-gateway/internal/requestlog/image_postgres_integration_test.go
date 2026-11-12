@@ -128,4 +128,12 @@ func TestPostgresImageRowAndImagePriceCatalog(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO gateway.gateway_model_image_prices (provider, model_name, usd_per_image) VALUES ('openai', 'dall-e-3-it-neg', -1)`); err == nil {
 		t.Error("a negative price must be refused")
 	}
+	// A price whose nano-USD value would overflow bigint is refused at write
+	// time, so it cannot fail every lookup of the model.
+	if _, err := pool.Exec(ctx, `INSERT INTO gateway.gateway_model_image_prices (provider, model_name, usd_per_image) VALUES ('openai', 'dall-e-3-it-big', 100001)`); err == nil {
+		t.Error("a per-image price above the bound must be refused")
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO gateway.gateway_model_image_prices (provider, model_name, usd_per_1m_pixels) VALUES ('openai', 'dall-e-3-it-big2', 1000001)`); err == nil {
+		t.Error("a per-pixel price above the bound must be refused")
+	}
 }

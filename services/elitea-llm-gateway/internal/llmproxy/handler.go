@@ -915,7 +915,8 @@ func (h *Handler) ImageGeneration(w http.ResponseWriter, r *http.Request) {
 	spec := imageSpecOfGeneration(bifReq)
 	// Issue 1969: the gate also refuses a request whose ESTIMATE does not fit
 	// in what is left of the budget (image_billing.go).
-	if !h.checkImageBudget(w, ctx, provider, model, spec) {
+	quote, ok := h.checkImageBudget(w, ctx, provider, model, spec)
+	if !ok {
 		return
 	}
 
@@ -926,7 +927,7 @@ func (h *Handler) ImageGeneration(w http.ResponseWriter, r *http.Request) {
 		// Bill the images actually returned: token usage when the provider
 		// reported it, else the catalog per-image price, else the flagged
 		// estimate (billImageResponse).
-		h.billImageResponse(ctx, provider, model, spec, resp)
+		h.billImageResponse(ctx, provider, model, spec, quote, resp)
 	}
 }
 
