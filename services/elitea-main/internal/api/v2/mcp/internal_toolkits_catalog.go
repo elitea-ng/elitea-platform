@@ -1,5 +1,7 @@
 package mcp
 
+import "github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
+
 const internalToolkitsCategory = "elitea_core/toolkits"
 
 type internalToolkitOperation string
@@ -55,7 +57,7 @@ var internalToolkitToolDefinitions = []internalToolkitToolDefinition{
 			"project_id":  intProperty("Current project ID. The server verifies this value."),
 			"type":        boundedStringProperty("Toolkit type from the current type catalogue.", 1, 256),
 			"name":        boundedStringProperty("Toolkit name.", 1, 768),
-			"description": boundedStringProperty("Optional toolkit description.", 0, 2304),
+			"description": boundedStringProperty("Optional toolkit description.", 0, entitylimits.MaxDescriptionLength),
 			"settings":    openObjectProperty("Toolkit settings matching the selected type schema."),
 			"meta":        openObjectProperty("Optional toolkit metadata."),
 		}, "project_id", "type", "name"),
@@ -71,7 +73,7 @@ var internalToolkitToolDefinitions = []internalToolkitToolDefinition{
 			"toolkit_id":  intProperty("Toolkit ID."),
 			"type":        boundedStringProperty("Optional toolkit type.", 1, 256),
 			"name":        boundedStringProperty("Optional toolkit name.", 1, 768),
-			"description": boundedStringProperty("Optional toolkit description.", 0, 2304),
+			"description": boundedStringProperty("Optional toolkit description.", 0, entitylimits.MaxDescriptionLength),
 			"settings":    openObjectProperty("Replacement settings matching the toolkit type schema."),
 			"meta":        openObjectProperty("Replacement toolkit metadata."),
 		}, "project_id", "toolkit_id"),

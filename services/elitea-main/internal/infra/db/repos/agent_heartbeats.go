@@ -26,6 +26,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/proactivity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 // HeartbeatConversationSource is chat_conversations.source of an agent's
@@ -639,9 +640,8 @@ func createHeartbeatConversation(
 	} else {
 		name += " (heartbeat run)"
 	}
-	if len(name) > 200 {
-		name = strings.ToValidUTF8(name[:200], "")
-	}
+	// The entity name limit, in characters (issue 1968).
+	name = entitylimits.Truncate(name, entitylimits.MaxNameLength)
 	meta, err := json.Marshal(map[string]any{
 		"conversation_type":        HeartbeatConversationSource,
 		"heartbeat_application_id": strconv.FormatInt(applicationID, 10),

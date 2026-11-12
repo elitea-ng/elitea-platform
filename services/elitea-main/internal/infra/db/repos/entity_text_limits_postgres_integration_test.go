@@ -9,8 +9,8 @@ import (
 )
 
 // Issue 1968: tenant migration 0172 truncates stored descriptions to 2000
-// characters and names to 128 (characters, not bytes), keeps configuration
-// titles unique, adds the CHECK constraints, and is idempotent. The test
+// characters and names to 128 (characters, not bytes), leaves configuration
+// titles (the key credentials are referenced by) alone, adds the CHECK constraints, and is idempotent. The test
 // builds a small schema in the shape of 001_initial.sql, fills it with
 // over-limit rows and applies the migration file as the runner would (the
 // search_path pinned to the schema). CI-only: skipped without the integration
@@ -54,7 +54,7 @@ CREATE TABLE configuration (id serial PRIMARY KEY, label varchar, elitea_title v
 	exec(tx, `INSERT INTO elitea_tools (name, description) VALUES ('t', $1), ('u', NULL)`, strings.Repeat("x", 5000))
 	exec(tx, `INSERT INTO chat_conversation_folders (name) VALUES ($1)`, longName)
 	exec(tx, `INSERT INTO chat_conversations (name) VALUES ($1)`, longName)
-	// Two titles equal over their first 128 characters must stay distinct.
+	// The title is the key other rows reference a credential by: it must survive untouched.
 	exec(tx, `INSERT INTO configuration (label, elitea_title) VALUES ($1, $2), ($1, $3)`,
 		longName, strings.Repeat("t", 200)+"1", strings.Repeat("t", 200)+"2")
 
@@ -95,8 +95,8 @@ CREATE TABLE configuration (id serial PRIMARY KEY, label varchar, elitea_title v
 	if n := count(`SELECT max(char_length(label)) FROM configuration`); n != 128 {
 		t.Fatalf("configuration label = %d", n)
 	}
-	if n := count(`SELECT count(DISTINCT elitea_title) FROM configuration WHERE char_length(elitea_title) <= 128`); n != 2 {
-		t.Fatalf("truncated configuration titles collided or overflowed: %d distinct", n)
+	if n := count(`SELECT count(*) FROM configuration WHERE char_length(elitea_title) = 201`); n != 2 {
+		t.Fatalf("the configuration titles were rewritten (%d left at 201 characters, want 2): links that name a credential by title would break", n)
 	}
 
 	// The constraints now refuse an over-limit write.

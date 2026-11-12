@@ -597,13 +597,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var initialVariables []any
 	var initialTags []any
 	if versions, ok := body["versions"].([]any); ok && len(versions) > 0 {
+		// Every entry is checked, not just the one that seeds the agent.
+		if err := checkVersionNames(versions); err != nil {
+			apierr.Write(w, err)
+			return
+		}
 		if vBody, ok := versions[0].(map[string]any); ok {
-			if name, ok := vBody["name"].(string); ok {
-				if err := entitylimits.CheckName("versions[0].name", name); err != nil {
-					apierr.Write(w, err)
-					return
-				}
-			}
 			// Validate model_project_id if llm_settings provided
 			if llm, ok := vBody["llm_settings"].(map[string]any); ok {
 				if mpid, ok := llm["model_project_id"].(string); ok && mpid != "" && mpid != projectID {
@@ -2598,4 +2597,21 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.WriteHeader(code)
 	// connection already committed; ignore write error
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// checkVersionNames refuses a version name over the entity name limit in any
+// entry of a `versions` array (issue 1968); the error names the entry.
+func checkVersionNames(versions []any) error {
+	for i, entry := range versions {
+		vBody, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, ok := vBody["name"].(string); ok {
+			if err := entitylimits.CheckName(fmt.Sprintf("versions[%d].name", i), name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

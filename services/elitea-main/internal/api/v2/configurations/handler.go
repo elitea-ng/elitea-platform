@@ -1137,7 +1137,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if !decodeBoundedJSON(w, r, &body) {
 		return
 	}
-	if refuseOverlongConfigurationName(w, body) {
+	if refuseOverlongConfigurationName(w, body, true) {
 		return
 	}
 	// A retired type (application/configurations/retired.go) is refused before
@@ -1414,7 +1414,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if !decodeBoundedJSON(w, r, &body) {
 		return
 	}
-	if refuseOverlongConfigurationName(w, body) {
+	if refuseOverlongConfigurationName(w, body, false) {
 		return
 	}
 	// A change TO a retired type is refused before the database is read.
@@ -2310,8 +2310,16 @@ func writeRetiredConfigurationTypeRefusal(w http.ResponseWriter) {
 // refuseOverlongConfigurationName answers 400 when a configuration's label or
 // display name (`elitea_title`, or its alias `name`) is over the shared name
 // limit (issue 1968). A configuration has no description column.
-func refuseOverlongConfigurationName(w http.ResponseWriter, body map[string]any) bool {
-	for _, field := range []string{"label", "elitea_title", "name"} {
+//
+// The title is the key other rows reference a credential by, and one stored
+// before the limit may be longer; only a create (`checkTitle`) is held to it, so
+// an edit that sends the stored title back is not refused.
+func refuseOverlongConfigurationName(w http.ResponseWriter, body map[string]any, checkTitle bool) bool {
+	fields := []string{"label"}
+	if checkTitle {
+		fields = append(fields, "elitea_title", "name")
+	}
+	for _, field := range fields {
 		value, ok := body[field].(string)
 		if !ok {
 			continue

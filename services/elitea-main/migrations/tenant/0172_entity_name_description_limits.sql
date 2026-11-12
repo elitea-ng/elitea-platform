@@ -14,7 +14,7 @@
 --   chat_conversation_folders.name     128  truncate + CHECK
 --   chat_conversations.name            128  truncate only
 --   configuration.label                128  truncate only
---   configuration.elitea_title         128  truncate only (keeps UNIQUE, below)
+--   configuration.elitea_title         128  NOT touched (see below)
 -- applications / application_versions / skills / skill_versions / elitea_tools
 -- names are already VARCHAR(128) (001_initial.sql), so they need nothing here.
 --
@@ -25,9 +25,12 @@
 -- them produced one character too long into a 500. The handlers are the gate
 -- there.
 --
--- configuration.elitea_title is UNIQUE, so a plain left() could make two
--- titles equal. A title over the limit is cut to leave room for `~<id>` and
--- gets that suffix, which keeps it unique and 128 characters at most.
+-- configuration.elitea_title is NOT truncated. It is the key other rows name a
+-- credential by (a toolkit's `*_configuration.elitea_title`, an agent version's
+-- model reference, the LLM gateway's credential lookup), so cutting it in place
+-- would break those links. The limit applies to it on new writes only (the
+-- configurations handler refuses an over-limit title on create; an update leaves
+-- the stored key alone). The display `label` is cut.
 --
 -- Every table is guarded, for the reason 0134 and 0160 are: several
 -- integration fixtures apply the tenant chain to a schema without them.
@@ -66,9 +69,6 @@ BEGIN
 
     IF to_regclass('configuration') IS NOT NULL THEN
         UPDATE configuration SET label = left(label, 128) WHERE char_length(label) > 128;
-        UPDATE configuration
-           SET elitea_title = left(elitea_title, 128 - char_length('~' || id::text)) || '~' || id::text
-         WHERE char_length(elitea_title) > 128;
     END IF;
 END
 $$;

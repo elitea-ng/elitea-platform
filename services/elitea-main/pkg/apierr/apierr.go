@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type Response struct {
@@ -76,9 +78,35 @@ func Conflict(message string) error {
 	return &APIError{Status: http.StatusConflict, Code: "conflict", Message: message}
 }
 
+// lengthConstraints are the CHECK constraints tenant migration 0172 adds (issue
+// 1968), by the column they guard.
+var lengthConstraints = map[string][2]any{
+	"applications_description_max_len":       {"description", 2000},
+	"skills_description_max_len":             {"description", 2000},
+	"elitea_tools_description_max_len":       {"description", 2000},
+	"chat_conversation_folders_name_max_len": {"name", 128},
+}
+
+// fromLengthCheck turns a violation of one of those constraints into the 400 a
+// handler would have written, as a backstop for a writer that skipped the check.
+func fromLengthCheck(err error) *APIError {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		return nil
+	}
+	spec, ok := lengthConstraints[pgErr.ConstraintName]
+	if !ok {
+		return nil
+	}
+	return FieldTooLong(spec[0].(string), spec[1].(int)).(*APIError)
+}
+
 func Write(w http.ResponseWriter, err error) {
 	var apiErr *APIError
-	if errors.As(err, &apiErr) {
+	if !errors.As(err, &apiErr) {
+		apiErr = fromLengthCheck(err)
+	}
+	if apiErr != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(apiErr.Status)
 		_ = json.NewEncoder(w).Encode(Response{Error: apiErr.Message, Field: apiErr.Field, MaxLength: apiErr.MaxLength})

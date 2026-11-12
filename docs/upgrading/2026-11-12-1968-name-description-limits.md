@@ -11,9 +11,11 @@
     declares `maxLength` on the create and update bodies of agents, toolkits, skills and tokens; for conversations it
     is described in the schema only, because the client contract subset is additive-only.
   - **Existing data is truncated.** Tenant migration `0172_entity_name_description_limits.sql` cuts stored descriptions of
-    agents, skills and toolkits to 2000 characters, folder, conversation and credential names to 128, and adds CHECK
-    constraints on those descriptions and on folder names. A credential title cut by it gets a `~<id>` suffix so it stays
-    unique. Shared migration `0242_token_name_limit.sql` cuts personal access token names to 128. The cut text is not
+    agents, skills and toolkits to 2000 characters, folder and conversation names and credential labels to 128, and adds
+    CHECK constraints on those descriptions and on folder names. A credential's `elitea_title` is the key toolkits and
+    agents reference it by, so stored titles are NOT cut; only a new credential's title is held to 128. Imports and
+    forks cut over-long names and descriptions instead of failing, and a write that still hits a length CHECK answers
+    400, not 500. Shared migration `0242_token_name_limit.sql` cuts personal access token names to 128. The cut text is not
     kept.
   - **Clients.** The web, desktop and mobile forms show a character counter near the limit, never cut what is typed
     or pasted, and block Save past the limit with the number of characters over.

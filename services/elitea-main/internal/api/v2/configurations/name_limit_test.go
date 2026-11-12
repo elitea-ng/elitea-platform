@@ -21,12 +21,23 @@ func TestRefuseOverlongConfigurationName(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			if got := refuseOverlongConfigurationName(rec, tc.body); got != tc.refused {
+			if got := refuseOverlongConfigurationName(rec, tc.body, true); got != tc.refused {
 				t.Fatalf("refused = %v, want %v", got, tc.refused)
 			}
 			if tc.refused && rec.Code != 400 {
 				t.Fatalf("status = %d", rec.Code)
 			}
 		})
+	}
+}
+
+// An edit is not refused for the stored title it sends back.
+func TestEditDoesNotRefuseTheStoredTitle(t *testing.T) {
+	rec := httptest.NewRecorder()
+	if refuseOverlongConfigurationName(rec, map[string]any{"elitea_title": strings.Repeat("t", 200), "label": "ok"}, false) {
+		t.Fatal("an update must not refuse a stored title over the limit")
+	}
+	if !refuseOverlongConfigurationName(rec, map[string]any{"label": strings.Repeat("l", 129)}, false) {
+		t.Fatal("an update still refuses an over-limit label")
 	}
 }
