@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as isMcpVisibleModule from '../api/useIsMcpVisible';
 import * as selectedProjectIdModule from '../api/useSelectedProjectId';
 import * as toolkitTypeSchemasModule from '../api/useToolkitTypeSchemas';
+import * as runtimeCapabilitiesModule from '@/shared/api/runtimeCapabilities';
 
 import { INTERNAL_TOOLS_LIST, INTERNAL_TOOL_ICONS, useAvailableInternalTools } from './internalTools';
 import { renderHookWithProviders } from '../__tests__/testUtils';
@@ -19,9 +20,10 @@ describe('INTERNAL_TOOLS_LIST / INTERNAL_TOOL_ICONS', () => {
     expect(attachments?.agentOnly).toBe(true);
   });
 
-  it('includes image_generation, gated on the ImageGen toolkit type', () => {
+  it('includes image_generation with no toolkit gate (#1969)', () => {
     const imageGeneration = INTERNAL_TOOLS_LIST.find((tool) => tool.name === 'image_generation');
-    expect(imageGeneration?.requiredToolkitType).toBe('ImageGenServiceProvider_ImageGen');
+    expect(imageGeneration).toBeDefined();
+    expect(imageGeneration).not.toHaveProperty('requiredToolkitType');
   });
 
   it('ELITEA-2783: lists Skills Builder and Project Context Builder with their own tooltips', () => {
@@ -94,33 +96,49 @@ describe('useAvailableInternalTools', () => {
     vi.restoreAllMocks();
   });
 
-  it('excludes image_generation unless its required toolkit type is present in the schema map', () => {
-    vi.spyOn(selectedProjectIdModule, 'useSelectedProjectId').mockReturnValue('proj-1');
-    vi.spyOn(toolkitTypeSchemasModule, 'useToolkitTypeSchemas').mockReturnValue({
-      toolkitTypeSchemas: {},
-      isFetching: false,
-      isError: false,
-      error: undefined,
-    });
+  it('shows image_generation enabled when the deployment reports an image model (#1969)', () => {
     vi.spyOn(isMcpVisibleModule, 'useIsMcpVisible').mockReturnValue(true);
+    vi.spyOn(runtimeCapabilitiesModule, 'useRuntimeCapabilities').mockReturnValue({
+      worker: 'rust',
+      internal_tools: { image_generation: true },
+      hidden_toolkit_types: [],
+    });
 
     const { result } = renderHookWithProviders(() => useAvailableInternalTools());
-    expect(result.current.some((tool) => tool.name === 'image_generation')).toBe(false);
+    const tool = result.current.find((entry) => entry.name === 'image_generation');
+    expect(tool?.available).toBe(true);
+    expect(tool?.unavailableReason).toBeUndefined();
     vi.restoreAllMocks();
   });
 
-  it('includes image_generation once its required toolkit type is present', () => {
-    vi.spyOn(selectedProjectIdModule, 'useSelectedProjectId').mockReturnValue('proj-1');
-    vi.spyOn(toolkitTypeSchemasModule, 'useToolkitTypeSchemas').mockReturnValue({
-      toolkitTypeSchemas: { ImageGenServiceProvider_ImageGen: {} },
-      isFetching: false,
-      isError: false,
-      error: undefined,
-    });
+  it('shows image_generation disabled, with the reason, when no image model is configured (#1969)', () => {
     vi.spyOn(isMcpVisibleModule, 'useIsMcpVisible').mockReturnValue(true);
+    vi.spyOn(runtimeCapabilitiesModule, 'useRuntimeCapabilities').mockReturnValue({
+      worker: 'rust',
+      internal_tools: { image_generation: false },
+      hidden_toolkit_types: [],
+    });
 
     const { result } = renderHookWithProviders(() => useAvailableInternalTools());
-    expect(result.current.some((tool) => tool.name === 'image_generation')).toBe(true);
+    const tool = result.current.find((entry) => entry.name === 'image_generation');
+    expect(tool).toBeDefined();
+    expect(tool?.available).toBe(false);
+    expect(tool?.unavailableReason).toBe('No image model is configured for this deployment');
+    vi.restoreAllMocks();
+  });
+
+  it('keeps the worker reason for the other tools the worker skips', () => {
+    vi.spyOn(isMcpVisibleModule, 'useIsMcpVisible').mockReturnValue(true);
+    vi.spyOn(runtimeCapabilitiesModule, 'useRuntimeCapabilities').mockReturnValue({
+      worker: 'rust',
+      internal_tools: { swarm: false },
+      hidden_toolkit_types: [],
+    });
+
+    const { result } = renderHookWithProviders(() => useAvailableInternalTools());
+    expect(result.current.find((entry) => entry.name === 'swarm')?.unavailableReason).toBe(
+      'Not available on the Rust worker',
+    );
     vi.restoreAllMocks();
   });
 });

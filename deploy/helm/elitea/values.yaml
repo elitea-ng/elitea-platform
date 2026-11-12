@@ -103,6 +103,14 @@ global:
   # With none of them, OTEL_SDK_DISABLED defaults to "true", so no component
   # exports to localhost and logs a refused connection every few seconds.
   otelEndpoint: ""
+  # The deployment's image generation model (#1969): the registry name of an
+  # image_generation_model the LLM gateway serves. ONE value feeds both
+  # elitea-main (ELITEA_IMAGE_GENERATION_MODEL, which turns the chat Image
+  # creation toggle on) and the worker (runtime.json image_generation_model,
+  # which the tool asks the gateway for), so the toggle and the worker cannot
+  # disagree. Empty: no image generation; the toggle shows disabled. Choosing
+  # the model per project is not supported yet.
+  imageGenerationModel: ""
 
 # ── cert-manager issuers for the in-cluster mTLS hops (#1460) ───────────────
 #

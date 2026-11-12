@@ -251,8 +251,8 @@ impl ImageGenerationTool {
             host: Arc::clone(&self.host),
             description: DESCRIPTION.into(),
         };
-        let saved = saver.save(images, "generate").await?;
-        Ok(self.answer(&saved, &bucket))
+        let stored = saver.save(images, "generate").await?;
+        Ok(self.answer(&stored, &bucket))
     }
 
     /// The saved files as the model reads them: references and a sentence,

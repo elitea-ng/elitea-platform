@@ -17,9 +17,6 @@ import { ToolsIcon } from '@/shared/ui/icons/tools-icon';
 import type { SvgIconComponent } from '@/shared/ui/icons/svg-icon.types';
 
 import { useIsMcpVisible } from '../api/useIsMcpVisible';
-import { useToolkitTypeSchemas } from '../api/useToolkitTypeSchemas';
-
-import { useSelectedProjectId } from '../api/useSelectedProjectId';
 import { productName } from '@/shared/brand';
 
 /**
@@ -48,7 +45,6 @@ export interface InternalToolDescriptor {
   readonly icon: string;
   readonly infoTooltip: InternalToolInfoTooltip;
   readonly agentOnly?: boolean;
-  readonly requiredToolkitType?: string;
 }
 
 /**
@@ -66,9 +62,6 @@ export interface AvailableInternalTool extends InternalToolDescriptor {
   readonly unavailableReason?: string;
 }
 
-/** Toolkit type key used to check if image generation is available via provider plugin. */
-const IMAGE_GENERATION_TOOLKIT_TYPE = 'ImageGenServiceProvider_ImageGen';
-
 export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
   {
     name: 'attachments',
@@ -83,8 +76,10 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
     name: 'image_generation',
     title: 'Image creation',
     icon: 'ImageIcon',
-    infoTooltip: { text: 'Enable AI-powered image generation capabilities.' },
-    requiredToolkitType: IMAGE_GENERATION_TOOLKIT_TYPE,
+    // #1969: no toolkit gate. Whether the deployment has an image model is
+    // `GET /elitea_core/runtime_capabilities`'s answer for this name, so the
+    // switch renders disabled with a reason when it has none.
+    infoTooltip: { text: 'Enable AI-powered image generation capabilities. Each image is billed.' },
   },
   {
     name: 'data_analysis',
@@ -203,7 +198,13 @@ export const INTERNAL_TOOL_ICONS: Readonly<Record<string, SvgIconComponent>> = {
  * worker makes every tool available, but it is answered rather than asserted
  * away.
  */
-function unavailableReasonFor(worker: string | undefined): string {
+function unavailableReasonFor(worker: string | undefined, toolName: string): string {
+  if (toolName === 'image_generation') {
+    return t(
+      'features.agents.internalTools.noImageModel',
+      'No image model is configured for this deployment',
+    );
+  }
   if (worker === 'rust') {
     return t('features.agents.internalTools.notAvailableOnRustWorker', 'Not available on the Rust worker');
   }
@@ -217,11 +218,8 @@ export interface UseAvailableInternalToolsOptions {
 /**
  * Ported from `apps/elitea-ui/src/[fsd]/shared/lib/hooks/
  * useAvailableInternalTools.hooks.js`. Filters `INTERNAL_TOOLS_LIST` down to
- * tools OFFERED at all: agent-only tools require `includeAgentOnly`,
- * `internal_mcp` requires `useIsMcpVisible()`, and any tool naming a
- * `requiredToolkitType` requires that type to be present in the project's
- * toolkit-type schema map. A tool this project has no provider for is
- * dropped entirely — there is nothing a user can do about it from here.
+ * tools OFFERED at all: agent-only tools require `includeAgentOnly` and
+ * `internal_mcp` requires `useIsMcpVisible()`.
  *
  * A DIFFERENT question, added by #865/#866, is layered on TOP rather than
  * filtered by: whether the CONFIGURED WORKER runs an offered tool for real.
@@ -233,8 +231,6 @@ export interface UseAvailableInternalToolsOptions {
  */
 export function useAvailableInternalTools(options: UseAvailableInternalToolsOptions = {}): readonly AvailableInternalTool[] {
   const { includeAgentOnly = false } = options;
-  const projectId = useSelectedProjectId();
-  const { toolkitTypeSchemas } = useToolkitTypeSchemas(projectId);
   const isMcpVisible = useIsMcpVisible();
   const capabilities = useRuntimeCapabilities();
 
@@ -242,17 +238,15 @@ export function useAvailableInternalTools(options: UseAvailableInternalToolsOpti
     () =>
       INTERNAL_TOOLS_LIST.filter((tool) => {
         if (tool.agentOnly && !includeAgentOnly) return false;
-        if (tool.name === 'internal_mcp' && !isMcpVisible) return false;
-        if (!tool.requiredToolkitType) return true;
-        return Boolean(toolkitTypeSchemas?.[tool.requiredToolkitType]);
+        return !(tool.name === 'internal_mcp' && !isMcpVisible);
       }).map((tool) => {
         const available = isInternalToolAvailable(capabilities, tool.name);
         return {
           ...tool,
           available,
-          ...(available ? {} : { unavailableReason: unavailableReasonFor(capabilities?.worker) }),
+          ...(available ? {} : { unavailableReason: unavailableReasonFor(capabilities?.worker, tool.name) }),
         };
       }),
-    [toolkitTypeSchemas, includeAgentOnly, isMcpVisible, capabilities],
+    [includeAgentOnly, isMcpVisible, capabilities],
   );
 }

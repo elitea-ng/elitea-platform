@@ -6,7 +6,7 @@ description: "Built-in chat and agent capabilities — image creation, data anal
 Internal tools are capabilities you turn on from **Modules** in chat or an agent's Tools section, without configuring an external toolkit. They come from a fixed platform catalogue (`features/agents/lib/internalTools.ts`) and are turned on per conversation or saved as an agent's default.
 
 <Note title="Which worker runs which module">
-**Planner**, **Attachments**, **Data analysis** and **Smart tools selection** run on the platform's agent worker. **Image creation**, **Elitea MCP tools** and **Swarm mode** are not run by the platform's worker: they show disabled with a "Not available on the Rust worker" note (agent Tools section) so you can see the gap before turning one on, and a run that still hits one gets a visible in-conversation notice rather than the capability silently doing nothing (tracked in #866).
+**Planner**, **Attachments**, **Data analysis**, **Smart tools selection** and **Image creation** run on the platform's agent worker (Image creation needs an image model, see below). **Elitea MCP tools** and **Swarm mode** are not run by the platform's worker: they show disabled with a "Not available on the Rust worker" note (agent Tools section) so you can see the gap before turning one on, and a run that still hits one gets a visible in-conversation notice rather than the capability silently doing nothing (tracked in #866).
 </Note>
 
 <Screenshot id="internal-tools-menu" alt="The Modules panel listing internal tools with toggles" />
@@ -24,7 +24,26 @@ Internal tools are capabilities you turn on from **Modules** in chat or an agent
 
 ## Image creation
 
-Generates images from a text prompt and shows them inline, using an image-generation model configured in **AI Providers**. Generated images are saved automatically to the project's `attachments` bucket, where you can also download or delete them later from [Artifacts](/menus/artifacts).
+Lets the assistant generate images from a text prompt and shows them inline in the chat. Ask for an image in plain words, for example "draw a red fox in watercolor, 1536x1024". The images are saved automatically to the conversation's `attachments` bucket, where you can also download or delete them later from [Artifacts](/menus/artifacts).
+
+The assistant can set these parameters:
+
+| Parameter | Values |
+| --- | --- |
+| `prompt` | The text that describes the image (required). |
+| `size` | `256x256`, `512x512`, `1024x1024`, `1024x1536`, `1536x1024`, `1792x1024`, `1024x1792`, or `auto` for the model's default. |
+| `n` | How many images, 1 to 4. The default is 1. |
+| `quality` | `low`, `medium`, `high`, `standard`, `hd`, or `auto`, for models that have a quality tier. |
+
+<Warning title="Each image is billed">
+Image generation is billed per image by the LLM gateway, to the project, like every other model call. A budget limit refuses the call, and the assistant tells you so.
+</Warning>
+
+**Enabling it.** The toggle is on when the deployment has an image model. An administrator sets `global.imageGenerationModel` in the Helm values to the registry name of an image model the gateway serves. When it is empty, the toggle shows disabled with the note "No image model is configured for this deployment". The model is chosen for the whole deployment: choosing it per project is not supported yet.
+
+<Note title="Desktop">
+The cloud agent worker runs this tool. The desktop app's local agent loop does not offer it yet.
+</Note>
 
 <Tip>
 This toggle is a chat-conversation setting. To let an agent or pipeline generate or edit images as a step in its own logic — not just inline in chat — attach the [ImageGen toolkit](/integrations/toolkits/imagegen_toolkit) instead.
@@ -61,8 +80,8 @@ A tool that needs your confirmation (a sensitive action) or a sign-in to the ser
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="A module toggle has no effect">Check the worker note under [Internal tools](/menus/internal-tools): Image creation, Elitea MCP tools and Swarm mode are not run by the platform's worker — the conversation shows a visible notice rather than running them.</Accordion>
-  <Accordion title="Image creation is missing from the list">No image-generation model is configured for the project yet — add one in [AI Providers](/menus/settings/ai-providers).</Accordion>
+  <Accordion title="A module toggle has no effect">Check the worker note under [Internal tools](/menus/internal-tools): Elitea MCP tools and Swarm mode are not run by the platform's worker — the conversation shows a visible notice rather than running them.</Accordion>
+  <Accordion title="Image creation is disabled">No image model is configured for this deployment. Ask an administrator to set `global.imageGenerationModel` (see above).</Accordion>
   <Accordion title="Modules are missing from the chat toolbar entirely">No module is available for the project at all — ask your administrator to configure at least one provider or toolkit.</Accordion>
 </AccordionGroup>
 

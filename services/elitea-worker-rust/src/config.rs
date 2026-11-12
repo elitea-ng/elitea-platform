@@ -1289,6 +1289,23 @@ mod tests {
     }
 
     #[test]
+    fn the_image_generation_model_is_optional_and_bounded() {
+        let mut value = config(Path::new("/runtime"));
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(loaded.image_generation_model, None);
+        assert!(loaded.validate().is_ok());
+        value["image_generation_model"] = json!("gpt-image-1");
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(loaded.image_generation_model.as_deref(), Some("gpt-image-1"));
+        assert!(loaded.validate().is_ok());
+        for invalid in [json!(""), json!("a\nb"), json!("m".repeat(257))] {
+            value["image_generation_model"] = invalid;
+            let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+            assert!(loaded.validate().is_err());
+        }
+    }
+
+    #[test]
     fn the_memory_embedding_model_is_optional_bounded_and_needs_a_vector_store() {
         let mut value = config(Path::new("/runtime"));
         let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();

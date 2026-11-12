@@ -53,6 +53,12 @@ data:
     {{- if $r.publicBaseUrl }}
     {{- $_ := set $config "public_base_url" $r.publicBaseUrl }}
     {{- end }}
+    {{- /* The image generation model (#1969): global.imageGenerationModel feeds
+    this and elitea-main's ELITEA_IMAGE_GENERATION_MODEL. Written only when
+    set; unset, the worker offers no image_generation tool. */}}
+    {{- if .Values.global.imageGenerationModel }}
+    {{- $_ := set $config "image_generation_model" .Values.global.imageGenerationModel }}
+    {{- end }}
     {{- /* The egress allowlist of the web toolkits' provider calls (#1238).
     Written only when set; the worker then allows every provider origin its
     registry declares. */}}

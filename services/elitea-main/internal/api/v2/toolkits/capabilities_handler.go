@@ -1,6 +1,9 @@
 package toolkits
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 // WithWorkerImplementation supplies the plain name ("rust", the only worker
 // since the Python worker's removal) of the worker image this deployment runs, for RuntimeCapabilities to serve as-is.
@@ -19,6 +22,15 @@ import "net/http"
 // say" a client can flag, where a guessed default would misreport silently.
 func WithWorkerImplementation(implementation string) Option {
 	return func(h *Handler) { h.workerImplementation = implementation }
+}
+
+// WithImageGenerationModel supplies the deployment's image generation model
+// (#1969): the registry name the Rust worker's image_generation tool asks the
+// gateway for. The worker and elitea-main read the SAME Helm value, so
+// RuntimeCapabilities reports image_generation available exactly when the
+// worker can serve it. Empty: no image model, the toggle renders disabled.
+func WithImageGenerationModel(model string) Option {
+	return func(h *Handler) { h.imageGenerationModel = strings.TrimSpace(model) }
 }
 
 // internalToolCapability names one of the platform's toggleable internal chat
@@ -44,7 +56,10 @@ type internalToolCapability struct {
 //   - skills_builder and project_context_builder (#940 A8) are served by the
 //     native runtime's SkillsBuilderTool/ProjectContextBuilderTool, which
 //     write through the claim-bound content listener;
-//   - image_generation, internal_mcp, swarm and pyodide (the Python sandbox,
+//   - image_generation (#1969) is served when the deployment names an image
+//     model (WithImageGenerationModel); RuntimeCapabilities overrides its
+//     rustAvailable below, so it is false here;
+//   - internal_mcp, swarm and pyodide (the Python sandbox,
 //     which only the retired Python worker ran) are recognized and SKIPPED
 //     (PLATFORM_INTERNAL_TOOLS, agent_internal_tool_skipped), so they are
 //     rustAvailable: false and the toggle renders disabled-with-a-reason
@@ -115,6 +130,9 @@ func (h *Handler) RuntimeCapabilities(w http.ResponseWriter, r *http.Request) {
 		available := true
 		if h.workerImplementation == "rust" {
 			available = tool.rustAvailable
+			if tool.name == "image_generation" {
+				available = h.imageGenerationModel != ""
+			}
 		}
 		internalTools[tool.name] = available
 	}
