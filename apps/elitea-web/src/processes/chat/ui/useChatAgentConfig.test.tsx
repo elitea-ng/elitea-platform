@@ -68,7 +68,7 @@ describe('useChatAgentConfig', () => {
     expect(form.props.entityType).toBe('application');
     expect(form.props.values.version_details.instructions).toBe('Be clear');
 
-    await act(async () => {
+    act(() => {
       result.current.onSaveVersion?.();
     });
     await waitFor(() => expect(body).toBeDefined());

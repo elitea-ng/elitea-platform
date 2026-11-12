@@ -46,6 +46,11 @@ export interface NativeSubmenuProps {
   readonly reserveIconColumn?: boolean;
 }
 
+function LeadingIcon({ icon, reserve }: { readonly icon: ReactNode; readonly reserve: boolean }): React.JSX.Element | null {
+  if (icon !== undefined) return <MenuRowIcon>{icon}</MenuRowIcon>;
+  return reserve ? <MenuRowIcon /> : null;
+}
+
 function useTimer(): { start: (ms: number, run: () => void) => void; stop: () => void } {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -109,7 +114,7 @@ export function NativeSubmenu({ label, icon, hint, testId, disabled, children, m
         onClick={() => openNow(false)}
         onKeyDown={onRowKey}
       >
-        {icon !== undefined ? <MenuRowIcon>{icon}</MenuRowIcon> : reserveIconColumn && <MenuRowIcon />}
+        <LeadingIcon icon={icon} reserve={reserveIconColumn} />
         <MenuRowText>{label}</MenuRowText>
         {hint !== undefined && <MenuRowHint>{hint}</MenuRowHint>}
         <MenuRowIcon>
