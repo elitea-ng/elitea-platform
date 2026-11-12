@@ -38691,6 +38691,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DocumentLoadersResponse'
+              # A SERVED catalogue, so a generated mock is deterministic: the
+              # faker default could leave all three maps out, which reads as
+              # "this deployment allows no file types" and turns attachments
+              # off at random in every test that renders the composer.
+              example:
+                items:
+                  - type: document_types
+                    name: Document types
+                    description: File extensions the indexer loads as documents.
+                    supported_extensions: ['.md', '.pdf', '.txt']
+                  - type: image_types
+                    name: Image types
+                    description: File extensions the indexer loads as images.
+                    supported_extensions: ['.png']
+                  - type: code_types
+                    name: Code types
+                    description: File extensions the indexer loads as plain-text code.
+                    supported_extensions: ['.py']
+                total: 3
+                document_types: { .md: text/markdown, .pdf: application/pdf, .txt: text/plain }
+                image_types: { .png: image/png }
+                code_types: { .py: text/plain }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '501':
