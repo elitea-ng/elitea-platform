@@ -3745,6 +3745,8 @@ export interface components {
             conversation_history?: components["schemas"]["DraftConversationTurn"][];
             current_draft?: components["schemas"]["AgentDefinition"];
             llm_settings?: components["schemas"]["DraftLlmSettings"];
+            /** @description True when the reviewer removed the persona from the draft. The model is told not to write one and the answer carries none. A `current_draft.soul` that fails the soul rules is refused with 422 and the soul's own code instead of being dropped. */
+            soul_declined?: boolean;
             /** @description This turn's request, in plain text. Required and non-blank. */
             user_description: string;
         };

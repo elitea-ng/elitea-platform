@@ -6,6 +6,7 @@ import {
   EMPTY_SOUL_DRAFT,
   SOUL_MAX_TEXT_BYTES,
   areSoulDraftsEqual,
+  readSoul,
   soulDraftProblems,
   soulFromDraft,
   soulTextBytes,
@@ -54,6 +55,16 @@ describe('agentSoulDraft', () => {
     expect(soulTextBytes({ schema: 'elitea.soul/v1', body: 'x'.repeat(SOUL_MAX_TEXT_BYTES) })).toBeGreaterThan(
       SOUL_MAX_TEXT_BYTES,
     );
+  });
+});
+
+describe('readSoul', () => {
+  it('accepts a well-formed soul and rejects any other shape', () => {
+    const good = { schema: 'elitea.soul/v1', role: 'Lead', voice: ['calm'], relationships: [{ agent: 'a', stance: 'b' }] };
+    expect(readSoul(good)).toBe(good);
+    for (const bad of [null, 'x', [], { voice: 'calm' }, { role: 7 }, { relationships: [null] }, { relationships: [{ agent: 'a' }] }]) {
+      expect(readSoul(bad)).toBeUndefined();
+    }
   });
 });
 

@@ -2,9 +2,9 @@
  * The default sub-agent avatars (ADR-0050 decisions 4 and 6, issues 1870 and 1951).
  *
  * A `spawn_agent` profile names its avatar by a key, `default:<name>`. The
- * set of names is CLOSED: the agent runtime refuses any other `default:`
- * key at spawn (`libs/rust/agent-runtime/src/subagents/profile.rs` keeps the
- * same names, and a test reads the `DEFAULT_AVATAR_NAMES` line below, so the
+ * set of names is CLOSED: the agent runtime drops any other `default:`
+ * key at spawn (the child has no avatar) (`libs/rust/agent-runtime/src/subagents/profile.rs` keeps the
+ * same names, and a test reads the `DEFAULT_AVATAR_NAMES` array below, so the
  * two cannot drift). Each name has ONE image here, drawn as small geometric
  * shapes, so the web, the desktop (the web build) and the mobile app all draw
  * the same animal from the same data.
@@ -19,7 +19,7 @@
 /** The key prefix of a default avatar. */
 export const DEFAULT_AVATAR_PREFIX = 'default:';
 
-/** The names, in display order. The Rust runtime reads this line: keep it on one line. */
+/** The names, in display order. The Rust runtime reads this array and checks it against its own list. */
 export const DEFAULT_AVATAR_NAMES = ['owl', 'hawk', 'fox', 'wolf', 'bear', 'otter', 'heron', 'lynx'] as const;
 
 export type DefaultAvatarName = (typeof DEFAULT_AVATAR_NAMES)[number];

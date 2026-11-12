@@ -50,3 +50,6 @@ Write only what the request supports. Do not invent technologies, team practices
 // conversationalDraftPrompt is appended to applicationDraftSystemPrompt by the
 // streaming route, whose request carries the builder conversation so far.
 const conversationalDraftPrompt = `The messages that follow are a conversation with the person building this agent. Earlier turns are context; the last message is the request to satisfy now. Your reply is still ONE JSON object with the keys above and nothing else, even when the request is a small change.`
+
+// soulDeclinedPrompt is appended when the reviewer removed the persona.
+const soulDeclinedPrompt = `The person declined a persona for this agent. Do not write a "soul" key.`

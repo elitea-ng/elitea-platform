@@ -242,23 +242,47 @@ func TestDraftStreamCapsTheCurrentDraftToTheAgentDefinitionLimits(t *testing.T) 
 	}
 }
 
-// Issue 1644: a refinement shows the model the persona under review, and a
-// persona that names a capability is dropped before the model sees it.
-func TestDraftStreamShowsTheCurrentPersonaOnlyWhenItIsValid(t *testing.T) {
-	last := func(soul map[string]any) string {
-		body, _ := json.Marshal(map[string]any{
+// Issue 1644: a refinement shows the model the persona under review; a
+// persona that fails the soul rules is refused with 422 and its own code
+// instead of silently vanishing from the reviewer's draft.
+func TestDraftStreamShowsTheCurrentPersonaAndRefusesAnInvalidOne(t *testing.T) {
+	send := func(soul map[string]any, extra map[string]any) (*streamingStub, *httptest.ResponseRecorder) {
+		payload := map[string]any{
 			"user_description": "tweak",
 			"current_draft":    map[string]any{"name": "Old", "description": "d", "instructions": "i", "soul": soul},
-		})
+		}
+		for k, v := range extra {
+			payload[k] = v
+		}
+		body, _ := json.Marshal(payload)
 		completer := &streamingStub{pieces: []string{validDraft}}
-		serveStream(t, completer, string(body))
-		return completer.got.Messages[len(completer.got.Messages)-1].Content
+		return completer, serveStream(t, completer, string(body))
 	}
-	if got := last(map[string]any{"role": "Lead"}); !strings.Contains(got, `"role":"Lead"`) {
+	completer, _ := send(map[string]any{"role": "Lead"}, nil)
+	if got := completer.got.Messages[len(completer.got.Messages)-1].Content; !strings.Contains(got, `"role":"Lead"`) {
 		t.Errorf("the valid persona was not shown: %q", got)
 	}
-	if got := last(map[string]any{"role": "Lead", "tools": []string{"github"}}); strings.Contains(got, "github") || strings.Contains(got, `"soul"`) {
-		t.Errorf("a capability-naming persona reached the model: %q", got)
+	completer, recorder := send(map[string]any{"role": "Lead", "tools": []string{"github"}}, nil)
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), "soul_capability_key") {
+		t.Errorf("status = %d body = %s, want 422 soul_capability_key", recorder.Code, recorder.Body.String())
+	}
+	if len(completer.got.Messages) != 0 {
+		t.Error("the model was called for a refused persona")
+	}
+}
+
+// After "Do not add a persona" the model is told so and no persona is returned
+// even when it writes one anyway.
+func TestDraftStreamNeverReturnsAPersonaTheReviewerDeclined(t *testing.T) {
+	withSoul := `{"name":"A","description":"B","instructions":"C","soul":{"role":"Lead"}}`
+	completer := &streamingStub{pieces: []string{withSoul}}
+	recorder := serveStream(t, completer, `{"user_description":"tweak","soul_declined":true,"current_draft":{"name":"Old","description":"d","instructions":"i"}}`)
+	if !strings.Contains(completer.got.Messages[0].Content, "declined a persona") {
+		t.Error("the system prompt does not tell the model the persona was declined")
+	}
+	if strings.Contains(recorder.Body.String(), `"soul"`) && strings.Contains(recorder.Body.String(), "draft.complete") &&
+		strings.Contains(recorder.Body.String(), `"role":"Lead"`) {
+		t.Errorf("a declined persona was returned: %s", recorder.Body.String())
 	}
 }
 

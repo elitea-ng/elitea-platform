@@ -8,11 +8,11 @@ import {
   type AgentLlmSettings,
 } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail, OutputContract } from '@/shared/api/generated/model';
+import { areSoulDraftsEqual, soulDraftProblems, soulToDraft, type AgentSoulDraft } from '@/shared/lib/agentSoulDraft';
 import { areOutputContractsEqual, readOutputContract } from '@/shared/ui/OutputContractField';
 
 import type { AvatarPack } from '@elitea/client-core/conversation';
 
-import { areSoulDraftsEqual, soulDraftProblems, soulToDraft, type AgentSoulDraft } from '@/shared/lib/agentSoulDraft';
 import { areAvatarPacksEqual, avatarPackDraftOf } from './avatarPackDraft';
 
 /**

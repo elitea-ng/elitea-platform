@@ -75,7 +75,8 @@ function roleColor(theme: Theme, role: DefaultAvatarRole): string {
     case 'body':
       return theme.vars.palette.primary.main;
     case 'detail':
-      return theme.vars.palette.background.default;
+      // The brand's own on-brand pair: its contrast with the body fill is what the brand contract guarantees.
+      return theme.vars.palette.primary.contrastText;
     case 'accent':
       return theme.vars.palette.text.secondary;
   }
@@ -89,8 +90,7 @@ function DefaultAvatarImage({ avatar }: { readonly avatar: DefaultAvatar }): Rea
       data-testid="default-avatar"
       data-avatar-name={avatar.name}
       viewBox={`0 0 ${String(DEFAULT_AVATAR_GRID)} ${String(DEFAULT_AVATAR_GRID)}`}
-      role="img"
-      aria-label={avatar.label}
+      aria-hidden
       sx={(theme: Theme) => ({
         width: '78%',
         height: '78%',

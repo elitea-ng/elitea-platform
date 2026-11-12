@@ -251,7 +251,7 @@ export function GenerateAgentReviewForm({ draft, onChange, onValidationChange, s
       )}
 
       {draft.soul !== undefined && (
-        <GenerateAgentPersona soul={draft.soul} onRemove={() => handleFieldChange('soul', undefined)} />
+        <GenerateAgentPersona soul={draft.soul} onRemove={() => onChange({ ...draft, soul: undefined, soul_declined: true })} />
       )}
 
       <ResourceSuggestions

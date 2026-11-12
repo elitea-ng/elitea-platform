@@ -35,11 +35,7 @@ fn a_profile_is_parsed_and_bounded() {
         json!({"profile": {"model": "a\nb"}}),
         json!({"profile": {"model": "x".repeat(MAX_MODEL_NAME_BYTES + 1)}}),
         json!({"profile": {"model": 5}}),
-        json!({"profile": {"avatar": "a\nb"}}),
-        json!({"profile": {"avatar": "x".repeat(MAX_AVATAR_BYTES + 1)}}),
-        json!({"profile": {"avatar": "default:dragon"}}),
-        json!({"profile": {"avatar": "owl"}}),
-        json!({"profile": {"avatar": "default:"}}),
+        json!({"profile": {"avatar": 5}}),
         json!({"profile": {"tools": ["no-slash"]}}),
         json!({"profile": {"tools": vec!["a/b"; MAX_PROFILE_TOOLS + 1]}}),
         json!({"profile": {"display_name": 7}}),
@@ -52,19 +48,20 @@ fn a_profile_is_parsed_and_bounded() {
     assert!(parse_profile(&json!({"profile": {"soul": "x".repeat(MAX_SOUL_BYTES)}})).is_ok());
 }
 
-/// Issue 1870: every key of the closed set is accepted, and the message of a
-/// refused key lists the set so the model can retry.
+/// Issue 1870: every key of the closed set is kept. A key outside it never
+/// fails the spawn: it is dropped, so the child has no avatar and the clients
+/// draw the brand mark.
 #[test]
-fn every_default_avatar_key_is_accepted_and_an_unknown_key_names_the_set() {
+fn every_default_avatar_key_is_kept_and_an_unknown_key_is_dropped() {
     for key in DEFAULT_AVATAR_KEYS {
         let profile = parse_profile(&json!({"profile": {"avatar": key}})).unwrap();
         assert_eq!(profile.avatar.as_deref(), Some(key));
     }
-    let message = parse_profile(&json!({"profile": {"avatar": "default:dragon"}})).unwrap_err();
-    assert!(
-        message.contains("default:owl") && message.contains("default:lynx"),
-        "{message}"
-    );
+    for unknown in ["default:dragon", "owl", "default:", "a\nb", &"x".repeat(500)] {
+        let profile = parse_profile(&json!({"profile": {"avatar": unknown, "display_name": "Scout"}})).unwrap();
+        assert_eq!(profile.avatar, None, "{unknown}");
+        assert_eq!(profile.display_name.as_deref(), Some("Scout"));
+    }
 }
 
 /// The Rust set and the clients' images name the same animals, in the same
@@ -77,11 +74,14 @@ fn default_avatar_keys_match_client_core() {
         "/../../ts/client-core/src/conversation/defaultAvatars.ts"
     ))
     .expect("client-core defaultAvatars.ts is in the repository");
-    let line = source
-        .lines()
-        .find(|line| line.starts_with("export const DEFAULT_AVATAR_NAMES"))
-        .expect("DEFAULT_AVATAR_NAMES line");
-    let names: Vec<String> = line
+    // The whole array literal, wherever it wraps: from `DEFAULT_AVATAR_NAMES`
+    // to the closing `]`, every quoted name in it.
+    let start = source
+        .find("export const DEFAULT_AVATAR_NAMES")
+        .expect("DEFAULT_AVATAR_NAMES declaration");
+    let array = &source[start..];
+    let array = &array[array.find('[').expect("array open")..=array.find(']').expect("array close")];
+    let names: Vec<String> = array
         .split('\'')
         .skip(1)
         .step_by(2)

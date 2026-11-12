@@ -78,6 +78,7 @@ describe('draftRequestBody', () => {
     assert.equal(turns.at(-1)?.content, 'turn 28');
     assert.deepEqual(body['current_draft'], { name: 'Old', description: 'd', instructions: 'i' });
     assert.deepEqual(draftRequestBody({ request: 'x' }), { user_description: 'x' });
+    assert.deepEqual(draftRequestBody({ request: 'x', soulDeclined: true }), { user_description: 'x', soul_declined: true });
   });
 });
 

@@ -65,6 +65,9 @@ type applicationDraftStreamRequest struct {
 	ConversationHistory []v2predict.Message `json:"conversation_history"`
 	CurrentDraft        *currentAgentDraft  `json:"current_draft"`
 	LLMSettings         *llmSettings        `json:"llm_settings"`
+	// SoulDeclined is set when the reviewer removed the persona: the model is
+	// told not to write one and the answer never carries one.
+	SoulDeclined bool `json:"soul_declined"`
 }
 
 // currentAgentDraft is the part of an AgentDefinition the model is shown when
@@ -76,7 +79,8 @@ type currentAgentDraft struct {
 	WelcomeMessage       string   `json:"welcome_message,omitempty"`
 	ConversationStarters []string `json:"conversation_starters,omitempty"`
 	// Soul is the persona under review (issue 1644). It is untrusted client
-	// input, so capped() keeps it only when agentsoul accepts it.
+	// input: the handler refuses an invalid one with a 422 before the stream
+	// opens, so capped() only ever sees a soul agentsoul accepts.
 	Soul any `json:"soul,omitempty"`
 }
 
@@ -129,6 +133,14 @@ func (h *Handler) GenerateApplicationDraftStream(w http.ResponseWriter, r *http.
 			"code":  NotConfiguredCode,
 		})
 		return
+	}
+	// A persona the caller sent back for review must not vanish silently: an
+	// invalid one is refused with the same codes as a version write.
+	if body.CurrentDraft != nil && !body.SoulDeclined {
+		if _, failure := proposedSoul(body.CurrentDraft.Soul); failure != nil && failure.status == http.StatusUnprocessableEntity {
+			writeJSON(w, failure.status, map[string]any{"error": failure.message, "code": failure.code})
+			return
+		}
 	}
 	request, err := streamCompletionRequest(projectID, callerUserID(r.Context()), body)
 	if err != nil {
@@ -193,7 +205,7 @@ func (h *Handler) GenerateApplicationDraftStream(w http.ResponseWriter, r *http.
 		return
 	}
 
-	draft, failure := h.finishApplicationDraft(r.Context(), projectID, content)
+	draft, failure := h.finishApplicationDraft(r.Context(), projectID, content, body.SoulDeclined)
 	if failure != nil {
 		failure.log(r.Context())
 		_ = frame(EventDraftError, DraftStreamError{Code: failure.code, Status: failure.status, Message: failure.message})
@@ -207,6 +219,9 @@ func (h *Handler) GenerateApplicationDraftStream(w http.ResponseWriter, r *http.
 // this turn's request.
 func streamCompletionRequest(projectID, userID string, body applicationDraftStreamRequest) (v2predict.CompletionRequest, error) {
 	prompt := applicationDraftSystemPrompt + "\n\n" + conversationalDraftPrompt
+	if body.SoulDeclined {
+		prompt += "\n\n" + soulDeclinedPrompt
+	}
 	messages := []v2predict.Message{{Role: "system", Content: prompt}}
 	history := body.ConversationHistory
 	if len(history) > maxDraftHistoryTurns {

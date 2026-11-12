@@ -59,6 +59,12 @@ export const GenerateApplicationDraftStreamRequest = zod.object({
       "The builder conversation so far, oldest first. At most 20 turns; entries with an empty role or content are dropped.\n",
     ),
   current_draft: AgentDefinition.optional(),
+  soul_declined: zod
+    .boolean()
+    .optional()
+    .describe(
+      "True when the reviewer removed the persona from the draft. The model is told not to write one and the answer carries none. A `current_draft.soul` that fails the soul rules is refused with 422 and the soul's own code instead of being dropped.\n",
+    ),
   llm_settings: DraftLlmSettings.optional(),
 });
 

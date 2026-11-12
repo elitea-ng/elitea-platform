@@ -11873,10 +11873,10 @@ components:
         soul:
           description: >
             ADR-0050 decision 1a: the persona the model proposed, checked
-            with the same rules as a version write (an AgentSoulV1 document;
-            a soul that names a capability is refused with 422
-            `soul_capability_key`, `soul_too_large` or `soul_invalid`).
-            Absent when the model proposed none. The review form shows it
+            with the same rules as a version write (an AgentSoulV1 document).
+            A proposal that fails those rules is dropped and the rest of the
+            draft is returned. Absent when the model proposed none or the
+            proposal was dropped. The review form shows it
             and the create body sends it as `version_details.soul`.
           allOf:
             - $ref: '#/components/schemas/AgentSoulV1'
@@ -12345,6 +12345,13 @@ components:
           items: { $ref: '#/components/schemas/DraftConversationTurn' }
         current_draft:
           $ref: '#/components/schemas/AgentDefinition'
+        soul_declined:
+          type: boolean
+          description: >
+            True when the reviewer removed the persona from the draft. The
+            model is told not to write one and the answer carries none. A
+            `current_draft.soul` that fails the soul rules is refused with
+            422 and the soul's own code instead of being dropped.
         llm_settings:
           $ref: '#/components/schemas/DraftLlmSettings'
       example:

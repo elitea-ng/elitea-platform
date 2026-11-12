@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { ApplicationDetail, ApplicationVersionDetail, ApplicationVersionSummary } from '@/shared/api/generated/model';
 import { VersionWriteRequest } from '@/shared/api/generated/model/versionWriteRequest.zod';
-
 import { EMPTY_SOUL_DRAFT, soulToDraft } from '@/shared/lib/agentSoulDraft';
+
 import { avatarPackDraftOf, withAvatarSlot } from './avatarPackDraft';
 import type { EditApplicationVersionFields } from './useEditApplicationVersionFields';
 import {

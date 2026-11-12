@@ -18,7 +18,7 @@ export function DefaultAvatarGlyph({ avatarKey, size = 24 }: { avatarKey: string
   const { colors } = useDesign();
   const avatar = defaultAvatarOf(avatarKey);
   if (avatar === undefined) return <BrandMark variant="avatar" size={size} decorative testID="brand-mark-fallback" />;
-  const fill: Record<DefaultAvatarRole, string> = { body: colors.accent, detail: colors.surfaceSunken, accent: colors.textSecondary };
+  const fill: Record<DefaultAvatarRole, string> = { body: colors.accent, detail: colors.accentOn, accent: colors.textSecondary };
   return (
     <View testID="default-avatar" accessible={false} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
       <Svg width={size} height={size} viewBox={`0 0 ${DEFAULT_AVATAR_GRID} ${DEFAULT_AVATAR_GRID}`}>

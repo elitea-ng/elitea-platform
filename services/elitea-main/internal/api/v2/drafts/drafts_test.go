@@ -417,7 +417,9 @@ func TestApplicationDraftWithoutASoulOmitsTheKey(t *testing.T) {
 	}
 }
 
-func TestApplicationDraftRefusesASoulThatNamesACapability(t *testing.T) {
+// The persona is optional: a proposal that fails the soul rules is dropped
+// and the rest of the draft is kept, never refused.
+func TestApplicationDraftDropsAnInvalidSoulAndKeepsTheDraft(t *testing.T) {
 	for name, soul := range map[string]string{
 		"capability key":     `{"role":"Lead","tools":["github"]}`,
 		"nested capability":  `{"role":"Lead","relationships":[{"agent":"x","stance":"y","permissions":["all"]}]}`,
@@ -427,15 +429,14 @@ func TestApplicationDraftRefusesASoulThatNamesACapability(t *testing.T) {
 	} {
 		completer := &stubCompleter{content: `{"name":"A","description":"B","instructions":"C","soul":` + soul + `}`}
 		recorder := serve(t, routes[1], completer, `{"user_description":"x"}`)
-		if recorder.Code != http.StatusUnprocessableEntity {
-			t.Errorf("%s: status = %d, want 422; body=%s", name, recorder.Code, recorder.Body.String())
+		if recorder.Code != http.StatusOK {
+			t.Errorf("%s: status = %d, want 200; body=%s", name, recorder.Code, recorder.Body.String())
 			continue
 		}
-	}
-	completer := &stubCompleter{content: `{"name":"A","description":"B","instructions":"C","soul":{"role":"Lead","tools":["github"]}}`}
-	recorder := serve(t, routes[1], completer, `{"user_description":"x"}`)
-	if !strings.Contains(recorder.Body.String(), "soul_capability_key") {
-		t.Errorf("body = %s, want the soul_capability_key code", recorder.Body.String())
+		draft := decode[v2drafts.ApplicationDraft](t, recorder)
+		if draft.Name != "A" || draft.Instructions != "C" || len(draft.Soul) != 0 {
+			t.Errorf("%s: draft = %+v, want the draft without a soul", name, draft)
+		}
 	}
 }
 

@@ -54,7 +54,14 @@ describe('GenerateAgentReviewForm', () => {
     expect(screen.getByTestId('agent-draft-persona-boundaries')).toHaveTextContent('never pages at night');
 
     fireEvent.click(screen.getByTestId('agent-draft-persona-remove'));
-    expect(onChange).toHaveBeenCalledWith({ ...draft, soul: undefined });
+    expect(onChange).toHaveBeenCalledWith({ ...draft, soul: undefined, soul_declined: true });
+  });
+
+  it('renders nothing for a malformed persona instead of throwing', () => {
+    const soul = { voice: 'calm', relationships: [null], role: 7 } as unknown as Record<string, unknown>;
+    const draft: AgentDraft = { ...EMPTY_AGENT_DRAFT, name: 'A', soul };
+    renderWithTheme(<GenerateAgentReviewForm {...baseProps({ draft })} />);
+    expect(screen.queryByTestId('agent-draft-persona')).toBeNull();
   });
 
   it('shows no persona section for a draft without one', () => {

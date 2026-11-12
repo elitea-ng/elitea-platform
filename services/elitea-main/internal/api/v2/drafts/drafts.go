@@ -401,7 +401,7 @@ func (h *Handler) GenerateApplicationDraft(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	draft, failure := h.finishApplicationDraft(r.Context(), chi.URLParam(r, "projectID"), content)
+	draft, failure := h.finishApplicationDraft(r.Context(), chi.URLParam(r, "projectID"), content, false)
 	if failure != nil {
 		failure.log(r.Context())
 		writeJSON(w, failure.status, map[string]any{"error": failure.message, "code": failure.code})
@@ -433,7 +433,7 @@ const (
 // finishApplicationDraft turns the model's text into the validated draft. It
 // is the one path both application draft routes take from model text to
 // answer, so they truncate, validate and suggest identically.
-func (h *Handler) finishApplicationDraft(ctx context.Context, projectID, content string) (ApplicationDraft, *draftFailure) {
+func (h *Handler) finishApplicationDraft(ctx context.Context, projectID, content string, soulDeclined bool) (ApplicationDraft, *draftFailure) {
 	unusable := func(text, otherwise string, cause error) *draftFailure {
 		message := truncatedOrUnusable(text, otherwise)
 		code := draftUnparseableCode
@@ -479,11 +479,21 @@ func (h *Handler) finishApplicationDraft(ctx context.Context, projectID, content
 	// The persona the model proposed (ADR-0050 decision 1a, issue 1644): the
 	// same refusal codes as a version write, so a soul that names a tool,
 	// credential or permission never reaches the reviewer.
-	soul, failure := proposedSoul(raw.Soul)
-	if failure != nil {
-		return ApplicationDraft{}, failure
+	// The persona is optional, so a proposal that fails the rules is dropped
+	// (and logged) rather than costing the reviewer the whole draft. Only an
+	// unloadable schema, which is not the model's fault, still fails. A
+	// persona the reviewer declined is never returned.
+	if !soulDeclined {
+		soul, failure := proposedSoul(raw.Soul)
+		switch {
+		case failure == nil:
+			draft.Soul = soul
+		case failure.status == http.StatusUnprocessableEntity:
+			slog.WarnContext(ctx, "draft: the proposed persona was dropped", "code", failure.code, "err", failure.cause)
+		default:
+			return ApplicationDraft{}, failure
+		}
 	}
-	draft.Soul = soul
 	// AgentDefinition (v2.yaml) is the rule: a missing name, description or
 	// instructions is refused, the same way on both routes.
 	if err := ValidateApplicationDraft(draft); err != nil {
@@ -827,12 +837,19 @@ func proposedSoul(value any) (json.RawMessage, *draftFailure) {
 		return nil, nil
 	}
 	if ok {
+		// A copy: the caller's map is never written to.
+		copied := make(map[string]any, len(object)+1)
+		for key, item := range object {
+			copied[key] = item
+		}
+		object = copied
 		if _, has := object["schema"]; !has {
 			object["schema"] = agentsoul.SchemaID
 		}
 		if len(object) == 1 {
 			return nil, nil
 		}
+		value = object
 	}
 	normalized, err := agentsoul.Normalize(value)
 	if err != nil {

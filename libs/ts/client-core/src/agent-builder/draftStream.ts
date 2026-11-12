@@ -90,13 +90,14 @@ export function readDraft(data: unknown): StreamedAgentDraft | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
   const raw = data as Record<string, unknown>;
   if (typeof raw['name'] !== 'string' || typeof raw['instructions'] !== 'string') return undefined;
+  const soul = soulOf(raw['soul']);
   return {
     name: raw['name'],
     description: text(raw['description']),
     instructions: raw['instructions'],
     welcome_message: text(raw['welcome_message']),
     conversation_starters: Array.isArray(raw['conversation_starters']) ? raw['conversation_starters'].filter((s): s is string => typeof s === 'string') : [],
-    ...(soulOf(raw['soul']) === undefined ? {} : { soul: soulOf(raw['soul']) }),
+    ...(soul === undefined ? {} : { soul }),
     suggested_toolkits: list(raw['suggested_toolkits']),
     suggested_mcp: list(raw['suggested_mcp']),
     suggested_pipelines: list(raw['suggested_pipelines']),
@@ -211,6 +212,8 @@ export interface DraftRequestInput {
   readonly request: string;
   readonly history?: readonly DraftTurn[];
   readonly current?: CurrentDraft | undefined;
+  /** True when the reviewer removed the persona: the server then never proposes one. */
+  readonly soulDeclined?: boolean | undefined;
 }
 
 /** The route's request body: the newest turns only, and the current draft when one is being revised. */
@@ -220,6 +223,7 @@ export function draftRequestBody(input: DraftRequestInput): Record<string, unkno
     user_description: input.request,
     ...(history.length > 0 ? { conversation_history: history.map((turn) => ({ role: turn.role, content: turn.content })) } : {}),
     ...(input.current === undefined ? {} : { current_draft: input.current }),
+    ...(input.soulDeclined === true ? { soul_declined: true } : {}),
   };
 }
 

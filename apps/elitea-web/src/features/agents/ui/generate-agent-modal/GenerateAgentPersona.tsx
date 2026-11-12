@@ -4,9 +4,8 @@ import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
-import type { AgentSoulV1 } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
-import { soulToDraft, type AgentSoulDraft } from '@/shared/lib/agentSoulDraft';
+import { readSoul, soulToDraft, type AgentSoulDraft } from '@/shared/lib/agentSoulDraft';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 
 /**
@@ -38,7 +37,10 @@ function rows(): readonly Row[] {
 }
 
 export function GenerateAgentPersona({ soul, onRemove }: GenerateAgentPersonaProps): ReactNode {
-  const draft = soulToDraft(soul as unknown as AgentSoulV1);
+  // The server checked it, but the shape is still untrusted input to a render.
+  const checked = readSoul(soul);
+  if (checked === undefined) return null;
+  const draft = soulToDraft(checked);
   return (
     <Box sx={sectionSx} data-testid="agent-draft-persona">
       <Typography variant="subtitle" sx={labelSx}>
