@@ -55,6 +55,13 @@ type litellmEntry struct {
 	// legacy runtime priced it as zero. The real rate is 30 USD per 1M.
 	InputCostPerImageToken  *float64 `json:"input_cost_per_image_token"`
 	OutputCostPerImageToken *float64 `json:"output_cost_per_image_token"`
+	// The flat per-image and per-pixel prices. They have no per-1M-token
+	// column, so tokenRates never reads them; parseLiteLLMImagePrices reads
+	// them into the per-image price table (source_litellm_image.go).
+	OutputCostPerImage *float64 `json:"output_cost_per_image"`
+	InputCostPerImage  *float64 `json:"input_cost_per_image"`
+	InputCostPerPixel  *float64 `json:"input_cost_per_pixel"`
+	OutputCostPerPixel *float64 `json:"output_cost_per_pixel"`
 }
 
 // tokenRates returns the per-token input and output prices the catalog stores
@@ -86,9 +93,10 @@ type litellmEntry struct {
 // produce text only; its image output is still billed at the text rate.
 //
 // A flat per-image price (output_cost_per_image, some fal.ai models) is NOT
-// mapped here. It prices an image, not a token, and the catalog has no column
-// for that unit. Putting it into a per-1M-token column would bill it a million
-// times too low or too high, depending on the direction of the mistake.
+// mapped here. It prices an image, not a token. Putting it into a per-1M-token
+// column would bill it a million times too low or too high, depending on the
+// direction of the mistake. It goes to the per-image price table instead
+// (parseLiteLLMImagePrices, shared migration 0242).
 func (e litellmEntry) tokenRates() (in, out *float64) {
 	if e.Mode == imageGenerationMode {
 		return higherRate(e.InputCostPerToken, e.InputCostPerImageToken),
@@ -204,6 +212,7 @@ var providerAlias = map[string]string{
 	"azure":                     "azure",
 	"vertex_ai":                 "vertex",
 	"vertex_ai-language-models": "vertex",
+	"vertex_ai-image-models":    "vertex",
 	"bedrock_converse":          "bedrock",
 	"bedrock":                   "bedrock",
 	"anthropic":                 "anthropic",
@@ -241,7 +250,15 @@ func (s *LiteLLMSource) Fetch(ctx context.Context) ([]RawModelPrice, error) {
 	if err != nil {
 		return nil, fmt.Errorf("litellm: read body: %w", err)
 	}
-	return parseLiteLLM(body)
+	models, err := parseLiteLLM(body)
+	if err != nil {
+		return nil, err
+	}
+	images, err := parseLiteLLMImagePrices(body)
+	if err != nil {
+		return nil, err
+	}
+	return append(models, images...), nil
 }
 
 // parseLiteLLM decodes the price sheet body into RawModelPrices. Split out from
