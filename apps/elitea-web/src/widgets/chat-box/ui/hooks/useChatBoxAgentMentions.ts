@@ -65,7 +65,7 @@ export function conversationAgents(participants: readonly unknown[] | undefined)
 }
 
 /** The people of the conversation: its user participants (the signed-in user is one of them). */
-export function conversationPeople(participants: readonly unknown[] | undefined): number {
+function conversationPeople(participants: readonly unknown[] | undefined): number {
   return (participants ?? []).filter((row) => ((row ?? {}) as AgentWire).entity_name === 'user' || ((row ?? {}) as AgentWire).entityName === 'user').length;
 }
 
