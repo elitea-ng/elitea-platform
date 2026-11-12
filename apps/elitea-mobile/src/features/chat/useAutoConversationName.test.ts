@@ -7,6 +7,14 @@ const exchange = [
 ];
 const agent = { id: 3, entity_name: 'application', meta: { name: 'Ops helper' } };
 
+describe('nameToReplace — long agent names (issue 1968)', () => {
+  it('detects the 128-character name a new chat gets from a long agent name', () => {
+    const long = { id: 4, entity_name: 'application', meta: { name: 'A'.repeat(150) } };
+    expect(nameToReplace({ name: 'A'.repeat(128), participants: [long] } as never, exchange)).toBe('A'.repeat(128));
+    expect(nameToReplace({ name: 'A'.repeat(150).slice(0, 200), participants: [long] } as never, exchange)).toBe('A'.repeat(150));
+  });
+});
+
 describe('nameToReplace', () => {
   it('replaces the agent’s name, a cut of the first message or a default once the first answer is in', () => {
     expect(nameToReplace({ name: 'Ops helper', participants: [agent] } as never, exchange)).toBe('Ops helper');

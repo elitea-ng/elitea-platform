@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
+import { exceedsLimit } from '@/shared/lib/textLimits';
+
 /**
  * `applicationCreationSchema` — ported from
  * `apps/elitea-ui/src/pages/Applications/Components/Applications/ApplicationCreationValidateSchema.js`
@@ -31,8 +34,19 @@ const conversationStarterEntrySchema = z
   });
 
 export const applicationCreationSchema = z.object({
-  name: z.string().min(1, 'Name is required'),
-  description: z.string().min(1, 'Description is required'),
+  // The limits count characters like the server does (issue 1968); the inputs do not cut, so this
+  // is what blocks Save past them.
+  name: z
+    .string()
+    .min(1, 'Name is required')
+    .refine((value) => !exceedsLimit(value, MAX_NAME_LENGTH), `Name must be ${MAX_NAME_LENGTH} characters or fewer`),
+  description: z
+    .string()
+    .min(1, 'Description is required')
+    .refine(
+      (value) => !exceedsLimit(value, MAX_DESCRIPTION_LENGTH),
+      `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer`,
+    ),
   version_details: z
     .object({
       conversation_starters: z.array(conversationStarterEntrySchema).optional(),

@@ -9,6 +9,9 @@ import { getToolComponent } from '../../../lib/helpers/toolComponent.helpers';
 import type { ToolFormComponent } from '../../../lib/helpers/toolComponent.helpers';
 import { convertToolkitSchema } from '../../../lib/helpers/toolkitSchema.helpers';
 import type { RawToolkitTypeSchema } from '../../../lib/helpers/toolkitSchema.helpers';
+import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
+import { exceedsLimit } from '@/shared/lib/textLimits';
+
 import { useGetCurrentToolkitSchemas } from '../../../lib/hooks/useGetCurrentToolkitSchemas.hooks';
 import { useToolkitNameProp } from '../../../lib/hooks/useToolkitNameProp.hooks';
 
@@ -223,8 +226,13 @@ export function useToolkitFormCore(props: ResolvedToolkitFormProps): CoreState {
 
   const { nameIsRequired } = useToolkitNameProp(toolType, toolkitSchemas);
   const nameIsBlank = !editToolDetail.name?.trim();
-  const computedNameError = nameIsRequired && nameIsBlank;
-  const mergedToolErrors = useMemo(() => ({ ...toolErrors, ...serverToolErrors, name: computedNameError }), [toolErrors, serverToolErrors, computedNameError]);
+  // A name or description past the contract limit blocks Save (issue 1968); the inputs do not cut.
+  const computedNameError = (nameIsRequired && nameIsBlank) || exceedsLimit(editToolDetail.name ?? '', MAX_NAME_LENGTH);
+  const descriptionTooLong = exceedsLimit(typeof editToolDetail.description === 'string' ? editToolDetail.description : '', MAX_DESCRIPTION_LENGTH);
+  const mergedToolErrors = useMemo(
+    () => ({ ...toolErrors, ...serverToolErrors, name: computedNameError, description: descriptionTooLong || Boolean(toolErrors['description'] ?? serverToolErrors['description']) }),
+    [toolErrors, serverToolErrors, computedNameError, descriptionTooLong],
+  );
   const hasErrors = useMemo(() => Object.values(mergedToolErrors).some(Boolean), [mergedToolErrors]);
   const triggerValidation = useCallback(() => setShowValidation(true), []);
 

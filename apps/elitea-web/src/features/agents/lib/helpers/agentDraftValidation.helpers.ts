@@ -9,6 +9,7 @@
  * 768`, `MAX_WELCOME_MESSAGE_LENGTH === 768`, matching
  * `apps/elitea-ui/src/common/constants.js:66-76`).
  */
+import { exceedsLimit } from '@/shared/lib/textLimits';
 import {
   MAX_CONVERSATION_STARTERS,
   MAX_CONVERSATION_STARTER_LENGTH,
@@ -49,11 +50,11 @@ export function validateAgentDraft(draft: AgentDraft): AgentDraftErrors {
 
   const name = (draft.name ?? '').trim();
   if (!name) errors.name = 'Name is required';
-  else if (name.length > MAX_NAME_LENGTH) errors.name = `Name must be ${MAX_NAME_LENGTH} characters or less`;
+  else if (exceedsLimit(name, MAX_NAME_LENGTH)) errors.name = `Name must be ${MAX_NAME_LENGTH} characters or less`;
 
   const description = (draft.description ?? '').trim();
   if (!description) errors.description = 'Description is required';
-  else if (description.length > MAX_DESCRIPTION_LENGTH)
+  else if (exceedsLimit(description, MAX_DESCRIPTION_LENGTH))
     errors.description = `Description must be ${MAX_DESCRIPTION_LENGTH} characters or less`;
 
   const welcomeMessage = draft.welcome_message ?? '';

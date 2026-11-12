@@ -76,10 +76,11 @@ describe('sendConversationAction', () => {
 });
 
 describe('cleanConversationName', () => {
-  it('trims and folds line breaks, and does not cut (the sheet blocks Save past the limit)', () => {
+  it('trims, folds line breaks and caps the length for a queued rename', () => {
     expect(cleanConversationName('  Trip\nto Lisbon ')).toBe('Trip to Lisbon');
     expect(cleanConversationName('   ')).toBeNull();
-    expect(cleanConversationName('x'.repeat(400))).toHaveLength(400);
+    expect(cleanConversationName('x'.repeat(400))).toHaveLength(CONVERSATION_NAME_MAX);
+    expect(Array.from(cleanConversationName('🙂'.repeat(300)) ?? '')).toHaveLength(CONVERSATION_NAME_MAX);
     expect(CONVERSATION_NAME_MAX).toBe(128);
   });
 

@@ -14,6 +14,7 @@ import { textLimitState } from '@elitea/client-core/limits';
 export {
   DESCRIPTION_MAX_LENGTH,
   NAME_MAX_LENGTH,
+  characterCount,
   clipToLimit,
   exceedsLimit,
   textLimitState,

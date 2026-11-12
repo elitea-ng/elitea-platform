@@ -105,6 +105,15 @@ describe('ApplicationEditForm', () => {
     expect(counter).toHaveTextContent('0 characters left. You have reached the MAXIMUM character limit');
   });
 
+  it('does not cut a pasted description and shows how far over the limit it is (issue 1968)', async () => {
+    renderForm({ description: 'x'.repeat(2003) });
+    const input = (await screen.findByTestId('agent-description-input')) as HTMLTextAreaElement;
+    expect(input).not.toHaveAttribute('maxlength');
+    expect(input.value).toHaveLength(2003);
+    expect(screen.getByTestId('agent-description-counter')).toHaveTextContent('3 characters over the limit');
+    expect(screen.getByTestId('agent-description-counter')).toBeVisible();
+  });
+
   it('renders an existing tag passed via the tags prop', async () => {
     renderForm({ tags: [{ id: 1, name: 'billing', data: null }] });
     expect(await screen.findByText('billing')).toBeInTheDocument();
