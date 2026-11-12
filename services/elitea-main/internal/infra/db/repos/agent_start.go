@@ -1014,7 +1014,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentRegeneration(
 				ConversationUUID:    uuid.UUID(row.ConversationUuid.Bytes).String(),
 				TargetParticipantID: int64(row.TargetParticipantID),
 				QuestionID:          uuid.UUID(row.QuestionID.Bytes).String(), UserInput: row.UserInput,
-				QuestionIsOwn: row.QuestionIsOwn != nil && *row.QuestionIsOwn,
+				QuestionIsOwn: row.QuestionIsOwn,
 			}
 			if err := target.Validate(); err != nil {
 				return agentexecutionapp.ErrUnsupportedCurrentAgentStart

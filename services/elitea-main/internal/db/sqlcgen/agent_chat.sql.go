@@ -502,7 +502,10 @@ WITH resolved AS MATERIALIZED (
            question_group.id,
            jsonb_build_object(
                'execution_generation',
-               $10::text
+               $10::text,
+               -- #1944: this turn wrote its question.
+               'question_own',
+               TRUE
            ),
            TRUE,
            -- Strictly after its question, and NEVER in the future (#1082).
@@ -931,7 +934,13 @@ WITH resolved AS MATERIALIZED (
            question_ref.id,
            jsonb_build_object(
                'execution_generation',
-               $18::text
+               $18::text,
+               -- #1944: whether this turn wrote the question (it did not when
+               -- it answers a question an earlier turn already wrote).
+               -- ResolveCurrentRegeneration reads it; the heuristic there is
+               -- only for an answer from before this flag.
+               'question_own',
+               resolved.reused_question_group_id IS NULL
            ),
            TRUE,
            -- Strictly after its question, and NEVER in the future (#1082).
@@ -3749,15 +3758,21 @@ SELECT conversation.uuid AS conversation_uuid,
            WHEN 'dummy' THEN 'adhoc'
        END::text AS regeneration_kind,
        question_text.content::text AS user_input,
-       -- #1903: this answer's own turn wrote its question, so no earlier
-       -- answer replies to it. A later addressed agent answers the person's
-       -- existing question instead, which is in its history already.
-       NOT EXISTS (
-           SELECT 1
-           FROM chat_message_group AS earlier_answer
-           WHERE earlier_answer.reply_to_id = question.id
-             AND earlier_answer.conversation_id = conversation.id
-             AND earlier_answer.id < response.id
+       -- #1903, #1944: this answer's own turn wrote its question. A later
+       -- addressed agent answers the person's existing question instead,
+       -- which is in its history already. The answer records it at start
+       -- (meta.question_own); for an answer from before that, no earlier
+       -- answer replying to the question is the heuristic fallback.
+       COALESCE(
+           CASE WHEN jsonb_typeof(response.meta -> 'question_own') = 'boolean'
+                THEN (response.meta ->> 'question_own')::boolean END,
+           NOT EXISTS (
+               SELECT 1
+               FROM chat_message_group AS earlier_answer
+               WHERE earlier_answer.reply_to_id = question.id
+                 AND earlier_answer.conversation_id = conversation.id
+                 AND earlier_answer.id < response.id
+           )
        )::boolean AS question_is_own
 FROM chat_message_group AS response
 JOIN chat_conversations AS conversation
@@ -3841,7 +3856,7 @@ type ResolveCurrentRegenerationRow struct {
 	ResponseIsStreaming bool        `db:"response_is_streaming" json:"response_is_streaming"`
 	RegenerationKind    string      `db:"regeneration_kind" json:"regeneration_kind"`
 	UserInput           string      `db:"user_input" json:"user_input"`
-	QuestionIsOwn       *bool       `db:"question_is_own" json:"question_is_own"`
+	QuestionIsOwn       bool        `db:"question_is_own" json:"question_is_own"`
 }
 
 func (q *Queries) ResolveCurrentRegeneration(ctx context.Context, arg ResolveCurrentRegenerationParams) (ResolveCurrentRegenerationRow, error) {
