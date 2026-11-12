@@ -172,7 +172,9 @@ export function foldSubAgentEntry(lanes: readonly CloudSubAgentLane[], entry: un
     // dropped (the same rule the server-side fold uses).
     const rawDepth = count(entry.depth);
     const parentAgentId = id(entry.parent_agent_id);
-    const parent = rawDepth === 2 && parentAgentId !== undefined ? findLane(lanes, parentAgentId) : undefined;
+    // Only a top-level depth-1 lane can parent (never a nested lane, never
+    // a depth-2 lane kept at the top level): nesting is one level deep.
+    const parent = rawDepth === 2 && parentAgentId !== undefined ? lanes.find((l) => l.agentId === parentAgentId && l.depth === 1) : undefined;
     const depth = parent === undefined ? 1 : 2;
     const lane: CloudSubAgentLane = {
       agentId,
@@ -268,7 +270,7 @@ export function subAgentEntryOf(frame: unknown): unknown {
  * still read rather than refused). `undefined` for anything that is not an
  * object with the required fields.
  */
-function parseOneSubAgentLane(raw: unknown, seen: ReadonlySet<string>): CloudSubAgentLane | undefined {
+function parseOneSubAgentLane(raw: unknown, seen: ReadonlySet<string>, nestable = true): CloudSubAgentLane | undefined {
   if (!isObject(raw)) return undefined;
   const agentId = id(raw.agent_id);
   const parentCallId = id(raw.parent_call_id);
@@ -296,7 +298,9 @@ function parseOneSubAgentLane(raw: unknown, seen: ReadonlySet<string>): CloudSub
   }
   const depth = count(raw.depth) === 2 ? 2 : 1;
   const parentAgentId = depth === 2 ? id(raw.parent_agent_id) : undefined;
-  const children = parseSubAgentLanes(raw.children, new Set([...seen, agentId]));
+  // One level of nesting: only a depth-1 lane carries children, and its
+  // children carry none (the same rule the server-side fold applies).
+  const children = nestable && depth === 1 ? parseSubAgentLanes(raw.children, new Set([...seen, agentId]), false) : [];
   return {
     agentId,
     parentCallId,
@@ -323,12 +327,12 @@ function parseOneSubAgentLane(raw: unknown, seen: ReadonlySet<string>): CloudSub
  * `seen` guards every level against an agent id reused at an outer level
  * (never written by Main, but a reader must not loop on it).
  */
-export function parseSubAgentLanes(value: unknown, seen: ReadonlySet<string> = new Set()): readonly CloudSubAgentLane[] {
+export function parseSubAgentLanes(value: unknown, seen: ReadonlySet<string> = new Set(), nestable = true): readonly CloudSubAgentLane[] {
   if (!Array.isArray(value)) return [];
   const lanes: CloudSubAgentLane[] = [];
   const ids = new Set(seen);
   for (const raw of value.slice(0, MAX_SUBAGENT_LANES)) {
-    const lane = parseOneSubAgentLane(raw, ids);
+    const lane = parseOneSubAgentLane(raw, ids, nestable);
     if (lane === undefined) continue;
     ids.add(lane.agentId);
     lanes.push(lane);

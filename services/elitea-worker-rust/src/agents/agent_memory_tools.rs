@@ -137,6 +137,10 @@ const MAX_RECALLED_ENTRIES: usize = 256;
 pub(crate) struct RecalledEntries {
     entries: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
     tag: Option<String>,
+    /// Main sent no tag for the run (a Main from before field 78): its marks
+    /// show a bare `N`, so a brief may cite an entry by its bare id, as the
+    /// prompt showed it (a rolling deploy).
+    bare_ids: bool,
 }
 
 impl Default for RecalledEntries {
@@ -157,11 +161,13 @@ impl RecalledEntries {
         entries: &[crate::agents::request::RecalledMemoryEntry],
         tag: Option<&str>,
     ) -> Self {
+        let bare_ids = tag.is_none() && !entries.is_empty();
         let tag = match tag {
             Some(tag) => Some(tag.to_owned()),
             None => memory_ref::new_memory_tag(),
         };
         Self {
+            bare_ids,
             entries: std::sync::Mutex::new(
                 entries
                     .iter()
@@ -219,6 +225,10 @@ impl RecalledEntries {
     /// this turn.
     #[must_use]
     pub(crate) fn cited(&self, reference: &str) -> Option<(String, String)> {
+        if self.bare_ids && !reference.contains(memory_ref::MEMORY_REF_SEPARATOR) {
+            let content = self.content(reference)?;
+            return Some((reference.to_owned(), content));
+        }
         let entry_id = memory_ref::cited_entry(reference, self.tag.as_deref()?)?;
         let content = self.content(entry_id)?;
         Some((entry_id.to_owned(), content))
@@ -655,6 +665,24 @@ mod tests {
             Some(("9".to_owned(), "uses pnpm".to_owned()))
         );
         assert_eq!(own.cited("9"), None);
+    }
+
+    /// Rolling deploy: a Main that sent no tag showed bare `N` marks, so a
+    /// brief's bare id cites; with Main's tag it does not.
+    #[test]
+    fn a_bare_id_cites_only_when_main_sent_no_tag() {
+        let entries = [crate::agents::request::RecalledMemoryEntry {
+            entry_id: "42".to_owned(),
+            content: "deploys on Fridays".to_owned(),
+        }];
+        let old_main = RecalledEntries::seeded(&entries, None);
+        assert_eq!(
+            old_main.cited("42"),
+            Some(("42".to_owned(), "deploys on Fridays".to_owned()))
+        );
+        assert_eq!(old_main.cited("43"), None);
+        let new_main = RecalledEntries::seeded(&entries, Some("k7f2m6q3xz"));
+        assert_eq!(new_main.cited("42"), None);
     }
 
     #[test]

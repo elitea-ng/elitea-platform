@@ -173,3 +173,38 @@ func TestDecodeAnswerSubAgentLanesReadsALegacyRow(t *testing.T) {
 		t.Fatalf("out = %+v", out)
 	}
 }
+
+// TestNestSubAgentLanesNestsOnlyUnderADepthOneParent: a depth-2 lane whose
+// parent is itself depth 2 (or missing) stays top-level instead of vanishing.
+func TestNestSubAgentLanesNestsOnlyUnderADepthOneParent(t *testing.T) {
+	out := nestSubAgentLanes([]subAgentLane{
+		{AgentID: "a", Ordinal: 1, Depth: 1},
+		{AgentID: "b", Ordinal: 2, Depth: 2, ParentAgentID: "a"},
+		{AgentID: "c", Ordinal: 3, Depth: 2, ParentAgentID: "b"},
+		{AgentID: "d", Ordinal: 4, Depth: 2, ParentAgentID: "zzz"},
+	})
+	ids := []string{}
+	for _, l := range out {
+		ids = append(ids, l.AgentID)
+	}
+	if strings.Join(ids, ",") != "a,c,d" {
+		t.Fatalf("top-level = %v", ids)
+	}
+	if len(out[0].Children) != 1 || out[0].Children[0].AgentID != "b" || len(out[0].Children[0].Children) != 0 {
+		t.Fatalf("children = %+v", out[0].Children)
+	}
+}
+
+// TestApplySubAgentLanesMergesLegacyMetaLanes: lanes an answer kept in the
+// legacy meta.subagents_v1 stay visible next to row lanes; rows win.
+func TestApplySubAgentLanesMergesLegacyMetaLanes(t *testing.T) {
+	meta := map[string]any{subAgentLanesMetaKey: []any{
+		map[string]any{"agent_id": "old", "ordinal": 1, "status": "running", "items": []any{}},
+		map[string]any{"agent_id": "new", "ordinal": 2, "status": "running", "items": []any{}},
+	}}
+	applySubAgentLanes(&meta, []subAgentLane{{AgentID: "new", Ordinal: 2, Status: "completed"}})
+	lanes, _ := meta[subAgentLanesMetaKey].([]subAgentLane)
+	if len(lanes) != 2 || lanes[0].AgentID != "old" || lanes[1].AgentID != "new" || lanes[1].Status != "completed" {
+		t.Fatalf("lanes = %+v", lanes)
+	}
+}

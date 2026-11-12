@@ -85,9 +85,9 @@ type subAgentLaneItem struct {
 // this JSON rather than as their own columns: they are read-side nesting
 // data, never queried on their own.
 type subAgentLane struct {
-	AgentID      string             `json:"agent_id"`
-	ParentCallID string             `json:"parent_call_id"`
-	Ordinal      int                `json:"ordinal"`
+	AgentID      string `json:"agent_id"`
+	ParentCallID string `json:"parent_call_id"`
+	Ordinal      int    `json:"ordinal"`
 	// Depth is 1 for a child of the run's agent, 2 for a child of a child
 	// (#1824). 0 (a lane written before #1872) reads as 1.
 	Depth int `json:"depth,omitempty"`
@@ -321,42 +321,71 @@ func decodeSubAgentLanes(raw []byte) []subAgentLane {
 // this is belt and braces against a malformed or partial write) is kept at
 // the top level rather than dropped, so a lane that arrived is never lost.
 func decodeAnswerSubAgentLanes(rows [][]byte) []subAgentLane {
-	byAgentID := make(map[string]*subAgentLane, len(rows))
-	var order []string
+	flat := make([]subAgentLane, 0, len(rows))
 	for _, raw := range rows {
 		var lane subAgentLane
 		if json.Unmarshal(raw, &lane) != nil || lane.AgentID == "" {
 			continue
 		}
+		flat = append(flat, lane)
+	}
+	return nestSubAgentLanes(flat)
+}
+
+// nestSubAgentLanes folds a flat lane list into the wire's top-level lanes.
+// A depth-2 lane nests only under a depth-1 parent present in the set; any
+// other lane (a depth-2 whose parent is missing, is itself depth 2, or is
+// itself) stays top-level, so a lane that arrived is never lost and nesting
+// is never deeper than one level. The first lane of an agent_id wins.
+func nestSubAgentLanes(flat []subAgentLane) []subAgentLane {
+	seen := make(map[string]bool, len(flat))
+	lanes := make([]subAgentLane, 0, len(flat))
+	depthOne := map[string]bool{}
+	for _, lane := range flat {
+		if seen[lane.AgentID] {
+			continue
+		}
+		seen[lane.AgentID] = true
 		lane.Children = nil
 		if lane.Depth < 1 {
 			lane.Depth = 1
 		}
-		byAgentID[lane.AgentID] = &lane
-		order = append(order, lane.AgentID)
-	}
-	var topOrder []string
-	for _, agentID := range order {
-		lane := byAgentID[agentID]
-		if lane.Depth == 2 && lane.ParentAgentID != "" && lane.ParentAgentID != agentID {
-			if parent, ok := byAgentID[lane.ParentAgentID]; ok {
-				parent.Children = append(parent.Children, *lane)
-				continue
-			}
+		if lane.Depth == 1 {
+			depthOne[lane.AgentID] = true
 		}
-		topOrder = append(topOrder, agentID)
+		lanes = append(lanes, lane)
 	}
-	out := make([]subAgentLane, 0, len(topOrder))
-	for _, agentID := range topOrder {
-		out = append(out, *byAgentID[agentID])
+	children := map[string][]subAgentLane{}
+	var out []subAgentLane
+	for _, lane := range lanes {
+		if lane.Depth == 2 && lane.ParentAgentID != lane.AgentID && depthOne[lane.ParentAgentID] {
+			children[lane.ParentAgentID] = append(children[lane.ParentAgentID], lane)
+			continue
+		}
+		out = append(out, lane)
+	}
+	if out == nil {
+		out = []subAgentLane{}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Ordinal < out[j].Ordinal })
 	for i := range out {
-		sort.SliceStable(out[i].Children, func(a, b int) bool {
-			return out[i].Children[a].Ordinal < out[i].Children[b].Ordinal
-		})
+		kids := children[out[i].AgentID]
+		sort.SliceStable(kids, func(a, b int) bool { return kids[a].Ordinal < kids[b].Ordinal })
+		out[i].Children = kids
 	}
 	return out
+}
+
+// flattenSubAgentLanes is the inverse of nestSubAgentLanes' nesting.
+func flattenSubAgentLanes(lanes []subAgentLane) []subAgentLane {
+	var flat []subAgentLane
+	for _, lane := range lanes {
+		kids := lane.Children
+		lane.Children = nil
+		flat = append(flat, lane)
+		flat = append(flat, kids...)
+	}
+	return flat
 }
 
 // projectSubAgentLane folds one accepted `agent_subagent` frame onto its
@@ -418,15 +447,43 @@ func projectSubAgentLane(ctx context.Context, tx sqlExecutor, projectID int64, f
 	if !ok {
 		return nil
 	}
+	laneTable := schema + ".chat_message_subagent_lanes"
 	var existingRaw []byte
 	var existing []subAgentLane
 	err = tx.QueryRow(ctx, fmt.Sprintf(`SELECT lane FROM %s WHERE message_group_id = $1 AND agent_id = $2`,
-		schema+".chat_message_subagent_lanes"), groupID, agentID).Scan(&existingRaw)
+		laneTable), groupID, agentID).Scan(&existingRaw)
 	switch {
 	case err == nil:
 		existing = decodeSubAgentLanes(existingRaw)
 	case errors.Is(err, pgx.ErrNoRows):
-		existing = nil
+		if entry.Kind == "started" {
+			// The per-answer bound lived in the whole array; with one row
+			// per lane it is the row count (the group is locked above).
+			var count int
+			if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT count(*) FROM %s WHERE message_group_id = $1`,
+				laneTable), groupID).Scan(&count); err != nil {
+				return fmt.Errorf("count sub-agent lanes: %w", err)
+			}
+			if count >= maxSubAgentLanes {
+				return nil
+			}
+		} else {
+			// An answer mid-stream when the lanes table shipped holds its
+			// lanes in the legacy meta.subagents_v1: seed the row from it.
+			var legacyRaw []byte
+			if err := tx.QueryRow(ctx, fmt.Sprintf(
+				`SELECT COALESCE(meta -> '%s', '[]'::jsonb) FROM %s WHERE id = $1`,
+				subAgentLanesMetaKey, schema+".chat_message_group"), groupID).Scan(&legacyRaw); err != nil {
+				return fmt.Errorf("load legacy sub-agent lanes: %w", err)
+			}
+			for _, lane := range decodeSubAgentLanes(legacyRaw) {
+				if lane.AgentID == agentID {
+					lane.Children = nil
+					existing = []subAgentLane{lane}
+					break
+				}
+			}
+		}
 	default:
 		return fmt.Errorf("load sub-agent lane: %w", err)
 	}
@@ -438,12 +495,17 @@ func projectSubAgentLane(ctx context.Context, tx sqlExecutor, projectID int64, f
 	if err != nil {
 		return fmt.Errorf("encode sub-agent lane: %w", err)
 	}
+	// A display-only lane never fails frame acceptance: a lane whose ordinal
+	// another agent of the answer already holds (the unique index) is
+	// dropped. The group is locked, so the check cannot race.
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`
-INSERT INTO %s (message_group_id, agent_id, ordinal, lane, updated_at)
-VALUES ($1, $2, $3, $4::jsonb, clock_timestamp())
+INSERT INTO %[1]s (message_group_id, agent_id, ordinal, lane, updated_at)
+SELECT $1::integer, $2::text, $3::integer, $4::jsonb, clock_timestamp()
+WHERE NOT EXISTS (
+	SELECT 1 FROM %[1]s WHERE message_group_id = $1::integer AND ordinal = $3::integer AND agent_id <> $2::text)
 ON CONFLICT (message_group_id, agent_id)
 DO UPDATE SET lane = EXCLUDED.lane, updated_at = EXCLUDED.updated_at`,
-		schema+".chat_message_subagent_lanes"), groupID, agentID, lanes[0].Ordinal, encoded); err != nil {
+		laneTable), groupID, agentID, lanes[0].Ordinal, encoded); err != nil {
 		return fmt.Errorf("store sub-agent lane: %w", err)
 	}
 	return nil
@@ -515,6 +577,15 @@ func applySubAgentLanes(metadata *map[string]any, lanes []subAgentLane) {
 	}
 	if *metadata == nil {
 		*metadata = map[string]any{}
+	}
+	// An answer mid-stream when the table shipped still holds lanes in its
+	// legacy meta: fold them in, the rows winning per agent_id.
+	if legacy, ok := (*metadata)[subAgentLanesMetaKey]; ok && legacy != nil {
+		if encoded, err := json.Marshal(legacy); err == nil {
+			if old := decodeSubAgentLanes(encoded); len(old) > 0 {
+				lanes = nestSubAgentLanes(append(flattenSubAgentLanes(lanes), old...))
+			}
+		}
 	}
 	(*metadata)[subAgentLanesMetaKey] = lanes
 }

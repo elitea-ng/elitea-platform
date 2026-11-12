@@ -1086,6 +1086,24 @@ BEGIN
         CREATE INDEX IF NOT EXISTS chat_message_context_views_frame
             ON %I.chat_message_context_views (frame_id)
             WHERE frame_id IS NOT NULL', schema_name);
+    -- One row per sub-agent lane of an answer (issue 1923). The same shape as
+    -- tenant/0170_chat_message_subagent_lanes.sql, which carries the full
+    -- account: a fresh tenant that never replays the tenant history still
+    -- needs it, because every accepted lane frame writes it.
+    EXECUTE format('
+        CREATE TABLE IF NOT EXISTS %I.chat_message_subagent_lanes (
+            message_group_id integer NOT NULL
+                REFERENCES %I.chat_message_group (id) ON DELETE CASCADE,
+            agent_id text NOT NULL CHECK (length(agent_id) BETWEEN 1 AND 128),
+            ordinal integer NOT NULL CHECK (ordinal >= 1),
+            lane jsonb NOT NULL CHECK (jsonb_typeof(lane) = ''object''),
+            created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            PRIMARY KEY (message_group_id, agent_id)
+        )', schema_name, schema_name);
+    EXECUTE format('
+        CREATE UNIQUE INDEX IF NOT EXISTS chat_message_subagent_lanes_ordinal
+            ON %I.chat_message_subagent_lanes (message_group_id, ordinal)', schema_name);
 
 END;
 $$ LANGUAGE plpgsql;

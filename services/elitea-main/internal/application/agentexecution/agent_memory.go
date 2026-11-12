@@ -31,7 +31,7 @@ type AgentMemoryRecall struct {
 }
 
 // AgentMemoryRecallRequest is one turn's recall question. MarkTag is the
-// turn's mark tag (agentmemory.NewMarkTag) the resolver renders the marks
+// conversation's mark tag (agentmemory.MarkTagFor) the resolver renders the marks
 // with (#1900).
 type AgentMemoryRecallRequest struct {
 	ProjectID        int64
@@ -70,9 +70,10 @@ func (service *CurrentApplicationStartService) resolveAgentMemory(
 	if !settings.Enabled {
 		return AgentMemoryRecall{}
 	}
-	// #1900: a fresh tag for every turn, so no authored text can carry a
-	// real mark.
-	tag := agentmemory.NewMarkTag()
+	// #1900: a secret tag, stable for the conversation (a provider's prompt
+	// cache keeps matching) and unknown to authored text, which so cannot
+	// carry a real mark.
+	tag := agentmemory.MarkTagFor(conversationUUID)
 	recall, err := service.agentMemory.ResolveAgentMemoryRecall(ctx, AgentMemoryRecallRequest{
 		ProjectID: projectID, ApplicationID: applicationID, ConversationUUID: conversationUUID,
 		UserInput: userInput, Settings: settings, MarkTag: tag,

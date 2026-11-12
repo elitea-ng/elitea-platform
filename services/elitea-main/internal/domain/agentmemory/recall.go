@@ -1,10 +1,13 @@
 package agentmemory
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -94,7 +97,9 @@ const (
 // Each entry opens with its mark, `[memory N·TAG, kind...]`, N its entry id
 // and TAG the turn's tag (#1826, #1900, ADR-0050 decision 9d): a
 // `spawn_agent` brief names an entry recalled here as `N·TAG` (MarkRef).
-// The tag is drawn per turn so nobody can type a real mark in advance: the
+// The tag is secret (MarkTagFor: an HMAC of the conversation under a key
+// this process draws, so it is stable across a conversation's turns and a
+// provider prompt cache still matches) so nobody can type a real mark in advance: the
 // author's instructions and skill bodies share the instructions with this
 // block and are never rewritten, so a copied `[memory N, ...]` line stays
 // there, but the worker refuses a brief that cites it. The cost is that the
@@ -201,16 +206,44 @@ const (
 	markTagSeparator = "·"
 )
 
-// NewMarkTag draws a turn's mark tag from crypto/rand.
+// NewMarkTag draws a mark tag from crypto/rand.
 func NewMarkTag() string {
 	var random [MarkTagLength]byte
 	_, _ = rand.Read(random[:]) // crypto/rand.Read never fails (Go 1.24+).
+	return tagFromBytes(random[:])
+}
+
+func tagFromBytes(random []byte) string {
 	tag := make([]byte, MarkTagLength)
-	for i, b := range random {
+	for i := range tag {
 		// 256 is a multiple of 32: masking keeps every character equally likely.
-		tag[i] = markTagAlphabet[b&31]
+		tag[i] = markTagAlphabet[random[i]&31]
 	}
 	return string(tag)
+}
+
+// markTagKey is this process's secret: drawn once, never logged or sent, so
+// no author can compute a conversation's tag. Replicas draw their own, so a
+// conversation changes tag (one prompt-cache miss) when its turn lands on
+// another replica or after a restart; the tag a run was rendered with
+// always travels with that run, so correctness never depends on it.
+var markTagKey = sync.OnceValue(func() []byte {
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+	return key
+})
+
+// MarkTagFor is the mark tag of a conversation: stable across its turns
+// (so the instructions' bytes, and a provider's prompt cache, do not change
+// turn to turn) and unguessable without markTagKey. An empty conversation
+// gets a fresh NewMarkTag.
+func MarkTagFor(conversation string) string {
+	if conversation == "" {
+		return NewMarkTag()
+	}
+	mac := hmac.New(sha256.New, markTagKey())
+	_, _ = mac.Write([]byte("agent-memory-mark-v1|" + conversation))
+	return tagFromBytes(mac.Sum(nil))
 }
 
 // ValidMarkTag reports whether tag has NewMarkTag's shape.

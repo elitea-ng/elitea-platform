@@ -112,9 +112,9 @@ func TestAgentMemoryRecallStampsTheEntriesIntoTheInput(t *testing.T) {
 	}
 }
 
-// #1900: every turn draws its own tag, so a mark seen in one run is not a
-// mark of the next.
-func TestAgentMemoryRecallTagsEachTurnAfresh(t *testing.T) {
+// #1900: a conversation keeps one tag across its turns, so the notes block
+// keeps its bytes and a provider prompt cache matches.
+func TestAgentMemoryRecallKeepsOneTagPerConversation(t *testing.T) {
 	memory := &agentMemoryRecallStub{render: []agentmemory.Candidate{{ID: 7, Kind: agentmemory.KindFact, Content: "x"}}}
 	service, admissions := agentMemoryStartService(t, memoryAgentVersion, memory)
 	for range 2 {
@@ -123,7 +123,7 @@ func TestAgentMemoryRecallTagsEachTurnAfresh(t *testing.T) {
 		}
 	}
 	first, second := admissions.requests[0].Input.GetRecalledMemoryTag(), admissions.requests[1].Input.GetRecalledMemoryTag()
-	if first == "" || first == second || memory.requests[0].MarkTag != first || memory.requests[1].MarkTag != second {
+	if first == "" || first != second || memory.requests[0].MarkTag != first || memory.requests[1].MarkTag != second {
 		t.Fatalf("tags %q, %q; requested %q, %q", first, second, memory.requests[0].MarkTag, memory.requests[1].MarkTag)
 	}
 }

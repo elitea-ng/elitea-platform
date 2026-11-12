@@ -141,4 +141,23 @@ describe('parseSubAgentLanes', () => {
     const settled = settleSubAgentLanes(lanes);
     assert.equal(laneAt(settled).children?.[0]?.status, 'cancelled');
   });
+
+  it('nests a depth-2 lane only under a top-level depth-1 parent', () => {
+    let lanes: readonly CloudSubAgentLane[] = [];
+    lanes = foldSubAgentEntry(lanes, { kind: 'started', agent_id: 'a_1', parent_call_id: 'p', ordinal: 1 });
+    lanes = foldSubAgentEntry(lanes, { kind: 'started', agent_id: 'a_2', parent_call_id: 'p', ordinal: 2, depth: 2, parent_agent_id: 'a_1' });
+    // a_3 names a depth-2 lane as its parent: kept top-level, never depth 3.
+    lanes = foldSubAgentEntry(lanes, { kind: 'started', agent_id: 'a_3', parent_call_id: 'p', ordinal: 3, depth: 2, parent_agent_id: 'a_2' });
+    assert.deepEqual(lanes.map((l) => l.agentId), ['a_1', 'a_3']);
+    assert.deepEqual(laneAt(lanes).children?.map((l) => l.agentId), ['a_2']);
+    assert.equal(laneAt(lanes).children?.[0]?.children, undefined);
+  });
+
+  it('parseSubAgentLanes reads no deeper than one level of children', () => {
+    const grand = { agent_id: 'a_3', parent_call_id: 'p', ordinal: 3, depth: 2, parent_agent_id: 'a_2', status: 'running', items: [] };
+    const lanes = parseSubAgentLanes([
+      { agent_id: 'a_1', parent_call_id: 'p', ordinal: 1, status: 'completed', items: [], children: [{ agent_id: 'a_2', parent_call_id: 'p', ordinal: 2, depth: 2, parent_agent_id: 'a_1', status: 'running', items: [], children: [grand] }] },
+    ]);
+    assert.equal(laneAt(lanes).children?.[0]?.children, undefined);
+  });
 });

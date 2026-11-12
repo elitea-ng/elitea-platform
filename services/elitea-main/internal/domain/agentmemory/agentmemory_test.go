@@ -250,3 +250,19 @@ func TestNeutralize(t *testing.T) {
 		}
 	}
 }
+
+// A conversation's tag is the same on every turn (the memory block keeps
+// its bytes, so a provider prompt cache matches), differs between
+// conversations and is a valid tag.
+func TestMarkTagForIsStablePerConversation(t *testing.T) {
+	first := MarkTagFor("conv-a")
+	if !ValidMarkTag(first) || first != MarkTagFor("conv-a") {
+		t.Fatalf("tag %q is not stable or valid", first)
+	}
+	if first == MarkTagFor("conv-b") {
+		t.Fatal("two conversations share a tag")
+	}
+	if !ValidMarkTag(MarkTagFor("")) {
+		t.Fatal("an empty conversation gets no valid tag")
+	}
+}
