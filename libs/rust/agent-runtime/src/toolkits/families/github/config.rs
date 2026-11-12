@@ -3,5 +3,5 @@
 
 #[allow(unused_imports)] // `GitHubAuthKind` is the suites' alone.
 pub(crate) use elitea_connectors::github::config::{
-    GitHubAuthKind, GitHubToolkitConfig, GitHubToolkitConfigError,
+    GitHubAuthKind, GitHubConfigFault, GitHubToolkitConfig, GitHubToolkitConfigError,
 };
