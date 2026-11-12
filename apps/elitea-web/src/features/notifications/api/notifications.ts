@@ -200,13 +200,21 @@ export async function deleteNotification(
 
 /* ── API-170 / ACT-053: DELETE /notifications/notifications/prompt_lib/{projectId} ── */
 
+/**
+ * The Go handler decodes `ids` as integers (v2.yaml NotificationBulkDeleteRequest);
+ * the UI carries ids as strings (`normalize.ts`), so a string id sent as-is is a 400.
+ */
+function toWireIds(ids: readonly (string | number)[]): number[] {
+  return ids.map((id) => Number(id));
+}
+
 export async function bulkDeleteNotifications(
   projectId: string | number,
   ids: readonly (string | number)[],
 ): Promise<unknown> {
   return fetchData<unknown>(`/notifications/notifications/prompt_lib/${projectId}`, {
     method: 'DELETE',
-    body: JSON.stringify({ ids }),
+    body: JSON.stringify({ ids: toWireIds(ids) }),
     headers: { 'Content-Type': 'application/json' },
   });
 }
@@ -227,7 +235,7 @@ export async function bulkMarkSeenNotifications(
 ): Promise<unknown> {
   return fetchData<unknown>(`/notifications/notifications/prompt_lib/${projectId}`, {
     method: 'PUT',
-    body: JSON.stringify({ ids, is_seen: isSeen }),
+    body: JSON.stringify({ ids: ids === 'all' ? ids : toWireIds(ids), is_seen: isSeen }),
     headers: { 'Content-Type': 'application/json' },
   });
 }
