@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.50"
+  x-elitea-client-contract: "1.51"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -18057,8 +18057,9 @@ components:
         personalization, which is where apps/elitea-web put them while this
         endpoint still dropped every other top-level key; the top-level
         placement wins, and a nested one is rewritten into the columns.
-        `personalization.theme_mode` is the one key this endpoint never
-        writes: it belongs to PUT /social/author/theme, so any value sent
+        `personalization.theme_mode` and `personalization.language` are the
+        keys this endpoint never writes: they belong to PUT
+        /social/author/theme and /social/author/language, so any value sent
         here is dropped and the stored one is carried forward, even when
         personalization itself is absent.
 
@@ -18081,6 +18082,24 @@ components:
         desktop app, which run on different origins and so share no browser
         storage. Stored in centry.social_users.personalization under
         `theme_mode` (internal/api/v2/social/theme.go).
+
+    LanguagePreference:
+      type: object
+      required: [language]
+      properties:
+        language:
+          type: string
+          nullable: true
+          description: >
+            A language tag such as `en`, `de`, `pt-BR` or `zh-Hant-TW`. On a
+            read, null means the user has never chosen one, and a client keeps
+            its own local choice. A write must send a tag of that shape; null
+            or anything else is a 400. A client with no catalogue for a stored
+            tag falls back to its default language.
+      description: >
+        The caller's interface-language preference, shared by the web, desktop
+        and mobile clients. Stored in centry.social_users.personalization
+        under `language` (internal/api/v2/social/language.go).
 
     CurrentAvatarResponse:
       type: object
@@ -43314,6 +43333,63 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ThemePreference'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '404': { $ref: '#/components/responses/404' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /social/author/language:
+    get:
+      operationId: getCurrentAuthorLanguage
+      summary: Get the authenticated user's own interface-language preference
+      description: |
+        Client contract 1.51. internal/api/v2/social/language.go
+        (GetLanguagePreference). Reads `personalization.language` from the
+        caller's own centry.social_users row, keyed on the authenticated
+        principal's owning user id. `language` is null when the user has never
+        chosen one, or when the stored value is not a language tag.
+      tags: [social, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: The caller's language preference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguagePreference'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '500': { $ref: '#/components/responses/500' }
+
+    put:
+      operationId: updateCurrentAuthorLanguage
+      summary: Set the authenticated user's own interface-language preference
+      description: |
+        Client contract 1.51. internal/api/v2/social/language.go
+        (UpdateLanguagePreference). Merges `language` into the caller's
+        personalization blob; every other key is kept. Creates the caller's
+        social profile row when there is none. Answers the stored preference.
+        The value is also returned as `personalization.language` by
+        GET /social/author.
+      tags: [social, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LanguagePreference'
+      responses:
+        '200':
+          description: The stored preference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguagePreference'
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '404': { $ref: '#/components/responses/404' }
