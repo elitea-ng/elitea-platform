@@ -939,6 +939,7 @@ export * from "./streamExecutionEventsParams.zod";
 export * from "./streamNotificationEventsHeaders.zod";
 export * from "./streamNotificationEventsParams.zod";
 export * from "./subAgentLane.zod";
+export * from "./subAgentLaneChild.zod";
 export * from "./subAgentLaneItem.zod";
 export * from "./suggestedResource.zod";
 export * from "./supportAssistantConfig.zod";

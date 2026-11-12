@@ -9138,6 +9138,127 @@
                                   "type": "string",
                                   "max_length": 120
                                 },
+                                "children": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "agent_id",
+                                      "items",
+                                      "ordinal",
+                                      "parent_call_id",
+                                      "status"
+                                    ],
+                                    "properties": {
+                                      "agent_id": {
+                                        "type": "string"
+                                      },
+                                      "avatar": {
+                                        "type": "string",
+                                        "max_length": 120
+                                      },
+                                      "depth": {
+                                        "type": "integer",
+                                        "enum": [
+                                          "1",
+                                          "2"
+                                        ]
+                                      },
+                                      "display_name": {
+                                        "type": "string",
+                                        "max_length": 120
+                                      },
+                                      "error": {
+                                        "type": "string"
+                                      },
+                                      "input_tokens": {
+                                        "type": "integer"
+                                      },
+                                      "items": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "required": [
+                                            "type"
+                                          ],
+                                          "properties": {
+                                            "args_summary": {
+                                              "type": "string",
+                                              "max_length": 240
+                                            },
+                                            "call_id": {
+                                              "type": "string"
+                                            },
+                                            "ok": {
+                                              "type": "boolean"
+                                            },
+                                            "summary": {
+                                              "type": "string",
+                                              "max_length": 240
+                                            },
+                                            "text": {
+                                              "type": "string",
+                                              "max_length": 600
+                                            },
+                                            "tool": {
+                                              "type": "string",
+                                              "max_length": 120
+                                            },
+                                            "type": {
+                                              "type": "string",
+                                              "enum": [
+                                                "text",
+                                                "tool"
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "max_items": 96
+                                      },
+                                      "label": {
+                                        "type": "string",
+                                        "max_length": 120
+                                      },
+                                      "ordinal": {
+                                        "type": "integer",
+                                        "minimum": 1
+                                      },
+                                      "output_tokens": {
+                                        "type": "integer"
+                                      },
+                                      "parent_agent_id": {
+                                        "type": "string"
+                                      },
+                                      "parent_call_id": {
+                                        "type": "string"
+                                      },
+                                      "result": {
+                                        "type": "string",
+                                        "max_length": 2000
+                                      },
+                                      "status": {
+                                        "type": "string",
+                                        "enum": [
+                                          "budget_exhausted",
+                                          "cancelled",
+                                          "completed",
+                                          "failed",
+                                          "running"
+                                        ]
+                                      },
+                                      "steps": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  }
+                                },
+                                "depth": {
+                                  "type": "integer",
+                                  "enum": [
+                                    "1",
+                                    "2"
+                                  ]
+                                },
                                 "display_name": {
                                   "type": "string",
                                   "max_length": 120
@@ -9199,6 +9320,9 @@
                                 },
                                 "output_tokens": {
                                   "type": "integer"
+                                },
+                                "parent_agent_id": {
+                                  "type": "string"
                                 },
                                 "parent_call_id": {
                                   "type": "string"

@@ -181,7 +181,7 @@ export function foldSubAgentEntry(lanes: readonly CloudSubAgentLane[], entry: un
       depth,
       status: 'running',
       items: [],
-      ...(depth === 2 ? { parentAgentId } : {}),
+      ...(parent !== undefined ? { parentAgentId: parent.agentId } : {}),
       ...optional('label', text(entry.label, MAX_NAME_CHARS)),
       ...optional('displayName', text(entry.display_name, MAX_NAME_CHARS)),
       ...optional('avatar', text(entry.avatar, MAX_NAME_CHARS)),

@@ -4500,11 +4500,18 @@ export interface components {
             /** @description The message, at most 16 KiB of UTF-8 and not only white space. */
             content: string;
         };
-        /** @description Client contract 1.48 (ADR-0050 decision 4). A temporary sub-agent a cloud run started with `spawn_agent`, as the answer keeps it (`metadata.subagents_v1`). Untrusted text: render it as plain text. */
+        /** @description Client contract 1.48 (ADR-0050 decision 4), nesting 1.50 (issue 1872). A temporary sub-agent a cloud run started with `spawn_agent`, as the answer keeps it (`metadata.subagents_v1`). Untrusted text: render it as plain text. */
         SubAgentLane: {
             agent_id: string;
             /** @description The profile's avatar key (`default:<name>`); display only. */
             avatar?: string;
+            /** @description Client contract 1.50. This lane's own sub-agents (depth 2), folded here by Main from their own rows; absent or empty for a depth-1 lane with no nested children. A `SubAgentLane` here never itself carries `children` (sub-agent depth is at most 2), so the items are `SubAgentLaneChild`. */
+            children?: components["schemas"]["SubAgentLaneChild"][];
+            /**
+             * @description Client contract 1.50. 1 for a child of the run's agent, 2 for a child of a child (agents.subagents_max_depth). Absent reads as 1 (an older answer).
+             * @enum {integer}
+             */
+            depth?: 1 | 2;
             /** @description The profile's display name; absent when the spawn named none. */
             display_name?: string;
             /** @description Why it stopped short (`subagent_failed`, `subagent_cancelled`, ...). */
@@ -4514,6 +4521,40 @@ export interface components {
             label?: string;
             ordinal: number;
             output_tokens?: number;
+            /** @description Client contract 1.50. The `agent_id` of the sub-agent that started this one; present only at depth 2. Render nested: this lane appears under its parent's `children`, not at the top level of `metadata.subagents_v1`. */
+            parent_agent_id?: string;
+            /** @description The `tool_run_id` of the `spawn_agent` call that started it. */
+            parent_call_id: string;
+            /** @description Its final text (or the text it had when it stopped). */
+            result?: string;
+            /**
+             * @description `running` on a lane whose answer is still streaming; a settled answer's children are settled (a child the run's end stopped is `cancelled`).
+             * @enum {string}
+             */
+            status: "running" | "completed" | "failed" | "budget_exhausted" | "cancelled";
+            steps?: number;
+        };
+        /** @description Client contract 1.50 (issue 1872). A depth-2 sub-agent lane under its parent's `children`: a `SubAgentLane` without `children` of its own. */
+        SubAgentLaneChild: {
+            agent_id: string;
+            /** @description The profile's avatar key (`default:<name>`); display only. */
+            avatar?: string;
+            /**
+             * @description Client contract 1.50. 1 for a child of the run's agent, 2 for a child of a child (agents.subagents_max_depth). Absent reads as 1 (an older answer).
+             * @enum {integer}
+             */
+            depth?: 1 | 2;
+            /** @description The profile's display name; absent when the spawn named none. */
+            display_name?: string;
+            /** @description Why it stopped short (`subagent_failed`, `subagent_cancelled`, ...). */
+            error?: string;
+            input_tokens?: number;
+            items: components["schemas"]["SubAgentLaneItem"][];
+            label?: string;
+            ordinal: number;
+            output_tokens?: number;
+            /** @description Client contract 1.50. The `agent_id` of the sub-agent that started this one; present only at depth 2. Render nested: this lane appears under its parent's `children`, not at the top level of `metadata.subagents_v1`. */
+            parent_agent_id?: string;
             /** @description The `tool_run_id` of the `spawn_agent` call that started it. */
             parent_call_id: string;
             /** @description Its final text (or the text it had when it stopped). */

@@ -53,7 +53,7 @@ pub(crate) const FORGET: &str = "forget";
 pub(crate) const MAX_CONTENT_BYTES: usize = 2_048;
 const MAX_QUERY_BYTES: usize = 1_024;
 pub(crate) const MAX_RECALL_ENTRIES: u64 = 50;
-/// The longest `forget` entry_id: 20 digits, or `N·TAG` as a mark shows it
+/// The longest `forget` `entry_id`: 20 digits, or `N·TAG` as a mark shows it
 /// (#1900): 19 digits, the 2-byte separator and the tag.
 const FORGET_ID_MAX_BYTES: usize = 19 + 2 + memory_ref::MEMORY_TAG_LENGTH;
 /// The kinds the agent may write. A `cursor` is the heartbeat's state.

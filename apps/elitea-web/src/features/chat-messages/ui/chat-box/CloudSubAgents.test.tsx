@@ -54,13 +54,16 @@ describe('cloud sub-agents under a chat answer (client contract 1.48)', () => {
     expect(screen.queryByTestId('cloud-subagents')).toBeNull();
   });
 
-  // #1872: a depth-2 grandchild renders nested, under its parent's own card.
-  it('shows a nested grandchild under its parent', () => {
+  // Issue 1872: a depth-2 grandchild renders nested, inside its parent's own
+  // body, so a settled (folded) parent shows it once opened.
+  it('shows a nested grandchild under its parent', async () => {
     const parent = lane({
       status: 'completed',
       children: [lane({ agentId: 'a_2', parentCallId: 'call-nested', ordinal: 2, depth: 2, parentAgentId: 'a_1', displayName: 'Hawk', status: 'completed' })],
     });
     renderWithTheme(<ApplicationAnswer answer={answer([parent])} messageId="m" />);
+    expect(screen.getAllByTestId('cloud-subagent')).toHaveLength(1);
+    await userEvent.click(screen.getByRole('button', { name: /Owl/ }));
     const rows = screen.getAllByTestId('cloud-subagent');
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent('Owl');
