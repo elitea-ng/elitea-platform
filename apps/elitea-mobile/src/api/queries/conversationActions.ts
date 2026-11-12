@@ -1,3 +1,4 @@
+import { NAME_MAX_LENGTH } from '@elitea/client-core/limits';
 import { sessionApiClient, type ApiClient } from '@/api/client';
 import { isApiError, parseRetryAfter } from '@/api/errors';
 import { metaWithLead } from '@elitea/client-core/conversation';
@@ -17,8 +18,8 @@ import { metaWithLead } from '@elitea/client-core/conversation';
  * screen holds every request), `rejected` (any other refusal: never sent again).
  */
 
-/** The longest title the rename sheet accepts (the web client's limit). */
-export const CONVERSATION_NAME_MAX = 256;
+/** The longest title a conversation has: the contract's name limit (issue 1968, was 256). */
+export const CONVERSATION_NAME_MAX = NAME_MAX_LENGTH;
 
 export type ConversationAction =
   | { kind: 'rename'; name: string }
@@ -31,13 +32,12 @@ export type ActionOutcome = { outcome: 'done' } | { outcome: 'gone' } | { outcom
 /**
  * A rename's name as sent, so that the server (client contract 1.4) accepts it: every run of
  * control characters (U+0000-U+001F, U+007F-U+009F, which the server refuses with 400) becomes
- * one space, the result is trimmed, and it is cut to `CONVERSATION_NAME_MAX` code points (the
- * server counts runes, so an emoji is one, and a surrogate pair is never split). Null when blank.
+ * one space and the result is trimmed. Null when blank. It does NOT cut: the rename sheet blocks Save
+ * past `CONVERSATION_NAME_MAX` characters (`canSaveName`), and the server answers 400 for more.
  */
 export function cleanConversationName(input: string): string | null {
   const folded = input.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim();
-  const name = Array.from(folded).slice(0, CONVERSATION_NAME_MAX).join('').trim();
-  return name === '' ? null : name;
+  return folded === '' ? null : folded;
 }
 
 function classifyStatus(response: Response): ActionOutcome {

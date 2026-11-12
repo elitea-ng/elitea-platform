@@ -2,12 +2,12 @@ import { ScrollView, StyleSheet } from 'react-native';
 
 import { CONVERSATION_NAME_MAX, cleanConversationName } from '@/api/queries/conversationActions';
 import { useDesign } from '@/design/DesignProvider';
-import { TextField } from '@/ui';
+import { exceedsLimit, TextField } from '@/ui';
 
 /** True when `draft` is a name worth saving: not blank and not the current name. */
 export function canSaveName(draft: string, current: string | null | undefined): boolean {
   const name = cleanConversationName(draft);
-  return name !== null && name !== (current ?? '').trim();
+  return name !== null && !exceedsLimit(name, CONVERSATION_NAME_MAX) && name !== (current ?? '').trim();
 }
 
 /**
@@ -39,7 +39,7 @@ export function RenameView({
         onChangeText={onChange}
         autoFocus
         selectTextOnFocus
-        maxLength={CONVERSATION_NAME_MAX}
+        characterLimit={CONVERSATION_NAME_MAX}
         returnKeyType="done"
         enablesReturnKeyAutomatically
         autoCapitalize="sentences"
