@@ -14,7 +14,7 @@ import Typography from '@mui/material/Typography';
 
 import { SubAgentLaneCard } from '@/shared/ui/sub-agent-lane';
 
-import type { SubAgentLane } from '../model/subAgentEvents';
+import { briefRefsLine, type SubAgentLane } from '../model/subAgentEvents';
 import type { TranscriptItem } from '../model/transcriptItem';
 
 type ToolItem = Extract<TranscriptItem, { type: 'tool' }>;
@@ -23,8 +23,14 @@ type ToolItem = Extract<TranscriptItem, { type: 'tool' }>;
 export type SubAgentAvatar = ComponentType<{ lane: SubAgentLane }>;
 
 function Lane({ lane, ToolRow, Avatar }: { lane: SubAgentLane; ToolRow: ComponentType<{ item: ToolItem }>; Avatar?: SubAgentAvatar | undefined }): React.JSX.Element {
+  const briefLine = briefRefsLine(lane.briefRefs);
   return (
     <SubAgentLaneCard lane={lane} variant="transcript" avatar={Avatar === undefined ? undefined : <Avatar lane={lane} />}>
+      {briefLine === undefined ? null : (
+        <Typography variant="bodySmall" component="p" data-testid="subagent-brief-refs" sx={(theme: Theme) => ({ margin: 0, color: theme.vars.palette.text.secondary })}>
+          {briefLine}
+        </Typography>
+      )}
       {lane.items.map((item) =>
         item.type === 'tool' ? (
           <ToolRow key={item.key} item={item} />

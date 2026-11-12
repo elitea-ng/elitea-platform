@@ -29,7 +29,7 @@ The team gets the conversation's agents in the order they joined, each with the 
 
 Open **Agents** and select the **Teams** tab. Each team shows its agents; the lead is marked **(lead)**. The tab loads 200 teams at a time; when a project has more, it says how many are shown and **Show more** loads the next 200.
 
-- **New team**: name the team, then add agents from **Add an agent**. Type part of an agent's name to search all of the project's agents; the list shows the first 50 matches and says when there are more to narrow. A new agent runs its default version. Select the star next to an agent to make it the lead, and again to clear it.
+- **New team**: name the team, then add agents from **Add an agent**. Type part of an agent's name to search all of the project's agents; the list shows the first 50 matches and says when there are more to narrow. A new agent runs its default version (the one marked as the default in its version menu, else `base`; the desktop app runs the same one). Select the star next to an agent to make it the lead, and again to clear it.
 - **Edit**: change the name, description, agents or lead. Saving replaces the whole team.
 - **Delete**: removes the team. Conversations started from it are not touched.
 
@@ -74,3 +74,5 @@ A team on the wire:
 ```
 
 `floor_policy` is `addressed` (the default) or `lead`; `lead_position` is the 1-based position of the lead member and is required with `lead`. A refused write answers `409 team_name_taken` or `422 team_invalid` with the rule it broke.
+
+The list route (`GET /api/v2/elitea_core/agent_teams/prompt_lib/{project_id}`) orders teams by lower-cased name, then id. Page it by `offset`, or, so a team created or deleted between two pages cannot shift the window, by keyset: pass the last team's `name` and `id` as `after_name` and `after_id` (both or neither; `offset` is then ignored). The Teams tab pages this way.

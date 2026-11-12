@@ -50,6 +50,8 @@ export const listAgentTeamsParamsLimitMax = 200;
 export const listAgentTeamsParamsOffsetDefault = 0;
 export const listAgentTeamsParamsOffsetMin = 0;
 
+export const listAgentTeamsParamsAfterNameMax = 128;
+
 export const ListAgentTeamsParams = zod.object({
   query: zod.string().max(listAgentTeamsParamsQueryMax).optional(),
   limit: zod
@@ -61,6 +63,8 @@ export const ListAgentTeamsParams = zod.object({
     .int()
     .min(listAgentTeamsParamsOffsetMin)
     .default(listAgentTeamsParamsOffsetDefault),
+  after_name: zod.string().max(listAgentTeamsParamsAfterNameMax).optional(),
+  after_id: zod.int().min(1).optional(),
 });
 
 export type ListAgentTeamsParams = zod.input<typeof ListAgentTeamsParams>;

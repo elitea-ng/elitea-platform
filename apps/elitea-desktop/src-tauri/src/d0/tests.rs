@@ -5255,6 +5255,9 @@ struct Versioned {
     /// How long a commit takes, and how many commits to refuse (503).
     commit_delay: Mutex<Duration>,
     refuse_commits: Mutex<usize>,
+    /// The unattended grant ids the starts carried: Main writes a chain's
+    /// row at its first start, so a second start with an id is `422`.
+    grants: Mutex<Vec<String>>,
     log: Mutex<Vec<(String, std::time::Instant, std::time::Instant)>>,
 }
 
@@ -5268,6 +5271,7 @@ impl Versioned {
             delay: Mutex::new(Duration::ZERO),
             commit_delay: Mutex::new(Duration::ZERO),
             refuse_commits: Mutex::new(0),
+            grants: Mutex::new(Vec::new()),
             log: Mutex::new(Vec::new()),
         })
     }
@@ -5346,7 +5350,15 @@ async fn versioned_platform(state: Arc<Versioned>) -> MockServer {
             }
             "start" => {
                 let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
-                if body["participant_id"] != *state.participant.lock().unwrap() {
+                let reused_grant = body["unattended"]["grant_id"].as_str().is_some_and(|id| {
+                    let mut grants = state.grants.lock().unwrap();
+                    let seen = grants.iter().any(|known| known == id);
+                    grants.push(id.to_owned());
+                    seen
+                });
+                if reused_grant {
+                    Res::json(422, &json!({"error": "unattended_grant_refused", "field": "grant_id", "reason": "invalid"}))
+                } else if body["participant_id"] != *state.participant.lock().unwrap() {
                     Res::json(422, &json!({"error": "local_turn_participant", "message": "not a participant"}))
                 } else {
                     inner(req)
@@ -5554,6 +5566,39 @@ async fn a_participant_that_changed_is_looked_up_and_started_again() {
         78
     );
     assert_eq!(starts.len(), 4);
+}
+
+/// A start retried for a participant that changed carries a NEW grant id
+/// (the first start already wrote the chain's row under the old one), and the
+/// turn is admitted (issue 1563).
+#[tokio::test]
+async fn a_retried_unattended_start_uses_a_new_grant_id() {
+    let state = Versioned::new();
+    let server = versioned_platform(state.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    timed_turn(&h, &state).await;
+    *state.participant.lock().unwrap() = 78;
+    let started = h
+        .host
+        .start(unattended_request(&h, json!({"goal_check": false})))
+        .await
+        .unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let starts: Vec<Value> = seen(
+        &h.server,
+        &format!("/local_turn/prompt_lib/1/{CONVERSATION_UUID}"),
+    )
+    .iter()
+    .map(|req| serde_json::from_str(&req.body).unwrap())
+    .collect();
+    let grants: Vec<&Value> = starts
+        .iter()
+        .filter(|body| body.get("unattended").is_some())
+        .map(|body| &body["unattended"]["grant_id"])
+        .collect();
+    assert_eq!(grants.len(), 2, "{starts:?}");
+    assert_ne!(grants[0], grants[1], "the retry reused the grant id");
+    assert_eq!(starts.last().unwrap()["participant_id"], 78);
 }
 
 #[tokio::test]

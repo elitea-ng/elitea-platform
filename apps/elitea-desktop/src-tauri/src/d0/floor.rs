@@ -247,6 +247,8 @@ pub struct FloorNext {
     /// The person's plan-mode choice for the message: a later LOCAL agent
     /// runs read-only as the first did (a cloud agent has no workspace).
     pub plan_mode: bool,
+    /// The message's default-version reads, shared by its hops.
+    pub defaults: super::turn::DefaultVersions,
 }
 
 /// The next agent after the turn that `started` answered, when Main routed
@@ -279,6 +281,11 @@ pub fn next(
         conversation_uuid: conversation_uuid.to_owned(),
         bypass: request.bypass,
         plan_mode: request.plan_mode,
+        defaults: request
+            .floor_turn
+            .as_ref()
+            .map(|turn| turn.defaults.clone())
+            .unwrap_or_default(),
     })
 }
 

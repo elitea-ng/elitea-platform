@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
+use super::turn::DefaultVersions;
 use crate::tokens::CLIENT_VERSION_HEADER;
 
 /// How long one platform request may take. A remote toolkit call waits up
@@ -636,6 +637,7 @@ impl PlatformApi {
         project_id: i64,
         conversation_id: &str,
         participant_id: i64,
+        defaults: &DefaultVersions,
     ) -> Result<FloorTarget, ApiError> {
         let detail: Value = self
             .send(
@@ -652,6 +654,15 @@ impl PlatformApi {
         let (target, pinned) = floor_target_in(&detail, participant_id)?;
         if pinned {
             return Ok(target);
+        }
+        // An unpinned agent's default version is read once per message, not
+        // once per hop of its floor chain (#1942); a new message reads it
+        // again, so a default changed since is seen (#1941).
+        if let Some(version_id) = defaults.get(target.application_id) {
+            return Ok(FloorTarget {
+                version_id,
+                ..target
+            });
         }
         let application: Value = self
             .send(
@@ -671,6 +682,7 @@ impl PlatformApi {
                 "the next agent of this message has no version to run",
             )
         })?;
+        defaults.keep(target.application_id, version_id);
         Ok(FloorTarget {
             version_id,
             ..target
@@ -1248,9 +1260,11 @@ fn floor_target_in(detail: &Value, participant_id: i64) -> Result<(FloorTarget, 
 }
 
 /// An agent's default version, as its detail (`GET application`) names it:
-/// the version marked `is_default`, else `meta.default_version_id`, else
-/// the one named `base`, else its first (the web app's
-/// `selectDefaultVersion`, #1926).
+/// `meta.default_version_id`, else the one named `base`, else its first: the
+/// one rule of the web app's `selectDefaultVersion` and the platform's
+/// `GET application` (issue 1941). `is_default` is not read: the platform
+/// derives it from `meta.default_version_id`, and a flag that disagreed
+/// would make the desktop run another version than the editor shows.
 fn default_version_of(application: &Value) -> Option<i64> {
     let versions = application.get("versions").and_then(Value::as_array)?;
     let id_of = |version: &Value| number_of(version.get("id")).filter(|id| *id > 0);
@@ -1259,14 +1273,8 @@ fn default_version_of(application: &Value) -> Option<i64> {
             .get("meta")
             .and_then(|meta| meta.get("default_version_id")),
     );
-    versions
-        .iter()
-        .find(|version| version.get("is_default") == Some(&Value::Bool(true)))
-        .and_then(id_of)
-        .or_else(|| {
-            meta_default
-                .and_then(|wanted| versions.iter().filter_map(id_of).find(|id| *id == wanted))
-        })
+    meta_default
+        .and_then(|wanted| versions.iter().filter_map(id_of).find(|id| *id == wanted))
         .or_else(|| {
             versions
                 .iter()
@@ -1582,8 +1590,15 @@ mod tests {
             {"id": 11, "name": "v2"},
             {"id": "12", "name": "v3"}
         ]);
-        let marked = json!({"versions": [{"id": 10, "name": "base"}, {"id": 11, "name": "v2", "is_default": true}]});
-        assert_eq!(default_version_of(&marked), Some(11));
+        // A flag that disagrees with `meta.default_version_id` is not the
+        // rule (issue 1941): the editor shows the meta's version.
+        let marked = json!({
+            "meta": {"default_version_id": "10"},
+            "versions": [{"id": 10, "name": "base"}, {"id": 11, "name": "v2", "is_default": true}]
+        });
+        assert_eq!(default_version_of(&marked), Some(10));
+        let flag_only = json!({"versions": [{"id": 10, "name": "base"}, {"id": 11, "name": "v2", "is_default": true}]});
+        assert_eq!(default_version_of(&flag_only), Some(10));
         let meta = json!({"meta": {"default_version_id": "12"}, "versions": versions});
         assert_eq!(default_version_of(&meta), Some(12));
         assert_eq!(default_version_of(&json!({"versions": versions})), Some(10));

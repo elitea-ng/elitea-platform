@@ -26,7 +26,8 @@ import {
 
 import type { ModelInfo } from '@/entities/credential';
 import { eliteaFetch } from '@/shared/api/generated/mutator';
-import { serverErrorOf } from '@/shared/api/serverErrorMessage';
+import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
+import { t } from '@/shared/i18n';
 
 /**
  * `eliteaFetch` resolves to orval's `{data, status, headers}` envelope, never
@@ -69,17 +70,13 @@ export const EMPTY_MODELS_RESPONSE: ModelsApiResponse = {
 };
 
 /**
- * The server's own message for a failed model call.
- *
- * `EliteaApiError.message` is `eliteaFetch: 404 from <url>` — a URL is not an
- * explanation for a user. `HttpFailure.body` holds the parsed error body, so
- * prefer its `error`/`message` field and fall back to the generic message.
+ * The server's own message for a failed model call, else a translated
+ * sentence. `EliteaApiError.message` is the `eliteaFetch: <status> from <url>`
+ * diagnostic, which never reaches a person (a proxy's HTML 502, an empty body
+ * and a network error all land on the fallback).
  */
 export function modelConfigurationErrorMessage(error: unknown): string {
-  const server = serverErrorOf(error);
-  if (server !== undefined) return server;
-  if (error instanceof Error) return error.message;
-  return String(error);
+  return serverErrorMessage(error, t('settings.models.saveFailed', 'The default model could not be saved. Try again.'));
 }
 
 /**

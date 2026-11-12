@@ -13,6 +13,7 @@ import * as entity from './index';
  */
 const PUBLIC_SURFACE = [
   'LATEST_VERSION_NAME',
+  'defaultRunVersionId',
   'isSetDefaultDisabled',
   'isVersionNotFound',
   'normaliseVersion',

@@ -5,6 +5,7 @@
  * tool rows and text, `subagent_finished` settles it (again, after a
  * `send_input` continued it).
  */
+import { t } from '@/shared/i18n';
 import type { SubAgentStartedPayload } from '@/shared/desktop/subAgentIpc';
 import type { AgentEvent, SubAgentStatus } from '@/shared/desktop/workspaceIpc';
 
@@ -42,6 +43,24 @@ export interface SubAgentLane {
   result?: string;
   /** Why it stopped short: `subagent_failed`, `subagent_budget_exhausted`, `subagent_step_limit`, … */
   error?: string;
+}
+
+/**
+ * One compact line for what a spawn's brief named (`subagent_started`'s
+ * `brief_refs`, #1827): "Brief named: messages 3, attachments 1, memory entries 2, facts 4".
+ * Empty counts are left out; `undefined` when it named nothing.
+ */
+export function briefRefsLine(refs: SubAgentLane['briefRefs']): string | undefined {
+  if (refs === undefined) return undefined;
+  const parts: string[] = [];
+  const count = (n: number, key: string, fallback: string): void => {
+    if (n > 0) parts.push(t(key, fallback, { count: n }));
+  };
+  count(refs.message_ids.length, 'workspace.subAgent.briefMessages', 'messages {{count}}');
+  count(refs.attachments.length, 'workspace.subAgent.briefAttachments', 'attachments {{count}}');
+  count(refs.memory_entries.length, 'workspace.subAgent.briefMemories', 'memory entries {{count}}');
+  count(refs.facts, 'workspace.subAgent.briefFacts', 'facts {{count}}');
+  return parts.length === 0 ? undefined : t('workspace.subAgent.briefNamed', 'Brief named: {{refs}}', { refs: parts.join(', ') });
 }
 
 /** The part of a turn's view these events change. */
