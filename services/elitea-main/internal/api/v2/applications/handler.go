@@ -25,6 +25,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 type Handler struct {
@@ -574,6 +575,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := entitylimits.CheckBody(body); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+
 	req := applications.CreateRequest{
 		ProjectID:   projectID,
 		Name:        strVal(body, "name"),
@@ -592,6 +598,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var initialTags []any
 	if versions, ok := body["versions"].([]any); ok && len(versions) > 0 {
 		if vBody, ok := versions[0].(map[string]any); ok {
+			if name, ok := vBody["name"].(string); ok {
+				if err := entitylimits.CheckName("versions[0].name", name); err != nil {
+					apierr.Write(w, err)
+					return
+				}
+			}
 			// Validate model_project_id if llm_settings provided
 			if llm, ok := vBody["llm_settings"].(map[string]any); ok {
 				if mpid, ok := llm["model_project_id"].(string); ok && mpid != "" && mpid != projectID {
@@ -964,6 +976,18 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if v, ok := body["version"].(map[string]any); ok {
 		versionData = v
 	}
+	if err := entitylimits.CheckBody(body); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	if versionData != nil {
+		if name, ok := versionData["name"].(string); ok {
+			if err := entitylimits.CheckName("version.name", name); err != nil {
+				apierr.Write(w, err)
+				return
+			}
+		}
+	}
 
 	// Validate version IDs if provided
 	if versionData != nil {
@@ -1261,6 +1285,10 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, apierr.BadRequest("version name is required"))
 		return
 	}
+	if err := entitylimits.CheckName("name", name); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 
 	user, ownerID, ok := principal(r)
 	if !ok {
@@ -1396,6 +1424,10 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 		// here rather than written or — as before #824 — silently dropped.
 		if name == "" {
 			apierr.Write(w, apierr.BadRequest("name cannot be empty"))
+			return
+		}
+		if err := entitylimits.CheckName("name", name); err != nil {
+			apierr.Write(w, err)
 			return
 		}
 		v.Name = name

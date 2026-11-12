@@ -1115,7 +1115,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 241: shared/0241_agent_teams_keyset_index.sql, the (project_id,
 	// lower(name), id) index behind the Teams list's keyset paging (issue
 	// 1955). No data, no permission.
-	require.EqualValues(t, 241, Head(shared))
+	//
+	// 242: shared/0242_token_name_limit.sql, a personal access token's name
+	// truncated to the 128-character limit (issue 1968). No permission.
+	require.EqualValues(t, 242, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1406,7 +1409,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 171: tenant/0171_agent_memory_orphans.sql, when an agent's memory
 	// lost its agent, so the retention sweep can purge it after the
 	// retention period (ADR-0042, issue 1658). No data, no permission.
-	require.EqualValues(t, 171, Head(tenant))
+	//
+	// 172: tenant/0172_entity_name_description_limits.sql, entity
+	// descriptions truncated to 2000 characters and names to 128, with CHECK
+	// constraints where only the handlers write (issue 1968). No permission.
+	require.EqualValues(t, 172, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

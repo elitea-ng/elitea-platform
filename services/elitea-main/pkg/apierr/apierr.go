@@ -3,17 +3,38 @@ package apierr
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 )
 
 type Response struct {
 	Error string `json:"error"`
+	// Field names the request property a validation refusal is about, and
+	// MaxLength the limit it broke. Both are omitted for every other error.
+	Field     string `json:"field,omitempty"`
+	MaxLength int    `json:"max_length,omitempty"`
 }
 
 type APIError struct {
 	Status  int
 	Code    string
 	Message string
+	// Field and MaxLength make a 400 field-level (see FieldTooLong).
+	Field     string
+	MaxLength int
+}
+
+// FieldTooLong is the 400 for a text property longer than max characters. It
+// carries the property name and the limit next to the message, so a client can
+// put the refusal on the right input.
+func FieldTooLong(field string, max int) error {
+	return &APIError{
+		Status:    http.StatusBadRequest,
+		Code:      "bad_request",
+		Message:   fmt.Sprintf("%s must be at most %d characters", field, max),
+		Field:     field,
+		MaxLength: max,
+	}
 }
 
 func (e *APIError) Error() string {
@@ -60,7 +81,7 @@ func Write(w http.ResponseWriter, err error) {
 	if errors.As(err, &apiErr) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(apiErr.Status)
-		_ = json.NewEncoder(w).Encode(Response{Error: apiErr.Message})
+		_ = json.NewEncoder(w).Encode(Response{Error: apiErr.Message, Field: apiErr.Field, MaxLength: apiErr.MaxLength})
 		return
 	}
 
