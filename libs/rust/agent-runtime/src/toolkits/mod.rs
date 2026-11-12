@@ -244,6 +244,11 @@ pub use families::data_analysis::tools::{
     AnalysisGate, AttachmentBucketError, AttachmentBucketResolver, DataAnalysisAuthority,
     DataAnalysisToolsetError, build_data_analysis_toolset, close_analysis_gate,
 };
+pub use families::imagegen::{
+    IMAGE_GENERATION_TOOL, IMAGE_QUALITIES, IMAGE_SIZES, ImageArtifactBucket, ImageBucketError,
+    ImageGenToolsetError, ImageGenerationAuthority, MAX_IMAGES_PER_CALL,
+    build_image_generation_toolset,
+};
 pub use families::index_tools::{
     INDEXES_KEY, IndexCatalog, IndexCatalogEntry, IndexToolAuthority, IndexToolCall,
     IndexToolFailure, IndexToolHost, IndexToolName, IndexToolSupport, IndexToolsWithheld,

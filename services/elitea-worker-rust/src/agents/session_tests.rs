@@ -1307,7 +1307,8 @@ async fn ask_user_pauses_and_resumes_as_the_original_correlated_tool_result() {
 async fn a_fresh_session_is_seeded_with_a_notice_for_every_skipped_internal_tool() {
     let mut request = ordinary_request(AgentExecutionKind::Adhoc);
     // `swarm` and `image_generation`: two platform-catalogue names this
-    // runtime does not implement, plus `ask_user`, which IS implemented and
+    // assembly serves no tool for (`image_generation` needs the ordinary
+    // assembly's host, an image model and the images API, #1969), plus `ask_user`, which IS implemented and
     // must produce no notice of its own.
     request.payload.internal_tools = vec![
         "swarm".to_owned(),

@@ -663,6 +663,7 @@ impl OfficeToolHost for ClaimOfficeHost {
             prompt: &request.prompt,
             size: request.size.as_deref(),
             count: request.count,
+            quality: request.quality.as_deref(),
         };
         self.charge_image_call()?;
         client.generate(context, &call).await.map_err(|error| {
@@ -693,6 +694,7 @@ impl OfficeToolHost for ClaimOfficeHost {
             prompt: &prompt,
             size: None,
             count: 1,
+            quality: None,
         };
         self.charge_image_call()?;
         client

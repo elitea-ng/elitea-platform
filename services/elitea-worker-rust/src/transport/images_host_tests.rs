@@ -529,6 +529,7 @@ async fn a_host_without_the_images_client_does_not_serve_the_toolkit() {
             prompt: "p".into(),
             size: None,
             count: 1,
+            quality: None,
         })
         .await
         .expect_err("no images API");
@@ -665,6 +666,7 @@ async fn stepback_office_and_images_stop_at_the_one_shared_cap() {
         prompt: "a red square".to_owned(),
         size: None,
         count: 1,
+        quality: None,
     };
     ask().await.expect("step-back reply");
     host.complete(OfficeModelRequest {

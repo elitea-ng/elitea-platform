@@ -62,7 +62,7 @@ use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use elitea_agent_runtime::host::PlatformWriter;
-use elitea_agent_runtime::toolkits::DataAnalysisAuthority;
+use elitea_agent_runtime::toolkits::{DataAnalysisAuthority, ImageGenerationAuthority};
 use elitea_agent_runtime::toolkits::governed::GovernedOperationClient;
 use sqlx::PgPool;
 
@@ -86,6 +86,9 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     /// the Office host's prompts), `toolkit_model_call_cap` in the runtime
     /// config.
     toolkit_model_call_cap: u32,
+    /// The `image_generation` internal tool's model (#1969); `None` withholds
+    /// the tool.
+    image_generation_model: Option<String>,
     /// The platform object client the Office families (`pptx`, `docx`, `xlsx`) read and write
     /// documents with (ADR-0032); `None` leaves them out as unsupported.
     office_runtime: Option<Arc<OfficeRuntime>>,
@@ -138,6 +141,7 @@ impl OrdinaryNativeAgentAssembler {
             sessions: NativeSessionBackend::invocation_local(),
             index_runtime: None,
             toolkit_model_call_cap: crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS,
+            image_generation_model: None,
             office_runtime: None,
             web_runtime: None,
             workspace_runs: None,
@@ -183,6 +187,13 @@ impl OrdinaryNativeAgentAssembler {
         web_runtime: Option<Arc<crate::transport::metering::WebRuntime>>,
     ) -> Self {
         self.web_runtime = web_runtime;
+        self
+    }
+
+    /// The image model the `image_generation` internal tool uses (#1969).
+    #[must_use]
+    pub(crate) fn with_image_generation_model(mut self, model: Option<String>) -> Self {
+        self.image_generation_model = model;
         self
     }
 
@@ -710,7 +721,11 @@ impl OrdinaryNativeAgentAssembler {
         // pipeline `code` nodes use, when this run has one.
         let wants_data_analysis = profile.internal_tools().data_analysis_enabled();
         let mut data_analysis_authority: Option<DataAnalysisAuthority> = None;
-        if (carries_office_family || wants_data_analysis)
+        // The image generation toggle (#1969) rides on the same host: the
+        // images API under the claim's credential, the conversation bucket.
+        let wants_image_generation = profile.internal_tools().image_generation_enabled();
+        let mut image_generation_authority: Option<ImageGenerationAuthority> = None;
+        if (carries_office_family || wants_data_analysis || wants_image_generation)
             && let Some(office) = self.office_host(
                 &context,
                 profile,
@@ -741,6 +756,16 @@ impl OrdinaryNativeAgentAssembler {
                     ));
                 }
                 data_analysis_authority = Some(authority);
+            }
+            if wants_image_generation {
+                image_generation_authority = Some(ImageGenerationAuthority::new(
+                    Arc::clone(&office),
+                    self.image_generation_model.as_deref(),
+                    Arc::new(super::attachments::ClaimAttachmentBucket::new(
+                        Arc::clone(&self.platform),
+                        Arc::clone(runtime_context),
+                    )),
+                ));
             }
             if carries_office_family {
                 artifact_authority = artifact_authority.with_office(office);
@@ -813,6 +838,11 @@ impl OrdinaryNativeAgentAssembler {
         if data_toolset.is_some() {
             internal_tools = internal_tools.serving_data_analysis();
         }
+        let image_toolset = internal_tools
+            .image_generation_toolset(image_generation_authority.as_ref(), tool_policy);
+        if image_toolset.is_some() {
+            internal_tools = internal_tools.serving_image_generation();
+        }
         toolsets.extend(internal_tools.toolsets(Some(&BuilderToolAuthority::new(platform_writer))));
         // The agent's own memory (#1607), on the version's `meta.memory`.
         // Main admits every call against the claim; `untrusted` tells it
@@ -830,6 +860,7 @@ impl OrdinaryNativeAgentAssembler {
             ));
         }
         toolsets.extend(data_toolset);
+        toolsets.extend(image_toolset);
         toolsets.extend(profile.instruction_plan().toolsets());
         // The attachment tools exist only when a document of this turn was
         // shown as an overview; the note in the prompt offers them by name.

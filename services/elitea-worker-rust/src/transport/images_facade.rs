@@ -87,6 +87,7 @@ pub(crate) struct ImageCall<'a> {
     pub(crate) prompt: &'a str,
     pub(crate) size: Option<&'a str>,
     pub(crate) count: u32,
+    pub(crate) quality: Option<&'a str>,
 }
 
 /// The gateway's images routes, bound to the shared channel.
@@ -157,6 +158,9 @@ impl ImagesClient {
         });
         if let Some(size) = call.size {
             body["size"] = serde_json::Value::String(size.to_owned());
+        }
+        if let Some(quality) = call.quality {
+            body["quality"] = serde_json::Value::String(quality.to_owned());
         }
         let body = serde_json::to_vec(&body).map_err(|_| ImagesError::RequestTooLarge)?;
         self.post(

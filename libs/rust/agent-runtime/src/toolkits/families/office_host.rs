@@ -229,6 +229,9 @@ pub struct ImageGenerateRequest {
     pub size: Option<String>,
     /// How many images to ask for.
     pub count: u32,
+    /// The model's quality tier (`low`, `medium`, `high`, `standard`, `hd`),
+    /// or `None` to leave it to the model.
+    pub quality: Option<String>,
 }
 
 /// One input image of an edit: its file name and bytes.

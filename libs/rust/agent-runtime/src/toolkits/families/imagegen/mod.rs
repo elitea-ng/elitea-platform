@@ -26,6 +26,12 @@
 //! gateway answers); `n` is capped at 10, the images API's own maximum;
 //! failures are sentences the model reads, not raised exceptions.
 
+mod internal_tool;
+pub use internal_tool::{
+    IMAGE_GENERATION_TOOL, IMAGE_QUALITIES, IMAGE_SIZES, ImageArtifactBucket, ImageBucketError,
+    ImageGenerationAuthority, MAX_IMAGES_PER_CALL, build_image_generation_toolset,
+};
+
 use std::fmt;
 use std::sync::Arc;
 
@@ -307,7 +313,7 @@ fn selected_tools(
 }
 
 /// The ADK tool definitions were refused by admission.
-pub(crate) struct ImageGenToolsetError;
+pub struct ImageGenToolsetError;
 
 impl fmt::Debug for ImageGenToolsetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -615,6 +621,7 @@ impl ImageGenToolImpl {
                 prompt,
                 size,
                 count: u32::try_from(count).unwrap_or(1),
+                quality: None,
             })
             .await
             .map_err(|e| host_sentence("generate the image", &e))?;

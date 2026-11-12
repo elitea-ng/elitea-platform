@@ -410,6 +410,7 @@ impl ProductionAgentRuntime {
                     .toolkit_model_call_cap
                     .unwrap_or(crate::transport::model_text::DEFAULT_TOOLKIT_MODEL_CALLS),
             )
+            .with_image_generation_model(deployment.image_generation_model.clone())
             .with_office_runtime(office_runtime.clone())
             .with_web_runtime(web_runtime.clone())
             .with_fanout_decisions(Arc::clone(&input))

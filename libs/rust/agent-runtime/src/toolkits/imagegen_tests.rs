@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 
 use super::families::artifact::ArtifactToolAuthority;
 use super::families::imagegen::{
+    ImageArtifactBucket, ImageBucketError, ImageGenerationAuthority, build_image_generation_toolset,
     ImageGenConfigErrorCode, ImageGenToolkitConfig, build_imagegen_toolset, build_with_host,
 };
 use super::families::office_host::{
@@ -885,4 +886,164 @@ async fn a_selection_of_only_unknown_tools_is_refused_naming_them() {
         json!({"selected_tools": ["paint", "edit_image"]}),
     ))
     .expect("accepted");
+}
+
+struct Bucket(Result<&'static str, ImageBucketError>);
+
+#[async_trait]
+impl ImageArtifactBucket for Bucket {
+    async fn artifact_bucket(&self) -> Result<String, ImageBucketError> {
+        self.0.map(str::to_owned)
+    }
+}
+
+async fn internal_tool(
+    host: FakeHost,
+    model: Option<&str>,
+    bucket: Result<&'static str, ImageBucketError>,
+) -> (Arc<FakeHost>, Vec<Arc<dyn Tool>>) {
+    let host = Arc::new(host);
+    let shared: SharedOfficeToolHost = Arc::clone(&host) as SharedOfficeToolHost;
+    let authority = ImageGenerationAuthority::new(shared, model, Arc::new(Bucket(bucket)));
+    let tools = match build_image_generation_toolset(&authority, &policy()).expect("builds") {
+        Some(toolset) => toolset
+            .tools(context() as Arc<dyn ReadonlyContext>)
+            .await
+            .expect("tools"),
+        None => Vec::new(),
+    };
+    (host, tools)
+}
+
+async fn run_internal(tools: &[Arc<dyn Tool>], args: Value) -> Value {
+    tools[0]
+        .execute(context() as Arc<dyn ToolContext>, args)
+        .await
+        .expect("a failure is a result, not an error")
+}
+
+#[tokio::test]
+async fn the_internal_tool_needs_a_model_and_an_images_host() {
+    let (_, none) = internal_tool(FakeHost::default(), None, Ok("conv")).await;
+    assert!(none.is_empty());
+    let (_, blank) = internal_tool(FakeHost::default(), Some("  "), Ok("conv")).await;
+    assert!(blank.is_empty());
+    let no_api = FakeHost {
+        no_images: true,
+        ..FakeHost::default()
+    };
+    let (_, none) = internal_tool(no_api, Some("img-1"), Ok("conv")).await;
+    assert!(none.is_empty());
+    let (_, some) = internal_tool(FakeHost::default(), Some("img-1"), Ok("conv")).await;
+    assert_eq!(some.len(), 1);
+    assert_eq!(some[0].name(), "image_generation");
+    let schema = some[0].parameters_schema().expect("schema");
+    assert_eq!(schema["required"], json!(["prompt"]));
+    assert_eq!(schema["properties"]["n"]["maximum"], json!(4));
+    assert!(schema["properties"]["size"]["enum"].is_array());
+}
+
+#[tokio::test]
+async fn the_internal_tool_saves_artifacts_and_answers_references_not_bytes() {
+    let (host, tools) = internal_tool(FakeHost::default(), Some("img-1"), Ok("conv")).await;
+    let out = run_internal(
+        &tools,
+        json!({"prompt": "a fox", "size": "1024x1536", "n": 2, "quality": "high"}),
+    )
+    .await;
+    assert_eq!(out["status"], "success");
+    let artifacts = out["artifacts"].as_array().expect("artifacts");
+    assert_eq!(artifacts.len(), 2);
+    assert_eq!(artifacts[0]["filepath"], "/conv/generated-generate-0.png");
+    assert!(out["message"].as_str().expect("message").contains("2 image(s)"));
+    // The model never sees image bytes.
+    assert!(!out.to_string().contains("base64"));
+    let asked = host.generated.lock().expect("generated");
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].model, "img-1");
+    assert_eq!(asked[0].size.as_deref(), Some("1024x1536"));
+    assert_eq!(asked[0].count, 2);
+    assert_eq!(asked[0].quality.as_deref(), Some("high"));
+    let writes = host.writes.lock().expect("writes");
+    assert_eq!(writes.len(), 2);
+    assert_eq!(writes[0].0, "conv");
+    assert_eq!(writes[0].2, "image/png");
+}
+
+#[tokio::test]
+async fn the_internal_tool_defaults_and_auto_leave_size_and_quality_to_the_model() {
+    let (host, tools) = internal_tool(FakeHost::default(), Some("img-1"), Ok("conv")).await;
+    run_internal(&tools, json!({"prompt": "x", "size": "auto", "quality": "auto"})).await;
+    let asked = host.generated.lock().expect("generated");
+    assert_eq!(asked[0].size, None);
+    assert_eq!(asked[0].quality, None);
+    assert_eq!(asked[0].count, 1);
+}
+
+#[tokio::test]
+async fn the_internal_tool_refuses_bad_arguments_before_the_billed_call() {
+    let (host, tools) = internal_tool(FakeHost::default(), Some("img-1"), Ok("conv")).await;
+    for (args, expected) in [
+        (json!({}), "`prompt` is required"),
+        (json!({"prompt": "  "}), "`prompt` is required"),
+        (json!({"prompt": "x", "n": 0}), "between 1 and 4"),
+        (json!({"prompt": "x", "n": 5}), "between 1 and 4"),
+        (json!({"prompt": "x", "n": "two"}), "whole number"),
+        (json!({"prompt": "x", "size": "7x7"}), "`size` must be one of"),
+        (json!({"prompt": "x", "quality": "ultra"}), "`quality` must be one of"),
+        (json!({"prompt": "x", "size": 3}), "`size` must be a string"),
+    ] {
+        match run_internal(&tools, args).await {
+            Value::String(text) => assert!(text.contains(expected), "{text}"),
+            other => panic!("expected a sentence, got {other}"),
+        }
+    }
+    assert!(host.generated.lock().expect("generated").is_empty());
+}
+
+#[tokio::test]
+async fn the_internal_tool_maps_every_gateway_refusal_to_a_sentence() {
+    let (host, tools) = internal_tool(FakeHost::default(), Some("img-1"), Ok("conv")).await;
+    for (kind, expected) in [
+        (OfficeFailure::BudgetRefused, "budget is exhausted"),
+        (OfficeFailure::InvalidRequest, "refused as invalid"),
+        (OfficeFailure::RateLimited, "rate-limited"),
+        (OfficeFailure::Unreachable, "could not be reached"),
+    ] {
+        host.answer_with(Err(OfficeHostError::new(kind, "scripted")));
+        match run_internal(&tools, json!({"prompt": "x"})).await {
+            Value::String(text) => {
+                assert!(text.starts_with("Could not generate the image"), "{text}");
+                assert!(text.contains(expected), "{text}");
+            }
+            other => panic!("expected a sentence, got {other}"),
+        }
+    }
+    assert!(host.writes.lock().expect("writes").is_empty());
+}
+
+#[tokio::test]
+async fn the_internal_tool_names_a_missing_bucket_before_it_generates() {
+    for (bucket, expected) in [
+        (Err(ImageBucketError::NotAvailable), "no conversation artifact bucket"),
+        (Err(ImageBucketError::Unavailable), "unavailable right now"),
+    ] {
+        let (host, tools) = internal_tool(FakeHost::default(), Some("img-1"), bucket).await;
+        match run_internal(&tools, json!({"prompt": "x"})).await {
+            Value::String(text) => assert!(text.contains(expected), "{text}"),
+            other => panic!("expected a sentence, got {other}"),
+        }
+        assert!(host.generated.lock().expect("generated").is_empty());
+    }
+}
+
+#[tokio::test]
+async fn the_internal_tool_reports_a_partial_save() {
+    let host = FakeHost::default();
+    *host.fail_write.lock().expect("fail") = Some(2);
+    let (_, tools) = internal_tool(host, Some("img-1"), Ok("conv")).await;
+    let out = run_internal(&tools, json!({"prompt": "x", "n": 2})).await;
+    assert_eq!(out["status"], "partial");
+    assert_eq!(out["artifacts"].as_array().expect("artifacts").len(), 1);
+    assert!(out["error"].as_str().expect("error").contains("saved 1 of 2"));
 }
