@@ -75,6 +75,9 @@ type currentAgentDraft struct {
 	Instructions         string   `json:"instructions"`
 	WelcomeMessage       string   `json:"welcome_message,omitempty"`
 	ConversationStarters []string `json:"conversation_starters,omitempty"`
+	// Soul is the persona under review (issue 1644). It is untrusted client
+	// input, so capped() keeps it only when agentsoul accepts it.
+	Soul any `json:"soul,omitempty"`
 }
 
 // capped bounds every field to the AgentDefinition limit, as
@@ -85,6 +88,9 @@ func (d currentAgentDraft) capped() currentAgentDraft {
 		Description:    strings.TrimSpace(truncate(d.Description, applicationDescriptionMaxLength)),
 		Instructions:   strings.TrimSpace(truncate(d.Instructions, applicationInstructionsSanityLength)),
 		WelcomeMessage: strings.TrimSpace(truncate(d.WelcomeMessage, applicationWelcomeMessageMaxLength)),
+	}
+	if normalized, failure := proposedSoul(d.Soul); failure == nil && normalized != nil {
+		out.Soul = normalized
 	}
 	for _, starter := range d.ConversationStarters {
 		starter = strings.TrimSpace(starter)

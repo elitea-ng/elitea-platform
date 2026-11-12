@@ -24,7 +24,7 @@ import { t } from '@/shared/i18n';
 import { SingleSelect } from '@/shared/ui/SingleSelect';
 
 import { agentMediaErrorMessage, useGenerateAgentMedia } from '../lib/agentMediaApi';
-import type { AgentSoulDraft } from '../lib/agentSoulDraft';
+import type { AgentSoulDraft } from '@/shared/lib/agentSoulDraft';
 
 export interface EditApplicationAvatarGenerateProps {
   readonly projectId: string;

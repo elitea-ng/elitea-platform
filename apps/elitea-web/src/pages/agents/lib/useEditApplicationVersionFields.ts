@@ -12,7 +12,7 @@ import { areOutputContractsEqual, readOutputContract } from '@/shared/ui/OutputC
 
 import type { AvatarPack } from '@elitea/client-core/conversation';
 
-import { areSoulDraftsEqual, soulDraftProblems, soulToDraft, type AgentSoulDraft } from './agentSoulDraft';
+import { areSoulDraftsEqual, soulDraftProblems, soulToDraft, type AgentSoulDraft } from '@/shared/lib/agentSoulDraft';
 import { areAvatarPacksEqual, avatarPackDraftOf } from './avatarPackDraft';
 
 /**

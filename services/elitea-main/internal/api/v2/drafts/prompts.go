@@ -34,6 +34,7 @@ Keys:
   "instructions"           string, required. Markdown. The agent's system prompt: its role, how it works, the order it does things in, what it produces, and what it must not do. Write it addressed to the agent.
   "welcome_message"        string, optional. The first thing the agent says. At most 768 characters.
   "conversation_starters"  array of at most 4 short strings, optional. Each is a complete opening request a user could send, at most 768 characters.
+  "soul"                   object, optional. The agent's persona: how it speaks and behaves. Keys, all optional: "display_name" (string, at most 64 characters), "role" (one line, at most 160 characters), "voice" (array of at most 16 short style words, each at most 64 characters), "values" (array of at most 32 strings), "boundaries" (array of at most 32 strings: what the agent declines or always escalates), "body" (Markdown, a short free-form description of the persona). The soul never names tools, toolkits, credentials, permissions or scopes: it grants nothing. Leave it out when the request gives no hint of a persona.
 
 Base every field on the request that follows. Do not name tools, toolkits or other agents: attaching them is a separate, human step.`
 

@@ -6185,5 +6185,14 @@
   "features.agentTeams.edit.searchAgents": "Search the project's agents",
   "features.agentTeams.loadMore": "Show more",
   "features.agentTeams.shownOf": "Showing {{shown}} of {{total}} teams",
-  "features.agentTeams.edit.loadingAgents": "Loading agents…"
+  "features.agentTeams.edit.loadingAgents": "Loading agents…",
+  "features.agents.generateAgentModal.personaBody": "Description",
+  "features.agents.generateAgentModal.personaBoundaries": "Boundaries",
+  "features.agents.generateAgentModal.personaDisplayName": "Display name",
+  "features.agents.generateAgentModal.personaHint": "The persona shapes how the agent speaks. It grants no tools or permissions. You can edit it later in the Persona tab.",
+  "features.agents.generateAgentModal.personaLabel": "Persona:",
+  "features.agents.generateAgentModal.personaRemove": "Do not add a persona",
+  "features.agents.generateAgentModal.personaRole": "Role",
+  "features.agents.generateAgentModal.personaValues": "Values",
+  "features.agents.generateAgentModal.personaVoice": "Voice"
 }

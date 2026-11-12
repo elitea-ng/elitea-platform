@@ -242,6 +242,26 @@ func TestDraftStreamCapsTheCurrentDraftToTheAgentDefinitionLimits(t *testing.T) 
 	}
 }
 
+// Issue 1644: a refinement shows the model the persona under review, and a
+// persona that names a capability is dropped before the model sees it.
+func TestDraftStreamShowsTheCurrentPersonaOnlyWhenItIsValid(t *testing.T) {
+	last := func(soul map[string]any) string {
+		body, _ := json.Marshal(map[string]any{
+			"user_description": "tweak",
+			"current_draft":    map[string]any{"name": "Old", "description": "d", "instructions": "i", "soul": soul},
+		})
+		completer := &streamingStub{pieces: []string{validDraft}}
+		serveStream(t, completer, string(body))
+		return completer.got.Messages[len(completer.got.Messages)-1].Content
+	}
+	if got := last(map[string]any{"role": "Lead"}); !strings.Contains(got, `"role":"Lead"`) {
+		t.Errorf("the valid persona was not shown: %q", got)
+	}
+	if got := last(map[string]any{"role": "Lead", "tools": []string{"github"}}); strings.Contains(got, "github") || strings.Contains(got, `"soul"`) {
+		t.Errorf("a capability-naming persona reached the model: %q", got)
+	}
+}
+
 // blockingStreamer holds the completion until released, so a test can look at
 // what the client has received before the first token.
 type blockingStreamer struct{ release chan struct{} }

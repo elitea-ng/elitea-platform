@@ -42,6 +42,26 @@ describe('GenerateAgentReviewForm', () => {
     expect(welcomeInput.tagName).toBe('TEXTAREA');
   });
 
+  it('shows the proposed persona and lets the reviewer leave it out (issue 1644)', () => {
+    const onChange = vi.fn();
+    const soul = { schema: 'elitea.soul/v1', display_name: 'Mira', role: 'Incident lead', voice: ['calm', 'brief'], boundaries: ['never pages at night'] };
+    const draft: AgentDraft = { ...EMPTY_AGENT_DRAFT, name: 'A', soul };
+    renderWithTheme(<GenerateAgentReviewForm {...baseProps({ draft, onChange })} />);
+
+    expect(screen.getByTestId('agent-draft-persona-displayName')).toHaveTextContent('Mira');
+    expect(screen.getByTestId('agent-draft-persona-role')).toHaveTextContent('Incident lead');
+    expect(screen.getByTestId('agent-draft-persona-voice')).toHaveTextContent('calm');
+    expect(screen.getByTestId('agent-draft-persona-boundaries')).toHaveTextContent('never pages at night');
+
+    fireEvent.click(screen.getByTestId('agent-draft-persona-remove'));
+    expect(onChange).toHaveBeenCalledWith({ ...draft, soul: undefined });
+  });
+
+  it('shows no persona section for a draft without one', () => {
+    renderWithTheme(<GenerateAgentReviewForm {...baseProps()} />);
+    expect(screen.queryByTestId('agent-draft-persona')).toBeNull();
+  });
+
   it('calls onChange with the updated name field', () => {
     const onChange = vi.fn();
     renderWithTheme(<GenerateAgentReviewForm {...baseProps({ onChange })} />);

@@ -27,7 +27,7 @@ import {
   soulFromDraft,
   soulTextBytes,
   type AgentSoulDraft,
-} from '../lib/agentSoulDraft';
+} from '@/shared/lib/agentSoulDraft';
 import type { EditApplicationVersionFieldsState } from '../lib/useEditApplicationVersionFields';
 
 export interface EditApplicationPersonaPanelProps {

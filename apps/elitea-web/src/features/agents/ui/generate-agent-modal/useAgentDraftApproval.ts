@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCreateApplicationDraft } from '@/entities/application-form';
 import { LATEST_VERSION_NAME } from '@/entities/version';
 import { getGetApplicationQueryOptions, getUpdateApplicationRelationQueryOptions } from '@/shared/api/generated/applications/applications';
-import type { ApplicationCreatedResponse } from '@/shared/api/generated/model';
+import type { AgentSoulV1, ApplicationCreatedResponse } from '@/shared/api/generated/model';
 import { contextResolver } from '@/shared/lib/string';
 
 import { mapAssociationError } from '../../lib/associationError';
@@ -148,6 +148,9 @@ export function useAgentDraftApproval({
             // `toVersionWriteRequest`, which had no key for it).
             welcomeMessage: draft.welcome_message,
             conversationStarters: filterEmptyStrings(draft.conversation_starters),
+            // The reviewed persona (issue 1644). Main checked it when it
+            // generated the draft and checks it again on this write.
+            ...(draft.soul === undefined ? {} : { soul: draft.soul as AgentSoulV1 }),
             variables: contextResolver(draft.instructions).map((name) => ({ name, value: '' })),
             // Empty `internal_tools` matches a fresh form: the gates admit
             // the whole authorable catalogue now (see

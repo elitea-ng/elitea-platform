@@ -80,6 +80,7 @@ import (
 	v2predict "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/predict"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentsoul"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -270,16 +271,21 @@ type SuggestedResource struct {
 // always present (never null) — [] when no repository was composed for that
 // category, or when nothing scored above zero.
 type ApplicationDraft struct {
-	Name                 string              `json:"name"`
-	Description          string              `json:"description"`
-	Instructions         string              `json:"instructions"`
-	WelcomeMessage       string              `json:"welcome_message"`
-	ConversationStarters []string            `json:"conversation_starters"`
-	SuggestedToolkits    []SuggestedResource `json:"suggested_toolkits"`
-	SuggestedMCP         []SuggestedResource `json:"suggested_mcp"`
-	SuggestedPipelines   []SuggestedResource `json:"suggested_pipelines"`
-	SuggestedAgents      []SuggestedResource `json:"suggested_agents"`
-	SuggestedSkills      []SuggestedResource `json:"suggested_skills"`
+	Name                 string   `json:"name"`
+	Description          string   `json:"description"`
+	Instructions         string   `json:"instructions"`
+	WelcomeMessage       string   `json:"welcome_message"`
+	ConversationStarters []string `json:"conversation_starters"`
+	// Soul is the proposed persona (ADR-0050 decision 1a): an AgentSoulV1
+	// document the model wrote and agentsoul.Normalize checked, the bytes the
+	// create body sends as version_details.soul. Absent when the model wrote
+	// none; it never names a capability.
+	Soul               json.RawMessage     `json:"soul,omitempty"`
+	SuggestedToolkits  []SuggestedResource `json:"suggested_toolkits"`
+	SuggestedMCP       []SuggestedResource `json:"suggested_mcp"`
+	SuggestedPipelines []SuggestedResource `json:"suggested_pipelines"`
+	SuggestedAgents    []SuggestedResource `json:"suggested_agents"`
+	SuggestedSkills    []SuggestedResource `json:"suggested_skills"`
 }
 
 // ProjectContextDraft is legacy's GenerateProjectContextDraftResponse.
@@ -446,6 +452,7 @@ func (h *Handler) finishApplicationDraft(ctx context.Context, projectID, content
 		Instructions         string   `json:"instructions"`
 		WelcomeMessage       string   `json:"welcome_message"`
 		ConversationStarters []string `json:"conversation_starters"`
+		Soul                 any      `json:"soul"`
 	}
 	if err := json.Unmarshal([]byte(object), &raw); err != nil {
 		return ApplicationDraft{}, unusable(object, "the model returned unusable JSON", err)
@@ -469,6 +476,14 @@ func (h *Handler) finishApplicationDraft(ctx context.Context, projectID, content
 		WelcomeMessage:       strings.TrimSpace(truncate(raw.WelcomeMessage, applicationWelcomeMessageMaxLength)),
 		ConversationStarters: starters,
 	}
+	// The persona the model proposed (ADR-0050 decision 1a, issue 1644): the
+	// same refusal codes as a version write, so a soul that names a tool,
+	// credential or permission never reaches the reviewer.
+	soul, failure := proposedSoul(raw.Soul)
+	if failure != nil {
+		return ApplicationDraft{}, failure
+	}
+	draft.Soul = soul
 	// AgentDefinition (v2.yaml) is the rule: a missing name, description or
 	// instructions is refused, the same way on both routes.
 	if err := ValidateApplicationDraft(draft); err != nil {
@@ -800,4 +815,34 @@ func (h *Handler) authorizeSkillEdit(w http.ResponseWriter, r *http.Request) boo
 	}
 	writeError(w, http.StatusForbidden, "skill details access is required")
 	return false
+}
+
+// proposedSoul checks the soul a model proposed with agentsoul.Normalize and
+// answers its canonical JSON. Nothing, null and a soul that holds only the
+// schema key are "no soul". The model need not write the `schema` key: the
+// version is fixed, so it is added.
+func proposedSoul(value any) (json.RawMessage, *draftFailure) {
+	object, ok := value.(map[string]any)
+	if value == nil || (ok && len(object) == 0) {
+		return nil, nil
+	}
+	if ok {
+		if _, has := object["schema"]; !has {
+			object["schema"] = agentsoul.SchemaID
+		}
+		if len(object) == 1 {
+			return nil, nil
+		}
+	}
+	normalized, err := agentsoul.Normalize(value)
+	if err != nil {
+		var refused *agentsoul.Error
+		if errors.As(err, &refused) {
+			return nil, &draftFailure{status: http.StatusUnprocessableEntity, code: refused.Code,
+				message: "the generated persona is not usable: " + refused.Message, cause: err}
+		}
+		return nil, &draftFailure{status: http.StatusInternalServerError, code: SchemaUnavailableCode,
+			message: "the persona schema could not be loaded", cause: err}
+	}
+	return normalized, nil
 }

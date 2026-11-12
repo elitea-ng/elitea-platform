@@ -75,6 +75,7 @@ export function useAgentDraftGenerator(projectId: string | undefined): AgentDraf
           instructions: current.instructions,
           welcome_message: current.welcome_message,
           conversation_starters: current.conversation_starters,
+          soul: current.soul,
         },
       });
       return remember(turns, request, draft);

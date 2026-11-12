@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
-import type { OutputContract } from '@/shared/api/generated/model';
+import type { AgentSoulV1, OutputContract } from '@/shared/api/generated/model';
 
 /**
  * `'base'` — the well-known "latest/default version" name. Duplicated from
@@ -43,6 +43,12 @@ export interface ApplicationVersionDraft {
    * fetched version legitimately do not carry one.
    */
   readonly welcomeMessage?: string;
+  /**
+   * The persona (`AgentSoulV1`, ADR-0050 decision 1a) a create sends as the
+   * version's `soul`. Optional: absent sends no key, which a create reads as
+   * "no soul" (the generated-agent review form sets it, issue 1644).
+   */
+  readonly soul?: AgentSoulV1;
   readonly conversationStarters: readonly string[];
   readonly variables: readonly {
     readonly name: string;

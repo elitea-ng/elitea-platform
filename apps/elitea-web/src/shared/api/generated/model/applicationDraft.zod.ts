@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentSoulV1 } from "./agentSoulV1.zod";
 import { SuggestedResource } from "./suggestedResource.zod";
 
 export const ApplicationDraft = zod
@@ -58,6 +59,9 @@ export const ApplicationDraft = zod
       .describe(
         "At most four, each at most 768 characters. Blank entries are dropped rather than returned as empty chips.\n",
       ),
+    soul: AgentSoulV1.optional().describe(
+      "ADR-0050 decision 1a: the persona the model proposed, checked with the same rules as a version write (an AgentSoulV1 document; a soul that names a capability is refused with 422 `soul_capability_key`, `soul_too_large` or `soul_invalid`). Absent when the model proposed none. The review form shows it and the create body sends it as `version_details.soul`.\n",
+    ),
     suggested_toolkits: zod.array(SuggestedResource),
     suggested_mcp: zod.array(SuggestedResource),
     suggested_pipelines: zod.array(SuggestedResource),
