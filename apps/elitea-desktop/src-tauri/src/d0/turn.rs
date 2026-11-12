@@ -257,7 +257,43 @@ pub struct FloorTurn {
     pub question_id: String,
     /// The agent's index in the routed order, from 1.
     pub position: usize,
+    /// The default versions read so far for this message (see
+    /// [`DefaultVersions`]); not sent.
+    pub defaults: DefaultVersions,
 }
+
+/// The default versions of unpinned agents read during ONE message's floor
+/// chain, by application id. The chain's hops share it so a hop does not read
+/// an agent's detail again (#1942); a new message starts an empty one, so a
+/// default changed in the editor is always seen by the next message (#1941).
+#[derive(Clone, Debug, Default)]
+pub struct DefaultVersions(Arc<Mutex<HashMap<i64, i64>>>);
+
+impl DefaultVersions {
+    #[must_use]
+    pub fn get(&self, application_id: i64) -> Option<i64> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&application_id)
+            .copied()
+    }
+
+    pub fn keep(&self, application_id: i64, version_id: i64) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(application_id, version_id);
+    }
+}
+
+impl PartialEq for DefaultVersions {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for DefaultVersions {}
 
 impl TurnRequest {
     /// Whether the turn runs in bypass mode: only when the person asked
@@ -2913,7 +2949,22 @@ impl AgentHost {
                         // The started execution (if any) is left to expire.
                         _ => {
                             question_id = uuid::Uuid::new_v4().to_string();
-                            start_turn(&api, request, &answering, &question_id).await?
+                            // The first start may have written the chain's
+                            // row under the grant's id: a new id for the
+                            // retry, kept for the rest of the chain.
+                            let mut retried = request.clone();
+                            retried.unattended =
+                                retried.unattended.as_ref().map(UnattendedTurn::regranted);
+                            let mut started =
+                                start_turn(&api, &retried, &answering, &question_id).await?;
+                            // Main's answer may omit the id: the retry's own
+                            // is then the chain's, not the first start's.
+                            if let (Some(chain), Some(turn)) =
+                                (started.unattended.as_mut(), retried.unattended.as_ref())
+                            {
+                                chain.fill_grant_id(turn.grant.grant_id.as_deref());
+                            }
+                            started
                         }
                     };
                     let memory = self
@@ -3034,6 +3085,13 @@ impl AgentHost {
         // one with no grant, and the host starts no continuation.
         if started.unattended.is_none() {
             request.unattended = None;
+        }
+        // The grant id Main admitted is the chain's (a retried start used a
+        // new one); the continuations carry it.
+        if let (Some(turn), Some(chain)) =
+            (request.unattended.as_mut(), started.unattended.as_ref())
+        {
+            turn.adopt_admitted_grant_id(chain.grant_id.as_deref());
         }
         // The chain's root as Main admitted it (the first turn's execution).
         let chain_root = started
@@ -3869,6 +3927,7 @@ impl AgentHost {
                 next.project_id,
                 &next.conversation_uuid,
                 next.participant_id,
+                &next.defaults,
             )
             .await?;
         Ok(TurnRequest {
@@ -3896,6 +3955,7 @@ impl AgentHost {
             floor_turn: Some(FloorTurn {
                 question_id: next.question_id.clone(),
                 position: next.position,
+                defaults: next.defaults.clone(),
             }),
             cloud: target.cloud,
         })

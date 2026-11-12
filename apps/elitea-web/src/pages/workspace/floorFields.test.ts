@@ -131,8 +131,8 @@ describe('an unpinned agent (#1926)', () => {
     });
   });
 
-  it('reads the default version as the host does: is_default, meta.default_version_id, base, first', () => {
-    expect(defaultVersionOf({ versions: [{ id: 3, name: 'base' }, { id: 4, name: 'v2', is_default: true }] })).toBe(4);
+  it('reads the default version as the host does: meta.default_version_id, base, first (not is_default)', () => {
+    expect(defaultVersionOf({ meta: { default_version_id: 3 }, versions: [{ id: 3, name: 'base' }, { id: 4, name: 'v2', is_default: true }] })).toBe(3);
     expect(defaultVersionOf({ meta: { default_version_id: 5 }, versions: [{ id: 3, name: 'base' }, { id: '5', name: 'v5' }] })).toBe(5);
     expect(defaultVersionOf({ versions: [{ id: 2, name: 'draft' }, { id: 3, name: 'base' }] })).toBe(3);
     expect(defaultVersionOf({ versions: [{ id: 0, name: 'base' }, { id: 7, name: 'x' }] })).toBe(7);

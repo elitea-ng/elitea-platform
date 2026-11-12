@@ -24,6 +24,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 
 import type { Conversation } from '@/entities/conversation';
 import { useConversationRail } from '@/features/chat-conversation-list';
+import { useDebounce } from '@/shared/lib/useDebounce';
 
 export type ChatRail = ReturnType<typeof useConversationRail>;
 
@@ -44,15 +45,6 @@ const ChatRailFilterContext = createContext<ChatRailFilter | null>(null);
 /** Registers one on-screen reader of a lazy rail; returns its release. */
 const RailDemandContext = createContext<(() => () => void) | null>(null);
 
-function useDebounced(value: string, delayMs: number): string {
-  const [settled, setSettled] = useState(value);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setSettled(value), delayMs);
-    return () => window.clearTimeout(timer);
-  }, [value, delayMs]);
-  return settled;
-}
-
 export interface ChatRailProviderProps {
   readonly projectId: string | undefined;
   /** Whether the person can use the chat here at all; `false` provides no rail. */
@@ -71,7 +63,7 @@ export function ChatRailProvider({ projectId, enabled, lazy = false, children }:
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [localWorkOnly, setLocalWorkOnly] = useState(false);
-  const searchQuery = useDebounced(searchOpen ? query.trim() : '', SEARCH_DEBOUNCE_MS);
+  const searchQuery = useDebounce(searchOpen ? query.trim() : '', SEARCH_DEBOUNCE_MS);
   const rail = useConversationRail({ projectId, searchQuery, localWorkOnly, enabled: enabled && (!lazy || readers > 0) });
   const filter = useMemo(() => ({ searchOpen, setSearchOpen, query, setQuery, localWorkOnly, setLocalWorkOnly }), [searchOpen, query, localWorkOnly]);
   if (!enabled) return <>{children}</>;

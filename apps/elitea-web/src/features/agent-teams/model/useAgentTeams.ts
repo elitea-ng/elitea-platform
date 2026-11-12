@@ -37,19 +37,32 @@ function teamsKey(projectId: string): readonly unknown[] {
 /** The route's largest page (`limit` max in the contract). */
 const TEAM_PAGE_SIZE = 200;
 
-/** Where the next page starts, or undefined once every team is loaded. */
-function nextTeamOffset(pages: readonly AgentTeamList[]): number | undefined {
-  const loaded = pages.reduce((sum, page) => sum + page.rows.length, 0);
-  const last = pages.at(-1);
-  if (last === undefined || last.rows.length === 0 || loaded >= last.total) return undefined;
-  return loaded;
+/** Where a page starts: after the last team held (name and id), or at the top. */
+export interface TeamCursor {
+  readonly after_name: string;
+  readonly after_id: number;
 }
 
 /**
- * Every team the pages hold, once each. Paging is by offset over a list
- * sorted by name, so a team created or deleted between pages shifts the
- * window and a team can come back on the next page.
+ * The cursor of the page after `pages`, or undefined once every team is
+ * loaded. `total` decides, not the page's length: a short page is not the
+ * end when the server capped it, and a page that happens to be full is the
+ * end when it holds the last team. The route orders by lower(name), then id,
+ * so the cursor is the last row's own name and id and a team created or
+ * deleted between pages cannot shift the window (issue 1955). An empty page
+ * ends the walk whatever `total` says.
  */
+function nextTeamCursor(pages: readonly AgentTeamList[]): TeamCursor | undefined {
+  const lastPage = pages.at(-1);
+  const last = lastPage?.rows.at(-1);
+  if (lastPage === undefined || last === undefined) return undefined;
+  // Distinct teams: a page can repeat the last team held (a rename between pages).
+  const loaded = new Set(pages.flatMap((page) => page.rows.map((team) => team.id))).size;
+  if (loaded >= lastPage.total) return undefined;
+  return { after_name: last.name, after_id: last.id };
+}
+
+/** Every team the pages hold, once each (a team renamed between pages can come back under its new name). */
 function uniqueTeams(pages: readonly AgentTeamList[]): AgentTeam[] {
   const seen = new Set<number>();
   return pages.flatMap((page) => page.rows).filter((team) => (seen.has(team.id) ? false : (seen.add(team.id), true)));
@@ -63,9 +76,9 @@ export function useAgentTeamList(projectId: string | undefined, query: string, e
   const params = { query: query.trim() === '' ? undefined : query.trim(), limit: TEAM_PAGE_SIZE };
   const list = useInfiniteQuery({
     queryKey: [...teamsKey(projectId ?? ''), params, 'pages'],
-    queryFn: ({ pageParam }) => fetchAgentTeams(projectId ?? '', { ...params, offset: pageParam }),
-    initialPageParam: 0,
-    getNextPageParam: (_last, pages) => nextTeamOffset(pages),
+    queryFn: ({ pageParam }) => fetchAgentTeams(projectId ?? '', { ...params, ...pageParam }),
+    initialPageParam: undefined as TeamCursor | undefined,
+    getNextPageParam: (_last, pages) => nextTeamCursor(pages),
     enabled: enabled && projectId !== undefined && projectId !== '',
     placeholderData: keepPreviousData,
     retry: false,

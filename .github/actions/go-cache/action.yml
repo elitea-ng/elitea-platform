@@ -24,10 +24,23 @@ inputs:
       Newline-separated go.sum paths or globs, as setup-go's input of the same
       name took them. Every line must match at least one file.
     required: true
+  save:
+    description: >-
+      `false` restores only, even on a run on main. The jobs of one workflow
+      that share a key (same go.sum list) set it on all but the one heavy job
+      that compiles the whole workspace, so the first job to finish cannot
+      save a partial build cache under the shared key (issue 1562).
+    required: false
+    default: "true"
 outputs:
   cache-hit:
     description: "'true' on an exact-key hit."
     value: ${{ steps.cache.outputs.cache-hit }}
+  key:
+    description: >-
+      The exact cache key, for a caller that saves the cache itself with
+      `save: "false"` plus a final actions/cache/save step.
+    value: go-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-${{ steps.go.outputs.hash }}
 runs:
   using: composite
   steps:
@@ -87,6 +100,7 @@ runs:
       uses: ./.github/actions/main-write-cache
       with:
         slot: go
+        save: ${{ inputs.save }}
         path: |
           ${{ steps.go.outputs.gocache }}
           ${{ steps.go.outputs.gomodcache }}

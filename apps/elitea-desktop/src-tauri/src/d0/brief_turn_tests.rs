@@ -190,6 +190,7 @@ fn the_hosts_own_turn_text_carries_no_message_id() {
         floor_turn: Some(super::super::turn::FloorTurn {
             question_id: "q-0".into(),
             position: 1,
+            defaults: Default::default(),
         }),
         ..request("w")
     };

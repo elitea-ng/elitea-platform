@@ -342,6 +342,11 @@ test('J15: a saved agent exposes a version selector listing its versions', async
   await expect(deleteDialog).toBeHidden({ timeout: 10_000 });
   await page.waitForURL(/\/agents\/[^/]+\/[^/]+$/, { timeout: 15_000 });
 
+  // …and the selector shows the default version (v2), not "base" (issue 1568:
+  // the agent read embedded the first version's details, not the default's).
+  await expect(versionTrigger).toContainText(/v2/i, { timeout: 10_000 });
+  await expect(versionTrigger).not.toContainText(/^base$/i);
+
   // …and the menu stops offering it. This is the read-back, so a DELETE the
   // server accepted and the list still shows would fail here.
   await versionTrigger.click();

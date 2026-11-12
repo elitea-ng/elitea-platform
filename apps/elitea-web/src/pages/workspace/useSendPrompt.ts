@@ -21,7 +21,7 @@ import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { addressedTo, firstAnswerer, floorOf } from '@elitea/client-core/conversation';
 
 import { conversationApi } from '@/entities/conversation';
-import { LATEST_VERSION_NAME } from '@/entities/version';
+import { defaultRunVersionId } from '@/entities/version';
 import { getApplication } from '@/shared/api/generated/applications/applications';
 import { unwrapBody } from '@/shared/api/unwrap';
 import { isDesktopGrantsOff, markGrantsTurnedOff } from '@/features/unattended';
@@ -128,24 +128,14 @@ export function floorFields(prompt: string, agents: readonly ThreadAgent[], meta
 }
 
 /**
- * An agent's default version, from its detail (`GET application`): the version marked `is_default`, else
- * `meta.default_version_id`, else the one named `base`, else its first (`selectDefaultVersion`; the host reads a later
- * unpinned agent's the same way). 0 when it has none.
+ * An agent's default version, from its detail (`GET application`): `meta.default_version_id`, else the one named
+ * `base`, else its first (`defaultRunVersionId`, the one rule; the host reads a later unpinned agent's the same way).
+ * 0 when it has none.
  */
 export function defaultVersionOf(detail: unknown): number {
   const record = (detail ?? {}) as { versions?: unknown; meta?: { default_version_id?: unknown } | null };
-  const versions = Array.isArray(record.versions) ? (record.versions as { id?: unknown; name?: unknown; is_default?: unknown }[]) : [];
-  const idOf = (version: { id?: unknown } | undefined): number => {
-    const id = Number(version?.id);
-    return Number.isSafeInteger(id) && id > 0 ? id : 0;
-  };
-  const wanted = Number(record.meta?.default_version_id);
-  const picked =
-    versions.find((version) => version.is_default === true && idOf(version) > 0) ??
-    versions.find((version) => idOf(version) > 0 && idOf(version) === wanted) ??
-    versions.find((version) => version.name === LATEST_VERSION_NAME && idOf(version) > 0) ??
-    versions.find((version) => idOf(version) > 0);
-  return idOf(picked);
+  const versions = Array.isArray(record.versions) ? (record.versions as { id?: unknown; name?: unknown }[]) : [];
+  return defaultRunVersionId(versions, record.meta?.default_version_id) ?? 0;
 }
 
 /** What a start sends of the floor: the fields that run the routed agent, or only the address (or nothing). */

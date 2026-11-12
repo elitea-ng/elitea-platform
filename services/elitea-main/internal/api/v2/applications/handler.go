@@ -157,16 +157,48 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		"meta": map[string]any{"default_version_id": defaultVersionID},
 	}
 
-	// Include version_details for the first (latest) version — matches the
-	// legacy response contract.
-	if len(versions) > 0 {
-		firstVersionID := versions[0]["id"].(string)
-		if vd := h.fetchVersionDetails(r.Context(), projectID, applicationID, firstVersionID); vd != nil {
+	// Include version_details for the DEFAULT version (the one meta names,
+	// else "base", else the first listed) — the same rule as GetDefaultVersion
+	// and the web's selectDefaultVersion. It used to be versions[0], so an
+	// agent page opened without a version in the URL showed whichever version
+	// sorted first, not the default (issue 1568).
+	if id := detailVersionID(versions); id != "" {
+		if vd := h.fetchVersionDetails(r.Context(), projectID, applicationID, id); vd != nil {
 			result["version_details"] = vd
 		}
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+// detailVersionID is the id of the version whose details Get embeds: the one
+// flagged is_default (derived from meta.default_version_id), else the one named
+// "base", else the first listed; "" for an empty list. Only a version whose id
+// is a positive integer counts, as in the web's defaultRunVersionId and the
+// desktop host's default_version_of, so a row with a blank or non-numeric id
+// is never the answer and the three clients cannot pick different versions.
+func detailVersionID(versions []map[string]any) string {
+	var usable []map[string]any
+	for _, version := range versions {
+		id, _ := version["id"].(string)
+		if n, err := strconv.ParseInt(id, 10, 64); err == nil && n > 0 {
+			usable = append(usable, version)
+		}
+	}
+	for _, version := range usable {
+		if isDefault, _ := version["is_default"].(bool); isDefault {
+			return version["id"].(string)
+		}
+	}
+	for _, version := range usable {
+		if name, _ := version["name"].(string); name == defaultVersionName {
+			return version["id"].(string)
+		}
+	}
+	if len(usable) > 0 {
+		return usable[0]["id"].(string)
+	}
+	return ""
 }
 
 // getVersions returns the application's version summaries and the id of the
