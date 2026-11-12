@@ -90,6 +90,7 @@ type Enrichment struct {
 	reasoning  int64
 	owner      string
 	metered    *MeteredFields
+	image      *ImageFields
 	guardrails []guardrail.Verdict
 }
 
@@ -126,6 +127,21 @@ func (e *Enrichment) SetMetered(units int64, unit string, costNanoUSD int64) {
 		return
 	}
 	e.metered = &MeteredFields{Units: units, Unit: unit, CostNanoUSD: costNanoUSD}
+}
+
+// SetImage records the image facts of the request (issue 1969). The handler
+// calls it at admission with the request's size and quality, and again after
+// the bill with the count and the pricing source; the last call wins.
+func (e *Enrichment) SetImage(fields ImageFields) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sealed {
+		return
+	}
+	e.image = &fields
 }
 
 // SetStreaming marks the response as streamed.
@@ -255,6 +271,7 @@ type snapshot struct {
 	reasoning  int64
 	owner      string
 	metered    *MeteredFields
+	image      *ImageFields
 	guardrails []guardrail.Verdict
 }
 
@@ -278,6 +295,7 @@ func (e *Enrichment) seal() snapshot {
 		reasoning:  e.reasoning,
 		owner:      e.owner,
 		metered:    e.metered,
+		image:      e.image,
 		guardrails: e.guardrails,
 	}
 }
@@ -418,6 +436,7 @@ func Middleware(recorder *Recorder) func(http.Handler) http.Handler {
 					CacheWriteToks:  final.cacheWrite,
 					ReasoningToks:   final.reasoning,
 					Metered:         final.metered,
+					Image:           final.image,
 					Guardrails:      final.guardrails,
 				})
 			}()

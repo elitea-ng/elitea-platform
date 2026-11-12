@@ -52,6 +52,10 @@ type Handler struct {
 	// meteredSettled and meteredLedger answer a settle's duplicate flag.
 	meteredSettled *meteredSettledSet
 	meteredLedger  MeteredLedger
+	// imageEstimateWarned holds the (provider, model) pairs already logged for
+	// billing on the flat per-image estimate (image_billing.go), so the WARN
+	// appears once per model for the life of the process.
+	imageEstimateWarned sync.Map
 	// models synthesises the per-project /llm/v1/models set from Postgres
 	// (design §4.2, §3.4). nil when the gateway is booted without a database:
 	// the /v1/models surface then reports an empty set rather than erroring.
@@ -908,7 +912,10 @@ func (h *Handler) ImageGeneration(w http.ResponseWriter, r *http.Request) {
 	// Image generation can be expensive; an over-budget project must be
 	// blocked before any provider call incurs real cost.
 	provider, model := providerModelFromImageGenReq(bifReq)
-	if !h.checkBudget(w, ctx, model) {
+	spec := imageSpecOfGeneration(bifReq)
+	// Issue 1969: the gate also refuses a request whose ESTIMATE does not fit
+	// in what is left of the budget (image_billing.go).
+	if !h.checkImageBudget(w, ctx, provider, model, spec) {
 		return
 	}
 
@@ -916,17 +923,10 @@ func (h *Handler) ImageGeneration(w http.ResponseWriter, r *http.Request) {
 	// Write the response first, then bill asynchronously (FIX #18).
 	h.writeUnary(w, resp, bErr)
 	if bErr == nil && resp != nil {
-		// Fix round-3 #8: bill image responses that carry no token Usage by
-		// falling back to a fixed per-image cost (perImageFallbackNano).
-		// usageFromImageResponse returns (in, out, imgCount):
-		//   - Usage != nil  →  in/out populated, imgCount = 0  →  normal token path.
-		//   - Usage == nil  →  in=out=0, imgCount = len(Data)  →  direct billing path.
-		in, out, imgCount := usageFromImageResponse(resp)
-		if in > 0 || out > 0 {
-			h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
-		} else if imgCount > 0 {
-			h.updateUsageDirect(ctx, identityProjectFromCtx(ctx), identityUserFromCtx(ctx), provider, model, imgCount*perImageFallbackNano)
-		}
+		// Bill the images actually returned: token usage when the provider
+		// reported it, else the catalog per-image price, else the flagged
+		// estimate (billImageResponse).
+		h.billImageResponse(ctx, provider, model, spec, resp)
 	}
 }
 

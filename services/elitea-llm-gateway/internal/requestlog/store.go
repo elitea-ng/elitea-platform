@@ -41,6 +41,10 @@ type Store struct {
 	// metered tool row is written WITHOUT the shared migration 0174 columns.
 	// Zero means "write them". See WriteBatch.
 	meteredUntil atomic.Int64
+	// imageUntil is the unix-nano time before which a batch holding an image
+	// row is written WITHOUT the shared migration 0242 columns. Zero means
+	// "write them".
+	imageUntil atomic.Int64
 	// reasoningUntil is the unix-nano time before which the full column list
 	// is written WITHOUT reasoning_tokens (shared migration 0225). Zero
 	// means "write it". See execWithReasoning.
@@ -155,8 +159,13 @@ func (s *Store) WriteBatch(ctx context.Context, records []Record) error {
 	if s == nil || len(records) == 0 {
 		return nil
 	}
-	if hasMetered(records) && !s.legacyColumns() && !s.latched(&s.meteredUntil) {
-		err := s.writeMeteredBatch(ctx, records)
+	// A batch with a metered tool row (0174) or an image row (0242) names those
+	// columns. A refusal latches the group that owns the missing column and the
+	// batch is tried again without it, so each skew costs only its own columns.
+	useMetered := hasMetered(records) && !s.legacyColumns() && !s.latched(&s.meteredUntil)
+	useImage := hasImage(records) && !s.legacyColumns() && !s.latched(&s.imageUntil)
+	for useMetered || useImage {
+		err := s.writeExtendedBatch(ctx, records, useMetered, useImage)
 		if err == nil {
 			s.writeVerdictsAfterLog(ctx, records)
 			return nil
@@ -164,7 +173,14 @@ func (s *Store) WriteBatch(ctx context.Context, records []Record) error {
 		if !isUndefinedColumn(err) {
 			return err
 		}
-		s.meteredUntil.Store(s.now().Add(legacyColumnsRetry).UnixNano())
+		until := s.now().Add(legacyColumnsRetry).UnixNano()
+		if useImage && (isMissingImageColumn(err) || !useMetered) {
+			s.imageUntil.Store(until)
+			useImage = false
+			continue
+		}
+		s.meteredUntil.Store(until)
+		useMetered = false
 	}
 	if !s.legacyColumns() {
 		err := s.writeBatch(ctx, records, false)
@@ -205,26 +221,87 @@ func hasMetered(records []Record) bool {
 	return false
 }
 
-// writeMeteredBatch writes every record with the full column list plus the
-// 0174 columns. A model row gets operation "llm" and NULL units, unit and
-// cost; the column default would say the same, but one statement binds one
-// shape.
-func (s *Store) writeMeteredBatch(ctx context.Context, records []Record) error {
+// hasImage reports whether a batch holds an image row.
+func hasImage(records []Record) bool {
+	for _, record := range records {
+		if record.Image != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// imageColumns are the shared migration 0242 columns, appended after the
+// metered ones when a batch holds an image row.
+const imageColumns = `kind, image_count, image_size, image_quality, pricing_source`
+
+// imageColumnsPerRow is the number of imageColumns.
+const imageColumnsPerRow = 5
+
+// isMissingImageColumn reports a 42703 that names one of the 0242 columns.
+func isMissingImageColumn(err error) bool {
+	for _, column := range []string{"kind", "image_count", "image_size", "image_quality", "pricing_source"} {
+		if isMissingColumn(err, column) {
+			return true
+		}
+	}
+	return false
+}
+
+// imageArgs is one row's bind values for imageColumns. A row that is not an
+// image row binds NULLs, so the columns of a model row stay NULL.
+func imageArgs(record Record) []any {
+	if record.Image == nil {
+		return []any{nil, nil, nil, nil, nil}
+	}
+	return []any{
+		"image",
+		nonNegative(record.Image.Count),
+		nullableText(truncate(record.Image.Size, 16)),
+		nullableText(truncate(record.Image.Quality, 32)),
+		nullableText(truncate(record.Image.PricingSource, 24)),
+	}
+}
+
+// nullableText is NULL for an empty string.
+func nullableText(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+// writeExtendedBatch writes every record with the full column list plus the
+// 0174 columns (withMetered) and the 0242 columns (withImage). A model row gets
+// operation "llm" and NULL units, unit and cost; the column default would say
+// the same, but one statement binds one shape.
+func (s *Store) writeExtendedBatch(ctx context.Context, records []Record, withMetered, withImage bool) error {
 	return s.execWithReasoning(ctx, func(shape columnShape) (string, []any) {
 		columns, perRow := shape.columns()
-		perRow += meteredColumnsPerRow - columnsPerRow
-		columns = strings.TrimSuffix(columns, ")") + ", " + meteredColumns + ")"
+		if withMetered {
+			perRow += meteredColumnsPerRow - columnsPerRow
+			columns = strings.TrimSuffix(columns, ")") + ", " + meteredColumns + ")"
+		}
+		if withImage {
+			perRow += imageColumnsPerRow
+			columns = strings.TrimSuffix(columns, ")") + ", " + imageColumns + ")"
+		}
 		placeholders := make([]string, 0, len(records))
 		args := make([]any, 0, len(records)*perRow)
 		for index, record := range records {
 			placeholders = append(placeholders, rowPlaceholders(index*perRow, perRow))
 			args = append(args, recordArgs(record, shape)...)
-			if record.Metered == nil {
-				args = append(args, operationLLM, nil, nil, nil)
-				continue
+			if withMetered {
+				if record.Metered == nil {
+					args = append(args, operationLLM, nil, nil, nil)
+				} else {
+					args = append(args, operationTool, record.Metered.Units,
+						truncate(record.Metered.Unit, 16), nanoNumeric(record.Metered.CostNanoUSD))
+				}
 			}
-			args = append(args, operationTool, record.Metered.Units,
-				truncate(record.Metered.Unit, 16), nanoNumeric(record.Metered.CostNanoUSD))
+			if withImage {
+				args = append(args, imageArgs(record)...)
+			}
 		}
 		return fmt.Sprintf(`INSERT INTO gateway.llm_request_logs %s VALUES %s`,
 			columns, strings.Join(placeholders, ",")), args
