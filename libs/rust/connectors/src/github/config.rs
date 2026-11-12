@@ -7,7 +7,6 @@ use zeroize::Zeroizing;
 const DEFAULT_BRANCH: &str = "main";
 /// The public GitHub API, the base URL the SDK toolkit and the web form both
 /// default to. A saved configuration that left the field blank means it.
-const DEFAULT_BASE_URL: &str = "https://api.github.com";
 const MAX_ORIGIN_BYTES: usize = 2_048;
 const MAX_REPOSITORY_BYTES: usize = 512;
 const MAX_BRANCH_BYTES: usize = 1_024;
@@ -117,8 +116,13 @@ impl GitHubToolkitConfig {
             .get("github_configuration")
             .and_then(Value::as_object)
             .ok_or_else(|| fault(GitHubConfigFault::Credential))?;
-        let base_url =
-            parse_base_url(optional_text(configuration, "base_url")?.unwrap_or(DEFAULT_BASE_URL))?;
+        // No default: a GitHub Enterprise credential whose URL was cleared
+        // must be refused, not silently pointed (with its token) at the
+        // public API.
+        let base_url = parse_base_url(
+            optional_text(configuration, "base_url")?
+                .ok_or_else(|| fault(GitHubConfigFault::BaseUrl))?,
+        )?;
         let repository = parse_repository(
             optional_text(settings, "repository")?
                 .ok_or_else(|| fault(GitHubConfigFault::Repository))?,

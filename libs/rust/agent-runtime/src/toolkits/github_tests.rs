@@ -2698,7 +2698,8 @@ async fn a_blank_repository_is_refused_with_the_setting_to_edit_not_a_bare_failu
     use super::families::UnsupportedSetting;
     use super::families::index_tools::{IndexToolSupport, IndexToolsWithheld};
     use super::materialize::{
-        left_out_toolkits_notice_text, materialize_configured_toolsets_reporting_refusals,
+        ToolsetMaterializationErrorCode, left_out_toolkits_notice_text,
+        materialize_configured_toolsets_reporting_refusals,
     };
 
     // The exact settings the web form's `toolInitialValues` produces for a
@@ -2746,6 +2747,11 @@ async fn a_blank_repository_is_refused_with_the_setting_to_edit_not_a_bare_failu
         error.refusal_reason(),
         Some(UnsupportedSetting::GitHubRepository.reason())
     );
+    assert_eq!(
+        error.code(),
+        ToolsetMaterializationErrorCode::InvalidConfiguration,
+        "a missing setting stays user-fixable configuration, not a missing capability"
+    );
 }
 
 #[test]
@@ -2780,6 +2786,19 @@ fn every_config_refusal_names_its_setting() {
         };
         assert_eq!(error.fault(), expected);
     }
+    let mut non_text = settings(
+        &json!({"base_url": "https://api.github.com", "access_token": "t"}),
+        &["get_me"],
+    );
+    non_text.insert("repository".to_owned(), json!(5));
+    let Err(error) = GitHubToolkitConfig::parse(&non_text) else {
+        panic!("a non-text repository was accepted");
+    };
+    assert_eq!(
+        error.fault(),
+        GitHubConfigFault::Other,
+        "an unclassified setting still reaches the run as the named GitHubSettings refusal"
+    );
     let mut no_credential = settings(&json!(null), &["get_me"]);
     no_credential.remove("github_configuration");
     let Err(error) = GitHubToolkitConfig::parse(&no_credential) else {
@@ -2788,19 +2807,23 @@ fn every_config_refusal_names_its_setting() {
     assert_eq!(error.fault(), GitHubConfigFault::Credential);
 }
 
-/// The web form pre-fills `https://api.github.com`, and the SDK defaults to
-/// it; a saved credential that left the field blank means the public API.
+/// No default: a GitHub Enterprise credential whose URL was cleared must be
+/// refused by name, never pointed (with its token) at the public API.
 #[test]
-fn a_blank_base_url_means_the_public_github_api() {
+fn a_blank_base_url_is_refused_by_name_not_defaulted() {
     for blank in [json!(""), json!(null), json!("   ")] {
-        let config = GitHubToolkitConfig::parse(&settings(
+        let Err(error) = GitHubToolkitConfig::parse(&settings(
             &json!({"base_url": blank, "access_token": "t"}),
             &["get_me"],
-        ))
-        .expect("a blank base URL defaults");
-        assert_eq!(config.base_url().as_str(), "https://api.github.com/");
+        )) else {
+            panic!("a blank base URL was accepted");
+        };
+        assert_eq!(error.fault(), GitHubConfigFault::BaseUrl);
     }
-    let config = GitHubToolkitConfig::parse(&settings(&json!({"access_token": "t"}), &["get_me"]))
-        .expect("an absent base URL defaults");
-    assert_eq!(config.base_url().as_str(), "https://api.github.com/");
+    let Err(error) =
+        GitHubToolkitConfig::parse(&settings(&json!({"access_token": "t"}), &["get_me"]))
+    else {
+        panic!("an absent base URL was accepted");
+    };
+    assert_eq!(error.fault(), GitHubConfigFault::BaseUrl);
 }

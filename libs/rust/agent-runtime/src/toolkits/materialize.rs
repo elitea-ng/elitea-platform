@@ -95,7 +95,11 @@ impl ToolsetMaterializationError {
 
     pub(super) const fn refused(setting: UnsupportedSetting) -> Self {
         Self {
-            code: ToolsetMaterializationErrorCode::UnsupportedToolkit,
+            code: if setting.is_invalid_configuration() {
+                ToolsetMaterializationErrorCode::InvalidConfiguration
+            } else {
+                ToolsetMaterializationErrorCode::UnsupportedToolkit
+            },
             refusal: Some(setting),
         }
     }
@@ -2074,7 +2078,7 @@ const fn github_config_materialization_error(
         Fault::Limit => {
             ToolsetMaterializationError::new(ToolsetMaterializationErrorCode::ResourceExhausted)
         }
-        Fault::Other => invalid_configuration(),
+        Fault::Other => ToolsetMaterializationError::refused(UnsupportedSetting::GitHubSettings),
     }
 }
 

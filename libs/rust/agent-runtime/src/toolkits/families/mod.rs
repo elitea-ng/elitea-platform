@@ -124,9 +124,28 @@ pub(crate) enum UnsupportedSetting {
     /// A `github` credential whose token, username/password or GitHub App
     /// parts are incomplete (#1978).
     GitHubAuthentication,
+    /// Any other unusable `github` toolkit setting — a non-text value, a
+    /// branch name or selected tool the runtime cannot use (#1978).
+    GitHubSettings,
 }
 
 impl UnsupportedSetting {
+    /// A setting that is missing or malformed rather than deliberately
+    /// unsupported: a caller that cannot report a left-out toolkit keeps
+    /// the `InvalidConfiguration` code for it, so status handling still
+    /// reads it as user-fixable configuration, not a missing capability.
+    #[must_use]
+    pub(crate) const fn is_invalid_configuration(self) -> bool {
+        matches!(
+            self,
+            Self::GitHubRepository
+                | Self::GitHubCredential
+                | Self::GitHubBaseUrl
+                | Self::GitHubAuthentication
+                | Self::GitHubSettings
+        )
+    }
+
     /// The reason, as the user and the model read it. Carries no
     /// configuration value.
     #[must_use]
@@ -164,6 +183,9 @@ impl UnsupportedSetting {
             }
             Self::GitHubAuthentication => {
                 "the GitHub credential is incomplete: provide an access token, a username with its password, or a GitHub App id with its private key, then save the configuration again"
+            }
+            Self::GitHubSettings => {
+                "a GitHub toolkit setting is not usable: check the repository, the branch names and the selected tools in the toolkit, and the GitHub credential it uses, then save them again"
             }
             Self::ToolkitNotGovernable => {
                 "this run is governed by the enterprise credential profile, and this toolkit has no governed credential adapter yet, so its tools were left out"
