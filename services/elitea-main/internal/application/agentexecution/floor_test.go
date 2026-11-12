@@ -229,3 +229,50 @@ func TestFloorTurnQuestionIDIsStable(t *testing.T) {
 		t.Fatalf("unstable id %s", a)
 	}
 }
+
+// Issue 1869: an agent of a conversation with several agents has its own
+// worker session thread; a single-agent conversation, and a service with no
+// floor, keep the conversation's thread so existing sessions keep resolving.
+func TestAgentSessionThreadIsPerParticipantOnlyInAMultiAgentConversation(t *testing.T) {
+	request := validCurrentApplicationStartRequest()
+	request.TargetParticipantID = 21
+	for name, c := range map[string]struct {
+		store FloorStore
+		want  string
+	}{
+		"several agents": {twoAgentFloor(), request.ConversationUUID + ":21"},
+		"a single agent": {&floorStoreStub{floor: ConversationFloor{Agents: []FloorAgent{{ParticipantID: 21}}}}, request.ConversationUUID},
+		"no floor":       {nil, request.ConversationUUID},
+		"another agent":  {twoAgentFloor(), request.ConversationUUID + ":22"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, admissions := floorStartService(t, c.store)
+			r := request
+			if name == "another agent" {
+				r.TargetParticipantID = 22
+			}
+			if _, err := service.StartCurrentApplication(context.Background(), r); err != nil {
+				t.Fatal(err)
+			}
+			if got := admissions.requests[0].Input.GetThreadId(); got != c.want {
+				t.Fatalf("thread = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestSessionThreadHelpers(t *testing.T) {
+	const conversation = "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1a01"
+	if got := SessionThreadID(conversation, 5, false); got != conversation {
+		t.Fatalf("single agent thread = %q", got)
+	}
+	thread := SessionThreadID(conversation, 5, true)
+	if thread != conversation+":5" || !IsParticipantSessionThread(thread, conversation) {
+		t.Fatalf("participant thread = %q", thread)
+	}
+	for _, shared := range []string{conversation, "thread-1", conversation + ":", ""} {
+		if IsParticipantSessionThread(shared, conversation) {
+			t.Fatalf("%q reads as a participant thread", shared)
+		}
+	}
+}

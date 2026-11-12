@@ -71,18 +71,24 @@ const idleRunExclusion = `NOT EXISTS (SELECT 1 FROM elitea_runtime.agent_idle_co
 
 // participantLatestSQL is the participant's newest execution in the
 // conversation, idle runs excluded, and whether a run is not terminal: the
-// participant's own turn ($5 false, the arm), or ANY agent run of the
-// conversation ($5 true, the sweep and the admission). Busy is
-// conversation-wide when a check fires on purpose: the
-// worker keys an agent's durable session by (actor, thread, definition) and
-// the thread is the conversation, so two participants that are the same
+// participant's own turn ($5 false, the arm), or the runs that can hold the
+// participant's worker session ($5 true, the sweep and the admission).
+//
+// The worker keys an agent's durable session by the frozen request's thread
+// id (with the actor and the project). With $6 true the thread is the
+// conversation's (a single-agent conversation, an ad hoc chat, a session
+// from before per-participant threads): two participants that are the same
 // agent version, or two ad hoc chats, asked by the same person share a
-// session writer, and an idle claim would take it from the live turn
-// (WriterNotCurrent). Waiting for every agent run is simpler than matching
-// the worker's key and costs only a later summary. A peer's
-// running turn defers the check to the next sweep; it never cancels it,
-// and it never stops the agent's own settled turn from arming one. $1 conversation uuid text, $2 participant, $3 projection
-// project, $4 an execution to leave out (” for none). Index
+// session writer, so ANY agent run of the conversation counts, and an idle
+// claim would otherwise take the session from the live turn
+// (WriterNotCurrent). With $6 false the participant has its own thread (issue
+// 1869: IsParticipantSessionThread), so only the participant's own runs
+// count, idle runs included, and a peer's turn neither delays nor skips the
+// check. A peer's running turn on a shared session defers the check to the
+// next sweep; it never cancels it, and it never stops the agent's own
+// settled turn from arming one. $1 conversation uuid text, $2 participant,
+// $3 projection project, $4 an execution to leave out ('' for none), $5 the
+// sweep/admission form, $6 the session is conversation-wide. Index
 // agent_execution_jobs_current_correlation_idx leads with client_stream_id.
 const participantLatestSQL = `
 SELECT COALESCE((
@@ -101,7 +107,7 @@ SELECT COALESCE((
     JOIN elitea_runtime.execution_jobs AS job
       ON job.execution_id = binding.execution_id AND job.generation = binding.generation
     WHERE binding.client_stream_id = $1
-      AND ($5::boolean OR binding.participant_id = $2)
+      AND (($5::boolean AND $6::boolean) OR binding.participant_id = $2)
       AND job.projection_project_id = $3 AND binding.execution_id <> $4
       AND job.state IN ` + nonTerminalJobStates + `
       AND ($5::boolean OR ` + idleRunExclusion + `))`
@@ -163,7 +169,7 @@ func (r *AgentIdleCompactionsRepository) ArmIdleCompaction(
 		var latest string
 		var busy bool
 		if err := tx.QueryRow(ctx, participantLatestSQL, source.conversationUUID, source.participantID,
-			source.projectID, "", false).Scan(&latest, &busy); err != nil {
+			source.projectID, "", false, false).Scan(&latest, &busy); err != nil {
 			return fmt.Errorf("idle compaction: read the agent's latest turn: %w", err)
 		}
 		if latest != executionID || busy {
@@ -590,7 +596,7 @@ WHERE response.uuid = $1::uuid AND conversation.uuid = $2::uuid`, schema),
 	if threadID == "" {
 		return target, agentexecutionapp.IdleCompactionSkipSourceInvalid, nil
 	}
-	if err := r.pool.QueryRow(ctx, participantLatestSQL, row.conversationUUID, row.participantID, row.projectID, "", true).
+	if err := r.pool.QueryRow(ctx, participantLatestSQL, row.conversationUUID, row.participantID, row.projectID, "", true, !agentexecutionapp.IsParticipantSessionThread(threadID, row.conversationUUID)).
 		Scan(&target.LatestExecution, &target.AgentBusy); err != nil {
 		return target, "", fmt.Errorf("load idle compaction agent turns: %w", err)
 	}
@@ -690,7 +696,7 @@ FOR UPDATE`, agentexecutionapp.IdleCompactionIdempotencyKey(turn.SourceExecution
 	var latest string
 	var busy bool
 	if err := tx.QueryRow(ctx, participantLatestSQL, turn.ConversationUUID, turn.ParticipantID, turn.ProjectID,
-		executionID, true).Scan(&latest, &busy); err != nil {
+		executionID, true, !agentexecutionapp.IsParticipantSessionThread(turn.ThreadID, turn.ConversationUUID)).Scan(&latest, &busy); err != nil {
 		return fmt.Errorf("recheck idle compaction agent turns: %w", err)
 	}
 	if latest != turn.SourceExecutionID {

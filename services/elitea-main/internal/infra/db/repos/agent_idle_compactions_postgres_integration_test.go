@@ -386,3 +386,26 @@ WHERE idempotency_key = $1`, agentexecutionapp.IdleCompactionIdempotencyKey(sour
 		t.Fatalf("sweep after the peer settled: %d %v %q", created, err, h.checkState(source))
 	}
 }
+
+// Issue 1869: when the source answered on its own participant session thread,
+// no peer shares its worker session, so a peer's live run neither delays nor
+// skips the due check.
+func TestIdleCompactionIgnoresAPeersLiveRunOnAParticipantSessionThread(t *testing.T) {
+	h := newIdleHarness(t)
+	peerResponse := h.newResponse()
+	peerRun := h.executions[peerResponse]
+	h.exec(`UPDATE elitea_runtime.agent_execution_jobs SET client_stream_id = $2, participant_id = $3
+WHERE execution_id = $1`, peerRun, h.conversation, h.peer)
+	h.exec(`UPDATE elitea_runtime.execution_jobs SET state = 'RUNNING' WHERE execution_id = $1`, peerRun)
+	responseID := h.newResponse()
+	source := h.settledAnswer(responseID, h.agent)
+	h.exec(`UPDATE p_1.chat_message_group SET meta = jsonb_set(meta, '{thread_id}', to_jsonb($2::text))
+WHERE uuid = $1::uuid`, responseID, agentexecutionapp.ParticipantSessionThreadID(h.conversation, h.agent))
+	if !h.arm(source) {
+		t.Fatal("the agent's check did not arm")
+	}
+	h.makeDue(source)
+	if created, err := h.admitter.Sweep(t.Context()); err != nil || created != 1 || h.checkState(source) != "ADMITTED" {
+		t.Fatalf("sweep during the peer's run: %d %v %q", created, err, h.checkState(source))
+	}
+}

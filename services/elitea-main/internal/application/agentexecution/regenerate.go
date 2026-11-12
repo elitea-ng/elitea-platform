@@ -342,6 +342,14 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		input.ContextSettings = contextSettings
 		input.IsRegenerate = true
 		input.CurrentMessageId = regeneratedQuestionID(target)
+		// Issue 1869: the regenerated answer runs in the agent's own session
+		// thread when the conversation has several agents, as its start did.
+		several, err := service.conversationHasSeveralAgents(ctx, request.ProjectID, target.ConversationUUID)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		sessionThread := SessionThreadID(target.ConversationUUID, target.TargetParticipantID, several)
+		input.ThreadId = &sessionThread
 		input.RecalledMemory, input.RecalledMemoryTag = recalledMemoryInput(agentMemory, input.GetApplication())
 		turn.ApplicationID = resolved.ApplicationID
 		turn.ApplicationVersionID = resolved.ApplicationVersionID
