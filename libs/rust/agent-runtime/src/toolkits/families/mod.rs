@@ -113,6 +113,17 @@ pub(crate) enum UnsupportedSetting {
     BucketName,
     /// A governed run (#1120) and a toolkit no credential adapter governs.
     ToolkitNotGovernable,
+    /// A `github` toolkit saved with no repository, or one that is not
+    /// `owner/name` (#1978).
+    GitHubRepository,
+    /// A `github` toolkit with no usable credential configuration (#1978).
+    GitHubCredential,
+    /// A `github` credential whose base URL is not a usable `https://` URL
+    /// (#1978).
+    GitHubBaseUrl,
+    /// A `github` credential whose token, username/password or GitHub App
+    /// parts are incomplete (#1978).
+    GitHubAuthentication,
 }
 
 impl UnsupportedSetting {
@@ -141,6 +152,18 @@ impl UnsupportedSetting {
             }
             Self::BucketName => {
                 "the toolkit has no usable bucket: set its bucket to a name of lowercase letters, digits and hyphens that starts with a letter, then save it again"
+            }
+            Self::GitHubRepository => {
+                "the GitHub toolkit has no usable repository: set it to owner/name (for example EliteaAI/elitea-platform) or the repository URL, then save the toolkit again"
+            }
+            Self::GitHubCredential => {
+                "the GitHub toolkit has no usable GitHub credential: select a GitHub configuration in the toolkit, then save it again"
+            }
+            Self::GitHubBaseUrl => {
+                "the GitHub credential's base URL is not a valid https:// URL: use https://api.github.com or your GitHub Enterprise API URL, then save the configuration again"
+            }
+            Self::GitHubAuthentication => {
+                "the GitHub credential is incomplete: provide an access token, a username with its password, or a GitHub App id with its private key, then save the configuration again"
             }
             Self::ToolkitNotGovernable => {
                 "this run is governed by the enterprise credential profile, and this toolkit has no governed credential adapter yet, so its tools were left out"

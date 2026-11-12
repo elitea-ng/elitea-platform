@@ -1920,7 +1920,7 @@ fn materialize_github(
     let toolset = github::tools::build_github_toolset(
         name,
         github::config::GitHubToolkitConfig::parse(settings)
-            .map_err(|_| invalid_configuration())?,
+            .map_err(|error| github_config_materialization_error(error.fault()))?,
         policy,
         office,
     )
@@ -2048,6 +2048,33 @@ const fn openapi_materialization_error(
         openapi::config::OpenApiConfigErrorCode::InvalidConfiguration => invalid_configuration(),
         openapi::config::OpenApiConfigErrorCode::ResourceExhausted => resource_exhausted(),
         openapi::config::OpenApiConfigErrorCode::UnsupportedCapability => unsupported_toolkit(),
+    }
+}
+
+/// A GitHub configuration refusal names the setting to edit instead of
+/// ending the run as a bare invalid configuration (#1978).
+const fn github_config_materialization_error(
+    fault: github::config::GitHubConfigFault,
+) -> ToolsetMaterializationError {
+    use github::config::GitHubConfigFault as Fault;
+    match fault {
+        Fault::Repository => {
+            ToolsetMaterializationError::refused(UnsupportedSetting::GitHubRepository)
+        }
+        Fault::Credential => {
+            ToolsetMaterializationError::refused(UnsupportedSetting::GitHubCredential)
+        }
+        Fault::BaseUrl => ToolsetMaterializationError::refused(UnsupportedSetting::GitHubBaseUrl),
+        Fault::PlainHttpBaseUrl => {
+            ToolsetMaterializationError::refused(UnsupportedSetting::PlainHttp)
+        }
+        Fault::Authentication => {
+            ToolsetMaterializationError::refused(UnsupportedSetting::GitHubAuthentication)
+        }
+        Fault::Limit => {
+            ToolsetMaterializationError::new(ToolsetMaterializationErrorCode::ResourceExhausted)
+        }
+        Fault::Other => invalid_configuration(),
     }
 }
 

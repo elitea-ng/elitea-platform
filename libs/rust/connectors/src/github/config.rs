@@ -5,6 +5,9 @@ use url::Url;
 use zeroize::Zeroizing;
 
 const DEFAULT_BRANCH: &str = "main";
+/// The public GitHub API, the base URL the SDK toolkit and the web form both
+/// default to. A saved configuration that left the field blank means it.
+const DEFAULT_BASE_URL: &str = "https://api.github.com";
 const MAX_ORIGIN_BYTES: usize = 2_048;
 const MAX_REPOSITORY_BYTES: usize = 512;
 const MAX_BRANCH_BYTES: usize = 1_024;
@@ -29,6 +32,37 @@ pub enum GitHubAuthKind {
 /// field path nor a source value.
 pub struct GitHubToolkitConfigError {
     message: &'static str,
+    kind: GitHubConfigFault,
+}
+
+/// Which part of the materialized settings a [`GitHubToolkitConfigError`]
+/// refuses. Data-free: it names a setting, never a value, so a caller can tell
+/// the user what to edit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GitHubConfigFault {
+    /// The `github_configuration` credential is missing or not an object.
+    Credential,
+    /// The toolkit's `repository` is blank, not `owner/name`, or not a URL of
+    /// one.
+    Repository,
+    /// The credential's `base_url` is not a usable `https://` URL.
+    BaseUrl,
+    /// A plain `http://` base URL.
+    PlainHttpBaseUrl,
+    /// The token, username/password or GitHub App parts are incomplete or
+    /// malformed.
+    Authentication,
+    /// Any other malformed setting (branches, selected tools).
+    Other,
+    /// A setting exceeds its approved size.
+    Limit,
+}
+
+impl GitHubToolkitConfigError {
+    #[must_use]
+    pub const fn fault(&self) -> GitHubConfigFault {
+        self.kind
+    }
 }
 
 impl fmt::Debug for GitHubToolkitConfigError {
@@ -82,9 +116,13 @@ impl GitHubToolkitConfig {
         let configuration = settings
             .get("github_configuration")
             .and_then(Value::as_object)
-            .ok_or_else(invalid_configuration)?;
-        let base_url = parse_base_url(required_text(configuration, "base_url")?)?;
-        let repository = parse_repository(required_text(settings, "repository")?)?;
+            .ok_or_else(|| fault(GitHubConfigFault::Credential))?;
+        let base_url =
+            parse_base_url(optional_text(configuration, "base_url")?.unwrap_or(DEFAULT_BASE_URL))?;
+        let repository = parse_repository(
+            optional_text(settings, "repository")?
+                .ok_or_else(|| fault(GitHubConfigFault::Repository))?,
+        )?;
         let active_branch = optional_text(settings, "active_branch")?
             .unwrap_or(DEFAULT_BRANCH)
             .to_owned()
@@ -229,7 +267,10 @@ fn parse_base_url(value: &str) -> Result<Url, GitHubToolkitConfigError> {
     if value.len() > MAX_ORIGIN_BYTES {
         return Err(resource_exhausted());
     }
-    let mut url = Url::parse(value).map_err(|_| invalid_configuration())?;
+    let mut url = Url::parse(value).map_err(|_| fault(GitHubConfigFault::BaseUrl))?;
+    if url.scheme() == "http" {
+        return Err(fault(GitHubConfigFault::PlainHttpBaseUrl));
+    }
     if url.scheme() != "https"
         || !url.username().is_empty()
         || url.password().is_some()
@@ -237,7 +278,7 @@ fn parse_base_url(value: &str) -> Result<Url, GitHubToolkitConfigError> {
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        return Err(invalid_configuration());
+        return Err(fault(GitHubConfigFault::BaseUrl));
     }
     let path = url.path().trim_end_matches('/').to_owned();
     url.set_path(if path.is_empty() { "/" } else { &path });
@@ -245,22 +286,21 @@ fn parse_base_url(value: &str) -> Result<Url, GitHubToolkitConfigError> {
 }
 
 fn parse_repository(value: &str) -> Result<Box<str>, GitHubToolkitConfigError> {
-    if value.is_empty() || value.len() > MAX_REPOSITORY_BYTES || value.contains('\0') {
-        return Err(if value.len() > MAX_REPOSITORY_BYTES {
-            resource_exhausted()
-        } else {
-            invalid_configuration()
-        });
+    if value.len() > MAX_REPOSITORY_BYTES {
+        return Err(resource_exhausted());
+    }
+    if value.is_empty() || value.contains('\0') {
+        return Err(fault(GitHubConfigFault::Repository));
     }
     let repository = if value.starts_with("http://") || value.starts_with("https://") {
-        let url = Url::parse(value).map_err(|_| invalid_configuration())?;
+        let url = Url::parse(value).map_err(|_| fault(GitHubConfigFault::Repository))?;
         let segments = url
             .path_segments()
-            .ok_or_else(invalid_configuration)?
+            .ok_or_else(|| fault(GitHubConfigFault::Repository))?
             .filter(|segment| !segment.is_empty())
             .collect::<Vec<_>>();
         if segments.len() != 2 || url.query().is_some() || url.fragment().is_some() {
-            return Err(invalid_configuration());
+            return Err(fault(GitHubConfigFault::Repository));
         }
         format!("{}/{}", segments[0], trim_git_suffix(segments[1]))
     } else if let Some((host, path)) = value
@@ -268,7 +308,7 @@ fn parse_repository(value: &str) -> Result<Box<str>, GitHubToolkitConfigError> {
         .and_then(|value| value.split_once(':'))
     {
         if host.is_empty() {
-            return Err(invalid_configuration());
+            return Err(fault(GitHubConfigFault::Repository));
         }
         trim_git_suffix(path).to_owned()
     } else {
@@ -281,7 +321,7 @@ fn parse_repository(value: &str) -> Result<Box<str>, GitHubToolkitConfigError> {
         || !valid_repository_segment(owner)
         || !valid_repository_segment(name)
     {
-        return Err(invalid_configuration());
+        return Err(fault(GitHubConfigFault::Repository));
     }
     Ok(format!("{owner}/{name}").into_boxed_str())
 }
@@ -317,13 +357,6 @@ fn selected_tools(
         }
     }
     Ok(selected)
-}
-
-fn required_text<'a>(
-    values: &'a Map<String, Value>,
-    key: &str,
-) -> Result<&'a str, GitHubToolkitConfigError> {
-    optional_text(values, key)?.ok_or_else(invalid_configuration)
 }
 
 fn optional_text<'a>(
@@ -382,20 +415,27 @@ fn validate_secret_text(
     Ok(())
 }
 
-const fn invalid_configuration() -> GitHubToolkitConfigError {
+const fn fault(kind: GitHubConfigFault) -> GitHubToolkitConfigError {
     GitHubToolkitConfigError {
         message: "the materialized GitHub toolkit configuration is invalid",
+        kind,
     }
+}
+
+const fn invalid_configuration() -> GitHubToolkitConfigError {
+    fault(GitHubConfigFault::Other)
 }
 
 const fn invalid_authentication() -> GitHubToolkitConfigError {
     GitHubToolkitConfigError {
         message: "the materialized GitHub authentication configuration is invalid",
+        kind: GitHubConfigFault::Authentication,
     }
 }
 
 const fn resource_exhausted() -> GitHubToolkitConfigError {
     GitHubToolkitConfigError {
         message: "the materialized GitHub toolkit configuration exceeds its approved limit",
+        kind: GitHubConfigFault::Limit,
     }
 }
