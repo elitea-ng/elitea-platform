@@ -52,7 +52,7 @@ export interface TeamCursor {
  * deleted between pages cannot shift the window (issue 1955). An empty page
  * ends the walk whatever `total` says.
  */
-export function nextTeamCursor(pages: readonly AgentTeamList[]): TeamCursor | undefined {
+function nextTeamCursor(pages: readonly AgentTeamList[]): TeamCursor | undefined {
   const lastPage = pages.at(-1);
   const last = lastPage?.rows.at(-1);
   if (lastPage === undefined || last === undefined) return undefined;
