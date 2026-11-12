@@ -103,7 +103,8 @@ export function answerAuthor(group: MessageGroupWire, participants: readonly Mes
   const personaName = trimmed(author?.persona?.display_name);
   const authorRole = trimmed(author?.persona?.role);
   const authorIconUrl = participantIconUrl(author);
-  const authorAvatarPack = avatarPackOf(author?.persona?.avatar_pack);
+  // Contract 1.49 serves the pack as `avatar_pack_v1`; a 1.46 to 1.48 server sent it as `avatar_pack`.
+  const authorAvatarPack = avatarPackOf(author?.persona?.avatar_pack_v1 ?? author?.persona?.avatar_pack);
   const authorApplicationId = participantApplicationId(participants, authorParticipantId);
   const addresseeNames = addresseeNamesOf(group.addressed_to, participants);
   return {

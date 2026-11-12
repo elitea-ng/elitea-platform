@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.48
+ * client contract:    1.49
  * operations sha256:  90f7ce0d441261594219777baafedfb6c11c64e23476f55952ced30a49d7d69e
  */
 export interface paths {
@@ -3502,8 +3502,13 @@ export interface components {
         };
         /** @description Client contract 1.38: the agent's persona in this conversation, from the soul of the version the conversation runs, refreshed on every turn. Absent when the agent has none. Show `display_name` instead of the agent's name when it is set. */
         ConversationParticipantPersona: {
-            /** @description Client contract 1.46 (ADR-0050 decision 6): on a read, the avatar pack of the version the agent participant runs, an AgentAvatarPackV1 OBJECT, read live from the version on every participants read; absent when the version has none (the client then shows `entity_settings.icon_meta`). It stays declared as a string, the "reserved" type contract 1.38 locked, because a type change is a breaking change within the major. A client reads the value as unknown JSON and validates it (`avatarPackOf` in `@elitea/client-core/conversation`); a value that is not a valid pack is ignored. A create request does not set it. */
+            /**
+             * @deprecated
+             * @description Deprecated by client contract 1.49: read `avatar_pack_v1`. Reserved by contract 1.38 as a string. Servers 1.46 to 1.48 sent the avatar pack OBJECT here, against its declared type, so a strict codegen client could reject the whole participant (issue 1881). From 1.49 the server never sends this property. A client that still talks to a 1.46 to 1.48 server may read it as unknown JSON and validate it (`avatarPackOf` in `@elitea/client-core/conversation`). A create request does not set it.
+             */
             avatar_pack?: string;
+            /** @description Client contract 1.49 (ADR-0050 decision 6, issue 1881): on a read, the avatar pack of the version the agent participant runs, read live from the version on every participants read; absent when the version has none (the client then shows `entity_settings.icon_meta`). Only a participant of the conversation's own project, bound to a version of its own agent, carries it. A client still validates it (`avatarPackOf`) and ignores a value that is not a valid pack. A create request does not set it. */
+            avatar_pack_v1?: components["schemas"]["AgentAvatarPackV1"];
             display_name?: string;
             pronouns?: string;
             role?: string;

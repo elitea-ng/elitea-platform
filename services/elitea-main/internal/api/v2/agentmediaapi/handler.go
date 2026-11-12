@@ -21,7 +21,9 @@
 // GENERATION. A still is `/llm/v1/images/generations` with the soul's
 // display name, role and voice in the prompt, `n` candidates. A loop is
 // 4–8 `/llm/v1/images/edits` calls over the chosen still, one per pose,
-// assembled into an animated WebP. Every call goes through llmproxy.Gateway
+// assembled into an animated WebP. The edits run in parallel, at most
+// maxConcurrentFrameEdits at a time, so the request lasts about one call
+// rather than the sum of them (#1854). Every call goes through llmproxy.Gateway
 // (gRPC over mTLS) under the caller's identity, so the gateway budgets,
 // bills and logs it against the project. Generated files are drafts: they
 // are stored, and returned with their URL, but nothing joins a pack until
@@ -45,8 +47,10 @@ import (
 	"net/textproto"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmedia"
@@ -81,12 +85,27 @@ const (
 	defaultLoopFrames = 6
 	loopFrameMS       = 400
 	cacheImmutable    = "public, max-age=31536000, immutable"
+	// maxConcurrentFrameEdits bounds a loop's edit calls in flight: enough
+	// that a default six-frame loop takes about two calls of wall time,
+	// few enough that one author cannot open eight provider calls at once.
+	maxConcurrentFrameEdits = 4
 )
 
 // Handler serves the three routes.
 type Handler struct {
 	store   storage.ObjectStore
 	gateway llmproxy.Gateway
+	// frameSlots holds one semaphore per project (string -> chan struct{}):
+	// the errgroup limit bounds ONE request, this bounds every loop
+	// generation of a project together, so concurrent requests cannot
+	// multiply the provider calls past maxConcurrentFrameEdits.
+	frameSlots sync.Map
+}
+
+// frameSlot is the project's semaphore of in-flight frame edits.
+func (h *Handler) frameSlot(projectID string) chan struct{} {
+	slot, _ := h.frameSlots.LoadOrStore(projectID, make(chan struct{}, maxConcurrentFrameEdits))
+	return slot.(chan struct{})
 }
 
 // NewHandler builds the handler. A nil store answers 503 on upload and
@@ -598,26 +617,9 @@ func (h *Handler) generateLoop(ctx context.Context, identity llmproxy.Identity, 
 	if err != nil {
 		return nil, err
 	}
-	pose := loopStates[req.State]
-	frames := make([][]byte, 0, req.Frames)
-	for index := 0; index < req.Frames; index++ {
-		prompt := fmt.Sprintf("The same character, same style, same framing and background. Pose %d of %d of a short seamless loop: %s. Keep the face and identity identical.",
-			index+1, req.Frames, pose)
-		body, contentType, err := editForm(req.Model, prompt, still, stillMedia)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := h.gateway.ImageEdit(ctx, &llmproxy.Request{
-			Header: http.Header{"Content-Type": {contentType}}, Body: bytes.NewReader(body), Identity: identity,
-		})
-		if err != nil {
-			return nil, err
-		}
-		images, err := readImages(resp)
-		if err != nil {
-			return nil, err
-		}
-		frames = append(frames, images[0])
+	frames, err := h.loopFrames(ctx, identity, req, still, stillMedia)
+	if err != nil {
+		return nil, err
 	}
 	data, media, err := agentmedia.AssembleLoop(frames, loopFrameMS)
 	if err != nil {
@@ -629,6 +631,56 @@ func (h *Handler) generateLoop(ctx context.Context, identity llmproxy.Identity, 
 	}
 	object.GeneratedBy = req.Model
 	return []MediaObject{object}, nil
+}
+
+// loopFrames makes the loop's pose frames, in pose order, with at most
+// maxConcurrentFrameEdits edit calls in flight (#1854). One edit commonly
+// takes 10–30 s, so one after another an eight-frame loop held its request
+// for minutes, long enough for an edge or browser timeout to cut it after
+// the gateway had already charged the budget. In parallel the wall time is
+// about one call. Each call writes only its own slot, so the order is the
+// pose order whatever order the answers arrive in. The first failure
+// cancels the calls still running, and that failure is the one answered
+// (the budget, rate-limit and validation mappings of writeGenerationError
+// still apply); the frames already charged are not stored, as before.
+func (h *Handler) loopFrames(ctx context.Context, identity llmproxy.Identity, req GenerateRequest, still []byte, stillMedia agentmedia.Media) ([][]byte, error) {
+	pose := loopStates[req.State]
+	frames := make([][]byte, req.Frames)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(maxConcurrentFrameEdits)
+	slot := h.frameSlot(identity.ProjectID)
+	for index := 0; index < req.Frames; index++ {
+		group.Go(func() error {
+			select {
+			case slot <- struct{}{}:
+				defer func() { <-slot }()
+			case <-groupCtx.Done():
+				return groupCtx.Err()
+			}
+			prompt := fmt.Sprintf("The same character, same style, same framing and background. Pose %d of %d of a short seamless loop: %s. Keep the face and identity identical.",
+				index+1, req.Frames, pose)
+			body, contentType, err := editForm(req.Model, prompt, still, stillMedia)
+			if err != nil {
+				return err
+			}
+			resp, err := h.gateway.ImageEdit(groupCtx, &llmproxy.Request{
+				Header: http.Header{"Content-Type": {contentType}}, Body: bytes.NewReader(body), Identity: identity,
+			})
+			if err != nil {
+				return err
+			}
+			images, err := readImages(resp)
+			if err != nil {
+				return err
+			}
+			frames[index] = images[0]
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	return frames, nil
 }
 
 // editForm builds the /images/edits multipart body. The image part names
