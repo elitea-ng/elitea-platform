@@ -14,6 +14,7 @@ import (
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
@@ -818,25 +819,32 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 			return nil, nil, "", err
 		}
 		resolved.VersionDetails = frozen
-		// #870: memory recall is wired on turn START only
-		// (StartCurrentApplication, StartCurrentAdhoc). ContinueCurrentAgent
-		// resumes an interrupted (e.g. HITL-paused) turn that already began
-		// with whatever recall its own start performed; re-running recall
-		// here would answer a DIFFERENT question ("what should the model
-		// have known") after the model has already partly answered, which
-		// is out of this issue's scope. "" is the same no-recall behavior
-		// this call site had before #870.
+		// #870: the person's memories are recalled on turn START only:
+		// ContinueCurrentAgent resumes an interrupted (e.g. HITL-paused) turn
+		// that already began with whatever recall its own start performed, so
+		// "" for them. #1659: the agent's own notes are resolved again, for
+		// the turn's own input and the frozen version it runs, so the
+		// continued run has the notes the paused one had.
+		agentMemory := service.resolveAgentMemory(
+			ctx, request.ProjectID, resolved.ApplicationID, request.ConversationUUID,
+			currentMemoryRecallUserInputText(target.UserInput), frozen,
+		)
+		// #946: project context is NOT a per-turn recall like memories —
+		// it is standing project configuration, so a resumed or
+		// regenerated turn in the same project must carry the same
+		// context the original start carried. Read here rather than
+		// passed "" (projectcontext.go's header).
+		projectContext := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
+		if agentMemory.Text != "" {
+			projectContext = agentmemory.Neutralize(projectContext)
+		}
 		var view ReaderView
-		input, view, err = currentApplicationInputWithView(start, resolved, toolkitGuardrails, nil, "",
-			// #946: project context is NOT a per-turn recall like memories —
-			// it is standing project configuration, so a resumed or
-			// regenerated turn in the same project must carry the same
-			// context the original start carried. Read here rather than
-			// passed "" (projectcontext.go's header).
-			service.resolveCurrentProjectContextText(ctx, request.ProjectID))
+		input, view, err = currentApplicationInputWithView(start, resolved, toolkitGuardrails, nil,
+			agentMemory.Text, projectContext)
 		if err != nil {
 			return nil, nil, "", err
 		}
+		input.RecalledMemory, input.RecalledMemoryTag = recalledMemoryInput(agentMemory, input.GetApplication())
 		turn.ApplicationID = resolved.ApplicationID
 		turn.ApplicationVersionID = resolved.ApplicationVersionID
 		// #1892: an agent's continued run reconciles the conversation as it
