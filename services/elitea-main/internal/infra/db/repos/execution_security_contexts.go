@@ -490,3 +490,81 @@ LIMIT 1`, facts.tenantProjectID, built.AgentBindingID, userID, facts.admittedAt)
 	}
 	return nil
 }
+
+// admitChildExecutionProfile is admitExecutionProfile for a child that runs
+// inside another execution: a code-sandbox toolkit call made from a code job
+// (issue 1557). A governed child inherits the parent run's binding and frozen
+// credential references; a child with no governed parent, or any other
+// admission, gets exactly what admitExecutionProfile gives it. A direct call
+// that started outside any run has no parent, so its context binds no agent
+// and the broker denies it before any secret is read.
+func admitChildExecutionProfile(ctx context.Context, tx pinExecutor, rows rowFunc, admission profile.Admission, pin admissionPin, facts securityContextFacts, parentExecutionID string) (securitycontext.Reference, error) {
+	if parentExecutionID == "" {
+		return admitExecutionProfile(ctx, tx, rows, admission, pin, facts)
+	}
+	if err := pinExecutionAdmission(ctx, tx, admission, pin); err != nil {
+		return securitycontext.Reference{}, err
+	}
+	if !admission.Governed() && !admission.ContinuationGuard() {
+		return securitycontext.Reference{}, nil
+	}
+	var (
+		revisionID                  *string
+		digest                      []byte
+		parentBytes, parentDigest   []byte
+		parentContent, parentSchema string
+	)
+	err := rows(ctx, `
+SELECT policy_revision_id, policy_digest
+FROM elitea_runtime.execution_admission_profiles
+WHERE execution_id = $1 AND profile = 'elitea.credential-profile.governed.v1'`, pin.executionID).Scan(&revisionID, &digest)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return securitycontext.Reference{}, nil
+	}
+	if err != nil {
+		return securitycontext.Reference{}, fmt.Errorf("read governed admission pin: %w", err)
+	}
+	if revisionID == nil || len(digest) != len(runtimedomain.Digest{}) {
+		return securitycontext.Reference{}, errors.New("governed admission pin has no revision")
+	}
+	if stored, ok, err := storedSecurityContext(ctx, rows, pin.executionID); err != nil || ok {
+		return stored, err
+	}
+	err = rows(ctx, `
+SELECT context_bytes, digest, content_id, schema_revision
+FROM elitea_runtime.execution_security_contexts
+WHERE execution_id = $1`, parentExecutionID).Scan(&parentBytes, &parentDigest, &parentContent, &parentSchema)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The parent run is not governed: nothing to inherit.
+		return recordSecurityContext(ctx, tx, rows, pin.executionID, facts)
+	}
+	if err != nil {
+		return securitycontext.Reference{}, fmt.Errorf("read the parent run's security context: %w", err)
+	}
+	parentRef := securitycontext.Reference{ContentID: parentContent, SchemaRevision: parentSchema}
+	if len(parentDigest) != len(parentRef.Digest) {
+		return securitycontext.Reference{}, errors.New("stored parent security context digest is malformed")
+	}
+	copy(parentRef.Digest[:], parentDigest)
+	message, err := securitycontext.Verify(parentBytes, parentRef)
+	if err != nil {
+		return securitycontext.Reference{}, fmt.Errorf("verify the parent run's security context: %w", err)
+	}
+	built, err := securitycontext.InheritedFrom(message, *revisionID, runtimedomain.Digest(digestArray(digest)), facts.tenantProjectID, facts.admittedAt)
+	if err != nil {
+		return securitycontext.Reference{}, err
+	}
+	encoded, reference, err := built.Marshal(pin.executionID)
+	if err != nil {
+		return securitycontext.Reference{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO elitea_runtime.execution_security_contexts (
+    execution_id, content_id, schema_revision, digest, context_bytes
+) VALUES ($1, $2, $3, $4, $5)`,
+		pin.executionID, reference.ContentID, reference.SchemaRevision, reference.Digest[:], encoded,
+	); err != nil {
+		return securitycontext.Reference{}, fmt.Errorf("store execution security context: %w", err)
+	}
+	return reference, nil
+}

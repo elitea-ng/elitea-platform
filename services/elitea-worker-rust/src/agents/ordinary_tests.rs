@@ -3651,6 +3651,58 @@ async fn recursive_saved_agent_confirmation_persists_the_exact_two_tier_path() {
     assert_eq!(captured.lock().expect("captured model requests").len(), 6);
 }
 
+/// #1560 / ADR-0045 decision 2: the unattended grant of the run reaches a
+/// nested agent. A grant that names the nested agent's sensitive tool lets
+/// the call run with no pause, and the run reports one grant approval for it;
+/// a grant that names another pair changes nothing.
+#[tokio::test(flavor = "current_thread")]
+async fn an_unattended_grant_approves_a_sensitive_tool_of_a_nested_agent() {
+    for (granted, expect_pause) in [
+        (("release intelligence", "lookup_release"), false),
+        (("release intelligence", "other_tool"), true),
+    ] {
+        let mut request = ordinary_request(AgentExecutionKind::Application);
+        attach_nested_agent(&mut request);
+        let binding = AuthorizedNativeCommandBinding::fixture().with_unattended_grant(Some(
+            super::unattended::UnattendedGrant::fixture(&[granted], false),
+        ));
+        let RecursiveSensitiveHarness {
+            assembler,
+            tool_calls,
+            ..
+        } = recursive_sensitive_harness(2, recursive_sensitive_outcomes());
+        let assembly =
+            AuthorizedNativeAssembly::new(&request, test_runtime_context_authority(), binding);
+        let mut invocation = assembler.assemble(assembly).await.expect("assembly");
+        invocation.project_start(chrono::Utc::now()).expect("start");
+        let (mut native, mut projector, _completion) = invocation.start().expect("native start");
+        let mut approvals = Vec::new();
+        while let Some(event) = native.next_event().await.expect("event") {
+            for projected in projector.project(&event).expect("projection") {
+                let value: serde_json::Value = serde_json::from_slice(
+                    &encode_current_node_event_json(&projected).expect("browser event"),
+                )
+                .expect("browser JSON");
+                if value["type"] == "agent_unattended_approval" {
+                    approvals.push(value);
+                }
+            }
+        }
+        assert_eq!(projector.is_paused(), expect_pause);
+        if expect_pause {
+            assert!(approvals.is_empty());
+            assert_eq!(tool_calls.load(Ordering::Acquire), 0);
+        } else {
+            assert_eq!(approvals.len(), 1, "one ledger event for the one call");
+            assert_eq!(
+                approvals[0]["response_metadata"]["unattended_approval_v1"]["tool_name"],
+                "lookup_release"
+            );
+            assert_eq!(tool_calls.load(Ordering::Acquire), 1);
+        }
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn recursive_parallel_saved_agents_resume_four_collision_safe_leaves() {
     let mut request = ordinary_request(AgentExecutionKind::Application);

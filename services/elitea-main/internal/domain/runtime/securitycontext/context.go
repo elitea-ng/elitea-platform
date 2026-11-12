@@ -374,3 +374,54 @@ func hasUnknown(message protoreflect.Message) bool {
 	})
 	return found
 }
+
+// InheritedFrom builds the context of a child execution that runs inside a
+// governed run: a code-sandbox toolkit call made from the run's code job
+// (ADR-0039 decision 7, issue 1557). The child keeps the parent's agent
+// binding, definition digest, authority, actor chain, application version
+// and frozen credential references, so the broker decides each redemption
+// of the child against the same agent binding the run holds. The child's own
+// policy pin, tenant and issue time replace the parent's, and the child opens
+// its own agent session.
+func InheritedFrom(parent *runtimev1.ExecutionSecurityContextV1, policyRevisionID string, policyDigest runtimedomain.Digest, tenantProjectID int64, issuedAt time.Time) (Context, error) {
+	if parent == nil || parent.GetTenantProjectId() != tenantProjectID {
+		return Context{}, fmt.Errorf("%w: the parent context is not this project's", ErrInvalidContext)
+	}
+	out := Context{
+		PolicyRevisionID:    policyRevisionID,
+		PolicyDigest:        policyDigest,
+		TenantProjectID:     tenantProjectID,
+		SubjectPrincipalRef: parent.GetSubjectPrincipalRef(),
+		AgentBindingID:      parent.GetAgentBindingId(),
+		AgentBindingEpoch:   parent.GetAgentBindingEpoch(),
+		MandateID:           parent.GetMandateId(),
+		MandateEpoch:        parent.GetMandateEpoch(),
+		DelegationID:        parent.GetDelegationId(),
+		DelegationEpoch:     parent.GetDelegationEpoch(),
+		Caller: Caller{
+			AuthenticationSource: parent.GetCaller().GetAuthenticationSource(),
+			CallingApplicationID: parent.GetCaller().GetCallingApplicationId(),
+		},
+		IssuedAt:             issuedAt,
+		ApplicationID:        parent.GetApplicationId(),
+		ApplicationVersionID: parent.GetApplicationVersionId(),
+	}
+	if digest := parent.GetDefinitionDigest(); digest != nil {
+		if digest.GetAlgorithm() != runtimev1.DigestAlgorithmV1_DIGEST_ALGORITHM_V1_SHA256 ||
+			len(digest.GetValue()) != len(runtimedomain.Digest{}) {
+			return Context{}, fmt.Errorf("%w: the parent definition digest is malformed", ErrInvalidContext)
+		}
+		copy(out.DefinitionDigest[:], digest.GetValue())
+	}
+	for _, link := range parent.GetActorChain() {
+		out.ActorChain = append(out.ActorChain, ActorLink{Kind: link.GetKind(), Ref: link.GetRef()})
+	}
+	for _, ref := range parent.GetCredentialReferences() {
+		converted, ok := CredentialReferenceOf(ref)
+		if !ok {
+			return Context{}, fmt.Errorf("%w: a parent credential reference is malformed", ErrInvalidContext)
+		}
+		out.CredentialReferences = append(out.CredentialReferences, converted)
+	}
+	return out, nil
+}

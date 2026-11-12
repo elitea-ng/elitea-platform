@@ -509,6 +509,17 @@ func TestRedemptionMustNameTheFrozenReference(t *testing.T) {
 		"a toolkit admission did not freeze": {func(w *world, r *RedeemRequest) {
 			r.Invocation.ToolkitID = tToolkit + 1
 		}, false},
+		// A user-started Test call outside any run (issue 1557): its context
+		// binds no agent and freezes no reference, so it is denied in governed
+		// mode before any secret is read.
+		"a direct call outside any run": {func(w *world, r *RedeemRequest) {
+			w.context.AgentBindingID, w.context.AgentBindingEpoch = "", 0
+			w.context.DefinitionDigest = [32]byte{}
+			w.context.MandateID, w.context.MandateEpoch = "", 0
+			w.context.DelegationID, w.context.DelegationEpoch = "", 0
+			w.context.CredentialReferences = nil
+			*r = w.request(t)
+		}, false},
 		"a reference for a digest-only toolkit": {func(w *world, r *RedeemRequest) {
 			w.context.CredentialReferences[0].CredentialReferenceID = ""
 			w.context.CredentialReferences[0].TargetBindingID = ""
