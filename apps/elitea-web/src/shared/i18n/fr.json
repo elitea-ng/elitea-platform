@@ -1849,6 +1849,7 @@
   "pages.admin.users.title": "Utilisateurs",
   "pages.agents.applications.tabsAriaLabel": "Agents",
   "pages.agents.chatWithAgent.defaultName": "Nouveau chat",
+  "pages.agents.chatWithAgent.label": "Chat",
   "pages.agents.chatWithAgent.starting": "Ouverture du chat…",
   "pages.agents.createApplication.error": "Échec de la création de l’agent.",
   "pages.agents.createApplication.fieldError.description": "Description : {{message}}",

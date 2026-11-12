@@ -1849,6 +1849,7 @@
   "pages.admin.users.title": "משתמשים",
   "pages.agents.applications.tabsAriaLabel": "סוכנים",
   "pages.agents.chatWithAgent.defaultName": "צ'אט חדש",
+  "pages.agents.chatWithAgent.label": "צ'אט",
   "pages.agents.chatWithAgent.starting": "פותח צ'אט…",
   "pages.agents.createApplication.error": "יצירת הסוכן נכשלה.",
   "pages.agents.createApplication.fieldError.description": "תיאור: {{message}}",

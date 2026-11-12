@@ -1849,6 +1849,7 @@
   "pages.admin.users.title": "用户",
   "pages.agents.applications.tabsAriaLabel": "智能体",
   "pages.agents.chatWithAgent.defaultName": "新建聊天",
+  "pages.agents.chatWithAgent.label": "聊天",
   "pages.agents.chatWithAgent.starting": "正在打开聊天…",
   "pages.agents.createApplication.error": "创建智能体失败。",
   "pages.agents.createApplication.fieldError.description": "描述：{{message}}",

@@ -13,6 +13,7 @@
   "codeDebug.exportUnavailable": "The Code debug artifact is unavailable. Code execution continues.",
   "codeDebug.invalidReference": "The Code debug reference is invalid. No artifact can be downloaded.",
   "codeDebug.projectUnavailable": "The artifact project does not match the selected project. No artifact can be downloaded.",
+  "pages.agents.chatWithAgent.label": "Chat",
   "pages.agents.chatWithAgent.openInChats": "Open in Chats",
   "pages.agents.testChat.clear": "Clear chat",
   "pages.agents.testChat.error": "Could not start a chat with this agent. Click the message box to try again.",

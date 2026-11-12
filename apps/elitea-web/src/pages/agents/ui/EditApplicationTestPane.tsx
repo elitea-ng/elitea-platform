@@ -54,8 +54,15 @@ export function EditApplicationTestPane({ projectId, applicationId, detail, acti
   const versionId = activeVersion?.id !== undefined ? String(activeVersion.id) : undefined;
   const agentType = activeVersion?.agent_type;
   const identity = useMemo(
-    () => ({ projectId, applicationId: applicationId === undefined ? undefined : String(applicationId), agentName, versionId, agentType }),
-    [projectId, applicationId, agentName, versionId, agentType],
+    () => ({
+      projectId,
+      applicationId: applicationId === undefined ? undefined : String(applicationId),
+      agentName,
+      versionId,
+      agentType,
+      userId: authorId === undefined ? undefined : String(authorId),
+    }),
+    [projectId, applicationId, agentName, versionId, agentType, authorId],
   );
   const starters = useMemo(() => stringsOf(activeVersion?.conversation_starters), [activeVersion?.conversation_starters]);
 

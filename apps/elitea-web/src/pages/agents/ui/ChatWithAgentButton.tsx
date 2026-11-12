@@ -11,6 +11,7 @@ import type { ApplicationVersionDetail, SocialAuthorProfile } from '@/shared/api
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { unwrapBody } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
+import { applicationParticipant } from '@/shared/lib/editorTestConversation';
 
 /** `ChatBox` truncates a conversation name to 50 characters; match it so the sidebar entry reads the same everywhere. */
 const MAX_CONVERSATION_NAME = 50;
@@ -118,16 +119,13 @@ export function ChatWithAgentButton({ projectId, applicationId, name, activeVers
         conversationId,
         participants: [
           { entity_name: 'user', entity_meta: { id: Number(input.userId) } },
-          {
-            entity_name: 'application',
-            entity_meta: { id: input.applicationId, ...(input.name !== undefined ? { name: input.name } : {}), project_id: input.projectId },
-            entity_settings: {
-              version_id: input.versionId,
-              agent_type: input.agentType,
-              variables: [],
-              icon_meta: {},
-            },
-          },
+          applicationParticipant({
+            applicationId: input.applicationId,
+            projectId: input.projectId,
+            name: input.name,
+            versionId: input.versionId,
+            agentType: input.agentType,
+          }),
         ],
       });
     } catch (error) {

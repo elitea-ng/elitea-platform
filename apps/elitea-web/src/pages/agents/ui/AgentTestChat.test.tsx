@@ -6,7 +6,7 @@
  * version by Main) carrying the agent as its one participant, so the chat
  * belongs to the agent and never reaches the Chats sidebar list.
  */
-import { screen, waitFor } from '@testing-library/react';
+import { cleanup, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { ReactElement } from 'react';
@@ -17,11 +17,12 @@ import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
 
 import { renderAgentsRoute } from '../__tests__/testRouter';
+import { resetAgentTestConversationsForTests } from '../lib/useAgentTestConversation';
 import { AgentTestChat } from './AgentTestChat';
 
 const globals = globalThis as unknown as Record<string, unknown>;
 
-const IDENTITY = { projectId: '9', applicationId: '42', agentName: 'My Agent', versionId: '7', agentType: 'openai' };
+const IDENTITY = { projectId: '9', applicationId: '42', agentName: 'My Agent', versionId: '7', agentType: 'openai', userId: '6' };
 const USER = { id: '6', name: 'E2E Chat Driver', avatar: '' };
 
 interface ParticipantRow {
@@ -46,9 +47,36 @@ function participantSummary(row: ParticipantRow | undefined): Record<string, unk
   };
 }
 
-function installRoutes(): { readonly bodies: CreateBody[] } {
+interface Routes {
+  readonly bodies: CreateBody[];
+  readonly deleted: string[];
+  readonly reads: string[];
+}
+
+function installRoutes(): Routes {
   const bodies: CreateBody[] = [];
+  const deleted: string[] = [];
+  const reads: string[] = [];
   server.use(
+    // `ChatBox` syncs the picked model onto the agent participant once the conversation exists.
+    http.put('*/elitea_core/entity_settings/prompt_lib/:projectId/:conversationId/:participantId', async ({ request }) =>
+      HttpResponse.json({ entity_settings: await request.json() }),
+    ),
+    http.delete('*/elitea_core/conversation/prompt_lib/:projectId/:id', ({ params }) => {
+      deleted.push(String(params['id']));
+      return new HttpResponse(null, { status: 204 });
+    }),
+    http.get('*/elitea_core/conversation/prompt_lib/:projectId/:id', ({ params }) => {
+      reads.push(String(params['id']));
+      return HttpResponse.json({
+        id: 501,
+        uuid: '00000000-0000-4000-8000-000000000abc',
+        name: 'My Agent',
+        source: 'editor_test',
+        participants: [{ id: '901', entity_name: 'application', entity_meta: { id: '42', project_id: '9' }, entity_settings: { version_id: '7' } }],
+        message_groups: [],
+      });
+    }),
     http.post('*/elitea_core/conversations/prompt_lib/:projectId', async ({ request }) => {
       bodies.push((await request.json()) as CreateBody);
       return HttpResponse.json({
@@ -69,7 +97,7 @@ function installRoutes(): { readonly bodies: CreateBody[] } {
     ),
     http.get('*/configurations/tts_voices/*', () => HttpResponse.json({ items: [] })),
   );
-  return { bodies };
+  return { bodies, deleted, reads };
 }
 
 function renderPane(node: ReactElement): void {
@@ -80,9 +108,14 @@ beforeEach(() => {
   globals['elitea_ui_config'] = { vite_server_url: '/api/v2', vite_base_uri: '/', vite_public_project_id: 'public-1' };
   resetConfigForTests();
   configureGeneratedClient({ baseUrl: '/api/v2' });
+  resetAgentTestConversationsForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Unmount first, then let a settings write the pane scheduled just before the test ended finish:
+  // none of it may outlive the client it uses.
+  cleanup();
+  await new Promise((resolve) => setTimeout(resolve, 50));
   delete globals['elitea_ui_config'];
   resetConfigForTests();
   resetGeneratedClient();
@@ -147,5 +180,82 @@ describe('AgentTestChat', () => {
     await user.click(await screen.findByTestId('chat-message-input'));
 
     await waitFor(() => expect(bodies).toHaveLength(0));
+  });
+
+  it('creates the conversation once: later interactions in the pane create nothing', async () => {
+    const { bodies } = installRoutes();
+    const user = userEvent.setup();
+    renderPane(<AgentTestChat identity={IDENTITY} user={USER} isDirty={false} />);
+    const input = await screen.findByTestId('chat-message-input');
+
+    await user.click(input);
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    // Settled: the conversation exists. Every further focus, click and key must reuse it.
+    await waitFor(() => expect(screen.queryByTestId('agent-test-chat-error')).not.toBeInTheDocument());
+    await user.click(input);
+    await user.keyboard('hello');
+    await user.click(screen.getByTestId('agent-test-chat'));
+
+    expect(bodies).toHaveLength(1);
+  });
+
+  it('creates nothing for Clear chat or the model picker', async () => {
+    const { bodies } = installRoutes();
+    const user = userEvent.setup();
+    renderPane(<AgentTestChat identity={IDENTITY} user={USER} isDirty={false} />);
+
+    await user.click(await screen.findByTestId('agent-test-chat-header'));
+    await user.click(await screen.findByTestId('model-selector-name'));
+
+    await waitFor(() => expect(bodies).toHaveLength(0));
+  });
+
+  it('Clear deletes the conversation and starts over without creating another', async () => {
+    const { bodies, deleted } = installRoutes();
+    const user = userEvent.setup();
+    renderPane(<AgentTestChat identity={IDENTITY} user={USER} isDirty={false} />);
+    await user.click(await screen.findByTestId('chat-message-input'));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    const clear = await screen.findByTestId('agent-test-chat-clear');
+    await waitFor(() => expect(clear).toBeEnabled());
+
+    await user.click(clear);
+
+    await waitFor(() => expect(deleted).toEqual(['501']));
+    expect(bodies, 'Clear itself creates nothing').toHaveLength(1);
+    await waitFor(() => expect(screen.getByTestId('agent-test-chat-clear')).toBeDisabled());
+    // The next use starts a fresh conversation.
+    await user.click(await screen.findByTestId('chat-message-input'));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+  });
+
+  it('restores the conversation, with a read and no create, when the page is re-entered', async () => {
+    const { bodies, reads } = installRoutes();
+    const user = userEvent.setup();
+    const first = renderAgentsRoute(<AgentTestChat identity={IDENTITY} user={USER} isDirty={false} />, '/agents/latest/42', { projectId: '9' });
+    await user.click(await screen.findByTestId('chat-message-input'));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    first.unmount();
+
+    renderPane(<AgentTestChat identity={IDENTITY} user={USER} isDirty={false} />);
+
+    await waitFor(() => expect(reads).toEqual(['501']));
+    await user.click(await screen.findByTestId('chat-message-input'));
+    expect(bodies, 'one conversation for this user, agent and version').toHaveLength(1);
+  });
+
+  it('starts a separate conversation for another version and does not carry the old one over', async () => {
+    const { bodies } = installRoutes();
+    const user = userEvent.setup();
+    const view = renderAgentsRoute(<AgentTestChat identity={IDENTITY} user={USER} isDirty={false} />, '/agents/latest/42', { projectId: '9' });
+    await user.click(await screen.findByTestId('chat-message-input'));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+
+    view.unmount();
+    renderPane(<AgentTestChat identity={{ ...IDENTITY, versionId: '8' }} user={USER} isDirty={false} />);
+    await user.click(await screen.findByTestId('chat-message-input'));
+
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(participantSummary(bodies[1]?.participants?.[0])['versionId']).toBe('8');
   });
 });

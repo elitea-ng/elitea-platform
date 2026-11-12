@@ -1849,6 +1849,7 @@
   "pages.admin.users.title": "کاربران",
   "pages.agents.applications.tabsAriaLabel": "عامل‌ها",
   "pages.agents.chatWithAgent.defaultName": "چت جدید",
+  "pages.agents.chatWithAgent.label": "چت",
   "pages.agents.chatWithAgent.starting": "در حال باز کردن چت…",
   "pages.agents.createApplication.error": "ایجاد عامل ناموفق بود.",
   "pages.agents.createApplication.fieldError.description": "توضیحات: {{message}}",

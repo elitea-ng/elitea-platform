@@ -1849,6 +1849,7 @@
   "pages.admin.users.title": "Пользователи",
   "pages.agents.applications.tabsAriaLabel": "Агенты",
   "pages.agents.chatWithAgent.defaultName": "Новый чат",
+  "pages.agents.chatWithAgent.label": "Чат",
   "pages.agents.chatWithAgent.starting": "Открытие чата…",
   "pages.agents.createApplication.error": "Не удалось создать агента.",
   "pages.agents.createApplication.fieldError.description": "Описание: {{message}}",

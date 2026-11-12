@@ -1849,6 +1849,7 @@
   "pages.admin.users.title": "المستخدمون",
   "pages.agents.applications.tabsAriaLabel": "الوكلاء",
   "pages.agents.chatWithAgent.defaultName": "دردشة جديدة",
+  "pages.agents.chatWithAgent.label": "دردشة",
   "pages.agents.chatWithAgent.starting": "جارٍ فتح الدردشة…",
   "pages.agents.createApplication.error": "فشل إنشاء الوكيل.",
   "pages.agents.createApplication.fieldError.description": "الوصف: {{message}}",

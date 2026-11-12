@@ -1849,6 +1849,7 @@
   "pages.admin.users.title": "Gebruikers",
   "pages.agents.applications.tabsAriaLabel": "Agents",
   "pages.agents.chatWithAgent.defaultName": "Nieuwe chat",
+  "pages.agents.chatWithAgent.label": "Chat",
   "pages.agents.chatWithAgent.starting": "Chat openen…",
   "pages.agents.createApplication.error": "De agent maken mislukt.",
   "pages.agents.createApplication.fieldError.description": "Beschrijving: {{message}}",

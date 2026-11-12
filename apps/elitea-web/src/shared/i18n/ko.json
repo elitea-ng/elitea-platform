@@ -1849,6 +1849,7 @@
   "pages.admin.users.title": "사용자",
   "pages.agents.applications.tabsAriaLabel": "에이전트",
   "pages.agents.chatWithAgent.defaultName": "새 채팅",
+  "pages.agents.chatWithAgent.label": "채팅",
   "pages.agents.chatWithAgent.starting": "채팅을 여는 중…",
   "pages.agents.createApplication.error": "에이전트를 만들지 못했습니다.",
   "pages.agents.createApplication.fieldError.description": "설명: {{message}}",

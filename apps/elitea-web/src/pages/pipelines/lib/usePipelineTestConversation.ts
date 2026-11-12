@@ -6,6 +6,7 @@ import {
   EditorTestRunsPage,
   type EditorTestRun,
 } from "@/shared/api/generated/model";
+import { applicationParticipant, editorTestIdentityKey as sharedIdentityKey } from "@/shared/lib/editorTestConversation";
 import type { ChatBoxProps } from "@/widgets/chat-box";
 
 type ConversationWire = Awaited<ReturnType<typeof conversationApi.details>>;
@@ -70,17 +71,7 @@ export function resetPipelineTestConversationsForTests(): void {
 function editorTestIdentityKey(
   identity: PipelineTestChatIdentity,
 ): string | undefined {
-  const values = [
-    identity.userId,
-    identity.projectId,
-    identity.applicationId,
-    identity.versionId,
-  ];
-  return values.every(
-    (value) => value !== undefined && /^[1-9][0-9]*$/.test(value),
-  )
-    ? values.join(":")
-    : undefined;
+  return sharedIdentityKey([identity.userId, identity.projectId, identity.applicationId, identity.versionId]);
 }
 function selectedGroups(
   groups: MessageGroups,
@@ -281,20 +272,13 @@ export function usePipelineTestConversation(
       source: "editor_test",
       meta: { is_hidden: true },
       participants: [
-        {
-          entity_name: "application",
-          entity_meta: {
-            id: input.identity.applicationId,
-            project_id: input.identity.projectId,
-            name: input.identity.pipelineName,
-          },
-          entity_settings: {
-            version_id: input.identity.versionId,
-            agent_type: input.identity.agentType ?? "pipeline",
-            variables: [],
-            icon_meta: {},
-          },
-        },
+        applicationParticipant({
+          applicationId: input.identity.applicationId!,
+          projectId: input.identity.projectId!,
+          name: input.identity.pipelineName,
+          versionId: input.identity.versionId!,
+          agentType: input.identity.agentType ?? "pipeline",
+        }),
       ],
     })
       .then((detail) => {

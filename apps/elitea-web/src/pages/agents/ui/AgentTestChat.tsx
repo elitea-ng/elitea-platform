@@ -9,7 +9,8 @@
  * belongs to the agent and stays out of the Chats list
  * (`../lib/useAgentTestConversation.ts`).
  *
- * `isAgentsPage` is the flag the pipeline editor's pane sets too: it keeps
+ * The conversation is created when the author first uses the composer, and
+ * restored (with its messages) when the page is re-entered. `isAgentsPage` is the flag the pipeline editor's pane sets too: it keeps
  * `ChatBox` from adding the ad-hoc model participant, because the turn is
  * addressed to the agent.
  *
@@ -17,8 +18,8 @@
  * unsaved form edit is therefore not part of a test run; the pane says so
  * rather than closing, so a half-edited agent can still be asked a question.
  */
-import { useCallback, useMemo, useRef } from 'react';
-import type { ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import type { ReactNode, SyntheticEvent } from 'react';
 
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -53,16 +54,33 @@ const paneSx: SxProps<Theme> = (theme: Theme) => ({
 const headerSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', padding: '0.5rem 0.75rem' };
 const noticeSx: SxProps<Theme> = { paddingX: '0.75rem', paddingBottom: '0.5rem' };
 const NO_STARTERS: readonly string[] = [];
+const editorTestExtensions = { editorTest: {} };
+/** The pane's header and the model picker with its menu: touching them is not talking to the agent. */
+const NOT_A_CHAT_INTERACTION = '[data-testid="agent-test-chat-header"], [data-testid^="model-selector"], [role="listbox"], [role="option"], [role="menu"], [role="menuitem"], [role="dialog"], [aria-hidden="true"]';
 
 export function AgentTestChat({ identity, user, isDirty, conversationStarters = NO_STARTERS }: AgentTestChatProps): ReactNode {
   const test = useAgentTestConversation(identity);
   const chatBoxRef = useRef<ChatBoxHandle | null>(null);
-  const { ensure, clear } = test;
+  const { ensure, clear, scopeKey } = test;
 
   const handleClear = useCallback(() => {
     chatBoxRef.current?.stopAll();
     clear();
   }, [clear]);
+
+  // Moving to another agent or version stops whatever is streaming; the hook remounts the transcript.
+  useEffect(() => {
+    chatBoxRef.current?.stopAll();
+  }, [scopeKey]);
+
+  const ensureOnChatInteraction = useCallback(
+    (event: SyntheticEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(NOT_A_CHAT_INTERACTION) !== null) return;
+      ensure();
+    },
+    [ensure],
+  );
 
   const participant = useMemo(() => ({ active: test.activeParticipant }), [test.activeParticipant]);
   const conversation = useMemo(
@@ -74,15 +92,21 @@ export function AgentTestChat({ identity, user, isDirty, conversationStarters = 
     <Box
       data-testid="agent-test-chat"
       sx={paneSx}
-      // The conversation is created on the first interaction, in the capture
-      // phase so the bootstrap is already in flight when the composer's own
-      // handlers run. `ensure` is idempotent, and a no-op until the version
-      // has loaded, so the first keystroke retries a click that came too early.
-      onPointerDownCapture={ensure}
-      onFocusCapture={ensure}
-      onKeyDownCapture={ensure}
+      // The conversation is created on the first interaction with the
+      // composer, in the capture phase so the bootstrap is already in flight
+      // when the composer's own handlers run. Clear chat and the model picker
+      // (and its menu, which React bubbles through its portal) are not
+      // interactions with the chat and create nothing. `ensure` is idempotent,
+      // and a no-op until the version has loaded, so the first keystroke
+      // retries a click that came too early.
+      onPointerDownCapture={ensureOnChatInteraction}
+      onFocusCapture={ensureOnChatInteraction}
+      onKeyDownCapture={ensureOnChatInteraction}
     >
-      <Box sx={headerSx}>
+      <Box
+        sx={headerSx}
+        data-testid="agent-test-chat-header"
+      >
         <Typography
           variant="subtitle"
           component="h2"
@@ -131,6 +155,8 @@ export function AgentTestChat({ identity, user, isDirty, conversationStarters = 
           participant={participant}
           conversationStarters={conversationStarters}
           isAgentsPage
+          // The same flag the pipeline pane sets: the composer, stop, unattended-grant and transport paths treat this as an editor_test conversation.
+          extensions={editorTestExtensions}
         />
       </Box>
     </Box>
