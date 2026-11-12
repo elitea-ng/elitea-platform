@@ -418,6 +418,20 @@ LEFT JOIN LATERAL (
                    ELSE 'user'
                END AS role,
                CASE
+                   -- Sent to people, not asked of the reader: always named, even
+                   -- when the asking person wrote it, and marked as such.
+                   WHEN message_group.meta ->> 'people_only' = 'true'
+                   THEN jsonb_build_object(
+                       'elitea_author', jsonb_build_object(
+                           'kind', 'person',
+                           'name', COALESCE(
+                               NULLIF(btrim(author.meta ->> 'user_name'), ''),
+                               NULLIF(btrim(author.entity_meta ->> 'user_name'), ''),
+                               ''
+                           )
+                       ),
+                       'elitea_addressed', 'people'
+                   )
                    WHEN author.id = author_participant.id
                      OR author.id = target_participant.id
                    THEN '{}'::jsonb
@@ -523,6 +537,16 @@ LEFT JOIN LATERAL (
             FROM regexp_matches(message_canvas.canvas_content, chr(96) || '+', 'g') AS backtick_run(run)
         ) AS canvas_fence ON TRUE
         CROSS JOIN LATERAL (
+            SELECT jsonb_build_object(
+                       'type', 'text',
+                       'text', '[Sent to people only: this message is for the people it @mentions and was not addressed to you.]'
+                   ) AS chunk,
+                   -1 AS chunk_index
+            WHERE message_item.item_type = 'text_message'
+              AND message_item.order_index = 0
+              AND message_group.meta ->> 'people_only' = 'true'
+              AND COALESCE(message_text.content, '') <> ''
+            UNION ALL
             SELECT jsonb_build_object(
                        'type', 'text', 'text', message_text.content
                    ) AS chunk,
@@ -703,6 +727,18 @@ LEFT JOIN LATERAL (
                             statement_timestamp() AT TIME ZONE 'UTC'
                         )
                   )
+              )
+              -- A message the person wrote to PEOPLE (a people-only post,
+              -- PostHumanMessage) never gets a reply, so the pair rule above
+              -- would drop it from every later turn. It is a visible message
+              -- like any other person's (ADR-0050 decision 9a), identified by
+              -- the marker its writer sets, NOT by "a user group with no
+              -- reply": that would bring back the question of a failed or
+              -- aborted turn.
+              OR (
+                  author.entity_name = 'user'
+                  AND message_group.reply_to_id IS NULL
+                  AND message_group.meta ->> 'people_only' = 'true'
               )
           )
         GROUP BY message_group.id, message_group.created_at, message_group.uuid,
@@ -1476,6 +1512,20 @@ LEFT JOIN LATERAL (
                    ELSE 'user'
                END AS role,
                CASE
+                   -- Sent to people, not asked of the reader: always named, even
+                   -- when the asking person wrote it, and marked as such.
+                   WHEN message_group.meta ->> 'people_only' = 'true'
+                   THEN jsonb_build_object(
+                       'elitea_author', jsonb_build_object(
+                           'kind', 'person',
+                           'name', COALESCE(
+                               NULLIF(btrim(author.meta ->> 'user_name'), ''),
+                               NULLIF(btrim(author.entity_meta ->> 'user_name'), ''),
+                               ''
+                           )
+                       ),
+                       'elitea_addressed', 'people'
+                   )
                    WHEN author.id = author_participant.id
                      OR author.id = target_participant.id
                    THEN '{}'::jsonb
@@ -1581,6 +1631,16 @@ LEFT JOIN LATERAL (
             FROM regexp_matches(message_canvas.canvas_content, chr(96) || '+', 'g') AS backtick_run(run)
         ) AS canvas_fence ON TRUE
         CROSS JOIN LATERAL (
+            SELECT jsonb_build_object(
+                       'type', 'text',
+                       'text', '[Sent to people only: this message is for the people it @mentions and was not addressed to you.]'
+                   ) AS chunk,
+                   -1 AS chunk_index
+            WHERE message_item.item_type = 'text_message'
+              AND message_item.order_index = 0
+              AND message_group.meta ->> 'people_only' = 'true'
+              AND COALESCE(message_text.content, '') <> ''
+            UNION ALL
             SELECT jsonb_build_object(
                        'type', 'text', 'text', message_text.content
                    ) AS chunk,
@@ -1757,6 +1817,18 @@ LEFT JOIN LATERAL (
                             statement_timestamp() AT TIME ZONE 'UTC'
                         )
                   )
+              )
+              -- A message the person wrote to PEOPLE (a people-only post,
+              -- PostHumanMessage) never gets a reply, so the pair rule above
+              -- would drop it from every later turn. It is a visible message
+              -- like any other person's (ADR-0050 decision 9a), identified by
+              -- the marker its writer sets, NOT by "a user group with no
+              -- reply": that would bring back the question of a failed or
+              -- aborted turn.
+              OR (
+                  author.entity_name = 'user'
+                  AND message_group.reply_to_id IS NULL
+                  AND message_group.meta ->> 'people_only' = 'true'
               )
           )
         GROUP BY message_group.id, message_group.created_at, message_group.uuid,

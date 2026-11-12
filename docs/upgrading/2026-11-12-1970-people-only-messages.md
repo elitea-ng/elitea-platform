@@ -21,8 +21,17 @@ names are notified, and **no agent or model turn starts**.
   `question_id` is still the idempotency key (a replay answers `created: false`
   and notifies nobody again). A message that addresses an agent still goes to
   it, with its people notified; a message with no mention is unchanged.
-  `@everyone` counts as mentioning people. In a conversation with a single
-  agent, mobile offers no agent mention, so a question to the agent is its own
-  message.
+  `@everyone` counts as mentioning people. Only the people who would really be
+  told count (project members other than the sender); a message that tags only
+  non-members or only its sender is an ordinary message. Only a person's own
+  start (composer or API client) is decided this way, never an automated one.
+  In a conversation with a single agent among other people, `@Agent` now
+  addresses that agent (web and mobile); `addressed_to` in a conversation with
+  fewer than two agents is checked against its agent and routes to it.
+- **History.** Later agent turns see the post as a user-role message from its
+  author, marked `elitea_addressed: "people"` and led by a note that it was not
+  addressed to the agent. It is identified by the `people_only` marker in the
+  message group's `meta`, so the unanswered question of a failed turn stays out
+  of the history. The reader's eligibility mode still applies.
 - **No migration.** The message is a normal sender message group with no reply
-  group, no execution and no addressee.
+  group, no execution and no addressee; `meta.people_only` marks it.

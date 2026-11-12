@@ -2,6 +2,7 @@ package agentexecution
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -145,7 +146,7 @@ func (service *CurrentApplicationStartService) PostPeopleMessage(
 		QuestionID:       request.QuestionID,
 		QuestionItemID:   currentTurnUUID(request.QuestionID, "question-item"),
 		UserInput:        request.UserInput,
-		Meta:             currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone),
+		Meta:             peopleOnlyMeta(request),
 		Attachments:      attachments,
 	})
 	if err != nil {
@@ -157,4 +158,18 @@ func (service *CurrentApplicationStartService) PostPeopleMessage(
 		service.notifyMentionedUsers(ctx, request)
 	}
 	return PostedMessage{MessageID: request.QuestionID, Created: created}, nil
+}
+
+// peopleOnlyMeta is the message group's `meta`: the question's own (interaction
+// and mentions) plus `people_only`, the marker later turns' history reads to
+// carry the message to every agent as a message to people (agent_chat.sql).
+func peopleOnlyMeta(request CurrentApplicationStartRequest) []byte {
+	meta := map[string]any{}
+	_ = json.Unmarshal(currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone), &meta)
+	meta["people_only"] = true
+	encoded, err := json.Marshal(meta)
+	if err != nil {
+		return []byte(`{"people_only":true}`)
+	}
+	return encoded
 }
