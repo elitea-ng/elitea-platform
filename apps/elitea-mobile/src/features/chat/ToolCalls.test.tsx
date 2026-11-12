@@ -61,6 +61,19 @@ describe('ToolActivity', () => {
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'b' }));
   });
 
+  it("draws the image of a sub-agent's default avatar key, and the brand mark for an unknown key", async () => {
+    const { rerender } = await render(
+      <ToolActivity steps={[step('a', { parentAgent: 'Owl · temporary', parentAvatar: 'default:owl' })]} streaming onOpen={jest.fn()} />,
+    );
+    expect(screen.getByTestId('default-avatar', { includeHiddenElements: true })).toBeTruthy();
+    expect(screen.queryByTestId('brand-mark-fallback', { includeHiddenElements: true })).toBeNull();
+    await rerender(<ToolActivity steps={[step('a', { parentAgent: 'Owl · temporary', parentAvatar: 'default:dragon' })]} streaming onOpen={jest.fn()} />);
+    expect(screen.queryByTestId('default-avatar', { includeHiddenElements: true })).toBeNull();
+    expect(screen.getByTestId('brand-mark-fallback', { includeHiddenElements: true })).toBeTruthy();
+    await rerender(<ToolActivity steps={[step('a', { parentAgent: 'Owl · temporary' })]} streaming onOpen={jest.fn()} />);
+    expect(screen.queryByTestId('brand-mark-fallback', { includeHiddenElements: true })).toBeNull();
+  });
+
   it('is expanded while the answer streams, with the running call labelled', async () => {
     await render(<ToolActivity steps={[step('a', { status: 'running', endedAt: null, parentAgent: 'researcher' })]} streaming onOpen={jest.fn()} />);
     expect(screen.getByLabelText('GitHub · list_issues, running')).toBeTruthy();

@@ -23,8 +23,12 @@ import {
   MOTION_KIND,
   MOTION_SPEC,
   MOTION_TONE,
+  DEFAULT_AVATAR_GRID,
   avatarSource,
+  defaultAvatarOf,
   type AvatarMotion,
+  type DefaultAvatar,
+  type DefaultAvatarRole,
   type MotionSpec,
   type MotionTone,
 } from '@elitea/client-core/conversation';
@@ -37,6 +41,12 @@ export interface AgentAvatarProps {
   /** The version's `avatar_pack` as the wire sends it; its slots win over `iconUrl`. */
   readonly pack?: unknown;
   readonly motion?: AvatarMotion | undefined;
+  /**
+   * A sub-agent profile's avatar key (`default:<name>`, issues 1870 and
+   * 1951). A key of the default set draws its image as the still when there
+   * is no icon or pack; an unknown key draws the brand mark.
+   */
+  readonly avatarKey?: string | undefined;
   /** A temporary sub-agent: a dashed ring (decision 7e). */
   readonly ephemeral?: boolean | undefined;
   /** Edge length, CSS. */
@@ -58,6 +68,42 @@ function toneColor(theme: Theme, tone: MotionTone | undefined): string {
     case undefined:
       return theme.vars.palette.primary.main;
   }
+}
+
+function roleColor(theme: Theme, role: DefaultAvatarRole): string {
+  switch (role) {
+    case 'body':
+      return theme.vars.palette.primary.main;
+    case 'detail':
+      return theme.vars.palette.background.default;
+    case 'accent':
+      return theme.vars.palette.text.secondary;
+  }
+}
+
+/** One default avatar image: inline SVG whose fills are theme tokens, so a brand pack and the dark scheme re-theme it. */
+function DefaultAvatarImage({ avatar }: { readonly avatar: DefaultAvatar }): ReactNode {
+  return (
+    <Box
+      component="svg"
+      data-testid="default-avatar"
+      data-avatar-name={avatar.name}
+      viewBox={`0 0 ${String(DEFAULT_AVATAR_GRID)} ${String(DEFAULT_AVATAR_GRID)}`}
+      role="img"
+      aria-label={avatar.label}
+      sx={(theme: Theme) => ({
+        width: '78%',
+        height: '78%',
+        '& path[data-role="body"]': { fill: roleColor(theme, 'body') },
+        '& path[data-role="detail"]': { fill: roleColor(theme, 'detail') },
+        '& path[data-role="accent"]': { fill: roleColor(theme, 'accent') },
+      })}
+    >
+      {avatar.shapes.map((shape, index) => (
+        <path key={String(index)} data-role={shape.role} d={shape.d} />
+      ))}
+    </Box>
+  );
 }
 
 const KEYFRAMES = {
@@ -127,8 +173,9 @@ function MotionLayer({ spec }: { readonly spec: MotionSpec }): ReactNode {
 }
 
 /** The still with the motion of its state. */
-export function AgentAvatar({ iconUrl, pack, motion = 'still', ephemeral = false, size = DEFAULT_SIZE }: AgentAvatarProps): ReactNode {
+export function AgentAvatar({ iconUrl, pack, avatarKey, motion = 'still', ephemeral = false, size = DEFAULT_SIZE }: AgentAvatarProps): ReactNode {
   const source = avatarSource(pack, iconUrl, motion);
+  const defaultAvatar = defaultAvatarOf(avatarKey);
   const spec = motion === 'still' || source?.ownMotion === true ? undefined : MOTION_SPEC[motion];
   const breathe = spec !== undefined && spec.peakScale > 1;
   return (
@@ -149,7 +196,9 @@ export function AgentAvatar({ iconUrl, pack, motion = 'still', ephemeral = false
             : {}),
         })}
       >
-        {source === undefined ? (
+        {source === undefined && defaultAvatar !== undefined ? (
+          <DefaultAvatarImage avatar={defaultAvatar} />
+        ) : source === undefined ? (
           <BrandLogoMark style={{ width: size, height: size }} />
         ) : source.kind === 'video' ? (
           // Never sound: muted, no controls; the poster shows before it plays.

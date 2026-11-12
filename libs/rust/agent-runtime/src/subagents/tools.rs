@@ -209,7 +209,8 @@ fn spawn_schema() -> Value {
                     "avatar": {
                         "type": "string",
                         "maxLength": MAX_AVATAR_BYTES,
-                        "description": "An avatar key of at most 128 bytes, such as \"default:owl\""
+                        "enum": profile::DEFAULT_AVATAR_KEYS,
+                        "description": "One of the default avatar keys, such as \"default:owl\"; any other key is refused"
                     }
                 },
                 "additionalProperties": false

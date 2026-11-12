@@ -29,6 +29,8 @@ describe('cloud sub-agents (client contract 1.48)', () => {
       ['read_file', 'running', 'Owl · temporary'],
     ]);
     expect(groupByAgent(steps).map((g) => g.agent)).toEqual(['Owl · temporary']);
+    // Issue 1870: the profile's avatar key reaches the group, to draw its image.
+    expect(groupByAgent(steps).map((g) => g.avatar)).toEqual(['default:owl']);
     // Settled without the child's end: it was stopped with the run.
     const stopped = subAgentSteps(turn.subAgents, true);
     expect(stopped[1]).toMatchObject({ status: 'error', error: 'Stopped' });
