@@ -47,6 +47,7 @@ import (
 	"net/textproto"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/sync/errgroup"
@@ -94,6 +95,17 @@ const (
 type Handler struct {
 	store   storage.ObjectStore
 	gateway llmproxy.Gateway
+	// frameSlots holds one semaphore per project (string -> chan struct{}):
+	// the errgroup limit bounds ONE request, this bounds every loop
+	// generation of a project together, so concurrent requests cannot
+	// multiply the provider calls past maxConcurrentFrameEdits.
+	frameSlots sync.Map
+}
+
+// frameSlot is the project's semaphore of in-flight frame edits.
+func (h *Handler) frameSlot(projectID string) chan struct{} {
+	slot, _ := h.frameSlots.LoadOrStore(projectID, make(chan struct{}, maxConcurrentFrameEdits))
+	return slot.(chan struct{})
 }
 
 // NewHandler builds the handler. A nil store answers 503 on upload and
@@ -636,8 +648,15 @@ func (h *Handler) loopFrames(ctx context.Context, identity llmproxy.Identity, re
 	frames := make([][]byte, req.Frames)
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(maxConcurrentFrameEdits)
+	slot := h.frameSlot(identity.ProjectID)
 	for index := 0; index < req.Frames; index++ {
 		group.Go(func() error {
+			select {
+			case slot <- struct{}{}:
+				defer func() { <-slot }()
+			case <-groupCtx.Done():
+				return groupCtx.Err()
+			}
 			prompt := fmt.Sprintf("The same character, same style, same framing and background. Pose %d of %d of a short seamless loop: %s. Keep the face and identity identical.",
 				index+1, req.Frames, pose)
 			body, contentType, err := editForm(req.Model, prompt, still, stillMedia)

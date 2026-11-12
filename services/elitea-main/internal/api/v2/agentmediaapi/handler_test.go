@@ -34,6 +34,7 @@ type memoryStore struct {
 	mu      sync.Mutex
 	objects map[string][]byte
 	types   map[string]string
+	puts    map[string]int
 	// noTotal leaves TotalSize at 0 on a ranged Get, as the storage
 	// contract allows a backend to.
 	noTotal bool
@@ -50,7 +51,7 @@ func (m *memoryStore) Stat(_ context.Context, ref storage.ObjectRef) (storage.Ob
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{objects: map[string][]byte{}, types: map[string]string{}}
+	return &memoryStore{objects: map[string][]byte{}, types: map[string]string{}, puts: map[string]int{}}
 }
 
 func (m *memoryStore) Put(_ context.Context, ref storage.ObjectRef, body io.Reader, opts storage.PutOptions) (storage.ObjectInfo, error) {
@@ -62,6 +63,7 @@ func (m *memoryStore) Put(_ context.Context, ref storage.ObjectRef, body io.Read
 	defer m.mu.Unlock()
 	m.objects[ref.StorageKey("")] = data
 	m.types[ref.StorageKey("")] = opts.ContentType
+	m.puts[ref.StorageKey("")]++
 	return storage.ObjectInfo{Key: ref.Key(), Size: int64(len(data))}, nil
 }
 
@@ -88,6 +90,12 @@ func (m *memoryStore) Get(_ context.Context, ref storage.ObjectRef, rng *storage
 		info.Size = int64(len(data))
 	}
 	return io.NopCloser(bytes.NewReader(data)), info, nil
+}
+
+func (m *memoryStore) putCount(ref storage.ObjectRef) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts[ref.StorageKey("")]
 }
 
 func (m *memoryStore) count() int {

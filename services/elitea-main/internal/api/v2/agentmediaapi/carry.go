@@ -41,6 +41,16 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
+const (
+	// MaxEmbeddedFiles bounds the entries of one import's `avatar_media`: a
+	// pack names at most a url and a poster per slot, and icon_meta one more.
+	MaxEmbeddedFiles = 2*9 + 1 // 2 * len(agentmedia.Slots) + icon_meta
+	// MaxEmbeddedBytes bounds the decoded bytes of one import's
+	// `avatar_media`, so a document cannot make Main decode and hash
+	// MaxEmbeddedFiles files of the per-file maximum.
+	MaxEmbeddedBytes = 16 << 20
+)
+
 // EmbeddedMediaKey is the version key of an export that carries the pack's
 // files.
 const EmbeddedMediaKey = "avatar_media"
@@ -163,6 +173,18 @@ func DecodeEmbeddedMedia(raw any) (map[string][]byte, error) {
 	if !ok {
 		return nil, errors.New(EmbeddedMediaKey + " must be an object of base64 files")
 	}
+	if len(entries) > MaxEmbeddedFiles {
+		return nil, fmt.Errorf("%s has %d files; at most %d are allowed", EmbeddedMediaKey, len(entries), MaxEmbeddedFiles)
+	}
+	// The total first, from the text lengths, before any file is decoded.
+	total := 0
+	for _, value := range entries {
+		if text, ok := value.(string); ok {
+			if total += base64.StdEncoding.DecodedLen(len(text)); total > MaxEmbeddedBytes {
+				return nil, fmt.Errorf("%s is larger than %d MiB in all", EmbeddedMediaKey, MaxEmbeddedBytes>>20)
+			}
+		}
+	}
 	files := make(map[string][]byte, len(entries))
 	for file, value := range entries {
 		text, ok := value.(string)
@@ -211,7 +233,12 @@ func checkFile(file string, data []byte) error {
 // target, a malformed URL, or a file that could not be stored is left out of
 // the mapping, so its URL stays as it was (see the file comment). A nil store
 // copies nothing.
-func CarryMedia(ctx context.Context, store storage.ObjectStore, target string, urls []string, embedded map[string][]byte) map[string]string {
+//
+// A URL may name ANY project, so a file with no embedded bytes is read from
+// its owner's bucket only when readable(owner) says the caller may read that
+// project (the public project, or one the caller is a member of). Otherwise it
+// is treated as a missing file. A nil readable allows no foreign project.
+func CarryMedia(ctx context.Context, store storage.ObjectStore, target string, urls []string, embedded map[string][]byte, readable func(owner string) bool) map[string]string {
 	mapping := map[string]string{}
 	if store == nil {
 		if len(urls) > 0 {
@@ -234,6 +261,11 @@ func CarryMedia(ctx context.Context, store storage.ObjectStore, target string, u
 			}
 			continue
 		}
+		if embedded[file] == nil && (readable == nil || !readable(owner)) {
+			slog.WarnContext(ctx, "agent media: the source project is not readable by the caller, the copy keeps the source url",
+				"project_id", target, "source_project_id", owner, "file", file)
+			continue
+		}
 		if err := copyInto(ctx, store, target, owner, file, embedded[file]); err != nil {
 			slog.WarnContext(ctx, "agent media: the copy keeps a source media url",
 				"project_id", target, "source_project_id", owner, "file", file, "error", err)
@@ -249,9 +281,21 @@ func copyInto(ctx context.Context, store storage.ObjectStore, target, owner, fil
 	if err != nil {
 		return err
 	}
-	// Content-addressed: an object under this name already IS these bytes.
+	// Content-addressed: an object under this name already IS these bytes, so
+	// it is not copied again. But it may be an old orphan the sweep is about
+	// to reclaim by its age (agent_media_orphan_sweep.go), so it is written
+	// again to refresh its modification time: the copy about to name it must
+	// not lose it to a sweep that listed it before this claim.
 	if _, err := store.Stat(ctx, ref); err == nil {
-		return nil
+		if data == nil {
+			if data, err = readMedia(ctx, store, target, file); err != nil {
+				return err
+			}
+		}
+		if err := checkFile(file, data); err != nil {
+			return err
+		}
+		return putMedia(ctx, store, ref, file, data)
 	}
 	if data == nil {
 		if data, err = readMedia(ctx, store, owner, file); err != nil {
@@ -261,8 +305,12 @@ func copyInto(ctx context.Context, store storage.ObjectStore, target, owner, fil
 	if err := checkFile(file, data); err != nil {
 		return err
 	}
+	return putMedia(ctx, store, ref, file, data)
+}
+
+func putMedia(ctx context.Context, store storage.ObjectStore, ref storage.ObjectRef, file string, data []byte) error {
 	sum := sha256.Sum256(data)
-	_, err = store.Put(ctx, ref, bytes.NewReader(data), storage.PutOptions{
+	_, err := store.Put(ctx, ref, bytes.NewReader(data), storage.PutOptions{
 		ContentType: agentmedia.MediaTypeOf(file[strings.LastIndexByte(file, '.')+1:]), ContentLength: int64(len(data)), ChecksumSHA256: sum[:],
 	})
 	return err

@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useRef } from 'react';
 
 import { publicAgentIconUrl } from '@/api/queries/discover';
 import { queryKeys } from '@/api/queries/keys';
@@ -84,4 +85,25 @@ export function useVettedMedia<T>(
     queryFn: async () => (await fetcher(uri as string)) ?? null,
   });
   return uri !== null ? (media.data ?? null) : null;
+}
+
+/**
+ * A function that drops the cached answer for `path` so it is fetched again, for a view whose file
+ * failed to load: a `keep` answer is a `file://` URI under the OS caches folder, which the system
+ * may evict while the query lives on. Once per path per mount, so a file that is bad on every
+ * download cannot loop.
+ */
+export function useVettedMediaReload(projectId: number | null, segment: string): (path: string | null) => void {
+  const queries = useQueryClient();
+  const origin = useSession((s) => s.serverOrigin);
+  const tried = useRef(new Set<string>());
+  return useCallback(
+    (path: string | null) => {
+      const uri = publicAgentIconUrl(path, origin);
+      if (uri === null || projectId === null || tried.current.has(uri)) return;
+      tried.current.add(uri);
+      void queries.invalidateQueries({ queryKey: [...queryKeys.agents(projectId), segment, uri] });
+    },
+    [queries, origin, projectId, segment],
+  );
 }

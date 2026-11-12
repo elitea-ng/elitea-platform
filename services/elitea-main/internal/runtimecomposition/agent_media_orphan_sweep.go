@@ -18,7 +18,8 @@ package runtimecomposition
 // saves the version that names it.
 //
 // Fail closed: when the reference set cannot be read in full, the tick
-// deletes nothing. A file of unknown age (a backend that reports no
+// deletes nothing. The set is read again before each batch of deletes, so a
+// file a fork or import claimed after the tick began is not deleted. A file of unknown age (a backend that reports no
 // modification time) is kept.
 //
 // NOT HERE, pending owner decisions (#1855): counting agent-media against
@@ -31,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"time"
 
@@ -170,6 +172,20 @@ func (s *agentMediaOrphanSweep) sweepProject(ctx context.Context, project int64,
 				continue
 			}
 			orphans = append(orphans, ref)
+		}
+		if len(orphans) > 0 {
+			// The snapshot was read before the listing. A fork or import may
+			// have claimed a candidate since (it copies a file in and only
+			// then saves the version that names it), so the candidates are
+			// checked against a FRESH read. Fail closed, as for the first.
+			fresh, err := s.references.Referenced(ctx)
+			if err != nil {
+				return deleted, fmt.Errorf("agent media orphan sweep: re-read references: %w", err)
+			}
+			orphans = slices.DeleteFunc(orphans, func(ref storage.ObjectRef) bool {
+				_, named := fresh[repos.AgentMediaReferenceKey(project, ref.Key())]
+				return named
+			})
 		}
 		if len(orphans) > 0 {
 			result, err := s.store.DeleteBatch(ctx, orphans)

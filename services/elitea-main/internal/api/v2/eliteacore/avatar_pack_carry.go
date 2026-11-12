@@ -5,10 +5,56 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentmediaapi"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmedia"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/projectaccess"
 )
+
+// mediaSourceReadable answers whether the caller may have a file copied out
+// of another project's agent-media bucket: the public project's (the
+// catalogue), or a project the caller is a member of (the same predicate
+// RequireProjectAccess applies). An export names URLs of any project, so
+// without this an importer could read a stranger's bucket server-side by
+// writing its URL into a pack. Answers are cached for the request; a failed
+// lookup is "no".
+func (h *Handler) mediaSourceReadable(ctx context.Context) func(owner string) bool {
+	known := map[string]bool{}
+	return func(owner string) bool {
+		if allowed, ok := known[owner]; ok {
+			return allowed
+		}
+		allowed := h.checkMediaSourceReadable(ctx, owner)
+		known[owner] = allowed
+		return allowed
+	}
+}
+
+func (h *Handler) checkMediaSourceReadable(ctx context.Context, owner string) bool {
+	if h.mediaReadable != nil {
+		return h.mediaReadable(ctx, owner)
+	}
+	if owner == publicProjectIDOrDefault() {
+		return true
+	}
+	projectID, err := strconv.Atoi(owner)
+	if err != nil || projectID <= 0 || h.pool == nil {
+		return false
+	}
+	user, ok := auth.UserFromContext(ctx)
+	if !ok {
+		return false
+	}
+	userID, err := strconv.Atoi(user.ID)
+	if err != nil || userID <= 0 {
+		return false
+	}
+	var member bool
+	err = h.pool.QueryRow(ctx, "SELECT "+projectaccess.Membership(1, 2), projectID, userID).Scan(&member)
+	return err == nil && member
+}
 
 // carriedAvatarPack is the avatar pack a fork or an import writes for one
 // version entry of an export document into project `target` (ADR-0050
@@ -46,7 +92,7 @@ func (h *Handler) carriedAvatarPack(ctx context.Context, version map[string]any,
 	if len(urls) == 0 {
 		return nil, nil
 	}
-	mapping := agentmediaapi.CarryMedia(ctx, h.store, target, urls, files)
+	mapping := agentmediaapi.CarryMedia(ctx, h.store, target, urls, files, h.mediaSourceReadable(ctx))
 	if meta != nil {
 		agentmediaapi.RewriteIconMeta(meta, mapping)
 	}

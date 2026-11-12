@@ -47,6 +47,30 @@ function fileFor(uri: string): File | null {
   return new File(mediaDirectory(origin), name);
 }
 
+// Directories whose temporary files were swept this run.
+const swept = new Set<string>();
+
+/**
+ * Deletes the `*.part` files a write cut short (the app killed mid-write) left behind. Once per
+ * directory per run, before the first write, so it never races this run's own writes.
+ */
+function sweepPartFiles(directory: Directory): void {
+  if (swept.has(directory.uri)) return;
+  swept.add(directory.uri);
+  try {
+    for (const entry of directory.list()) {
+      if (entry instanceof File && entry.name.endsWith('.part')) entry.delete();
+    }
+  } catch (error) {
+    log.info('agent media: stale temporary files not swept', { error });
+  }
+}
+
+/** Forgets which folders were swept (tests). */
+export function resetPartFileSweepForTests(): void {
+  swept.clear();
+}
+
 export const agentMediaFiles: AgentMediaFiles = {
   cached(uri) {
     try {
@@ -64,6 +88,7 @@ export const agentMediaFiles: AgentMediaFiles = {
       if (file === null) return null;
       const directory = mediaDirectory(origin);
       if (!directory.exists) directory.create({ intermediates: true });
+      sweepPartFiles(directory);
       // Written beside it under a temporary name, then moved into place: `cached` trusts any file
       // with the final name, so a write cut short (the app killed, the disk full) must never
       // leave one there.
@@ -88,6 +113,7 @@ export const agentMediaFiles: AgentMediaFiles = {
 export function deleteAgentMediaFiles(origin: string): void {
   const directory = mediaDirectory(origin);
   if (directory.exists) directory.delete();
+  swept.delete(directory.uri);
 }
 
 // A workspace being wiped (active or not): its pack media files. The origin is read from its slot

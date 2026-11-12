@@ -18,10 +18,19 @@ type fakeMediaReferences struct {
 	projects   []int64
 	referenced map[string]struct{}
 	err        error
+	// later, when set, is the set every read AFTER the first answers.
+	later map[string]struct{}
+	reads *int
 }
 
 func (f fakeMediaReferences) TenantProjects(context.Context) ([]int64, error) { return f.projects, nil }
 func (f fakeMediaReferences) Referenced(context.Context) (map[string]struct{}, error) {
+	if f.reads != nil {
+		*f.reads++
+		if *f.reads > 1 && f.later != nil {
+			return f.later, f.err
+		}
+	}
 	return f.referenced, f.err
 }
 
@@ -130,5 +139,33 @@ func TestAgentMediaOrphanSweepRefusesAForeignOccurrence(t *testing.T) {
 	}
 	if _, err := newAgentMediaOrphanSweep(nil, nil); err == nil {
 		t.Fatal("built without dependencies")
+	}
+}
+
+// A file claimed after the tick read its reference snapshot is kept.
+func TestAgentMediaOrphanSweepRechecksCandidatesAgainstAFreshRead(t *testing.T) {
+	now := time.Date(2026, 11, 11, 3, 23, 0, 0, time.UTC)
+	old := now.Add(-agentMediaOrphanGrace - time.Hour)
+	store := &listingMediaStore{objects: map[string][]storage.ObjectInfo{
+		"1": {{Key: mediaFile("a"), LastModified: old}, {Key: mediaFile("b"), LastModified: old}},
+	}}
+	reads := 0
+	references := fakeMediaReferences{
+		projects:   []int64{1},
+		referenced: map[string]struct{}{},
+		// A fork names "a" while the tick is running.
+		later: map[string]struct{}{repos.AgentMediaReferenceKey(1, mediaFile("a")): {}},
+		reads: &reads,
+	}
+	sweep, err := newAgentMediaOrphanSweep(references, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sweep.now = func() time.Time { return now }
+	if _, err := sweep.sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(store.deleted, ",") != "1/"+mediaFile("b") {
+		t.Fatalf("deleted %v, want only the file nobody claimed", store.deleted)
 	}
 }

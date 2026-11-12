@@ -81,6 +81,10 @@ type Handler struct {
 	guardedClientOnce     sync.Once
 	guardedClient         *http.Client
 	store                 storage.ObjectStore
+	// mediaReadable overrides the check that the caller may read another
+	// project's avatar media when a fork or import copies it (tests); nil
+	// uses callerCanReadProjectMedia.
+	mediaReadable func(ctx context.Context, owner string) bool
 	// The pre-built MCP server catalogue and the vault holding its client
 	// secrets (mcp_prebuilt_resolution.go). Both nil unless
 	// WithPrebuiltMCPCatalogue is applied, in which case resolution is a no-op.
@@ -280,6 +284,12 @@ func WithObjectStore(store storage.ObjectStore) Option {
 	return func(handler *Handler) {
 		handler.store = store
 	}
+}
+
+// WithMediaSourceReadable replaces the project-access check a fork or import
+// makes before it copies another project's avatar media (tests).
+func WithMediaSourceReadable(readable func(ctx context.Context, owner string) bool) Option {
+	return func(handler *Handler) { handler.mediaReadable = readable }
 }
 
 func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {

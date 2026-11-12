@@ -108,11 +108,26 @@ const TYPE_OF_EXTENSION: Record<string, VettedMediaType> = {
  * download: the name is the server's content address. An image that could not be stored is drawn
  * from a `data:` URI instead; a video needs a file.
  */
-export async function fetchAgentMedia(
+export function fetchAgentMedia(
   uri: string,
   fetchImpl: BaseFetch = noRedirectFetch,
   files: AgentMediaFiles = agentMediaFiles,
 ): Promise<AgentMedia | null> {
+  // The same content address asked for twice at once (two avatars of one agent, a state naming the
+  // still's file) is one download and one write; the entry is dropped when it settles.
+  const key = uri;
+  const running = inFlight.get(key);
+  if (running !== undefined && running.files === files) return running.promise;
+  const promise = downloadAgentMedia(uri, fetchImpl, files).finally(() => {
+    if (inFlight.get(key)?.promise === promise) inFlight.delete(key);
+  });
+  inFlight.set(key, { files, promise });
+  return promise;
+}
+
+const inFlight = new Map<string, { files: AgentMediaFiles; promise: Promise<AgentMedia | null> }>();
+
+async function downloadAgentMedia(uri: string, fetchImpl: BaseFetch, files: AgentMediaFiles): Promise<AgentMedia | null> {
   const name = agentMediaFileName(uri);
   const type = name === null ? undefined : TYPE_OF_EXTENSION[name.slice(name.lastIndexOf('.') + 1)];
   if (type === undefined) return null;

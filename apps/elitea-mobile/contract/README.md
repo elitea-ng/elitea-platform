@@ -183,7 +183,7 @@ Reduced motion shows the still only and downloads nothing else.
 
 | Area | What |
 |---|---|
-| Avatar pack typed (#1881) | `persona.avatar_pack_v1` is an `AgentAvatarPackV1` object, so the generated type is the pack. `persona.avatar_pack` stays the string 1.38 reserved and is deprecated; a 1.49 server never sends it. The app reads `avatar_pack_v1`, then the object a 1.46 to 1.48 server sent as `avatar_pack` (`participantAvatarPack`), and validates either with `avatarPackOf`. |
+| Avatar pack typed (#1881) | `persona.avatar_pack_v1` is an `AgentAvatarPackV1` object, so the generated type is the pack. `persona.avatar_pack` stays the string 1.38 reserved and is deprecated; a 1.49 server never sends it, so a client built for 1.46 to 1.48, which reads only `avatar_pack`, loses the pack (and shows the old icon) until it is updated. The app reads `avatar_pack_v1`, then the object a 1.46 to 1.48 server sent as `avatar_pack` (`participantAvatarPack`), and validates either with `avatarPackOf`. |
 
 Issue 1864: the app plays a state's own file. An image or an animated WebP is drawn with expo-image, which
 animates WebP on both platforms; an MP4 or WebM loop plays muted and looping with expo-video, over its

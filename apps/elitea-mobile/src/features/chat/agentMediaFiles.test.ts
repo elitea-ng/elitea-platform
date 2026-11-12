@@ -3,7 +3,7 @@
  * workspace origin, deleted with the workspace even when it is not the active one.
  */
 import { FIXTURE_ORIGIN } from '@/api/__fixtures__/nativeClient';
-import { agentMediaFileName, agentMediaFiles } from '@/features/chat/agentMediaFiles';
+import { agentMediaFileName, agentMediaFiles, resetPartFileSweepForTests } from '@/features/chat/agentMediaFiles';
 import { wipeStoredWorkspace } from '@/security/endSession';
 import { DEVICE_KEYS, SECURE_KEYS, bindWorkspace, setSecureItemIn } from '@/security/secureStorage';
 import { __resetRegistryForTests } from '@/security/workspaceRegistry';
@@ -28,6 +28,9 @@ jest.mock('expo-file-system', () => {
     }
     create() {
       dirs.add(this.uri);
+    }
+    list() {
+      return [...files.keys()].filter((f) => f.startsWith(`${this.uri}/`)).map((f) => new File(f));
     }
     delete() {
       for (const d of [...dirs]) if (d === this.uri || d.startsWith(`${this.uri}/`)) dirs.delete(d);
@@ -126,4 +129,20 @@ it("deletes a removed workspace's pack media and keeps the active one's", async 
   expect(wiped).toBe(true);
   expect(files.has(theirs!)).toBe(false);
   expect(files.has(mine!)).toBe(true);
+});
+
+it('deletes the temporary files an earlier run left in the folder, once, before its first write', () => {
+  const uri = `${FIXTURE_ORIGIN}${STILL}`;
+  const stored = agentMediaFiles.store(uri, BYTES)!;
+  const directory = stored.slice(0, stored.lastIndexOf('/'));
+  const stale = `${directory}/${'b'.repeat(64)}.png.abc123.part`;
+  files.set(stale, BYTES);
+  // Swept already in this run: a later write leaves it.
+  agentMediaFiles.store(`${FIXTURE_ORIGIN}/api/v2/agent_media/7/${'c'.repeat(64)}.png`, BYTES);
+  expect(files.has(stale)).toBe(true);
+  // A new run: the first write sweeps the folder, and the stored files stay.
+  resetPartFileSweepForTests();
+  agentMediaFiles.store(`${FIXTURE_ORIGIN}/api/v2/agent_media/7/${'d'.repeat(64)}.png`, BYTES);
+  expect(files.has(stale)).toBe(false);
+  expect(files.has(stored)).toBe(true);
 });

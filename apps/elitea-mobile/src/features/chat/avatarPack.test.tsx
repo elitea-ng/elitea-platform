@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 
 import { avatarPackOf, type AvatarPack } from '@elitea/client-core/conversation';
@@ -113,6 +113,12 @@ describe('participantAvatarPack', () => {
     expect(participantAvatarPack(undefined)).toBeUndefined();
   });
 
+  it('rejects the string persona.avatar_pack a 1.38 to 1.45 server reserves, so such a server shows no pack', () => {
+    const reserved = { id: 3, entity_name: 'application', persona: { avatar_pack: JSON.stringify(FULL) } };
+    expect(participantAvatarPack(reserved)).toBeUndefined();
+    expect(avatarPackOf(JSON.stringify(FULL))).toBeUndefined();
+  });
+
   it('ignores media from anywhere else and an unknown schema', () => {
     const foreign = { schema: 'elitea.avatar_pack/v1', slots: { still: { url: 'https://evil.example/x.png' } } };
     const v2 = { schema: 'elitea.avatar_pack/v2', slots: { still: { url: STILL } } };
@@ -191,6 +197,20 @@ describe('fetchAgentMedia', () => {
     mockExpoFetch.mockResolvedValueOnce(answer(big));
     expect(await fetchAgentMedia(`${FIXTURE_ORIGIN}${STILL}`, undefined, files)).toBeNull();
     expect(files.written.size).toBe(0);
+  });
+});
+
+describe('fetchAgentMedia in flight', () => {
+  it('downloads one content address once while two callers ask at the same time', async () => {
+    const files = memoryFiles();
+    mockExpoFetch.mockReset();
+    mockExpoFetch.mockResolvedValue(answer(PNG));
+    const uri = `${FIXTURE_ORIGIN}${STILL}`;
+    const [first, second] = await Promise.all([fetchAgentMedia(uri, undefined, files), fetchAgentMedia(uri, undefined, files)]);
+    expect(first).not.toBeNull();
+    expect(second).toEqual(first);
+    expect(mockExpoFetch).toHaveBeenCalledTimes(1);
+    expect(files.written.size).toBe(1);
   });
 });
 
@@ -298,6 +318,19 @@ describe('PackAvatar', () => {
     expect(image()?.props.autoplay).toBe(true);
     expect(motionLayer('speaking')).toBeNull();
     expect(fetchMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it('fetches a kept file again when the view cannot load it (the OS evicted it), once', async () => {
+    const fetchMedia = served();
+    await withQueries(<PackAvatar projectId={7} pack={FULL} motion="still" name="Mira" imageUri={null} mark fetchMedia={fetchMedia} />);
+    await waitFor(() => expect(shown()).toBe(uriOf(STILL)));
+    expect(fetchMedia).toHaveBeenCalledTimes(1);
+    fireEvent(image()!, 'error');
+    await waitFor(() => expect(fetchMedia).toHaveBeenCalledTimes(2));
+    // A second failure of the same file does not loop.
+    fireEvent(image()!, 'error');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchMedia).toHaveBeenCalledTimes(2);
   });
 
   it('falls back to the old icon when the still is refused, and to the monogram without either', async () => {

@@ -134,3 +134,34 @@ func TestLoopFrameFailureFailsTheGenerationWithItsStatus(t *testing.T) {
 		t.Fatalf("a failed loop stored %d objects", store.count()-stored)
 	}
 }
+
+// Two concurrent loop requests of one project share one budget of
+// maxConcurrentFrameEdits provider calls (the errgroup limit alone bounds
+// each request, so two requests ran eight).
+func TestLoopFramesShareOneBoundPerProject(t *testing.T) {
+	still := pngOf(t, 32, color.White)
+	media, err := agentmedia.Inspect(still)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := &poseGateway{images: map[int][]byte{}}
+	for pose := 1; pose <= agentmedia.MaxLoopFrames; pose++ {
+		gateway.images[pose] = pngOf(t, 16, color.NRGBA{R: uint8(pose * 20), A: 255})
+	}
+	h := NewHandler(newMemoryStore(), gateway)
+	req := GenerateRequest{Kind: "loop", Model: "m", State: agentmedia.SlotThinking, Frames: agentmedia.MaxLoopFrames}
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := h.loopFrames(context.Background(), llmproxy.Identity{ProjectID: "7"}, req, still, media); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if gateway.peak > maxConcurrentFrameEdits {
+		t.Fatalf("peak concurrent edits across requests = %d, want at most %d", gateway.peak, maxConcurrentFrameEdits)
+	}
+}

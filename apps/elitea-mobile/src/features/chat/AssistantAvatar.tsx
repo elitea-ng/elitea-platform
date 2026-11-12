@@ -10,7 +10,7 @@ import { useDesign } from '@/design/DesignProvider';
 import { AgentMotion } from '@/features/chat/AgentMotion';
 import { fetchAgentMedia, packMediaPlan, type AgentMedia } from '@/features/chat/avatarPackMedia';
 import { fetchPublicAgentIcon } from '@/features/discover/agentIconData';
-import { useVettedMedia } from '@/features/media/vettedMedia';
+import { useVettedMedia, useVettedMediaReload } from '@/features/media/vettedMedia';
 import { Avatar } from '@/ui';
 
 /**
@@ -48,6 +48,14 @@ export function useAgentMedia(projectId: number | null, path: string | null, fet
   return useVettedMedia(projectId, 'media', path, fetchMedia, true);
 }
 
+/**
+ * Drops the cached answer for a pack media path whose file would not load (the OS may evict the
+ * caches folder under a kept query), so the next read downloads it again.
+ */
+export function useReloadAgentMedia(projectId: number | null): (path: string | null) => void {
+  return useVettedMediaReload(projectId, 'media');
+}
+
 const hidden = { accessible: false, importantForAccessibility: 'no-hide-descendants', accessibilityElementsHidden: true } as const;
 
 /**
@@ -55,11 +63,11 @@ const hidden = { accessible: false, importantForAccessibility: 'no-hide-descenda
  * animates GIF only on iOS and no WebP on an Expo Android build). `play` false draws the first frame.
  * The file is already on disk, so expo-image keeps it in memory only.
  */
-function PackImage({ uri, size, play }: { uri: string; size: number; play: boolean }) {
+function PackImage({ uri, size, play, onError }: { uri: string; size: number; play: boolean; onError: () => void }) {
   const frame = { width: size, height: size, borderRadius: size / 2 };
   return (
     <View {...hidden} style={[styles.frame, frame]}>
-      <ExpoImage testID="avatar-image" source={{ uri }} style={frame} contentFit="cover" autoplay={play} cachePolicy="memory" />
+      <ExpoImage testID="avatar-image" source={{ uri }} style={frame} contentFit="cover" autoplay={play} cachePolicy="memory" onError={onError} />
     </View>
   );
 }
@@ -69,7 +77,7 @@ function PackImage({ uri, size, play }: { uri: string; size: number; play: boole
  * first frame renders, and again when the player fails, so the state always reads. It never takes
  * the audio session from another app, shows no controls and does not keep the screen on.
  */
-function PackVideo({ uri, poster, size }: { uri: string; poster: string | null; size: number }) {
+function PackVideo({ uri, poster, size, onError }: { uri: string; poster: string | null; size: number; onError: () => void }) {
   const frame = { width: size, height: size, borderRadius: size / 2 };
   const [playing, setPlaying] = useState(false);
   const player = useVideoPlayer(uri, (p) => {
@@ -80,7 +88,10 @@ function PackVideo({ uri, poster, size }: { uri: string; poster: string | null; 
     p.play();
   });
   useEventListener(player, 'statusChange', ({ status }) => {
-    if (status === 'error') setPlaying(false);
+    if (status === 'error') {
+      setPlaying(false);
+      onError();
+    }
   });
   return (
     <View {...hidden} pointerEvents="none" style={[styles.frame, frame]}>
@@ -139,6 +150,7 @@ export function PackAvatar({
   const stillMedia = useAgentMedia(projectId, still?.path ?? null, fetchMedia);
   const stateMedia = useAgentMedia(projectId, state?.path ?? null, fetchMedia);
   const posterMedia = useAgentMedia(projectId, posterPath, fetchMedia);
+  const reload = useReloadAgentMedia(projectId);
   const stillUri = stillMedia?.kind === 'image' ? stillMedia.uri : null;
 
   let drawn: ReactElement | null = null;
@@ -148,13 +160,13 @@ export function PackAvatar({
     drawn =
       stateMedia.kind === 'video' ? (
         // Keyed by the file: another state's video is a new player, with its poster up until its first frame.
-        <PackVideo key={stateMedia.uri} uri={stateMedia.uri} poster={posterMedia?.kind === 'image' ? posterMedia.uri : stillUri} size={edge} />
+        <PackVideo key={stateMedia.uri} uri={stateMedia.uri} poster={posterMedia?.kind === 'image' ? posterMedia.uri : stillUri} size={edge} onError={() => reload(state.path)} />
       ) : (
-        <PackImage uri={stateMedia.uri} size={edge} play />
+        <PackImage uri={stateMedia.uri} size={edge} play onError={() => reload(state.path)} />
       );
   } else if (stillUri !== null) {
     ownMotion = sameAsStill && planned?.ownMotion === true;
-    drawn = <PackImage uri={stillUri} size={edge} play={ownMotion} />;
+    drawn = <PackImage uri={stillUri} size={edge} play={ownMotion} onError={() => reload(still?.path ?? null)} />;
   }
   return (
     <AgentMotion motion={ownMotion ? 'still' : motion} size={edge}>

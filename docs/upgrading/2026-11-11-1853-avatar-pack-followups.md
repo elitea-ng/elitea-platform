@@ -24,7 +24,12 @@
   - Projects whose agents have avatar packs.
   - Web, desktop or mobile builds from contract 1.46 to 1.48 read the pack from `persona.avatar_pack`, so
     against this Main they show the agent's icon (`meta.icon_meta`, which Save keeps equal to the still)
-    and the default motion, and lose only the pack's state files. Upgrade the clients with Main.
+    and the default motion, and lose only the pack's state files until they are updated. Upgrade the clients
+    with Main.
+  - An import copies a file out of another project's `agent-media` bucket only when that project is the public
+    project or one the importer is a member of; otherwise the pack keeps the file's source URL. An export's
+    `avatar_media` is limited to 19 files and 16 MiB in all per version. Loop generation is limited to 4 frame
+    edits at once per project, across requests.
   - Generated still candidates that were never saved into a pack, and files of removed packs, are deleted
     from 7 days after this release.
 - **What to do.**

@@ -153,7 +153,7 @@ func TestForkCarriesTheAvatarPackIntoTheTargetBucket(t *testing.T) {
 	version["avatar_pack"] = avatarPack(still, thinking)
 	version["meta"] = map[string]any{"icon_meta": map[string]any{"url": still, "name": strings.TrimPrefix(still, agentmedia.URLPrefix)}}
 
-	recorder := forkDo(t, forkRouter(eliteacore.NewHandler(pool, eliteacore.WithObjectStore(store)), true), body)
+	recorder := forkDo(t, forkRouter(eliteacore.NewHandler(pool, eliteacore.WithObjectStore(store), eliteacore.WithMediaSourceReadable(readProject9)), true), body)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("fork status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
@@ -166,6 +166,29 @@ func TestForkCarriesTheAvatarPackIntoTheTargetBucket(t *testing.T) {
 	}
 	if !store.has("1", fileOf(still)) || !store.has("1", fileOf(thinking)) {
 		t.Fatal("the target bucket has no copy of the media")
+	}
+}
+
+func readProject9(_ context.Context, owner string) bool { return owner == "9" }
+
+// A pack may name any project's file; the caller reads only the projects it
+// has access to, so a stranger's bucket is not copied from.
+func TestForkDoesNotCopyFromAProjectTheCallerCannotRead(t *testing.T) {
+	pool := newImportLinkPool(t)
+	store := newMediaStore()
+	still := putMedia(t, store, "9", color.White)
+	thinking := putMedia(t, store, "9", color.Black)
+
+	body := forkBody("api_token")
+	version := body["applications"].([]any)[0].(map[string]any)["versions"].([]any)[0].(map[string]any)
+	version["avatar_pack"] = avatarPack(still, thinking)
+
+	recorder := forkDo(t, forkRouter(eliteacore.NewHandler(pool, eliteacore.WithObjectStore(store), eliteacore.WithMediaSourceReadable(func(context.Context, string) bool { return false })), true), body)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("fork status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if store.has("1", fileOf(still)) || store.has("1", fileOf(thinking)) {
+		t.Fatal("the fork copied media out of a project the caller cannot read")
 	}
 }
 
@@ -212,7 +235,7 @@ UPDATE p_1.application_versions
 	// Another installation: an empty bucket, the source project 9 present.
 	target := newMediaStore()
 	putMedia(t, target, "9", color.Black)
-	recorder := importLinkDo(t, importLinkRouter(eliteacore.NewHandler(pool, eliteacore.WithObjectStore(target))), roundTripImportBody(t, document))
+	recorder := importLinkDo(t, importLinkRouter(eliteacore.NewHandler(pool, eliteacore.WithObjectStore(target), eliteacore.WithMediaSourceReadable(readProject9))), roundTripImportBody(t, document))
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("import status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
