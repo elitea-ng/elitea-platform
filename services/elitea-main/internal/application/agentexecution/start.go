@@ -491,6 +491,10 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		return CurrentApplicationStartOutcome{}, err
 	}
 	input.ContextSettings = contextSettings
+	// Issue 1869: an agent of a conversation with several agents has its own
+	// worker session thread; every other turn keeps the conversation's.
+	sessionThread := floor.sessionThreadID(request.ConversationUUID, request.TargetParticipantID)
+	input.ThreadId = &sessionThread
 	input.Floor = heartbeatFloor(floor.input(request.TargetParticipantID), request.Heartbeat)
 	input.CurrentMessageId = currentMessageID(request)
 	// #1826, #1900: the entries the instructions show and their marks' tag,

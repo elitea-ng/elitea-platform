@@ -2236,6 +2236,37 @@ fn pseudonymous_session_identity_is_stable_per_thread_and_separated_between_thre
     assert_ne!(first.session_id(), other.session_id());
 }
 
+/// Issue 1869: Main freezes `<conversation>:<participant>` as the thread of an
+/// agent of a multi-agent conversation. Two agents of one conversation write
+/// separate sessions, the same agent resolves the same one on every turn, and
+/// the conversation's own thread (single-agent, ad hoc, older sessions) is a
+/// third session that keeps resolving.
+#[test]
+fn agents_of_one_conversation_write_separate_worker_sessions() {
+    const CONVERSATION: &str = "0192f5e2-7c3a-7b1e-8a9d-2b4c6d8e1a01";
+    let session_of = |thread: &str| {
+        let mut request = ordinary_request(AgentExecutionKind::Application);
+        request.payload.thread_id = Some(thread.to_owned());
+        let profile = OrdinaryNoToolProfile::validate(&request).expect("ordinary profile");
+        OrdinaryNativeAgentPlan::from_authorized(
+            &request,
+            &profile,
+            &AuthorizedNativeCommandBinding::fixture(),
+            &request.payload.input_attachments,
+        )
+        .expect("plan")
+        .session_id()
+        .to_owned()
+    };
+    let first_agent = session_of(&format!("{CONVERSATION}:21"));
+    let second_agent = session_of(&format!("{CONVERSATION}:22"));
+    let conversation = session_of(CONVERSATION);
+    assert_ne!(first_agent, second_agent);
+    assert_ne!(first_agent, conversation);
+    assert_ne!(second_agent, conversation);
+    assert_eq!(first_agent, session_of(&format!("{CONVERSATION}:21")));
+}
+
 #[test]
 fn output_continuation_keeps_the_session_and_replaces_the_user_turn_with_a_bounded_instruction() {
     let request = ordinary_request(AgentExecutionKind::Adhoc);

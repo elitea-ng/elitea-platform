@@ -3773,7 +3773,10 @@ SELECT conversation.uuid AS conversation_uuid,
                  AND earlier_answer.conversation_id = conversation.id
                  AND earlier_answer.id < response.id
            )
-       )::boolean AS question_is_own
+       )::boolean AS question_is_own,
+       -- #1869: the session thread the answer ran in, so a regeneration keeps it
+       -- ("" for an answer that settled none).
+       COALESCE(response.meta ->> 'thread_id', '')::text AS thread_id
 FROM chat_message_group AS response
 JOIN chat_conversations AS conversation
   ON conversation.id = response.conversation_id
@@ -3857,6 +3860,7 @@ type ResolveCurrentRegenerationRow struct {
 	RegenerationKind    string      `db:"regeneration_kind" json:"regeneration_kind"`
 	UserInput           string      `db:"user_input" json:"user_input"`
 	QuestionIsOwn       bool        `db:"question_is_own" json:"question_is_own"`
+	ThreadID            string      `db:"thread_id" json:"thread_id"`
 }
 
 func (q *Queries) ResolveCurrentRegeneration(ctx context.Context, arg ResolveCurrentRegenerationParams) (ResolveCurrentRegenerationRow, error) {
@@ -3870,6 +3874,7 @@ func (q *Queries) ResolveCurrentRegeneration(ctx context.Context, arg ResolveCur
 		&i.RegenerationKind,
 		&i.UserInput,
 		&i.QuestionIsOwn,
+		&i.ThreadID,
 	)
 	return i, err
 }

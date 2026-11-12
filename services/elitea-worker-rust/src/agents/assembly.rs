@@ -84,8 +84,9 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// agent memory tools. Only a root application agent has it; Main
     /// recalls no agent memory for a nested agent or a pipeline.
     agent_memory: Option<super::agent_memory_tools::AgentMemoryBinding>,
-    /// The run's unattended grant (ADR-0045). Only the root agent of a run
-    /// has it; a nested agent pauses as before.
+    /// The run's unattended grant (ADR-0045). Only the root profile holds
+    /// it; a nested agent reads it from the root profile it falls back to
+    /// (#1560) and applies it to its own narrowed grants.
     unattended: Option<Arc<super::unattended::UnattendedGrant>>,
     /// The turn-taking floor (ADR-0050 decision 11, #1611). Only the root
     /// agent of a turn holds it; a nested agent or a pipeline has none.
