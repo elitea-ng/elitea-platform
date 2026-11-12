@@ -246,10 +246,7 @@ export function CreatePersonalTokenPage() {
                       aria-label={t('entities.token.form.expirationPeriod', 'Expiration period')}
                     >
                       {TOKEN_EXPIRATION_OPTIONS.map((opt) => (
-                        <option
-                          key={opt.value}
-                          value={opt.value}
-                        >
+                        <option key={opt.value} value={opt.value}>
                           {opt.label}
                         </option>
                       ))}
@@ -374,10 +371,8 @@ const getStyles = (theme: Theme): {
       marginLeft: '0.5rem',
     },
     input: baseInput,
-    // The open list is the browser's own popup: it paints the option rows on the
-    // browser's background, not the page's, so inherited light text on a light
-    // popup in the dark theme was unreadable until hovered. Colour the select
-    // and its options explicitly, and tell the browser which scheme the popup is.
+    // The open list is the browser's popup: inherited light text on its light
+    // background was unreadable in the dark theme. Colour both explicitly.
     select: {
       ...baseInput,
       cursor: 'pointer',
