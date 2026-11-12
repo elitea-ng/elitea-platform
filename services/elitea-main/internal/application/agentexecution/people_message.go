@@ -3,6 +3,8 @@ package agentexecution
 import (
 	"context"
 	"errors"
+
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 // PEOPLE-ONLY MESSAGES.
@@ -37,6 +39,18 @@ func PeopleOnly(mentionedUserIDs []int64, mentionsEveryone bool, addressedTo []i
 	return (len(mentionedUserIDs) > 0 || mentionsEveryone) && len(addressedTo) == 0
 }
 
+// HumanOrigin reports whether a start is a person's message (the composer, or a
+// programmatic client acting for a person). An automated start (a schedule, a
+// webhook) addresses its own participant, as the floor already treats it, and
+// is never a message to people.
+func HumanOrigin(origin executiondomain.TriggerOrigin) bool {
+	switch origin {
+	case "", executiondomain.TriggerOriginManual, executiondomain.TriggerOriginAPI:
+		return true
+	}
+	return false
+}
+
 // IsPeopleOnly decides a start on its EFFECTIVE audience: the wire rule
 // (PeopleOnly) and at least one person who would really be told, the project
 // members the message names other than its sender (mentionAudience, the rule
@@ -45,7 +59,8 @@ func PeopleOnly(mentionedUserIDs []int64, mentionsEveryone bool, addressedTo []i
 // has no people to talk to and is an ordinary message. When the membership
 // cannot be read the wire rule stands: no turn is started on a doubt.
 func (service *CurrentApplicationStartService) IsPeopleOnly(ctx context.Context, request CurrentApplicationStartRequest) bool {
-	if !PeopleOnly(request.MentionedUserIDs, request.MentionsEveryone, request.AddressedTo) {
+	if !HumanOrigin(request.TriggerOrigin) ||
+		!PeopleOnly(request.MentionedUserIDs, request.MentionsEveryone, request.AddressedTo) {
 		return false
 	}
 	if service == nil || service.mentions == nil {
@@ -107,7 +122,7 @@ func (service *CurrentApplicationStartService) PostPeopleMessage(
 	ctx context.Context,
 	request CurrentApplicationStartRequest,
 ) (PostedMessage, error) {
-	if request.ProjectID <= 0 || request.ActorUserID <= 0 || !request.TriggerOrigin.Valid() ||
+	if request.ProjectID <= 0 || request.ActorUserID <= 0 || !request.TriggerOrigin.Valid() || !HumanOrigin(request.TriggerOrigin) ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentInput(request.UserInput, false) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||

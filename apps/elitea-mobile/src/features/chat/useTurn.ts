@@ -373,6 +373,11 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
           {
             onSettle: refetch,
             onRefreshNeeded: () => void refetch(),
+            // Stored as a message for people alone (no turn): nothing to show live.
+            onPosted: () => {
+              void refetch();
+              if (getLiveTurn(key) === next) setLiveTurn(key, null);
+            },
             // The workspace cannot be reached: the outbox shows and retries it.
             handOff: async (prepared, hint) => {
               const queued = await handOffToOutbox(prepared, conversationRef, hint);

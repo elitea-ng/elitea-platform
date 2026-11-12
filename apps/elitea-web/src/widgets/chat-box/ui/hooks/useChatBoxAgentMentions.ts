@@ -64,9 +64,18 @@ export function conversationAgents(participants: readonly unknown[] | undefined)
   return out;
 }
 
-/** Whether the conversation has enough agents for addressing to mean anything. */
-export function isMultiAgent(agents: readonly AddressableAgent[]): boolean {
-  return agents.length >= 2;
+/** The people of the conversation: its user participants (the signed-in user is one of them). */
+export function conversationPeople(participants: readonly unknown[] | undefined): number {
+  return (participants ?? []).filter((row) => ((row ?? {}) as AgentWire).entity_name === 'user' || ((row ?? {}) as AgentWire).entityName === 'user').length;
+}
+
+/**
+ * Whether agents can be addressed: with two or more agents, or with one agent among other people. In a mixed
+ * conversation a message that mentions people and no agent is for the people alone, so the one agent has to be
+ * addressable by name too.
+ */
+export function canAddressAgents(agents: readonly AddressableAgent[], participants: readonly unknown[] | undefined): boolean {
+  return agents.length >= 2 || (agents.length === 1 && conversationPeople(participants) >= 2);
 }
 
 /** The "@" rows for the agents. */
@@ -139,8 +148,11 @@ export function useChatBoxAgentMentions(participants: readonly unknown[] | undef
   // typed keeps its picks. The picks only drive the highlight.
   const agentsRef = useRef(agents);
   agentsRef.current = agents;
-  const takeAddressedTo = useCallback((question: string) => (agentsRef.current.length >= 2 ? addressedTo(question, agentsRef.current) : []), []);
+  const addressable = canAddressAgents(agents, participants);
+  const addressableRef = useRef(addressable);
+  addressableRef.current = addressable;
+  const takeAddressedTo = useCallback((question: string) => (addressableRef.current ? addressedTo(question, agentsRef.current) : []), []);
 
   const highlightRanges = useMemo(() => agentMentionRanges(content, chosen), [content, chosen]);
-  return { agents, enabled: isMultiAgent(agents), chosen, highlightRanges, onInputChange: setContent, insert, takeAddressedTo };
+  return { agents, enabled: addressable, chosen, highlightRanges, onInputChange: setContent, insert, takeAddressedTo };
 }

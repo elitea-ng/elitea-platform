@@ -174,7 +174,7 @@ func (service *CurrentApplicationStartService) planFloor(
 		return nil, err
 	}
 	if len(conversation.Agents) < 2 {
-		return nil, nil
+		return nil, soleAgentAddressee(conversation.Agents, request)
 	}
 	plan := &floorPlan{agents: conversation.Agents, cause: turntaking.CauseHumanMessage}
 	if request.FloorTurn != nil {
@@ -212,6 +212,31 @@ func (service *CurrentApplicationStartService) planFloor(
 	request.TargetParticipantID = targets[0]
 	plan.targets = targets
 	return plan, nil
+}
+
+// soleAgentAddressee handles `addressed_to` in a conversation with fewer than
+// two agents, where there is no floor to route: a person's message that
+// addresses agents is checked against the conversation's agents (an id that is
+// not one is ErrFloorAddressee, 422) and goes to the addressed agent. It is
+// what lets "@Clarifier @Aksana check this" reach the one agent of a mixed
+// conversation; without it the address was ignored and the message went to
+// whoever the client named as `participant_id`.
+func soleAgentAddressee(agents []FloorAgent, request *CurrentApplicationStartRequest) error {
+	if len(request.AddressedTo) == 0 || request.FloorTurn != nil || request.UnattendedContinuation != nil ||
+		request.HandoffCompletion != nil || request.ThreadRun != nil || !HumanOrigin(request.TriggerOrigin) {
+		return nil
+	}
+	for _, id := range request.AddressedTo {
+		found := false
+		for _, agent := range agents {
+			found = found || agent.ParticipantID == id
+		}
+		if !found {
+			return ErrFloorAddressee
+		}
+	}
+	request.TargetParticipantID = request.AddressedTo[0]
+	return nil
 }
 
 // input is the turn's AgentFloorV1 for the agent that answers.

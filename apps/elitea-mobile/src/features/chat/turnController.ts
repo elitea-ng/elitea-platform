@@ -152,6 +152,11 @@ export interface TurnDeps {
    * retrying in place (e.g. offline storage is off).
    */
   handOff?: (prepared: PreparedTurn, hint: HandOffHint) => Promise<boolean>;
+  /**
+   * The send was stored as a message for people alone (client contract 1.51) and started no turn, so there is no
+   * answer to stream: the caller drops the live turn and reads the transcript. Without it the turn settles at once.
+   */
+  onPosted?: () => void;
   /** Starts the execution instead of a chat send (a continuation). */
   start?: (signal: AbortSignal) => Promise<StartedTurn>;
   /** Set by `TurnController.regeneration`. */
@@ -740,8 +745,12 @@ export class TurnController {
         const started = this.deps.start
           ? await this.postContinuation(this.deps.start)
           : await startTurn(this.prepared, { client: this.deps.client, signal: abort.signal });
-        // A turn is only built for a message with an answerer; a stored people-only message has no stream to follow.
-        if (isPostedMessage(started)) throw new TurnStartError({ kind: 'bad_response' });
+        // A stored people-only message has no stream to follow: it is delivered, and the turn ends here.
+        if (isPostedMessage(started)) {
+          if (this.deps.onPosted) this.deps.onPosted();
+          else void this.deps.onSettle?.();
+          return null;
+        }
         return started;
       } catch (error) {
         if (generation !== this.generation) return null;

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 func TestPeopleOnlyDecision(t *testing.T) {
@@ -172,5 +174,29 @@ func TestIsPeopleOnlyUsesTheEffectiveAudience(t *testing.T) {
 	request.AddressedTo = []int64{21}
 	if service.IsPeopleOnly(context.Background(), request) {
 		t.Fatal("an addressed agent keeps the turn")
+	}
+}
+
+// An automated start addresses its own participant: it is never a message to people.
+func TestPeopleOnlyAppliesToHumanOriginsOnly(t *testing.T) {
+	t.Parallel()
+	writer := &peopleMentionWriter{members: []int64{7, 11}}
+	service := (&CurrentApplicationStartService{}).WithMentionNotifications(writer).WithHumanMessages(&recordingHumanMessages{created: true})
+	for _, tc := range []struct {
+		origin executiondomain.TriggerOrigin
+		want   bool
+	}{
+		{"", true}, {executiondomain.TriggerOriginManual, true}, {executiondomain.TriggerOriginAPI, true},
+		{executiondomain.TriggerOriginSchedule, false}, {"webhook", false},
+	} {
+		request := peopleRequest()
+		request.TriggerOrigin = tc.origin
+		if got := service.IsPeopleOnly(context.Background(), request); got != tc.want {
+			t.Errorf("origin %q: IsPeopleOnly = %v, want %v", tc.origin, got, tc.want)
+		}
+		_, err := service.PostPeopleMessage(context.Background(), request)
+		if (err == nil) != tc.want {
+			t.Errorf("origin %q: PostPeopleMessage err = %v", tc.origin, err)
+		}
 	}
 }

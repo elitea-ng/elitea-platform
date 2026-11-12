@@ -365,7 +365,8 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 	// stored rather than refused (422), and notifies nobody.
 	noAnswerer := body.ParticipantID <= 0 && absentJSON(body.LLMSettings)
 	if handler.useCase.IsPeopleOnly(request.Context(), peopleRequest) ||
-		(noAnswerer && agentexecutionapp.PeopleOnly(mentioned, body.SendingToEveryone, body.AddressedTo)) {
+		(noAnswerer && agentexecutionapp.HumanOrigin(origin) &&
+			agentexecutionapp.PeopleOnly(mentioned, body.SendingToEveryone, body.AddressedTo)) {
 		peopleRequest.AddressedTo = nil
 		posted, err := handler.useCase.PostPeopleMessage(request.Context(), peopleRequest)
 		if err != nil {
