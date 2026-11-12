@@ -40,7 +40,7 @@ export interface UpdatedMessageItem { readonly uuid?: string | undefined; readon
  * `useChatBoxActions`'s `handleSend`.
  */
 /** `questionId` is the client-generated `question_id` this turn was admitted under — the value the start route persists as the question row's own uuid, so a caller still recognises the row after a reload (A17's queue marks its interjections with it). */
-export interface SendResult { readonly success: boolean; readonly createdConversation?: { readonly id?: string | number; readonly uuid?: string }; readonly questionId?: string }
+export interface SendResult { readonly success: boolean; readonly notice?: string; readonly createdConversation?: { readonly id?: string | number; readonly uuid?: string }; readonly questionId?: string }
 export interface SendQuestionParams {
   readonly question: string;
   readonly attachments?: readonly File[];
@@ -151,7 +151,6 @@ export interface ChatBoxHandlerDeps {
  * `already-resolved` — HTTP 409: the paused set was consumed elsewhere. Settle
  * quietly: no error, no other transport.
  *
- * `posted` — a people-only message was stored with no turn (contract 1.51): not a missing transport; never emit it over the socket.
  * `retry-later` — the server refused this attempt and said so is temporary
  * (regeneration only: HTTP 409 `agent_regeneration_pending`, `retryable: true`,
  * `Retry-After: 1`). Neither a fallback nor a failure: repeat the SAME request
@@ -162,7 +161,8 @@ export interface ChatBoxHandlerDeps {
  */
 export type StreamStartOutcome =
   | { readonly started: true }
-  | { readonly started: false; readonly reason: 'no-transport' | 'retry-later' | 'posted' }
+  | { readonly started: false; readonly reason: 'no-transport' | 'retry-later' }
+  | { readonly started: false; readonly reason: 'posted'; readonly ignored?: readonly string[] }
   | { readonly started: false; readonly reason: 'already-resolved'; readonly code: 'agent_hitl_already_resolved' | 'agent_authorization_already_resolved' }
   | { readonly started: false; readonly reason: 'rejected'; readonly message: string; readonly grantsOff?: true };
 /** No REST start happened; the socket emit is the fallback. */

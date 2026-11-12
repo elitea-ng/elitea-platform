@@ -236,6 +236,8 @@ export interface AgentExecutionStart {
    */
   readonly turn_started?: boolean;
   readonly message_id?: string;
+  /** On that 201: the run inputs the message carried that no turn reads (`llm_settings`, `mcp_tokens`, `skills`, `unattended`, `release_id`). */
+  readonly ignored?: readonly string[];
   readonly [key: string]: unknown;
 }
 

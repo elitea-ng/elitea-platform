@@ -59,10 +59,26 @@ describe('sendQuestion to people alone', () => {
   });
 });
 
+describe('a people-only message that carried run inputs no agent read', () => {
+  it('is delivered with a small notice, not an error', async () => {
+    const t = setup({ startStreamedExecution: vi.fn(() => Promise.resolve<StreamStartOutcome>({ started: false, reason: 'posted', ignored: ['skills'] })) });
+    const result = await t.handlers.sendQuestion({ question: '@Aksana ~skill', isSendingToUser: true, userIds: ['11'] });
+    expect(result.success).toBe(true);
+    expect(result.notice).toContain('no agent was asked');
+    expect(t.history().some((message) => message.exception !== undefined)).toBe(false);
+  });
+
+  it('says nothing when nothing was ignored', async () => {
+    const t = setup();
+    const result = await t.handlers.sendQuestion({ question: '@Aksana hi', isSendingToUser: true, userIds: ['11'] });
+    expect(result.notice).toBeUndefined();
+  });
+});
+
 describe('a people-only message whose REST start did not deliver it never becomes a turn', () => {
   const outcomes: [string, Partial<ChatBoxHandlerDeps>][] = [
     ['no transport', { startStreamedExecution: vi.fn(() => Promise.resolve<StreamStartOutcome>({ started: false, reason: 'no-transport' })) }],
-    ['no start function (the socket-less E2E stack)', { startStreamedExecution: undefined }],
+    ['no start function (the socket-less E2E stack)', { startStreamedExecution: undefined as never }],
     ['retry-later', { startStreamedExecution: vi.fn(() => Promise.resolve<StreamStartOutcome>({ started: false, reason: 'retry-later' })) }],
     ['a 422 rejection', { startStreamedExecution: vi.fn(() => Promise.resolve<StreamStartOutcome>({ started: false, reason: 'rejected', message: 'refused' })) }],
   ];
