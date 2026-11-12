@@ -20,7 +20,10 @@ import { memo, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
+import ButtonBase from '@mui/material/ButtonBase';
 import Typography from '@mui/material/Typography';
+
+import { t } from '@/shared/i18n';
 
 import type { TransformedParticipant } from '../../model/types';
 
@@ -49,6 +52,12 @@ export interface UsersRowProps {
   readonly usersToRender: readonly TransformedParticipant[];
   /** How many more the row is not drawing (`+N`), or `0`. */
   readonly overflowCount: number;
+  /**
+   * The people behind the `+N`. The control used to be static text, so the
+   * hidden participants could be neither seen nor detached (#1964); it now
+   * expands to list them with the same select and remove actions.
+   */
+  readonly hiddenUsers?: readonly TransformedParticipant[] | undefined;
   /** The rail's currently active participant, for the highlight. */
   readonly activeParticipantId?: string | undefined;
   /** Selecting a person — the "@"-mention shortcut the avatars have always had. */
@@ -93,12 +102,15 @@ const UserRowEntry = memo(function UserRowEntry(props: {
 export const UsersRow = memo(function UsersRow({
   usersToRender,
   overflowCount,
+  hiddenUsers = [],
   activeParticipantId,
   onSelectParticipant,
   onDeleteParticipant,
   disabledEdit,
   vertical = false,
 }: UsersRowProps): ReactNode {
+  const [expanded, setExpanded] = useState(false);
+  const canExpand = hiddenUsers.length > 0;
   return (
     <Box sx={vertical ? styles.usersColumn : styles.usersRow()} data-testid="users-section">
       <Box sx={vertical ? styles.usersColumn : styles.usersDisplay}>
@@ -112,12 +124,43 @@ export const UsersRow = memo(function UsersRow({
             disabledEdit={disabledEdit}
           />
         ))}
-        {overflowCount > 0 && (
-          <Typography variant="bodySmall" sx={styles.usersOverflow}>
-            {`+${String(overflowCount)}`}
-          </Typography>
-        )}
+        {overflowCount > 0 &&
+          (canExpand ? (
+            <ButtonBase
+              onClick={() => setExpanded((previous) => !previous)}
+              aria-expanded={expanded}
+              aria-label={
+                expanded
+                  ? t('chat-participants.users.showLess', 'Hide additional participants')
+                  : t('chat-participants.users.showMore', 'Show {{count}} more participants', { count: overflowCount })
+              }
+              data-testid="users-overflow-toggle"
+              sx={styles.usersOverflowButton}
+            >
+              <Typography variant="bodySmall" component="span">
+                {expanded ? t('chat-participants.users.lessLabel', 'Show less') : `+${String(overflowCount)}`}
+              </Typography>
+            </ButtonBase>
+          ) : (
+            <Typography variant="bodySmall" sx={styles.usersOverflow}>
+              {`+${String(overflowCount)}`}
+            </Typography>
+          ))}
       </Box>
+      {expanded && canExpand && (
+        <Box sx={styles.usersColumn} data-testid="users-overflow-list">
+          {hiddenUsers.map((participant) => (
+            <UserRowEntry
+              key={getChatParticipantUniqueId(asWireRow(participant))}
+              participant={participant}
+              isActive={activeParticipantId === getChatParticipantUniqueId(asWireRow(participant))}
+              onSelectParticipant={onSelectParticipant}
+              onDeleteParticipant={onDeleteParticipant}
+              disabledEdit={disabledEdit}
+            />
+          ))}
+        </Box>
+      )}
     </Box>
   );
 });
