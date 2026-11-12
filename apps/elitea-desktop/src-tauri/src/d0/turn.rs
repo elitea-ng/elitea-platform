@@ -6781,7 +6781,11 @@ fn execution_request(
             subagent_policy: None,
             context_view_history: None,
             context_view_binding: None,
+            // The desktop recalls no agent memory into the instructions,
+            // and its brief check refuses every memory entry (#1827), so
+            // there is no mark tag (#1900) to carry.
             recalled_memory: Vec::new(),
+            recalled_memory_tag: None,
         },
     }
 }

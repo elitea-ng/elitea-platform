@@ -157,6 +157,11 @@ pub struct AgentExecutionPayload {
     /// `spawn_agent` brief may name these in `memory_entries`. Empty: none
     /// recalled, or an input from before field 76.
     pub recalled_memory: Vec<RecalledMemoryEntry>,
+    /// The tag of those entries' `[memory N·TAG, ...]` marks (#1900,
+    /// `subagents::memory_ref`): a brief cites an entry as `N·TAG` with it.
+    /// `None`: no entry recalled into the instructions; the host cites what
+    /// `recall` returns under a tag of its own.
+    pub recalled_memory_tag: Option<String>,
 }
 
 /// The run's sub-agent policy (ADR-0050 decision 4).

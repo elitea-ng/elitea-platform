@@ -63,6 +63,28 @@ describe('foldSubAgentEntry', () => {
     assert.equal(laneAt(lanes).status, 'running');
     assert.equal(laneAt(lanes).result, undefined);
   });
+
+  // #1872: a depth-2 start names its parent; the fold nests it under the
+  // parent's children instead of adding a top-level lane.
+  it('nests a depth-2 start under its parent', () => {
+    const grandchild = { kind: 'started', agent_id: 'a_2', parent_call_id: 'call-nested', ordinal: 2, depth: 2, parent_agent_id: 'a_1' };
+    const lanes = fold([started, grandchild, { kind: 'text', agent_id: 'a_2', text: 'from the grandchild' }]);
+    assert.equal(lanes.length, 1, 'the grandchild must not be a top-level lane');
+    const parent = laneAt(lanes);
+    assert.equal(parent.children?.length, 1);
+    const child = parent.children?.[0];
+    assert.equal(child?.agentId, 'a_2');
+    assert.equal(child?.depth, 2);
+    assert.equal(child?.parentAgentId, 'a_1');
+    assert.deepEqual(child?.items, [{ type: 'text', text: 'from the grandchild' }]);
+  });
+
+  it('a depth-2 start whose named parent is not among the lanes stays at the top level', () => {
+    const orphan = { kind: 'started', agent_id: 'a_2', parent_call_id: 'call-nested', ordinal: 1, depth: 2, parent_agent_id: 'a_missing' };
+    const lanes = fold([orphan]);
+    assert.equal(lanes.length, 1);
+    assert.equal(laneAt(lanes).depth, 1, 'without its parent, a depth-2 start is not trusted as depth 2');
+  });
 });
 
 describe('parseSubAgentLanes', () => {
@@ -96,5 +118,46 @@ describe('parseSubAgentLanes', () => {
   it('subAgentEntryOf reads the frame entry', () => {
     assert.deepEqual(subAgentEntryOf({ type: 'agent_subagent', response_metadata: { subagent_v1: started } }), started);
     assert.equal(subAgentEntryOf({ type: 'agent_subagent' }), undefined);
+  });
+
+  // #1872: Main's fold already nests a depth-2 lane under its parent's
+  // `children` on read; this reader carries that shape through rather than
+  // re-nesting, and settles a running grandchild too.
+  it('reads nested children and settles them', () => {
+    const lanes = parseSubAgentLanes([
+      {
+        agent_id: 'a_1',
+        parent_call_id: 'p',
+        ordinal: 1,
+        status: 'completed',
+        items: [],
+        children: [{ agent_id: 'a_2', parent_call_id: 'p2', ordinal: 2, depth: 2, parent_agent_id: 'a_1', status: 'running', items: [] }],
+      },
+    ]);
+    const child = laneAt(lanes).children?.[0];
+    assert.equal(child?.agentId, 'a_2');
+    assert.equal(child?.depth, 2);
+    assert.equal(child?.parentAgentId, 'a_1');
+    const settled = settleSubAgentLanes(lanes);
+    assert.equal(laneAt(settled).children?.[0]?.status, 'cancelled');
+  });
+
+  it('nests a depth-2 lane only under a top-level depth-1 parent', () => {
+    let lanes: readonly CloudSubAgentLane[] = [];
+    lanes = foldSubAgentEntry(lanes, { kind: 'started', agent_id: 'a_1', parent_call_id: 'p', ordinal: 1 });
+    lanes = foldSubAgentEntry(lanes, { kind: 'started', agent_id: 'a_2', parent_call_id: 'p', ordinal: 2, depth: 2, parent_agent_id: 'a_1' });
+    // a_3 names a depth-2 lane as its parent: kept top-level, never depth 3.
+    lanes = foldSubAgentEntry(lanes, { kind: 'started', agent_id: 'a_3', parent_call_id: 'p', ordinal: 3, depth: 2, parent_agent_id: 'a_2' });
+    assert.deepEqual(lanes.map((l) => l.agentId), ['a_1', 'a_3']);
+    assert.deepEqual(laneAt(lanes).children?.map((l) => l.agentId), ['a_2']);
+    assert.equal(laneAt(lanes).children?.[0]?.children, undefined);
+  });
+
+  it('parseSubAgentLanes reads no deeper than one level of children', () => {
+    const grand = { agent_id: 'a_3', parent_call_id: 'p', ordinal: 3, depth: 2, parent_agent_id: 'a_2', status: 'running', items: [] };
+    const lanes = parseSubAgentLanes([
+      { agent_id: 'a_1', parent_call_id: 'p', ordinal: 1, status: 'completed', items: [], children: [{ agent_id: 'a_2', parent_call_id: 'p', ordinal: 2, depth: 2, parent_agent_id: 'a_1', status: 'running', items: [], children: [grand] }] },
+    ]);
+    assert.equal(laneAt(lanes).children?.[0]?.children, undefined);
   });
 });

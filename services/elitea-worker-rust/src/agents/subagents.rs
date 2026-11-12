@@ -179,11 +179,12 @@ impl BriefView {
         let memory_entries = brief
             .memory_entries
             .iter()
-            .map(|id| {
+            // #1900: only as `N·TAG` with this turn's tag; the child's block
+            // names the entry by its bare id.
+            .map(|reference| {
                 self.recalled
                     .as_ref()
-                    .and_then(|recalled| recalled.content(id))
-                    .map(|content| (id.clone(), content))
+                    .and_then(|recalled| recalled.cited(reference))
                     .ok_or(BRIEF_MEMORY_NOT_RECALLED)
             })
             .collect::<Result<Vec<_>, _>>()?;

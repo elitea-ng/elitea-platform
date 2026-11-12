@@ -142,6 +142,17 @@ func (r *ConversationsRepo) scanMessageRows(ctx context.Context, s string, rows 
 		if err != nil {
 			return nil, nil, err
 		}
+		// issue 1923: each answer's sub-agent lanes are rows of their own
+		// (chat_message_subagent_lanes), folded back onto
+		// metadata.subagents_v1 here so this route reads the same shape it
+		// did before the lanes table existed.
+		lanesByGroup, err := subAgentLanesByGroup(ctx, r.pool, s, groupIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+		for i := range items {
+			applySubAgentLanes(&items[i].Metadata, lanesByGroup[groupIDs[i]])
+		}
 		for i := range items {
 			// One list per group, in the order the items are STORED. Each
 			// projection is ordered on its own, so concatenating them would

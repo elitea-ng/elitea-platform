@@ -27,7 +27,7 @@ func (s *AgentWorkforce) applyStage(ctx context.Context, tx pgx.Tx, agent Workfo
 	case agentworkforce.StageWatch:
 		return map[string]any{"under_review": true}, nil, setWatch(ctx, tx, agent)
 	case agentworkforce.StageDemote:
-		applied, err := s.demote(ctx, tx, agent, proposal.Narrowing)
+		applied, err := s.demote(ctx, tx, agent, proposal.Narrowing, decision.Actor.UserID, proposal.ID)
 		return applied, nil, err
 	case agentworkforce.StageSuspend:
 		id, err := suspendForDismissal(ctx, tx, agent, decision.Actor.UserID, proposal.ID)
@@ -78,51 +78,83 @@ WHERE tenant_project_id = $1 AND application_id = $2`, agent.ProjectID, agent.Ap
 
 /* ── demote ────────────────────────────────────────────────────────────── */
 
-// demote writes the narrowing onto the agent's working draft and drops it
-// as a lead. The published release is untouched: the narrowed draft is the
-// next release, published through the agent's own release path (a change
-// request when its tier asks approval, or directly). applied records the
-// draft version the narrowing went onto, so the owner can see and publish
-// it. A lead role is dropped at once.
-func (s *AgentWorkforce) demote(ctx context.Context, tx pgx.Tx, agent WorkforceAgent, narrowing agentworkforce.Narrowing) (map[string]any, error) {
+// demote applies the narrowing and drops the agent as a lead (ADR-0050
+// decision 5b as amended for issue 1873). The approval is the review: no
+// ADR-0040 change request is opened, and no release gate runs.
+//
+//   - The published release: every version of status published is
+//     narrowed in place (meta, toolkit attachments and its catalogue twin's
+//     meta), its earlier releases are withdrawn, and a new release is
+//     recorded from it through the publish path's release recorder
+//     (AgentReleases.RecordPublishedTx: definition, digest, toolkit pins,
+//     head pointer). The narrowing is live at once: a run of any published
+//     version resolves its new release, and the head points at the new
+//     release of the version it pointed at before. A rollback cannot
+//     re-widen the agent, because the wide releases are withdrawn. When
+//     the head's version has nothing to narrow, no release is recorded
+//     and the head stays; an older published version it narrowed runs as
+//     its narrowed row (publishNarrowing says why).
+//   - The draft: the same narrowing is applied to the newest draft, and
+//     nothing else in it changes. So the owner's unpublished edits stay,
+//     and a later publish of the draft does not undo the demotion. An open
+//     change request whose candidate is the draft goes stale (its candidate
+//     digest changed); the owner submits it again.
+//   - No published version: only the draft is narrowed. Nothing is live,
+//     so there is nothing to publish.
+//   - Embedded versions (status embedded) are frozen sub-agent copies that
+//     another agent's release pins. They are not this agent's release and
+//     stay as they are.
+//
+// A narrowing that changes nothing in a version (the toolkit is not
+// attached, the capability is absent) records no release for it.
+func (s *AgentWorkforce) demote(ctx context.Context, tx pgx.Tx, agent WorkforceAgent, narrowing agentworkforce.Narrowing, actorID, proposalID int64) (map[string]any, error) {
 	schema, err := tenantschema.QuoteInt(agent.ProjectID)
 	if err != nil {
 		return nil, agentworkforce.Refuse(agentworkforce.InvalidCode, "The project id is invalid.")
 	}
 	applied := map[string]any{}
+	published := false
 	if narrowing.TouchesVersion() {
+		releases, err := s.publishNarrowing(ctx, tx, agent, schema, narrowing, actorID, proposalID)
+		if err != nil {
+			return nil, err
+		}
 		var (
 			draftID int64
 			rawMeta []byte
 		)
-		err := tx.QueryRow(ctx, fmt.Sprintf(`
+		err = tx.QueryRow(ctx, fmt.Sprintf(`
 SELECT id, COALESCE(meta, '{}'::jsonb)::text::bytea FROM %s.application_versions
 WHERE application_id = $1 AND status = 'draft'
 ORDER BY id DESC LIMIT 1 FOR UPDATE`, schema), agent.ApplicationID).Scan(&draftID, &rawMeta)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, agentworkforce.Refuse(agentworkforce.StateConflictCode, "The agent has no draft version to narrow.")
-		}
-		if err != nil {
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			if len(releases.Versions) == 0 {
+				return nil, agentworkforce.Refuse(agentworkforce.StateConflictCode, "The agent has no published or draft version to narrow.")
+			}
+		case err != nil:
 			return nil, fmt.Errorf("agent workforce: read the draft: %w", err)
+		default:
+			_, detached, err := narrowVersion(ctx, tx, schema, draftID, rawMeta, narrowing)
+			if err != nil {
+				return nil, err
+			}
+			applied["draft_version_id"] = draftID
+			// detached_toolkit_ids are the draft's, as before issue 1873;
+			// each published version lists its own in published_versions.
+			applied["detached_toolkit_ids"] = detached
 		}
-		meta := map[string]any{}
-		if err := json.Unmarshal(rawMeta, &meta); err != nil {
-			return nil, fmt.Errorf("agent workforce: decode the draft meta: %w", err)
+		applied["published_versions"] = releases.Versions
+		for _, version := range releases.Versions {
+			published = published || version.Narrowed
 		}
-		encoded, err := json.Marshal(agentworkforce.NarrowMeta(meta, narrowing))
-		if err != nil {
-			return nil, fmt.Errorf("agent workforce: encode the draft meta: %w", err)
+		// release_id is the narrowed release the head points at now; it is
+		// absent when the head's own version had nothing to narrow (the
+		// head stayed where it was).
+		if releases.ReleaseID > 0 {
+			applied["release_id"] = releases.ReleaseID
+			applied["published_version_id"] = releases.VersionID
 		}
-		if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.application_versions SET meta = $2::jsonb WHERE id = $1`, schema),
-			draftID, string(encoded)); err != nil {
-			return nil, fmt.Errorf("agent workforce: write the draft meta: %w", err)
-		}
-		detached, err := detachToolkits(ctx, tx, schema, draftID, narrowing)
-		if err != nil {
-			return nil, err
-		}
-		applied["draft_version_id"] = draftID
-		applied["detached_toolkit_ids"] = detached
 	}
 	if narrowing.ProactivityOff {
 		stopped, err := stopHeartbeat(ctx, tx, schema, agent.ApplicationID)
@@ -139,15 +171,251 @@ ORDER BY id DESC LIMIT 1 FOR UPDATE`, schema), agent.ApplicationID).Scan(&draftI
 		applied["leads_removed"] = leads
 	}
 	applied["narrowing"] = narrowing
-	applied["publish_needed"] = narrowing.TouchesVersion()
+	// published: at least one new release carries the narrowing and is
+	// live now.
+	// publish_needed stays in the record for older readers; it is always
+	// false now, because nothing waits for the owner to publish.
+	applied["published"] = published
+	applied["publish_needed"] = false
 	return applied, nil
 }
 
+// narrowedRelease is one published version a demotion narrowed.
+type narrowedRelease struct {
+	VersionID int64 `json:"version_id"`
+	// Narrowed: the narrowing changed the version (it is live now).
+	Narrowed bool `json:"narrowed"`
+	// ReleaseID is the release recorded from the narrowed version; zero
+	// when the version did not change, or when the head's version did not
+	// change (publishNarrowing says why).
+	ReleaseID          int64   `json:"release_id"`
+	DetachedToolkitIDs []int64 `json:"detached_toolkit_ids"`
+}
+
+// narrowedPublish is what publishNarrowing did.
+type narrowedPublish struct {
+	Versions []narrowedRelease
+	// VersionID and ReleaseID: the published release the head points at
+	// after the demotion, when the demotion recorded it.
+	VersionID, ReleaseID int64
+}
+
+// publishNarrowing narrows every published version of the agent and
+// records a release from each one it changed (demote has the rules). The
+// head release's version goes last, so the head ends on its new release.
+func (s *AgentWorkforce) publishNarrowing(ctx context.Context, tx pgx.Tx, agent WorkforceAgent, schema string, narrowing agentworkforce.Narrowing, actorID, proposalID int64) (narrowedPublish, error) {
+	out := narrowedPublish{Versions: []narrowedRelease{}}
+	type versionRow struct {
+		id   int64
+		name string
+		meta []byte
+	}
+	var rows []versionRow
+	if err := collect(ctx, tx, fmt.Sprintf(`
+SELECT id, name, COALESCE(meta, '{}'::jsonb)::text::bytea FROM %s.application_versions
+WHERE application_id = $1 AND status = 'published'
+ORDER BY id FOR UPDATE`, schema), []any{agent.ApplicationID}, func(r pgx.Rows) error {
+		var row versionRow
+		if err := r.Scan(&row.id, &row.name, &row.meta); err != nil {
+			return err
+		}
+		rows = append(rows, row)
+		return nil
+	}); err != nil {
+		return out, fmt.Errorf("agent workforce: read the published versions: %w", err)
+	}
+	if len(rows) == 0 {
+		return out, nil
+	}
+	// The head's version. The head row is locked after the version rows,
+	// in the publish path's order.
+	var headVersionID int64
+	err := tx.QueryRow(ctx, `
+SELECT r.application_version_id
+FROM elitea_lifecycle.application_release_heads AS h
+JOIN elitea_lifecycle.application_releases AS r ON r.id = h.release_id
+WHERE h.tenant_project_id = $1 AND h.application_id = $2
+FOR UPDATE OF h`, agent.ProjectID, agent.ApplicationID).Scan(&headVersionID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return out, fmt.Errorf("agent workforce: read the release head: %w", err)
+	}
+	// The head's version last; without a head, the newest version is last.
+	slices.SortStableFunc(rows, func(a, b versionRow) int {
+		switch {
+		case a.id == headVersionID:
+			return 1
+		case b.id == headVersionID:
+			return -1
+		}
+		return 0
+	})
+	// Pass one: narrow every published version in place, its catalogue
+	// twin with it, and withdraw its wide releases (so a rollback cannot
+	// point the head back at them).
+	changed := make([]bool, len(rows))
+	for i, row := range rows {
+		versionChanged, detached, err := narrowVersion(ctx, tx, schema, row.id, row.meta, narrowing)
+		if err != nil {
+			return out, err
+		}
+		changed[i] = versionChanged
+		out.Versions = append(out.Versions, narrowedRelease{VersionID: row.id, Narrowed: versionChanged, DetachedToolkitIDs: detached})
+		if !versionChanged {
+			continue
+		}
+		if err := narrowPublicTwins(ctx, tx, agent.ProjectID, row.id, narrowing); err != nil {
+			return out, err
+		}
+		if err := withdrawVersions(ctx, pgxExecutor{queryer: tx}, agent.ProjectID, []int64{row.id}, actorID); err != nil {
+			return out, err
+		}
+	}
+	// Pass two: record the new releases, the head's version last, so the
+	// head release keeps the highest id. The run resolver reads a head
+	// older than a version's own newest release as a rollback and runs the
+	// head instead (resolveRunRelease), so a new release of an older
+	// version under an unchanged head would make that version run the
+	// head's definition. When the head's version had nothing to narrow, no
+	// release is recorded: the head stays as it is, and a run of a
+	// narrowed older version executes the narrowed row as it stands (its
+	// wide releases are withdrawn).
+	if !changed[len(rows)-1] {
+		if slices.Contains(changed, true) {
+			return out, s.appendDemotionPublished(ctx, tx, agent, actorID, proposalID, nil)
+		}
+		return out, nil
+	}
+	releases := &AgentReleases{publicProjectID: func() int64 { return int64(publicproject.ID()) }}
+	recorded := []int64{}
+	for i, row := range rows {
+		if !changed[i] {
+			continue
+		}
+		// The release is cut from the published version itself, so the
+		// version is its own source. RecordPublishedTx is the publish
+		// path's release recorder: definition, digest, toolkit pins and
+		// the head pointer.
+		releaseID, err := releases.RecordPublishedTx(ctx, tx, agent.ProjectID, agent.ApplicationID, row.id, row.id, row.name, actorID)
+		if err != nil {
+			return out, fmt.Errorf("agent workforce: record the narrowed release: %w", err)
+		}
+		out.Versions[i].ReleaseID = releaseID
+		recorded = append(recorded, releaseID)
+	}
+	out.VersionID, out.ReleaseID = rows[len(rows)-1].id, recorded[len(recorded)-1]
+	if _, err := tx.Exec(ctx, `
+UPDATE elitea_lifecycle.application_release_heads SET reason = $3
+WHERE tenant_project_id = $1 AND application_id = $2 AND release_id = $4`,
+		agent.ProjectID, agent.ApplicationID, fmt.Sprintf("Demotion approved on workforce proposal %d.", proposalID), out.ReleaseID); err != nil {
+		return out, fmt.Errorf("agent workforce: label the release head: %w", err)
+	}
+	return out, s.appendDemotionPublished(ctx, tx, agent, actorID, proposalID, recorded)
+}
+
+// appendDemotionPublished records, in the decision's transaction, that a
+// demotion narrowed the published versions and the releases it recorded.
+func (s *AgentWorkforce) appendDemotionPublished(ctx context.Context, tx pgx.Tx, agent WorkforceAgent, actorID, proposalID int64, recorded []int64) error {
+	reasons := []string{"agent:" + strconv.FormatInt(agent.ApplicationID, 10)}
+	for _, id := range recorded {
+		reasons = append(reasons, "release:"+strconv.FormatInt(id, 10))
+	}
+	return s.append(ctx, tx, agent.ProjectID, "agent.workforce.demotion_published", personRef(actorID),
+		proposalRef(proposalID), "", reasons...)
+}
+
+// narrowVersion applies the version-level narrowing to one version: its
+// meta (only the keys NarrowMeta narrows) and its toolkit attachments.
+// changed reports whether anything in the version changed.
+func narrowVersion(ctx context.Context, tx pgx.Tx, schema string, versionID int64, rawMeta []byte, narrowing agentworkforce.Narrowing) (bool, []int64, error) {
+	meta := map[string]any{}
+	if err := json.Unmarshal(rawMeta, &meta); err != nil {
+		return false, nil, fmt.Errorf("agent workforce: decode the version meta: %w", err)
+	}
+	before, err := json.Marshal(meta)
+	if err != nil {
+		return false, nil, fmt.Errorf("agent workforce: encode the version meta: %w", err)
+	}
+	after, err := json.Marshal(agentworkforce.NarrowMeta(meta, narrowing))
+	if err != nil {
+		return false, nil, fmt.Errorf("agent workforce: encode the version meta: %w", err)
+	}
+	changed := string(before) != string(after)
+	if changed {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.application_versions SET meta = $2::jsonb WHERE id = $1`, schema),
+			versionID, string(after)); err != nil {
+			return false, nil, fmt.Errorf("agent workforce: write the version meta: %w", err)
+		}
+	}
+	detached, err := detachToolkits(ctx, tx, schema, versionID, narrowing)
+	if err != nil {
+		return false, nil, err
+	}
+	return changed || len(detached) > 0, detached, nil
+}
+
+// narrowPublicTwins applies the meta narrowing to the catalogue twins of a
+// published version in the public project's schema (the twin carries no
+// toolkit attachments; see eliteacore's catalog_mirror.go). The public
+// project's own versions have no twin.
+func narrowPublicTwins(ctx context.Context, tx pgx.Tx, projectID, versionID int64, narrowing agentworkforce.Narrowing) error {
+	public := int64(publicproject.ID())
+	if projectID == public {
+		return nil
+	}
+	schema, err := tenantschema.QuoteInt(public)
+	if err != nil {
+		return nil
+	}
+	var hasTwins bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = $1 AND table_name = 'application_versions' AND column_name = 'shared_owner_id')`,
+		"p_"+strconv.FormatInt(public, 10)).Scan(&hasTwins); err != nil {
+		return fmt.Errorf("agent workforce: probe the catalogue: %w", err)
+	}
+	if !hasTwins {
+		return nil
+	}
+	type twin struct {
+		id   int64
+		meta []byte
+	}
+	var twins []twin
+	if err := collect(ctx, tx, fmt.Sprintf(`
+SELECT id, COALESCE(meta, '{}'::jsonb)::text::bytea FROM %s.application_versions
+WHERE shared_owner_id = $1 AND shared_id = $2 FOR UPDATE`, schema), []any{projectID, versionID}, func(r pgx.Rows) error {
+		var row twin
+		if err := r.Scan(&row.id, &row.meta); err != nil {
+			return err
+		}
+		twins = append(twins, row)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("agent workforce: read the catalogue twins: %w", err)
+	}
+	for _, row := range twins {
+		meta := map[string]any{}
+		if err := json.Unmarshal(row.meta, &meta); err != nil {
+			return fmt.Errorf("agent workforce: decode the catalogue twin meta: %w", err)
+		}
+		encoded, err := json.Marshal(agentworkforce.NarrowMeta(meta, narrowing))
+		if err != nil {
+			return fmt.Errorf("agent workforce: encode the catalogue twin meta: %w", err)
+		}
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.application_versions SET meta = $2::jsonb WHERE id = $1`, schema),
+			row.id, string(encoded)); err != nil {
+			return fmt.Errorf("agent workforce: narrow the catalogue twin: %w", err)
+		}
+	}
+	return nil
+}
+
 // stopHeartbeat disables the agent's heartbeat (tenant 0166, #1618) at
-// once. The heartbeat reads the block of the RELEASE, which keeps it until
-// the narrowed draft is published; a demotion or a retirement takes the
-// heartbeat away now. stopped is false without an enabled row, or on a
-// tenant schema older than 0166.
+// once. A demotion also narrows the release's proactivity block (the block
+// the heartbeat reads), and a retirement unpublishes it; the row is
+// disabled too, so the heartbeat stops in this transaction whatever the
+// release carries. stopped is false without an enabled row, or on a tenant
+// schema older than 0166.
 func stopHeartbeat(ctx context.Context, tx pgx.Tx, schema string, applicationID int64) (bool, error) {
 	exists, err := relationExists(ctx, tx, schema+".agent_heartbeat_settings")
 	if err != nil || !exists {
@@ -163,8 +431,10 @@ WHERE application_id = $1 AND enabled`, schema), applicationID)
 }
 
 // detachToolkits removes the named toolkits, and those of a type outside
-// the ceiling, from the draft. Sub-agent entries are not toolkits and stay.
-func detachToolkits(ctx context.Context, tx pgx.Tx, schema string, draftID int64, narrowing agentworkforce.Narrowing) ([]int64, error) {
+// the ceiling, from one version (a published version or the draft): only
+// the attachment rows go, the toolkit rows stay. Sub-agent entries are not
+// toolkits and stay.
+func detachToolkits(ctx context.Context, tx pgx.Tx, schema string, versionID int64, narrowing agentworkforce.Narrowing) ([]int64, error) {
 	if len(narrowing.RemoveToolkitIDs) == 0 && len(narrowing.ToolkitTypeCeiling) == 0 {
 		return []int64{}, nil
 	}
@@ -179,7 +449,7 @@ WHERE tool.id = mapping.tool_id AND mapping.entity_version_id = $1 AND mapping.e
   AND tool.type <> 'application'
   AND (mapping.tool_id = ANY($2::bigint[])
        OR (cardinality($3::text[]) > 0 AND NOT (lower(tool.type) = ANY($3::text[]))))
-RETURNING mapping.tool_id`, schema), draftID, narrowing.RemoveToolkitIDs, ceiling)
+RETURNING mapping.tool_id`, schema), versionID, narrowing.RemoveToolkitIDs, ceiling)
 	if err != nil {
 		return nil, fmt.Errorf("agent workforce: detach the toolkits: %w", err)
 	}

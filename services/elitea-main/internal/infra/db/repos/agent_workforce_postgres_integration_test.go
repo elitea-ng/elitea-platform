@@ -20,7 +20,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
 
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -152,57 +155,335 @@ WHERE event_type = $1 AND event->'data'->>'resource_id' = $2`,
 	}
 }
 
-func TestWorkforceDemoteNarrowsTheDraftAndDropsTheLead(t *testing.T) {
+// seedWorkforceReleases gives the test tenant what the release recorder
+// reads (the applications columns the definition projection selects).
+func seedWorkforceReleases(t *testing.T, pool *pgxpool.Pool) *AgentReleases {
+	t.Helper()
+	wfExec(t, pool, `ALTER TABLE p_1.applications
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb`)
+	releases, err := NewAgentReleases(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return releases
+}
+
+// wfRecordRelease records the release of a published version and points
+// the head at it, as a publish does.
+func wfRecordRelease(t *testing.T, releases *AgentReleases, app, version int64) int64 {
+	t.Helper()
+	release, err := releases.RecordRelease(context.Background(), RecordReleaseRequest{
+		ProjectID: wfProject, ApplicationID: app, VersionID: version, SourceVersionID: version, Name: "v" + strconv.FormatInt(version, 10), ActorID: wfOwner,
+	})
+	if err != nil {
+		t.Fatalf("record the release of version %d: %v", version, err)
+	}
+	return release.ID
+}
+
+func wfToolkits(t *testing.T, pool *pgxpool.Pool, version int64) []int64 {
+	t.Helper()
+	var ids []int64
+	if err := pool.QueryRow(context.Background(), `
+SELECT COALESCE(array_agg(tool_id ORDER BY tool_id), '{}') FROM p_1.entity_tool_mapping WHERE entity_version_id = $1`, version).Scan(&ids); err != nil {
+		t.Fatal(err)
+	}
+	return ids
+}
+
+func wfHead(t *testing.T, pool *pgxpool.Pool, app int64) (release int64, cause, reason string) {
+	t.Helper()
+	if err := pool.QueryRow(context.Background(), `
+SELECT release_id, cause, reason FROM elitea_lifecycle.application_release_heads WHERE tenant_project_id = 1 AND application_id = $1`,
+		app).Scan(&release, &cause, &reason); err != nil {
+		t.Fatal(err)
+	}
+	return release, cause, reason
+}
+
+// Issue 1873 (ADR-0050 decision 5b as amended): an approved demotion
+// publishes the narrowing at once, cut from the published version, and
+// rebases the same narrowing onto the draft without touching the draft's
+// other edits. No change request is opened.
+func TestWorkforceDemotePublishesTheNarrowingAndRebasesItOntoTheDraft(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	seedCurrentAgentContinuationSchema(t, pool)
+	releases := seedWorkforceReleases(t, pool)
 	now := time.Now().UTC()
 	store := workforceStore(t, pool, &now)
 	ctx := context.Background()
 	const app int64 = 991702
 	published, draft := seedWorkforceAgent(t, pool, app, "low",
-		`{"capabilities":{"can_propose_agents":true,"can_review_agents":true},"memory":{"write":"auto"},"proactivity":{"mode":"heartbeat","interval":"30m"}}`)
+		`{"capabilities":{"can_propose_agents":true,"can_review_agents":true},"memory":{"enabled":true,"write":"auto"},"proactivity":{"mode":"heartbeat","interval":"30m"}}`)
+	// The owner's unpublished draft edits: other instructions, another meta
+	// key, and a toolkit only the draft has.
+	wfExec(t, pool, `UPDATE p_1.application_versions SET instructions = 'unpublished draft edit', meta = meta || '{"draft_note":"wip"}'::jsonb WHERE id = $1`, draft)
 	wfExec(t, pool, `INSERT INTO p_1.agent_heartbeat_settings (application_id, enabled, owner_user_id) VALUES ($1, true, 4)`, app)
 	wfExec(t, pool, `INSERT INTO p_1.elitea_tools (id, type, name, description, settings, author_id, meta, created_at)
-VALUES (9917021, 'github', 'gh', '', '{}'::jsonb, 4, '{}'::jsonb, now() AT TIME ZONE 'UTC'), (9917022, 'jira', 'jira', '', '{}'::jsonb, 4, '{}'::jsonb, now() AT TIME ZONE 'UTC')
+VALUES (9917021, 'github', 'gh', '', '{}'::jsonb, 4, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+       (9917022, 'jira', 'jira', '', '{}'::jsonb, 4, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+       (9917023, 'slack', 'slack', '', '{}'::jsonb, 4, '{}'::jsonb, now() AT TIME ZONE 'UTC')
 ON CONFLICT (id) DO NOTHING`)
 	wfExec(t, pool, `INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type, selected_tools)
-VALUES (9917021, $1, $2, 'application', '[]'::jsonb), (9917022, $1, $2, 'agent', '[]'::jsonb)`, app, draft)
+VALUES (9917021, $1, $2, 'agent', '[]'::jsonb), (9917022, $1, $2, 'agent', '[]'::jsonb),
+       (9917021, $1, $3, 'application', '[]'::jsonb), (9917022, $1, $3, 'agent', '[]'::jsonb), (9917023, $1, $3, 'agent', '[]'::jsonb)`,
+		app, published, draft)
+	// An older published version, published before the head's: a run
+	// pinned to it is narrowed too, and resolves its own new release.
+	const older int64 = app * 10
+	wfExec(t, pool, `
+INSERT INTO p_1.application_versions (id, application_id, name, status, author_id, uuid, llm_settings, instructions,
+    conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at)
+SELECT $1, application_id, 'v0', status, author_id, gen_random_uuid(), llm_settings, 'older', conversation_starters,
+       welcome_message, agent_type, meta, pipeline_settings, created_at
+FROM p_1.application_versions WHERE id = $2`, older, published)
+	wfExec(t, pool, `INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type, selected_tools)
+VALUES (9917021, $1, $2, 'agent', '[]'::jsonb)`, app, older)
+	olderWide := wfRecordRelease(t, releases, app, older)
+	wide := wfRecordRelease(t, releases, app, published)
 	conversation, _ := seedRoster(t, pool, app, true)
 
 	decided := approve(t, store, propose(t, store, app, agentworkforce.StageDemote, agentworkforce.Narrowing{
 		RemoveToolkitIDs: []int64{9917021}, MemoryReview: true, RemoveCapabilities: []string{"can_review_agents"}, RemoveLead: true, ProactivityOff: true,
 	}), false)
-	if decided.Kind != "demote" || decided.Applied["draft_version_id"] != float64(draft) {
+	narrowed, ok := appliedInt(decided.Applied, "release_id")
+	if decided.Kind != "demote" || !ok || narrowed == wide || decided.Applied["published"] != true ||
+		decided.Applied["publish_needed"] != false || decided.Applied["published_version_id"] != float64(published) ||
+		decided.Applied["draft_version_id"] != float64(draft) {
 		t.Fatalf("applied = %v", decided.Applied)
 	}
-	var meta string
-	if err := pool.QueryRow(ctx, `SELECT meta::text FROM p_1.application_versions WHERE id = $1`, draft).Scan(&meta); err != nil {
+
+	// The published version is narrowed, and its new release is live.
+	var publishedMeta string
+	_ = pool.QueryRow(ctx, `SELECT meta::text FROM p_1.application_versions WHERE id = $1`, published).Scan(&publishedMeta)
+	if !strings.Contains(publishedMeta, `"write": "review"`) || strings.Contains(publishedMeta, "can_review_agents") ||
+		!strings.Contains(publishedMeta, "can_propose_agents") || !strings.Contains(publishedMeta, `"mode": "off"`) {
+		t.Fatalf("published meta = %s", publishedMeta)
+	}
+	if got := wfToolkits(t, pool, published); !slices.Equal(got, []int64{9917022}) {
+		t.Fatalf("toolkits on the published version = %v", got)
+	}
+	head, cause, reason := wfHead(t, pool, app)
+	if head != narrowed || cause != "publish" || !strings.Contains(reason, strconv.FormatInt(decided.ID, 10)) {
+		t.Fatalf("head = %d %s %q, want %d", head, cause, reason, narrowed)
+	}
+	var (
+		wideState, narrowedState, definition, pins string
+		releaseVersion, releaseSource, publishedBy int64
+	)
+	_ = pool.QueryRow(ctx, `SELECT state FROM elitea_lifecycle.application_releases WHERE id = $1`, wide).Scan(&wideState)
+	if err := pool.QueryRow(ctx, `
+SELECT state, application_version_id, source_version_id, published_by, definition::text, toolkit_pins::text
+FROM elitea_lifecycle.application_releases WHERE id = $1`, narrowed).Scan(
+		&narrowedState, &releaseVersion, &releaseSource, &publishedBy, &definition, &pins); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(meta, `"mode": "off"`) || !strings.Contains(meta, `"interval": "30m"`) || decided.Applied["heartbeat_stopped"] != true {
-		t.Fatalf("the heartbeat was not narrowed: %s applied=%v", meta, decided.Applied)
+	if wideState != "withdrawn" || narrowedState != "published" || releaseVersion != published || releaseSource != published || publishedBy != wfManager {
+		t.Fatalf("releases: wide %s, narrowed %s version=%d source=%d by=%d", wideState, narrowedState, releaseVersion, releaseSource, publishedBy)
 	}
+	if strings.Contains(definition, "can_review_agents") || !strings.Contains(definition, `"review"`) ||
+		strings.Contains(pins, "9917021") || !strings.Contains(pins, "9917022") {
+		t.Fatalf("the narrowed release: definition=%s pins=%s", definition, pins)
+	}
+	// The older version: its wide release withdrawn, a new one below the
+	// head's, and a run of it resolves that new release.
+	var olderWideState string
+	var olderNarrowed int64
+	_ = pool.QueryRow(ctx, `SELECT state FROM elitea_lifecycle.application_releases WHERE id = $1`, olderWide).Scan(&olderWideState)
+	_ = pool.QueryRow(ctx, `
+SELECT id FROM elitea_lifecycle.application_releases WHERE tenant_project_id = 1 AND application_version_id = $1 AND state = 'published'`,
+		older).Scan(&olderNarrowed)
+	if olderWideState != "withdrawn" || olderNarrowed == 0 || olderNarrowed >= narrowed || !slices.Equal(wfToolkits(t, pool, older), []int64{}) {
+		t.Fatalf("older version: wide %s, narrowed %d (head %d), toolkits %v", olderWideState, olderNarrowed, narrowed, wfToolkits(t, pool, older))
+	}
+	if run, _, err := wfResolveRelease(t, pool, app, older); err != nil || run == nil || run.ID != olderNarrowed {
+		t.Fatalf("a run of the older version resolves %+v %v, want %d", run, err, olderNarrowed)
+	}
+	// A run of the published version resolves the narrowed release.
+	if run, _, err := wfResolveRelease(t, pool, app, published); err != nil || run == nil || run.ID != narrowed {
+		t.Fatalf("the run resolves %+v %v, want release %d", run, err, narrowed)
+	}
+
+	// The draft gets the same narrowing and keeps its own edits.
+	var draftMeta, draftInstructions string
+	_ = pool.QueryRow(ctx, `SELECT meta::text, instructions FROM p_1.application_versions WHERE id = $1`, draft).Scan(&draftMeta, &draftInstructions)
+	if draftInstructions != "unpublished draft edit" || !strings.Contains(draftMeta, `"draft_note": "wip"`) ||
+		!strings.Contains(draftMeta, `"write": "review"`) || strings.Contains(draftMeta, "can_review_agents") ||
+		!strings.Contains(draftMeta, `"mode": "off"`) || !strings.Contains(draftMeta, `"interval": "30m"`) {
+		t.Fatalf("draft: instructions=%q meta=%s", draftInstructions, draftMeta)
+	}
+	if got := wfToolkits(t, pool, draft); !slices.Equal(got, []int64{9917022, 9917023}) {
+		t.Fatalf("toolkits on the draft = %v", got)
+	}
+
+	// No change request; the publish is in the audit trail.
+	var changes int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM elitea_lifecycle.change_requests WHERE tenant_project_id = 1 AND application_id = $1`, app).Scan(&changes)
+	if changes != 0 {
+		t.Fatalf("change requests = %d, want none", changes)
+	}
+	var published1873 int
+	_ = pool.QueryRow(ctx, `
+SELECT count(*) FROM elitea_runtime.security_audit_outbox
+WHERE event_type = $1 AND event->'data'->>'action' = 'agent.workforce.demotion_published' AND event->'data'->>'resource_id' = $2`,
+		string(securityaudit.TypeAgentWorkforceChanged), strconv.FormatInt(decided.ID, 10)).Scan(&published1873)
+	if published1873 != 1 {
+		t.Fatalf("demotion_published audit events = %d", published1873)
+	}
+
 	var heartbeatEnabled bool
 	if err := pool.QueryRow(ctx, `SELECT enabled FROM p_1.agent_heartbeat_settings WHERE application_id = $1`, app).Scan(&heartbeatEnabled); err != nil || heartbeatEnabled {
 		t.Fatalf("the heartbeat row still runs: %v %v", heartbeatEnabled, err)
-	}
-	if want := `"write": "review"`; !strings.Contains(meta, want) || strings.Contains(meta, "can_review_agents") || !strings.Contains(meta, "can_propose_agents") {
-		t.Fatalf("draft meta = %s", meta)
-	}
-	var publishedMeta string
-	_ = pool.QueryRow(ctx, `SELECT meta::text FROM p_1.application_versions WHERE id = $1`, published).Scan(&publishedMeta)
-	if !strings.Contains(publishedMeta, "can_review_agents") {
-		t.Fatalf("the published release changed: %s", publishedMeta)
-	}
-	var tools int
-	_ = pool.QueryRow(ctx, `SELECT count(*) FROM p_1.entity_tool_mapping WHERE entity_version_id = $1`, draft).Scan(&tools)
-	if tools != 1 {
-		t.Fatalf("toolkits on the draft = %d, want 1", tools)
 	}
 	var floor *string
 	_ = pool.QueryRow(ctx, `SELECT meta -> 'floor' ->> 'policy' FROM p_1.chat_conversations WHERE id = $1`, conversation).Scan(&floor)
 	if floor != nil {
 		t.Fatalf("the lead remained: %v", *floor)
+	}
+}
+
+// wfResolveRelease is the start resolver's release read for a run of a
+// version (resolveRunRelease), in a project transaction.
+func wfResolveRelease(t *testing.T, pool *pgxpool.Pool, app, version int64) (*agentexecutionapp.ReleaseRun, []byte, error) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := tenant.BindProject(ctx, tx, tenant.Project{ID: wfProject}); err != nil {
+		t.Fatal(err)
+	}
+	executor := pgxExecutor{queryer: tx}
+	row, err := executor.ResolveCurrentApplicationVersionDetails(ctx, sqlcgen.ResolveCurrentApplicationVersionDetailsParams{
+		ApplicationVersionID: int32(version), ApplicationID: int32(app),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolveRunRelease(ctx, executor, func() int64 { return 99 }, wfProject, app, version, []byte(row.ApplicationVersionDetailsJson), 0)
+}
+
+// An agent with no published version: only the draft is narrowed, and no
+// release is recorded. An embedded copy (a sub-agent frozen inside another
+// agent's release) is not this agent's release and stays as it is. An
+// agent with neither a draft nor a published version is refused.
+func TestWorkforceDemoteWithoutAPublishedVersionNarrowsTheDraftOnly(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	seedWorkforceReleases(t, pool)
+	now := time.Now().UTC()
+	store := workforceStore(t, pool, &now)
+	ctx := context.Background()
+	const app, empty int64 = 991708, 991709
+	meta := `{"capabilities":{"can_propose_agents":true,"can_review_agents":true}}`
+	embedded, draft := seedWorkforceAgent(t, pool, app, "low", meta)
+	wfExec(t, pool, `UPDATE p_1.application_versions SET status = 'embedded' WHERE id = $1`, embedded)
+
+	decided := approve(t, store, propose(t, store, app, agentworkforce.StageDemote, agentworkforce.Narrowing{
+		RemoveCapabilities: []string{"can_review_agents"},
+	}), false)
+	if decided.Applied["published"] != false || decided.Applied["release_id"] != nil || decided.Applied["draft_version_id"] != float64(draft) ||
+		decided.Applied["publish_needed"] != false {
+		t.Fatalf("applied = %v", decided.Applied)
+	}
+	var draftMeta, embeddedMeta string
+	var releases int
+	_ = pool.QueryRow(ctx, `SELECT meta::text FROM p_1.application_versions WHERE id = $1`, draft).Scan(&draftMeta)
+	_ = pool.QueryRow(ctx, `SELECT meta::text FROM p_1.application_versions WHERE id = $1`, embedded).Scan(&embeddedMeta)
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM elitea_lifecycle.application_releases WHERE tenant_project_id = 1 AND application_id = $1`, app).Scan(&releases)
+	if strings.Contains(draftMeta, "can_review_agents") || !strings.Contains(embeddedMeta, "can_review_agents") || releases != 0 {
+		t.Fatalf("draft=%s embedded=%s releases=%d", draftMeta, embeddedMeta, releases)
+	}
+
+	gonePublished, goneDraft := seedWorkforceAgent(t, pool, empty, "low", meta)
+	wfExec(t, pool, `DELETE FROM p_1.application_versions WHERE id IN ($1, $2)`, gonePublished, goneDraft)
+	proposal := propose(t, store, empty, agentworkforce.StageDemote, agentworkforce.Narrowing{RemoveCapabilities: []string{"can_review_agents"}})
+	if _, err := store.Approve(ctx, Decision{ProjectID: wfProject, ProposalID: proposal.ID, Actor: managerActor(wfManager)}); refusalCode(err) != agentworkforce.StateConflictCode {
+		t.Fatalf("a demotion with nothing to narrow: %v", err)
+	}
+}
+
+// Every published version is narrowed, so a run pinned to an older one is
+// narrowed too; the catalogue twin follows. When the head's version had
+// nothing to narrow, the head stays exactly where it was.
+func TestWorkforceDemoteNarrowsOlderPublishedVersionsAndKeepsAnUnchangedHead(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	releases := seedWorkforceReleases(t, pool)
+	now := time.Now().UTC()
+	store := workforceStore(t, pool, &now)
+	ctx := context.Background()
+	const app int64 = 991710
+	older, draft := seedWorkforceAgent(t, pool, app, "low", `{}`)
+	const newer int64 = 991710*10 + 3
+	wfExec(t, pool, `
+INSERT INTO p_1.application_versions (id, application_id, name, status, author_id, uuid, llm_settings, instructions,
+    conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at)
+VALUES ($1, $2, 'v2', 'published', 4, gen_random_uuid(), '{}'::jsonb, 'x', '[]'::json, '', 'agent', '{}'::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC')`,
+		newer, app)
+	wfExec(t, pool, `INSERT INTO p_1.elitea_tools (id, type, name, description, settings, author_id, meta, created_at)
+VALUES (9917101, 'github', 'gh', '', '{}'::jsonb, 4, '{}'::jsonb, now() AT TIME ZONE 'UTC') ON CONFLICT (id) DO NOTHING`)
+	// Only the older published version (and the draft) carry the toolkit.
+	wfExec(t, pool, `INSERT INTO p_1.entity_tool_mapping (tool_id, entity_id, entity_version_id, entity_type, selected_tools)
+VALUES (9917101, $1, $2, 'agent', '[]'::jsonb), (9917101, $1, $3, 'agent', '[]'::jsonb)`, app, older, draft)
+	olderRelease := wfRecordRelease(t, releases, app, older)
+	newerRelease := wfRecordRelease(t, releases, app, newer)
+	wfExec(t, pool, `UPDATE elitea_lifecycle.application_release_heads SET cause = 'rollback', reason = 'kept'
+WHERE tenant_project_id = 1 AND application_id = $1`, app)
+
+	// The older version has a catalogue twin in public project 2.
+	t.Setenv("ELITEA_AI_PROJECT_ID", "2")
+	wfExec(t, pool, `INSERT INTO centry.project (id, create_success, suspended) VALUES (2, TRUE, FALSE) ON CONFLICT DO NOTHING`)
+	wfExec(t, pool, `CREATE SCHEMA IF NOT EXISTS p_2;
+CREATE TABLE IF NOT EXISTS p_2.applications (LIKE p_1.applications INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS p_2.application_versions (LIKE p_1.application_versions INCLUDING ALL);
+ALTER TABLE p_2.application_versions ADD COLUMN IF NOT EXISTS shared_owner_id integer, ADD COLUMN IF NOT EXISTS shared_id integer`)
+	wfExec(t, pool, `INSERT INTO p_2.applications (id, name, owner_id) VALUES (87, 'Agent twin', 4)`)
+	wfExec(t, pool, `INSERT INTO p_2.application_versions (id, application_id, name, status, author_id, shared_owner_id, shared_id, instructions, uuid, llm_settings,
+    conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at)
+VALUES (88, 87, 'v1', 'published', 4, 1, $1, 'twin', gen_random_uuid(), '{}'::jsonb, '[]'::json, '', 'agent',
+        '{"capabilities":{"can_review_agents":true},"category":"Other"}'::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC')`, older)
+
+	decided := approve(t, store, propose(t, store, app, agentworkforce.StageDemote, agentworkforce.Narrowing{
+		RemoveToolkitIDs: []int64{9917101}, RemoveCapabilities: []string{"can_review_agents"},
+	}), false)
+	if got := wfToolkits(t, pool, older); len(got) != 0 {
+		t.Fatalf("toolkits on the older published version = %v", got)
+	}
+	// The older version's wide release is withdrawn and no release is cut
+	// for it: a new one would have an id above the head's, and the run
+	// resolver would then read the head as a rollback and run the newer
+	// version's definition for it.
+	var olderState, newerState string
+	var releaseCount int
+	_ = pool.QueryRow(ctx, `SELECT state FROM elitea_lifecycle.application_releases WHERE id = $1`, olderRelease).Scan(&olderState)
+	_ = pool.QueryRow(ctx, `SELECT state FROM elitea_lifecycle.application_releases WHERE id = $1`, newerRelease).Scan(&newerState)
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM elitea_lifecycle.application_releases WHERE tenant_project_id = 1 AND application_id = $1`, app).Scan(&releaseCount)
+	if olderState != "withdrawn" || newerState != "published" || releaseCount != 2 {
+		t.Fatalf("releases: older %s, newer %s, count %d", olderState, newerState, releaseCount)
+	}
+	if head, cause, reason := wfHead(t, pool, app); head != newerRelease || cause != "rollback" || reason != "kept" {
+		t.Fatalf("head = %d %s %q, want %d rollback kept", head, cause, reason, newerRelease)
+	}
+	versions, _ := decided.Applied["published_versions"].([]any)
+	if decided.Applied["published"] != true || decided.Applied["release_id"] != nil || len(versions) != 2 {
+		t.Fatalf("applied = %v (the narrowing is live; the head did not move)", decided.Applied)
+	}
+	// A run of the older version executes its narrowed row (no release);
+	// a run of the newer one still resolves its release.
+	if run, _, err := wfResolveRelease(t, pool, app, older); err != nil || run != nil {
+		t.Fatalf("a run of the older version resolves %+v %v, want the narrowed row", run, err)
+	}
+	if run, _, err := wfResolveRelease(t, pool, app, newer); err != nil || run == nil || run.ID != newerRelease {
+		t.Fatalf("a run of the newer version resolves %+v %v, want %d", run, err, newerRelease)
+	}
+	var twinMeta string
+	_ = pool.QueryRow(ctx, `SELECT meta::text FROM p_2.application_versions WHERE id = 88`).Scan(&twinMeta)
+	if strings.Contains(twinMeta, "can_review_agents") || !strings.Contains(twinMeta, `"category": "Other"`) {
+		t.Fatalf("catalogue twin meta = %s", twinMeta)
 	}
 }
 

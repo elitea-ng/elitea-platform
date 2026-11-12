@@ -24,7 +24,7 @@ The tab shows the latest scorecard and the failure-rate trend. Scorecards are ke
 | Stage | What it does |
 |-------|--------------|
 | **Watch** | Flags the agent as under review. Nothing else changes. |
-| **Demote** | Takes away exactly what the proposal names: toolkits, the heartbeat, the capabilities `can_propose_agents` and `can_review_agents`, or its lead role in conversations; or sets its memory writes to need review. The heartbeat and the lead role go at once; the rest is written to the agent's draft and reaches its published version the next time you publish it. |
+| **Demote** | Takes away exactly what the proposal names: toolkits, the heartbeat, the capabilities `can_propose_agents` and `can_review_agents`, or its lead role in conversations; or sets its memory writes to need review. All of it applies at once: the approval publishes the narrowed agent. See [What a demotion changes](#what-a-demotion-changes). |
 | **Suspend** | Suspends the agent with the agent kill switch, so its runs are refused. Any admin can lift it. |
 | **Retire** | Unpublishes the agent and removes it from conversations and saved teams, drops it as a lead, turns its schedules and its heartbeat off and revokes its triggers. Other agents keep it as a sub-agent; their runs fail with `nested_agent_retired` until someone fixes them. Its history stays. |
 | **Delete** | Only after a retirement and its 30-day window, and never under legal hold: removes the agent's memory, schedules, triggers and versions. |
@@ -32,6 +32,22 @@ The tab shows the latest scorecard and the failure-rate trend. Scorecards are ke
 Before you approve a suspension, retirement or deletion, the dialog shows what it touches: conversations, saved teams, agents that nest it, schedules, triggers and published versions. Retiring an agent other agents nest needs a confirmation.
 
 A critical-tier agent and an agent under legal hold cannot be proposed for any stage.
+
+### What a demotion changes
+
+The approval is the review. The platform publishes the narrowing directly, with no change request and no release gate.
+
+- **Published versions.** The narrowing is cut from each published version, not from the draft. Each narrowed version gets a new release (a new definition digest and toolkit pins), and the release head moves to the new release of the version it pointed at. The earlier releases of those versions are withdrawn, so a rollback cannot bring the removed tools back. The catalogue entry gets the same narrowing. Runs use the narrowed agent from the moment of approval.
+- **The draft.** The same narrowing is applied to the draft, and nothing else in it changes. Your unpublished edits stay. When you publish the draft later, the demotion stays in force. If the draft is the candidate of an open change request, that request goes stale; submit it again.
+- **No published version.** Only the draft is narrowed. Nothing is live, so nothing is published.
+- **Embedded copies.** A copy of this agent that another agent embedded as a sub-agent is part of that agent's release. The demotion does not change it.
+- **The heartbeat and the lead role.** The heartbeat stops and the agent stops leading conversations at once.
+
+The applied record of the proposal shows `published` (`true` when a narrowed version is live), `release_id` and `published_version_id` (the new head release), `published_versions` (each narrowed version and its new release) and `draft_version_id`. If the version the head points at had nothing to narrow, the head stays where it was. A narrowed older version then runs as its narrowed version, with no release.
+
+When the head moves, a certified agent becomes **due** for recertification, as after any new release.
+
+Granting an appeal of a demotion does not restore what it took away. To restore it, edit the agent and publish it again.
 
 ## Propose a stage
 

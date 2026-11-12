@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.49"
+  x-elitea-client-contract: "1.50"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3133,9 +3133,10 @@ components:
     SubAgentLane:
       type: object
       description: >-
-        Client contract 1.48 (ADR-0050 decision 4). A temporary sub-agent a
-        cloud run started with `spawn_agent`, as the answer keeps it
-        (`metadata.subagents_v1`). Untrusted text: render it as plain text.
+        Client contract 1.48 (ADR-0050 decision 4), nesting 1.50 (issue 1872). A
+        temporary sub-agent a cloud run started with `spawn_agent`, as the
+        answer keeps it (`metadata.subagents_v1`). Untrusted text: render it
+        as plain text.
       required: [agent_id, parent_call_id, ordinal, status, items]
       properties:
         agent_id: { type: string }
@@ -3143,6 +3144,88 @@ components:
           type: string
           description: The `tool_run_id` of the `spawn_agent` call that started it.
         ordinal: { type: integer, minimum: 1 }
+        depth:
+          type: integer
+          enum: [1, 2]
+          description: >-
+            Client contract 1.50. 1 for a child of the run's agent, 2 for a
+            child of a child (agents.subagents_max_depth). Absent reads as
+            1 (an older answer).
+        parent_agent_id:
+          type: string
+          description: >-
+            Client contract 1.50. The `agent_id` of the sub-agent that
+            started this one; present only at depth 2. Render nested: this
+            lane appears under its parent's `children`, not at the top
+            level of `metadata.subagents_v1`.
+        children:
+          type: array
+          description: >-
+            Client contract 1.50. This lane's own sub-agents (depth 2),
+            folded here by Main from their own rows; absent or empty for a
+            depth-1 lane with no nested children. A `SubAgentLane` here
+            never itself carries `children` (sub-agent depth is at most 2),
+            so the items are `SubAgentLaneChild`.
+          items:
+            $ref: '#/components/schemas/SubAgentLaneChild'
+        label: { type: string, maxLength: 120 }
+        display_name:
+          type: string
+          maxLength: 120
+          description: The profile's display name; absent when the spawn named none.
+        avatar:
+          type: string
+          maxLength: 120
+          description: The profile's avatar key (`default:<name>`); display only.
+        status:
+          type: string
+          enum: [running, completed, failed, budget_exhausted, cancelled]
+          description: >-
+            `running` on a lane whose answer is still streaming; a settled
+            answer's children are settled (a child the run's end stopped is
+            `cancelled`).
+        items:
+          type: array
+          maxItems: 96
+          items:
+            $ref: '#/components/schemas/SubAgentLaneItem'
+        steps: { type: integer }
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        result:
+          type: string
+          maxLength: 2000
+          description: Its final text (or the text it had when it stopped).
+        error:
+          type: string
+          description: Why it stopped short (`subagent_failed`, `subagent_cancelled`, ...).
+
+    SubAgentLaneChild:
+      type: object
+      description: >-
+        Client contract 1.50 (issue 1872). A depth-2 sub-agent lane under its
+        parent's `children`: a `SubAgentLane` without `children` of its own.
+      required: [agent_id, parent_call_id, ordinal, status, items]
+      properties:
+        agent_id: { type: string }
+        parent_call_id:
+          type: string
+          description: The `tool_run_id` of the `spawn_agent` call that started it.
+        ordinal: { type: integer, minimum: 1 }
+        depth:
+          type: integer
+          enum: [1, 2]
+          description: >-
+            Client contract 1.50. 1 for a child of the run's agent, 2 for a
+            child of a child (agents.subagents_max_depth). Absent reads as
+            1 (an older answer).
+        parent_agent_id:
+          type: string
+          description: >-
+            Client contract 1.50. The `agent_id` of the sub-agent that
+            started this one; present only at depth 2. Render nested: this
+            lane appears under its parent's `children`, not at the top
+            level of `metadata.subagents_v1`.
         label: { type: string, maxLength: 120 }
         display_name:
           type: string

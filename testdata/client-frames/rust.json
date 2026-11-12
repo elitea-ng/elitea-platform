@@ -279,6 +279,7 @@
       "subagent_v1": {
         "agent_id": "a_0000beef",
         "avatar": "default:owl",
+        "depth": 1,
         "display_name": "Owl",
         "kind": "started",
         "label": "callers",

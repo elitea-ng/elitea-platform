@@ -96,8 +96,10 @@ WHERE uuid = $1`, responseID, questionID, rootLedgerPauses); err != nil {
 	var digest string
 	var entries int
 	if err := tx.QueryRow(t.Context(), `
-SELECT digest, jsonb_array_length(entries) FROM chat_message_context_views
-WHERE message_group_uuid = $1::uuid`, responseID).Scan(&digest, &entries); err != nil {
+SELECT view.digest, COALESCE(frame.entry_count, jsonb_array_length(view.entries))
+FROM chat_message_context_views view
+LEFT JOIN chat_message_context_view_frames frame ON frame.id = view.frame_id
+WHERE view.message_group_uuid = $1::uuid`, responseID).Scan(&digest, &entries); err != nil {
 		t.Fatal(err)
 	}
 	if digest != continuedView.Digest || entries != 2 {

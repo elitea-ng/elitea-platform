@@ -422,7 +422,7 @@ func (s *AgentMemory) ResolveAgentMemoryRecall(ctx context.Context, request agen
 	// present, so the ids the run input carries pass the same rule.
 	selected := agentmemory.Select(candidates, present, request.UserInput, request.Settings)
 	return agentexecutionapp.AgentMemoryRecall{
-		Text:    agentmemory.Render(selected, people),
+		Text:    agentmemory.Render(selected, people, request.MarkTag),
 		Entries: agentmemory.RecalledEntries(selected),
 	}, nil
 }

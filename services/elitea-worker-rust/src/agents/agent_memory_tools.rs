@@ -31,6 +31,7 @@ use adk_rust::{Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use elitea_agent_runtime::host::{HostError, HostErrorCode};
 use elitea_agent_runtime::memory_tools::looks_like_secret;
+use elitea_agent_runtime::subagents::memory_ref;
 use elitea_agent_runtime::untrusted::UntrustedReads;
 use serde_json::{Map, Value, json};
 
@@ -52,6 +53,9 @@ pub(crate) const FORGET: &str = "forget";
 pub(crate) const MAX_CONTENT_BYTES: usize = 2_048;
 const MAX_QUERY_BYTES: usize = 1_024;
 pub(crate) const MAX_RECALL_ENTRIES: u64 = 50;
+/// The longest `forget` `entry_id`: 20 digits, or `N·TAG` as a mark shows it
+/// (#1900): 19 digits, the 2-byte separator and the tag.
+const FORGET_ID_MAX_BYTES: usize = 19 + 2 + memory_ref::MEMORY_TAG_LENGTH;
 /// The kinds the agent may write. A `cursor` is the heartbeat's state.
 const AGENT_KINDS: [&str; 3] = ["fact", "preference", "episode"];
 
@@ -124,18 +128,46 @@ const MAX_RECALLED_ENTRIES: usize = 256;
 /// (#1826, [`Self::seeded`]). A `spawn_agent` brief may name only these, so
 /// a creator passes on only what it was shown. One per turn, shared between
 /// the `recall` tool and the sub-agent host.
-#[derive(Default)]
+///
+/// A brief cites an entry as `N·TAG` (#1900, `memory_ref`), TAG the turn's
+/// tag: Main's (`recalled_memory_tag`), which its marks in the instructions
+/// show, or, when Main sent none, one drawn here for what `recall` returns.
+/// A bare id or another tag cites nothing, so a `[memory N, ...]` line
+/// copied into the author's instructions cannot be passed on.
 pub(crate) struct RecalledEntries {
     entries: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+    tag: Option<String>,
+    /// Main sent no tag for the run (a Main from before field 78): its marks
+    /// show a bare `N`, so a brief may cite an entry by its bare id, as the
+    /// prompt showed it (a rolling deploy).
+    bare_ids: bool,
+}
+
+impl Default for RecalledEntries {
+    fn default() -> Self {
+        Self::seeded(&[], None)
+    }
 }
 
 impl RecalledEntries {
     /// A recorder that starts with the entries Main recalled into the
-    /// instructions (`AgentExecutionInputV1.recalled_memory`, #1826). The
-    /// content is Main's stored text, never the model's.
+    /// instructions (`AgentExecutionInputV1.recalled_memory`, #1826), cited
+    /// under `tag`, their marks' tag (#1900). The content is Main's stored
+    /// text, never the model's. Without a tag (no entry in the instructions,
+    /// or a Main from before field 78) the recorder draws its own, so the
+    /// seeded entries, whose marks show no tag, cannot be cited.
     #[must_use]
-    pub(crate) fn seeded(entries: &[crate::agents::request::RecalledMemoryEntry]) -> Self {
+    pub(crate) fn seeded(
+        entries: &[crate::agents::request::RecalledMemoryEntry],
+        tag: Option<&str>,
+    ) -> Self {
+        let bare_ids = tag.is_none() && !entries.is_empty();
+        let tag = match tag {
+            Some(tag) => Some(tag.to_owned()),
+            None => memory_ref::new_memory_tag(),
+        };
         Self {
+            bare_ids,
             entries: std::sync::Mutex::new(
                 entries
                     .iter()
@@ -143,7 +175,16 @@ impl RecalledEntries {
                     .map(|entry| (entry.entry_id.clone(), entry.content.clone()))
                     .collect(),
             ),
+            tag,
         }
+    }
+
+    /// How a brief cites `entry_id` this turn (`N·TAG`), or `None` when the
+    /// system's random source gave no tag.
+    pub(crate) fn memory_ref(&self, entry_id: &str) -> Option<String> {
+        self.tag
+            .as_deref()
+            .map(|tag| memory_ref::memory_ref(entry_id, tag))
     }
 
     fn record(&self, entries: &[crate::transport::runtime_context::AgentMemoryRecalledEntry]) {
@@ -173,10 +214,34 @@ impl RecalledEntries {
         }
     }
 
-    /// The content of an entry recalled this turn.
+    /// The content of an entry recalled this turn, by its id.
     #[must_use]
     pub(crate) fn content(&self, entry_id: &str) -> Option<String> {
         self.entries.lock().ok()?.get(entry_id).cloned()
+    }
+
+    /// The entry a brief's `reference` cites (#1900): its id and content,
+    /// when `reference` is `N·TAG` with this turn's tag and N was recalled
+    /// this turn.
+    #[must_use]
+    pub(crate) fn cited(&self, reference: &str) -> Option<(String, String)> {
+        if self.bare_ids && !reference.contains(memory_ref::MEMORY_REF_SEPARATOR) {
+            let content = self.content(reference)?;
+            return Some((reference.to_owned(), content));
+        }
+        let entry_id = memory_ref::cited_entry(reference, self.tag.as_deref()?)?;
+        let content = self.content(entry_id)?;
+        Some((entry_id.to_owned(), content))
+    }
+
+    /// The id a `forget` call names: a bare id (as `recall` gives it), or
+    /// `N·TAG` with this turn's tag (as a mark shows it). A mark with any
+    /// other tag is not one of this turn's notes.
+    fn forget_target<'a>(&self, entry_id: &'a str) -> Option<&'a str> {
+        if !entry_id.contains(memory_ref::MEMORY_REF_SEPARATOR) {
+            return Some(entry_id);
+        }
+        memory_ref::cited_entry(entry_id, self.tag.as_deref()?)
     }
 }
 
@@ -418,12 +483,32 @@ impl Tool for RecallTool {
                 Ok(json!({
                     "status": "ok",
                     "note": DATA_NOTE,
-                    "entries": outcome.entries,
+                    "entries": recall_entries(&outcome.entries, &self.authority.recalled),
                 }))
             }
             Err(transport) => Ok(failure(RECALL, &host_error(&transport))),
         }
     }
+}
+
+/// `recall`'s entries as the model reads them: each with its `memory_ref`
+/// (#1900), the `N·TAG` a brief cites it by.
+fn recall_entries(
+    entries: &[crate::transport::runtime_context::AgentMemoryRecalledEntry],
+    recalled: &RecalledEntries,
+) -> Vec<Value> {
+    entries
+        .iter()
+        .map(|entry| {
+            let mut value = serde_json::to_value(entry).unwrap_or(Value::Null);
+            if let (Some(object), Some(reference)) =
+                (value.as_object_mut(), recalled.memory_ref(&entry.entry_id))
+            {
+                object.insert("memory_ref".to_owned(), Value::String(reference));
+            }
+            value
+        })
+        .collect()
 }
 
 struct ForgetTool {
@@ -437,7 +522,7 @@ impl Tool for ForgetTool {
     }
 
     fn description(&self) -> &'static str {
-        "Delete one note from this agent's memory, by its entry_id (the N of a [memory N, ...] note, or an entry_id recall gave you), when it is wrong or someone asks you to forget it."
+        "Delete one note from this agent's memory, by its entry_id (the N·TAG of a [memory N·TAG, ...] note, or an entry_id recall gave you), when it is wrong or someone asks you to forget it."
     }
 
     fn is_read_only(&self) -> bool {
@@ -452,7 +537,7 @@ impl Tool for ForgetTool {
         Some(json!({
             "type": "object",
             "properties": {
-                "entry_id": {"type": "string", "minLength": 1, "maxLength": 20}
+                "entry_id": {"type": "string", "minLength": 1, "maxLength": FORGET_ID_MAX_BYTES}
             },
             "required": ["entry_id"],
             "additionalProperties": false
@@ -466,13 +551,14 @@ impl Tool for ForgetTool {
     ) -> adk_rust::Result<Value> {
         let Some(entry_id) = string_argument(&arguments, "entry_id")
             .map(str::trim)
+            .and_then(|id| self.authority.recalled.forget_target(id))
             .filter(|id| {
                 !id.is_empty() && id.len() <= 20 && id.bytes().all(|b| b.is_ascii_digit())
             })
         else {
             return Ok(error(
                 "invalid_argument",
-                "entry_id must be the id of one of your notes: the N of [memory N, ...], or an id recall gave you.",
+                "entry_id must be the id of one of your notes: the N·TAG of [memory N·TAG, ...] exactly as shown, or an id recall gave you.",
             ));
         };
         let request = AgentMemoryForgetRequest {
@@ -529,16 +615,74 @@ mod tests {
 
     #[test]
     fn a_seeded_entry_is_forgotten_too() {
-        let recalled = RecalledEntries::seeded(&[crate::agents::request::RecalledMemoryEntry {
-            entry_id: "42".to_owned(),
-            content: "deploys on Fridays".to_owned(),
-        }]);
+        let recalled = RecalledEntries::seeded(
+            &[crate::agents::request::RecalledMemoryEntry {
+                entry_id: "42".to_owned(),
+                content: "deploys on Fridays".to_owned(),
+            }],
+            Some("k7f2m6q3xz"),
+        );
         assert_eq!(
             recalled.content("42").as_deref(),
             Some("deploys on Fridays")
         );
         recalled.forget("42");
         assert_eq!(recalled.content("42"), None);
+    }
+
+    /// #1900: `forget` takes a bare id or a mark with this turn's tag; a
+    /// mark with another tag is not one of this turn's notes.
+    #[test]
+    fn forget_names_a_note_by_id_or_by_this_turns_mark() {
+        let recalled = RecalledEntries::seeded(&[], Some("k7f2m6q3xz"));
+        assert_eq!(recalled.forget_target("42"), Some("42"));
+        assert_eq!(recalled.forget_target("42·k7f2m6q3xz"), Some("42"));
+        assert_eq!(recalled.forget_target("42·aaaaaaaaaa"), None);
+        assert!("42·k7f2m6q3xz".len() <= FORGET_ID_MAX_BYTES);
+    }
+
+    /// #1900: each `recall` entry shows the reference a brief cites it by,
+    /// under the turn's tag (Main's, or one drawn here when Main sent none).
+    #[test]
+    fn recall_shows_each_entry_with_its_memory_ref() {
+        let entry = crate::transport::runtime_context::AgentMemoryRecalledEntry {
+            entry_id: "9".to_owned(),
+            kind: "fact".to_owned(),
+            content: "uses pnpm".to_owned(),
+            about_user: String::new(),
+            pinned: false,
+        };
+        let tagged = RecalledEntries::seeded(&[], Some("k7f2m6q3xz"));
+        let shown = recall_entries(std::slice::from_ref(&entry), &tagged);
+        assert_eq!(shown[0]["entry_id"], "9");
+        assert_eq!(shown[0]["memory_ref"], "9·k7f2m6q3xz");
+        let own = RecalledEntries::default();
+        let shown = recall_entries(std::slice::from_ref(&entry), &own);
+        let reference = shown[0]["memory_ref"].as_str().expect("a memory_ref");
+        own.record(std::slice::from_ref(&entry));
+        assert_eq!(
+            own.cited(reference),
+            Some(("9".to_owned(), "uses pnpm".to_owned()))
+        );
+        assert_eq!(own.cited("9"), None);
+    }
+
+    /// Rolling deploy: a Main that sent no tag showed bare `N` marks, so a
+    /// brief's bare id cites; with Main's tag it does not.
+    #[test]
+    fn a_bare_id_cites_only_when_main_sent_no_tag() {
+        let entries = [crate::agents::request::RecalledMemoryEntry {
+            entry_id: "42".to_owned(),
+            content: "deploys on Fridays".to_owned(),
+        }];
+        let old_main = RecalledEntries::seeded(&entries, None);
+        assert_eq!(
+            old_main.cited("42"),
+            Some(("42".to_owned(), "deploys on Fridays".to_owned()))
+        );
+        assert_eq!(old_main.cited("43"), None);
+        let new_main = RecalledEntries::seeded(&entries, Some("k7f2m6q3xz"));
+        assert_eq!(new_main.cited("42"), None);
     }
 
     #[test]

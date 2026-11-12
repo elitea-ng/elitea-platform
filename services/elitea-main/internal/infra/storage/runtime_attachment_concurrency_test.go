@@ -158,6 +158,12 @@ func TestAttachmentObjectServiceRefusesPastAFullQueue(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return service.queued.Load() == maxQueuedAttachmentExtractions
 	}, 5*time.Second, 5*time.Millisecond)
+	// The full-queue answer comes from the extraction's own goroutine. With
+	// the 10ms fill wait a loaded runner could schedule it late and the
+	// request would answer "processing" first; a long wait lets it arrive
+	// (it arrives at once, so the test stays fast). No other Resolve runs
+	// now, so nothing reads the field concurrently.
+	service.extractionWait = 5 * time.Second
 	_, err = service.Resolve(context.Background(), testAttachmentClaim, "chat-attachments", attachmentTestConversation+"/one-more.txt")
 	require.ErrorIs(t, err, ErrContentUnavailable, "a full queue is a server condition, never a file property")
 }

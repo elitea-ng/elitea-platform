@@ -418,9 +418,11 @@ impl OrdinaryNativeAgentAssembler {
         };
         tracing::Span::current().record("stage", "toolsets");
         // What this turn recalled, for a sub-agent brief: the entries Main
-        // put in the instructions (#1826) and what `recall` returns (#1614).
+        // put in the instructions (#1826) and what `recall` returns (#1614),
+        // cited under the tag of Main's marks (#1900).
         let recalled = Arc::new(super::agent_memory_tools::RecalledEntries::seeded(
             profile.recalled_memory(),
+            profile.recalled_memory_tag(),
         ));
         // W3-1: Code runs admitted against the run's deadline.
         let code_runtime = match self.sandbox.as_ref().zip(sandbox_authority) {

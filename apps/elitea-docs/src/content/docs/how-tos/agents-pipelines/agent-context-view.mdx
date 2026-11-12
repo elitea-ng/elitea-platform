@@ -84,6 +84,16 @@ The inspector shows what Main sent on that turn. When the agent's mode has chang
 
 An answer that paused for an approval or a question and then went on shows the view of the run that finished it: the continued run records its view again over the one recorded when the answer started.
 
+### How views are stored
+
+Each answer's view is stored as the change from the same agent's previous view in the conversation: message ids and reasons only, never a message body. Every 64th view is stored in full. A turn's storage therefore grows with what changed since the agent's last answer, not with the length of the conversation. In a 2,000-message conversation, the stored views of one agent take about 1 MB instead of about 54 MB. What the inspector shows does not change:
+
+- A regenerated answer shows its new view. The later answers still show the views they were given.
+- A message deleted since keeps its place in the views that held it, with no author.
+- Deleting an answer does not change the views recorded after it.
+- Views recorded before this storage change still read as before.
+- Deleting the conversation deletes all of its views.
+
 ## When the mode changes
 
 The agent's own session is bound to the view it was started under: its mode, side talk, and (for `since_joined`) the join time. On the agent's first turn after any of these changes (a new version with another `context.history` or side-talk setting, "share history from: now" set on its participant, or the agent removed and added again), the worker checks the session against the current view:

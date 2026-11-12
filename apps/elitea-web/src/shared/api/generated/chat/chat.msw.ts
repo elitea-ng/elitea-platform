@@ -1733,6 +1733,104 @@ export const getListConversationMessagesResponseMock = (
               length: { min: 10, max: 20 },
             }),
             ordinal: faker.number.int({ min: 1 }),
+            depth: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([1, 2] as const),
+              undefined,
+            ]),
+            parent_agent_id: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            children: faker.helpers.arrayElement([
+              Array.from(
+                { length: faker.number.int({ min: 1, max: 10 }) },
+                (_, i) => i + 1,
+              ).map(() => ({
+                agent_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+                parent_call_id: faker.string.alpha({
+                  length: { min: 10, max: 20 },
+                }),
+                ordinal: faker.number.int({ min: 1 }),
+                depth: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([1, 2] as const),
+                  undefined,
+                ]),
+                parent_agent_id: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                label: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 120 } }),
+                  undefined,
+                ]),
+                display_name: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 120 } }),
+                  undefined,
+                ]),
+                avatar: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 120 } }),
+                  undefined,
+                ]),
+                status: faker.helpers.arrayElement([
+                  "running",
+                  "completed",
+                  "failed",
+                  "budget_exhausted",
+                  "cancelled",
+                ] as const),
+                items: Array.from(
+                  { length: faker.number.int({ min: 1, max: 96 }) },
+                  (_, i) => i + 1,
+                ).map(() => ({
+                  type: faker.helpers.arrayElement(["tool", "text"] as const),
+                  call_id: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  tool: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 120 } }),
+                    undefined,
+                  ]),
+                  args_summary: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 240 } }),
+                    undefined,
+                  ]),
+                  ok: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                  summary: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 240 } }),
+                    undefined,
+                  ]),
+                  text: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 600 } }),
+                    undefined,
+                  ]),
+                })),
+                steps: faker.helpers.arrayElement([
+                  faker.number.int(),
+                  undefined,
+                ]),
+                input_tokens: faker.helpers.arrayElement([
+                  faker.number.int(),
+                  undefined,
+                ]),
+                output_tokens: faker.helpers.arrayElement([
+                  faker.number.int(),
+                  undefined,
+                ]),
+                result: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 2000 } }),
+                  undefined,
+                ]),
+                error: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+              })),
+              undefined,
+            ]),
             label: faker.helpers.arrayElement([
               faker.string.alpha({ length: { min: 10, max: 120 } }),
               undefined,

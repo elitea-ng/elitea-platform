@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { SubAgentLaneChild } from "./subAgentLaneChild.zod";
 import { SubAgentLaneItem } from "./subAgentLaneItem.zod";
 
 export const subAgentLaneLabelMax = 120;
@@ -60,6 +61,24 @@ export const SubAgentLane = zod
       .string()
       .describe("The `tool_run_id` of the `spawn_agent` call that started it."),
     ordinal: zod.int().min(1),
+    depth: zod
+      .union([zod.literal(1), zod.literal(2)])
+      .optional()
+      .describe(
+        "Client contract 1.50. 1 for a child of the run's agent, 2 for a child of a child (agents.subagents_max_depth). Absent reads as 1 (an older answer).",
+      ),
+    parent_agent_id: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.50. The `agent_id` of the sub-agent that started this one; present only at depth 2. Render nested: this lane appears under its parent's `children`, not at the top level of `metadata.subagents_v1`.",
+      ),
+    children: zod
+      .array(SubAgentLaneChild)
+      .optional()
+      .describe(
+        "Client contract 1.50. This lane's own sub-agents (depth 2), folded here by Main from their own rows; absent or empty for a depth-1 lane with no nested children. A `SubAgentLane` here never itself carries `children` (sub-agent depth is at most 2), so the items are `SubAgentLaneChild`.",
+      ),
     label: zod.string().max(subAgentLaneLabelMax).optional(),
     display_name: zod
       .string()
@@ -95,7 +114,7 @@ export const SubAgentLane = zod
       ),
   })
   .describe(
-    "Client contract 1.48 (ADR-0050 decision 4). A temporary sub-agent a cloud run started with `spawn_agent`, as the answer keeps it (`metadata.subagents_v1`). Untrusted text: render it as plain text.",
+    "Client contract 1.48 (ADR-0050 decision 4), nesting 1.50 (issue 1872). A temporary sub-agent a cloud run started with `spawn_agent`, as the answer keeps it (`metadata.subagents_v1`). Untrusted text: render it as plain text.",
   );
 
 export type SubAgentLane = zod.input<typeof SubAgentLane>;

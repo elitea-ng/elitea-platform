@@ -306,6 +306,16 @@ describe('client contract 1.49', () => {
     assert.deepEqual(persona.avatar_pack_v1.allOf, [{ $ref: '#/components/schemas/AgentAvatarPackV1' }]);
     assert.match(persona.avatar_pack_v1.description, /Client contract 1\.49/);
     assert.ok(doc.components.schemas.AgentAvatarPackV1.required.includes('slots'));
-    assert.equal(doc.info['x-elitea-client-contract'], '1.49');
+  });
+});
+
+describe('client contract 1.50', () => {
+  it('nests a depth-2 sub-agent lane under its parent (issue 1872)', () => {
+    const { doc } = buildContract();
+    const lane = doc.components.schemas.SubAgentLane.properties;
+    assert.deepEqual(lane.depth.enum, [1, 2]);
+    assert.equal(lane.children.items.$ref, '#/components/schemas/SubAgentLaneChild');
+    assert.equal(doc.components.schemas.SubAgentLaneChild.properties.children, undefined);
+    assert.equal(doc.info['x-elitea-client-contract'], '1.50');
   });
 });

@@ -39,6 +39,14 @@ function Lane({ lane }: { readonly lane: CloudSubAgentLane }): ReactNode {
           {item.type === 'tool' ? toolLine(item) : item.text}
         </Typography>
       ))}
+      {/* #1872: a grandchild (depth 2) nests under its parent's own body, one level in. */}
+      {lane.children !== undefined && lane.children.length > 0 && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+          {lane.children.map((child) => (
+            <Lane key={child.agentId} lane={child} />
+          ))}
+        </Box>
+      )}
     </SubAgentLaneCard>
   );
 }

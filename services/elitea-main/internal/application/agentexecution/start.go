@@ -475,7 +475,9 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	)
 	if agentMemory.Text != "" {
 		// #1826: the other injected blocks share the instructions with the
-		// agent's notes, so none of them may show a `[memory N, ...]` mark.
+		// agent's notes, so none of them may show a `[memory ...]` mark. The
+		// marks' per-turn tag (#1900) already keeps a copied one from being
+		// cited; this keeps the model from being shown one.
 		memoryRecall.Text = agentmemory.Neutralize(memoryRecall.Text)
 		projectContextText = agentmemory.Neutralize(projectContextText)
 	}
@@ -491,8 +493,9 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	input.ContextSettings = contextSettings
 	input.Floor = heartbeatFloor(floor.input(request.TargetParticipantID), request.Heartbeat)
 	input.CurrentMessageId = currentMessageID(request)
-	// #1826: the entries the instructions show, so a brief can name them.
-	input.RecalledMemory = recalledMemoryInput(agentMemory, input.GetApplication())
+	// #1826, #1900: the entries the instructions show and their marks' tag,
+	// so a brief can name them.
+	input.RecalledMemory, input.RecalledMemoryTag = recalledMemoryInput(agentMemory, input.GetApplication())
 	grant, chain, err := service.admitUnattended(ctx, unattendedTarget{
 		request: request.Unattended, continuation: request.UnattendedContinuation,
 		capabilityID: executiondomain.AgentApplicationCapability, input: input,

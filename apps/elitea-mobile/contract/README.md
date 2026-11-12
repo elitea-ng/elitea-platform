@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.50
+
+| Area | What |
+|---|---|
+| Nested sub-agent lanes (ADR-0050 decision 4, issue 1872) | At `subagents.max_depth` 2 a `started` entry may carry `depth` (1 or 2, absent reads as 1) and, at depth 2, `parent_agent_id`. A stored `SubAgentLane` may carry `children` (`SubAgentLaneChild`, one level, never with children of its own). The app has no tree view: a grandchild's tool steps follow its parent's under a label built from both ("Owl · temporary › Hawk · temporary", `src/features/chat/subAgentLanes.ts`). A server before 1.50 sends none of these. |
+
 ## Client contract 1.49
 
 | Area | What |
