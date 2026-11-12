@@ -147,14 +147,14 @@ struct SensitiveToolEntry {
 impl SensitiveToolEntry {
     /// The tool is in `external_send` or `payment`: the categories the grant
     /// admission withholds or gates behind a `hitl` node, by the agent's tier.
-    fn is_withholdable_category(&self) -> bool {
+    fn is_withholdable_category(&self, tool_name: &str) -> bool {
         use elitea_agent_runtime::approval_policy::ApprovalRule;
         use elitea_agent_runtime::tool_category::{ToolCategory, declared_category};
         let category = match self.policy.rule() {
             ApprovalRule::Policy { category, .. }
             | ApprovalRule::UntrustedReadThenAct { category } => Some(category),
             ApprovalRule::Platform | ApprovalRule::Builtin => {
-                declared_category(self.policy.toolkit_type(), self.policy.action_name())
+                declared_category(self.policy.toolkit_type(), tool_name)
             }
         };
         matches!(
@@ -256,7 +256,7 @@ impl SensitiveToolCatalog {
         };
         self.unattended_grant = Some(Arc::new(grant.clone()));
         for (identity, entry) in &mut self.scoped_entries {
-            if nested && entry.is_withholdable_category() {
+            if nested && entry.is_withholdable_category(&identity.tool_name) {
                 continue;
             }
             if !entry.conditional && grant.names_tool(&identity.toolkit_name, &identity.tool_name) {

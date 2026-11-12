@@ -3690,7 +3690,7 @@ async fn an_unattended_grant_approves_a_sensitive_tool_of_a_nested_agent() {
         }
         assert_eq!(projector.is_paused(), expect_pause);
         if expect_pause {
-            assert!(approvals.is_empty());
+            assert_eq!(approvals, Vec::<serde_json::Value>::new());
             assert_eq!(tool_calls.load(Ordering::Acquire), 0);
         } else {
             assert_eq!(approvals.len(), 1, "one ledger event for the one call");
