@@ -1771,11 +1771,13 @@ func (r *pgRepo) ForkToolkit(ctx context.Context, projectID string, body map[str
 	// the handler's contract rather than to this statement.
 	q := fmt.Sprintf(`
 		INSERT INTO %s.elitea_tools (name, type, description, owner_id, author_id, settings, env_vars, meta, created_at)
-		SELECT name || ' (copy)', type, description, owner_id, author_id, settings, env_vars, meta, now() AT TIME ZONE 'UTC'
+		SELECT left(name, $2) || ' (copy)', type, description, owner_id, author_id, settings, env_vars, meta, now() AT TIME ZONE 'UTC'
 		FROM %s.elitea_tools WHERE id = $1
 		RETURNING id, name, type, COALESCE(description, '')`, s, s)
 	var t Tool
-	err = r.pool.QueryRow(ctx, q, sourceID).Scan(&t.ID, &t.Name, &t.Type, &t.Description)
+	// The suffix must fit inside the name limit (issue 1968): left() counts characters, as the
+	// limit does.
+	err = r.pool.QueryRow(ctx, q, sourceID, entitylimits.MaxNameLength-len(" (copy)")).Scan(&t.ID, &t.Name, &t.Type, &t.Description)
 	if err != nil {
 		return Tool{}, fmt.Errorf("fork toolkit: %w", err)
 	}

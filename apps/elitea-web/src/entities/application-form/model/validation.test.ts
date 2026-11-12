@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { applicationCreationSchema } from './validation';
+import { applicationCreationSchema, applicationEditSchema } from './validation';
 
 describe('applicationCreationSchema', () => {
   it('accepts a minimal valid draft', () => {
@@ -83,5 +83,13 @@ describe('applicationCreationSchema', () => {
 
   it('counts characters, not UTF-16 units', () => {
     expect(applicationCreationSchema.safeParse({ name: '😀'.repeat(32), description: '字'.repeat(2000) }).success).toBe(true);
+  });
+
+  // An agent named past the create form's 32 through the API must still save from the edit page.
+  it('holds an existing agent to the server name limit (128), not the create cap', () => {
+    expect(applicationEditSchema.safeParse({ name: 'n'.repeat(42), description: 'ok' }).success).toBe(true);
+    expect(applicationEditSchema.safeParse({ name: 'n'.repeat(128), description: 'ok' }).success).toBe(true);
+    const longName = applicationEditSchema.safeParse({ name: 'n'.repeat(129), description: 'ok' });
+    expect(longName.error?.issues[0]?.message).toBe('Name must be 128 characters or fewer');
   });
 });

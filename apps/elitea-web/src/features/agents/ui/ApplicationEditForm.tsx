@@ -4,10 +4,12 @@ import { useCallback, useEffect, useState } from 'react';
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { NAME_MAX_LENGTH } from '@elitea/client-core/limits';
+
 import type { Tag } from '@/entities/tag';
 import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { t } from '@/shared/i18n';
-import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
+import { MAX_DESCRIPTION_LENGTH } from '@/shared/lib/limits';
 import { characterCount, exceedsLimit } from '@/shared/lib/textLimits';
 import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
@@ -169,10 +171,10 @@ export function ApplicationEditForm({
                     required
                     slotProps={{ htmlInput: { 'data-testid': 'agent-name-input' } }}
                   />
-                  {isFocused(PROMPT_PAYLOAD_KEY.name) && characterCount(localName) >= MAX_NAME_LENGTH && (
+                  {isFocused(PROMPT_PAYLOAD_KEY.name) && characterCount(localName) >= NAME_MAX_LENGTH && (
                     <CharacterCounter
                       value={localName}
-                      maxLength={MAX_NAME_LENGTH}
+                      maxLength={NAME_MAX_LENGTH}
                       textVariant="labelSmall"
                       sx={nameCharactersLabelSx}
                       data-testid="agent-name-counter"

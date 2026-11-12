@@ -91,7 +91,8 @@ describe('ApplicationEditForm', () => {
   });
 
   it('shows the at-limit hint only while the name field is focused at the max length', async () => {
-    renderForm({ name: 'x'.repeat(32) });
+    // An existing agent is held to the server's 128 (issue 1968), not the create form's 32.
+    renderForm({ name: 'x'.repeat(128) });
     const input = await screen.findByTestId('agent-name-input');
     // The name counter mounts only at the limit, so its absence is a real
     // absence. The description counter is a different test id — it is always

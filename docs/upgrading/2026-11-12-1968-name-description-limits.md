@@ -18,7 +18,10 @@
     400, not 500. Shared migration `0242_token_name_limit.sql` cuts personal access token names to 128. The cut text is not
     kept.
   - **Clients.** The web, desktop and mobile forms show a character counter near the limit, never cut what is typed
-    or pasted, and block Save past the limit with the number of characters over.
+    or pasted, and block Save past the limit with the number of characters over. The web create forms keep their
+    stricter agent and toolkit name cap (32); editing an existing agent or pipeline is held to the server's 128, so a
+    name set through the API still saves. Duplicating a conversation or forking a toolkit clips the source name so
+    the ` (copy)` suffix fits inside 128.
 - **Who is affected.** Scripts and integrations that send a name over 128 or a description over 2000 characters now get
   400, and text stored above the limits is shortened when the migrations run. Take a backup first if you need the long
   text. Run the migrations (`elitea-migrate`, shared and tenant).
