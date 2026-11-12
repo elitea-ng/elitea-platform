@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.48",
+  "client_contract": "1.50",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -6760,6 +6760,233 @@
                         "properties": {
                           "avatar_pack": {
                             "type": "string"
+                          },
+                          "avatar_pack_v1": {
+                            "type": "object",
+                            "required": [
+                              "schema",
+                              "slots"
+                            ],
+                            "properties": {
+                              "schema": {
+                                "type": "string"
+                              },
+                              "slots": {
+                                "type": "object",
+                                "required": [
+                                  "still"
+                                ],
+                                "properties": {
+                                  "error": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "idle": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "speaking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "still": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "success": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "thinking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "waiting": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "waking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "working": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
                           },
                           "display_name": {
                             "type": "string"
@@ -18456,6 +18683,233 @@
                         "avatar_pack": {
                           "type": "string"
                         },
+                        "avatar_pack_v1": {
+                          "type": "object",
+                          "required": [
+                            "schema",
+                            "slots"
+                          ],
+                          "properties": {
+                            "schema": {
+                              "type": "string"
+                            },
+                            "slots": {
+                              "type": "object",
+                              "required": [
+                                "still"
+                              ],
+                              "properties": {
+                                "error": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "idle": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "speaking": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "still": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "success": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "thinking": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "waiting": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "waking": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "working": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
                         "display_name": {
                           "type": "string"
                         },
@@ -18598,6 +19052,233 @@
                         "properties": {
                           "avatar_pack": {
                             "type": "string"
+                          },
+                          "avatar_pack_v1": {
+                            "type": "object",
+                            "required": [
+                              "schema",
+                              "slots"
+                            ],
+                            "properties": {
+                              "schema": {
+                                "type": "string"
+                              },
+                              "slots": {
+                                "type": "object",
+                                "required": [
+                                  "still"
+                                ],
+                                "properties": {
+                                  "error": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "idle": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "speaking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "still": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "success": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "thinking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "waiting": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "waking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "working": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
                           },
                           "display_name": {
                             "type": "string"
@@ -22449,6 +23130,233 @@
                     "properties": {
                       "avatar_pack": {
                         "type": "string"
+                      },
+                      "avatar_pack_v1": {
+                        "type": "object",
+                        "required": [
+                          "schema",
+                          "slots"
+                        ],
+                        "properties": {
+                          "schema": {
+                            "type": "string"
+                          },
+                          "slots": {
+                            "type": "object",
+                            "required": [
+                              "still"
+                            ],
+                            "properties": {
+                              "error": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "idle": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "speaking": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "still": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "success": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "thinking": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "waiting": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "waking": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "working": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
                       },
                       "display_name": {
                         "type": "string"

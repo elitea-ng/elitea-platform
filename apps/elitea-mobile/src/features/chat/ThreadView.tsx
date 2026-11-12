@@ -25,7 +25,7 @@ import { useAutoConversationName } from '@/features/chat/useAutoConversationName
 import { speaksContract } from '@/api/discovery';
 import { AnswerActions } from '@/features/chat/actions/AnswerActions';
 import { PackAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
-import { AVATAR_PACK_CONTRACT, participantAvatarPack } from '@/features/chat/avatarPackMedia';
+import { AVATAR_PACK_CONTRACT, avatarPacksById } from '@/features/chat/avatarPackMedia';
 import { ChatEmptyState, MODEL_CHAT_SUGGESTIONS } from '@/features/chat/ChatEmptyState';
 import { ThreadLayout, Toast, useToast } from '@/features/chat/ThreadLayout';
 import { LiveReply, PersistedMessage, QueuedMessage, SideTalkRow, SystemLine } from '@/features/chat/ThreadRows';
@@ -101,6 +101,7 @@ import {
   floorOf,
   foldSideTalk,
   type AddressableAgent,
+  type AvatarPack,
   type AvatarStates,
 } from '@elitea/client-core/conversation';
 import { ATTACHMENT_ONLY_TEXT, STEERING_NOT_SUPPORTED_TEXT, useTurn } from '@/features/chat/useTurn';
@@ -710,8 +711,21 @@ export function ThreadView({
 
   // Who answers, drawn left of every answer (§4.6, §5): the addressed agent's own icon; else, for
   // it (or a model chat), the Elitea mark; another agent of the conversation gets a monogram.
-  const agentIcon = useAgentIconUri(targetAgent ? (targetAgent.agentProjectId ?? projectId) : null, agentVersion.data?.iconPath ?? null);
   const primaryParticipant = target.ok ? target.participantId : null;
+  // Client contract 1.46 (issue 1835): every agent participant's avatar pack, read live and validated
+  // once per conversation read (issue 1883), not per avatar per render.
+  const avatarPacks = useMemo(
+    () => (avatarPacksAvailable ? avatarPacksById(detail?.participants) : NO_PACKS),
+    [avatarPacksAvailable, detail?.participants],
+  );
+  // The primary agent's icon (`icon_meta`) is its pack's still whenever Save wrote both: the pack
+  // downloads that file already, so the icon is not downloaded a second time (issue 1882).
+  const iconPath = agentVersion.data?.iconPath ?? null;
+  const primaryStill = primaryParticipant !== null ? avatarPacks.get(primaryParticipant)?.slots.still?.url : undefined;
+  const agentIcon = useAgentIconUri(
+    targetAgent ? (targetAgent.agentProjectId ?? projectId) : null,
+    iconPath !== null && iconPath === primaryStill ? null : iconPath,
+  );
   // ADR-0050 decision 6: one avatar per list moves. The states are the live turn's, so only the
   // live reply can move; persisted answers show their still.
   const avatarStates = live && !live.settled ? (live.avatars ?? NO_AVATARS) : NO_AVATARS;
@@ -723,14 +737,13 @@ export function ThreadView({
     const primary = participantId === null || participantId === primaryParticipant;
     const label = name ?? (target.ok ? target.name : null) ?? 'Assistant';
     const motion = avatarMotion({ participantId: participantId ?? undefined, newest }, avatarStates, avatarNow, { reducedMotion: design.reduceMotion });
-    // Client contract 1.46 (issue 1835): the answering participant's avatar pack, read live.
-    // The media url names its own project; the cache is the open project's, so a switch drops it.
+    // The answering participant's pack. The media url names its own project; the cache is the open
+    // project's, so a switch drops it.
     const answerId = participantId ?? primaryParticipant;
-    const answering = avatarPacksAvailable ? (detail?.participants ?? []).find((p) => Number(p.id) === answerId) : undefined;
     return (
       <PackAvatar
         projectId={projectId}
-        pack={participantAvatarPack(answering)}
+        pack={answerId !== null ? avatarPacks.get(answerId) : undefined}
         motion={motion}
         name={label}
         imageUri={primary ? agentIcon : null}
@@ -1126,6 +1139,7 @@ export function ThreadView({
 }
 
 const NO_AVATARS: AvatarStates = {};
+const NO_PACKS: ReadonlyMap<number, AvatarPack> = new Map();
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },

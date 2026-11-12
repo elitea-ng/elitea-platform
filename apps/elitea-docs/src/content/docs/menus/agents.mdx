@@ -84,9 +84,11 @@ The **Avatar** tab holds the version's avatar pack: the pictures the chat shows 
 
 Select **Upload** on a card to fill it, or **Remove** to clear it. Removing the still removes the whole pack. Every file is at most 2 MiB and 512 px, and a loop is at most 4 seconds and plays forever. The server reads the file type from the file itself, not from its name. It refuses a file that breaks a rule and says why, for example a video with sound or an SVG with a script. Lottie and Rive files are not accepted.
 
-When the project has an image generation model, **Generate** makes the pictures for you. **Generate stills** makes four candidates from the persona's display name, role and voice; select one to use it as the still. **Generate loop** makes a looping animated WebP of the still for the state you choose. The project's budget pays for each call. There is no video generation.
+When the project has an image generation model, **Generate** makes the pictures for you. **Generate stills** makes four candidates from the persona's display name, role and voice; select one to use it as the still. **Generate loop** makes a looping animated WebP of the still for the state you choose; its frames are made at the same time, so a loop takes about as long as one picture. The project's budget pays for each call. There is no video generation.
 
-The pack is saved with the version by **Save**, like the other fields. Save also makes the still the version's icon, so an older app shows it. Publishing and a new version keep the pack. Export, import and fork do not carry it yet: the copy keeps the still as its icon, and you upload the state files again.
+The pack is saved with the version by **Save**, like the other fields. Save also makes the still the version's icon, so an older app shows it. Publishing and a new version keep the pack. **Fork** copies the pack and its files into the target project. **Export** puts the files in the exported file, and **Import** stores them in the project you import into, so the pack survives a move to another installation.
+
+A generated or uploaded file that no version uses is deleted after 7 days. That includes the candidates you did not pick.
 
 ## Test the agent
 

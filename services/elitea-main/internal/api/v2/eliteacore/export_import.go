@@ -115,12 +115,15 @@ type exportedVersionRow struct {
 	uuid          string
 	// soulText is the soul column (ADR-0050 decision 1a); nil for none.
 	soulText *string
+	// avatarPackText is the pack (ADR-0050 decision 6, tenant 0165); nil
+	// for none.
+	avatarPackText *string
 }
 
 // exportedVersions reads every version of one application, with its tools,
 // variables, tags and skill attachments.
 func (h *Handler) exportedVersions(
-	ctx context.Context, schema, applicationID string, toolkitMap map[int]string,
+	ctx context.Context, projectID, schema, applicationID string, toolkitMap map[int]string,
 ) ([]map[string]any, error) {
 	collected, err := h.exportedVersionRows(ctx, schema, applicationID)
 	if err != nil {
@@ -201,6 +204,11 @@ func (h *Handler) exportedVersions(
 				entry["soul"] = soul
 			}
 		}
+		// #1853: the pack used to be left out, so an export then an import
+		// lost it silently while meta.icon_meta kept the source's still URL.
+		if err := h.exportedAvatarPack(ctx, projectID, entry, row.avatarPackText, metaMap); err != nil {
+			return nil, fmt.Errorf("version %d in %q: %w", row.id, schema, err)
+		}
 		versions = append(versions, entry)
 	}
 	return versions, nil
@@ -212,7 +220,8 @@ func (h *Handler) exportedVersionRows(ctx context.Context, schema, applicationID
 			COALESCE(instructions, ''), COALESCE(welcome_message, ''),
 			COALESCE(llm_settings::text, '{}'), COALESCE(conversation_starters::text, '[]'),
 			COALESCE(meta::text, '{}'), COALESCE(uuid::text, ''), application_id, COALESCE(author_id, 0),
-			soul::text
+			soul::text,
+			CASE WHEN jsonb_typeof(avatar_pack) = 'object' THEN avatar_pack::text END
 		FROM %s.application_versions WHERE application_id = $1
 		ORDER BY created_at`, schema), applicationID)
 	if err != nil {
@@ -225,7 +234,7 @@ func (h *Handler) exportedVersionRows(ctx context.Context, schema, applicationID
 		var row exportedVersionRow
 		if err := rows.Scan(&row.id, &row.name, &row.status, &row.agentType,
 			&row.instructions, &row.welcomeMsg, &row.llmText, &row.startersText,
-			&row.metaText, &row.uuid, &row.applicationID, &row.authorID, &row.soulText); err != nil {
+			&row.metaText, &row.uuid, &row.applicationID, &row.authorID, &row.soulText, &row.avatarPackText); err != nil {
 			return nil, fmt.Errorf("scan a version of application %q in %q: %w", applicationID, schema, err)
 		}
 		collected = append(collected, row)
