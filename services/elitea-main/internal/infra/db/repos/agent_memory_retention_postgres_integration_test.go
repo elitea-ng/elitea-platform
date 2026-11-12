@@ -68,8 +68,26 @@ VALUES ('agent', 1, 990183, 'litigation', 1)`)
 		return entries, optouts
 	}
 
+	// The purge is driven by the orphan rows: before the backfill (the agent
+	// was deleted before tenant/0171) it sees nothing.
+	cleared, err := store.PurgeDeletedAgents(ctx, project, now.Add(24*time.Hour), 10)
+	require.NoError(t, err)
+	require.Zero(t, cleared)
+	// The bounded backfill records the one agent without an application
+	// (the live and the held-but-live agents have one... the held agent has
+	// none, so it is recorded too) and is idempotent.
+	recorded, err := store.BackfillDeletedAgents(ctx, project, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, recorded, "bounded by the limit")
+	recorded, err = store.BackfillDeletedAgents(ctx, project, 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, recorded, "the rest, never the recorded one twice")
+	recorded, err = store.BackfillDeletedAgents(ctx, project, 10)
+	require.NoError(t, err)
+	require.Zero(t, recorded)
+
 	// First sight of the orphans: within the period, nothing is purged.
-	cleared, err := store.PurgeDeletedAgents(ctx, project, now.Add(-30*24*time.Hour), 10)
+	cleared, err = store.PurgeDeletedAgents(ctx, project, now.Add(-30*24*time.Hour), 10)
 	require.NoError(t, err)
 	require.Zero(t, cleared)
 	entries, optouts := remaining(gone)

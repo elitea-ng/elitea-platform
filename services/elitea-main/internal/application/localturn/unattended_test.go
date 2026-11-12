@@ -29,7 +29,7 @@ func (s *grantFakeStore) StartLocalTurn(ctx context.Context, record StartRecord)
 		return StartedTurn{}, err
 	}
 	s.started = append(s.started, record)
-	return StartedTurn{ExecutionID: record.ExecutionID, Created: true}, nil
+	return record.Admitted(StartedTurn{ExecutionID: record.ExecutionID, Created: true}), nil
 }
 
 func grantStartRequest(chainRoot string, maxContinuations int64) StartRequest {

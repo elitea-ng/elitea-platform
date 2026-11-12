@@ -330,6 +330,10 @@ impl SubAgentHost for TestHost {
         Ok(self.model.clone())
     }
 
+    fn toolset_lists_statically(&self, toolset: &str) -> bool {
+        toolset == "counted" || toolset == "local"
+    }
+
     async fn toolsets(&self, _child: &ChildIdentity) -> Result<Vec<Arc<dyn Toolset>>, HostError> {
         let mut toolsets: Vec<Arc<dyn Toolset>> = vec![Arc::new(BasicToolset::new(
             "local",
@@ -1292,26 +1296,27 @@ async fn isolation_is_refused_where_the_host_gives_no_checkout() {
     assert_eq!(host.write.0.load(Ordering::SeqCst), 0);
 }
 
-/// A toolset that counts how many times it is listed.
-struct CountedToolset(Arc<AtomicUsize>);
+/// A toolset that counts how many times it is listed. The test host calls
+/// the toolset named `counted` static and `counted_dynamic` not.
+struct CountedToolset(&'static str, Arc<AtomicUsize>);
 
 #[async_trait]
 impl Toolset for CountedToolset {
     fn name(&self) -> &str {
-        "counted"
+        self.0
     }
 
     async fn tools(
         &self,
         _ctx: Arc<dyn adk_core::ReadonlyContext>,
     ) -> adk_core::Result<Vec<Arc<dyn Tool>>> {
-        self.0.fetch_add(1, Ordering::SeqCst);
+        self.1.fetch_add(1, Ordering::SeqCst);
         Ok(vec![Arc::new(Look) as Arc<dyn Tool>])
     }
 }
 
-/// #1819: a spawn with `profile.tools` lists a host toolset once: the key
-/// check and the child share one listing.
+/// #1819: a spawn with `profile.tools` lists a toolset the host calls static
+/// once: the key check and the child share one listing.
 #[tokio::test]
 async fn a_spawn_with_profile_tools_lists_each_toolset_once() {
     let host = TestHost::new();
@@ -1319,7 +1324,7 @@ async fn a_spawn_with_profile_tools_lists_each_toolset_once() {
     host.extra
         .lock()
         .unwrap()
-        .push(Arc::new(CountedToolset(Arc::clone(&listings))));
+        .push(Arc::new(CountedToolset("counted", Arc::clone(&listings))));
     let children = subagents(&host);
     let responses = run_parent(
         "parent",
@@ -1332,6 +1337,31 @@ async fn a_spawn_with_profile_tools_lists_each_toolset_once() {
     for offered in host.model.offered.lock().unwrap().iter() {
         assert_eq!(offered, &["look".to_owned()]);
     }
+}
+
+/// A toolset the host does not call static (an MCP toolset lists per user
+/// and session) is handed through unfrozen: the key check lists it and the
+/// child lists it again under its own context, and the child still runs.
+#[tokio::test]
+async fn a_context_dependent_toolset_is_not_frozen_by_the_spawn() {
+    let host = TestHost::new();
+    let listings = Arc::new(AtomicUsize::new(0));
+    host.extra.lock().unwrap().push(Arc::new(CountedToolset(
+        "counted_dynamic",
+        Arc::clone(&listings),
+    )));
+    let children = subagents(&host);
+    let responses = run_parent(
+        "parent",
+        &children,
+        spawn_with_tools(json!(["counted_dynamic/look"])),
+    )
+    .await;
+    assert_eq!(wait_results(&responses)[0]["status"], "completed");
+    assert!(
+        listings.load(Ordering::SeqCst) >= 2,
+        "the check and the child each list it"
+    );
 }
 
 #[path = "depth_model_tests.rs"]

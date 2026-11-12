@@ -30,7 +30,7 @@ use super::session::{
     OrdinaryRuntimeBindings, assemble_direct_hitl_resume_with_sessions,
     assemble_direct_hitl_resume_with_sessions_and_applications, assemble_ordinary_native,
     assemble_ordinary_native_with_sessions, assemble_ordinary_native_with_sessions_and_options,
-    assemble_ordinary_native_with_sessions_and_runtime_catalogs,
+    assemble_ordinary_native_with_sessions_and_runtime_catalogs, reset_session_for_regeneration,
 };
 use super::unattended::UnattendedGrant;
 use crate::protocol::control::test_session_authority_for;
@@ -661,6 +661,100 @@ impl SessionService for CountingSessions {
     ) -> adk_rust::Result<()> {
         self.inner.append_event_for_identity(req).await
     }
+}
+
+/// A session store whose deletes fail while `failing` is set.
+struct FailingDeletes {
+    inner: Arc<dyn SessionService>,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait]
+impl SessionService for FailingDeletes {
+    async fn create(
+        &self,
+        req: adk_rust::session::CreateRequest,
+    ) -> adk_rust::Result<Box<dyn adk_rust::session::Session>> {
+        self.inner.create(req).await
+    }
+
+    async fn get(&self, req: GetRequest) -> adk_rust::Result<Box<dyn adk_rust::session::Session>> {
+        self.inner.get(req).await
+    }
+
+    async fn list(
+        &self,
+        req: adk_rust::session::ListRequest,
+    ) -> adk_rust::Result<Vec<Box<dyn adk_rust::session::Session>>> {
+        self.inner.list(req).await
+    }
+
+    async fn delete(&self, req: adk_rust::session::DeleteRequest) -> adk_rust::Result<()> {
+        if self.failing.load(Ordering::SeqCst) {
+            return Err(adk_rust::AdkError::session("delete failed"));
+        }
+        self.inner.delete(req).await
+    }
+
+    async fn append_event(&self, session_id: &str, event: adk_rust::Event) -> adk_rust::Result<()> {
+        self.inner.append_event(session_id, event).await
+    }
+
+    async fn append_event_for_identity(
+        &self,
+        req: adk_rust::session::AppendEventRequest,
+    ) -> adk_rust::Result<()> {
+        self.inner.append_event_for_identity(req).await
+    }
+}
+
+/// A pipeline regeneration resets its session right after the frontier: a
+/// failed delete is an error that leaves the session, and the same command
+/// retried resets it (an absent session is not an error either).
+#[tokio::test]
+async fn a_pipeline_regeneration_session_reset_is_safe_to_retry() {
+    let store = Arc::new(FailingDeletes {
+        inner: Arc::new(InMemorySessionService::new()),
+        failing: std::sync::atomic::AtomicBool::new(true),
+    });
+    let sessions: Arc<dyn SessionService> = store.clone();
+    let user = adk_rust::UserId::new("user-1").expect("user");
+    let session = adk_rust::SessionId::new("session-1").expect("session");
+    sessions
+        .create(adk_rust::session::CreateRequest {
+            app_name: "elitea-agent-v1".into(),
+            user_id: "user-1".into(),
+            session_id: Some("session-1".into()),
+            state: std::collections::HashMap::default(),
+        })
+        .await
+        .expect("session");
+    let present = || async {
+        sessions
+            .get(GetRequest {
+                app_name: "elitea-agent-v1".into(),
+                user_id: "user-1".into(),
+                session_id: "session-1".into(),
+                num_recent_events: Some(0),
+                after: None,
+            })
+            .await
+            .is_ok()
+    };
+    assert!(
+        reset_session_for_regeneration(sessions.as_ref(), &user, &session)
+            .await
+            .is_err()
+    );
+    assert!(present().await, "a failed delete leaves the session");
+    store.failing.store(false, Ordering::SeqCst);
+    reset_session_for_regeneration(sessions.as_ref(), &user, &session)
+        .await
+        .expect("retry");
+    assert!(!present().await, "the retry reset it");
+    reset_session_for_regeneration(sessions.as_ref(), &user, &session)
+        .await
+        .expect("nothing to reset is not an error");
 }
 
 #[tokio::test]

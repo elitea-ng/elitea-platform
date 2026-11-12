@@ -143,8 +143,12 @@ func validateAgentLifecycleValues(section string, values map[string]any) string 
 		return ""
 	}
 	if raw, present := values[platformconfig.KeyMemoryAutoMaxTier]; present {
-		text, _ := raw.(string)
-		if !agentlifecycle.Tier(text).Valid() {
+		// "" is the default, as MemoryAutoMaxTierFromValues reads it: a
+		// whole-section save or reset sends it for a field never set.
+		switch text, isString := raw.(string); {
+		case !isString && raw != nil:
+			return fmt.Sprintf("%q must be a string, one of: low, medium, high, critical", platformconfig.KeyMemoryAutoMaxTier)
+		case text != "" && !agentlifecycle.Tier(text).Valid():
 			return fmt.Sprintf("%q must be one of: low, medium, high, critical", platformconfig.KeyMemoryAutoMaxTier)
 		}
 	}

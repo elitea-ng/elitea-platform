@@ -526,12 +526,16 @@ async fn filtered_toolsets(
     grant: Option<Arc<SubAgentGrant>>,
     requested: Option<Arc<Vec<RequestedTool>>>,
     ancestors: &[Arc<Vec<RequestedTool>>],
+    lists_statically: &(dyn Fn(&str) -> bool + Sync),
 ) -> Result<Vec<ChildToolset>, &'static str> {
-    // One listing per spawn (#1819): a spawn with `profile.tools` lists each
-    // toolset once, checks the keys against that listing and hands the same
-    // frozen tools to the child, which would otherwise list them again.
+    // One listing per spawn (#1819) for the toolsets the host says list the
+    // same tools in any context: a spawn with `profile.tools` lists each of
+    // them once, checks the keys against that listing and hands the same
+    // frozen tools to the child, which would otherwise list them again. The
+    // others (an MCP toolset lists per user and session) are handed through
+    // as they are and listed again under the child's own context.
     let toolsets = if requested.is_some() {
-        freeze_for_check(toolsets).await?
+        freeze_for_check(toolsets, lists_statically).await?
     } else {
         toolsets
     };
@@ -556,14 +560,21 @@ async fn filtered_toolsets(
         .collect())
 }
 
-/// List every toolset once and keep what it listed as a static toolset.
+/// List each toolset the host calls static once and keep what it listed as a
+/// static toolset; every other toolset is returned untouched. A listing that
+/// fails refuses the spawn, as the key check's listing does.
 async fn freeze_for_check(
     toolsets: Vec<Arc<dyn Toolset>>,
+    lists_statically: &(dyn Fn(&str) -> bool + Sync),
 ) -> Result<Vec<Arc<dyn Toolset>>, &'static str> {
     let ctx: Arc<dyn ReadonlyContext> =
         Arc::new(adk_tool::SimpleToolContext::new("subagent_tool_grant"));
     let mut frozen: Vec<Arc<dyn Toolset>> = Vec::with_capacity(toolsets.len());
     for toolset in toolsets {
+        if !lists_statically(toolset.name()) {
+            frozen.push(toolset);
+            continue;
+        }
         let tools = toolset
             .tools(Arc::clone(&ctx))
             .await
@@ -663,8 +674,16 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
     if let Some(config) = host.generation_config(model_name.as_deref()) {
         builder = builder.generate_content_config(config);
     }
-    for toolset in
-        filtered_toolsets(toolsets, &excluded, isolated, grant, requested, &ancestors).await?
+    for toolset in filtered_toolsets(
+        toolsets,
+        &excluded,
+        isolated,
+        grant,
+        requested,
+        &ancestors,
+        &|name| host.toolset_lists_statically(name),
+    )
+    .await?
     {
         builder = builder.toolset(Arc::new(toolset));
     }

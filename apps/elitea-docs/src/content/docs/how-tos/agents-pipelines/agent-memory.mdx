@@ -36,7 +36,7 @@ A pending note is never given to the agent until it is approved.
 
 When you save a version with `"write": "auto"` for an agent above that tier, the platform refuses the save with status 422 and the code `memory_auto_above_tier`. The answer names the agent's tier and the limit. Set `auto_attended` or `review` and save again. A new agent has the tier `low`.
 
-Only a save is checked. An agent that already has `auto` keeps it until its next save.
+The limit also holds when the agent runs. An agent whose version has `auto` by another route (an import, a fork, a publish) or whose tier was raised after the save runs as `auto_attended`, the default, until the version or the limit changes. If the platform cannot read the limit or the tier, it runs as `auto_attended` too.
 
 ## Regenerate and continue
 

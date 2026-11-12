@@ -8,8 +8,8 @@
   - **A legal hold on the project or on the agent keeps the notes.** With the seeded policy (`step_record` keeps
     forever) nothing is deleted.
   - **New tenant migration 0171** adds the table `agent_memory_orphans`. It records when an agent lost its agent.
-    Deleting an agent writes the row. The pass writes a row for an agent deleted before this release, when it first
-    finds the notes without their agent. The retention period for such an agent starts at that time.
-- **Operator action.** None is needed. The migration runs on start and is safe to run again.
+    Deleting an agent writes the row. A scan of the notes, run at the first pass after a start and once a day after that, writes a row for an agent
+    deleted before this release; the hourly pass reads the rows only. The retention period for such an agent starts at that time.
+- **Operator action.** None is needed. Apply the migration with `elitea-migrate`, as for every tenant migration; it is safe to run again.
 - **Rollback.** Stop the `main.step_record_retention` routine on the Schedules page to keep the notes. The table is
   not read by older versions.

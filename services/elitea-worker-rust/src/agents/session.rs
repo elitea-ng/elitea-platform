@@ -3452,10 +3452,15 @@ async fn resolve_pipeline_start(
     >,
 ) -> Result<Option<super::graph::resume::PipelineResume>, NativeAgentAssemblyError> {
     if matches!(start, PipelineNativeStart::Regenerate) {
-        // The frontier goes first, whether or not a session exists; the
-        // session itself is re-created by `open_history_session` below, on
-        // its one read (#1943).
+        // The frontier and the session are reset as a pair, the session
+        // straight after the frontier, so a failure between them leaves
+        // a state the same command retries: a retry deletes an absent
+        // frontier again and resets the session still there. (The ordinary
+        // agent path has no frontier to keep in step and does its reset on
+        // `open_history_session`'s one read, #1943.)
         delete_pipeline_frontier(state, plan).await?;
+        reset_session_for_regeneration(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
+            .await?;
     }
     // FU-269: with Main's paused writer the row was proven and the session
     // restored once (`continuation_entry`); the arms read that session. A
@@ -3488,15 +3493,8 @@ async fn resolve_pipeline_start(
                 &plan.chat_history,
                 plan.definition_digest,
                 &binding,
-                matches!(start, PipelineNativeStart::Regenerate),
-                // A regeneration deleted the frontier above.
-                async || {
-                    if matches!(start, PipelineNativeStart::Regenerate) {
-                        Ok(())
-                    } else {
-                        delete_pipeline_frontier(state, plan).await
-                    }
-                },
+                false,
+                async || delete_pipeline_frontier(state, plan).await,
             )
             .await?;
             let identity = session
@@ -4831,6 +4829,30 @@ async fn restore_or_create_session(
         Err(error) if error.code == "session.not_found" => {
             Ok((create_session(sessions, user_id, session_id).await?, true))
         }
+        Err(_) => Err(dependency_unavailable()),
+    }
+}
+
+/// Reset the session of a pipeline regeneration: delete it when there is one.
+pub(super) async fn reset_session_for_regeneration(
+    sessions: &dyn SessionService,
+    user_id: &UserId,
+    session_id: &SessionId,
+) -> Result<(), NativeAgentAssemblyError> {
+    let user_id = user_id.to_string();
+    let session_id = session_id.to_string();
+    match sessions
+        .get(GetRequest {
+            app_name: APP_NAME.to_owned(),
+            user_id: user_id.clone(),
+            session_id: session_id.clone(),
+            num_recent_events: Some(0),
+            after: None,
+        })
+        .await
+    {
+        Ok(_) => delete_present_session(sessions, &user_id, &session_id).await,
+        Err(error) if error.code == "session.not_found" => Ok(()),
         Err(_) => Err(dependency_unavailable()),
     }
 }

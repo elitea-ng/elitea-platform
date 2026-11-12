@@ -110,7 +110,16 @@ type AgentMemoryStore interface {
 	// project that were deleted before cutoff and that no active legal hold
 	// covers, one audit event per agent. It returns how many agents.
 	PurgeDeletedAgents(ctx context.Context, projectID int64, cutoff time.Time, limit int) (int, error)
+	// BackfillDeletedAgents records up to limit agents deleted before the
+	// orphan record existed, with a full scan of the project's memory. It
+	// answers how many it recorded (limit means more may remain).
+	BackfillDeletedAgents(ctx context.Context, projectID int64, limit int) (int, error)
 }
+
+// memoryBackfillEvery is how often the full-scan backfill runs per project:
+// the hourly purge is driven by the orphan rows a delete records, and only
+// agents deleted before that record existed need the scan.
+const memoryBackfillEvery = 24 * time.Hour
 
 // Gate reports whether a maintenance window is open. An error stops the pass.
 type Gate func(ctx context.Context) (bool, error)
@@ -159,6 +168,8 @@ type Sweeper struct {
 	// memory purges a deleted agent's memory in the step_record pass; nil
 	// when no store is composed.
 	memory AgentMemoryStore
+	// backfilled is when each project's memory backfill last finished.
+	backfilled map[int64]time.Time
 
 	expired     metric.Int64Counter
 	purged      metric.Int64Counter
@@ -224,7 +235,11 @@ func (s *Sweeper) WithAgentMemory(store AgentMemoryStore) *Sweeper {
 }
 
 // sweepAgentMemory deletes, per project, the memory of agents deleted before
-// the project's step_record cutoff, within the pass's budget.
+// the project's step_record cutoff, within its own budget: it does not
+// depend on how far the run-record pass got. The full-scan backfill of
+// agents deleted before the orphan record runs once a day per project (and
+// at the first pass after a start), bounded by the batch size; a batch that
+// came back full is repeated on the next pass.
 func (s *Sweeper) sweepAgentMemory(ctx context.Context, maxima map[int64]int, stats *RetentionStats) {
 	if s.memory == nil {
 		return
@@ -235,6 +250,17 @@ func (s *Sweeper) sweepAgentMemory(ctx context.Context, maxima map[int64]int, st
 	for _, projectID := range sortedKeys(maxima) {
 		if ctx.Err() != nil || budget <= 0 {
 			return
+		}
+		if last, ok := s.backfilled[projectID]; !ok || now.Sub(last) >= memoryBackfillEvery {
+			recorded, err := s.memory.BackfillDeletedAgents(ctx, projectID, s.cfg.BatchSize)
+			if err != nil {
+				s.fail(ctx, stats, class, "agent_memory", projectID, err)
+			} else if recorded < s.cfg.BatchSize {
+				if s.backfilled == nil {
+					s.backfilled = map[int64]time.Time{}
+				}
+				s.backfilled[projectID] = now
+			}
 		}
 		cutoff := now.Add(-time.Duration(maxima[projectID]) * 24 * time.Hour)
 		cleared, err := s.memory.PurgeDeletedAgents(ctx, projectID, cutoff, min(s.cfg.BatchSize, budget))
@@ -438,6 +464,10 @@ func (s *Sweeper) SweepRecords(ctx context.Context) (RetentionStats, error) {
 	if err != nil {
 		return stats, err
 	}
+	// A deleted agent's memory is purged first and within its own bound, so a
+	// run-record pass that truncates, fails or is cancelled does not starve
+	// it; the stats it counted are returned either way.
+	s.sweepAgentMemory(ctx, maxima, &stats)
 	now := s.now().UTC()
 	budget := s.cfg.MaxPerPass
 	for _, projectID := range sortedKeys(maxima) {
@@ -495,7 +525,6 @@ func (s *Sweeper) SweepRecords(ctx context.Context) (RetentionStats, error) {
 			break
 		}
 	}
-	s.sweepAgentMemory(ctx, maxima, &stats)
 	return stats, nil
 }
 

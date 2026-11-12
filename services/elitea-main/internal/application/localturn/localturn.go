@@ -127,8 +127,11 @@ type PolicyReader interface {
 //
 // StartLocalTurn MUST run record.Admit inside its transaction and write the
 // record Admit returns (issue 1888): the routing and the memory recall run
-// there. The service refuses a start whose store did not call Admit, and a
-// decorator forwards the record to the store it wraps untouched.
+// there. It returns the started turn through record.Admitted, which carries
+// the admission's evidence: the service refuses a turn without it (a store
+// that skipped Admit, or one that answers for another start), a replayed
+// start included, and a decorator forwards the record to the store it wraps
+// untouched.
 type Store interface {
 	StartLocalTurn(ctx context.Context, record StartRecord) (StartedTurn, error)
 	CommitLocalTurn(ctx context.Context, record CommitRecord) (CommittedTurn, error)
@@ -217,11 +220,13 @@ type StartRecord struct {
 	// FloorTargets and MemoriesUsed as given.
 	route  func(ConversationFloor) (floorPlan, error)
 	recall func(context.Context) (int, error)
-	// admitted is set by Admit (issue 1940): the service checks it after
-	// the store returns, so a store that forwards the record without
-	// running Admit fails the start instead of losing the routing and the
-	// recall silently. Shared by the copies of the record.
-	admitted *bool
+	// expected is the start's own proof, made by the service. Admit moves
+	// it to admission, and Admitted hands it back on the StartedTurn
+	// (issue 1940): a store that forwards the record without running Admit
+	// has no admission to hand back, and the service refuses the start
+	// instead of losing the routing and the recall silently.
+	expected  *admissionProof
+	admission *admissionProof
 	// logger records why the floor could not be read (the answer is a bare
 	// ErrUnavailable).
 	logger *slog.Logger
@@ -238,9 +243,7 @@ func (record StartRecord) Routes() bool { return record.route != nil }
 // transaction reads. It answers the record with the participant that
 // answers, the routed order and the recall's count set.
 func (record StartRecord) Admit(ctx context.Context, read func() (ConversationFloor, error)) (StartRecord, error) {
-	if record.admitted != nil {
-		*record.admitted = true
-	}
+	record.admission = record.expected
 	if record.route != nil {
 		floor, err := read()
 		if err != nil {
@@ -268,8 +271,23 @@ func (record StartRecord) Admit(ctx context.Context, read func() (ConversationFl
 	return record, nil
 }
 
+// admissionProof is the evidence that Admit ran for one start: one value per
+// Service.Start, compared by identity.
+type admissionProof struct{ _ byte }
+
+// Admitted marks turn as the answer of the start this record (as Admit
+// returned it) admitted. A store calls it on the turn it returns, a replay
+// of an earlier start too: the replay is admitted like the first.
+func (record StartRecord) Admitted(turn StartedTurn) StartedTurn {
+	turn.admission = record.admission
+	return turn
+}
+
 // StartedTurn is the stored execution after a start (new or replayed).
 type StartedTurn struct {
+	// admission is the evidence Admitted sets.
+	admission *admissionProof
+
 	ExecutionID       string
 	ResponseMessageID string
 	ParticipantID     int64
@@ -510,8 +528,7 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 			return routed, err
 		}
 	}
-	var admitted bool
-	record.admitted = &admitted
+	record.expected = &admissionProof{}
 	turn, err := s.store.StartLocalTurn(ctx, record)
 	if err != nil {
 		return StartOutcome{}, err
@@ -519,7 +536,7 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 	// The store's contract (issue 1940): it runs StartRecord.Admit in its
 	// transaction. A store that did not has not routed the message or
 	// recalled the memory, so the start is refused, never answered.
-	if !admitted {
+	if turn.admission == nil || turn.admission != record.expected {
 		s.logger.ErrorContext(ctx, "local turn: the store did not run the start's admission")
 		return StartOutcome{}, fmt.Errorf("local turn: the store did not admit the start: %w", ErrUnavailable)
 	}

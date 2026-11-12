@@ -645,9 +645,13 @@ func (r *ApplicationsRepo) Delete(ctx context.Context, projectID, applicationID 
 	}
 	// ADR-0042, issue 1658: the agent's memory outlives the agent for the
 	// retention period. Record when it lost its agent, in this transaction.
+	// The probe stays: tenant migrations are applied by elitea-migrate, not
+	// at Main's boot, so a tenant may not carry tenant/0171 yet (a 42P01
+	// inside this transaction would abort the delete). It names the
+	// validated schema, not a hand-built one.
 	var orphans *string
 	if err := tx.QueryRow(ctx, `SELECT to_regclass($1)::text`,
-		"p_"+projectID+".agent_memory_orphans").Scan(&orphans); err != nil {
+		s+".agent_memory_orphans").Scan(&orphans); err != nil {
 		return fmt.Errorf("applications: delete: probe agent_memory_orphans: %w", err)
 	}
 	if orphans != nil {
