@@ -1133,7 +1133,7 @@ WHERE uuid = $1`, response); err != nil {
 	}
 	// #1903: the first answer's turn wrote the question. A later answer to
 	// the same question (an addressed agent's) reused it.
-	if binding.QuestionIsOwn == nil || !*binding.QuestionIsOwn {
+	if !binding.QuestionIsOwn {
 		t.Fatalf("the first answer's question is its own: %+v", binding.QuestionIsOwn)
 	}
 	laterAnswer := mustCurrentPGUUID(t, "40000000-0000-4000-8000-000000000032")
@@ -1147,8 +1147,36 @@ FROM chat_message_group AS question WHERE question.uuid = $1::uuid`, questionID,
 	later, err := queries.ResolveCurrentRegeneration(t.Context(), sqlcgen.ResolveCurrentRegenerationParams{
 		ActorUserID: 11, ProjectID: 1, ResponseMessageID: laterAnswer,
 	})
-	if err != nil || later.QuestionIsOwn == nil || *later.QuestionIsOwn {
+	if err != nil || later.QuestionIsOwn {
 		t.Fatalf("a later answer reuses the question: %+v %v", later.QuestionIsOwn, err)
+	}
+	// #1944: the turn recorded at start that it wrote the question, and the
+	// record beats the heuristic in both directions.
+	var recorded *bool
+	if err := tx.QueryRow(t.Context(),
+		`SELECT (meta ->> 'question_own')::boolean FROM chat_message_group WHERE uuid = $1`,
+		response).Scan(&recorded); err != nil || recorded == nil || !*recorded {
+		t.Fatalf("the start did not record question_own=true: %v %v", recorded, err)
+	}
+	for _, tc := range []struct {
+		answer pgtype.UUID
+		own    bool
+	}{{laterAnswer, true}, {response, false}} {
+		if _, err := tx.Exec(t.Context(),
+			`UPDATE chat_message_group SET meta = meta || jsonb_build_object('question_own', $2::boolean) WHERE uuid = $1`,
+			tc.answer, tc.own); err != nil {
+			t.Fatal(err)
+		}
+		got, err := queries.ResolveCurrentRegeneration(t.Context(), sqlcgen.ResolveCurrentRegenerationParams{
+			ActorUserID: 11, ProjectID: 1, ResponseMessageID: tc.answer,
+		})
+		if err != nil || got.QuestionIsOwn != tc.own {
+			t.Fatalf("the recorded question_own=%v must win over the heuristic: %+v %v", tc.own, got.QuestionIsOwn, err)
+		}
+	}
+	if _, err := tx.Exec(t.Context(),
+		`UPDATE chat_message_group SET meta = meta || '{"question_own": true}'::jsonb WHERE uuid = $1`, response); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := tx.Exec(t.Context(), `DELETE FROM chat_message_group WHERE uuid = $1`, laterAnswer); err != nil {
 		t.Fatal(err)

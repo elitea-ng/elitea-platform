@@ -102,6 +102,25 @@ type RetentionStore interface {
 	PurgeOrphanContent(ctx context.Context, olderThan time.Time, limit int, remove func(context.Context, []string) error) (claimed, deleted int, err error)
 }
 
+// AgentMemoryStore is the agent memory side of the step_record sweep
+// (repos.AgentMemory, ADR-0042, issue 1658): the run data of a deleted agent
+// includes what the agent remembered.
+type AgentMemoryStore interface {
+	// PurgeDeletedAgents deletes the memory of up to limit agents of the
+	// project that were deleted before cutoff and that no active legal hold
+	// covers, one audit event per agent. It returns how many agents.
+	PurgeDeletedAgents(ctx context.Context, projectID int64, cutoff time.Time, limit int) (int, error)
+	// BackfillDeletedAgents records up to limit agents deleted before the
+	// orphan record existed, with a full scan of the project's memory. It
+	// answers how many it recorded (limit means more may remain).
+	BackfillDeletedAgents(ctx context.Context, projectID int64, limit int) (int, error)
+}
+
+// memoryBackfillEvery is how often the full-scan backfill runs per project:
+// the hourly purge is driven by the orphan rows a delete records, and only
+// agents deleted before that record existed need the scan.
+const memoryBackfillEvery = 24 * time.Hour
+
 // Gate reports whether a maintenance window is open. An error stops the pass.
 type Gate func(ctx context.Context) (bool, error)
 
@@ -130,8 +149,10 @@ type RetentionStats struct {
 	SkippedHold int64
 	Anchored    int64
 	Orphans     int64
-	Errors      int64
-	Truncated   bool
+	// MemoryAgents is how many deleted agents' memory the pass cleared.
+	MemoryAgents int64
+	Errors       int64
+	Truncated    bool
 }
 
 // Sweeper enforces step_content (Content) and step_record (Records).
@@ -143,6 +164,12 @@ type Sweeper struct {
 	cfg      RetentionConfig
 	logger   *slog.Logger
 	now      func() time.Time
+
+	// memory purges a deleted agent's memory in the step_record pass; nil
+	// when no store is composed.
+	memory AgentMemoryStore
+	// backfilled is when each project's memory backfill last finished.
+	backfilled map[int64]time.Time
 
 	expired     metric.Int64Counter
 	purged      metric.Int64Counter
@@ -199,6 +226,52 @@ func NewSweeper(policies Policies, store RetentionStore, content ContentStore, g
 	return s, nil
 }
 
+// WithAgentMemory makes the step_record pass also delete the memory of an
+// agent deleted longer ago than the project's step_record maximum (issue
+// 1658). A nil store leaves it off.
+func (s *Sweeper) WithAgentMemory(store AgentMemoryStore) *Sweeper {
+	s.memory = store
+	return s
+}
+
+// sweepAgentMemory deletes, per project, the memory of agents deleted before
+// the project's step_record cutoff, within its own budget: it does not
+// depend on how far the run-record pass got. The full-scan backfill of
+// agents deleted before the orphan record runs once a day per project (and
+// at the first pass after a start), bounded by the batch size; a batch that
+// came back full is repeated on the next pass.
+func (s *Sweeper) sweepAgentMemory(ctx context.Context, maxima map[int64]int, stats *RetentionStats) {
+	if s.memory == nil {
+		return
+	}
+	class := attribute.String("class", string(retention.ClassStepRecord))
+	now := s.now().UTC()
+	budget := s.cfg.MaxPerPass
+	for _, projectID := range sortedKeys(maxima) {
+		if ctx.Err() != nil || budget <= 0 {
+			return
+		}
+		if last, ok := s.backfilled[projectID]; !ok || now.Sub(last) >= memoryBackfillEvery {
+			recorded, err := s.memory.BackfillDeletedAgents(ctx, projectID, s.cfg.BatchSize)
+			if err != nil {
+				s.fail(ctx, stats, class, "agent_memory", projectID, err)
+			} else if recorded < s.cfg.BatchSize {
+				if s.backfilled == nil {
+					s.backfilled = map[int64]time.Time{}
+				}
+				s.backfilled[projectID] = now
+			}
+		}
+		cutoff := now.Add(-time.Duration(maxima[projectID]) * 24 * time.Hour)
+		cleared, err := s.memory.PurgeDeletedAgents(ctx, projectID, cutoff, min(s.cfg.BatchSize, budget))
+		budget -= cleared
+		stats.MemoryAgents += int64(cleared)
+		if err != nil {
+			s.fail(ctx, stats, class, "agent_memory", projectID, err)
+		}
+	}
+}
+
 // ContentPass is the step_content routine's pass.
 func (s *Sweeper) ContentPass(ctx context.Context) (string, error) {
 	return s.pass(ctx, retention.ClassStepContent, s.SweepContent)
@@ -246,7 +319,7 @@ func (s *Sweeper) pass(ctx context.Context, class retention.DataClass, sweep fun
 	}
 	s.logger.Info("step retention: pass complete", "class", class, "projects", stats.Projects,
 		"expired", stats.Expired, "purged", stats.Purged, "deleted_runs", stats.DeletedRuns,
-		"skipped_hold", stats.SkippedHold, "anchored", stats.Anchored, "errors", stats.Errors, "truncated", stats.Truncated)
+		"skipped_hold", stats.SkippedHold, "anchored", stats.Anchored, "memory_agents", stats.MemoryAgents, "errors", stats.Errors, "truncated", stats.Truncated)
 	return routines.OutcomeOK, nil
 }
 
@@ -391,6 +464,10 @@ func (s *Sweeper) SweepRecords(ctx context.Context) (RetentionStats, error) {
 	if err != nil {
 		return stats, err
 	}
+	// A deleted agent's memory is purged first and within its own bound, so a
+	// run-record pass that truncates, fails or is cancelled does not starve
+	// it; the stats it counted are returned either way.
+	s.sweepAgentMemory(ctx, maxima, &stats)
 	now := s.now().UTC()
 	budget := s.cfg.MaxPerPass
 	for _, projectID := range sortedKeys(maxima) {

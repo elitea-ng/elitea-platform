@@ -56,6 +56,19 @@ impl<K: GenerationKey, V> ExecutionRegistry<K, V> {
         keep: impl FnOnce(&V) -> bool,
         make: impl FnOnce() -> Arc<V>,
     ) -> Arc<V> {
+        self.get_or_make_evicting(key, keep, make, |_| {})
+    }
+
+    /// [`Self::get_or_make`], handing each entry that making one dropped
+    /// (aged, an older generation, the oldest of a full registry) to
+    /// `evicted`, after the registry's lock is released.
+    pub(crate) fn get_or_make_evicting(
+        &self,
+        key: K,
+        keep: impl FnOnce(&V) -> bool,
+        make: impl FnOnce() -> Arc<V>,
+        mut evicted: impl FnMut(Arc<V>),
+    ) -> Arc<V> {
         let Ok(mut tracked) = self.tracked.lock() else {
             return make();
         };
@@ -65,19 +78,30 @@ impl<K: GenerationKey, V> ExecutionRegistry<K, V> {
             return Arc::clone(&existing.value);
         }
         let now = Instant::now();
-        tracked.retain(|other, entry| {
-            now.duration_since(entry.since) < MAX_TRACKED_AGE
-                && !(other.execution_id() == key.execution_id()
+        let mut dropped = Vec::new();
+        let mut aged = Vec::new();
+        for (other, entry) in tracked.iter() {
+            if now.duration_since(entry.since) >= MAX_TRACKED_AGE
+                || (other.execution_id() == key.execution_id()
                     && other.generation() < key.generation())
-        });
+            {
+                aged.push(other.clone());
+            }
+        }
+        for other in aged {
+            if let Some(entry) = tracked.remove(&other) {
+                dropped.push(entry.value);
+            }
+        }
         if !tracked.contains_key(&key)
             && tracked.len() >= MAX_TRACKED_EXECUTIONS
             && let Some(oldest) = tracked
                 .iter()
                 .min_by_key(|(_, entry)| entry.since)
                 .map(|(key, _)| key.clone())
+            && let Some(entry) = tracked.remove(&oldest)
         {
-            tracked.remove(&oldest);
+            dropped.push(entry.value);
         }
         let value = make();
         tracked.insert(
@@ -87,7 +111,22 @@ impl<K: GenerationKey, V> ExecutionRegistry<K, V> {
                 since: now,
             },
         );
+        drop(tracked);
+        for entry in dropped {
+            evicted(entry);
+        }
         value
+    }
+
+    /// The entry of the newest generation tracked for `execution_id`.
+    #[must_use]
+    pub(crate) fn newest_of_execution(&self, execution_id: &str) -> Option<Arc<V>> {
+        let tracked = self.tracked.lock().ok()?;
+        tracked
+            .iter()
+            .filter(|(key, _)| key.execution_id() == execution_id)
+            .max_by_key(|(key, _)| key.generation())
+            .map(|(_, entry)| Arc::clone(&entry.value))
     }
 
     /// The key's entry, if one is tracked.
@@ -100,11 +139,13 @@ impl<K: GenerationKey, V> ExecutionRegistry<K, V> {
             .map(|entry| Arc::clone(&entry.value))
     }
 
-    /// Stop tracking a settled command.
-    pub(crate) fn forget(&self, key: &K) {
-        if let Ok(mut tracked) = self.tracked.lock() {
-            tracked.remove(key);
-        }
+    /// Stop tracking a settled command; the entry it held, if any.
+    pub(crate) fn forget(&self, key: &K) -> Option<Arc<V>> {
+        self.tracked
+            .lock()
+            .ok()?
+            .remove(key)
+            .map(|entry| entry.value)
     }
 
     #[cfg(test)]

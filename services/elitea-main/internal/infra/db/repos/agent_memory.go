@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -16,10 +17,12 @@ import (
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
@@ -120,6 +123,7 @@ func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64
 	if err != nil {
 		return storage.AgentMemoryRun{}, storage.ErrContentRejected
 	}
+	settings = s.capAutoWrite(ctx, projectID, applicationID, settings)
 	run := storage.AgentMemoryRun{
 		ProjectID: projectID, ApplicationID: applicationID, ActorID: actorID,
 		ConversationUUID: conversation.String(), MessageID: message, ExecutionID: executionID,
@@ -141,6 +145,47 @@ func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64
 		}
 	}
 	return run, nil
+}
+
+// capAutoWrite holds the memory auto limit at run time (ADR-0050 decision
+// 1b, issue 1660): the save-time 422 is the early error, but a version can
+// reach the store with auto by other routes (import, fork, publish) and an
+// agent's tier or the limit can change after the save. An auto above the
+// limit runs as auto_attended, the default. Not being able to read the
+// limit or the tier downgrades too: never an upgrade by failure.
+func (s *AgentMemory) capAutoWrite(ctx context.Context, projectID, applicationID int64, settings agentmemory.Settings) agentmemory.Settings {
+	if settings.Write != agentmemory.WriteAuto {
+		return settings
+	}
+	downgrade := func(reason string, err error) agentmemory.Settings {
+		slog.WarnContext(ctx, "agent memory: write auto runs as auto_attended: "+reason,
+			"project_id", projectID, "application_id", applicationID, "error", err)
+		settings.Write = agentmemory.WriteAutoAttended
+		return settings
+	}
+	limit, err := platformconfig.LoadMemoryAutoMaxTier(ctx, s.pool)
+	if err != nil {
+		return downgrade("the limit is not readable", err)
+	}
+	sources, err := NewWorkerEgressSources(s.pool)
+	if err != nil {
+		return downgrade("the tier is not readable", err)
+	}
+	stored, err := sources.AgentRiskTier(ctx, projectID, applicationID)
+	if err != nil {
+		return downgrade("the tier is not readable", err)
+	}
+	tier := agentlifecycle.TierLow
+	if stored != "" {
+		tier = agentlifecycle.Tier(stored)
+		if !tier.Valid() {
+			return downgrade("the tier is not a tier", fmt.Errorf("risk tier %q", stored))
+		}
+	}
+	if tier.Above(limit) {
+		return downgrade("the agent's tier is above the limit", nil)
+	}
+	return settings
 }
 
 // personalRecallInConversation reports whether any turn of the conversation
@@ -823,6 +868,100 @@ func (s *AgentMemory) SubjectOptedOut(ctx context.Context, projectID, applicatio
 	var opted bool
 	err = s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s.agent_memory_subject_optouts WHERE application_id = $1 AND user_id = $2)`, schema), applicationID, userID).Scan(&opted)
 	return opted, err
+}
+
+// BackfillDeletedAgents records the agents of the project whose memory has no
+// agent any more and no orphan row: the ones deleted before tenant/0171 (a
+// later delete records its own row). It is a full scan of the memory tables,
+// so the retention sweep runs it rarely, and it is bounded: it records at
+// most limit agents and answers how many. A count equal to limit means more
+// may remain.
+func (s *AgentMemory) BackfillDeletedAgents(ctx context.Context, projectID int64, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	schema, err := tenantschema.QuoteInt(projectID)
+	if err != nil {
+		return 0, err
+	}
+	tag, err := s.pool.Exec(ctx, fmt.Sprintf(`
+INSERT INTO %[1]s.agent_memory_orphans (application_id)
+SELECT held.application_id
+FROM (SELECT application_id FROM %[1]s.agent_memory_entries
+      UNION
+      SELECT application_id FROM %[1]s.agent_memory_subject_optouts) AS held
+WHERE NOT EXISTS (SELECT 1 FROM %[1]s.applications AS agent WHERE agent.id = held.application_id)
+  AND NOT EXISTS (SELECT 1 FROM %[1]s.agent_memory_orphans AS known WHERE known.application_id = held.application_id)
+ORDER BY held.application_id
+LIMIT $1
+ON CONFLICT (application_id) DO NOTHING`, schema), limit)
+	if err != nil {
+		return 0, fmt.Errorf("agent memory: record agents without an application: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// PurgeDeletedAgents is the retention sweep of agent memory (ADR-0042, issue
+// 1658). It is driven by the orphan rows an agent delete records (tenant/
+// 0171; BackfillDeletedAgents records the older ones): it forgets a record
+// whose agent exists again, then deletes the entries, versions and opt-outs
+// of up to limit agents recorded before cutoff that no active legal hold
+// covers (the project's, or the agent's). Each agent is one transaction and
+// one agent.memory.cleared audit event. It answers how many agents it
+// cleared.
+func (s *AgentMemory) PurgeDeletedAgents(ctx context.Context, projectID int64, cutoff time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	schema, err := tenantschema.QuoteInt(projectID)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.pool.Exec(ctx, fmt.Sprintf(`
+DELETE FROM %[1]s.agent_memory_orphans AS orphan
+WHERE EXISTS (SELECT 1 FROM %[1]s.applications AS agent WHERE agent.id = orphan.application_id)`, schema)); err != nil {
+		return 0, fmt.Errorf("agent memory: forget restored agents: %w", err)
+	}
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+SELECT orphan.application_id
+FROM %[1]s.agent_memory_orphans AS orphan
+WHERE orphan.first_seen_at < $2
+  AND NOT EXISTS (
+      SELECT 1 FROM elitea_runtime.legal_holds AS hold
+      WHERE hold.released_at IS NULL
+        AND ((hold.scope = 'project' AND hold.project_id = $1)
+          OR (hold.scope = 'agent' AND hold.project_id = $1 AND hold.agent_id = orphan.application_id)))
+ORDER BY orphan.first_seen_at, orphan.application_id
+LIMIT $3`, schema), projectID, cutoff, limit)
+	if err != nil {
+		return 0, fmt.Errorf("agent memory: list the agents due for a purge: %w", err)
+	}
+	due, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		return 0, fmt.Errorf("agent memory: list the agents due for a purge: %w", err)
+	}
+	cleared := 0
+	for _, applicationID := range due {
+		err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+			if err := lockAgent(ctx, tx, projectID, applicationID); err != nil {
+				return err
+			}
+			for _, table := range []string{"agent_memory_entries", "agent_memory_subject_optouts"} {
+				if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.%s WHERE application_id = $1`, schema, table), applicationID); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.agent_memory_orphans WHERE application_id = $1`, schema), applicationID); err != nil {
+				return err
+			}
+			return s.append(ctx, tx, projectID, "agent.memory.cleared", 0, applicationID, 0, "retention_after_deletion", "")
+		})
+		if err != nil {
+			return cleared, fmt.Errorf("agent memory: purge the memory of agent %d: %w", applicationID, err)
+		}
+		cleared++
+	}
+	return cleared, nil
 }
 
 // IsAgentOwner reports whether userID is a registry owner of the agent.

@@ -238,3 +238,104 @@ func TestAgentMemoryNeutralizesThePersonalMemories(t *testing.T) {
 		t.Fatalf("the agent's own note lost its mark:\n%s", application)
 	}
 }
+
+// #1659: a regeneration and a continuation resolve the agent's notes again,
+// for the same input and the same conversation as the turn they repeat.
+func TestRegenerationRecallsTheAgentsNotesForTheEditedQuestion(t *testing.T) {
+	resolver := &currentApplicationResolverStub{
+		regenerationTarget: CurrentRegenerationTarget{
+			Kind:                CurrentRegenerationApplication,
+			ConversationUUID:    "8bc66e50-46c4-4e2c-94ec-daec6c596ac0",
+			TargetParticipantID: 21,
+			QuestionID:          "ee92ccbd-3312-4c72-b20b-fddf224e7c0e",
+			UserInput:           "original question",
+		},
+		target: CurrentApplicationTarget{
+			ApplicationID: 31, ApplicationVersionID: 41,
+			Variables:      json.RawMessage(`[]`),
+			VersionDetails: json.RawMessage(memoryAgentVersion),
+			ChatHistory:    json.RawMessage(`[]`),
+		},
+	}
+	admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
+		ExecutionID: "execution-1", CommandID: "command-1", Created: true,
+	}}
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver,
+		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory := &agentMemoryRecallStub{render: []agentmemory.Candidate{{ID: 7, Kind: agentmemory.KindFact, Content: "ships on Fridays"}}}
+	service.WithAgentMemory(memory)
+	request := validCurrentRegenerationRequest()
+	request.EditedQuestion = CurrentRegenerationEdit{
+		Text: "the rewritten question", ItemUUID: "1c0f6f4e-9f4a-4a61-9c9a-2fd3a4d7b0aa",
+	}
+	if _, err := service.RegenerateCurrentAgent(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(memory.requests) != 1 || memory.requests[0].UserInput != "the rewritten question" ||
+		memory.requests[0].ConversationUUID != resolver.regenerationTarget.ConversationUUID ||
+		memory.requests[0].ApplicationID != 31 {
+		t.Fatalf("recall requests = %+v", memory.requests)
+	}
+	input := admissions.requests[0].Input
+	if !strings.Contains(frozenInstructions(t, input), "ships on Fridays") {
+		t.Fatalf("the regenerated run has no agent notes:\n%s", frozenInstructions(t, input))
+	}
+	if len(input.GetRecalledMemory()) != 1 || input.GetRecalledMemoryTag() != memory.requests[0].MarkTag {
+		t.Fatalf("recalled memory %+v tag %q", input.GetRecalledMemory(), input.GetRecalledMemoryTag())
+	}
+}
+
+func TestContinuationRecallsTheAgentsNotesForThePausedInput(t *testing.T) {
+	resolver := &currentApplicationResolverStub{
+		continuationTarget: CurrentContinuationTarget{
+			Kind: CurrentRegenerationApplication, TargetParticipantID: 21,
+			QuestionID: "ee92ccbd-3312-4c72-b20b-fddf224e7c0e",
+			UserInput:  "delete the stale branch", ThreadID: "thread-current-1",
+			ExecutionGeneration: "9fba0a08-5049-42bb-9019-c2f3df686010",
+			InterruptID:         "interrupt-sensitive-1",
+			AvailableActions:    []string{"approve", "reject", "edit", "block_with_comment"},
+			HITLInterrupts: []CurrentHITLInterrupt{{
+				InterruptID: "interrupt-sensitive-1", AvailableActions: []string{"approve", "reject", "edit", "block_with_comment"},
+			}},
+		},
+		target: CurrentApplicationTarget{
+			ApplicationID: 31, ApplicationVersionID: 41,
+			Variables:      json.RawMessage(`[]`),
+			VersionDetails: json.RawMessage(memoryAgentVersion),
+			ChatHistory:    json.RawMessage(`[]`),
+		},
+	}
+	admittedAt := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
+		ExecutionID: "execution-continue", CommandID: "command-continue", Created: true,
+		AdmittedAt: admittedAt, Deadline: admittedAt.Add(time.Minute),
+	}}
+	service, err := NewCurrentApplicationStartService(resolver, resolver, resolver, resolver,
+		&currentAgentGuardrailStub{}, &currentApplicationVersionFreezerStub{}, admissions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory := &agentMemoryRecallStub{render: []agentmemory.Candidate{{ID: 7, Kind: agentmemory.KindFact, Content: "ships on Fridays"}}}
+	service.WithAgentMemory(memory)
+	request := CurrentContinuationRequest{
+		ProjectID: 7, ActorUserID: 11,
+		ConversationUUID:  "8bc66e50-46c4-4e2c-94ec-daec6c596ac0",
+		ResponseMessageID: "30e0913e-10d4-43db-b8d0-c7b79480935a",
+		ThreadID:          "thread-current-1", Action: "edit", Value: "delete only merged branches",
+	}
+	if _, err := service.ContinueCurrentAgent(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(memory.requests) != 1 || memory.requests[0].UserInput != "delete the stale branch" ||
+		memory.requests[0].ConversationUUID != request.ConversationUUID {
+		t.Fatalf("recall requests = %+v", memory.requests)
+	}
+	input := admissions.requests[0].Input
+	if !strings.Contains(frozenInstructions(t, input), "ships on Fridays") ||
+		len(input.GetRecalledMemory()) != 1 {
+		t.Fatalf("the continued run has no agent notes:\n%s", frozenInstructions(t, input))
+	}
+}

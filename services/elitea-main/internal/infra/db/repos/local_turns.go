@@ -198,7 +198,7 @@ RETURNING execution_id, response_message_id::text, target_participant_id, expire
 	if err := tx.Commit(ctx); err != nil {
 		return localturn.StartedTurn{}, fmt.Errorf("local turn: commit start: %w", err)
 	}
-	return turn, nil
+	return record.Admitted(turn), nil
 }
 
 // admitLocalTurnChain starts the chain of a first unattended turn, or adds a

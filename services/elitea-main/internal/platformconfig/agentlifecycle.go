@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 )
 
@@ -28,6 +30,48 @@ const (
 	// KeyLifecycleLapseAction is warn (the default) or suspend.
 	KeyLifecycleLapseAction = "lapse_action"
 )
+
+// KeyMemoryAutoMaxTier is the highest risk tier whose agents may save a
+// version with meta.memory.write set to auto (ADR-0050 decision 1b, issue
+// 1660). The default is DefaultMemoryAutoMaxTier.
+const KeyMemoryAutoMaxTier = "memory_auto_max_tier"
+
+// DefaultMemoryAutoMaxTier: a high or critical tier agent keeps the
+// attended default, and a person must set write to auto_attended or review.
+const DefaultMemoryAutoMaxTier = agentlifecycle.TierMedium
+
+// MemoryAutoMaxTierFromValues is the configured limit, else the default. A
+// value that is not a tier keeps the default.
+func MemoryAutoMaxTierFromValues(values Values) agentlifecycle.Tier {
+	tier := agentlifecycle.Tier(values.String(KeyMemoryAutoMaxTier, ""))
+	if !tier.Valid() {
+		return DefaultMemoryAutoMaxTier
+	}
+	return tier
+}
+
+// LoadMemoryAutoMaxTier reads the limit through the pool. A database without
+// the platform_config table, and no pool, answer the default.
+func LoadMemoryAutoMaxTier(ctx context.Context, pool *pgxpool.Pool) (agentlifecycle.Tier, error) {
+	if pool == nil {
+		return DefaultMemoryAutoMaxTier, nil
+	}
+	query := func(ctx context.Context, sql string, args ...any) (Rows, error) {
+		return pool.Query(ctx, sql, args...)
+	}
+	present, err := tableExists(ctx, query, "centry.platform_config")
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		return DefaultMemoryAutoMaxTier, nil
+	}
+	values, err := LoadVia(ctx, query, SectionAgentLifecycle)
+	if err != nil {
+		return "", err
+	}
+	return MemoryAutoMaxTierFromValues(values), nil
+}
 
 // LifecycleKey is the key of one tier's field.
 func LifecycleKey(tier agentlifecycle.Tier, suffix string) string {

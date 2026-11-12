@@ -431,9 +431,13 @@ impl OrdinaryNativeAgentAssembler {
             }
             None => None,
         };
+        // Built once per assembly (#1820): the sub-agent grant below and
+        // `materialize_runtime` (envelope, Smart Tools Selection) share it.
+        let toolkit_kinds = toolkit_kinds(&tool_snapshot);
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
                 &tool_snapshot,
+                &toolkit_kinds,
                 mcp_tokens,
                 &runtime_context,
                 context.clone(),
@@ -580,7 +584,7 @@ impl OrdinaryNativeAgentAssembler {
                 // key can name a toolkit by its type.
                 let grant = elitea_agent_runtime::tool_envelope::SubAgentGrant::new(
                     profile.tool_envelope().cloned().unwrap_or_default(),
-                    toolkit_kinds(&tool_snapshot),
+                    toolkit_kinds.clone(),
                 );
                 // ADR-0050 decision 9d (#1614): a brief names only what this
                 // agent sees; each spawn goes to the execution's ledger. The
@@ -656,6 +660,7 @@ impl OrdinaryNativeAgentAssembler {
     async fn materialize_runtime(
         &self,
         tool_snapshot: &AdmittedToolSnapshot<'_>,
+        toolkit_kinds: &BTreeMap<String, String>,
         mcp_tokens: &serde_json::Map<String, serde_json::Value>,
         runtime_context: &Arc<ClaimBoundRuntimeContextAuthority>,
         context: Arc<ClaimScopedEliteaContext>,
@@ -898,7 +903,6 @@ impl OrdinaryNativeAgentAssembler {
         // policy and the guardrails, and only keeps or counts some of them.
         let no_envelope = elitea_agent_runtime::tool_envelope::ToolEnvelope::none();
         let envelope = profile.tool_envelope().unwrap_or(&no_envelope);
-        let toolkit_kinds = toolkit_kinds(tool_snapshot);
         // A turn no human waits on (decision 11) binds only its unattended
         // tools: the envelope's `unattended_tools`, else the read-only ones.
         if profile
@@ -909,7 +913,7 @@ impl OrdinaryNativeAgentAssembler {
             (frozen, kept, dropped) = elitea_agent_runtime::tool_envelope::retain_unattended(
                 frozen,
                 envelope,
-                &toolkit_kinds,
+                toolkit_kinds,
             );
             tracing::info!(
                 event = "agent_floor_unattended_tools",
@@ -920,7 +924,7 @@ impl OrdinaryNativeAgentAssembler {
         }
         let limited;
         (frozen, limited) =
-            elitea_agent_runtime::tool_envelope::limit_toolsets(frozen, envelope, &toolkit_kinds);
+            elitea_agent_runtime::tool_envelope::limit_toolsets(frozen, envelope, toolkit_kinds);
         if limited > 0 {
             tracing::info!(
                 event = "agent_tool_envelope_limits",

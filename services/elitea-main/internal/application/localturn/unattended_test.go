@@ -23,9 +23,13 @@ type grantFakeStore struct {
 	started []StartRecord
 }
 
-func (s *grantFakeStore) StartLocalTurn(_ context.Context, record StartRecord) (StartedTurn, error) {
+func (s *grantFakeStore) StartLocalTurn(ctx context.Context, record StartRecord) (StartedTurn, error) {
+	record, err := record.Admit(ctx, func() (ConversationFloor, error) { return ConversationFloor{}, nil })
+	if err != nil {
+		return StartedTurn{}, err
+	}
 	s.started = append(s.started, record)
-	return StartedTurn{ExecutionID: record.ExecutionID, Created: true}, nil
+	return record.Admitted(StartedTurn{ExecutionID: record.ExecutionID, Created: true}), nil
 }
 
 func grantStartRequest(chainRoot string, maxContinuations int64) StartRequest {

@@ -64,6 +64,13 @@ func startStepRetention(ctx context.Context, lookup func(string) (string, bool),
 	if err != nil {
 		return err
 	}
+	// ADR-0042, issue 1658: the step_record pass also purges the memory of
+	// an agent deleted longer ago than the project's step_record maximum.
+	memory, err := dbrepos.ComposeAgentMemory(pool)
+	if err != nil {
+		return err
+	}
+	sweeper.WithAgentMemory(memory)
 	for _, routine := range []struct {
 		id, description string
 		schedule        string
@@ -77,7 +84,7 @@ func startStepRetention(ctx context.Context, lookup func(string) (string, bool),
 			"Expires run step content older than the step_content retention maximum, except under legal hold, deletes the stored content of expired steps, and deletes content objects no step record names an hour after they were written.",
 			"1h", 5 * time.Minute, sweeper.ContentPass},
 		{runevidence.RecordRoutineID,
-			"Anchors settled runs' step chains whose anchor was missed, and deletes run step records older than the step_record retention maximum, except under legal hold.",
+			"Anchors settled runs' step chains whose anchor was missed, deletes run step records older than the step_record retention maximum, and deletes the memory of agents deleted longer ago than that maximum, except under legal hold.",
 			"1h", 5 * time.Minute, sweeper.RecordPass},
 	} {
 		loop := &routines.Loop{

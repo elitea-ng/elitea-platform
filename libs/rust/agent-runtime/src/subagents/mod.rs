@@ -444,6 +444,16 @@ pub trait SubAgentHost: Send + Sync {
     /// When the tools cannot be prepared: the spawn is refused.
     async fn toolsets(&self, child: &ChildIdentity) -> Result<Vec<Arc<dyn Toolset>>, HostError>;
 
+    /// Whether the named toolset lists the same tools whatever the context
+    /// it is asked with (no per-user or per-session listing, like an MCP
+    /// server's). A spawn with `profile.tools` lists such a toolset once and
+    /// hands the child that listing (#1819). Any other toolset is listed
+    /// again by the child under its own invocation context: the default,
+    /// because the spawn has no real context to list it with.
+    fn toolset_lists_statically(&self, _toolset: &str) -> bool {
+        false
+    }
+
     /// Whether a child may ask for a checkout of its own (`isolation:
     /// "worktree"`); `false` keeps the argument out of `spawn_agent`.
     fn supports_worktree_isolation(&self) -> bool {

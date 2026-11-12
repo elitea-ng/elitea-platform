@@ -3452,6 +3452,12 @@ async fn resolve_pipeline_start(
     >,
 ) -> Result<Option<super::graph::resume::PipelineResume>, NativeAgentAssemblyError> {
     if matches!(start, PipelineNativeStart::Regenerate) {
+        // The frontier and the session are reset as a pair, the session
+        // straight after the frontier, so a failure between them leaves
+        // a state the same command retries: a retry deletes an absent
+        // frontier again and resets the session still there. (The ordinary
+        // agent path has no frontier to keep in step and does its reset on
+        // `open_history_session`'s one read, #1943.)
         delete_pipeline_frontier(state, plan).await?;
         reset_session_for_regeneration(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
             .await?;
@@ -3487,6 +3493,7 @@ async fn resolve_pipeline_start(
                 &plan.chat_history,
                 plan.definition_digest,
                 &binding,
+                false,
                 async || delete_pipeline_frontier(state, plan).await,
             )
             .await?;
@@ -4034,9 +4041,6 @@ where
         return Err(invalid_configuration());
     }
     let notices = FreshSessionNotices::from_runtime(&runtime);
-    if regenerate {
-        reset_session_for_regeneration(sessions.as_ref(), &user_id, &session_id).await?;
-    }
     let HistorySession {
         session,
         created,
@@ -4071,6 +4075,7 @@ where
             &chat_history,
             definition_digest,
             &binding,
+            regenerate,
             async || Ok(()),
         )
         .await?
@@ -4828,7 +4833,8 @@ async fn restore_or_create_session(
     }
 }
 
-async fn reset_session_for_regeneration(
+/// Reset the session of a pipeline regeneration: delete it when there is one.
+pub(super) async fn reset_session_for_regeneration(
     sessions: &dyn SessionService,
     user_id: &UserId,
     session_id: &SessionId,
@@ -4912,6 +4918,7 @@ async fn open_history_session(
     history: &[Content],
     definition_digest: [u8; 32],
     binding: &HistoryBinding,
+    regenerate: bool,
     restart: impl AsyncFnOnce() -> Result<(), NativeAgentAssemblyError>,
 ) -> Result<HistorySession, NativeAgentAssemblyError> {
     let (session, created) = restore_or_create_session(sessions, user_id, session_id).await?;
@@ -4923,7 +4930,15 @@ async fn open_history_session(
             rebound: false,
         });
     }
-    match history_decision(session.as_ref(), binding, refs, history, definition_digest) {
+    // #1943: a regeneration always starts a new lineage, on the read above:
+    // one read, one delete, one create. It is not a re-seed of another view,
+    // so it is reported as the seed it is.
+    let decision = if regenerate {
+        HistoryDecision::Reseed
+    } else {
+        history_decision(session.as_ref(), binding, refs, history, definition_digest)
+    };
+    match decision {
         HistoryDecision::Keep => Ok(HistorySession {
             session,
             created,
@@ -4948,7 +4963,7 @@ async fn open_history_session(
             Ok(HistorySession {
                 session: create_session(sessions, user_id, session_id).await?,
                 created: true,
-                reseeded: true,
+                reseeded: !regenerate,
                 rebound: false,
             })
         }

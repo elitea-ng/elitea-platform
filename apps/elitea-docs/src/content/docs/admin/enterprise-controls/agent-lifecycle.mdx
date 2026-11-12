@@ -288,6 +288,7 @@ A platform administrator sets the tier policy in **Admin › Configuration › A
 | `low_recertify_days`, `medium_recertify_days`, `high_recertify_days`, `critical_recertify_days` | 0 (none), 365, 180, 90 | 0 to 1095 |
 | `low_attestations` … `critical_attestations` | critical: `model_risk`, `legal`; others none | kinds except `custom` |
 | `lapse_action` | `warn` | `warn` or `suspend` |
+| `memory_auto_max_tier` | `medium` | `low`, `medium`, `high` or `critical`. The highest tier whose agents may save a version with memory write set to `auto` (see [Agent memory](/how-tos/agents-pipelines/agent-memory/)). |
 
 Governance approvals never exceed approvals. A value below the default is raised to the default.
 

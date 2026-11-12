@@ -298,3 +298,19 @@ fn a_normalized_history_text_is_kept_as_it_is() {
     );
     assert!(raw.check(&excerpt("m-1", "one line two")).is_ok());
 }
+
+/// #1819: a toolset the parent bound (a toolkit, or an MCP connection frozen
+/// into the binding) lists statically for a spawn; a name the host never
+/// offered does not.
+#[test]
+fn a_bound_toolset_lists_statically_and_an_unknown_one_does_not() {
+    use adk_rust::Toolset;
+    use adk_rust::tool::BasicToolset;
+    let offered: Vec<Arc<dyn Toolset>> = vec![
+        Arc::new(BasicToolset::new("jira", Vec::new())),
+        Arc::new(BasicToolset::new("mcp_docs", Vec::new())),
+    ];
+    assert!(super::lists_statically(&offered, "jira"));
+    assert!(super::lists_statically(&offered, "mcp_docs"));
+    assert!(!super::lists_statically(&offered, "other"));
+}
