@@ -54,7 +54,7 @@
  *    Fixed here; it's inside this file and finding 3 isn't exercisable
  *    without it.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -86,6 +86,7 @@ import {
   useBulkMarkSeenNotifications,
   useNotificationsList,
 } from '@/features/notifications/api/useNotifications';
+import { useDebounce } from '@/shared/lib/useDebounce';
 
 /**
  * `personal_project_id` from the TanStack Router root context's
@@ -112,22 +113,6 @@ function selectPersonalProjectId(context: unknown): string | undefined {
 }
 
 /**
- * Debounce a value — no shared debounce primitive exists yet in this app
- * (only local, per-call-site copies do: `src/pages/settings/Users.tsx`'s
- * own `useDebounce`). Delays the SEARCH QUERY PARAM only; the controlled
- * `<input>` (`DrawerPageHeader`'s `slotProps.searchInput`) still receives
- * every keystroke immediately, so typing itself never feels delayed.
- */
-function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => setDebounced(value), delayMs);
-    return () => clearTimeout(timer);
-  }, [value, delayMs]);
-  return debounced;
-}
-
-/**
  * The reference debounces search by 600ms (`NotificationCenter.jsx:34`) and
  * ignores anything shorter than two characters (`apiSearchTerm`).
  */
@@ -151,7 +136,7 @@ export function NotificationsPage() {
   const [search, setSearch] = useState('');
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [toast, setToast] = useState<NotificationToastKind>();
-  const debouncedSearch = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
+  const debouncedSearch = useDebounce(search, SEARCH_DEBOUNCE_MS);
 
   const { data, isFetching, isError, error } = useNotificationsList(
     {

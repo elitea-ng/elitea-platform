@@ -191,7 +191,15 @@ export function AgentPipelineVersionSelector({
     [applicationVersionId, displayVersions],
   );
 
-  const selectedVersion = useMemo(() => displayVersions.find((v) => v.id === applicationVersionId) ?? displayVersions[0], [applicationVersionId, displayVersions]);
+  // With no active version yet (the page opened on the agent URL, or the open version was just deleted)
+  // the trigger shows the DEFAULT version, not whichever sorts first ("base" always does; issue 1568).
+  const selectedVersion = useMemo(
+    () =>
+      displayVersions.find((v) => v.id === applicationVersionId) ??
+      displayVersions.find((v) => defaultVersionId !== undefined && v.id === defaultVersionId) ??
+      displayVersions[0],
+    [applicationVersionId, defaultVersionId, displayVersions],
+  );
 
   const displayText = useMemo(() => {
     if (isInvalidVersionReference) return t('agents.versionSelector.invalidVersion', 'Invalid version');

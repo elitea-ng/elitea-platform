@@ -12,6 +12,7 @@ export type {
 } from './model/types';
 export {
   LATEST_VERSION_NAME,
+  defaultRunVersionId,
   isSetDefaultDisabled,
   isVersionNotFound,
   selectDefaultVersion,

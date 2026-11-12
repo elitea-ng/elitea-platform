@@ -239,6 +239,8 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
+          # Only test-checks (go vet over every module) writes this key.
+          save: 'false'
           # This job lints every go.work module, so the cache key reads every
           # module that has a go.sum. The block below is a literal string, so a
           # comment inside it would become a path.
@@ -450,6 +452,8 @@ jobs:
       - name: Restore the Go cache (pull requests read, main writes)
         uses: ./.github/actions/go-cache
         with:
+          # Only test-checks (go vet over every module) writes this key.
+          save: 'false'
           cache-dependency-path: |
             services/elitea-main/go.sum
             services/elitea-scheduler/go.sum

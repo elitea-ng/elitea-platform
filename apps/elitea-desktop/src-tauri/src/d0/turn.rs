@@ -2913,7 +2913,13 @@ impl AgentHost {
                         // The started execution (if any) is left to expire.
                         _ => {
                             question_id = uuid::Uuid::new_v4().to_string();
-                            start_turn(&api, request, &answering, &question_id).await?
+                            // The first start may have written the chain's
+                            // row under the grant's id: a new id for the
+                            // retry, kept for the rest of the chain.
+                            let mut retried = request.clone();
+                            retried.unattended =
+                                retried.unattended.as_ref().map(UnattendedTurn::regranted);
+                            start_turn(&api, &retried, &answering, &question_id).await?
                         }
                     };
                     let memory = self
@@ -3034,6 +3040,13 @@ impl AgentHost {
         // one with no grant, and the host starts no continuation.
         if started.unattended.is_none() {
             request.unattended = None;
+        }
+        // The grant id Main admitted is the chain's (a retried start used a
+        // new one); the continuations carry it.
+        if let (Some(turn), Some(chain)) =
+            (request.unattended.as_mut(), started.unattended.as_ref())
+        {
+            turn.adopt_admitted_grant_id(chain.grant_id.as_deref());
         }
         // The chain's root as Main admitted it (the first turn's execution).
         let chain_root = started
@@ -3863,12 +3876,15 @@ impl AgentHost {
     /// read from the conversation (the participant Main named).
     async fn floor_request(&self, next: &FloorNext) -> Result<TurnRequest, TurnError> {
         let pinned = PinnedCredentials::current(self.deps.credentials.clone())?;
+        let identity = pinned.pinned_identity().to_owned();
         let api = self.api.with_credentials(Arc::new(pinned));
         let target = api
             .floor_target(
                 next.project_id,
                 &next.conversation_uuid,
                 next.participant_id,
+                &identity,
+                &self.caches,
             )
             .await?;
         Ok(TurnRequest {

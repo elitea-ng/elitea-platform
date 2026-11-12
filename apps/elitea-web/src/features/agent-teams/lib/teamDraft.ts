@@ -6,6 +6,7 @@
  * The floor policy is not a separate control: a team with a lead is `lead`,
  * one without is `addressed`, the two policies of the conversation floor.
  */
+import { defaultRunVersionId } from '@/entities/version';
 import type { AgentTeam, AgentTeamMember, AgentTeamWrite, ApplicationVersionSummary } from '@/shared/api/generated/model';
 
 export const MAX_TEAM_MEMBERS = 16;
@@ -78,11 +79,7 @@ export function draftProblem(draft: TeamDraft): TeamDraftProblem | undefined {
   return undefined;
 }
 
-/** The version a new member runs: the agent's default, else its `base`, else its first. */
-export function defaultVersionOf(versions: readonly ApplicationVersionSummary[]): number | undefined {
-  const chosen = versions.find((version) => version.is_default === true) ?? versions.find((version) => version.name === 'base') ?? versions[0];
-  if (chosen === undefined) return undefined;
-  const id = Number(chosen.id);
-  return Number.isInteger(id) && id > 0 ? id : undefined;
+/** The version a new member runs: the agent's default (`meta.default_version_id`), else its `base`, else its first. */
+export function defaultVersionOf(versions: readonly ApplicationVersionSummary[], defaultVersionId?: unknown): number | undefined {
+  return defaultRunVersionId(versions, defaultVersionId);
 }
-

@@ -63,7 +63,8 @@ describe('teamDraft', () => {
 
   it('picks the default version, else base, else the first', () => {
     const version = (id: string, name: string, isDefault = false) => ({ id, name, status: 'draft', agent_type: 'classic', created_at: '', is_default: isDefault });
-    expect(defaultVersionOf([version('1', 'base'), version('2', 'v2', true)])).toBe(2);
+    expect(defaultVersionOf([version('1', 'base'), version('2', 'v2', true)], '2')).toBe(2);
+    expect(defaultVersionOf([version('1', 'base'), version('2', 'v2', true)], '1')).toBe(1);
     expect(defaultVersionOf([version('5', 'v5'), version('1', 'base')])).toBe(1);
     expect(defaultVersionOf([version('5', 'v5')])).toBe(5);
     expect(defaultVersionOf([])).toBeUndefined();

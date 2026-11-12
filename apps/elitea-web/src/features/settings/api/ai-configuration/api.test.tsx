@@ -164,13 +164,22 @@ describe('modelConfigurationErrorMessage', () => {
     expect(modelConfigurationErrorMessage(error)).toBe('the model is not available');
   });
 
-  it('falls back to the error message when the body carries no detail', () => {
+  it('never shows the eliteaFetch diagnostic for an HTML or empty refusal', () => {
+    for (const body of ['<html>502 Bad Gateway</html>', '', null]) {
+      const error = new EliteaApiError({ kind: 'http', status: 502, url: `${BASE}/configurations/models/7`, body });
+      const message = modelConfigurationErrorMessage(error);
+      expect(message).not.toContain('eliteaFetch');
+      expect(message).toBe('The default model could not be saved. Try again.');
+    }
+  });
+
+  it('falls back to a translated sentence for a network error', () => {
     const error = new EliteaApiError({
       kind: 'network',
       url: `${BASE}/configurations/models/7`,
       message: 'http: request failed',
       cause: undefined,
     });
-    expect(modelConfigurationErrorMessage(error)).toContain('network error');
+    expect(modelConfigurationErrorMessage(error)).toBe('The default model could not be saved. Try again.');
   });
 });

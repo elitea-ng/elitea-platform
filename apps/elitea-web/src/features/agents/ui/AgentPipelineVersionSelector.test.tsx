@@ -59,6 +59,19 @@ describe('AgentPipelineVersionSelector', () => {
     expect(container.querySelector('svg[data-testid="WarningAmberIcon"]')).toBeInTheDocument();
   });
 
+  it('shows the DEFAULT version, not base, when no version is active (issue 1568)', () => {
+    const { getByText, queryByText } = renderWithTheme(
+      <AgentPipelineVersionSelector
+        applicationVersionId={undefined}
+        defaultVersionId={2}
+        versions={versions}
+        onSelectVersion={vi.fn()}
+      />,
+    );
+    expect(getByText(`v1 – ${formatDate('2026-02-01T12:00:00Z')}`)).toBeInTheDocument();
+    expect(queryByText('base')).not.toBeInTheDocument();
+  });
+
   it('falls back to the latest version display when applicationVersionId is undefined', () => {
     const { getByText } = renderWithTheme(
       <AgentPipelineVersionSelector

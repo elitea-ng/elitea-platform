@@ -16,28 +16,13 @@ import { usePermissionSet } from '@/widgets/sidebar';
 import { usersFeature } from '@/features/settings';
 import { errorMessage, inviteSuccessMessage, invitePartialMessage } from './usersToast';
 import { useInviteDialog } from './useInviteDialog';
+import { useDebounce } from '@/shared/lib/useDebounce';
 
 const { useUsersActions, UsersPageContent } = usersFeature;
 
 const ROWS_PER_PAGE_DEFAULT = 20;
 
 /* ── helpers ───────────────────────────────────────────────────────────── */
-
-/** Debounce value and return { value, isDebounce }. */
-function useDebounce<T>(value: T, delayMs: number): { value: T; isDebounce: boolean } {
-  const [debounced, setDebounced] = useState(value);
-  const [isDebounce, setIsDebounce] = useState(true);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebounced(value);
-      setIsDebounce(false);
-    }, delayMs);
-    return () => clearTimeout(timer);
-  }, [value, delayMs]);
-
-  return { value: debounced, isDebounce };
-}
 
 
 /* ── custom hook: useUsersPageData ────────────────────────────────────── */
@@ -87,7 +72,7 @@ function useUsersPageData(projectId: string, canView: boolean): UseUsersPageData
   const [sortField, setSortField] = useState('name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [searchText, setSearchText] = useState('');
-  const { value: debouncedSearch } = useDebounce(searchText, 300);
+  const debouncedSearch = useDebounce(searchText, 300);
   const [accumulatedUsers, setAccumulatedUsers] = useState<UserRecord[]>([]);
   const [serverTotal, setServerTotal] = useState(0);
 

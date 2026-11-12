@@ -348,6 +348,32 @@ impl UnattendedTurn {
         }
     }
 
+    /// This turn under a NEW grant id, for the start retried after Main
+    /// answered the first one for a participant that changed: that first
+    /// start already wrote the chain's row under the old id, so a second
+    /// start with it collides (422 `unattended_grant_refused`). Only a chain
+    /// root takes one; a continuation keeps the chain's.
+    #[must_use]
+    pub fn regranted(&self) -> Self {
+        let mut turn = self.clone();
+        if turn.chain_root_execution_id.is_none() {
+            turn.grant.grant_id = Some(uuid::Uuid::new_v4().hyphenated().to_string());
+        }
+        turn
+    }
+
+    /// Keep the grant id the platform admitted (`LocalTurnStarted.unattended`)
+    /// on a chain root, so the chain's continuations and its HITL records
+    /// carry the id Main knows, whichever start it answered.
+    pub fn adopt_admitted_grant_id(&mut self, admitted: Option<&str>) {
+        if self.chain_root_execution_id.is_none()
+            && let Some(id) = admitted
+            && !id.is_empty()
+        {
+            self.grant.grant_id = Some(id.to_owned());
+        }
+    }
+
     /// The next turn of the chain, after a turn of execution `execution_id`.
     #[must_use]
     pub fn next(&self, execution_id: &str) -> Self {

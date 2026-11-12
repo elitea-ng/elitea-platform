@@ -102,7 +102,7 @@ function TeamEditForm({ projectId, team, onClose, onSaved }: Omit<TeamEditDialog
     setError(undefined);
     fetchAgentVersions(projectId, applicationId)
       .then((detail) => {
-        const versionId = defaultVersionOf(detail.versions);
+        const versionId = defaultVersionOf(detail.versions, detail.versions.find((version) => version.is_default === true)?.id);
         if (versionId === undefined) {
           setError(t('features.agentTeams.edit.noVersion', 'This agent has no saved version to add.'));
           return;

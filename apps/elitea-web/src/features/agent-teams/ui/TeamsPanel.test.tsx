@@ -53,16 +53,18 @@ describe('TeamsPanel', () => {
     expect(screen.queryByTestId('agent-team-delete-3')).not.toBeInTheDocument();
   });
 
-  // #1847: past one page the list says how many there are and loads the rest.
-  it('pages past the first 200 teams', async () => {
+  // #1847 / #1955: past one page the list says how many there are and loads the rest by keyset.
+  it('pages past the first 200 teams by the last team held, not by offset', async () => {
     grant('models.teams.list');
-    const offsets: string[] = [];
+    const cursors: string[] = [];
     const row = (id: number) => ({ ...TEAM_ROW, id, name: `Team ${id}` });
     server.use(
       http.get(TEAMS, ({ request }) => {
-        const offset = Number(new URL(request.url).searchParams.get('offset') ?? '0');
-        offsets.push(String(offset));
-        const rows = offset === 0 ? Array.from({ length: 200 }, (_, i) => row(i + 1)) : [row(201)];
+        const params = new URL(request.url).searchParams;
+        expect(params.has('offset')).toBe(false);
+        const after = params.get('after_id');
+        cursors.push(after === null ? '-' : `${params.get('after_name')} / ${after}`);
+        const rows = after === null ? Array.from({ length: 200 }, (_, i) => row(i + 1)) : [row(201)];
         return HttpResponse.json({ rows, total: 201 });
       }),
     );
@@ -72,7 +74,7 @@ describe('TeamsPanel', () => {
     await userEvent.click(screen.getByTestId('agent-teams-more'));
     expect(await screen.findByTestId('agent-team-name-201')).toHaveTextContent('Team 201');
     expect(screen.queryByTestId('agent-teams-more')).not.toBeInTheDocument();
-    expect(offsets).toEqual(['0', '200']);
+    expect(cursors).toEqual(['-', 'Team 200 / 200']);
   });
 
   it('shows a team the next page repeats once', async () => {
@@ -80,9 +82,9 @@ describe('TeamsPanel', () => {
     const row = (id: number) => ({ ...TEAM_ROW, id, name: `Team ${id}` });
     server.use(
       http.get(TEAMS, ({ request }) => {
-        const offset = Number(new URL(request.url).searchParams.get('offset') ?? '0');
-        // A team created before the click shifts the window: team 200 comes back.
-        const rows = offset === 0 ? Array.from({ length: 200 }, (_, i) => row(i + 1)) : [row(200), row(201)];
+        const after = new URL(request.url).searchParams.get('after_id');
+        // A page that repeats the last team held (a rename between pages).
+        const rows = after === null ? Array.from({ length: 200 }, (_, i) => row(i + 1)) : [row(200), row(201)];
         return HttpResponse.json({ rows, total: 202 });
       }),
     );

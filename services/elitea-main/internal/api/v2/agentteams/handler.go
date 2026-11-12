@@ -27,9 +27,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -52,7 +54,7 @@ const (
 
 // Store is *repos.AgentTeams.
 type Store interface {
-	ListTeams(ctx context.Context, projectID int64, query string, limit, offset int) ([]agentteams.Stored, int, error)
+	ListTeams(ctx context.Context, projectID int64, query string, limit, offset int, after *agentteams.ListCursor) ([]agentteams.Stored, int, error)
 	GetTeam(ctx context.Context, projectID, teamID int64) (agentteams.Stored, error)
 	CreateTeam(ctx context.Context, projectID, actorID int64, team agentteams.Team) (agentteams.Stored, error)
 	UpdateTeam(ctx context.Context, projectID, teamID int64, team agentteams.Team) (agentteams.Stored, error)
@@ -177,7 +179,12 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, apierr.BadRequest("query is longer than 128 characters"))
 		return
 	}
-	teams, total, err := h.store.ListTeams(r.Context(), projectID, search, limit, offset)
+	after, err := listCursor(query)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	teams, total, err := h.store.ListTeams(r.Context(), projectID, search, limit, offset, after)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -187,6 +194,27 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, teamJSON(team))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "total": total})
+}
+
+// listCursor reads the keyset position of a page: `after_name` and
+// `after_id` together (the last team the caller holds), or neither.
+func listCursor(query url.Values) (*agentteams.ListCursor, error) {
+	name, hasName := query["after_name"]
+	rawID := query.Get("after_id")
+	if !hasName && rawID == "" {
+		return nil, nil
+	}
+	if !hasName || rawID == "" {
+		return nil, apierr.BadRequest("after_name and after_id go together")
+	}
+	id, err := strconv.ParseInt(rawID, 10, 64)
+	if err != nil || id < 1 {
+		return nil, apierr.BadRequest("after_id is not valid")
+	}
+	if utf8.RuneCountInString(name[0]) > agentteams.MaxName {
+		return nil, apierr.BadRequest("after_name is not valid")
+	}
+	return &agentteams.ListCursor{Name: name[0], ID: id}, nil
 }
 
 // Get answers one team.
