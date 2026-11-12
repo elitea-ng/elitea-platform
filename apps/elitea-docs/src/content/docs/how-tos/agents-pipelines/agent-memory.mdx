@@ -30,6 +30,22 @@ In your personal project, notes are always saved straight away (except in `revie
 
 A pending note is never given to the agent until it is approved.
 
+### Limit on `auto` by risk tier
+
+`auto` lets an agent save notes from unattended runs and tool output with no person to approve them. The platform therefore limits it by the agent's [risk tier](/admin/enterprise-controls/agent-lifecycle/). An administrator sets the highest tier that may use `auto`. The setting is **Highest Tier for Automatic Agent Memory** in the **Agent Lifecycle** section of the admin console. The default is `medium`.
+
+When you save a version with `"write": "auto"` for an agent above that tier, the platform refuses the save with status 422 and the code `memory_auto_above_tier`. The answer names the agent's tier and the limit. Set `auto_attended` or `review` and save again. A new agent has the tier `low`.
+
+Only a save is checked. An agent that already has `auto` keeps it until its next save.
+
+## Regenerate and continue
+
+A regenerated answer and a continued run use the agent's notes in the same way as the turn they repeat. The platform looks up the notes again with the question the turn answers (the edited text, when you edited the question). The agent has the notes it had for the first answer, plus any note saved since.
+
+## When an agent is deleted
+
+The notes of a deleted agent stay for the retention period. After that period the platform deletes the notes, their versions and the opt-outs, and writes one `agent.memory.cleared` audit event for each agent. The period is the **step_record** retention maximum of the project (see [Audit evidence and retention](/admin/enterprise-controls/audit-evidence-and-retention/)). A legal hold on the project or on the agent keeps the notes. If the maximum is "keep forever", the platform keeps the notes.
+
 ## What is never saved
 
 - **Secrets.** A note that looks like a password, API key, token, private key or a connection string with a password is refused, both by the agent and by the platform.
