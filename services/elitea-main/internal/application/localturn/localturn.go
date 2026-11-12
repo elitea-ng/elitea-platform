@@ -124,6 +124,11 @@ type PolicyReader interface {
 }
 
 // Store persists local turn executions and their commit.
+//
+// StartLocalTurn MUST run record.Admit inside its transaction and write the
+// record Admit returns (issue 1888): the routing and the memory recall run
+// there. The service refuses a start whose store did not call Admit, and a
+// decorator forwards the record to the store it wraps untouched.
 type Store interface {
 	StartLocalTurn(ctx context.Context, record StartRecord) (StartedTurn, error)
 	CommitLocalTurn(ctx context.Context, record CommitRecord) (CommittedTurn, error)
@@ -212,6 +217,11 @@ type StartRecord struct {
 	// FloorTargets and MemoriesUsed as given.
 	route  func(ConversationFloor) (floorPlan, error)
 	recall func(context.Context) (int, error)
+	// admitted is set by Admit (issue 1940): the service checks it after
+	// the store returns, so a store that forwards the record without
+	// running Admit fails the start instead of losing the routing and the
+	// recall silently. Shared by the copies of the record.
+	admitted *bool
 	// logger records why the floor could not be read (the answer is a bare
 	// ErrUnavailable).
 	logger *slog.Logger
@@ -228,6 +238,9 @@ func (record StartRecord) Routes() bool { return record.route != nil }
 // transaction reads. It answers the record with the participant that
 // answers, the routed order and the recall's count set.
 func (record StartRecord) Admit(ctx context.Context, read func() (ConversationFloor, error)) (StartRecord, error) {
+	if record.admitted != nil {
+		*record.admitted = true
+	}
 	if record.route != nil {
 		floor, err := read()
 		if err != nil {
@@ -497,9 +510,18 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 			return routed, err
 		}
 	}
+	var admitted bool
+	record.admitted = &admitted
 	turn, err := s.store.StartLocalTurn(ctx, record)
 	if err != nil {
 		return StartOutcome{}, err
+	}
+	// The store's contract (issue 1940): it runs StartRecord.Admit in its
+	// transaction. A store that did not has not routed the message or
+	// recalled the memory, so the start is refused, never answered.
+	if !admitted {
+		s.logger.ErrorContext(ctx, "local turn: the store did not run the start's admission")
+		return StartOutcome{}, fmt.Errorf("local turn: the store did not admit the start: %w", ErrUnavailable)
 	}
 	if turn.Created {
 		s.record(ctx, request.ActorUserID, request.ProjectID, request.AuditRoute, started,
