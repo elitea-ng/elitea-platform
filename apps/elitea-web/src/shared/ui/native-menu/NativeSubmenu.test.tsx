@@ -75,4 +75,22 @@ describe('NativeSubmenu', () => {
     await user.click(await screen.findByRole('menuitem', { name: 'Español' }));
     expect(onPick).toHaveBeenCalledWith('Español');
   });
+
+  it('keeps the empty icon column by default, and drops it for a menu without icons (#1966)', () => {
+    render(
+      <Menu open anchorEl={document.body} onClose={() => undefined}>
+        <NativeSubmenu label="Aligned" testId="aligned">
+          {() => null}
+        </NativeSubmenu>
+        <NativeSubmenu label="Flush" testId="flush" reserveIconColumn={false}>
+          {() => null}
+        </NativeSubmenu>
+      </Menu>,
+    );
+    // Row = [icon column?] [label] [chevron column]; only the leading column differs.
+    expect(screen.getByTestId('aligned').querySelectorAll('span[aria-hidden]')).toHaveLength(2);
+    const flush = screen.getByTestId('flush');
+    expect(flush.querySelectorAll('span[aria-hidden]')).toHaveLength(1);
+    expect(flush.firstElementChild?.getAttribute('aria-hidden')).toBeNull();
+  });
 });

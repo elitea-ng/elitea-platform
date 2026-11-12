@@ -82,22 +82,15 @@ function useAgentEditing(isEditingAgent: boolean, attach: AttachCreatedParticipa
    * a created agent is attached, not auto-selected as active.
    */
   const agentCreation = agentEditorHooks.useAgentCreation({
-    // `useAgentCreation`'s own `CreatedAgentParticipant.entity_settings.variables`
-    // is `readonly unknown[]` (element shape unvalidated) — narrower than
-    // `useEditAgent`'s own `EditAgentParticipant.entity_settings.variables?:
-    // readonly AgentVariable[]`, so `editAgent.onAgentEditorCreated` cannot be
-    // passed straight through (`unknown[]` is not assignable to a
-    // `{name?,value?}[]`). This wrapper forwards only the two fields both
-    // sides actually declare (`entity_meta.id`/`entity_settings.version_id`) —
-    // `variables` is intentionally not carried over; the freshly-created
-    // agent has no participant-scoped variable VALUES yet regardless.
-    onAgentEditorCreated: (createdAgent) => {
-      editAgent.onAgentEditorCreated({
-        ...(createdAgent.entity_meta?.id !== undefined ? { entity_meta: { id: createdAgent.entity_meta.id } } : {}),
-        ...(createdAgent.entity_settings?.version_id !== undefined
-          ? { entity_settings: { version_id: createdAgent.entity_settings.version_id } }
-          : {}),
-      });
+    // After a create-from-chat the editor must hand the column back to the
+    // default chat view (#1971). It used to switch to EDIT mode on the new
+    // agent, but the created-agent shape `useAgentCreation` hands over has no
+    // top-level `id`, so `readAgentParticipantSnapshot` came back `undefined`,
+    // `AgentEditor` rendered `null` and the still-mounted editor column was a
+    // blank panel. The agent is attached as a participant right after (below),
+    // so the user lands on the chat with it already in the conversation.
+    onAgentEditorCreated: () => {
+      editAgent.onCloseAgentEditor();
     },
     addNewParticipants: async (participants, onAdded) => {
       const created = participants[0];

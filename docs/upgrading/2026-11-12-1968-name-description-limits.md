@@ -7,7 +7,7 @@
     instructions, welcome messages and other free text are not limited by this.
   - **A longer value is refused with 400.** The body keeps the usual envelope and names the field:
     `{"error": "name must be at most 128 characters", "field": "name", "max_length": 128}`. This replaces the
-    256-character conversation name limit and the 768-byte token name limit. The contract (client contract 1.51)
+    256-character conversation name limit and the 768-byte token name limit. The contract (client contract 1.52)
     declares `maxLength` on the create and update bodies of agents, toolkits, skills and tokens; for conversations it
     is described in the schema only, because the client contract subset is additive-only.
   - **Existing data is truncated.** Tenant migration `0172_entity_name_description_limits.sql` cuts stored descriptions of

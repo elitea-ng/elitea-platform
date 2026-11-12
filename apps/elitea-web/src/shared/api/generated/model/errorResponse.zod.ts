@@ -49,7 +49,7 @@ export const ErrorResponse = zod
       .string()
       .optional()
       .describe(
-        "Only on a 400 for a text property over its length limit (client contract 1.51): the request property, e.g. `name` or `description`.\n",
+        "Only on a 400 for a text property over its length limit (client contract 1.52): the request property, e.g. `name` or `description`.\n",
       ),
     max_length: zod
       .int()

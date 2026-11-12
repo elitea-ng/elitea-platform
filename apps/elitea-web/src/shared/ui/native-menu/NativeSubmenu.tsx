@@ -37,6 +37,18 @@ export interface NativeSubmenuProps {
   /** The submenu's rows; `close` closes the submenu (the caller closes its own menu too when a row acts). */
   readonly children: (close: () => void) => ReactNode;
   readonly minWidth?: string;
+  /**
+   * Keeps the empty 16px icon column before the label when no `icon` is given
+   * (default), so the label lines up with sibling rows that have icons. A menu
+   * whose rows carry no icons at all passes `false`, otherwise this row alone is
+   * indented by the column's width and its label sits right of the others (#1966).
+   */
+  readonly reserveIconColumn?: boolean;
+}
+
+function LeadingIcon({ icon, reserve }: { readonly icon: ReactNode; readonly reserve: boolean }): React.JSX.Element | null {
+  if (icon !== undefined) return <MenuRowIcon>{icon}</MenuRowIcon>;
+  return reserve ? <MenuRowIcon /> : null;
 }
 
 function useTimer(): { start: (ms: number, run: () => void) => void; stop: () => void } {
@@ -51,7 +63,7 @@ function useTimer(): { start: (ms: number, run: () => void) => void; stop: () =>
   };
 }
 
-export function NativeSubmenu({ label, icon, hint, testId, disabled, children, minWidth = '12rem' }: NativeSubmenuProps): React.JSX.Element {
+export function NativeSubmenu({ label, icon, hint, testId, disabled, children, minWidth = '12rem', reserveIconColumn = true }: NativeSubmenuProps): React.JSX.Element {
   const [row, setRow] = useState<HTMLLIElement | null>(null);
   const [open, setOpen] = useState(false);
   // Opened from the keyboard: its first row takes the focus.
@@ -102,7 +114,7 @@ export function NativeSubmenu({ label, icon, hint, testId, disabled, children, m
         onClick={() => openNow(false)}
         onKeyDown={onRowKey}
       >
-        {icon === undefined ? <MenuRowIcon /> : <MenuRowIcon>{icon}</MenuRowIcon>}
+        <LeadingIcon icon={icon} reserve={reserveIconColumn} />
         <MenuRowText>{label}</MenuRowText>
         {hint !== undefined && <MenuRowHint>{hint}</MenuRowHint>}
         <MenuRowIcon>

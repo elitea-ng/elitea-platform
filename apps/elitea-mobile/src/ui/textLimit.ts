@@ -1,7 +1,7 @@
 import { DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, exceedsLimit, textLimitState } from '@elitea/client-core/limits';
 
 /**
- * The entity text limits of client contract 1.51 (issue 1968): a name is at most 128 characters, a
+ * The entity text limits of client contract 1.52 (issue 1968): a name is at most 128 characters, a
  * description at most 2000 (`@elitea/client-core/limits`, the numbers the server enforces). A form
  * never cuts what the person typed: `TextField` shows `limitMessage` under the field and the form
  * blocks Save with `exceedsLimit`. The characters are counted like the server counts runes.

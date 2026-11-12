@@ -12,7 +12,7 @@
  * it, the ⌘, hint and Troubleshoot, and opens the admin portal in the system
  * browser: the console runs on the browser session, not the app's token.
  *
- * A language change saves the choice and reloads: `t()` is not reactive
+ * A language change saves the choice (locally, then to the server) and reloads: `t()` is not reactive
  * (`shared/i18n/locales.ts`), and the session survives a reload.
  */
 import { useState, type ReactNode } from 'react';
@@ -150,6 +150,9 @@ function openExternally(url: string): void {
   window.open(url, '_blank', 'noopener');
 }
 
+/** How long a language change waits for the server to confirm before it reloads anyway. */
+const LANGUAGE_SAVE_WAIT_MS = 2000;
+
 function reloadPage(): void {
   window.location.reload();
 }
@@ -203,7 +206,11 @@ export function AccountMenu({ items, go, platform, collapsed = false, selected =
   const chooseLanguage = (next: Locale): void => {
     if (next === currentLocale()) return;
     saveLocale(next);
-    reload();
+    // Stored for the user's other clients before the reload; a slow or failed save must not hold the reload (the sync retries it).
+    const saved = import('@/shared/api/languagePreference').then(({ saveLanguagePreference }) => saveLanguagePreference(next));
+    void Promise.race([saved, new Promise((resolve) => setTimeout(resolve, LANGUAGE_SAVE_WAIT_MS))])
+      .catch(() => undefined)
+      .then(reload);
   };
 
   const trailing = desktop ? (

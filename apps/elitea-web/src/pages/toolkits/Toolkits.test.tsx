@@ -172,6 +172,28 @@ describe('shouldRedirectToCreatePage (pure)', () => {
 });
 
 describe('Toolkits', () => {
+  it('lists the toolkits again on a second visit that finds the page already cached (regression: the cached page was never accumulated, so the "new toolkit" view showed)', async () => {
+    server.use(getListToolkitInstancesMockHandler({ rows: [toolkitRow({ id: 'tk-1', name: 'My GitHub', type: 'github' })], total: 1 }));
+    // A fresh cache entry that is not refetched on remount: what a second visit sees.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const mountPage = () =>
+      render(
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+            <RouterProvider router={buildTestRouter('/toolkits/all', <Toolkits />, 'proj-1')} />
+          </ThemeProvider>
+        </QueryClientProvider>,
+      );
+
+    const first = mountPage();
+    expect(await screen.findByText('My GitHub')).toBeInTheDocument();
+    first.unmount();
+
+    mountPage();
+    expect(await screen.findByText('My GitHub')).toBeInTheDocument();
+    expect(screen.getByTestId('page-toolbar-summary')).toHaveTextContent('1 toolkits');
+  });
+
   it('renders the real, fetched toolkit cards (regression: R1 — used to render a permanently-blank placeholder Box with no data fetch at all)', async () => {
     server.use(getListToolkitInstancesMockHandler({ rows: [toolkitRow({ id: 'tk-1', name: 'My GitHub', type: 'github' })], total: 1 }));
 

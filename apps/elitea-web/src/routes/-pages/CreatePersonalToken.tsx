@@ -236,21 +236,19 @@ export function CreatePersonalTokenPage() {
                 {/* Expiration row */}
                 <Box sx={styles.expirationRow}>
                   <Box sx={styles.measureField}>
-                    <select
+                    <Box
+                      component="select"
                       id="measure"
                       {...register('measure')}
-                      style={styles.select}
+                      sx={styles.select}
                       aria-label={t('entities.token.form.expirationPeriod', 'Expiration period')}
                     >
                       {TOKEN_EXPIRATION_OPTIONS.map((opt) => (
-                        <option
-                          key={opt.value}
-                          value={opt.value}
-                        >
+                        <option key={opt.value} value={opt.value}>
                           {opt.label}
                         </option>
                       ))}
-                    </select>
+                    </Box>
                   </Box>
                   {measure !== 'never' && (
                     <Box sx={styles.valueField}>
@@ -371,10 +369,19 @@ const getStyles = (theme: Theme): {
       marginLeft: '0.5rem',
     },
     input: baseInput,
+    // The open list is the browser's popup: inherited light text on its light
+    // background was unreadable in the dark theme. Colour both explicitly.
     select: {
       ...baseInput,
       cursor: 'pointer',
       appearance: 'auto',
+      color: theme.vars.palette.text.primary,
+      colorScheme: 'light',
+      ...theme.applyStyles('dark', { colorScheme: 'dark' }),
+      '& option': {
+        color: theme.vars.palette.text.primary,
+        backgroundColor: theme.vars.palette.background.paper,
+      },
     },
     numberInput: {
       ...baseInput,

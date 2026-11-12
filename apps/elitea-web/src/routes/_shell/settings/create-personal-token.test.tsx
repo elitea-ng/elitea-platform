@@ -269,3 +269,20 @@ describe('project binding — the §4 error contract', () => {
     expect(alert).toHaveTextContent('The system did not create the token. Try again.');
   });
 });
+
+describe('expiration unit select — readable options', () => {
+  it('colours the select and its option rows from the theme, not the browser popup', async () => {
+    mount();
+    const select = await screen.findByRole('combobox', { name: 'Expiration period' });
+    // Without an explicit colour the options inherit the page's light text in the dark
+    // theme and sit on the browser popup's own light background: invisible until hovered.
+    expect(getComputedStyle(select).color).toContain('var(--');
+    const option = screen.getByRole('option', { name: 'Days' });
+    const rule = Array.from(document.querySelectorAll('style'))
+      .flatMap((sheet) => Array.from(sheet.sheet?.cssRules ?? []))
+      .map((r) => r.cssText)
+      .find((text) => text.includes('option') && text.includes('background-color') && select.className.split(' ').some((c) => c !== '' && text.includes(c)));
+    expect(option).toBeInTheDocument();
+    expect(rule).toBeDefined();
+  });
+});

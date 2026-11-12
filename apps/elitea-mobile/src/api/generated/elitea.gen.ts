@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.51
+ * client contract:    1.52
  * operations sha256:  90f7ce0d441261594219777baafedfb6c11c64e23476f55952ced30a49d7d69e
  */
 export interface paths {
@@ -3703,7 +3703,7 @@ export interface components {
         ErrorResponse: {
             /** @description Human-readable error message */
             error: string;
-            /** @description Only on a 400 for a text property over its length limit (client contract 1.51): the request property, e.g. `name` or `description`. */
+            /** @description Only on a 400 for a text property over its length limit (client contract 1.52): the request property, e.g. `name` or `description`. */
             field?: string;
             /** @description Only with `field`: the limit in characters. An entity name is at most 128 characters and a description at most 2000. */
             max_length?: number;

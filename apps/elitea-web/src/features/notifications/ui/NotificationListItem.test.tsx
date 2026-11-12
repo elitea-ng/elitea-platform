@@ -165,7 +165,7 @@ describe('NotificationListItem', () => {
     // fighting that hover state machine.
     fireEvent.click(button);
     await waitFor(() => expect(onChange).toHaveBeenCalledWith('99', true));
-    expect(sentBody).toEqual({ ids: ['99'], is_seen: true });
+    expect(sentBody).toEqual({ ids: [99], is_seen: true });
   });
 
   it('surfaces a mutation failure via onMarkToggleError instead of throwing', async () => {

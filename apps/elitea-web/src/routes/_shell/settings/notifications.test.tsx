@@ -250,7 +250,7 @@ describe('finding 3 — bulk mark-toggle sends the correct isSeen', () => {
     await user.click(markButton);
 
     await waitFor(() => expect(capturedBodies).toHaveLength(1));
-    expect(capturedBodies[0]).toMatchObject({ is_seen: true, ids: ['1', '2'] });
+    expect(capturedBodies[0]).toMatchObject({ is_seen: true, ids: [1, 2] });
   });
 
   it('sends isSeen:false when every selected row is already read, and labels the button "Mark selected as unread"', async () => {
@@ -279,7 +279,7 @@ describe('finding 3 — bulk mark-toggle sends the correct isSeen', () => {
     await user.click(markButton);
 
     await waitFor(() => expect(capturedBodies).toHaveLength(1));
-    expect(capturedBodies[0]).toMatchObject({ is_seen: false, ids: ['1', '2'] });
+    expect(capturedBodies[0]).toMatchObject({ is_seen: false, ids: [1, 2] });
   });
 
   /**
@@ -342,7 +342,7 @@ describe('finding 3 — bulk mark-toggle sends the correct isSeen', () => {
     await user.click(await screen.findByRole('button', { name: /^Delete$/ }));
 
     await waitFor(() => expect(deleteBodies).toHaveLength(1));
-    expect(deleteBodies[0]).toMatchObject({ ids: ['1'] });
+    expect(deleteBodies[0]).toMatchObject({ ids: [1] });
     expect(await screen.findByText('The selected notifications have been successfully deleted.')).toBeInTheDocument();
   });
 

@@ -146,9 +146,9 @@ describe('API-170 / ACT-053 bulkDeleteNotifications', () => {
         return HttpResponse.json({});
       }),
     );
-    await bulkDeleteNotifications(7, ['a', 'b']);
+    await bulkDeleteNotifications(7, ['11', '12']);
     expect(sink[0]?.method).toBe('DELETE');
-    expect(sink[0]?.body).toEqual({ ids: ['a', 'b'] });
+    expect(sink[0]?.body).toEqual({ ids: [11, 12] });
   });
 });
 
@@ -162,8 +162,8 @@ describe('API-171 / ACT-054 bulkMarkSeenNotifications', () => {
         return HttpResponse.json({});
       }),
     );
-    await bulkMarkSeenNotifications(7, ['a', 'b'], true);
-    expect(sink[0]?.body).toEqual({ ids: ['a', 'b'], is_seen: true });
+    await bulkMarkSeenNotifications(7, ['11', '12'], true);
+    expect(sink[0]?.body).toEqual({ ids: [11, 12], is_seen: true });
   });
 
   it("accepts the 'all' sentinel (NotificationList.jsx:50-54 parity)", async () => {
