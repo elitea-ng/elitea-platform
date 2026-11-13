@@ -287,11 +287,8 @@ export function ToolkitEditorSaveButton({
       values={{ ...editToolDetail, id: toolkitId } as ToolkitFormValues}
       isDirty={isDirty}
       hasErrors={validationState.hasErrors}
-      triggerValidation={() => {
-        // A refused click shows the invalid fields AND says why nothing happened (#2016).
-        validationState.triggerValidation();
-        onBlocked?.();
-      }}
+      // A refused click shows the invalid fields AND says why nothing happened (#2016).
+      triggerValidation={() => { validationState.triggerValidation(); onBlocked?.(); }}
       projectId={saveProjectId}
       saveToolkit={deps.saveToolkit}
       onToolkitSaved={onToolkitSaved}
