@@ -1932,9 +1932,10 @@ where
     let Some(event) = run.assembly_delegation_notice(callee, refusal, occurred_at) else {
         return false;
     };
+    // A progress event, not the turn's final message: Main shows it only
+    // beside the FAILED terminal that follows (FU-335).
     matches!(
-        run.publish_full_message(event, occurred_at_unix_millis)
-            .await,
+        run.publish_progress(event, occurred_at_unix_millis).await,
         Ok(AgentProgressPublishOutcome::Acknowledged { .. })
     )
 }

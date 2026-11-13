@@ -502,8 +502,8 @@ fn the_delegation_notice_names_only_the_node_kind_and_the_toolkit() {
         ),
     ];
     for (callee, node) in [
-        (DelegatedCallee::Agent, "Agent node"),
-        (DelegatedCallee::Pipeline, "pipeline node"),
+        (DelegatedCallee::Agent, "agent"),
+        (DelegatedCallee::Pipeline, "pipeline"),
     ] {
         for (refusal, toolkit) in &cases {
             let event = super::super::events::delegation_refused_assembly_notice(
@@ -513,16 +513,18 @@ fn the_delegation_notice_names_only_the_node_kind_and_the_toolkit() {
                 Utc.timestamp_opt(1_800_000_000, 0).single().expect("time"),
             )
             .expect("the notice builds");
-            let content: String = serde_json::from_slice(&event.content).expect("notice content");
+            let content: Value = serde_json::from_slice(&event.content).expect("notice content");
             let metadata: Value =
                 serde_json::from_slice(&event.response_metadata).expect("notice metadata");
             let shown = format!("{content}{metadata}");
-            assert_eq!(event.r#type, "full_message");
-            assert!(content.contains(node), "{content}");
-            assert_eq!(metadata["delegation_refused"]["toolkit"], json!(toolkit));
-            if let Some(toolkit) = toolkit {
-                assert!(content.contains(&format!("'{toolkit}'")), "{content}");
-            }
+            // A dedicated event Main shows only beside a FAILED terminal,
+            // never the turn's final message; data only, no prose.
+            assert_eq!(event.r#type, "agent_delegation_refused");
+            assert_eq!(content, Value::Null);
+            assert_eq!(
+                metadata["delegation_refused"],
+                json!({"code":"DELEGATION_GRANT_MISSING","node":node,"toolkit":toolkit})
+            );
             for hidden in [
                 "create_issue",
                 "cred-admin-7f3a",
@@ -534,23 +536,30 @@ fn the_delegation_notice_names_only_the_node_kind_and_the_toolkit() {
             }
         }
     }
-    // A control-character or oversized name is bounded before it is shown.
-    let hostile = missing(
-        GrantKind::Toolkit,
-        &format!("evil\n{}", "x".repeat(4_096)),
-        None,
-    );
-    let event = super::super::events::delegation_refused_assembly_notice(
-        &identity,
-        DelegatedCallee::Agent,
-        &hostile,
-        Utc.timestamp_opt(1_800_000_000, 0).single().expect("time"),
-    )
-    .expect("the notice builds");
-    let content: String = serde_json::from_slice(&event.content).expect("notice content");
+    // A control-character or oversized name is bounded before it is sent:
+    // at most `MAX_NOTICE_LABEL_BYTES`, the limit kept, one more cut.
+    let notice_toolkit = |name: String| {
+        let event = super::super::events::delegation_refused_assembly_notice(
+            &identity,
+            DelegatedCallee::Agent,
+            &missing(GrantKind::Toolkit, &name, None),
+            Utc.timestamp_opt(1_800_000_000, 0).single().expect("time"),
+        )
+        .expect("the notice builds");
+        let metadata: Value =
+            serde_json::from_slice(&event.response_metadata).expect("notice metadata");
+        metadata["delegation_refused"]["toolkit"]
+            .as_str()
+            .expect("a toolkit name")
+            .to_owned()
+    };
+    let limit = elitea_agent_runtime::toolkits::MAX_NOTICE_LABEL_BYTES;
+    assert_eq!(notice_toolkit("x".repeat(limit)).len(), limit);
+    assert_eq!(notice_toolkit("x".repeat(limit + 1)).len(), limit);
+    let hostile = notice_toolkit(format!("evil\n{}", "x".repeat(4_096)));
     assert!(
-        !content.contains('\n') && content.len() < 1_024,
-        "{content}"
+        !hostile.contains('\n') && hostile.len() <= limit,
+        "{hostile}"
     );
 }
 

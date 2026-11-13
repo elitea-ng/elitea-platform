@@ -4245,42 +4245,35 @@ pub(crate) fn delegated_authorization_assembly_notice(
     });
     assembly_notice(
         identity,
-        requirement.assembly_notice_message(),
+        "full_message",
+        &Value::String(requirement.assembly_notice_message()),
         &metadata,
         occurred_at,
     )
 }
 
-/// The `full_message` a run refused at start for a delegation grant shows
-/// before its `DelegationGrantMissing` terminal (FU-335): which node kind ran
-/// the refused saved agent or pipeline, and the display name of the toolkit
-/// the missing grant belongs to. It names nothing else: never a tool, a
-/// credential or its reference, a data class, a host or a URL.
+/// The node event type of the notice a run refused at start for a
+/// delegation grant shows beside its `DelegationGrantMissing` terminal
+/// (FU-335). Main shows it only beside a FAILED terminal; the chat renders it
+/// from a registered template.
+pub(crate) const DELEGATION_REFUSED_EVENT: &str = "agent_delegation_refused";
+
+/// The notice of a delegation refused at start (FU-335): data only, which
+/// node kind ran the refused saved agent or pipeline and the bounded display
+/// name of the toolkit the missing grant belongs to. It names nothing else:
+/// never a tool, a credential or its reference, a data class, a host or a URL.
 pub(crate) fn delegation_refused_assembly_notice(
     identity: &AssemblyNoticeIdentity<'_>,
     callee: DelegatedCallee,
     refusal: &DelegationRefusal,
     occurred_at: DateTime<Utc>,
 ) -> Result<NodeEventV1, AgentEventProjectionError> {
-    let (node, saved) = match callee {
-        DelegatedCallee::Agent => ("Agent node", "saved agent"),
-        DelegatedCallee::Pipeline => ("pipeline node", "saved pipeline"),
-    };
     let toolkit = refusal
         .toolkit_display_name()
         .map(crate::toolkits::bounded_label)
         .filter(|name| !name.is_empty());
-    let message = match toolkit.as_deref() {
-        Some(name) => format!(
-            "This run did not start: the {saved} that one of its {node}s runs needs the toolkit '{name}', which its caller does not hold. Attach '{name}' to the caller, or remove it from the {saved}."
-        ),
-        None => format!(
-            "This run did not start: the {saved} that one of its {node}s runs needs a grant its caller does not hold. Grant it to the caller, or remove it from the {saved}."
-        ),
-    };
     let metadata = json!({
         "thread_id": identity.thread_id,
-        "invoked_skills": [],
         "delegation_refused": {
             "code": refusal.code(),
             "node": match callee {
@@ -4288,16 +4281,22 @@ pub(crate) fn delegation_refused_assembly_notice(
                 DelegatedCallee::Pipeline => "pipeline",
             },
             "toolkit": toolkit,
-            "raised_during": "assembly",
         },
     });
-    assembly_notice(identity, message, &metadata, occurred_at)
+    assembly_notice(
+        identity,
+        DELEGATION_REFUSED_EVENT,
+        &Value::Null,
+        &metadata,
+        occurred_at,
+    )
 }
 
-/// One assembly-time `full_message` on a validated identity.
+/// One assembly-time notice event on a validated identity.
 fn assembly_notice(
     identity: &AssemblyNoticeIdentity<'_>,
-    message: String,
+    event_type: &str,
+    content: &Value,
     metadata: &Value,
     occurred_at: DateTime<Utc>,
 ) -> Result<NodeEventV1, AgentEventProjectionError> {
@@ -4318,11 +4317,11 @@ fn assembly_notice(
         return Err(AgentEventProjectionError::invalid_state());
     }
     let event = NodeEventV1 {
-        r#type: "full_message".to_owned(),
+        r#type: event_type.to_owned(),
         stream_id: Some(identity.stream_id.to_owned()),
         message_id: Some(identity.message_id.to_owned()),
         question_id: None,
-        content: serde_json::to_vec(&Value::String(message)).map_err(|_| {
+        content: serde_json::to_vec(content).map_err(|_| {
             AgentEventProjectionError::output(ProtocolError::InvalidInput(
                 "the assembly notice content is malformed",
             ))
