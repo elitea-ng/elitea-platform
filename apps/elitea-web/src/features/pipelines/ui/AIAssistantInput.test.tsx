@@ -142,4 +142,18 @@ describe('AIAssistantInput', () => {
     // The field itself must still work; only the trigger goes.
     expect(ui.getByDisplayValue('draft')).toBeInTheDocument();
   });
+
+  // #2007: Router Condition, State Modifier Jinja template and Decision description are plain
+  // AIAssistantInputs. With the assistant absent they had no way to open the full text at all.
+  it('opens an editor-only full-screen view from the toolbar while the assistant is absent', async () => {
+    resetBackendCapabilitiesForTests();
+    const user = userEvent.setup();
+    const ui = renderInput({ value: 'a long condition', fieldName: 'condition', label: 'Condition' });
+
+    await user.hover(ui.getByDisplayValue('a long condition'));
+    await user.click(ui.getByRole('button', { name: 'Full screen view' }));
+
+    expect(ui.getByLabelText('Close')).toBeInTheDocument();
+    expect(ui.queryByPlaceholderText('Describe your idea to generate or rewrite the value.')).toBeNull();
+  });
 });

@@ -87,6 +87,22 @@ describe('StyledInputEnhancer', () => {
     expect(getAllByDisplayValue('shared value')).toHaveLength(2);
   });
 
+  it('fills the modal instead of pinning the editor to a fixed row count (#2010)', async () => {
+    const user = userEvent.setup();
+    const { getByRole } = renderWithTheme(
+      <StyledInputEnhancer
+        label="Prompt"
+        value="shared value"
+        onChange={() => {}}
+      />,
+    );
+    await user.click(getByRole('button', { name: 'Full screen view' }));
+    const editor = within(getByRole('dialog')).getByRole('textbox');
+    // A fixed `rows`/`minRows` height stopped the text partway down and drew a rule across the modal.
+    expect(editor).toHaveStyle({ height: '100%' });
+    expect(editor).not.toHaveAttribute('rows', '15');
+  });
+
   it('closes the modal via the close button', async () => {
     const user = userEvent.setup();
     const { getByRole, queryByRole } = renderWithTheme(

@@ -27,6 +27,8 @@
 import type { ReactNode } from 'react';
 import { memo, useCallback, useContext, useMemo } from 'react';
 
+import Box from '@mui/material/Box';
+
 import { SingleSelect } from '@/shared/ui/SingleSelect';
 import { ToolListError } from '@/shared/ui/ToolListError';
 import { ToolTypes } from '@/entities/toolkit';
@@ -248,14 +250,16 @@ interface ToolFunctionSelectProps {
 function ToolFunctionSelect({ functionOptions, selectedTool, onChangeTool, onClearTool, disabled, catalogueReadFailed, catalogueDiscoveryDisabled, typeSchemasReadFailed, onRetry }: ToolFunctionSelectProps): ReactNode {
   if (functionOptions.length > 0) {
     return (
-      <SingleSelect
-        label={t('pipelines.flowEditor.baseToolNode.toolLabel', 'Tool')}
-        value={selectedTool}
-        onChange={onChangeTool}
-        options={[...functionOptions]}
-        disabled={disabled}
-        onClear={onClearTool}
-      />
+      <Box className="nopan nodrag nowheel">
+        <SingleSelect
+          label={t('pipelines.flowEditor.baseToolNode.toolLabel', 'Tool')}
+          value={selectedTool}
+          onChange={onChangeTool}
+          options={[...functionOptions]}
+          disabled={disabled}
+          onClear={onClearTool}
+        />
+      </Box>
     );
   }
   if (catalogueReadFailed || typeSchemasReadFailed) {

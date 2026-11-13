@@ -201,6 +201,11 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
       <InputBase
         {...inputBaseProps}
         {...(fieldName.toLowerCase() === 'code' ? { expand: { minRows: 3, maxRows: 8 } } : {})}
+        // Copy + full-screen, hover-revealed, on every field. Router Condition, State Modifier
+        // Jinja template and Decision description had neither, and with the assistant trigger
+        // hidden there was no way to open the full text at all (#2007).
+        actions={{ enabled: true, showCopy: true, showFullScreen: true }}
+        onFullScreen={handleOpenAIAssistant}
       />
       {aiAssistantServed && (
         <Tooltip
@@ -221,7 +226,7 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
           </IconButton>
         </Tooltip>
       )}
-      {aiAssistantServed && showAIAssistantModal && <AIAssistantModal {...modalProps} />}
+      {showAIAssistantModal && <AIAssistantModal {...modalProps} withoutAssistant={!aiAssistantServed} />}
     </Box>
   );
 });

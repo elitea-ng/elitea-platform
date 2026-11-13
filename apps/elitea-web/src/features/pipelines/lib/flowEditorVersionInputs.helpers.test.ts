@@ -75,6 +75,17 @@ describe('toPipelineToolEntries', () => {
     expect(entries[3]).toEqual({ id: '5' });
   });
 
+  it('falls back to the toolkit\'s own selected_tools when the mapping selection is the empty default (#2003)', () => {
+    // `entity_tool_mapping.selected_tools` defaults to `[]`; the runtime treats that as "no narrowing".
+    const entry = only(toPipelineToolEntries([{ id: 7, type: 'github', name: 'gh', selected_tools: [], config: { selected_tools: ['create_issue', 'list_issues'] } }]));
+    expect(entry.settings).toEqual({ selected_tools: ['create_issue', 'list_issues'] });
+  });
+
+  it('lets a non-empty mapping selection narrow the toolkit\'s own list', () => {
+    const entry = only(toPipelineToolEntries([{ id: 7, type: 'github', selected_tools: ['list_issues'], config: { selected_tools: ['create_issue', 'list_issues'] } }]));
+    expect(entry.settings).toEqual({ selected_tools: ['list_issues'] });
+  });
+
   it('filters non-string entries out of selected_tools/tools arrays', () => {
     const entry = only(toPipelineToolEntries([{ id: 6, selected_tools: ['a', 42, null, 'b'], config: { tools: ['x', 7, { name: 'y' }] } }]));
     expect(entry.settings).toEqual({ selected_tools: ['a', 'b'] });

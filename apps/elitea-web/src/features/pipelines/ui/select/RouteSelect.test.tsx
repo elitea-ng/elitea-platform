@@ -132,4 +132,33 @@ describe('RouteSelect', () => {
     }
     expect(nextEdges).toEqual([expect.objectContaining({ source: 'Router 1', target: 'Tool 1' })]);
   });
+
+  it('drops the canvas edge too when a route is removed with its chip X (#2006)', async () => {
+    const user = userEvent.setup();
+    const setYamlJsonObject = vi.fn<(next: YamlPipelineDocument) => void>();
+    const setFlowEdges = vi.fn<SetFlowEdges>();
+    const contextValue = buildFlowEditorContextValue({
+      yamlJsonObject: { nodes: [{ id: 'Router 1', routes: ['Tool 1', 'Tool 2'] }, { id: 'Tool 1' }, { id: 'Tool 2' }] },
+      setYamlJsonObject,
+      setFlowEdges,
+    });
+
+    const { getAllByTestId } = renderWithTheme(
+      <FlowEditorContext.Provider value={contextValue}>
+        <RouteSelect id="Router 1" />
+      </FlowEditorContext.Provider>,
+    );
+
+    // MUI renders a Chip's delete affordance as an svg with this test id.
+    await user.click(getAllByTestId('CancelIcon')[0] as HTMLElement);
+
+    const nextDoc = setYamlJsonObject.mock.calls[0]?.[0];
+    expect(nextDoc?.nodes?.find(node => node.id === 'Router 1')?.['routes']).toEqual(['Tool 2']);
+    const updater = setFlowEdges.mock.calls[0]?.[0];
+    expect(typeof updater).toBe('function');
+    const routeEdge = (target: string): FlowEdge =>
+      ({ id: `edge-${target}`, source: 'Router 1', sourceHandle: 'routerNode_routes', target, type: 'custom' }) as FlowEdge;
+    const remaining = (updater as (prev: FlowEdge[]) => FlowEdge[])([routeEdge('Tool 1'), routeEdge('Tool 2')]);
+    expect(remaining.map(candidate => candidate.target)).toEqual(['Tool 2']);
+  });
 });

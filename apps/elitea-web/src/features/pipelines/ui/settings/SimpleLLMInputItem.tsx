@@ -210,13 +210,21 @@ export interface SimpleLLMInputItemProps {
 }
 
 const containerSx: SxProps<Theme> = {};
-const fieldRowSx: SxProps<Theme> = { display: 'flex', gap: '0.75rem', alignItems: 'flex-start', minHeight: '3.79rem' };
-const typeSelectWrapperSx: SxProps<Theme> = { width: '7.25rem', transform: 'translateY(0.89rem)' };
+/*
+ * Type and Value are two identically-built standard fields (label above, underline below), so
+ * they need no vertical nudge: the old `translateY(0.89rem)` on Type (and on a non-string Value)
+ * put the two underlines and labels at different heights, which read as uneven divider lines
+ * (#2001). A single-line value pins both to the bottom edge, so the underlines meet on one line
+ * whatever the field heights; a multi-line value (chat history, code) pins both to the top, so the
+ * labels meet instead.
+ */
+function fieldRowSx(isMultiline: boolean): SxProps<Theme> {
+  return { display: 'flex', gap: '0.75rem', alignItems: isMultiline ? 'flex-start' : 'flex-end', minHeight: '3.79rem' };
+}
+const typeSelectWrapperSx: SxProps<Theme> = { width: '7.25rem' };
 const selectSx: SxProps<Theme> = { marginBottom: '0rem' };
 
-function valueWrapperSx(isStringType: boolean): SxProps<Theme> {
-  return { flex: 1, transform: isStringType ? undefined : 'translateY(0.89rem)' };
-}
+const valueWrapperSx: SxProps<Theme> = { flex: 1 };
 
 const AI_ASSISTANT_VARIABLE_NAMES: ReadonlySet<string> = new Set(['system', 'task', 'code', 'printer', 'user_message']);
 
@@ -285,7 +293,7 @@ export function SimpleLLMInputItem(props: SimpleLLMInputItemProps): ReactNode {
     <Box sx={containerSx}>
       <HeadingChip label={capitalizeFirstChar(variableName.replaceAll('_', ' '))} />
 
-      <Box sx={fieldRowSx}>
+      <Box sx={fieldRowSx(isMultiline)}>
         {/*
          * `nopan nodrag` — React Flow's escape hatch, and it is load-bearing
          * for the two `SingleSelect`s below. The canvas's drag layer handles
@@ -325,7 +333,7 @@ export function SimpleLLMInputItem(props: SimpleLLMInputItemProps): ReactNode {
         </Box>
         <Box
           className="nopan nodrag"
-          sx={valueWrapperSx(isStringType)}
+          sx={valueWrapperSx}
         >
           {isStringType ? (
             <NodeFieldInput

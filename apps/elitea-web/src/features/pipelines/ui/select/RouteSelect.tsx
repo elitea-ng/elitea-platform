@@ -96,18 +96,13 @@ export function RouteSelect(props: RouteSelectProps): ReactNode {
     return [...optionsNotInState, ...nodeOptions];
   }, [routesFromNode, nodeOptions]);
 
+  // Same path as deselecting in the menu: the YAML route AND its canvas edge go together.
+  // Writing only the YAML (as this did) left an orphaned connection line behind (#2006).
   const onDeleteOption = useCallback(
     (value: string) => {
-      if (!setYamlJsonObject) return;
-      FlowEditorHelpers.updateYamlNode(
-        id,
-        fieldName,
-        routesFromNode.filter(item => item !== value),
-        yamlJsonObject,
-        setYamlJsonObject,
-      );
+      onChangeInput(routesFromNode.filter(item => item !== value));
     },
-    [id, fieldName, routesFromNode, setYamlJsonObject, yamlJsonObject],
+    [onChangeInput, routesFromNode],
   );
 
   return (

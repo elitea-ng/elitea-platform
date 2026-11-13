@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useCallback, useState } from 'react';
 
 import Box from '@mui/material/Box';
+import MuiTextField from '@mui/material/TextField';
 
 import { BaseModal } from '../BaseModal';
 import { CharacterCounter } from '../CharacterCounter';
@@ -27,12 +28,24 @@ function FullScreenEditor({ value, onChange, ariaLabel, htmlInputProps }: FullSc
   const stringValue = typeof value === 'string' ? value : '';
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <InputBase
+      {/*
+        Fills the modal. This was an `InputBase` pinned to `expand={{ minRows: 15,
+        maxRows: 15 }}`: fifteen rows is a fixed height, so on any real modal the
+        text stopped partway down, the standard-variant underline drew a cyan rule
+        across the middle, and the rest was dead space (#2010). A plain multiline
+        field whose root and textarea take the available height has neither.
+      */}
+      <MuiTextField
+        multiline
+        fullWidth
+        variant="standard"
         value={value}
         onChange={onChange}
-        expand={{ minRows: 15, maxRows: 15 }}
-        slotProps={{ htmlInput: { ...htmlInputProps, 'aria-label': ariaLabel } }}
-        sx={{ flex: 1, minHeight: 0 }}
+        sx={{ flex: 1, minHeight: 0, display: 'flex' }}
+        slotProps={{
+          input: { disableUnderline: true, sx: { flex: 1, alignItems: 'flex-start', overflow: 'auto' } },
+          htmlInput: { ...htmlInputProps, 'aria-label': ariaLabel, style: { height: '100%', overflow: 'auto' } },
+        }}
       />
       {maxLength !== undefined && (
         <CharacterCounter

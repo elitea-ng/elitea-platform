@@ -76,7 +76,7 @@ function resolveToolkitToolRows(
   getSelectedTools: (type: string | undefined) => readonly string[],
 ): readonly LLMToolkitToolRow[] {
   return toolNames.map(toolkitName => {
-    const toolkitObj = allToolkits.find(tk => (tk.toolkit_name ?? getToolkitNameFromSchema(tk)) === toolkitName);
+    const toolkitObj = allToolkits.find(tk => getToolkitNameFromSchema(tk) === toolkitName || tk.toolkit_name === toolkitName);
     const settings = toolkitObj?.settings as { readonly selected_tools?: readonly (string | { readonly name?: string })[] } | undefined;
     const rawTools = ((toolkitObj as unknown as { tools?: readonly (string | { name?: string })[] })?.tools ?? settings?.selected_tools ?? []) as readonly (
       | string

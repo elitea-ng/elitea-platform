@@ -78,7 +78,7 @@ export function ToolkitsSelect(props: ToolkitsSelectProps): ReactNode {
 
       for (const toolkitName of newValue) {
         const toolkitObj = versionTools.find(
-          candidate => (candidate.toolkit_name ?? getToolkitNameFromSchema(candidate)) === toolkitName,
+          candidate => getToolkitNameFromSchema(candidate) === toolkitName || candidate.toolkit_name === toolkitName,
         );
         const availableTools = (toolkitObj?.tools ?? toolkitObj?.settings?.selected_tools ?? []).map(tool =>
           typeof tool === 'string' ? tool : (tool.name ?? ''),
