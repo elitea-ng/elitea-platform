@@ -127,8 +127,10 @@ export async function createArtifactBucket(
 ): Promise<void> {
   // `retention_days` is omitted (not sent as null) when unset, so the project's
   // default retention still applies server-side.
+  // Converted outside the try: a non-numeric id is a caller bug and must surface as such.
+  const id = toProjectID(projectId);
   try {
-    await createBucket(toProjectID(projectId), {
+    await createBucket(id, {
       name,
       ...(retentionDays === undefined || retentionDays === null ? {} : { retention_days: retentionDays }),
     });
