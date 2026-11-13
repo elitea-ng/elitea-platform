@@ -65,7 +65,8 @@ export function useArtifactMutations(projectId: string | undefined) {
     ]);
 
   const createBucket = useMutation({
-    mutationFn: (name: string) => createArtifactBucket(requiredProjectId(), name),
+    mutationFn: ({ name, retentionDays }: { readonly name: string; readonly retentionDays?: number | null }) =>
+      createArtifactBucket(requiredProjectId(), name, retentionDays),
     onSuccess: refreshBuckets,
   });
   const pinBucket = useMutation({

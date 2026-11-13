@@ -114,6 +114,7 @@ describe('artifacts API', () => {
     vi.mocked(batchDeleteObjects).mockResolvedValue(okResponse as never);
 
     await createArtifactBucket('1', 'docs');
+    await createArtifactBucket('1', 'kept', 7);
     await setArtifactBucketRetention('1', 'docs', 30);
     await setArtifactBucketPinned('1', 'reports', true);
     await removeArtifactBucket('1', 'reports');
@@ -122,6 +123,7 @@ describe('artifacts API', () => {
 
     // projectId is a NUMERIC path segment in the S11 artifacts API.
     expect(createBucket).toHaveBeenCalledWith(1, { name: 'docs' });
+    expect(createBucket).toHaveBeenCalledWith(1, { name: 'kept', retention_days: 7 });
     expect(updateBucket).toHaveBeenCalledWith(1, 'docs', { retention_days: 30 });
     expect(updateBucket).toHaveBeenCalledWith(1, 'reports', { is_pinned: true });
     expect(deleteBucket).toHaveBeenCalledWith(1, 'reports');

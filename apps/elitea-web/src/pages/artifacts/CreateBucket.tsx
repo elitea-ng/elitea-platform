@@ -20,6 +20,7 @@ const BUCKET_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9-]*$/;
 
 export function validateBucketName(name: string): string {
   if (name.trim() === '') return 'Name is required.';
+  if (name.trim().length < 2) return 'Name must be at least 2 characters.';
   if (name.length > 56) return 'Name must not exceed 56 characters.';
   if (!BUCKET_NAME_PATTERN.test(name)) {
     return 'Start with a letter and use only letters, numbers, and hyphens.';
@@ -175,7 +176,7 @@ export function CreateBucket(): ReactNode {
       return;
     }
     void mutations.createBucket
-      .mutateAsync(name.trim())
+      .mutateAsync({ name: name.trim(), retentionDays: parseRetentionDays(retention) })
       .then(() => goToBucket(name.trim()))
       .catch(() => setError('Failed to create the bucket.'));
   };
@@ -206,22 +207,15 @@ export function CreateBucket(): ReactNode {
           // both reserves the line and keeps the naming rule on screen.
           helperText={nameHelperText(isEditing, touched, validationError)}
           onBlur={() => setTouched(true)}
-          onChange={(event) => setName(event.target.value)}
+          // The server only accepts lowercase names (`^[a-z][a-z0-9-]{1,62}$`); typing
+          // `TestBucket` yields `testbucket` instead of a silent 400 (#2002).
+          onChange={(event) => setName(event.target.value.toLowerCase())}
         />
-        {isEditing ? (
-          <RetentionField
-            value={retention}
-            error={retentionError}
-            onChange={setRetention}
-          />
-        ) : (
-          <Typography variant="bodySmall">
-            {t(
-              'artifacts.create.retentionHelp',
-              'Retention settings are managed by the storage service and are not part of the current bucket API.',
-            )}
-          </Typography>
-        )}
+        <RetentionField
+          value={retention}
+          error={retentionError}
+          onChange={setRetention}
+        />
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button
             type="submit"

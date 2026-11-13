@@ -106,8 +106,17 @@ function toProjectID(projectId: string): number {
   return parsed;
 }
 
-export async function createArtifactBucket(projectId: string, name: string): Promise<void> {
-  await createBucket(toProjectID(projectId), { name });
+export async function createArtifactBucket(
+  projectId: string,
+  name: string,
+  retentionDays?: number | null,
+): Promise<void> {
+  // `retention_days` is omitted (not sent as null) when unset, so the project's
+  // default retention still applies server-side.
+  await createBucket(toProjectID(projectId), {
+    name,
+    ...(retentionDays === undefined || retentionDays === null ? {} : { retention_days: retentionDays }),
+  });
 }
 
 /**

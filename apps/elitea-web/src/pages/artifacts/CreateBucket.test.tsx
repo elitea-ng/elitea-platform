@@ -84,11 +84,23 @@ describe('CreateBucket', () => {
     await user.clear(input);
     await user.type(input, 'reports');
     await user.click(screen.getByRole('button', { name: 'Create bucket' }));
-    expect(mocks.createBucket).toHaveBeenCalledWith('reports');
+    expect(mocks.createBucket).toHaveBeenCalledWith({ name: 'reports', retentionDays: null });
     await waitFor(() => {
       expect(router.state.location.pathname).toBe('/artifacts');
       expect(router.state.location.search).toMatchObject({ bucket: 'reports' });
     });
+  });
+
+  it('lowercases the typed name and sends the retention window on create (#2002, #2018)', async () => {
+    const user = userEvent.setup();
+    renderArtifactsRoute(<CreateBucket />, '/artifacts/create-bucket');
+    const input = await screen.findByLabelText('Name');
+    await user.clear(input);
+    await user.type(input, 'TestBucket');
+    expect(input).toHaveValue('testbucket');
+    await user.type(screen.getByLabelText('Retention (days)'), '14');
+    await user.click(screen.getByRole('button', { name: 'Create bucket' }));
+    expect(mocks.createBucket).toHaveBeenCalledWith({ name: 'testbucket', retentionDays: 14 });
   });
 
   it('keeps invalid input local and supports cancellation', async () => {
