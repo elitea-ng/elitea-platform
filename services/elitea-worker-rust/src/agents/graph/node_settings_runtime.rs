@@ -16,6 +16,7 @@ use elitea_agent_runtime::graph::node_settings::{
     OnNodeError, executed_once, mark_executed_once, neutral_value, node_error_count,
     node_error_support_ref,
 };
+use elitea_agent_runtime::graph::{router, state_modifier};
 use elitea_faults::{Code, codes};
 use serde_json::{Value, json};
 
@@ -33,19 +34,24 @@ pub(crate) const fn family_failure(family: DeterministicFamily) -> Code {
     }
 }
 
+/// The `GraphError::Other` messages a wrapped deterministic body is known to
+/// raise for its own work failing. Router, Split Out and Aggregate fail with
+/// `NodeExecutionFailed` only (`router.rs` `node_failure`,
+/// `data_shaping.rs`).
+const FAMILY_OTHER_FAILURES: [&str; 2] = [
+    state_modifier::TEMPLATE_FAILED,
+    state_modifier::OUTPUT_BOUND_EXCEEDED,
+];
+
 /// Whether a body error is a failure of the node's own work, which its
-/// settings may settle (D6). Everything else propagates: interrupts,
-/// checkpoint, recursion, channel and timeout errors, and the recovery and
-/// settings integrity codes.
+/// settings may settle (D6). An allowlist: `NodeExecutionFailed` and the exact
+/// messages in `FAMILY_OTHER_FAILURES`. Everything else propagates:
+/// interrupts, checkpoint, recursion, channel and timeout errors, the recovery
+/// and settings integrity codes, and any `Other` not on the list.
 pub(super) fn settled_by_settings(error: &GraphError) -> bool {
     match error {
         GraphError::NodeExecutionFailed { .. } => true,
-        GraphError::Other(message) => {
-            !message.starts_with("pipeline.node_recovery.")
-                && !message.starts_with("pipeline.node_errors.")
-                && !message.starts_with("pipeline.node_settings.")
-                && !message.starts_with("graph.")
-        }
+        GraphError::Other(message) => FAMILY_OTHER_FAILURES.contains(&message.as_str()),
         _ => false,
     }
 }
@@ -160,7 +166,8 @@ impl<N: Node> SettingsNode<N> {
         let route = match (on_error, self.admitted.router_default.as_ref()) {
             (OnNodeError::ErrorOutput, _) => self.settings().error_transition.clone(),
             (OnNodeError::Continue, Some((target, label))) => {
-                output = output.with_update("router_output", Value::String(label.clone()));
+                output =
+                    output.with_update(router::ROUTER_OUTPUT_KEY, Value::String(label.clone()));
                 Some(target.clone())
             }
             _ => None,

@@ -353,12 +353,18 @@ fn only_a_body_failure_is_settled() {
     assert!(settled_by_settings(&GraphError::Other(
         "state modifier template evaluation failed".to_owned()
     )));
+    assert!(settled_by_settings(&GraphError::Other(
+        "state modifier output exceeds its resource bound".to_owned()
+    )));
     for never in [
         GraphError::RecursionLimitExceeded(100),
         GraphError::CheckpointError("lease lost".to_owned()),
         GraphError::Other("pipeline.node_recovery.invalid_activation".to_owned()),
         GraphError::Other("pipeline.node_errors.exhausted".to_owned()),
         GraphError::Other("graph.state.reducer_limit: node_errors".to_owned()),
+        // B1: an Other no family is known to raise is never continued.
+        GraphError::Other("some future body failure".to_owned()),
+        GraphError::Other("state modifier template evaluation failed: extra".to_owned()),
         GraphError::NodeTimedOut {
             node: "n".to_owned(),
             elapsed: std::time::Duration::from_secs(1),

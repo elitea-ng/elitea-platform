@@ -23,6 +23,9 @@ use super::state_modifier::template_value;
 use super::yaml::{valid_graph_id, valid_output_key};
 use crate::bounded_yaml;
 
+/// The state key a Router writes its chosen label to.
+pub const ROUTER_OUTPUT_KEY: &str = "router_output";
+
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
 const MAX_CONDITION_BYTES: usize = 64 * 1024;
 const MAX_RENDERED_BYTES: usize = 8 * 1024;
@@ -264,7 +267,7 @@ impl Node for RouterNode {
             tracing::Span::current().record("stage", "route_selection");
             let (target, label) = self.definition.routes.resolve(&rendered);
             Ok(NodeOutput::new()
-                .with_update("router_output", Value::String(label.to_owned()))
+                .with_update(ROUTER_OUTPUT_KEY, Value::String(label.to_owned()))
                 .with_goto([graph_target(target)]))
         }
         .instrument(span.clone())

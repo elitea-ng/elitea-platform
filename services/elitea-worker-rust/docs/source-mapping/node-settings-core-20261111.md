@@ -116,9 +116,15 @@ No new dependency in any tree.
 - `SettingsNode<N>` (`node_settings_runtime.rs`) wraps a State Modifier, Router, Split Out or Aggregate only when its
   settings are non-default (`compiler.rs:1989` `bind_settled`). Every other node binds exactly as before.
 - A body error is settled only when it is the node's own work failing (`settled_by_settings`,
-  `node_settings_runtime.rs:40`): `NodeExecutionFailed`, or `Other` that is not a `pipeline.node_recovery.*`,
-  `pipeline.node_errors.*`, `pipeline.node_settings.*` or `graph.*` code. Interrupts, checkpoint, recursion,
-  channel and node-timeout errors always propagate (D6; test `only_a_body_failure_is_settled`).
+  `node_settings_runtime.rs`). This is an **allowlist** (review B1): `NodeExecutionFailed`, which Router, Split Out
+  and Aggregate raise, or an `Other` whose message is exactly one of `FAMILY_OTHER_FAILURES`. Those are the State
+  Modifier's `state_modifier::TEMPLATE_FAILED` and `OUTPUT_BOUND_EXCEEDED`, the same constants the body raises.
+  - Every other error propagates: interrupts, checkpoint, recursion, channel and node-timeout errors, every
+    `pipeline.*`/`graph.*` integrity code, and any `Other` a body might raise in the future (D6; test
+    `only_a_body_failure_is_settled`, which includes an unknown `Other`).
+  - **A State Modifier output-bound breach can be continued (review N2).** `OUTPUT_BOUND_EXCEEDED` is the node's
+    own result exceeding its resource bound. Nothing was written, and the bound itself holds, so settling it as a
+    node failure is a documented D6 choice. The entry carries the family's registry code, never the oversized value.
 - `continue`: one entry appended, declared outputs untouched or neutral (`always_output_data`), the normal
   transition; a Router writes its default label to `router_output` and takes `default_output`. `error_output`: the
   same entry plus `goto(error_transition)`. One node output, so one super-step update, checkpointed by the graph.
@@ -477,3 +483,11 @@ The only conflict was `en.json`, appended on both sides; both were kept. Counts 
 | faults gate | `faults`, `grpcrecover`, `httperr`, `logx` ok; `cmd/faultsgen` no test files |
 | Web tsc, oxlint, `i18n-backfill --check` | clean |
 | Web pipelines + i18n vitest | 247 files, 2779 passed, 1 expected fail |
+
+## 19. Review of #2055 (`REVIEW-2055.md`): B1, N1, N2
+
+| Item | Change | Proof |
+|---|---|---|
+| B1 | `settled_by_settings` is an allowlist (`FAMILY_OTHER_FAILURES` next to `family_failure`); the State Modifier's two messages are named constants in `state_modifier.rs` used by both the body and the list | `only_a_body_failure_is_settled` adds an unknown `Other` and a near-match message: both failed against the old denylist, both pass now |
+| N1 | `router::ROUTER_OUTPUT_KEY`, used by `router.rs` and the settings layer | compile, existing Router tests |
+| N2 | §3 states that an output-bound breach can be continued | — |
