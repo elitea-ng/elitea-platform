@@ -11,6 +11,7 @@ import { BaseModal } from '@/shared/ui/BaseModal';
 import { isValidPublishVersionName, type NormalizedPublishValidation, type PublishCategory } from '../lib/publishValidation';
 import { PublishPreparationStep } from './PublishPreparationStep';
 import { PublishValidationReport } from './PublishValidationReport';
+import { PublishWizardMessages } from './PublishWizardMessages';
 
 /**
  * The three-step publish wizard, matching the one production shows
@@ -161,19 +162,7 @@ export function PublishVersionDialog({
             other two are rendered so a reader can see where they are in the
             wizard rather than only which button is next.
           */}
-          <Box sx={stepperSx}>
-            {STEPS.map((name) => (
-              <Typography
-                key={name}
-                component="span"
-                variant="labelSmall"
-                color={name === step ? 'text.primary' : 'text.secondary'}
-                {...(name === step ? { 'data-testid': 'publish-step' } : {})}
-              >
-                {stepLabel(name)}
-              </Typography>
-            ))}
-          </Box>
+          <PublishStepper step={step} />
           {step === 'preparation' ? (
             <PublishPreparationStep
               versionName={versionName}
@@ -188,64 +177,36 @@ export function PublishVersionDialog({
           ) : (
             validation !== undefined && <PublishValidationReport validation={validation} />
           )}
-          {step === 'preparation' && attempted && (
-            <Typography
-              role="alert"
-              variant="bodySmall"
-              data-testid="publish-missing-summary"
-            >
-              {t(
-                'features.agentLifecycle.publish.missingSummary',
-                'Some required fields are missing. Fill in the marked fields to continue.',
-              )}
-            </Typography>
-          )}
-          {step === 'preparation' && !categoryChosen && (
-            <Typography variant="bodySmall">
-              {t(
-                'features.agentLifecycle.publish.categoryRequired',
-                'Choose a category. The Catalog groups published agents by it, and an agent with no category does not appear there.',
-              )}
-            </Typography>
-          )}
-          {blocked && (
-            <Typography
-              role="alert"
-              variant="bodySmall"
-            >
-              {t('features.agentLifecycle.publish.blocked', 'This version cannot be published until validation passes.')}
-            </Typography>
-          )}
-          {blocked && publishRefused && (
-            <Box
-              role="alert"
-              data-testid="publish-blocked-reason"
-            >
-              {(validation?.criticalIssues ?? []).map((finding) => (
-                <Typography
-                  key={finding.id}
-                  variant="bodySmall"
-                >
-                  {finding.text}
-                </Typography>
-              ))}
-              {(validation?.criticalIssues.length ?? 0) === 0 && validation?.summary !== undefined && (
-                <Typography variant="bodySmall">{validation.summary}</Typography>
-              )}
-            </Box>
-          )}
-          {error !== undefined && (
-            <Typography
-              role="alert"
-              variant="bodySmall"
-              data-testid="publish-error"
-            >
-              {error}
-            </Typography>
-          )}
+          <PublishWizardMessages
+            isPreparation={step === 'preparation'}
+            attempted={attempted}
+            categoryChosen={categoryChosen}
+            blocked={blocked}
+            publishRefused={publishRefused}
+            validation={validation}
+            error={error}
+          />
         </Box>
       }
     />
+  );
+}
+
+function PublishStepper({ step }: { readonly step: Step }): ReactNode {
+  return (
+    <Box sx={stepperSx}>
+      {STEPS.map((name) => (
+        <Typography
+          key={name}
+          component="span"
+          variant="labelSmall"
+          color={name === step ? 'text.primary' : 'text.secondary'}
+          {...(name === step ? { 'data-testid': 'publish-step' } : {})}
+        >
+          {stepLabel(name)}
+        </Typography>
+      ))}
+    </Box>
   );
 }
 
