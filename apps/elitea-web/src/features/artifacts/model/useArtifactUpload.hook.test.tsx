@@ -135,9 +135,9 @@ describe('useArtifactUpload', () => {
   /* #2004 — a plain-text or empty refusal is not "blocked by a proxy"; each file names its own reason */
   it('names the server refusal per file, and only calls HTML a proxy block', async () => {
     const hook = renderUpload([]);
-    vi.mocked(uploadArtifactObject).mockImplementation(async (input: { file: File }) => ({
+    vi.mocked(uploadArtifactObject).mockImplementation(async (input) => ({
       ok: false,
-      error: input.file.name === 'a.pdf'
+      error: input.fileKey.endsWith('a.pdf')
         ? { kind: 'http', status: 413, url: '/upload', body: 'Payload Too Large' }
         : { kind: 'http', status: 502, url: '/upload', body: '<html>Bad gateway</html>' },
     }) as never);
