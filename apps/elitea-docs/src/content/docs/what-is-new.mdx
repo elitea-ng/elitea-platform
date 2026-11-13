@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Pipeline layout, toolkit Test Settings and index history
+
+Scrolling the settings panel on the left of the pipeline editor no longer scrolls the canvas away: the panel scrolls on its own. A pipeline whose editor is read-only (no permission to update pipelines in the project, or a published pipeline) now says so above the Flow and YAML views. Running `index_data` from a toolkit's **Test Settings** starts an index run, as the Indexes tab does, instead of failing with "does not support the index_data tool"; the result panel points to the Indexes tab. In an index's **History**, the first "Created" entry no longer reads "Successfully reindexed" with zero counts, and a failure's **Details for support** no longer shows the placeholder `welcome_message_id`.
+
 ## Pipeline editor fixes
 
 In the pipeline editor, the Agent, Toolkit and MCP node pickers and the LLM node's **Output contract** now open inside the node, and an LLM node's **Toolkits** list shows the tools a toolkit has enabled instead of **None (0/0)**. Removing a route from a Router node with the chip's **X** also removes its connection line. Router **Condition**, State Modifier **Jinja Template** and Decision **Description** fields get a copy and full-screen button on hover, and the plain **Value** full-screen editor now fills the whole window. The Type and Value rows of node inputs line up on one underline.

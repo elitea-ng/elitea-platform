@@ -35,11 +35,9 @@
  *
  *  1. **No model selector.** A synchronous tool run asks no model anything.
  *     `TestToolSettings`' `llm`/`LLMModelSelector` became optional for this.
- *  2. **`index_data` is offered but cannot run here.** The Go start handler
- *     admits `index_data` on a different, asynchronous route
- *     (`internal/api/v2/indexing/start_handler.go`), which the Indexes tab
- *     owns. Pressing Run on it here answers the route's own refusal rather
- *     than pretending; the honest message is the one the server writes.
+ *  2. **`index_data` starts an index run.** It is admitted on the asynchronous
+ *     route the Indexes tab uses (`useToolkitTestToolRun` calls
+ *     `startIndexExecution`); progress and result live in the Indexes tab.
  *  3. **No run history.** `ConfigurationTab` already renders the
  *     `ViewRunHistoryButton` above this pane, through its own slot.
  */

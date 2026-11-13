@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import { t } from '@/shared/i18n';
 import { handleCopy } from '@/shared/lib/clipboard';
+import { WELCOME_MESSAGE_ID } from '@/shared/lib/enums';
 
 interface FailureReferenceProps {
   readonly messageId: string;
@@ -10,8 +11,12 @@ interface FailureReferenceProps {
 
 /** Copy public identifiers without copying conversation content or internal traces. */
 export function FailureReference({ messageId, code }: FailureReferenceProps): ReactNode {
-  const reference = [code ? `Error code: ${code}` : undefined, `Message ID: ${messageId}`]
+  // The welcome message is a client-side placeholder (it carries the index run
+  // history's failure as well): its id names nothing a server log could find.
+  const realMessageId = messageId === WELCOME_MESSAGE_ID ? undefined : messageId;
+  const reference = [code ? `Error code: ${code}` : undefined, realMessageId ? `Message ID: ${realMessageId}` : undefined]
     .filter(Boolean).join('\n');
+  if (!reference) return null;
   return (
     <Box component="details" sx={{ mt: 1 }} data-testid="failure-reference">
       <Typography component="summary" variant="bodyMedium" sx={{ cursor: 'pointer' }}>

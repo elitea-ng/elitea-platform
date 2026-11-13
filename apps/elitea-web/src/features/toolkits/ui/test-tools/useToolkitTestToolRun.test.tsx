@@ -43,6 +43,27 @@ describe('useToolkitTestToolRun', () => {
     expect(result.current.isRunning).toBe(false);
   });
 
+  it('starts index_data through the index start route instead of the inline tool run', async () => {
+    let inline = false;
+    let body: unknown;
+    server.use(
+      http.post(RUN_PATH, () => { inline = true; return HttpResponse.json({ ok: false, reason: 'unsupported_toolkit' }, { status: 422 }); }),
+      http.post('/api/v2/elitea_core/test_toolkit_tool/prompt_lib/:projectId', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ task_id: 'run-1' });
+      }),
+    );
+
+    const { result } = renderRun();
+    await act(async () => {
+      await result.current.run('index_data', { index_name: 'docs' });
+    });
+
+    expect(inline).toBe(false);
+    expect(body).toMatchObject({ tool_name: 'index_data', tool_params: { index_name: 'docs' } });
+    expect(result.current.outcome).toEqual({ kind: 'indexStarted', taskId: 'run-1' });
+  });
+
   it('reports a tool error as a settled outcome rather than a rejection', async () => {
     server.use(http.post(RUN_PATH, () => HttpResponse.json({ ok: false, error: 'the repository does not exist' })));
 

@@ -164,6 +164,12 @@ describe('ApplicationAnswer', () => {
     expect(await navigator.clipboard.readText()).toBe('Message ID: failed-message');
   });
 
+  it('does not present the welcome placeholder id as a failure reference', () => {
+    const answer = { id: 'welcome_message_id', role: 'assistant', content: 'Failed', exception: 'The run failed.' } as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+    expect(screen.queryByTestId('failure-reference')).not.toBeInTheDocument();
+  });
+
   it('does not show an error reference for successful responses', () => {
     const answer = { id: 'success', role: 'assistant', content: 'Complete' } as ChatMessage;
     renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);

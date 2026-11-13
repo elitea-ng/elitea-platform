@@ -58,6 +58,7 @@ export type TestToolkitToolOutcome =
   | { readonly kind: 'unknownTool'; readonly message: string }
   | { readonly kind: 'timeout'; readonly taskId: string | undefined; readonly lookup?: 'request'; readonly message: string }
   | { readonly kind: 'unconfirmed'; readonly message: string }
+  | { readonly kind: 'indexStarted'; readonly taskId: string }
   | { readonly kind: 'failure'; readonly message: string };
 
 interface ResponseBodyLike {

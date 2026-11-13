@@ -69,7 +69,7 @@ function referenceLabel(lookup?: 'request'): string {
   return lookup === 'request' ? t('features.toolkits.testToolPane.resultRequestId', 'Request reference:') : t('features.toolkits.testToolPane.resultJobId', 'Job id:');
 }
 
-function OutcomeBody({ outcome }: { readonly outcome: TestToolkitToolOutcome }): ReactNode {
+function OutcomeBody({ outcome }: { readonly outcome: Exclude<TestToolkitToolOutcome, { kind: 'indexStarted' }> }): ReactNode {
   switch (outcome.kind) {
     case 'ok':
       return (
@@ -97,7 +97,6 @@ function OutcomeBody({ outcome }: { readonly outcome: TestToolkitToolOutcome }):
     case 'skipped':
       return <Typography variant="bodyMedium">{t('features.toolkits.testToolPane.skipped', 'Tool run skipped.')}</Typography>;
     case 'toolError':
-      return <Typography variant="bodyMedium">{outcome.message}</Typography>;
     case 'unsupportedToolkit':
     case 'unknownTool':
     case 'failure':
@@ -118,6 +117,15 @@ function OutcomeBody({ outcome }: { readonly outcome: TestToolkitToolOutcome }):
         </>
       );
   }
+}
+
+function IndexStartedBody({ taskId }: { readonly taskId: string }): ReactNode {
+  return (
+    <>
+      <Typography variant="bodyMedium">{t('features.toolkits.testToolPane.indexStarted', 'Indexing started. Follow its progress and result in the Indexes tab.')}</Typography>
+      <Typography variant="bodySmall" data-testid="test-tool-result-task-id">{referenceLabel()} {taskId}</Typography>
+    </>
+  );
 }
 
 export function TestToolResultPanel({ outcome, isRunning }: TestToolResultPanelProps): ReactNode {
@@ -144,7 +152,7 @@ export function TestToolResultPanel({ outcome, isRunning }: TestToolResultPanelP
       // the platform already gives that meaning to.
       component="output"
     >
-      <OutcomeBody outcome={outcome} />
+      {outcome.kind === 'indexStarted' ? <IndexStartedBody taskId={outcome.taskId} /> : <OutcomeBody outcome={outcome} />}
     </Box>
   );
 }

@@ -60,6 +60,27 @@ export interface UseIndexHistoryResult {
   readonly setProgressingIndexHistoryRecovered: (value: boolean) => void;
 }
 
+// The permanent first entry of an index and a stopped run carry no counts: a
+// "Successfully reindexed" line with zeros there contradicts the failed run
+// recorded right after it.
+function getCountlessHistoryMessage(state: unknown, isFailed: boolean, updatedOn: unknown): Message[] | undefined {
+  const content =
+    state === IndexStatuses.created
+      ? 'The index was created. No indexing run has finished yet.'
+      : state === IndexStatuses.cancelled
+        ? 'Indexing was stopped before it finished.'
+        : undefined;
+  if (content === undefined || isFailed) return undefined;
+  return [
+    {
+      id: WELCOME_MESSAGE_ID,
+      role: ROLES.Assistant,
+      content,
+      ...(typeof updatedOn === 'number' ? { createdAt: new Date(fromUnixTime(updatedOn)).toISOString() } : {}),
+    },
+  ];
+}
+
 function getHistoryMockMessage(
   showMockMessage: boolean,
   indexHistoryItem: Record<string, unknown> | null,
@@ -72,6 +93,9 @@ function getHistoryMockMessage(
 
   const getFailedTrace = (): unknown =>
     indexHistoryItem['error'] ?? 'The system encountered an issue and was unable to complete the scheduled reindexing operation';
+
+  const countless = getCountlessHistoryMessage(state, isFailed, indexHistoryItem['updated_on']);
+  if (countless) return countless;
 
   const executionSummary = isFailed
     ? 'The system encountered an issue and was unable to complete the scheduled reindexing operation'

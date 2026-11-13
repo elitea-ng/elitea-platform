@@ -22,6 +22,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { TestToolkitToolOutcome } from '../../api/toolkitTestRun';
 import { readToolkitToolResult, testToolkitTool } from '../../api/toolkitTestRun';
+import { startIndexExecution } from '../../indexes/api/indexesApi';
+import { isBoundedIndexExecutionTaskId, parseIndexStartConflictTaskId } from '../../indexes/lib/helpers/indexExecution.helpers';
 import { forgetToolkitTest, recalledToolkitTest, rememberToolkitTest, rememberToolkitTestOutcome } from '../../api/toolkitTestRecovery';
 
 export interface UseToolkitTestToolRunParams {
@@ -41,6 +43,24 @@ export interface UseToolkitTestToolRunResult {
   readonly reset: () => void;
   readonly authorize: (reference: string) => Promise<void>;
   readonly skip: () => void;
+}
+
+/**
+ * `index_data` is never run inline by a tool call (ADR-0030): the worker refuses
+ * it as unsupported. It is admitted through the asynchronous index start route,
+ * the same one the Indexes tab uses, so Test Settings starts a real index run.
+ */
+async function startIndexRun(projectId: string | number | undefined, toolkitId: string | number | undefined, toolParams: Readonly<Record<string, unknown>>): Promise<TestToolkitToolOutcome> {
+  if (toolkitId === undefined || toolkitId === '') return { kind: 'failure', message: 'Save the toolkit before starting an index.' };
+  try {
+    const started = await startIndexExecution({ projectId, toolkitId: String(toolkitId), toolParams });
+    if (isBoundedIndexExecutionTaskId(started.task_id)) return { kind: 'indexStarted', taskId: started.task_id };
+    return { kind: 'failure', message: 'The server did not confirm that indexing started.' };
+  } catch (error) {
+    const active = parseIndexStartConflictTaskId(error);
+    if (active !== undefined) return { kind: 'indexStarted', taskId: active };
+    return { kind: 'failure', message: error instanceof Error && error.message ? error.message : 'Indexing could not be started.' };
+  }
 }
 
 export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestToolRunParams): UseToolkitTestToolRunResult {
@@ -104,6 +124,13 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
 
       const savedParams = structuredClone(toolParams);
       pendingRef.current = undefined;
+      if (toolName === 'index_data') {
+        const started = await startIndexRun(projectId, toolkitId, savedParams);
+        if (!mountedRef.current || press !== currentPressRef.current) return;
+        setOutcome(started);
+        setIsRunning(false);
+        return;
+      }
       const requestId = crypto.randomUUID();
       rememberToolkitTest(projectId, toolkitId, requestId, 'request');
       const settled = await testToolkitTool({ requestId, projectId, toolkitId, toolName, toolParams: savedParams, ...(authorizationReference.current ? { authorizationReference: authorizationReference.current } : {}) });

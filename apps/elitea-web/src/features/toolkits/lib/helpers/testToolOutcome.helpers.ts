@@ -61,7 +61,17 @@ export function buildTestToolChatMessage(toolName: string, outcome: TestToolkitT
  * `'unknownTool'`/`'timeout'`/`'failure'`), or `undefined` for a settled run
  * — see this module's own doc comment for why the two surfaces are split.
  */
+function describeTimeout(outcome: Extract<TestToolkitToolOutcome, { kind: 'timeout' }>): string {
+  if (outcome.lookup === 'request') return outcome.message;
+  return outcome.taskId === undefined
+    ? t('features.toolkits.toolkitChat.testTool.timeoutNoTask', 'The tool did not finish in time. It may still be running.')
+    : t('features.toolkits.toolkitChat.testTool.timeout', 'The tool is still running (task {{taskId}}). Its result is not ready yet.', {
+        taskId: outcome.taskId,
+      });
+}
+
 export function describeTestToolRefusal(toolName: string, outcome: TestToolkitToolOutcome): string | undefined {
+  if (outcome.kind === 'indexStarted') return undefined;
   switch (outcome.kind) {
     case 'unsupportedToolkit':
       return t('features.toolkits.toolkitChat.testTool.unsupportedToolkit', 'This toolkit type cannot run tools on this deployment: {{message}}', {
@@ -73,12 +83,7 @@ export function describeTestToolRefusal(toolName: string, outcome: TestToolkitTo
         message: outcome.message,
       });
     case 'timeout':
-      if (outcome.lookup === 'request') return outcome.message;
-      return outcome.taskId === undefined
-        ? t('features.toolkits.toolkitChat.testTool.timeoutNoTask', 'The tool did not finish in time. It may still be running.')
-        : t('features.toolkits.toolkitChat.testTool.timeout', 'The tool is still running (task {{taskId}}). Its result is not ready yet.', {
-            taskId: outcome.taskId,
-          });
+      return describeTimeout(outcome);
     case 'unconfirmed':
       return outcome.message;
     case 'failure':
