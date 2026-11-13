@@ -190,7 +190,8 @@ export function useQueryFoldersList(params: UseQueryFoldersListParams): UseQuery
         return { ...serverFolder, conversations: sortConversations([...serverFolder.conversations, ...localOnly]) };
       });
 
-      return [...newFolders, ...pinnedFoldersFirst(mergedFolders)];
+      // One ordering rule with `useEditFolder.onPinFolder`: pinned first, the rest as they came.
+      return pinnedFoldersFirst([...newFolders, ...mergedFolders]);
     });
   }, []);
 

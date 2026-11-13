@@ -276,6 +276,36 @@ describe('AgentHub', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('sends one like for a double click and rolls the count back when the server refuses it (issue 2028)', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockAgentsHubData();
+    let posts = 0;
+    server.use(
+      http.get('/api/v2/elitea_core/public_applications/prompt_lib', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        const bulk = params.get('sort_by') !== 'likes' && !params.has('my_liked');
+        const rows = bulk ? [{ ...ROWS[0], id: '8' }] : [];
+        return HttpResponse.json({ rows, total: rows.length });
+      }),
+      http.post('/api/v2/social/like/prompt_lib/:projectId/application/:applicationId', async () => {
+        posts += 1;
+        await new Promise((resolve) => { setTimeout(resolve, 50); });
+        return HttpResponse.json({ ok: false, error: 'failed to like' }, { status: 500 });
+      }),
+    );
+    const user = userEvent.setup();
+
+    withProviders(<AgentHub />);
+    const card = (await screen.findByText('Research Agent')).closest('[data-testid="agent-hub-card"]') as HTMLElement;
+    const like = within(card).getByRole('button', { pressed: false });
+
+    await user.dblClick(like);
+
+    await waitFor(() => { expect(like).toHaveTextContent('0'); });
+    await waitFor(() => { expect(like).toHaveAttribute('aria-pressed', 'false'); });
+    expect(posts).toBe(1);
+  });
+
   it('draws the agent card with the shared gradient border (issue 2027)', async () => {
     configureGeneratedClient({ baseUrl: '/api/v2' });
     mockAgentsHubData();

@@ -301,11 +301,24 @@ describe('buildOptimisticUserMessage', () => {
     expect('messageItems' in msg).toBe(false);
   });
 
-  it('carries the uploaded files as attachment items so their chips stay on the sent message (issue 2037)', () => {
-    const msg = buildOptimisticUserMessage('q1', 'See file', undefined, undefined, [{ filepath: '/bucket/uuid-1/report.pdf', name: 'report.pdf' }, new File(['x'], 'raw.txt')]);
-    expect(msg.messageItems).toEqual([
-      { id: -1, item_type: 'attachment_message', order_index: 1, item_details: { filepath: '/bucket/uuid-1/report.pdf', name: 'report.pdf' } },
-    ]);
+  it('carries the text and the uploaded files as items so the chips stay on the sent message (issue 2037)', () => {
+    const msg = buildOptimisticUserMessage('q1', 'See file', undefined, undefined, [{ filepath: '/bucket/uuid-1/report.pdf', name: 'report.pdf' }, { name: 'bare.txt' }]);
+    const items = msg.messageItems as unknown as Record<string, unknown>[];
+    expect(items.map((item) => item['item_type'])).toEqual(['text_message', 'attachment_message', 'attachment_message']);
+    expect(items[0]).not.toHaveProperty('uuid');
+    expect(items[1]?.['item_details']).toEqual({ name: 'report.pdf', filepath: '/bucket/uuid-1/report.pdf' });
+    // A file with no path still renders a chip, from its name.
+    expect(items[2]?.['item_details']).toEqual({ name: 'bare.txt' });
+    // Copy reads the items instead of `content`: the text must be among them.
+    expect(extractCopyableContent(msg)).toBe('See file, [report.pdf], [bare.txt]');
+  });
+
+  it('gives synthetic items ids and uuids that never repeat across messages', () => {
+    const first = buildOptimisticUserMessage('q1', 'a', undefined, undefined, [{ filepath: '/b/u/a.txt', name: 'a.txt' }]);
+    const second = buildOptimisticUserMessage('q2', 'b', undefined, undefined, [{ filepath: '/b/u/b.txt', name: 'b.txt' }]);
+    const ids = [...(first.messageItems as unknown as { id: number }[]), ...(second.messageItems as unknown as { id: number }[])].map((item) => item.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.every((id) => id < 0)).toBe(true);
   });
 });
 

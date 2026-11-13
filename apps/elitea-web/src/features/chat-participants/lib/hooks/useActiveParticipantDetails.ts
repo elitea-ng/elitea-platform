@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ChatParticipantType } from '../../model/constants';
 
@@ -58,13 +58,26 @@ async function fetchAndMergeVersionDetails(
 
 const EMPTY_DETAILS: Record<string, unknown> = {};
 
-function isIdLike(value: unknown): value is string | number {
-  return typeof value === 'string' || typeof value === 'number';
+/** Who the details belong to: type, entity id and owning project. The version is not part of it: a version switch keeps the same participant. */
+function participantKey(participant: Record<string, unknown> | null | undefined): string | undefined {
+  if (!participant) return undefined;
+  const meta = (participant['entity_meta'] ?? {}) as Record<string, unknown>;
+  return `${String(participant['entity_name'])}:${String(meta['id'])}:${String(meta['project_id'])}`;
 }
 
+interface LoadedDetails {
+  readonly key: string | undefined;
+  readonly details: Record<string, unknown>;
+  readonly failed: boolean;
+}
+const NOTHING_LOADED: LoadedDetails = { key: undefined, details: EMPTY_DETAILS, failed: false };
+
 export interface UseActiveParticipantDetailsResult {
+  /** Details of THIS participant only; empty while they load, after a failed read, and for a participant whose read has not answered. */
   activeParticipantDetails: Record<string, unknown>;
   isLoadingDetails: boolean;
+  /** The read for this participant failed; consumers that act on the details (the version-missing guard) must not treat empty as "no versions". */
+  isDetailsFailed: boolean;
   refetchParticipantDetails: (options?: FetchOptions) => Promise<void>;
 }
 
@@ -85,7 +98,12 @@ export function useActiveParticipantDetails(
   const projectId = useSelectedProjectId();
   const { fetchOriginalDetails, fetchOriginalVersionDetails } = useFetchParticipantDetails();
 
-  const [activeParticipantDetails, setActiveParticipantDetails] = useState<Record<string, unknown>>({});
+  // Keyed by participant: details of the PREVIOUS participant would otherwise stay
+  // visible until the next read answers, and the chat's version-missing guard
+  // wrote that agent's base version onto the new participant (issue 2053).
+  const [loaded, setLoaded] = useState<LoadedDetails>(NOTHING_LOADED);
+  const currentKey = participantKey(activeParticipant);
+  const owned = currentKey !== undefined && loaded.key === currentKey;
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   // Only the latest request may write. The target can change while a read is
   // in flight (a chat with nothing picked resolves to one agent, then to the
@@ -99,6 +117,7 @@ export function useActiveParticipantDetails(
       if (!activeParticipant) return;
 
       latestRequest.current += 1;
+      const requestKey = participantKey(activeParticipant);
       const request = latestRequest.current;
       setIsLoadingDetails(true);
       try {
@@ -119,10 +138,10 @@ export function useActiveParticipantDetails(
         );
 
         if (request !== latestRequest.current) return;
-        setActiveParticipantDetails({
-          ...details,
-          version_details: versionDetails,
-        });
+        setLoaded({ key: requestKey, details: { ...details, version_details: versionDetails }, failed: false });
+      } catch (error) {
+        if (request === latestRequest.current) setLoaded({ key: requestKey, details: EMPTY_DETAILS, failed: true });
+        throw error;
       } finally {
         if (request === latestRequest.current) setIsLoadingDetails(false);
       }
@@ -144,7 +163,7 @@ export function useActiveParticipantDetails(
 
   useEffect(() => {
     if (!activeParticipant) {
-      setActiveParticipantDetails({});
+      setLoaded(NOTHING_LOADED);
     }
   }, [activeParticipant]);
 
@@ -155,21 +174,10 @@ export function useActiveParticipantDetails(
     [fetchDetails],
   );
 
-  // Details of the PREVIOUS participant stay in state until the new read lands.
-  // Handed out as the new participant's, their version list made the chat's
-  // "version missing" guard pick that agent's base version and write it onto
-  // the new participant (404 "version not found" on the second agent added,
-  // issue 2053). Details that name another entity are not this one's.
-  const ownedId = activeParticipant?.entity_meta?.id;
-  const ownedDetails = useMemo(() => {
-    const detailsId = activeParticipantDetails['id'];
-    if (!isIdLike(ownedId) || !isIdLike(detailsId)) return activeParticipantDetails;
-    return String(detailsId) === String(ownedId) ? activeParticipantDetails : EMPTY_DETAILS;
-  }, [activeParticipantDetails, ownedId]);
-
   return {
-    activeParticipantDetails: ownedDetails,
+    activeParticipantDetails: owned ? loaded.details : EMPTY_DETAILS,
     isLoadingDetails,
+    isDetailsFailed: owned && loaded.failed,
     refetchParticipantDetails,
   };
 }

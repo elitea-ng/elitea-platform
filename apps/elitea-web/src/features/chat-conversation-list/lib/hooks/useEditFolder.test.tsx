@@ -318,4 +318,18 @@ describe('useEditFolder', () => {
 
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
+
+  it('onPinFolder re-reads the folder list on UNpin, so the folder returns to its own place', async () => {
+    server.use(http.patch(`${BASE}/elitea_core/folder/prompt_lib/7/f1`, () => HttpResponse.json({ id: 'f1' })));
+    const { wrapper, client } = createWrapper(['models.chat.folders.update']);
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries');
+    const { result } = renderHook(
+      () => useEditFolder({ projectId: '7', activeFolder: undefined, setActiveFolder: vi.fn(), setFolders: vi.fn(), toastError: vi.fn() }),
+      { wrapper },
+    );
+
+    await result.current.onPinFolder(mkFolder({ id: 'f1', isPinned: true }), false);
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folder', 'list'] });
+  });
 });

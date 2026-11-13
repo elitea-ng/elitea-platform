@@ -71,6 +71,7 @@ const styles: Record<string, SxProps<Theme>> = {
   // card drew neither, so the card melted into the page in both schemes (issue 2027).
   card: (theme: Theme) => ({
     ...cardGradientSx(theme),
+    boxShadow: 'none',
     height: '7rem',
     maxHeight: '7rem',
     display: 'flex',
