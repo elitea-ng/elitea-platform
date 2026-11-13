@@ -46,6 +46,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 func generateID() string {
@@ -3223,6 +3224,8 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 		app := ae.raw
 		name, _ := app["name"].(string)
 		desc, _ := app["description"].(string)
+		// An old export may carry text over the entity limits (issue 1968): cut, never fail.
+		name, desc = entitylimits.Truncate(name, entitylimits.MaxNameLength), entitylimits.Truncate(desc, entitylimits.MaxDescriptionLength)
 
 		versions, hasVersions := app["versions"].([]any)
 		if !hasVersions || len(versions) == 0 {
@@ -3577,6 +3580,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 		}
 
 		tkDesc, _ := tk.raw["description"].(string)
+		tkName, tkDesc = entitylimits.Truncate(tkName, entitylimits.MaxNameLength), entitylimits.Truncate(tkDesc, entitylimits.MaxDescriptionLength)
 		if toolkitOwnerErr != nil {
 			errorToolkits = append(errorToolkits, map[string]any{"index": tk.entityIdx, "name": tkName, "msg": "Import function has been failed: " + toolkitOwnerErr.Error()})
 			failedToolkitImportUUIDs[tk.importUUID] = true
@@ -4042,6 +4046,7 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		toolkitDesc, _ := toolkit["description"].(string)
+		toolkitName, toolkitDesc = entitylimits.Truncate(toolkitName, entitylimits.MaxNameLength), entitylimits.Truncate(toolkitDesc, entitylimits.MaxDescriptionLength)
 		var toolID int
 		if err := h.pool.QueryRow(ctx, importToolkitInsertSQL(s),
 			toolkitName, toolkitType, settingsJSON,
@@ -4076,6 +4081,8 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		}
 		name, _ := app["name"].(string)
 		desc, _ := app["description"].(string)
+		// An old export may carry text over the entity limits (issue 1968): cut, never fail.
+		name, desc = entitylimits.Truncate(name, entitylimits.MaxNameLength), entitylimits.Truncate(desc, entitylimits.MaxDescriptionLength)
 
 		forkVersions, _ := app["versions"].([]any)
 		if err := importedVersionsRefusal(forkVersions); err != nil {

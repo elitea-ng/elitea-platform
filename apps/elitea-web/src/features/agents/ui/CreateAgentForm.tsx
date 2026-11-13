@@ -7,6 +7,7 @@ import Typography from '@mui/material/Typography';
 
 import { applicationCreationSchema } from '@/entities/application-form';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
+import { exceedsLimit } from '@/shared/lib/textLimits';
 import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
@@ -163,15 +164,19 @@ function GeneralFields({ name, description, disabled, iconSlot, tagsSlot }: Gene
             required
             error={Boolean(name.error)}
             helperText={name.error}
-            slotProps={{ htmlInput: { maxLength: MAX_NAME_LENGTH, 'data-testid': 'agent-name-input' } }}
+            slotProps={{ htmlInput: { 'data-testid': 'agent-name-input' } }}
           />
           {name.focused && name.atMax && (
-            <Typography
-              variant="labelSmall"
-              sx={nameCharactersLabelSx}
-            >
-              {t('features.agents.createAgentForm.nameCharactersLeft', ' 0 is left from {{max}} characters', { max: MAX_NAME_LENGTH })}
-            </Typography>
+            exceedsLimit(name.value, MAX_NAME_LENGTH) ? (
+              <CharacterCounter value={name.value} maxLength={MAX_NAME_LENGTH} textVariant="labelSmall" sx={nameCharactersLabelSx} data-testid="agent-name-counter" />
+            ) : (
+              <Typography
+                variant="labelSmall"
+                sx={nameCharactersLabelSx}
+              >
+                {t('features.agents.createAgentForm.nameCharactersLeft', ' 0 is left from {{max}} characters', { max: MAX_NAME_LENGTH })}
+              </Typography>
+            )
           )}
         </Box>
       </Box>
@@ -190,7 +195,7 @@ function GeneralFields({ name, description, disabled, iconSlot, tagsSlot }: Gene
           disabled={disabled}
           error={Boolean(description.error)}
           helperText={description.error}
-          slotProps={{ htmlInput: { maxLength: MAX_DESCRIPTION_LENGTH, 'data-testid': 'agent-description-input' } }}
+          slotProps={{ htmlInput: { 'data-testid': 'agent-description-input' } }}
         />
         {/* #848 — never unmount: unlike `nameCharactersLabelSx` above
           * (absolutely positioned, so it overlays rather than pushes), this
@@ -202,7 +207,7 @@ function GeneralFields({ name, description, disabled, iconSlot, tagsSlot }: Gene
           value={description.value}
           maxLength={MAX_DESCRIPTION_LENGTH}
           textVariant="labelSmall"
-          visible={description.focused && description.value.length > 0}
+          visible={(description.focused && description.value.length > 0) || exceedsLimit(description.value, MAX_DESCRIPTION_LENGTH)}
           sx={descriptionCharactersLabelSx}
           data-testid="agent-description-counter"
         />

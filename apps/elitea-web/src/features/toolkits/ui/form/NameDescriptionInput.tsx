@@ -7,6 +7,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { t } from '@/shared/i18n';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
+import { characterCount, exceedsLimit } from '@/shared/lib/textLimits';
 import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
@@ -100,13 +101,12 @@ function NameField({ visible, value, nameIsRequired, disabled, showValidation, h
         label={t('features.toolkits.nameDescriptionInput.nameLabel', 'Toolkit Name')}
         value={value}
         onChange={onChange}
-        error={Boolean(showValidation && hasError)}
-        helperText={showValidation && hasError ? t('features.toolkits.nameDescriptionInput.fieldRequired', 'Field is required') : undefined}
-        slotProps={{ htmlInput: { maxLength: MAX_NAME_LENGTH } }}
+        error={Boolean(showValidation && hasError) || exceedsLimit(value, MAX_NAME_LENGTH)}
+        helperText={showValidation && hasError && !exceedsLimit(value, MAX_NAME_LENGTH) ? t('features.toolkits.nameDescriptionInput.fieldRequired', 'Field is required') : undefined}
         onFocus={onFocus}
         onBlur={onBlur}
       />
-      {isFocused && MAX_NAME_LENGTH === value.length && (
+      {((isFocused && characterCount(value) >= MAX_NAME_LENGTH) || exceedsLimit(value, MAX_NAME_LENGTH)) && (
         <CharacterCounter
           value={value}
           maxLength={MAX_NAME_LENGTH}
@@ -143,9 +143,8 @@ function DescriptionField({ visible, value, disabled, showValidation, hasError, 
         actions={{ enabled: true }}
         value={value}
         onChange={onChange}
-        error={Boolean(showValidation && hasError)}
-        helperText={showValidation && hasError ? t('features.toolkits.nameDescriptionInput.fieldRequired', 'Field is required') : undefined}
-        slotProps={{ htmlInput: { maxLength: MAX_DESCRIPTION_LENGTH } }}
+        error={Boolean(showValidation && hasError) || exceedsLimit(value, MAX_DESCRIPTION_LENGTH)}
+        helperText={showValidation && hasError && !exceedsLimit(value, MAX_DESCRIPTION_LENGTH) ? t('features.toolkits.nameDescriptionInput.fieldRequired', 'Field is required') : undefined}
         disabled={disabled}
         onFocus={onFocus}
         onBlur={onBlur}
@@ -159,7 +158,7 @@ function DescriptionField({ visible, value, disabled, showValidation, hasError, 
       <CharacterCounter
         value={value}
         maxLength={MAX_DESCRIPTION_LENGTH}
-        visible={isFocused && value.length > 0}
+        visible={(isFocused && value.length > 0) || exceedsLimit(value, MAX_DESCRIPTION_LENGTH)}
         sx={descriptionLengthMessageSx}
         data-testid="toolkit-description-counter"
       />

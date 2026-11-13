@@ -43,9 +43,16 @@
 import * as zod from "zod";
 import { VersionWriteRequest } from "./versionWriteRequest.zod";
 
+export const applicationCreateRequestNameMax = 128;
+
+export const applicationCreateRequestDescriptionMax = 2000;
+
 export const ApplicationCreateRequest = zod.object({
-  name: zod.string().optional(),
-  description: zod.string().optional(),
+  name: zod.string().max(applicationCreateRequestNameMax).optional(),
+  description: zod
+    .string()
+    .max(applicationCreateRequestDescriptionMax)
+    .optional(),
   type: zod.string().optional(),
   icon: zod.string().optional(),
   versions: zod

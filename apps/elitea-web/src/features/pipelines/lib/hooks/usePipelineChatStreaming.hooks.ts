@@ -7,6 +7,7 @@ import type { Participant } from '@/entities/participant';
 import { pipelineErrorMessage } from './pipelineErrorMessage';
 import { getInitialChatHistory, isMessageInFlight } from './pipelineChat.helpers';
 import type { ChatConversationAdapter, ChatConversation, ChatHistoryMessage, ChatPipelineVersionDetails } from './pipelineChat.types';
+import { NAME_MAX_LENGTH, clipToLimit } from '@/shared/lib/textLimits';
 
 /**
  * Streaming/delete slice of `usePipelineChat` — `isStreaming` tracking,
@@ -66,7 +67,7 @@ function buildFreshConversation(
   activeParticipantId: string | number | undefined,
 ): ChatConversation {
   return {
-    name: `Chat with ${pipelineName ?? ''}`,
+    name: clipToLimit(`Chat with ${pipelineName ?? ''}`, NAME_MAX_LENGTH),
     is_private: true,
     source: 'pipeline',
     participants: pipelineParticipant ? [pipelineParticipant] : [],

@@ -31,7 +31,7 @@ describe('numeric limit constants', () => {
     expect(TOAST_DURATION).toBe(3000);
     expect(TAG_NAME_MAX_LENGTH).toBe(48);
     expect(MAX_NAME_LENGTH).toBe(32);
-    expect(MAX_DESCRIPTION_LENGTH).toBe(2304);
+    expect(MAX_DESCRIPTION_LENGTH).toBe(2000);
     expect(MAX_INSTRUCTIONS_LENGTH).toBe(2500);
     expect(MAX_VARIABLES_LENGTH).toBe(768);
     expect(MAX_STEP_LIMIT).toBe(999);

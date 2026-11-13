@@ -41,7 +41,7 @@ func TestSkillEditUsesScopedSelectedVersionAndSourceContract(t *testing.T) {
 		t.Fatalf("response=%d reader=%+v", response.Code, reader)
 	}
 	prompt := completer.got.Messages[0].Content
-	for _, expected := range []string{"stored-name", "Stored description", "Selected version rules", "selected", "complete draft", "At most " + strconv.Itoa(skillsapi.SkillInstructionsMaxLength) + " characters", "2304"} {
+	for _, expected := range []string{"stored-name", "Stored description", "Selected version rules", "selected", "complete draft", "At most " + strconv.Itoa(skillsapi.SkillInstructionsMaxLength) + " characters", "2000"} {
 		if !strings.Contains(prompt, expected) {
 			t.Errorf("prompt lacks %q", expected)
 		}

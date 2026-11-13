@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.52
+
+| Area | What |
+|---|---|
+| Name and description limits (issue 1968) | An entity name (agent, pipeline, toolkit, credential, token, folder, conversation, skill) is at most 128 characters and a description at most 2000, counted in characters. A longer one answers 400 with `field` and `max_length` next to `error` (`ErrorResponse`). The app shows a counter and blocks the save past the limit (`src/ui/textLimit.ts`); the limits come from `@elitea/client-core`. A server before 1.52 stored longer text. |
+
 ## Client contract 1.50
 
 | Area | What |

@@ -42,6 +42,8 @@ import { useCallback } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 
+import { clipToLimit, NAME_MAX_LENGTH } from '@elitea/client-core/limits';
+
 import type { Conversation } from '@/entities/conversation';
 import { conversationApi } from '@/entities/conversation';
 import { useAddParticipantMutation } from '@/entities/participant';
@@ -58,6 +60,17 @@ import { useAddParticipantMutation } from '@/entities/participant';
  */
 const FOLDER_LIST_QUERY_KEY = ['folder', 'list'] as const;
 
+const COPY_SUFFIX = ' (copy)';
+
+/**
+ * The duplicate's name: the source's with the suffix, clipped so the whole stays inside the
+ * server's name limit (issue 1968). Without the clip a source near the limit could not be
+ * duplicated at all.
+ */
+export function duplicateConversationName(sourceName: string): string {
+  return `${clipToLimit(sourceName, NAME_MAX_LENGTH - COPY_SUFFIX.length)}${COPY_SUFFIX}`;
+}
+
 export function useDuplicateConversation(projectId: string | undefined, toastError: (message: string) => void): (conversation: Conversation) => Promise<string | undefined> {
   const queryClient = useQueryClient();
   const { mutateAsync: addParticipants } = useAddParticipantMutation();
@@ -67,7 +80,7 @@ export function useDuplicateConversation(projectId: string | undefined, toastErr
       if (projectId === undefined) return undefined;
       try {
         const source = await conversationApi.details({ projectId, id: conversation.id });
-        const duplicateName = `${source.name || conversation.name} (copy)`;
+        const duplicateName = duplicateConversationName(source.name || conversation.name);
         const isPrivate = source.is_private !== false;
 
         const created = await conversationApi.create({

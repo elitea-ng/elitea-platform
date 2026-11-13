@@ -30,7 +30,7 @@ import { BaseBtn } from '@/shared/ui/BaseBtn';
  * `features/credentials/ui/CredentialsTabBar.tsx`'s established
  * DISCLOSED-REDESIGN precedent for this exact situation.
  */
-export interface ApplicationSaveButtonProps {
+interface ApplicationSaveButtonProps {
   readonly onSave: () => void;
   readonly disabled?: boolean;
   readonly isSaving?: boolean;

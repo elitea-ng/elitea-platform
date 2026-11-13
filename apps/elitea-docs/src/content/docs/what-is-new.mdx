@@ -9,6 +9,10 @@ Elitea ships frequent, small releases. This page summarizes the most recent user
 
 The chat panel on the right of the agent page works again, also on a new agent right after you save it. Its conversation belongs to the agent and no longer lands in your **Chats** list; **Open in Chats** in the toolbar starts an ordinary conversation when you want one there. The Instructions field now grows with its text instead of filling the page. See [Test the agent](/menus/agents#test-the-agent).
 
+## Length limits on names and descriptions
+
+A name (agent, pipeline, toolkit, credential, personal access token, folder, conversation, skill) is now at most 128 characters and a description at most 2000. The forms in the web, desktop and mobile apps show a character counter near the limit and block Save past it; the API answers 400 with the field and the limit. **Run the migrations:** stored text over the limits is truncated. See [Create a personal access token](/getting-started/create-personal-access-token#name-limit).
+
 ## Fixes: language, toolkits, notifications, tokens
 
 The web app now starts in the language you pick under **Language** in the account menu; before, it saved the choice and stayed in English (the choice is saved to your account, so the desktop app opens in the same language). The Toolkits page lists your toolkits when you come back to it after creating one. **Create new** next to a toolkit's configuration picker opens the create page in a new tab, so the toolkit you are filling in is kept; use the picker's refresh when you return. Deleting or marking notifications in the Notifications Center works again, and the expiry unit list on **Create personal token** is readable in the dark theme.

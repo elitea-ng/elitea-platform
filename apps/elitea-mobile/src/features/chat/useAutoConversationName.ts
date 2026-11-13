@@ -1,3 +1,4 @@
+import { clipToLimit, NAME_MAX_LENGTH } from '@elitea/client-core/limits';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 
@@ -30,7 +31,12 @@ export function nameToReplace(
     question.slice(0, 50),
     question.trim().slice(0, 80),
     ...DEFAULT_NAMES,
-    ...participants.filter((p) => p?.entity_name !== 'user').map((p) => participantName(p)?.slice(0, 200) ?? ''),
+    // The name a new chat gets from its agent or model: cut to the name limit (128 characters, issue
+    // 1968), and, for a chat made before that, to the 200 code units the app used to send.
+    ...participants.filter((p) => p?.entity_name !== 'user').flatMap((p) => {
+      const named = participantName(p) ?? '';
+      return [clipToLimit(named, NAME_MAX_LENGTH), named.slice(0, 200)];
+    }),
   ];
   return automatic.includes(name) && name !== '' ? name : null;
 }
