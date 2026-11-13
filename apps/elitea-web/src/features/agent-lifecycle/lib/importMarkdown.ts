@@ -13,7 +13,7 @@ export function asRecord(value: unknown): Front {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Front) : {};
 }
 
-export function defined(entries: Front): Front {
+function defined(entries: Front): Front {
   return Object.fromEntries(Object.entries(entries).filter(([, value]) => value !== undefined && value !== null));
 }
 
