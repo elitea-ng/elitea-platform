@@ -69,7 +69,7 @@ function referenceLabel(lookup?: 'request'): string {
   return lookup === 'request' ? t('features.toolkits.testToolPane.resultRequestId', 'Request reference:') : t('features.toolkits.testToolPane.resultJobId', 'Job id:');
 }
 
-function OutcomeBody({ outcome }: { readonly outcome: Exclude<TestToolkitToolOutcome, { kind: 'indexStarted' }> }): ReactNode {
+function OutcomeBody({ outcome }: { readonly outcome: Exclude<TestToolkitToolOutcome, { kind: 'indexStarted' | 'indexBusy' }> }): ReactNode {
   switch (outcome.kind) {
     case 'ok':
       return (
@@ -119,10 +119,12 @@ function OutcomeBody({ outcome }: { readonly outcome: Exclude<TestToolkitToolOut
   }
 }
 
-function IndexStartedBody({ taskId }: { readonly taskId: string }): ReactNode {
+function IndexStartedBody({ taskId, busy }: { readonly taskId: string; readonly busy: boolean }): ReactNode {
   return (
     <>
-      <Typography variant="bodyMedium">{t('features.toolkits.testToolPane.indexStarted', 'Indexing started. Follow its progress and result in the Indexes tab.')}</Typography>
+      <Typography variant="bodyMedium">{busy
+        ? t('features.toolkits.testToolPane.indexBusy', 'An index run is already in progress; your parameters were not applied. Follow it in the Indexes tab.')
+        : t('features.toolkits.testToolPane.indexStarted', 'Indexing started. Follow its progress and result in the Indexes tab.')}</Typography>
       <Typography variant="bodySmall" data-testid="test-tool-result-task-id">{referenceLabel()} {taskId}</Typography>
     </>
   );
@@ -152,7 +154,7 @@ export function TestToolResultPanel({ outcome, isRunning }: TestToolResultPanelP
       // the platform already gives that meaning to.
       component="output"
     >
-      {outcome.kind === 'indexStarted' ? <IndexStartedBody taskId={outcome.taskId} /> : <OutcomeBody outcome={outcome} />}
+      {outcome.kind === 'indexStarted' || outcome.kind === 'indexBusy' ? <IndexStartedBody taskId={outcome.taskId} busy={outcome.kind === 'indexBusy'} /> : <OutcomeBody outcome={outcome} />}
     </Box>
   );
 }

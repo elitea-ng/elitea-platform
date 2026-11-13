@@ -12,10 +12,10 @@ import { PipelineReadOnlyNotice } from './PipelineReadOnlyNotice';
 beforeEach(() => configureGeneratedClient({ baseUrl: '/api/v2' }));
 afterEach(() => resetGeneratedClient());
 
-function renderNotice(disabled: boolean) {
+function renderNotice(disabled: boolean, isPublished = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const rootRoute = createRootRoute({
-    component: () => <QueryClientProvider client={client}><PipelineReadOnlyNotice disabled={disabled} /></QueryClientProvider>,
+    component: () => <QueryClientProvider client={client}><PipelineReadOnlyNotice disabled={disabled} isPublished={isPublished} /></QueryClientProvider>,
   });
   const router = createRouter({
     routeTree: rootRoute,
@@ -29,7 +29,13 @@ describe('PipelineReadOnlyNotice', () => {
   it('says why a disabled editor is read-only once permissions are known', async () => {
     server.use(http.get('*/auth/permissions/prompt_lib/:projectId', () => HttpResponse.json([])));
     renderNotice(true);
-    expect(await screen.findByTestId('pipeline-read-only-notice')).toHaveTextContent('read-only');
+    expect(await screen.findByTestId('pipeline-read-only-notice')).toHaveAttribute('data-cause', 'permission');
+  });
+
+  it('names a published pipeline without waiting for the permission list', async () => {
+    server.use(http.get('*/auth/permissions/prompt_lib/:projectId', () => new Promise(() => undefined)));
+    renderNotice(true, true);
+    expect(await screen.findByTestId('pipeline-read-only-notice')).toHaveAttribute('data-cause', 'published');
   });
 
   it('stays silent for an editable pipeline', async () => {

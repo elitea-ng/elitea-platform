@@ -4124,7 +4124,6 @@
   "widgets.contextBudget.edit.failed": "Failed to save the context settings.",
   "widgets.contextBudget.edit.save": "Save",
   "widgets.contextBudget.editTooltip": "Edit context settings",
-  "features.toolkits.testToolPane.indexStarted": "Indexing started. Follow its progress and result in the Indexes tab.",
   "features.toolkits.testToolPane.resultJobId": "Job id:",
   "features.toolkits.testToolPane.resultOk": "The tool ran and returned:",
   "features.toolkits.testToolPane.resultTruncated": "The result was too large to show in full.",
@@ -4818,7 +4817,6 @@
   "pages.pipelines.createPipeline.admissionNode": "Node",
   "pages.pipelines.createPipeline.admissionTitle": "This pipeline cannot be saved",
   "pages.pipelines.createPipeline.admissionUnparseable": "The YAML does not parse, so the runtime cannot read a graph out of it.",
-  "features.pipelines.editorPanel.readOnly": "This pipeline is read-only. Editing needs permission to update pipelines in this project, and published pipelines cannot be edited.",
   "features.pipelines.editorPanel.serializationError": "This change could not be written as pipeline YAML, so the stored YAML was kept: {{reason}}",
   "features.chatMessages.authorization.skip": "Skip",
   "features.chatMessages.continue": "Continue",
@@ -6249,5 +6247,15 @@
   "artifacts.rename.title": "Rename file",
   "artifacts.table.renameSelected": "Rename selected file",
   "common.rename": "Rename",
-  "artifacts.create.retentionDefaultHelp": "Leave empty to use the project's default retention."
+  "artifacts.create.retentionDefaultHelp": "Leave empty to use the project's default retention.",
+  "chatMessages.error.noReference": "No error reference is available for this failure. Contact your administrator and say when it happened.",
+  "features.pipelines.editorPanel.readOnlyPermission": "This pipeline is read-only: you do not have permission to update pipelines in this project.",
+  "features.pipelines.editorPanel.readOnlyPublished": "This pipeline is published and cannot be edited.",
+  "features.toolkits.indexHistory.created": "The index was created. No indexing run has finished yet.",
+  "features.toolkits.indexHistory.stopped": "Indexing was stopped before it finished.",
+  "features.toolkits.indexHistory.stoppedWithCount": "Indexing was stopped before it finished. Documents indexed: {{count}}.",
+  "features.toolkits.testToolPane.indexBusy": "An index run is already in progress; your parameters were not applied. Follow it in the Indexes tab.",
+  "features.toolkits.testToolPane.indexNotConfirmed": "The server did not confirm that indexing started.",
+  "features.toolkits.testToolPane.indexStarted": "Indexing started. Follow its progress and result in the Indexes tab.",
+  "features.toolkits.testToolPane.saveFirst": "Save the toolkit before starting an index."
 }

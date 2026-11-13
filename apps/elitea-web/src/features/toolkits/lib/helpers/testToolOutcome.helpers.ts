@@ -56,11 +56,6 @@ export function buildTestToolChatMessage(toolName: string, outcome: TestToolkitT
   return undefined;
 }
 
-/**
- * The Snackbar message for a REFUSAL (`'unsupportedToolkit'`/
- * `'unknownTool'`/`'timeout'`/`'failure'`), or `undefined` for a settled run
- * — see this module's own doc comment for why the two surfaces are split.
- */
 function describeTimeout(outcome: Extract<TestToolkitToolOutcome, { kind: 'timeout' }>): string {
   if (outcome.lookup === 'request') return outcome.message;
   return outcome.taskId === undefined
@@ -70,8 +65,12 @@ function describeTimeout(outcome: Extract<TestToolkitToolOutcome, { kind: 'timeo
       });
 }
 
+/**
+ * The Snackbar message for a REFUSAL (`'unsupportedToolkit'`/
+ * `'unknownTool'`/`'timeout'`/`'failure'`), or `undefined` for a settled run
+ * — see this module's own doc comment for why the two surfaces are split.
+ */
 export function describeTestToolRefusal(toolName: string, outcome: TestToolkitToolOutcome): string | undefined {
-  if (outcome.kind === 'indexStarted') return undefined;
   switch (outcome.kind) {
     case 'unsupportedToolkit':
       return t('features.toolkits.toolkitChat.testTool.unsupportedToolkit', 'This toolkit type cannot run tools on this deployment: {{message}}', {
@@ -93,6 +92,8 @@ export function describeTestToolRefusal(toolName: string, outcome: TestToolkitTo
     case 'skipped':
     case 'ok':
     case 'toolError':
+    case 'indexStarted':
+    case 'indexBusy':
       return undefined;
     default:
       return outcome satisfies never;

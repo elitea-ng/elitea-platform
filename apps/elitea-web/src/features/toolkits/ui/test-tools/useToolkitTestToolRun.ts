@@ -21,9 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { TestToolkitToolOutcome } from '../../api/toolkitTestRun';
-import { readToolkitToolResult, testToolkitTool } from '../../api/toolkitTestRun';
-import { startIndexExecution } from '../../indexes/api/indexesApi';
-import { isBoundedIndexExecutionTaskId, parseIndexStartConflictTaskId } from '../../indexes/lib/helpers/indexExecution.helpers';
+import { readToolkitToolResult, startIndexTest, testToolkitTool } from '../../api/toolkitTestRun';
 import { forgetToolkitTest, recalledToolkitTest, rememberToolkitTest, rememberToolkitTestOutcome } from '../../api/toolkitTestRecovery';
 
 export interface UseToolkitTestToolRunParams {
@@ -45,30 +43,14 @@ export interface UseToolkitTestToolRunResult {
   readonly skip: () => void;
 }
 
-/**
- * `index_data` is never run inline by a tool call (ADR-0030): the worker refuses
- * it as unsupported. It is admitted through the asynchronous index start route,
- * the same one the Indexes tab uses, so Test Settings starts a real index run.
- */
-async function startIndexRun(projectId: string | number | undefined, toolkitId: string | number | undefined, toolParams: Readonly<Record<string, unknown>>): Promise<TestToolkitToolOutcome> {
-  if (toolkitId === undefined || toolkitId === '') return { kind: 'failure', message: 'Save the toolkit before starting an index.' };
-  try {
-    const started = await startIndexExecution({ projectId, toolkitId: String(toolkitId), toolParams });
-    if (isBoundedIndexExecutionTaskId(started.task_id)) return { kind: 'indexStarted', taskId: started.task_id };
-    return { kind: 'failure', message: 'The server did not confirm that indexing started.' };
-  } catch (error) {
-    const active = parseIndexStartConflictTaskId(error);
-    if (active !== undefined) return { kind: 'indexStarted', taskId: active };
-    return { kind: 'failure', message: error instanceof Error && error.message ? error.message : 'Indexing could not be started.' };
-  }
-}
-
 export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestToolRunParams): UseToolkitTestToolRunResult {
   const [outcome, setOutcome] = useState<TestToolkitToolOutcome | undefined>(undefined);
   const [isRunning, setIsRunning] = useState(false);
 
   /** The press whose answer this component still wants. */
   const currentPressRef = useRef(0);
+  /** True while an `index_data` start request is on the wire, so a second press cannot start a second run. */
+  const indexStartInFlightRef = useRef(false);
   const authorizationReference = useRef<string | undefined>(undefined);
   const getAuthorizationReference = useCallback(() => authorizationReference.current, []);
   const rememberAuthorization = useCallback((reference: string) => {
@@ -117,6 +99,7 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
 
   const run = useCallback(
     async (toolName: string, toolParams: Readonly<Record<string, unknown>>): Promise<void> => {
+      if (toolName === 'index_data' && indexStartInFlightRef.current) return;
       currentPressRef.current += 1;
       const press = currentPressRef.current;
       setOutcome(undefined);
@@ -125,7 +108,9 @@ export function useToolkitTestToolRun({ projectId, toolkitId }: UseToolkitTestTo
       const savedParams = structuredClone(toolParams);
       pendingRef.current = undefined;
       if (toolName === 'index_data') {
-        const started = await startIndexRun(projectId, toolkitId, savedParams);
+        // No recovery bookkeeping: a reload that re-presses Run gets the active run's 409 (`indexBusy`).
+        indexStartInFlightRef.current = true;
+        const started = await startIndexTest({ projectId, toolkitId, toolParams: savedParams }).finally(() => { indexStartInFlightRef.current = false; });
         if (!mountedRef.current || press !== currentPressRef.current) return;
         setOutcome(started);
         setIsRunning(false);

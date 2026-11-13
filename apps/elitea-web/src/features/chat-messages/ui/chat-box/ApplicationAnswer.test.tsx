@@ -167,7 +167,8 @@ describe('ApplicationAnswer', () => {
   it('does not present the welcome placeholder id as a failure reference', () => {
     const answer = { id: 'welcome_message_id', role: 'assistant', content: 'Failed', exception: 'The run failed.' } as ChatMessage;
     renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
-    expect(screen.queryByTestId('failure-reference')).not.toBeInTheDocument();
+    expect(screen.getByTestId('failure-reference')).not.toHaveTextContent('welcome_message_id');
+    expect(screen.getByTestId('failure-reference')).toHaveTextContent('No error reference is available');
   });
 
   it('does not show an error reference for successful responses', () => {

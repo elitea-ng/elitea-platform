@@ -32,6 +32,10 @@ import { readToolkitTestAuthorization } from './toolkitTestAuthorization';
 import type { ToolkitTestAuthorization } from './toolkitTestAuthorization';
 
 import { eliteaFetch } from '@/shared/api/generated/mutator';
+import { t } from '@/shared/i18n';
+
+import { startIndexExecution } from '../indexes/api/indexesApi';
+import { isBoundedIndexExecutionTaskId, parseIndexStartConflictTaskId } from '../indexes/lib/helpers/indexExecution.helpers';
 
 export interface TestToolkitToolParams {
   readonly requestId?: string;
@@ -59,6 +63,7 @@ export type TestToolkitToolOutcome =
   | { readonly kind: 'timeout'; readonly taskId: string | undefined; readonly lookup?: 'request'; readonly message: string }
   | { readonly kind: 'unconfirmed'; readonly message: string }
   | { readonly kind: 'indexStarted'; readonly taskId: string }
+  | { readonly kind: 'indexBusy'; readonly taskId: string }
   | { readonly kind: 'failure'; readonly message: string };
 
 interface ResponseBodyLike {
@@ -224,5 +229,31 @@ export async function readToolkitToolResult(
       return { kind: 'unconfirmed', message: 'No execution is visible yet. Reload to check again. The tool will not be submitted automatically.' };
     }
     return outcomeFromRejection(error, params.toolkitId);
+  }
+}
+
+/**
+ * `index_data` is never run inline by a tool call (ADR-0030): the worker refuses
+ * it as unsupported. It is admitted through the asynchronous index start route
+ * the Indexes tab uses. That route runs with the toolkit's stored credentials
+ * and answers no authorization challenge, so no challenge is mapped here; every
+ * other refusal maps like a tool run's (`outcomeFromRejection`).
+ *
+ * A 409 names a run that is ALREADY active: the parameters sent here were not
+ * applied, so it is `indexBusy`, not `indexStarted`.
+ */
+export async function startIndexTest(params: Pick<TestToolkitToolParams, 'projectId' | 'toolkitId' | 'toolParams'>): Promise<TestToolkitToolOutcome> {
+  const { projectId, toolkitId, toolParams } = params;
+  if (toolkitId === undefined || toolkitId === '') {
+    return { kind: 'failure', message: t('features.toolkits.testToolPane.saveFirst', 'Save the toolkit before starting an index.') };
+  }
+  try {
+    const started = await startIndexExecution({ projectId, toolkitId: String(toolkitId), toolParams });
+    if (isBoundedIndexExecutionTaskId(started.task_id)) return { kind: 'indexStarted', taskId: started.task_id };
+    return { kind: 'failure', message: t('features.toolkits.testToolPane.indexNotConfirmed', 'The server did not confirm that indexing started.') };
+  } catch (error) {
+    const active = parseIndexStartConflictTaskId(error);
+    if (active !== undefined) return { kind: 'indexBusy', taskId: active };
+    return outcomeFromRejection(error, toolkitId);
   }
 }
