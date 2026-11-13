@@ -11,6 +11,7 @@ import type { MentionableTool } from '../lib/hooks/useInstructionsMention.hooks'
 import { renderWithProviders } from '../__tests__/testUtils';
 
 import { InstructionsInput } from './InstructionsInput';
+import { INSTRUCTIONS_MAX_HEIGHT } from './InstructionsInput.sizing';
 
 installCodeMirrorTestPolyfills();
 
@@ -185,5 +186,76 @@ describe('InstructionsInput', () => {
     await waitFor(() => {
       expect(onInstructionsChange).toHaveBeenCalledWith('~Summarizer ');
     });
+  });
+});
+
+describe('InstructionsInput sizing (#1979)', () => {
+  beforeEach(() => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+  });
+  afterEach(() => {
+    resetGeneratedClient();
+  });
+
+  it('is a compact auto-growing field rather than a viewport-tall code editor', () => {
+    const { container } = renderWithProviders(
+      <InstructionsInput
+        instructions="one line"
+        onInstructionsChange={vi.fn()}
+      />,
+    );
+    // The rules CodeMirror injects are applied by jsdom's cascade, so these are the computed values the browser resolves.
+    const editor = container.querySelector('.cm-editor');
+    const gutters = container.querySelector('.cm-gutters');
+    expect(editor).toBeInstanceOf(HTMLElement);
+    expect(gutters).toBeInstanceOf(HTMLElement);
+    // jsdom resolves rem against 16px: 24rem is 384px.
+    expect(INSTRUCTIONS_MAX_HEIGHT).toBe('24rem');
+    expect(getComputedStyle(editor as HTMLElement).maxHeight, 'growth is capped, then the field scrolls').toBe('384px');
+    expect(getComputedStyle(gutters as HTMLElement).display, 'no line numbers beside prose').toBe('none');
+    const css = Array.from(document.querySelectorAll('style'))
+      .map((style) => style.textContent ?? '')
+      .join('\n');
+    expect(css, 'the viewport-tall default must not apply').not.toContain('100vh - 220px');
+  });
+
+  it('keeps line numbers for a pipeline\'s YAML instructions, still capped', () => {
+    const { container } = renderWithProviders(
+      <InstructionsInput
+        instructions={'state:\n  input: str'}
+        onInstructionsChange={vi.fn()}
+        lineNumbers
+      />,
+    );
+    const editor = container.querySelector('.cm-editor');
+    const gutters = container.querySelector('.cm-gutters');
+    expect(gutters).toBeInstanceOf(HTMLElement);
+    expect(getComputedStyle(gutters as HTMLElement).display, 'YAML keeps its line numbers').not.toBe('none');
+    expect(getComputedStyle(editor as HTMLElement).maxHeight).toBe('384px');
+  });
+
+  it('shows the "/" mention list in full, outside the capped editor, so the compact field cannot clip it', async () => {
+    const user = userEvent.setup();
+    const { container } = renderWithProviders(
+      <InstructionsInput
+        instructions=""
+        onInstructionsChange={vi.fn()}
+        tools={TOOLS}
+        versionId="v1"
+        entityProjectId="proj-1"
+      />,
+    );
+    await user.click(getContent(container));
+    await user.keyboard('/');
+
+    const item = await screen.findByText('Github');
+    // The list is a sibling of the editor, not a child of its scroller: the editor's max-height and overflow do not apply to it.
+    expect(item.closest('.cm-editor')).toBeNull();
+    expect(item.closest('.cm-scroller')).toBeNull();
+    // And nothing around the editor (the field's wrapper, the accordion body) clips what overflows it.
+    const editor = container.querySelector('.cm-editor') as HTMLElement;
+    for (let node: HTMLElement | null = editor.parentElement; node !== null && node !== container; node = node.parentElement) {
+      expect(getComputedStyle(node).overflow, `${node.className} must not clip the list`).not.toBe('hidden');
+    }
   });
 });

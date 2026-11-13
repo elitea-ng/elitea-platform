@@ -15,12 +15,18 @@ import ListItemText from '@mui/material/ListItemText';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import type { ConversationSummary, EditorTestRun } from '@/shared/api/generated/model';
+import { useGetConversation } from '@/shared/api/generated/chat/chat';
+import type { ConversationDetail, ConversationSummary, EditorTestRun } from '@/shared/api/generated/model';
+import { unwrapBody } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
 
 import { formatRunDuration } from '../lib/formatRunDuration';
+import { formatRunTimestamp } from '../lib/formatRunTimestamp';
+import { runPreview } from '../lib/runExchange';
 
 export interface RunHistoryListProps {
+  /** Needed to read each run's first message (#1981); without it a row shows its title. */
+  readonly projectId?: string | undefined;
   readonly rows: readonly ConversationSummary[];
   readonly selectedId: number | undefined;
   readonly onSelect: (row: ConversationSummary) => void;
@@ -59,11 +65,32 @@ function secondaryOf(row: ConversationSummary, versionName: string | undefined):
   const messages = t('entities.runHistory.list.messageCount', '{{count}} messages', {
     count: row.message_groups_count,
   });
-  const parts = [row.created_at, ...(versionName === undefined ? [] : [versionName]), duration, messages];
+  const parts = [formatRunTimestamp(row.created_at), ...(versionName === undefined ? [] : [versionName]), duration, messages];
   return parts.join(' · ');
 }
 
+/** The first two groups are enough to find the first user message; a row must not pull a whole transcript. */
+const PREVIEW_GROUPS = 2;
+
+/**
+ * A run's headline (#1981): the first thing the user wrote, else the
+ * conversation's title. Every run of one agent carries the same title (the
+ * agent's name), which told the rows apart not at all. The title is what shows
+ * while the message loads, and for good if it cannot be read.
+ */
+function RunPreview({ projectId, row }: { readonly projectId: string | undefined; readonly row: ConversationSummary }): ReactNode {
+  const query = useGetConversation(
+    projectId ?? '',
+    String(row.id),
+    { messages_limit: PREVIEW_GROUPS, sort_order: 'asc' },
+    { query: { enabled: projectId !== undefined && projectId !== '', staleTime: 60_000 } },
+  );
+  const detail = unwrapBody(query.data) as ConversationDetail | undefined;
+  return <span data-testid="run-history-preview">{runPreview(detail?.message_groups, row.name)}</span>;
+}
+
 export function RunHistoryList({
+  projectId,
   rows,
   selectedId,
   onSelect,
@@ -81,9 +108,9 @@ export function RunHistoryList({
           onClick={() => onSelect(row)}
         >
           <ListItemText
-            primary={row.name}
+            primary={<RunPreview projectId={projectId} row={row} />}
             secondary={secondaryOf(row, versionNameOf(row, versionNameById))}
-            slotProps={{ secondary: { variant: 'bodySmall' } }}
+            slotProps={{ primary: { noWrap: true }, secondary: { variant: 'bodySmall' } }}
           />
           {onRestoreConversation !== undefined && (
             <Button

@@ -182,9 +182,13 @@ function captureVersionSave(sink: Record<string, unknown>[]): void {
   );
 }
 
-/** Opens the model menu and picks a row by its catalogue display name. */
+/**
+ * Opens the AGENT's model menu (the configuration panel's; the test chat beside
+ * it has a model picker of its own, #1974) and picks a row by its catalogue display name.
+ */
 async function chooseModel(user: ReturnType<typeof userEvent.setup>, displayName: string): Promise<void> {
-  await user.click(await screen.findByTestId('model-selector-name'));
+  const panel = await screen.findByTestId('edit-application-configuration-tab-panel');
+  await user.click(await within(panel).findByTestId('model-selector-name'));
   await user.click(await screen.findByRole('option', { name: new RegExp(displayName) }));
 }
 
@@ -279,6 +283,36 @@ describe('EditApplication', () => {
 
     await waitFor(() => expect(screen.getByText('My Agent')).toBeInTheDocument());
     expect(screen.queryByText('Version not found')).not.toBeInTheDocument();
+  });
+
+  /*
+   * #1980 — after Create → Save the page opened with the right half EMPTY and
+   * no conversation. The test chat is mounted in that column, and the agent's
+   * name is in the shell's crumbs, straight after the creation navigation.
+   */
+  it('shows the agent test chat beside the form and the agent name in the crumbs right after creation', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    const { router } = renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
+    await router.navigate({
+      to: '/agents/$tab/$agentId',
+      params: { tab: 'all', agentId: '42' },
+      search: { isFromCreation: 'true' },
+      replace: true,
+    });
+
+    const pane = await screen.findByTestId('edit-application-test-pane', {}, { timeout: 15_000 });
+    expect(within(pane).getByTestId('agent-test-chat')).toBeInTheDocument();
+    expect(await within(pane).findByTestId('chat-message-input')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('My Agent'));
+  });
+
+  it('keeps the form full width, with no test chat, for a read-only public view', async () => {
+    setPublicProjectId('9');
+    server.use(getGetApplicationMockHandler(detail()));
+    renderAgentsRoute(withShell(<EditApplication />), '/agents/all/42', { projectId: '9' });
+
+    await screen.findByTestId('edit-application-configuration-tab-panel', {}, { timeout: 15_000 });
+    expect(screen.queryByTestId('edit-application-test-pane')).not.toBeInTheDocument();
   });
 
   it('renders the Save/Cancel bar once loaded', async () => {

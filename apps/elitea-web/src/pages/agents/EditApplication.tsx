@@ -33,6 +33,7 @@ import { EditApplicationConfigurationPanel } from './ui/EditApplicationConfigura
 import { EditApplicationEditorTabs } from './ui/EditApplicationEditorTabs';
 import { EditApplicationPersonaPanel } from './ui/EditApplicationPersonaPanel';
 import { EditApplicationSaveBar } from './ui/EditApplicationSaveBar';
+import { EditApplicationSplit, EditApplicationTestPane } from './ui/EditApplicationTestPane';
 
 interface EditApplicationParams {
   readonly tab?: string;
@@ -349,18 +350,11 @@ export function EditApplication(): ReactNode {
               {agentSaveErrorMessage(saveError, t('pages.agents.editApplication.saveError', 'Failed to save your changes.'))}
             </Typography>
           )}
-          {/*
-           * The Evaluation tab — the dimension library — mounted BESIDE the
-           * configuration panel, which is where the baseline puts it
-           * (`EditApplication.jsx:103-113`). It gets no route of its own:
-           * an agent's evaluation criteria are a property of the agent being
-           * edited, and reaching them should not mean leaving the editor.
-           * See `./ui/EditApplicationEditorTabs.tsx` for why only the Library
-           * sub-view exists.
-           *
-           * The configuration panel moved to its own file in the same change,
-           * unaltered — two panels do not fit under the §3.5 400-line budget.
-           */}
+          {/* The editor tabs sit beside the test chat (#1974, #1980); a read-only public view keeps the form alone. */}
+          <EditApplicationSplit
+            showPane={!isReadOnlyView}
+            pane={<EditApplicationTestPane projectId={projectId} applicationId={applicationId} detail={detail} activeVersion={activeVersion} isDirty={isDirty} />}
+          >
           <EditApplicationEditorTabs
             projectId={projectId}
             applicationId={applicationId}
@@ -392,6 +386,7 @@ export function EditApplication(): ReactNode {
               />
             }
           />
+          </EditApplicationSplit>
         </Box>
       </Box>
     </FormProvider>

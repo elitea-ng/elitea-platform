@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## The agent page has its chat back
+
+The chat panel on the right of the agent page works again, also on a new agent right after you save it. Its conversation belongs to the agent and no longer lands in your **Chats** list; **Open in Chats** in the toolbar starts an ordinary conversation when you want one there. The Instructions field now grows with its text instead of filling the page. See [Test the agent](/menus/agents#test-the-agent).
+
 ## Length limits on names and descriptions
 
 A name (agent, pipeline, toolkit, credential, personal access token, folder, conversation, skill) is now at most 128 characters and a description at most 2000. The forms in the web, desktop and mobile apps show a character counter near the limit and block Save past it; the API answers 400 with the field and the limit. **Run the migrations:** stored text over the limits is truncated. See [Create a personal access token](/getting-started/create-personal-access-token#name-limit).

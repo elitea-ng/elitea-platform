@@ -11,6 +11,7 @@ import type { ApplicationVersionDetail, SocialAuthorProfile } from '@/shared/api
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { unwrapBody } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
+import { applicationParticipant } from '@/shared/lib/editorTestConversation';
 
 /** `ChatBox` truncates a conversation name to 50 characters; match it so the sidebar entry reads the same everywhere. */
 const MAX_CONVERSATION_NAME = 50;
@@ -27,21 +28,19 @@ export interface ChatWithAgentButtonProps {
 }
 
 /**
- * "Chat" — the way to actually TALK to the agent being edited.
+ * "Open in Chats" — carry on with this agent in the Chats list, as an
+ * ordinary conversation.
  *
- * The baseline's agent page is a two-panel grid whose right half is a live
- * test chat (`apps/elitea-ui/src/pages/Applications/Components/Applications/
- * ConfigurationTab.jsx` — `LeftGridItem` form, `RightGridItem` `ChatBox`).
- * That pane's port (`features/agents/ui/ConfigurationTab.tsx` +
- * the `useApplicationChat` hook family) exists but is still socket-era and
- * mounted by nothing, so this page shipped with the form and an empty right
- * half: an agent could be authored, and there was no way to speak to it.
+ * It is NOT how you test the agent from this page: the page's own test chat
+ * (`./AgentTestChat.tsx`, the right half) does that, in an `editor_test`
+ * conversation that belongs to the agent and stays out of the Chats list.
+ * This button used to be the only way to talk to the agent at all (the
+ * baseline's right-hand pane was unported), so its conversations landed in the
+ * general list with no link to the agent (#1974); the label now says what it
+ * does. The streaming journeys that start from here keep this route.
  *
- * This button is the SSE-era answer, built from the parts a live browser run
- * already proved out end to end: it creates a conversation, attaches the
- * agent as a participant, and lands in the real chat surface — the same
- * three steps the chat page's "+" menu performs, addressed from the agent's
- * side instead.
+ * It creates a conversation, attaches the agent as a participant, and lands in
+ * the real chat surface: the same three steps the chat page's "+" menu performs.
  *
  * The participant mapping is copied from what the resolver actually joins on
  * (`services/elitea-main/internal/db/queries/agent_chat.sql`):
@@ -120,16 +119,13 @@ export function ChatWithAgentButton({ projectId, applicationId, name, activeVers
         conversationId,
         participants: [
           { entity_name: 'user', entity_meta: { id: Number(input.userId) } },
-          {
-            entity_name: 'application',
-            entity_meta: { id: input.applicationId, ...(input.name !== undefined ? { name: input.name } : {}), project_id: input.projectId },
-            entity_settings: {
-              version_id: input.versionId,
-              agent_type: input.agentType,
-              variables: [],
-              icon_meta: {},
-            },
-          },
+          applicationParticipant({
+            applicationId: input.applicationId,
+            projectId: input.projectId,
+            name: input.name,
+            versionId: input.versionId,
+            agentType: input.agentType,
+          }),
         ],
       });
     } catch (error) {
@@ -177,7 +173,7 @@ export function ChatWithAgentButton({ projectId, applicationId, name, activeVers
     >
       {isStarting
         ? t('pages.agents.chatWithAgent.starting', 'Opening chat…')
-        : t('pages.agents.chatWithAgent.label', 'Chat')}
+        : t('pages.agents.chatWithAgent.openInChats', 'Open in Chats')}
     </Button>
   );
 }
