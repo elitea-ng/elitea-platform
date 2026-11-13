@@ -12,7 +12,7 @@ publish.workspace = true
 [dependencies]
 async-trait = "0.1.92"
 # The untrusted-content frame's per-call nonce, from the system RNG.
-getrandom = "0.3.4"
+getrandom = "0.4.3"
 serde_json = "1.0.154"
 
 [dev-dependencies]
