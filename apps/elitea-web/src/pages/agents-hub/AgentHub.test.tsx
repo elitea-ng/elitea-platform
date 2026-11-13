@@ -243,4 +243,49 @@ describe('AgentHub', () => {
     await screen.findByText('Research Agent');
     expect(screen.queryByText('Start conversation')).not.toBeInTheDocument();
   });
+
+  it('a like click raises the count by one and does not open the agent (issue 2028)', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockAgentsHubData();
+    const liked: string[] = [];
+    server.use(
+      // Real ids are numeric (the like route takes a number); the shared rows' ids are not.
+      http.get('/api/v2/elitea_core/public_applications/prompt_lib', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        const bulk = params.get('sort_by') !== 'likes' && !params.has('my_liked');
+        const rows = bulk ? [{ ...ROWS[0], id: '7' }] : [];
+        return HttpResponse.json({ rows, total: rows.length });
+      }),
+      http.post('/api/v2/social/like/prompt_lib/:projectId/application/:applicationId', ({ params }) => {
+        liked.push(String(params['applicationId']));
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    const user = userEvent.setup();
+
+    withProviders(<AgentHub />);
+    const card = (await screen.findByText('Research Agent')).closest('[data-testid="agent-hub-card"]') as HTMLElement;
+    const like = within(card).getByRole('button', { pressed: false });
+    expect(like).toHaveTextContent('0');
+
+    await user.click(like);
+
+    await waitFor(() => { expect(like).toHaveTextContent('1'); });
+    expect(like).toHaveAttribute('aria-pressed', 'true');
+    expect(liked).toHaveLength(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('draws the agent card with the shared gradient border (issue 2027)', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockAgentsHubData();
+
+    withProviders(<AgentHub />);
+    const card = (await screen.findByText('Research Agent')).closest('[data-testid="agent-hub-card"]') as HTMLElement;
+
+    // jsdom resolves the emotion rule: the card carries the gradient fill that
+    // the 1px `::before` border is masked from, not the bare paper card.
+    expect(getComputedStyle(card).position).toBe('relative');
+    expect(getComputedStyle(card).background).toContain('var(');
+  });
 });

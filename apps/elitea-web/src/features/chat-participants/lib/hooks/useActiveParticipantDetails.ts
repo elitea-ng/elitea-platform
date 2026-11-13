@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ChatParticipantType } from '../../model/constants';
 
@@ -55,6 +55,12 @@ async function fetchAndMergeVersionDetails(
 // ---------------------------------------------------------------------------
 // useActiveParticipantDetails — full implementation
 // ---------------------------------------------------------------------------
+
+const EMPTY_DETAILS: Record<string, unknown> = {};
+
+function isIdLike(value: unknown): value is string | number {
+  return typeof value === 'string' || typeof value === 'number';
+}
 
 export interface UseActiveParticipantDetailsResult {
   activeParticipantDetails: Record<string, unknown>;
@@ -149,8 +155,20 @@ export function useActiveParticipantDetails(
     [fetchDetails],
   );
 
+  // Details of the PREVIOUS participant stay in state until the new read lands.
+  // Handed out as the new participant's, their version list made the chat's
+  // "version missing" guard pick that agent's base version and write it onto
+  // the new participant (404 "version not found" on the second agent added,
+  // issue 2053). Details that name another entity are not this one's.
+  const ownedId = activeParticipant?.entity_meta?.id;
+  const ownedDetails = useMemo(() => {
+    const detailsId = activeParticipantDetails['id'];
+    if (!isIdLike(ownedId) || !isIdLike(detailsId)) return activeParticipantDetails;
+    return String(detailsId) === String(ownedId) ? activeParticipantDetails : EMPTY_DETAILS;
+  }, [activeParticipantDetails, ownedId]);
+
   return {
-    activeParticipantDetails,
+    activeParticipantDetails: ownedDetails,
     isLoadingDetails,
     refetchParticipantDetails,
   };

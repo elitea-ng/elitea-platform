@@ -41,8 +41,12 @@ const AgentHubLike = memo(({ data }: AgentHubLikeProps) => {
 
   return (
     <Box
-      onClick={() => { void toggleLike(); }}
-      sx={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 0.5 }}
+      component="button"
+      type="button"
+      aria-pressed={isLiked}
+      // The card is a button that opens the agent; a like must not open it (issue 2028).
+      onClick={(event) => { event.stopPropagation(); void toggleLike(); }}
+      sx={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 0.5, background: 'none', border: 0, padding: 0, color: 'inherit', font: 'inherit' }}
     >
       {isLiked ? <HeartActiveIcon /> : <HeartIcon />}
       <Typography variant="bodySmall">{likeCount}</Typography>

@@ -15,6 +15,8 @@ import Card from '@mui/material/Card';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { cardGradientSx } from '@/shared/lib/cardGradient';
+
 import AgentHubLike from './AgentHubLike';
 import type { ApplicationData, AuthorData } from '../types';
 
@@ -36,7 +38,7 @@ const AgentCard = memo(({ application, onSelectItem }: AgentCardProps) => {
   if (!application) return null;
 
   return (
-    <Card sx={styles.card} onClick={handleClick}>
+    <Card data-testid="agent-hub-card" sx={styles.card} onClick={handleClick}>
       <Box sx={styles.header}>
         {application.icon_meta && (
           <Box
@@ -65,7 +67,10 @@ const AgentCard = memo(({ application, onSelectItem }: AgentCardProps) => {
 AgentCard.displayName = 'AgentCard';
 
 const styles: Record<string, SxProps<Theme>> = {
-  card: {
+  // The shared gradient card: fill and the 1px gradient border. The bare MUI
+  // card drew neither, so the card melted into the page in both schemes (issue 2027).
+  card: (theme: Theme) => ({
+    ...cardGradientSx(theme),
     height: '7rem',
     maxHeight: '7rem',
     display: 'flex',
@@ -75,8 +80,7 @@ const styles: Record<string, SxProps<Theme>> = {
     boxSizing: 'border-box',
     paddingBottom: 0,
     cursor: 'pointer',
-    boxShadow: 'none',
-  },
+  }),
   header: {
     display: 'flex',
     flexDirection: 'row',

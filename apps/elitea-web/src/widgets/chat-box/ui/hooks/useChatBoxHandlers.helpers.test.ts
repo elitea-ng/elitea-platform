@@ -298,6 +298,14 @@ describe('buildOptimisticUserMessage', () => {
     expect('avatar' in msg).toBe(false);
     expect('userId' in msg).toBe(false);
     expect('participantId' in msg).toBe(false);
+    expect('messageItems' in msg).toBe(false);
+  });
+
+  it('carries the uploaded files as attachment items so their chips stay on the sent message (issue 2037)', () => {
+    const msg = buildOptimisticUserMessage('q1', 'See file', undefined, undefined, [{ filepath: '/bucket/uuid-1/report.pdf', name: 'report.pdf' }, new File(['x'], 'raw.txt')]);
+    expect(msg.messageItems).toEqual([
+      { id: -1, item_type: 'attachment_message', order_index: 1, item_details: { filepath: '/bucket/uuid-1/report.pdf', name: 'report.pdf' } },
+    ]);
   });
 });
 

@@ -61,7 +61,30 @@ export function DocumentEditorToolbar({ editor, readOnly }: DocumentEditorToolba
   return (
     <Box
       data-testid="canvas-document-toolbar"
-      sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px', padding: '4px 0' }}
+      sx={(theme) => ({
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: '4px',
+        padding: '4px 8px',
+        // The tab-button tokens the shared ToggleButton skin reads are drawn
+        // for the app chrome, and their hover fill matched the icon on this
+        // surface: the icon vanished under the pointer (issue 2030). Every
+        // state is set from the same surface-relative pair instead.
+        '& .MuiToggleButton-root, & .MuiIconButton-root': {
+          color: theme.vars.palette.text.secondary,
+          backgroundColor: 'transparent',
+        },
+        '& .MuiToggleButton-root:hover, & .MuiIconButton-root:hover': {
+          color: theme.vars.palette.text.primary,
+          backgroundColor: theme.vars.palette.action.hover,
+        },
+        '& .MuiToggleButton-root.Mui-selected, & .MuiToggleButton-root.Mui-selected:hover': {
+          color: theme.vars.palette.text.primary,
+          backgroundColor: theme.vars.palette.action.selected,
+        },
+        '& .Mui-disabled': { opacity: 0.4 },
+      })}
     >
       <Tooltip title={t('features.chatMessages.canvas.document.bold', 'Bold')} placement="top">
         <span>

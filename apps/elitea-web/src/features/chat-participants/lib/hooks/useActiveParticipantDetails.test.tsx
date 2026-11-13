@@ -106,3 +106,18 @@ it('reads the bound version, not the default one, when the participant carries a
   render(<RouterProvider router={router} />);
   await waitFor(() => expect(screen.getByTestId('bound')).toHaveTextContent('bound welcome'));
 });
+
+it('never hands the previous agent\'s details to the next participant while its read is in flight (issue 2053)', async () => {
+  server.use(
+    http.get('*/elitea_core/application/prompt_lib/2/:id', async ({ params }) => {
+      if (params['id'] === '144') await delay(200);
+      return HttpResponse.json(params['id'] === '143' ? application(143, '164') : application(144, '165'));
+    }),
+  );
+  renderProbe();
+  await waitFor(() => expect(screen.getByTestId('details')).toHaveTextContent('143'));
+  act(() => { switchToB(); });
+  // B's read is still pending: A's version list must not be offered as B's.
+  expect(screen.getByTestId('details')).toHaveTextContent('');
+  await waitFor(() => expect(screen.getByTestId('details')).toHaveTextContent('144'));
+});

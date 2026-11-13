@@ -7,6 +7,7 @@ import { folderApi } from '@/entities/folder';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
 import { conversationListErrorMessage } from '../errorMessage';
+import { pinnedFoldersFirst } from '../helpers/conversationList.helpers';
 import { useHasPermission } from '../useHasPermission';
 import type { FolderListItem } from './conversationListState.types';
 import { useLatestRef } from './useLatestRef';
@@ -119,7 +120,7 @@ export function useEditFolder(params: UseEditFolderParams): UseEditFolderResult 
 
       try {
         await folderApi.updatePin({ projectId, id: folder.id, is_pinned: isPinned });
-        setFolders((prev) => prev.map((item) => (item.id === folder.id ? { ...item, isPinned } : item)));
+        setFolders((prev) => pinnedFoldersFirst(prev.map((item) => (item.id === folder.id ? { ...item, isPinned } : item))));
       } catch (caught) {
         toastError(conversationListErrorMessage(caught));
       }
