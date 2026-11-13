@@ -8,7 +8,8 @@
     "./agent-builder": "./src/agent-builder/index.ts",
     "./brand": "./src/brand/index.ts",
     "./conversation": "./src/conversation/index.ts",
-    "./stream": "./src/stream/index.ts",
+    "./limits": "./src/limits/index.ts",
+    "./stream":"./src/stream/index.ts",
     "./support": "./src/support/index.ts"
   },
   "scripts": {

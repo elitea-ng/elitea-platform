@@ -42,10 +42,13 @@
  */
 import * as zod from "zod";
 
+export const skillVersionCreateRequestNameMax = 128;
+
 export const SkillVersionCreateRequest = zod
   .object({
     name: zod
       .string()
+      .max(skillVersionCreateRequestNameMax)
       .describe(
         'Must be non-empty and not "base" (400 otherwise); a duplicate name for this skill is a 409.',
       ),

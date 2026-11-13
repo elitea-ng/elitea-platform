@@ -41,6 +41,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/wikichat"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 // DeepWikiSource is the `chat_conversations.source` a wiki chat is filed
@@ -56,7 +57,7 @@ const (
 // deepWikiConversationName bounds the name derived from the first question.
 // `chat_conversations.name` is an unbounded varchar, but the chat list renders
 // it in one line and the support assistant already refuses more than this.
-const deepWikiConversationName = 255
+const deepWikiConversationName = entitylimits.MaxNameLength
 
 // DeepWikiHistoryRepo writes wiki chat transcripts.
 type DeepWikiHistoryRepo struct {

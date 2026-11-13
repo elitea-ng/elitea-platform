@@ -1,3 +1,5 @@
+import { exceedsLimit } from '@/shared/lib/textLimits';
+
 import type { SkillDraft, SkillWriteInput } from '../model/types';
 
 export const SKILL_NAME_MAX_LENGTH = 64;
@@ -17,10 +19,10 @@ export function validateSkill(input: SkillWriteInput | SkillDraft): SkillValidat
   const instructions = input.instructions.trim();
 
   if (name === '') errors.name = 'Name is required.';
-  else if (name.length > SKILL_NAME_MAX_LENGTH) errors.name = `Name must be ${SKILL_NAME_MAX_LENGTH} characters or fewer.`;
+  else if (exceedsLimit(name, SKILL_NAME_MAX_LENGTH)) errors.name = `Name must be ${SKILL_NAME_MAX_LENGTH} characters or fewer.`;
 
   if (description === '') errors.description = 'Description is required.';
-  else if (description.length > SKILL_DESCRIPTION_MAX_LENGTH) {
+  else if (exceedsLimit(description, SKILL_DESCRIPTION_MAX_LENGTH)) {
     errors.description = `Description must be ${SKILL_DESCRIPTION_MAX_LENGTH} characters or fewer.`;
   }
 

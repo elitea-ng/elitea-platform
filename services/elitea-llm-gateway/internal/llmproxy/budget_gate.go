@@ -115,13 +115,16 @@ const (
 	budgetScopeFieldMember  = "member"
 )
 
-// perImageFallbackNano is the fixed per-image billing cost in nano-USD used
-// when an image-generation response carries no token-based Usage field.
-// $0.040 per image (40_000_000 nano-USD) matches the DALL·E 3 Standard
-// 1024×1024 list price and is a conservative floor for image models that do
-// not report token usage. This constant is intentionally NOT a catalog lookup:
-// image models whose pricing is token-based will report Usage and go through
-// the normal cost.Calculator path; this path only fires when Usage==nil.
+// perImageFallbackNano is the flat per-image ESTIMATE in nano-USD. It is the
+// LAST step of the image billing order (image_billing.go): it pays only when the
+// provider reported no token usage AND the catalog holds no per-image price for
+// the model (gateway.gateway_model_image_prices, shared migration 0243). It is
+// recorded as pricing_source "fallback_estimate" on the request-log row, counted
+// on gateway_image_fallback_estimate_total and logged once per model, because it
+// is a guess that an operator must replace with a price. It is also the
+// admission estimate for a model that has no per-image price.
+// $0.040 per image (40_000_000 nano-USD) is the DALL·E 3 Standard 1024×1024
+// list price.
 const perImageFallbackNano int64 = 40_000_000
 
 // billingPeriodStart returns the first second of the current calendar month in
@@ -302,6 +305,34 @@ func (h *Handler) recheckVerdict(ctx context.Context, model string) budgetVerdic
 }
 
 func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode admissionMode) budgetVerdict {
+	return h.admissionVerdictEstimate(ctx, model, mode, nil)
+}
+
+// estimateFunc prices the request being admitted, in nano-USD, from the SAME
+// budget-plane snapshot the admission uses (budget_plane.go). It is called only
+// when the admission reaches a gate and a project, so an unbudgeted request
+// pays for no price lookup.
+type estimateFunc func(bp *budgetPlane) int64
+
+// estimateExceeds reports that the request's estimate does not fit in what is
+// left of a ceiling the NATS counter answered for: spent + estimate > limit.
+// A request that fits exactly is admitted. dec carries the figures only on the
+// healthy path (failmode.Decision.SpentNano); the degraded path refuses an
+// estimate inside the FSM, against the replica's share.
+func estimateExceeds(dec failmode.Decision, estimateNano int64) bool {
+	if estimateNano <= 0 || dec.HardLimitNano <= 0 {
+		return false
+	}
+	// Both are positive here, so the subtraction cannot overflow.
+	return dec.SpentNano > dec.HardLimitNano-estimateNano
+}
+
+// admissionVerdictEstimate is the whole admission decision. A nil estimate is
+// the decision every route made before issue 1969: refuse only a scope that is
+// already over its ceiling. An estimate (the image routes) also refuses a
+// request that would not fit in what is left, at the project and the member
+// ceiling alike.
+func (h *Handler) admissionVerdictEstimate(ctx context.Context, model string, mode admissionMode, estimate estimateFunc) budgetVerdict {
 	// Circular-routing guard #2 (spec §2.6) runs BEFORE the budget gate and
 	// regardless of whether budget enforcement is wired: a routing loop must
 	// be contained even on a deployment without governance. The tuple key is
@@ -371,8 +402,13 @@ func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode ad
 	// stalled Postgres pool would park the handler goroutine forever, where it
 	// previously unwound on client hangup. Fail-closed semantics are preserved
 	// — a timeout surfaces as the existing 503 branch below.
+	var estimateNano int64
+	if estimate != nil {
+		estimateNano = max(estimate(bp), 0)
+	}
+
 	gateCtx, gateCancel := context.WithTimeout(ctx, budgetGateTimeout)
-	dec, err := bp.gate.CheckBudget(gateCtx, pid, budgetScopeProject, scopeID, periodStart, 0)
+	dec, err := bp.gate.CheckBudget(gateCtx, pid, budgetScopeProject, scopeID, periodStart, estimateNano)
 	gateCancel()
 	if err != nil {
 		// A hard error from the gate is unexpected (the gate is designed to
@@ -402,7 +438,19 @@ func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode ad
 		}
 		// The project has room. The member cap is a SECOND ceiling inside it,
 		// so it is asked only after the project admits (issue #321).
-		v := h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		if estimateExceeds(dec, estimateNano) {
+			h.logger.Info("budget gate: estimate does not fit in the remaining project budget",
+				"project_id", pid, "estimate_nano", estimateNano,
+				"spent_nano", dec.SpentNano, "limit_nano", dec.HardLimitNano)
+			return budgetVerdict{
+				status:  http.StatusPaymentRequired,
+				errType: budgetErrorType,
+				message: "the estimated cost of this request exceeds the remaining project budget for this billing period",
+				code:    budgetCodeProject,
+				scope:   budgetScopeFieldProject,
+			}
+		}
+		v := h.memberVerdict(ctx, bp.gate, pid, periodStart, estimateNano)
 		v.budgeted = v.allow && dec.Budgeted
 		return v
 	case failmode.Block402:
@@ -427,7 +475,7 @@ func (h *Handler) admissionVerdictFor(ctx context.Context, model string, mode ad
 		// independent limit.
 		h.logger.Warn("budget gate: unknown verdict; allowing request",
 			"verdict", fmt.Sprintf("%v", dec.Verdict))
-		v := h.memberVerdict(ctx, bp.gate, pid, periodStart)
+		v := h.memberVerdict(ctx, bp.gate, pid, periodStart, estimateNano)
 		v.budgeted = v.allow && dec.Budgeted
 		return v
 	}
@@ -475,6 +523,7 @@ func (h *Handler) memberVerdict(
 	gate BudgetChecker,
 	projectID int,
 	periodStart int64,
+	estimateNano int64,
 ) budgetVerdict {
 	raw := identityUserFromCtx(ctx)
 	uid := parseUserID(raw)
@@ -492,7 +541,7 @@ func (h *Handler) memberVerdict(
 	scopeID := failmode.UserScopeID(projectID, uid)
 
 	gateCtx, gateCancel := context.WithTimeout(ctx, budgetGateTimeout)
-	dec, err := gate.CheckBudget(gateCtx, projectID, budgetScopeUser, scopeID, periodStart, 0)
+	dec, err := gate.CheckBudget(gateCtx, projectID, budgetScopeUser, scopeID, periodStart, estimateNano)
 	gateCancel()
 	if err != nil {
 		// Same reasoning as the project gate: a hard error is not a licence to
@@ -526,6 +575,18 @@ func (h *Handler) memberVerdict(
 			code:    "nats_unavailable",
 		}
 	default:
+		if estimateExceeds(dec, estimateNano) {
+			h.logger.Info("budget gate: estimate does not fit in the remaining member budget",
+				"project_id", projectID, "user_id", uid, "estimate_nano", estimateNano,
+				"spent_nano", dec.SpentNano, "limit_nano", dec.HardLimitNano)
+			return budgetVerdict{
+				status:  http.StatusPaymentRequired,
+				errType: budgetErrorType,
+				message: "the estimated cost of this request exceeds the remaining member budget for this billing period",
+				code:    budgetCodeMember,
+				scope:   budgetScopeFieldMember,
+			}
+		}
 		return budgetAllowed
 	}
 }
@@ -972,6 +1033,21 @@ func (h *Handler) updateUsageDirect(
 	model string,
 	costNano int64,
 ) billOutcome {
+	return h.updateUsageDirectWith(ctx, h.budget(), projectIDStr, userIDStr, provider, model, costNano)
+}
+
+// updateUsageDirectWith is updateUsageDirect on the caller's budget-plane
+// snapshot, so an operation that priced the request through bp.calc bills
+// through the SAME gate (budget_plane.go).
+func (h *Handler) updateUsageDirectWith(
+	ctx context.Context,
+	bp *budgetPlane,
+	projectIDStr string,
+	userIDStr string,
+	provider string,
+	model string,
+	costNano int64,
+) billOutcome {
 	// A credential served this response too, though it reported no usage.
 	// Before the gate check, for the reason updateUsageUnits records first:
 	// the log is about what happened, not about what was charged.
@@ -986,7 +1062,6 @@ func (h *Handler) updateUsageDirect(
 		}
 	}()
 
-	bp := h.budget()
 	if bp.gate == nil || costNano <= 0 {
 		return billNotBillable
 	}
@@ -1511,25 +1586,15 @@ func usageFromEmbeddingResponse(resp *schemas.BifrostEmbeddingResponse) (int64, 
 	return int64(resp.Usage.PromptTokens), int64(resp.Usage.CompletionTokens)
 }
 
-// usageFromImageResponse extracts (inputTokens, outputTokens, imageCount)
-// from a BifrostImageGenerationResponse.
-//
-// When the provider populates Usage (e.g. OpenAI gpt-image-1), the token
-// counts are returned and imageCount is 0 — the normal cost.Calculator path
-// applies.
-//
-// When Usage is nil (e.g. DALL·E 2, Stability AI), token counts are 0 and
-// imageCount is set to len(resp.Data) so the caller can bill a fixed per-image
-// fallback cost via perImageFallbackNano (Fix round-3 #8). This ensures image
-// models that do not report token usage still get billed.
-func usageFromImageResponse(resp *schemas.BifrostImageGenerationResponse) (inputTokens, outputTokens, imageCount int64) {
-	if resp == nil {
-		return 0, 0, 0
+// usageFromImageResponse extracts (inputTokens, outputTokens) from a
+// BifrostImageGenerationResponse. Both are 0 when the provider reported no
+// usage, or a usage block with no tokens. billImageResponse then bills the
+// images returned (image_billing.go).
+func usageFromImageResponse(resp *schemas.BifrostImageGenerationResponse) (inputTokens, outputTokens int64) {
+	if resp == nil || resp.Usage == nil {
+		return 0, 0
 	}
-	if resp.Usage != nil {
-		return int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens), 0
-	}
-	return 0, 0, int64(len(resp.Data))
+	return int64(resp.Usage.InputTokens), int64(resp.Usage.OutputTokens)
 }
 
 // providerModelFromImageGenReq extracts provider and model from a

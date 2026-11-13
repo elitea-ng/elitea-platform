@@ -17,6 +17,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 // SkillVersion holds one independently selected skill version.
@@ -424,6 +425,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	skill := req.toSkill()
+	if err := entitylimits.CheckName("name", skill.Name); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	if err := entitylimits.CheckDescription("description", skill.Description); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 	if err := checkInstructionsLength(skill.Instructions); err != nil {
 		apierr.Write(w, err)
 		return
@@ -464,6 +473,10 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		apierr.Write(w, apierr.BadRequest("version name is required"))
+		return
+	}
+	if err := entitylimits.CheckName("name", name); err != nil {
+		apierr.Write(w, err)
 		return
 	}
 	if name == "base" {
@@ -595,6 +608,14 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	var req createRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
+		return
+	}
+	if err := entitylimits.CheckName("name", req.Name); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	if err := entitylimits.CheckDescription("description", req.Description); err != nil {
+		apierr.Write(w, err)
 		return
 	}
 	if err := checkInstructionsLength(req.toSkill().Instructions); err != nil {
@@ -888,6 +909,14 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 	name, description, instructions, tags, err := parseSkillMarkdown(content)
 	if err != nil {
 		apierr.Write(w, apierr.BadRequest(err.Error()))
+		return
+	}
+	if err := entitylimits.CheckName("name", name); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	if err := entitylimits.CheckDescription("description", description); err != nil {
+		apierr.Write(w, err)
 		return
 	}
 	if err := checkInstructionsLength(instructions); err != nil {

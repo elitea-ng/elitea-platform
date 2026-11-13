@@ -5,6 +5,7 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { textLimitState } from '@/shared/lib/textLimits';
 
 import { combineSx } from '../lib/combineSx';
 
@@ -57,10 +58,12 @@ export interface CharacterCounterProps {
  * `WelcomeMessageInput`, `ConversationStartersEditor`, `CreateAgentForm`,
  * `ApplicationEditForm` and toolkits' `NameDescriptionInput`.
  *
- * `remaining` is clamped at zero. A caller whose stored value is longer than
- * its own `maxLength` — a row saved under an older, larger limit — would
- * otherwise read "-12 characters left", which is not a state a reader can act
- * on, and would never show the limit message either.
+ * `remaining` is clamped at zero. A caller whose value is longer than its own
+ * `maxLength` — a row saved under an older, larger limit, or text pasted into a
+ * field that does not cut it (issue 1968: name and description inputs do not
+ * truncate silently) — reads "N characters over the limit" in the error colour
+ * instead of "-12 characters left". The caller blocks the save with
+ * `exceedsLimit` from `@/shared/lib/textLimits`.
  */
 export function CharacterCounter({
   value,
@@ -70,7 +73,8 @@ export function CharacterCounter({
   sx,
   'data-testid': dataTestId,
 }: CharacterCounterProps): ReactNode {
-  const remaining = Math.max(maxLength - value.length, 0);
+  // Characters, not UTF-16 units: the server counts runes (issue 1968).
+  const { remaining, over, exceeded } = textLimitState(value, maxLength);
   const isAtLimit = remaining === 0;
 
   return (
@@ -85,9 +89,17 @@ export function CharacterCounter({
       )}
     >
       <Typography variant={textVariant}>
-        {remaining} {t('shared.ui.characterCounter.remaining', 'characters left')}
-        {isAtLimit &&
-          t('shared.ui.characterCounter.atLimit', '. You have reached the MAXIMUM character limit')}
+        {exceeded ? (
+          <>
+            {over} {t('shared.ui.characterCounter.over', 'characters over the limit. Shorten the text to save.')}
+          </>
+        ) : (
+          <>
+            {remaining} {t('shared.ui.characterCounter.remaining', 'characters left')}
+            {isAtLimit &&
+              t('shared.ui.characterCounter.atLimit', '. You have reached the MAXIMUM character limit')}
+          </>
+        )}
       </Typography>
     </Box>
   );

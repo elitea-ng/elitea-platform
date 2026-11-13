@@ -42,15 +42,24 @@
  */
 import * as zod from "zod";
 
+export const applicationUpdateRequestNameMax = 128;
+
+export const applicationUpdateRequestDescriptionMax = 2000;
+
+export const applicationUpdateRequestVersionNameMax = 128;
+
 export const ApplicationUpdateRequest = zod.object({
-  name: zod.string().optional(),
-  description: zod.string().optional(),
+  name: zod.string().max(applicationUpdateRequestNameMax).optional(),
+  description: zod
+    .string()
+    .max(applicationUpdateRequestDescriptionMax)
+    .optional(),
   icon: zod.string().optional(),
   version: zod
     .object({
       application_id: zod.union([zod.string(), zod.int()]),
       id: zod.union([zod.string(), zod.int()]),
-      name: zod.string().optional(),
+      name: zod.string().max(applicationUpdateRequestVersionNameMax).optional(),
       instructions: zod.string().optional(),
     })
     .optional(),
