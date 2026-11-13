@@ -117,6 +117,18 @@ SELECT replay.cursor,
        replay.event_bytes,
        replay.event_digest,
        CASE
+           -- FU-335: the notice of a delegation refused at start is shown
+           -- only beside the run's FAILED terminal; nothing else changes.
+           WHEN replay.event_type = 'execution.node_event'
+            AND COALESCE(convert_from(replay.event_bytes, 'UTF8')::jsonb ->> 'type', '') = 'agent_delegation_refused'
+           THEN EXISTS (
+               SELECT 1
+               FROM elitea_runtime.output_inbox AS terminal
+               WHERE terminal.execution_id = replay.execution_id
+                 AND terminal.generation = replay.generation
+                 AND terminal.payload_type = 'RUNTIME_FAILURE'
+                 AND terminal.projected_at IS NOT NULL
+           )
            WHEN replay.event_type = 'execution.node_event'
             AND COALESCE(convert_from(replay.event_bytes, 'UTF8')::jsonb ->> 'type', '') IN (
                 'full_message',

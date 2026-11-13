@@ -512,6 +512,10 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 	return outcome, nil
 }
 
+// MaxDelegationNoticeToolkitChars bounds the author-written toolkit name a
+// delegation notice shows (FU-335); a longer name is not persisted.
+const MaxDelegationNoticeToolkitChars = 128
+
 func persistCurrentAgentRuntimeTerminal(
 	ctx context.Context,
 	tx sqlExecutor,
@@ -542,7 +546,27 @@ SET is_streaming = FALSE,
             'is_error', TRUE,
             'error', $3::text,
             'error_code', $5::text
-        )
+        ) || COALESCE((
+            -- FU-335: a reload shows the delegation notice the run's stream
+            -- showed: its node kind and the toolkit's bounded display name.
+            SELECT jsonb_build_object('delegation_refused', jsonb_build_object(
+                'node', notice.block ->> 'node',
+                'toolkit', notice.block ->> 'toolkit'))
+            FROM (
+                SELECT convert_from(replay.event_bytes, 'UTF8')::jsonb
+                           -> 'response_metadata' -> 'delegation_refused' AS block
+                FROM elitea_runtime.execution_replay_events AS replay
+                WHERE replay.execution_id = $1
+                  AND replay.generation = $2
+                  AND replay.event_type = 'execution.node_event'
+                  AND convert_from(replay.event_bytes, 'UTF8')::jsonb ->> 'type' = 'agent_delegation_refused'
+                ORDER BY replay.cursor DESC
+                LIMIT 1
+            ) AS notice
+            WHERE $5::text = 'AUTHORIZATION_FAILED'
+              AND notice.block ->> 'node' IN ('agent', 'pipeline')
+              AND char_length(COALESCE(notice.block ->> 'toolkit', '')) <= $6::integer
+        ), '{}'::jsonb)
     END,
     updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
 FROM elitea_runtime.agent_execution_jobs AS agent,
@@ -561,7 +585,7 @@ WHERE agent.execution_id = $1
       agent.client_execution_generation`,
 		schema+".chat_message_group",
 		schema+".chat_conversations",
-	), record.ExecutionID, int64(record.Generation), safeMessage, failureCode == "CANCELLED", failureCode)
+	), record.ExecutionID, int64(record.Generation), safeMessage, failureCode == "CANCELLED", failureCode, MaxDelegationNoticeToolkitChars)
 	if err != nil {
 		return fmt.Errorf("finalize current agent terminal state: %w", err)
 	}

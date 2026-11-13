@@ -287,7 +287,9 @@ func agentTerminalNodeEvent(data []byte) bool {
 		return false
 	}
 	switch event.Type {
-	case "full_message", "agent_hitl_interrupt", "mcp_authorization_required":
+	// FU-335: a delegation notice waits for its failed terminal, like a
+	// final message waits for its result: no wake for a still-hidden row.
+	case "full_message", "agent_hitl_interrupt", "mcp_authorization_required", "agent_delegation_refused":
 		return true
 	default:
 		return false

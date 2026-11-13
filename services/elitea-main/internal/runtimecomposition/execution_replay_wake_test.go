@@ -285,3 +285,18 @@ func replayWakeHighWater(bus *natsExecutionReplayWakeBus, projectID, executionID
 	defer bus.mu.Unlock()
 	return bus.highWater[key]
 }
+
+// FU-335: the delegation notice is held behind its FAILED terminal on replay,
+// so its ingest must not wake a stream: a wake for a still-hidden row would
+// make every waiter re-read the same barrier at once. Progress still wakes.
+func TestADelegationNoticeDoesNotWakeTheStreamItIsHiddenFrom(t *testing.T) {
+	for data, terminal := range map[string]bool{
+		`{"type":"agent_delegation_refused","content":null}`: true,
+		`{"type":"full_message","content":"done"}`:           true,
+		`{"type":"agent_llm_chunk","content":"partial"}`:     false,
+	} {
+		if got := agentTerminalNodeEvent([]byte(data)); got != terminal {
+			t.Fatalf("%s: held=%t, want %t", data, got, terminal)
+		}
+	}
+}
