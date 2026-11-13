@@ -5,6 +5,7 @@ import {
   createBucket,
   deleteBucket,
   deleteObject,
+  moveObject,
   updateBucket,
 } from '@/shared/api/generated/artifacts/artifacts';
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
@@ -165,10 +166,7 @@ export async function removeArtifacts(projectId: string, bucket: string, keys: r
  */
 export async function renameArtifact(projectId: string, bucket: string, from: string, to: string): Promise<void> {
   try {
-    await eliteaFetch<unknown>(
-      `/artifacts/objects/${toProjectID(projectId)}/${encodeURIComponent(bucket)}:move`,
-      { method: 'POST', body: JSON.stringify({ from, to }) },
-    );
+    await moveObject(toProjectID(projectId), bucket, { from, to });
   } catch (cause) {
     if (cause instanceof EliteaApiError && cause.failure.kind === 'http') {
       if (cause.failure.status === 409) throw new Error('A file with that name already exists.');

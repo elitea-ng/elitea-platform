@@ -764,7 +764,7 @@
       "method": "POST",
       "path": "/artifacts/objects/{projectID}/{bucket}:move",
       "operationId": "moveObject",
-      "source": "handwritten",
+      "source": "generated",
       "responseSchema": "UploadObjectResponse",
       "fixture": null,
       "usedBy": [

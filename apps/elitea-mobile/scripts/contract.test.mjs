@@ -334,6 +334,15 @@ describe('client contract 1.52', () => {
   });
 });
 
+describe('client contract 1.54', () => {
+  it('renames an artifact file with moveObject (issue 2015)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 54), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.54`);
+    assert.ok(doc.components.schemas.MoveObjectRequest, 'MoveObjectRequest is in the contract');
+  });
+});
+
 describe('client contract 1.53', () => {
   it('answers a message for people alone without a turn (issue 1970)', () => {
     const { doc } = buildContract();

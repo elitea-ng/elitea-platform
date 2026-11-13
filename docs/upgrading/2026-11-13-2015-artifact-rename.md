@@ -5,7 +5,7 @@ Main has a new operation, `POST /api/v2/artifacts/objects/{projectID}/{bucket}:m
 desktop Artifacts table now has a **Rename** action that calls it.
 
 - **Who is affected:** clients of the artifact API; client builders (additive
-  change to the client contract, bumped when this lands).
+  change, client contract 1.54).
 - **What to do:** upgrade Main before, or together with, the web and desktop
   apps; an app that calls `:move` against an older Main gets 404/405. No
   migration, no new setting.
