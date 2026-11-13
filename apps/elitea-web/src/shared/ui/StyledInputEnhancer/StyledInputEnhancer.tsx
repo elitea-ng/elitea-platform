@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useCallback, useState } from 'react';
 
 import Box from '@mui/material/Box';
+import type { SxProps, Theme } from '@mui/material/styles';
 
 import { BaseModal } from '../BaseModal';
 import { CharacterCounter } from '../CharacterCounter';
@@ -27,12 +28,26 @@ function FullScreenEditor({ value, onChange, ariaLabel, htmlInputProps }: FullSc
   const stringValue = typeof value === 'string' ? value : '';
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <InputBase
-        value={value}
+      {/*
+        Fills the modal. This was an `InputBase` pinned to `expand={{ minRows: 15,
+        maxRows: 15 }}`: fifteen rows is a fixed height, so on any real modal the
+        text stopped partway down, the standard-variant underline drew a cyan rule
+        across the middle, and the rest was dead space (#2010). A plain multiline
+        field whose root and textarea take the available height has neither.
+      */}
+      {/*
+        A plain <textarea>, not MUI's multiline field: that always renders
+        TextareaAutosize, which writes a content-sized inline pixel height and
+        brings the dead space back.
+      */}
+      <Box
+        component="textarea"
+        {...htmlInputProps}
+        aria-label={ariaLabel}
+        value={stringValue}
         onChange={onChange}
-        expand={{ minRows: 15, maxRows: 15 }}
-        slotProps={{ htmlInput: { ...htmlInputProps, 'aria-label': ariaLabel } }}
-        sx={{ flex: 1, minHeight: 0 }}
+        style={{ height: '100%' }}
+        sx={editorSx}
       />
       {maxLength !== undefined && (
         <CharacterCounter
@@ -128,3 +143,17 @@ export function StyledInputEnhancer({
     </>
   );
 }
+
+const editorSx: SxProps<Theme> = {
+  flex: 1,
+  minHeight: 0,
+  width: '100%',
+  resize: 'none',
+  overflow: 'auto',
+  border: 0,
+  outline: 0,
+  padding: 0,
+  background: 'transparent',
+  color: 'text.primary',
+  font: 'inherit',
+};

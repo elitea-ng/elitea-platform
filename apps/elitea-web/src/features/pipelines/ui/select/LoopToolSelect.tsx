@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useCallback, useMemo } from 'react';
 
+import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { toolkitTools } from '@/entities/toolkit';
@@ -199,14 +200,16 @@ function ToolPicker({ readFailed, discoveryDisabled, onRetry, label, value, opti
   }
   if (options.length === 0) return null;
   return (
-    <SingleSelect
-      sx={toolSelectSx}
-      label={label}
-      value={value}
-      onChange={onSelect}
-      options={[...options]}
-      disabled={disabled}
-    />
+    <Box className="nopan nodrag nowheel">
+      <SingleSelect
+        sx={toolSelectSx}
+        label={label}
+        value={value}
+        onChange={onSelect}
+        options={[...options]}
+        disabled={disabled}
+      />
+    </Box>
   );
 }
 
@@ -232,15 +235,17 @@ export function LoopToolSelect(props: LoopToolSelectProps): ReactNode {
 
   return (
     <>
-      <SingleSelect
-        sx={toolkitSelectSx}
-        label={label}
-        value={toolkit ?? ''}
-        onChange={handleToolkitChange}
-        onClear={onClear}
-        options={[...toolkits]}
-        disabled={disabled || toolkits.length === 0}
-      />
+      <Box className="nopan nodrag nowheel">
+        <SingleSelect
+          sx={toolkitSelectSx}
+          label={label}
+          value={toolkit ?? ''}
+          onChange={handleToolkitChange}
+          onClear={onClear}
+          options={[...toolkits]}
+          disabled={disabled || toolkits.length === 0}
+        />
+      </Box>
       <ToolPicker
         readFailed={toolsReadFailed}
         discoveryDisabled={toolsDiscoveryDisabled}

@@ -40,6 +40,17 @@ afterEach(async () => {
 });
 
 describe('ToolSelect', () => {
+  it('sits under the React Flow drag shield so its dropdown can open inside a node (#2005)', async () => {
+    const { findByRole } = renderWithRouterAndProject(
+      <ToolSelect versionTools={[{ type: 'github', name: 'github', toolkit_name: 'github' }]} />,
+      PROJECT_ID,
+      queryClient,
+    );
+
+    const combobox = await findByRole('combobox');
+    expect(combobox.closest('.nopan.nodrag')).not.toBeNull();
+  });
+
   it('lists every version tool by resolved name', async () => {
     const { findByText } = renderWithRouterAndProject(
       <ToolSelect versionTools={[{ type: 'github', name: 'github', toolkit_name: 'github' }]} />,

@@ -49,8 +49,10 @@ export function RouteSelect(props: RouteSelectProps): ReactNode {
 
   const onChangeInput = useCallback(
     (newValue: string[]) => {
-      if (!setYamlJsonObject || !setFlowEdges) return;
+      if (!setYamlJsonObject) return;
       FlowEditorHelpers.updateYamlNode(id, fieldName, newValue, yamlJsonObject, setYamlJsonObject);
+      // A context with no canvas (no edge setter) still gets the YAML write — the chip ✕ used to work there.
+      if (!setFlowEdges) return;
       const routerHandle = `${FlowEditorConstants.ROUTER_HANDLE_ID_SUFFIX}_${fieldName}`;
 
       setFlowEdges(prevEdges => {
@@ -96,18 +98,13 @@ export function RouteSelect(props: RouteSelectProps): ReactNode {
     return [...optionsNotInState, ...nodeOptions];
   }, [routesFromNode, nodeOptions]);
 
+  // Same path as deselecting in the menu: the YAML route AND its canvas edge go together.
+  // Writing only the YAML (as this did) left an orphaned connection line behind (#2006).
   const onDeleteOption = useCallback(
     (value: string) => {
-      if (!setYamlJsonObject) return;
-      FlowEditorHelpers.updateYamlNode(
-        id,
-        fieldName,
-        routesFromNode.filter(item => item !== value),
-        yamlJsonObject,
-        setYamlJsonObject,
-      );
+      onChangeInput(routesFromNode.filter(item => item !== value));
     },
-    [id, fieldName, routesFromNode, setYamlJsonObject, yamlJsonObject],
+    [onChangeInput, routesFromNode],
   );
 
   return (
