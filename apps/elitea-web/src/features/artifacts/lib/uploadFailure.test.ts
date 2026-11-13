@@ -11,9 +11,11 @@ describe('describeUploadFailure', () => {
     })).toBe(BLOCKED);
   });
 
-  it('treats an empty or foreign JSON body as not ours', () => {
-    expect(describeUploadFailure({ kind: 'http', status: 403, url: '/x', body: undefined })).toBe(BLOCKED);
-    expect(describeUploadFailure({ kind: 'http', status: 403, url: '/x', body: { blocked: true } })).toBe(BLOCKED);
+  it('does not blame a proxy for an empty, plain-text or foreign JSON refusal', () => {
+    const refused = (status: number) => `The server refused the upload (HTTP ${status}).`;
+    expect(describeUploadFailure({ kind: 'http', status: 403, url: '/x', body: undefined })).toBe(refused(403));
+    expect(describeUploadFailure({ kind: 'http', status: 413, url: '/x', body: 'Payload Too Large' })).toBe(refused(413));
+    expect(describeUploadFailure({ kind: 'http', status: 502, url: '/x', body: { blocked: true } })).toBe(refused(502));
   });
 
   it("surfaces the server's own envelope message", () => {

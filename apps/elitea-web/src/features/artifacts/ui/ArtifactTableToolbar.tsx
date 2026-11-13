@@ -33,7 +33,8 @@ interface ArtifactTableToolbarProps {
   readonly onDeleteSelected: () => void;
   /** Exactly one file (not a folder) is selected. */
   readonly canRenameSelected: boolean;
-  readonly onRenameSelected: () => void;
+  /** Absent when the caller may not rename; the button is then not rendered. */
+  readonly onRenameSelected?: (() => void) | undefined;
 }
 
 function retentionText(days: number | null): string {
@@ -148,18 +149,20 @@ export function ArtifactTableToolbar(props: ArtifactTableToolbarProps): ReactNod
             </BaseBtn>
           </span>
         </Tooltip>
-        <Tooltip title={t('artifacts.table.renameSelected', 'Rename selected file')}>
-          <span>
-            <BaseBtn
-              variant="icon"
-              aria-label={t('artifacts.table.renameSelected', 'Rename selected file')}
-              disabled={!props.canRenameSelected}
-              onClick={props.onRenameSelected}
-            >
-              <DriveFileRenameOutlineIcon fontSize="small" />
-            </BaseBtn>
-          </span>
-        </Tooltip>
+        {props.onRenameSelected !== undefined && (
+          <Tooltip title={t('artifacts.table.renameSelected', 'Rename selected file')}>
+            <span>
+              <BaseBtn
+                variant="icon"
+                aria-label={t('artifacts.table.renameSelected', 'Rename selected file')}
+                disabled={!props.canRenameSelected}
+                onClick={props.onRenameSelected}
+              >
+                <DriveFileRenameOutlineIcon fontSize="small" />
+              </BaseBtn>
+            </span>
+          </Tooltip>
+        )}
         <Tooltip title={t('artifacts.table.deleteSelected', 'Delete selected')}>
           <span>
             <BaseBtn

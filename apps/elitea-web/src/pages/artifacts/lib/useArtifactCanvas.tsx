@@ -26,6 +26,8 @@ interface CanvasSession {
 export interface UseArtifactCanvasResult {
   readonly openInCanvas: (item: ArtifactListItem) => void;
   readonly error: string | undefined;
+  /** Closes the drawer when it is editing `key` (the file was renamed: saving would re-create the old name). */
+  readonly closeFor: (key: string) => void;
   /** The drawer itself — render it once, unconditionally, in the page. */
   readonly node: React.ReactNode;
 }
@@ -63,6 +65,10 @@ export function useArtifactCanvas(
     [projectId, bucketName],
   );
 
+  const closeFor = useCallback((key: string) => {
+    setSession((current) => (current?.source.name === key ? undefined : current));
+  }, []);
+
   const node =
     session !== undefined && projectId !== undefined ? (
       <Drawer
@@ -87,5 +93,5 @@ export function useArtifactCanvas(
       </Drawer>
     ) : null;
 
-  return { openInCanvas, error, node };
+  return { openInCanvas, error, closeFor, node };
 }

@@ -9,8 +9,10 @@ import {
   updateBucket,
 } from '@/shared/api/generated/artifacts/artifacts';
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
+
 import { listArtifacts, listBuckets } from '@/shared/api/artifacts';
 
+import { envelopeMessage } from '../lib/uploadFailure';
 import type { ArtifactStorageConfiguration } from '../model/types';
 
 interface BucketListWire {
@@ -114,10 +116,20 @@ export async function createArtifactBucket(
 ): Promise<void> {
   // `retention_days` is omitted (not sent as null) when unset, so the project's
   // default retention still applies server-side.
-  await createBucket(toProjectID(projectId), {
-    name,
-    ...(retentionDays === undefined || retentionDays === null ? {} : { retention_days: retentionDays }),
-  });
+  try {
+    await createBucket(toProjectID(projectId), {
+      name,
+      ...(retentionDays === undefined || retentionDays === null ? {} : { retention_days: retentionDays }),
+    });
+  } catch (cause) {
+    // A refusal the server explains (a retention above the project's ceiling, a
+    // storage quota, a name that is taken) is shown as the server wrote it.
+    if (cause instanceof EliteaApiError && cause.failure.kind === 'http' && cause.failure.status < 500) {
+      const message = envelopeMessage(cause.failure.body);
+      if (message !== undefined) throw new Error(message);
+    }
+    throw new Error('Failed to create the bucket.');
+  }
 }
 
 /**

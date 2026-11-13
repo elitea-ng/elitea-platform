@@ -41,7 +41,11 @@ describe('validateBucketName', () => {
     expect(validateBucketName('reports-2026')).toBe('');
     expect(validateBucketName('')).toBe('Name is required.');
     expect(validateBucketName('1reports')).toContain('Start with a letter');
-    expect(validateBucketName(`a${'b'.repeat(56)}`)).toContain('56 characters');
+    expect(validateBucketName('Reports')).toContain('lowercase');
+    expect(validateBucketName('a')).toContain('at least 2');
+    // The server's rule is ^[a-z][a-z0-9-]{1,62}$: 63 characters is the last accepted length.
+    expect(validateBucketName(`a${'b'.repeat(62)}`)).toBe('');
+    expect(validateBucketName(`a${'b'.repeat(63)}`)).toContain('63 characters');
   });
 });
 
@@ -101,6 +105,17 @@ describe('CreateBucket', () => {
     await user.type(screen.getByLabelText('Retention (days)'), '14');
     await user.click(screen.getByRole('button', { name: 'Create bucket' }));
     expect(mocks.createBucket).toHaveBeenCalledWith({ name: 'testbucket', retentionDays: 14 });
+  });
+
+  /* #2018 — an empty retention sends nothing, so the project's default applies; the help must say so */
+  it('says an empty retention uses the project default, and shows the server refusal', async () => {
+    const user = userEvent.setup();
+    renderArtifactsRoute(<CreateBucket />, '/artifacts/create-bucket');
+    expect(await screen.findByText("Leave empty to use the project's default retention.")).toBeInTheDocument();
+    mocks.createBucket.mockRejectedValueOnce(new Error("retention_days exceeds the project's policy ceiling"));
+    await user.type(screen.getByLabelText('Retention (days)'), '999');
+    await user.click(screen.getByRole('button', { name: 'Create bucket' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("retention_days exceeds the project's policy ceiling");
   });
 
   it('keeps invalid input local and supports cancellation', async () => {

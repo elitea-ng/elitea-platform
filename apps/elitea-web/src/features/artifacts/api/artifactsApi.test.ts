@@ -133,6 +133,19 @@ describe('artifacts API', () => {
     expect(batchDeleteObjects).toHaveBeenCalledWith(1, 'docs', { keys: ['a.txt', 'b.txt'] });
   });
 
+  /* #2018 — a refusal the server explains is shown as written; anything else stays generic */
+  it('surfaces the server message of a refused bucket create', async () => {
+    vi.mocked(generatedArtifacts.createBucket).mockRejectedValue(new generatedMutator.EliteaApiError({
+      kind: 'http', status: 403, url: '/x',
+      body: { error: { code: 'QuotaExceeded', message: "retention_days exceeds the project's policy ceiling" } },
+    }));
+    await expect(createArtifactBucket('1', 'docs', 999)).rejects.toThrow("retention_days exceeds the project's policy ceiling");
+    vi.mocked(generatedArtifacts.createBucket).mockRejectedValue(new generatedMutator.EliteaApiError({
+      kind: 'http', status: 500, url: '/x', body: { error: { message: 'pq: connection refused' } },
+    }));
+    await expect(createArtifactBucket('1', 'docs')).rejects.toThrow('Failed to create the bucket.');
+  });
+
   /* #2015 — rename is a server move: POST :move with {from, to}, never replacing silently */
   it('renames a file through the :move operation and names a taken name', async () => {
     vi.mocked(generatedArtifacts.moveObject).mockResolvedValue(okResponse as never);

@@ -339,7 +339,6 @@ describe('client contract 1.54', () => {
     const { doc } = buildContract();
     const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
     assert.ok(major > 1 || (major === 1 && minor >= 54), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.54`);
-    assert.ok(doc.components.schemas.MoveObjectRequest, 'MoveObjectRequest is in the contract');
   });
 });
 

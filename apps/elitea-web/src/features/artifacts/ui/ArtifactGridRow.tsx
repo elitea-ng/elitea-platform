@@ -27,7 +27,8 @@ interface ArtifactGridRowProps {
   readonly onOpen: (item: ArtifactListItem) => void;
   readonly onPreview: (item: ArtifactListItem) => void;
   readonly onDownload: (item: ArtifactListItem) => void;
-  readonly onRename: (item: ArtifactListItem) => void;
+  /** Absent when the caller may not rename (rename needs create + delete). */
+  readonly onRename?: ((item: ArtifactListItem) => void) | undefined;
   readonly onDelete: (item: ArtifactListItem) => void;
 }
 
@@ -130,7 +131,7 @@ export function ArtifactGridRow(props: ArtifactGridRowProps): ReactNode {
             <FileDownloadOutlinedIcon fontSize="small" />
           </IconButton>
         </Tooltip>
-        {!isFolder && (
+        {!isFolder && props.onRename !== undefined && (
           <Tooltip title={t('common.rename', 'Rename')}>
             <IconButton
               size="small"
@@ -138,7 +139,7 @@ export function ArtifactGridRow(props: ArtifactGridRowProps): ReactNode {
               aria-label={`Rename ${props.item.name}`}
               onClick={(event) => {
                 event.stopPropagation();
-                props.onRename(props.item);
+                props.onRename?.(props.item);
               }}
             >
               <DriveFileRenameOutlineIcon fontSize="small" />

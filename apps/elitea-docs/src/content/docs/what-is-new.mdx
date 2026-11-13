@@ -7,11 +7,11 @@ Elitea ships frequent, small releases. This page summarizes the most recent user
 
 ## Artifacts: rename a file, and why an upload failed
 
-Files in an Artifacts bucket now have a **Rename** action, on the row and in the toolbar for one selected file. The rename is done by the server (copy, then delete), keeps the file in its folder, and refuses a name that is already taken. An upload that fails now says why: when a proxy or firewall in front of Elitea answers instead of Elitea, the message says the upload was blocked before it reached Elitea. **Upgrade Main and the web app together.** See [Upload, preview, and manage files](/menus/artifacts#upload-preview-and-manage-files).
+Files in an Artifacts bucket now have a **Rename** action, on the row and in the toolbar for one selected file. The rename is done by the server (copy, then delete), keeps the file in its folder, and refuses a name that is already taken. An upload that fails now says why: when a proxy or firewall in front of Elitea answers with a block page, the message says the upload was blocked before it reached Elitea; any other refusal says the server refused the upload, with its HTTP status, per file. Rename is offered only to people who may both create and delete files, and a renamed file keeps its retention. **Upgrade Main and the web app together.** See [Upload, preview, and manage files](/menus/artifacts#upload-preview-and-manage-files).
 
 ## Artifacts: bucket names, retention and pinned buckets
 
-A bucket name you type with capital letters is lowercased as you type, so **Create bucket** no longer fails silently. **Retention (days)** is now on the New bucket form too, not only when you edit a bucket. A pinned bucket keeps its pin icon visible in the list, and the text cursor shows in the Code and Canvas editors on the dark theme.
+A bucket name you type with capital letters is lowercased as you type, so **Create bucket** no longer fails silently. **Retention (days)** is now on the New bucket form too, not only when you edit a bucket; leave it empty on a new bucket to use the project's default retention. Bucket names follow the server's rule (a lowercase letter first, 2 to 63 characters). A pinned bucket keeps its pin icon visible in the list, and the text cursor shows in the Code and Canvas editors on the dark theme.
 
 ## The agent page has its chat back
 

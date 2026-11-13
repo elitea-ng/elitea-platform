@@ -67,6 +67,13 @@ describe('ArtifactTable', () => {
     expect(toolbarRename).toBeDisabled();
   });
 
+  /* #2015 — without the permission to rename, the row action and the toolbar button are not rendered */
+  it('hides Rename entirely when no rename handler is given', () => {
+    renderTable({ onRename: undefined });
+    expect(screen.queryByRole('button', { name: 'Rename alpha.txt' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rename selected file' })).not.toBeInTheDocument();
+  });
+
   /**
    * The `Type` column is a real column, not a label: it prints the baseline's
    * `getFileTypeName`, so `beta.svg` reads "SVG" and not "svg".

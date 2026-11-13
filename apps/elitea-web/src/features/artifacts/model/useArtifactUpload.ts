@@ -135,16 +135,14 @@ export function useArtifactUpload(options: UseArtifactUploadOptions) {
           }),
         ),
       );
-      const failedNames: string[] = [];
-      const reasons = new Set<string>();
+      // One reason per file ("x.pdf: <reason>"), so a mixed batch says which file hit which refusal.
+      const failures: string[] = [];
       results.forEach((result, index) => {
         if (result.status !== 'rejected') return;
-        failedNames.push(files[index]?.name ?? '');
-        if (result.reason instanceof Error) reasons.add(result.reason.message);
+        const name = files[index]?.name ?? '';
+        failures.push(result.reason instanceof Error ? `${name}: ${result.reason.message}` : name);
       });
-      if (failedNames.length > 0) {
-        setError(`Failed to upload: ${failedNames.join(', ')}. ${[...reasons].join(' ')}`.trim());
-      }
+      if (failures.length > 0) setError(`Failed to upload: ${failures.join(' ')}`);
       await options.onUploaded();
       setPendingFiles([]);
       setPendingPlan(undefined);

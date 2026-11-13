@@ -3,10 +3,6 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -40,6 +36,8 @@ import { triggerBlobDownload } from '@/shared/lib/download';
 import { useIsTeamProject } from '@/pages/toolkits/lib/usePersonalProjectId'; // cross-page import (#901), see EliteaCatalog.tsx precedent
 
 import { useArtifactCanvas } from './lib/useArtifactCanvas';
+import { DeleteArtifactsDialog, DiscardChangesDialog } from './lib/ArtifactConfirmDialogs';
+import { useRenameArtifact } from './lib/useRenameArtifact';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 
 interface ArtifactsRouteSearch {
@@ -73,8 +71,6 @@ export function Artifacts(): ReactNode {
   const [selectedStorage, setSelectedStorage] = useState<string>();
   const [bucketsCollapsed, setBucketsCollapsed] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<readonly ArtifactListItem[]>([]);
-  const [pendingRename, setPendingRename] = useState<ArtifactListItem>();
-  const [renameError, setRenameError] = useState<string>();
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<(() => void)>();
   const [actionError, setActionError] = useState<string>();
@@ -179,18 +175,16 @@ export function Artifacts(): ReactNode {
   }, [currentPrefix, downloadFile, files.data, projectId, selectedBucket, zip]);
 
   const canvas = useArtifactCanvas(projectId, selectedBucket?.name, mutations.refreshFiles);
-  const confirmRename = (name: string): void => {
-    if (selectedBucket === undefined || pendingRename === undefined) return;
-    // The folder part of the key stays; only the file name changes (#2015).
-    const folder = pendingRename.key.slice(0, pendingRename.key.lastIndexOf('/') + 1);
-    setRenameError(undefined);
-    void mutations.renameFile
-      .mutateAsync({ bucket: selectedBucket.name, from: pendingRename.key, to: `${folder}${name}` })
-      .then(() => setPendingRename(undefined))
-      .catch((cause: unknown) => {
-        setRenameError(cause instanceof Error ? cause.message : 'Failed to rename the file.');
-      });
-  };
+  const existingKeys = useMemo(() => (files.data ?? []).map((file) => file.key), [files.data]);
+  const rename = useRenameArtifact({
+    projectId,
+    bucket: selectedBucket?.name,
+    existingKeys,
+    rename: mutations.renameFile,
+    previewKey: search.file,
+    onPreviewMoved: (newKey) => setSearch({ bucket: selectedBucket?.name ?? '', file: newKey }),
+    onKeyRenamed: canvas.closeFor,
+  });
   const confirmDelete = (): void => {
     if (selectedBucket === undefined) return;
     const keys = expandFoldersToArtifactKeys(pendingDelete, files.data ?? []);
@@ -207,7 +201,7 @@ export function Artifacts(): ReactNode {
   const missingBucket = search.bucket !== undefined && search.bucket !== '' && !buckets.isFetching && selectedBucket === undefined;
   const queryError = buckets.isError ? 'Failed to load buckets.'
     : files.isError ? 'Failed to load artifacts.' : undefined;
-  const pageError = actionError ?? queryError ?? upload.error ?? zip.progress.error ?? canvas.error;
+  const pageError = actionError ?? queryError ?? upload.error ?? zip.progress.error ?? canvas.error ?? rename.staleError;
 
   return (
     <Box sx={rootSx}>
@@ -303,10 +297,7 @@ export function Artifacts(): ReactNode {
             }}
             onDownloadMany={downloadItems}
             onDelete={setPendingDelete}
-            onRename={(item) => {
-              setRenameError(undefined);
-              setPendingRename(item);
-            }}
+            onRename={rename.open}
             onUpload={upload.stageFiles}
           />
         ) : (
@@ -345,55 +336,28 @@ export function Artifacts(): ReactNode {
       />
       {canvas.node /* "Open in canvas" (issue #878) — see lib/useArtifactCanvas.tsx */}
       <RenameArtifactDialog
-        item={pendingRename}
-        pending={mutations.renameFile.isPending}
-        error={renameError}
-        onClose={() => setPendingRename(undefined)}
-        onSubmit={confirmRename}
+        item={rename.pending}
+        pending={rename.pendingMutation}
+        error={rename.error}
+        onClose={rename.close}
+        onSubmit={rename.confirm}
       />
-      <Dialog
+      <DeleteArtifactsDialog
         open={pendingDelete.length > 0}
+        pending={mutations.deleteMany.isPending}
         onClose={() => setPendingDelete([])}
-      >
-        <DialogTitle>{t('artifacts.page.deleteTitle', 'Delete selected artifacts?')}</DialogTitle>
-        <DialogContent>{t('artifacts.page.deleteDescription', 'This action cannot be undone.')}</DialogContent>
-        <DialogActions>
-          <Button onClick={() => setPendingDelete([])}>{t('common.cancel', 'Cancel')}</Button>
-          <Button
-            color="error"
-            variant="contained"
-            disabled={mutations.deleteMany.isPending}
-            onClick={confirmDelete}
-          >
-            {t('common.delete', 'Delete')}
-          </Button>
-        </DialogActions>
-      </Dialog>
-      <Dialog
+        onConfirm={confirmDelete}
+      />
+      <DiscardChangesDialog
         open={pendingNavigation !== undefined}
-        onClose={() => setPendingNavigation(undefined)}
-      >
-        <DialogTitle>{t('artifacts.page.unsavedTitle', 'Discard unsaved changes?')}</DialogTitle>
-        <DialogContent>
-          {t('artifacts.page.unsavedDescription', 'Your current file edits will be lost.')}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setPendingNavigation(undefined)}>
-            {t('artifacts.preview.keepEditing', 'Keep editing')}
-          </Button>
-          <Button
-            color="warning"
-            onClick={() => {
-              const action = pendingNavigation;
-              setPendingNavigation(undefined);
-              setHasUnsavedChanges(false);
-              action?.();
-            }}
-          >
-            {t('common.discard', 'Discard')}
-          </Button>
-        </DialogActions>
-      </Dialog>
+        onKeepEditing={() => setPendingNavigation(undefined)}
+        onDiscard={() => {
+          const action = pendingNavigation;
+          setPendingNavigation(undefined);
+          setHasUnsavedChanges(false);
+          action?.();
+        }}
+      />
     </Box>
   );
 }
