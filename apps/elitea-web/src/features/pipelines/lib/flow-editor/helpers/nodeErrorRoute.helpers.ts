@@ -12,10 +12,10 @@ import type { FlowGraphEdge, YamlPipelineDocument, YamlPipelineNode } from './pi
 /** The source handle id of the error output, on every node that shows one. */
 export const ERROR_OUTPUT_HANDLE = 'node_error_output';
 
-export const errorRouteEdgeId = (source: string, target: string): string => `${EDGE_PREFIX}${source}error_output---${target}`;
+const errorRouteEdgeId = (source: string, target: string): string => `${EDGE_PREFIX}${source}error_output---${target}`;
 
 /** The node's error route target, when it routes failures (`error_output`). */
-export function errorTransitionOf(node: YamlPipelineNode | undefined): string | undefined {
+function errorTransitionOf(node: YamlPipelineNode | undefined): string | undefined {
   const settings = readNodeSettings(node);
   return settings.on_error === 'error_output' ? settings.error_transition : undefined;
 }

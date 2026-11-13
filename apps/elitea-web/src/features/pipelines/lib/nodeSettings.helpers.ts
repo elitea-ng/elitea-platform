@@ -27,7 +27,7 @@ export const NodeSettingsLimits = {
 } as const;
 
 export const NODE_ON_ERROR = ['stop', 'continue', 'error_output'] as const;
-export type NodeOnError = (typeof NODE_ON_ERROR)[number];
+type NodeOnError = (typeof NODE_ON_ERROR)[number];
 
 export const NODE_SETTINGS_KEYS = [
   'retry_on_fail', 'max_tries', 'wait_between_tries_ms', 'on_error', 'error_transition', 'always_output_data', 'execute_once', 'timeout_ms',
@@ -131,7 +131,7 @@ const SETTINGS_CHECKS: readonly (readonly [(settings: NodeSettings) => boolean, 
 ];
 
 /** Mirrors `NodeSettings::parse`: strict keys, plain values, the bounds and the couplings. */
-export function parseNodeSettings(block: unknown): { settings?: NodeSettings; refusal?: NodeSettingsRefusal } {
+function parseNodeSettings(block: unknown): { settings?: NodeSettings; refusal?: NodeSettingsRefusal } {
   if (!isRecord(block) || Object.entries(block).some(([key, value]) => !validSettingValue(key, value))) return { refusal: 'malformed' };
   const settings = readSettings(block);
   const refused = SETTINGS_CHECKS.find(([check]) => check(settings));
@@ -144,7 +144,7 @@ export function parseNodeSettings(block: unknown): { settings?: NodeSettings; re
  * `_`, `-` and `.`, with `.` as `_`; a valid id, an empty value, one over 128
  * bytes, or one that would become empty or too long is kept as written.
  */
-export function legacyGraphId(value: string): string {
+function legacyGraphId(value: string): string {
   const bytes = new TextEncoder().encode(value);
   if (GRAPH_ID.test(value) || value === '' || bytes.length > 128) return value;
   let out = '';
