@@ -248,6 +248,7 @@ export interface ToolkitEditorSaveButtonProps {
   readonly deps: ToolkitEditorDeps;
   readonly onToolkitCreated: (result: ToolkitWriteResult) => void;
   readonly onToolkitSaved: (result: ToolkitWriteResult, toolkitData: ToolkitFormValues) => void;
+  readonly onBlocked?: (() => void) | undefined;
 }
 
 export function ToolkitEditorSaveButton({
@@ -261,6 +262,7 @@ export function ToolkitEditorSaveButton({
   deps,
   onToolkitCreated,
   onToolkitSaved,
+  onBlocked,
 }: ToolkitEditorSaveButtonProps): ReactNode {
   const toolSchema = editToolDetail?.schema as ToolSchemaLike | undefined;
 
@@ -289,6 +291,7 @@ export function ToolkitEditorSaveButton({
       projectId={saveProjectId}
       saveToolkit={deps.saveToolkit}
       onToolkitSaved={onToolkitSaved}
+      onBlocked={onBlocked}
       onBeforeSave={deps.checkBeforeSave}
     />
   );
