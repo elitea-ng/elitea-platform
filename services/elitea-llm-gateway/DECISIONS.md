@@ -6,6 +6,28 @@ records a decision so it is not re-litigated on every PR. Items marked **[human
 decision]** are risk/policy calls an autonomous agent must NOT change without sign-off.
 
 ## Money
+- **Image billing order and admission estimate (issue 1969, 2026-11-12).** Images
+  are billed on the images the provider RETURNED, in this order: provider token
+  usage at the token rates; else the catalog price per image for (model, size,
+  quality) from `gateway.gateway_model_image_prices` (shared 0243); else the flat
+  `perImageFallbackNano` estimate, recorded as `pricing_source =
+  fallback_estimate`, counted and logged once per model. A zero price is no
+  price. Why a second table and not a column: a price per image depends on size
+  and quality, so it is many rows per model, and `gateway_models` holds one row
+  of per-1M rates. Why per-image and per-1M-pixels, with the sync converting a
+  sized per-pixel price to per-image: the sheet encodes size and quality in the
+  key, and a sized entry then has the number a price list prints. Admission now
+  carries an ESTIMATE (n x unit price). On the healthy path the FSM does not
+  read it, because the soft-alert re-read passes the cost it just billed and
+  `spent + cost > limit` would count it twice. `GovernanceStore.CheckBudget`
+  reports `SpentNano` and `HardLimitNano` on the Decision, and
+  `estimateExceeds` refuses `spent + estimate > limit` (402, the existing
+  refusal shape, project and member scope). A request that fits exactly is
+  admitted. The degraded path refuses the estimate inside the FSM, against the
+  replica share, as before. The estimate for a token-priced model is the flat
+  figure: there is no token count before the call, so it is a floor. The metered
+  admit/settle contract was not used: it is for a CALLER that spends outside the
+  gateway, and here the gateway makes the provider call itself.
 - **Only the TERMINAL stream event carries authoritative usage.** bifrost maps
   Anthropic's `message_start` to `response.created`, and that event already
   carries usage (input tokens, `output_tokens: 1`). Accepting usage from any

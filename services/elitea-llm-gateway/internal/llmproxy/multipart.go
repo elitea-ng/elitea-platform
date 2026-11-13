@@ -43,20 +43,16 @@ func (h *Handler) ImageEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	// FIX #26: enforce the budget gate before calling the image provider.
 	provider, model := providerModelFromImageEditReq(bifReq)
-	if !h.checkBudget(w, ctx, model) {
+	spec := imageSpecOfEdit(bifReq)
+	quote, ok := h.checkImageBudget(w, ctx, provider, model, spec)
+	if !ok {
 		return
 	}
 
 	resp, bErr := h.router.ImageEditRequest(ctx, bifReq)
 	h.writeUnary(w, resp, bErr)
 	if bErr == nil && resp != nil {
-		// Fix round-3 #8: fall back to fixed per-image cost when Usage is nil.
-		in, out, imgCount := usageFromImageResponse(resp)
-		if in > 0 || out > 0 {
-			h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
-		} else if imgCount > 0 {
-			h.updateUsageDirect(ctx, identityProjectFromCtx(ctx), identityUserFromCtx(ctx), provider, model, imgCount*perImageFallbackNano)
-		}
+		h.billImageResponse(ctx, provider, model, spec, quote, resp)
 	}
 }
 
@@ -85,20 +81,16 @@ func (h *Handler) ImageVariation(w http.ResponseWriter, r *http.Request) {
 	}
 	// FIX #26: enforce the budget gate before calling the image provider.
 	provider, model := providerModelFromImageVariationReq(bifReq)
-	if !h.checkBudget(w, ctx, model) {
+	spec := imageSpecOfVariation(bifReq)
+	quote, ok := h.checkImageBudget(w, ctx, provider, model, spec)
+	if !ok {
 		return
 	}
 
 	resp, bErr := h.router.ImageVariationRequest(ctx, bifReq)
 	h.writeUnary(w, resp, bErr)
 	if bErr == nil && resp != nil {
-		// Fix round-3 #8: fall back to fixed per-image cost when Usage is nil.
-		in, out, imgCount := usageFromImageResponse(resp)
-		if in > 0 || out > 0 {
-			h.updateUsage(ctx, provider, model, in, out, identityProjectFromCtx(ctx), identityUserFromCtx(ctx))
-		} else if imgCount > 0 {
-			h.updateUsageDirect(ctx, identityProjectFromCtx(ctx), identityUserFromCtx(ctx), provider, model, imgCount*perImageFallbackNano)
-		}
+		h.billImageResponse(ctx, provider, model, spec, quote, resp)
 	}
 }
 

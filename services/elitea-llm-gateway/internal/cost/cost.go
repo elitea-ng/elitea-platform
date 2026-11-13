@@ -322,6 +322,8 @@ type Calculator struct {
 	// metered caches the metered operation prices (metered.go) under the same
 	// TTL as the model prices.
 	metered map[string]meteredEntry
+	// images caches the per-image prices (image_price.go), same TTL.
+	images map[string]imageEntry
 
 	// schemaBehindUntil is the unix-nano time before which the widened price
 	// statement must not be attempted again, because the database answered

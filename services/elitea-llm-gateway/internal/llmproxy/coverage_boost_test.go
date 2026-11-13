@@ -305,46 +305,35 @@ func TestProviderModelFromImageVariationReq(t *testing.T) {
 
 // TestUsageFromImageResponse_NilResponse verifies the nil guard.
 func TestUsageFromImageResponse_NilResponse(t *testing.T) {
-	in, out, count := usageFromImageResponse(nil)
-	if in != 0 || out != 0 || count != 0 {
-		t.Errorf("nil: got (%d,%d,%d), want (0,0,0)", in, out, count)
+	in, out := usageFromImageResponse(nil)
+	if in != 0 || out != 0 {
+		t.Errorf("nil: got (%d,%d), want (0,0)", in, out)
 	}
 }
 
 // TestUsageFromImageResponse_WithUsage verifies that a response carrying a
-// non-nil Usage returns token counts and imageCount=0 (token-based billing path).
+// non-nil Usage returns its token counts.
 func TestUsageFromImageResponse_WithUsage(t *testing.T) {
 	resp := &schemas.BifrostImageGenerationResponse{
 		Usage: &schemas.ImageUsage{InputTokens: 5, OutputTokens: 10},
 	}
-	in, out, count := usageFromImageResponse(resp)
-	if in != 5 {
-		t.Errorf("inputTokens = %d, want 5", in)
-	}
-	if out != 10 {
-		t.Errorf("outputTokens = %d, want 10", out)
-	}
-	if count != 0 {
-		t.Errorf("imageCount = %d, want 0 (token-based path)", count)
+	in, out := usageFromImageResponse(resp)
+	if in != 5 || out != 10 {
+		t.Errorf("tokens = (%d,%d), want (5,10)", in, out)
 	}
 }
 
-// TestUsageFromImageResponse_UsageNilFallback verifies that a response WITHOUT
-// Usage returns imageCount = len(Data) (per-image fallback billing path).
-func TestUsageFromImageResponse_UsageNilFallback(t *testing.T) {
-	resp := &schemas.BifrostImageGenerationResponse{
-		Data: []schemas.ImageData{
-			{URL: "https://example.com/img1.png"},
-			{URL: "https://example.com/img2.png"},
-			{URL: "https://example.com/img3.png"},
-		},
-	}
-	in, out, count := usageFromImageResponse(resp)
-	if in != 0 || out != 0 {
-		t.Errorf("no-Usage path: tokens = (%d,%d), want (0,0)", in, out)
-	}
-	if count != 3 {
-		t.Errorf("imageCount = %d, want 3", count)
+// TestUsageFromImageResponse_NoTokens verifies that no Usage, and a Usage block
+// with zero tokens, both read as no token usage. billImageResponse then bills
+// the images returned.
+func TestUsageFromImageResponse_NoTokens(t *testing.T) {
+	for name, resp := range map[string]*schemas.BifrostImageGenerationResponse{
+		"nil usage":  {Data: []schemas.ImageData{{URL: "a"}, {URL: "b"}}},
+		"zero usage": {Data: []schemas.ImageData{{URL: "a"}}, Usage: &schemas.ImageUsage{}},
+	} {
+		if in, out := usageFromImageResponse(resp); in != 0 || out != 0 {
+			t.Errorf("%s: tokens = (%d,%d), want (0,0)", name, in, out)
+		}
 	}
 }
 
