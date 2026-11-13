@@ -29,7 +29,7 @@ export function FolderOpenIcon(props: SvgIconProps): React.JSX.Element {
 }
 
 /** The pin, drawn small after a pinned folder's or conversation's name (issue 2031). Labelled through `aria-label`, not a `<title>`: that would add "Pinned" to the row's text. */
-export function PinMark(): React.JSX.Element {
+function PinMark(): React.JSX.Element {
   return (
     <SvgIcon
       // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- an inline SVG that must take `currentColor`; `<img>` cannot, and a `<title>` would add "Pinned" to the row's text.
