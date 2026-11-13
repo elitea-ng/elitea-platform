@@ -101,6 +101,8 @@ describe('StyledInputEnhancer', () => {
     // A fixed `rows`/`minRows` height stopped the text partway down and drew a rule across the modal.
     expect(editor).toHaveStyle({ height: '100%' });
     expect(editor).not.toHaveAttribute('rows', '15');
+    // A plain <textarea>, not TextareaAutosize (which adds a hidden shadow textarea and overwrites the height inline).
+    expect(getByRole('dialog').querySelectorAll('textarea')).toHaveLength(1);
   });
 
   it('closes the modal via the close button', async () => {

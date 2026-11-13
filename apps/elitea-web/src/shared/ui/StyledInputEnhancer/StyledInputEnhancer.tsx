@@ -35,15 +35,21 @@ function FullScreenEditor({ value, onChange, ariaLabel, htmlInputProps }: FullSc
         across the middle, and the rest was dead space (#2010). A plain multiline
         field whose root and textarea take the available height has neither.
       */}
+      {/*
+        `rows` (with no min/maxRows) makes MUI render a plain <textarea> instead of
+        TextareaAutosize, which would write a content-sized inline pixel height over
+        the `height: 100%` below and bring the dead space back.
+      */}
       <MuiTextField
         multiline
+        rows={1}
         fullWidth
         variant="standard"
         value={value}
         onChange={onChange}
         sx={{ flex: 1, minHeight: 0, display: 'flex' }}
         slotProps={{
-          input: { disableUnderline: true, sx: { flex: 1, alignItems: 'flex-start', overflow: 'auto' } },
+          input: { disableUnderline: true, sx: { flex: 1, alignItems: 'stretch', overflow: 'auto' } },
           htmlInput: { ...htmlInputProps, 'aria-label': ariaLabel, style: { height: '100%', overflow: 'auto' } },
         }}
       />

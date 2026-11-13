@@ -77,9 +77,10 @@ export function ToolkitsSelect(props: ToolkitsSelectProps): ReactNode {
       const updatedToolNames: Record<string, readonly string[]> = {};
 
       for (const toolkitName of newValue) {
-        const toolkitObj = versionTools.find(
-          candidate => getToolkitNameFromSchema(candidate) === toolkitName || candidate.toolkit_name === toolkitName,
-        );
+        // The option value is the schema-derived name, so that match wins; `toolkit_name` is the fallback.
+        const toolkitObj =
+          versionTools.find(candidate => getToolkitNameFromSchema(candidate) === toolkitName) ??
+          versionTools.find(candidate => candidate.toolkit_name === toolkitName);
         const availableTools = (toolkitObj?.tools ?? toolkitObj?.settings?.selected_tools ?? []).map(tool =>
           typeof tool === 'string' ? tool : (tool.name ?? ''),
         );

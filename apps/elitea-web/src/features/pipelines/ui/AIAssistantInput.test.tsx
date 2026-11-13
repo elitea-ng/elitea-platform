@@ -156,4 +156,21 @@ describe('AIAssistantInput', () => {
     expect(ui.getByLabelText('Close')).toBeInTheDocument();
     expect(ui.queryByPlaceholderText('Describe your idea to generate or rewrite the value.')).toBeNull();
   });
+
+  // Review of #2007: with the assistant served, the sparkle trigger and the full-screen action must
+  // not be the same button twice — full screen is the plain editor.
+  it('opens full screen WITHOUT the assistant prompt even when the assistant is served', async () => {
+    // beforeEach serves the assistant (llmPredictStreaming).
+    configureGeneratedClient({ baseUrl: BASE });
+    stubConfigurationsEndpoints();
+    const user = userEvent.setup();
+    const ui = renderInput({ value: 'a long condition', fieldName: 'condition', label: 'Condition', projectId: 7 });
+    expect(ui.getByRole('button', { name: 'AI Assistant' })).toBeInTheDocument();
+
+    await user.hover(ui.getByDisplayValue('a long condition'));
+    await user.click(ui.getByRole('button', { name: 'Full screen view' }));
+
+    expect(ui.getByLabelText('Close')).toBeInTheDocument();
+    expect(ui.queryByPlaceholderText('Describe your idea to generate or rewrite the value.')).toBeNull();
+  });
 });
