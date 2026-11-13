@@ -482,6 +482,37 @@ describe('ChatPage participant removal', () => {
     await waitFor(() => expect(deletedParticipants).toEqual(['25']), { timeout: 5000 });
     await waitFor(() => expect(screen.queryByText('rust_openapi_echo')).toBeNull(), { timeout: 5000 });
   });
+
+  it('says why a refused removal did not happen instead of failing silently (#2014)', async () => {
+    const participant = {
+      id: '25',
+      entity_name: 'toolkit',
+      entity_meta: { id: '20', name: 'rust_openapi_echo', project_id: PROJECT },
+      entity_settings: { toolkit_type: 'openapi' },
+    };
+    server.use(
+      http.get(`${BASE}/elitea_core/conversation/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({ id: CONVERSATION, uuid: 'conversation-uuid-5', name: 'A conversation', participants: [participant] }),
+      ),
+      http.delete(`${BASE}/elitea_core/participant/prompt_lib/${PROJECT}/${CONVERSATION}/:participantId`, () =>
+        HttpResponse.json({ error: 'Cannot delete author of the conversation' }, { status: 400 }),
+      ),
+      http.get(`${BASE}/configurations/tts_voices/${PROJECT}`, () => HttpResponse.json({ items: [] })),
+      http.get(`${BASE}/elitea_core/context_analytics/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({ current_tokens: 0, max_tokens: 0, message_groups_in_context: 0 }),
+      ),
+    );
+
+    renderAt(`/chat/${CONVERSATION}`);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Expand participants' }));
+    await user.hover(await screen.findByText('rust_openapi_echo'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove toolkit' }));
+    await screen.findByText('Remove toolkit?');
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    expect(await screen.findByText('Cannot delete author of the conversation', undefined, { timeout: 5000 })).toBeInTheDocument();
+  });
 });
 
 /**

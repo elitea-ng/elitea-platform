@@ -109,6 +109,14 @@ describe('credential-scoped toolkit logout through the mounted editor', () => {
     expect(loadLogoutMarker(KEY)).toBe(0);
   });
 
+  it('offers no logout (and so no "logged out" toast) while no authorization is held (#1999)', async () => {
+    installHandlers('openapi');
+    renderEditor();
+    const status = await screen.findByTestId('delegated-credential-status');
+    expect(within(status).getByText('Authorize this credential when you use the toolkit.')).toBeInTheDocument();
+    expect(within(status).queryByRole('button', { name: 'Log out' })).not.toBeInTheDocument();
+  });
+
   it('does not show delegated logout for client credentials', async () => {
     installHandlers('openapi', false);
     renderEditor();
