@@ -316,6 +316,20 @@ describe('client contract 1.50', () => {
     assert.deepEqual(lane.depth.enum, [1, 2]);
     assert.equal(lane.children.items.$ref, '#/components/schemas/SubAgentLaneChild');
     assert.equal(doc.components.schemas.SubAgentLaneChild.properties.children, undefined);
-    assert.equal(doc.info['x-elitea-client-contract'], '1.50');
+    // At least 1.50: a later bump keeps the depth-2 lane, so pinning the exact
+    // version only broke every following contract change.
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 50), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.50`);
+  });
+});
+
+describe('client contract 1.52', () => {
+  it('states the name and description limits (issue 1968)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 52), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.52`);
+    const error = doc.components.schemas.ErrorResponse.properties;
+    assert.equal(error.field.type, 'string');
+    assert.equal(error.max_length.type, 'integer');
   });
 });

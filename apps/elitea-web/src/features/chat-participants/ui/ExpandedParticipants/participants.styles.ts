@@ -89,6 +89,13 @@ export const styles = {
     marginLeft: '.25rem',
     color: 'text.primary',
   },
+  usersOverflowButton: {
+    marginLeft: '.25rem',
+    padding: '0 .25rem',
+    borderRadius: 'var(--el-shape-radiusSm, 4px)',
+    color: 'text.primary',
+    '&:hover': { background: 'background.participant.hover' },
+  },
   emptyState: {
     padding: '1rem 0',
     textAlign: 'center',

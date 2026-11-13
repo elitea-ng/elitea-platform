@@ -24,6 +24,8 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/toolrelation"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/toolkitnaming"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 type Tool struct {
@@ -1255,6 +1257,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if refuseOverlongText(w, body) {
+		return
+	}
 	if err := validateToolkitCreate(body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
@@ -1367,6 +1372,9 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	// Detect tool-entity relation operation (add_tool_to / remove_tool_from)
 	if _, hasRelation := body["has_relation"]; hasRelation {
 		h.updateToolRelation(w, r, projectID, toolkitID, body)
+		return
+	}
+	if refuseOverlongText(w, body) {
 		return
 	}
 	dropRetiredToolkitSettings(body)
@@ -1763,11 +1771,13 @@ func (r *pgRepo) ForkToolkit(ctx context.Context, projectID string, body map[str
 	// the handler's contract rather than to this statement.
 	q := fmt.Sprintf(`
 		INSERT INTO %s.elitea_tools (name, type, description, owner_id, author_id, settings, env_vars, meta, created_at)
-		SELECT name || ' (copy)', type, description, owner_id, author_id, settings, env_vars, meta, now() AT TIME ZONE 'UTC'
+		SELECT left(name, $2) || ' (copy)', type, description, owner_id, author_id, settings, env_vars, meta, now() AT TIME ZONE 'UTC'
 		FROM %s.elitea_tools WHERE id = $1
 		RETURNING id, name, type, COALESCE(description, '')`, s, s)
 	var t Tool
-	err = r.pool.QueryRow(ctx, q, sourceID).Scan(&t.ID, &t.Name, &t.Type, &t.Description)
+	// The suffix must fit inside the name limit (issue 1968): left() counts characters, as the
+	// limit does.
+	err = r.pool.QueryRow(ctx, q, sourceID, entitylimits.MaxNameLength-len(" (copy)")).Scan(&t.ID, &t.Name, &t.Type, &t.Description)
 	if err != nil {
 		return Tool{}, fmt.Errorf("fork toolkit: %w", err)
 	}
@@ -2212,3 +2222,13 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func WithDiscovery(source discovery.UseCase) Option { return func(h *Handler) { h.discovery = source } }
 func (h *Handler) DiscoveryAvailable() bool         { return h != nil && h.discovery != nil }
+
+// refuseOverlongText answers 400 when the body's name or description is over
+// the shared limits (issue 1968). The refusal names the field and the limit.
+func refuseOverlongText(w http.ResponseWriter, body map[string]any) bool {
+	if err := entitylimits.CheckBody(body); err != nil {
+		apierr.Write(w, err)
+		return true
+	}
+	return false
+}

@@ -17,6 +17,8 @@ import type { Theme } from '@mui/material/styles';
 import type { Conversation } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
 import { isLocalWorkConversation } from '@/shared/lib/localWork';
+import { NAME_MAX_LENGTH, exceedsLimit, isNearLimit } from '@/shared/lib/textLimits';
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { GroupActivitySummary } from '@/shared/ui/ConversationActivity';
 
 import type { ConversationRowActions } from '../lib/conversationMenu';
@@ -227,12 +229,15 @@ interface FolderNameFieldProps {
 /** A folder's name, new or renamed: Enter saves it, Escape or leaving the field cancels. */
 export function FolderNameField({ onDone, initial = '', label = t('desktop.chats.newFolderLabel', 'New folder name'), testId = 'shell-chats-new-folder-name' }: FolderNameFieldProps): React.JSX.Element {
   const [value, setValue] = useState(initial);
+  const tooLong = exceedsLimit(value, NAME_MAX_LENGTH);
+  // Enter does not save a name past the limit (issue 1968); the counter says by how much.
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === 'Enter') onDone(value.trim());
-    else if (event.key === 'Escape') onDone(null);
+    if (event.key === 'Enter') {
+      if (!tooLong) onDone(value.trim());
+    } else if (event.key === 'Escape') onDone(null);
   };
   return (
-    <Box component="li" sx={(theme: Theme) => ({ paddingLeft: 1, paddingRight: 0.5, minHeight: '1.75rem', display: 'flex', alignItems: 'center', gap: 1, color: theme.vars.palette.text.metrics })}>
+    <Box component="li" sx={(theme: Theme) => ({ paddingLeft: 1, paddingRight: 0.5, minHeight: '1.75rem', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, color: theme.vars.palette.text.metrics })}>
       <FolderOutlinedIcon aria-hidden sx={{ width: '1rem', height: '1rem' }} />
       <InputBase
         value={value}
@@ -241,7 +246,7 @@ export function FolderNameField({ onDone, initial = '', label = t('desktop.chats
         onKeyDown={onKeyDown}
         onBlur={() => onDone(null)}
         inputRef={(node: HTMLInputElement | null) => node?.focus()}
-        inputProps={{ 'aria-label': label, 'data-testid': testId }}
+        inputProps={{ 'aria-label': label, 'aria-invalid': tooLong || undefined, 'data-testid': testId }}
         sx={(theme: Theme) => ({
           flex: 1,
           paddingX: 0.5,
@@ -250,6 +255,14 @@ export function FolderNameField({ onDone, initial = '', label = t('desktop.chats
           background: theme.vars.palette.background.default,
           typography: 'labelSmall',
         })}
+      />
+      <CharacterCounter
+        value={value}
+        maxLength={NAME_MAX_LENGTH}
+        visible={isNearLimit(value, NAME_MAX_LENGTH)}
+        textVariant="labelSmall"
+        sx={{ flexBasis: '100%' }}
+        data-testid={`${testId}-counter`}
       />
     </Box>
   );

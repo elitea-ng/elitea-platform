@@ -23,11 +23,11 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 const (
 	maxTokenRequestBodyBytes = 4 << 10
-	maxTokenNameBytes        = 768
 )
 
 var (
@@ -467,9 +467,11 @@ func (h *Handler) TokenCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := request.Name.value
-	if name != nil && len(*name) > maxTokenNameBytes {
-		apierr.Write(w, apierr.BadRequest("invalid token name"))
-		return
+	if name != nil {
+		if err := entitylimits.CheckName("name", *name); err != nil {
+			apierr.Write(w, err)
+			return
+		}
 	}
 	expires, err := request.Expires.resolve(time.Now().UTC())
 	if err != nil {

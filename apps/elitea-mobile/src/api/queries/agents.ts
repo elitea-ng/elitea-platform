@@ -1,3 +1,4 @@
+import { clipToLimit, NAME_MAX_LENGTH } from '@elitea/client-core/limits';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 
@@ -187,7 +188,7 @@ export async function startConversationWithAgent(
   const versionId = await fetchAgentVersionId(projectId, agent.id, client);
   if (versionId === null) throw new StartConversationError('no_version');
   const body: CreateConversationRequest = {
-    name: agent.name.slice(0, 200),
+    name: clipToLimit(agent.name, NAME_MAX_LENGTH),
     is_private: true,
     participants: [
       {

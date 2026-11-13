@@ -7,6 +7,7 @@ import { usePipelineAttachments } from './usePipelineAttachments';
 import type { UsePipelineAttachmentsResult } from './usePipelineAttachments';
 import { buildPipelineParticipant, getInitialChatHistory, getWelcomeMessage } from './pipelineChat.helpers';
 import type { ChatConversation, ChatHistoryMessage, ChatPipelineVersionDetails, ChatSource } from './pipelineChat.types';
+import { NAME_MAX_LENGTH, clipToLimit } from '@/shared/lib/textLimits';
 
 /**
  * Conversation-lifecycle slice of `usePipelineChat` — restore-by-id,
@@ -143,7 +144,7 @@ function useInitializeConversationEffect(
 
     setIsCreating(true);
     setActiveConversation({
-      name: `Chat with ${pipelineName ?? ''}`,
+      name: clipToLimit(`Chat with ${pipelineName ?? ''}`, NAME_MAX_LENGTH),
       is_private: true,
       source,
       participants: [pipelineParticipant],

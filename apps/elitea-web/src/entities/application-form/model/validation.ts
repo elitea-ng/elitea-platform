@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+import { NAME_MAX_LENGTH } from '@elitea/client-core/limits';
+
+import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
+import { exceedsLimit } from '@/shared/lib/textLimits';
+
 /**
  * `applicationCreationSchema` — ported from
  * `apps/elitea-ui/src/pages/Applications/Components/Applications/ApplicationCreationValidateSchema.js`
@@ -30,15 +35,38 @@ const conversationStarterEntrySchema = z
     message: 'Chat starter cannot be empty',
   });
 
-export const applicationCreationSchema = z.object({
-  name: z.string().min(1, 'Name is required'),
-  description: z.string().min(1, 'Description is required'),
-  version_details: z
-    .object({
-      conversation_starters: z.array(conversationStarterEntrySchema).optional(),
-      tags: z.array(z.string()).optional(),
-    })
-    .optional(),
-});
+function applicationSchema(nameMaxLength: number) {
+  return z.object({
+    // The limits count characters like the server does (issue 1968); the inputs do not cut, so this
+    // is what blocks Save past them.
+    name: z
+      .string()
+      .min(1, 'Name is required')
+      .refine((value) => !exceedsLimit(value, nameMaxLength), `Name must be ${nameMaxLength} characters or fewer`),
+    description: z
+      .string()
+      .min(1, 'Description is required')
+      .refine(
+        (value) => !exceedsLimit(value, MAX_DESCRIPTION_LENGTH),
+        `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer`,
+      ),
+    version_details: z
+      .object({
+        conversation_starters: z.array(conversationStarterEntrySchema).optional(),
+        tags: z.array(z.string()).optional(),
+      })
+      .optional(),
+  });
+}
+
+/** A new agent or pipeline: the web's stricter name cap ({@link MAX_NAME_LENGTH}). */
+export const applicationCreationSchema = applicationSchema(MAX_NAME_LENGTH);
+
+/**
+ * An existing agent or pipeline: the server's name limit (128), not the create form's 32. Names
+ * between the two are valid on the server (API, MCP, imports), and the edit page must still save
+ * them (issue 1968).
+ */
+export const applicationEditSchema = applicationSchema(NAME_MAX_LENGTH);
 
 export type ApplicationCreationInput = z.infer<typeof applicationCreationSchema>;

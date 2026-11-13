@@ -256,7 +256,7 @@ export const Participants = memo(
     return (
       <ParticipantsLayout
         header={{ showTitle, collapseIcon, collapsed, onCollapsed, showCollapsedParticipants, inspector }}
-        users={{ usersToDisplay, hasOverflow, visibleCount, maxVisibleUsers }}
+        users={{ usersToDisplay, allUsers: userParticipants, hasOverflow, visibleCount, maxVisibleUsers }}
         sections={{
           sections,
           activeParticipantId,

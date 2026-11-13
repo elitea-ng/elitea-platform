@@ -86,6 +86,7 @@ import (
 
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 // importedSkill is one skill that the import or the fork created, addressed the
@@ -148,6 +149,9 @@ func (h *Handler) importSkill(
 		return importedSkill{}, fmt.Errorf("a skill needs a name")
 	}
 	description, _ := entry["description"].(string)
+	// An old export may carry text over the entity limits (issue 1968): cut, never fail.
+	name = entitylimits.Truncate(name, entitylimits.MaxNameLength)
+	description = entitylimits.Truncate(description, entitylimits.MaxDescriptionLength)
 	if description == "" {
 		// `skills.description` is NOT NULL (001_initial.sql:370-381), and the
 		// the legacy runtime writes `description or name` into it (utils/skill_utils.py,
@@ -238,6 +242,7 @@ func (h *Handler) importSkill(
 		if versionName == "" {
 			versionName = "base"
 		}
+		versionName = entitylimits.Truncate(versionName, entitylimits.MaxNameLength)
 		instructions, _ := version["instructions"].(string)
 		versionMetaJSON, err := importedJSONObject(version, "meta")
 		if err != nil {

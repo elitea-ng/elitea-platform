@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.50
+ * client contract:    1.52
  * operations sha256:  90f7ce0d441261594219777baafedfb6c11c64e23476f55952ced30a49d7d69e
  */
 export interface paths {
@@ -3241,6 +3241,7 @@ export interface components {
             meta?: {
                 [key: string]: unknown;
             };
+            /** @description Limit: at most 128 characters (issue 1968). Not declared as `maxLength` because the `client` subset is additive-only (ADR-0025 decision 6); the server answers 400 with `field` and `max_length`. */
             name?: string;
             /** @description Participants to add at creation. Each needs `entity_name` and `entity_meta`; `entity_meta.project_id` defaults to this project. */
             participants?: components["schemas"]["ConversationParticipant"][];
@@ -3702,6 +3703,10 @@ export interface components {
         ErrorResponse: {
             /** @description Human-readable error message */
             error: string;
+            /** @description Only on a 400 for a text property over its length limit (client contract 1.52): the request property, e.g. `name` or `description`. */
+            field?: string;
+            /** @description Only with `field`: the limit in characters. An entity name is at most 128 characters and a description at most 2000. */
+            max_length?: number;
         };
         /** @description Client contract 1.11. The body of forkConversation. An absent body forks the whole conversation with the default name. */
         ForkConversationRequest: {
@@ -3721,7 +3726,7 @@ export interface components {
             message_id?: string;
             /** @description `fork` (the default) or `rewind`. A rewind is a fork that also records the abandoned turns after the fork point as `forked_from.branch_summary`; it needs `message_id`. Any other value answers 400. */
             mode?: string;
-            /** @description The new conversation's name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 256 characters or with a control character answers 400. */
+            /** @description The new conversation's name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 128 characters or with a control character answers 400. */
             name?: string;
         };
         /**
@@ -4659,7 +4664,7 @@ export interface components {
             meta?: {
                 [key: string]: unknown;
             };
-            /** @description The new title, trimmed; 1 to 256 characters after trimming, no control characters. `null` does not rename. */
+            /** @description The new title, trimmed; 1 to 128 characters after trimming, no control characters. `null` does not rename. */
             name?: string | null;
         };
         /** @description A conversation as updateConversation answers it. `id` is the numeric id AS A STRING, as in createConversation's answer; `uuid` is the id the chat send path takes. NOTE(W2): internal/infra/db/repos/conversations.go:685 (`Update`) fills these from the UPDATE's RETURNING row. Any other key it carries (a `message_count` of 0, which is not counted here) is not part of the answer's meaning. */

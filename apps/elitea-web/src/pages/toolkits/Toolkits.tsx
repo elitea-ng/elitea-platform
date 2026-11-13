@@ -123,7 +123,12 @@ function usePagedToolkitRows(projectId: string | undefined, isMCP: boolean): Use
     [query.data],
   );
 
-  const [prevWire, setPrevWire] = useState(wire);
+  // Starts `undefined`, NOT `wire`: a remount that finds the page already in
+  // the query cache (a second visit, or one right after a toolkit was created)
+  // has `wire` on its first render, and seeding the sentinel with it meant the
+  // rows were never accumulated: the list read empty and showed the "new
+  // toolkit" view until a refetch happened to hand back a new object.
+  const [prevWire, setPrevWire] = useState<typeof wire>(undefined);
   if (wire !== prevWire) {
     setPrevWire(wire);
     if (wire !== undefined) {

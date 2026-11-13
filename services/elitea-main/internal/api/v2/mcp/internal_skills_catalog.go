@@ -1,6 +1,9 @@
 package mcp
 
-import skillsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+import (
+	skillsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
+)
 
 const internalSkillsCategory = "elitea_core/skills"
 
@@ -52,7 +55,7 @@ var internalSkillToolDefinitions = []internalSkillToolDefinition{
 		schema: objectSchema(map[string]any{
 			"project_id":  intProperty("Current project ID. The server verifies this value."),
 			"name":        skillNameProperty("Skill name."),
-			"description": boundedStringProperty("Skill description.", 1, 2304),
+			"description": boundedStringProperty("Skill description.", 1, entitylimits.MaxDescriptionLength),
 			"versions": map[string]any{
 				"type": "array", "minItems": 1, "maxItems": 1,
 				"items": skillVersionWriteSchema(true),
@@ -76,7 +79,7 @@ var internalSkillToolDefinitions = []internalSkillToolDefinition{
 		schema: mergeObjectSchema(skillVersionWriteSchema(false), map[string]any{
 			"project_id":   intProperty("Current project ID. The server verifies this value."),
 			"skill_id":     intProperty("Skill ID."),
-			"description":  boundedStringProperty("Optional skill description.", 1, 2304),
+			"description":  boundedStringProperty("Optional skill description.", 1, entitylimits.MaxDescriptionLength),
 			"version_id":   intProperty("Update this version with flat name, instructions, tags, and meta fields."),
 			"instructions": boundedStringProperty("Version instructions; requires version_id.", 1, skillsapi.SkillInstructionsMaxLength),
 			"tags":         map[string]any{"type": "array", "items": skillTagWriteSchema()},
