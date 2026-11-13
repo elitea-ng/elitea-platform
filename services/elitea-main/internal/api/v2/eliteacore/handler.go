@@ -4596,8 +4596,14 @@ func (h *Handler) ExportImportGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isFork := strings.EqualFold(r.URL.Query().Get("fork"), "true")
-	if isFork && len(versions) > 0 {
-		versions = versions[len(versions)-1:]
+	if isFork {
+		// The version the caller named, else the newest (#1993).
+		kept, found := forkVersions(versions, r.URL.Query()["follow_version_ids"])
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
+			return
+		}
+		versions = kept
 	}
 
 	// AFTER the fork branch, so the skills the document carries are the skills

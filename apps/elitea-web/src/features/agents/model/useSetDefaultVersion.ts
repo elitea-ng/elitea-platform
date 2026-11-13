@@ -2,7 +2,10 @@ import { useCallback, useState } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 
-import { getSetApplicationDefaultVersionQueryOptions } from '@/shared/api/generated/applications/applications';
+import {
+  getGetApplicationQueryKey,
+  getSetApplicationDefaultVersionQueryOptions,
+} from '@/shared/api/generated/applications/applications';
 import type { OkResponse } from '@/shared/api/generated/model';
 
 import { applicationErrorMessage } from '../lib/errorMessage';
@@ -82,7 +85,14 @@ export function useSetDefaultVersion(input: UseSetDefaultVersionInput): UseSetDe
       try {
         const options = getSetApplicationDefaultVersionQueryOptions(input.projectId, input.applicationId, versionId);
         const response = await queryClient.query({ ...options, staleTime: 0 });
-        return (response as { data: OkResponse }).data.ok;
+        const ok = (response as { data: OkResponse }).data.ok;
+        // #1991: the application detail is cached (30 s) and embeds the
+        // DEFAULT version's `version_details` and each row's `is_default`.
+        // Leaving it alone meant leaving the agent and opening it again
+        // inside the window replayed the old default (usually `base`) and the
+        // pinned version was neither selected nor listed first.
+        if (ok) await queryClient.invalidateQueries({ queryKey: getGetApplicationQueryKey(input.projectId, input.applicationId) });
+        return ok;
       } catch (caught) {
         setError(caught);
         return false;

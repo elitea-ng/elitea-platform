@@ -118,7 +118,7 @@ export function EntityLifecycleMenu({
             onClick={run(onShareVersion)}
           >
             <LinkOutlinedIcon sx={iconSx} />
-            {t('features.agentLifecycle.menu.shareVersion', 'Share')}
+            {t('features.agentLifecycle.menu.shareVersion', 'Share version link')}
           </MenuItem>
         )}
         <MenuItem
@@ -158,7 +158,7 @@ export function EntityLifecycleMenu({
           onClick={run(onShareEntity)}
         >
           <LinkOutlinedIcon sx={iconSx} />
-          {t('features.agentLifecycle.menu.shareEntity', 'Share')}
+          {t('features.agentLifecycle.menu.shareEntity', 'Share agent link')}
         </MenuItem>
         {onReleaseHistory !== undefined && (
           <MenuItem

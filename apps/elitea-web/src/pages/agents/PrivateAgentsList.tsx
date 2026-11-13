@@ -45,6 +45,14 @@ function forkedFromId(application: Application): string | undefined {
   return typeof parentEntityId === 'string' || typeof parentEntityId === 'number' ? String(parentEntityId) : undefined;
 }
 
+/** The uploaded icon the list row carries on `meta.icon_meta` (#1995). */
+function iconUrlOf(application: Application): string | undefined {
+  const iconMeta = application.meta?.['icon_meta'];
+  if (typeof iconMeta !== 'object' || iconMeta === null) return undefined;
+  const url = (iconMeta as Record<string, unknown>)['url'];
+  return typeof url === 'string' && url !== '' ? url : undefined;
+}
+
 function toRow(application: Application, onSelectForkedFrom: (id: string) => void): ApplicationListRow {
   const forkedFrom = forkedFromId(application);
   return {
@@ -57,6 +65,7 @@ function toRow(application: Application, onSelectForkedFrom: (id: string) => voi
     })),
     tags: application.tags ?? [],
     createdAt: application.created_at,
+    ...(iconUrlOf(application) === undefined ? {} : { iconUrl: iconUrlOf(application) as string }),
     ...(forkedFrom === undefined ? {} : { forkedFrom: { onClick: () => onSelectForkedFrom(forkedFrom) } }),
   };
 }

@@ -3,13 +3,14 @@
  * safety.suspend in the project, sends an agent suspension with a reason,
  * then shows the stopped state with Resume.
  */
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { server } from '@/test/setup';
 
 import { StopAgentButton } from './StopAgentButton';
@@ -45,7 +46,7 @@ function serve(granted: readonly string[]): void {
 
 function renderButton(onError = vi.fn()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  renderWithTheme(
     <QueryClientProvider client={client}>
       <StopAgentButton projectId="7" applicationId="31" onError={onError} />
     </QueryClientProvider>,
@@ -99,5 +100,17 @@ describe('StopAgentButton', () => {
 
     expect(await screen.findByTestId('agent-stopped-chip')).toHaveTextContent('Project stopped');
     expect(screen.queryByRole('button', { name: 'Resume agent' })).not.toBeInTheDocument();
+  });
+
+  // #2026: the stopped state must not rely on the theme's default chip colours,
+  // which left "Agent stopped" a pale tint on the light theme.
+  it('draws the stopped chip and the stop button from the error colour, outlined', async () => {
+    serve(['safety.suspend']);
+    renderButton();
+    expect(await screen.findByTestId('stop-agent-button')).toHaveClass('MuiButton-outlinedError');
+
+    active = [{ id: 3, scope: 'agent', project_id: 7, application_id: 31, reason: 'r', active: true }];
+    renderButton();
+    expect(await screen.findByTestId('agent-stopped-chip')).toHaveClass('MuiChip-outlined');
   });
 });

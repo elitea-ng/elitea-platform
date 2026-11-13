@@ -35,6 +35,8 @@ import { BrandLogoMark } from '@/shared/ui/brand-logo';
 export interface ChatEmptyGreetingProps {
   /** The signed-in user's display name, as `ChatBox` received it. */
   readonly userName?: string | undefined;
+  /** The agent's saved welcome message (#1987), shown before any message is sent. */
+  readonly welcomeMessage?: string | undefined;
 }
 
 /** "Alexander Kharkevich" -> "Alexander"; "alex" -> "alex"; "" -> undefined. */
@@ -44,7 +46,7 @@ function firstNameOf(userName: string | undefined): string | undefined {
   return trimmed.split(/\s+/)[0];
 }
 
-export function ChatEmptyGreeting({ userName }: ChatEmptyGreetingProps): ReactNode {
+export function ChatEmptyGreeting({ userName, welcomeMessage }: ChatEmptyGreetingProps): ReactNode {
   const name = firstNameOf(userName);
 
   return (
@@ -75,6 +77,16 @@ export function ChatEmptyGreeting({ userName }: ChatEmptyGreetingProps): ReactNo
       >
         {t('widgets.chatBox.greetingPrompt', 'What can I do for you today?')}
       </Typography>
+      {welcomeMessage !== undefined && (
+        <Typography
+          component="p"
+          variant="bodyMedium"
+          data-testid="chat-agent-welcome-message"
+          sx={{ color: 'text.primary', textAlign: 'center', whiteSpace: 'pre-wrap', maxWidth: '40rem' }}
+        >
+          {welcomeMessage}
+        </Typography>
+      )}
     </Box>
   );
 }

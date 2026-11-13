@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 )
@@ -39,16 +40,23 @@ import (
 // published. This is the rule the skill publish path already applies
 // (internal/api/v2/skillpublish/handler.go).
 //
-// The secret is generated per process rather than read from configuration. The
-// token is only meaningful between a check and the publish that follows it,
-// which is one user action against one process, and a restart is answered with
+// The secret is derived from APPLICATION_SECRET_KEY, which every replica of
+// this service shares, so a check answered by one replica can be spent on
+// another (issue 1989: behind a load balancer a per-process secret made the
+// publish after a passing check answer "validation_token_invalid" whenever the
+// two requests landed on different pods). Without that key (a development
+// process) the secret is random per process, and a restart is answered with
 // the same "check it again" refusal a tampered token gets. A package-level
 // secret rather than a per-handler one keeps a token valid across every handler
-// this process builds, so a deployment that composes the routes more than once
-// does not refuse its own tokens.
-var publishValidationSecret = newPublishValidationSecret()
+// this process builds.
+var publishValidationSecret = newPublishValidationSecret(os.Getenv("APPLICATION_SECRET_KEY"))
 
-func newPublishValidationSecret() []byte {
+func newPublishValidationSecret(applicationKey string) []byte {
+	if applicationKey != "" {
+		mac := hmac.New(sha256.New, []byte(applicationKey))
+		mac.Write([]byte("elitea/publish-validation-token/v1"))
+		return mac.Sum(nil)
+	}
 	secret := make([]byte, 32)
 	_, _ = rand.Read(secret) // crypto/rand.Read never fails on supported platforms
 	return secret

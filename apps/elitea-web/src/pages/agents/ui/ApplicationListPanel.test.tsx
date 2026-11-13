@@ -154,4 +154,22 @@ describe('ApplicationListPanel', () => {
     );
     expect(queryByRole('link', { name: 'Forked from' })).not.toBeInTheDocument();
   });
+
+  // #1995: the icon an author uploaded must reach the dashboard card.
+  it('shows the uploaded icon on the card, and the agent glyph when there is none', () => {
+    const { container } = renderWithTheme(
+      <ApplicationListPanel
+        {...BASE_PROPS}
+        rows={[
+          { id: '1', name: 'With icon', description: '', iconUrl: '/icons/1/picked.png' },
+          { id: '2', name: 'Without icon', description: '' },
+        ]}
+        isLoading={false}
+        isError={false}
+      />,
+    );
+    const images = container.querySelectorAll('img[data-testid="application-card-icon"]');
+    expect(images).toHaveLength(1);
+    expect(images[0]).toHaveAttribute('src', '/icons/1/picked.png');
+  });
 });

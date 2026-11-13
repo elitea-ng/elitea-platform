@@ -8,6 +8,8 @@ import { server } from '@/test/setup';
 
 import { renderHookWithProviders } from '../__tests__/testUtils';
 
+import { getGetApplicationQueryKey } from '@/shared/api/generated/applications/applications';
+
 import { useSetDefaultVersion } from './useSetDefaultVersion';
 
 const SET_DEFAULT_ROUTE = '*/elitea_core/default_version/prompt_lib/:projectId/:applicationId/:versionId';
@@ -76,6 +78,22 @@ describe('useSetDefaultVersion', () => {
     });
 
     expect(calls).toBe(2);
+  });
+
+  // #1991: the cached application detail embeds the default version; leaving
+  // it fresh made reopening the agent replay the old default.
+  it('invalidates the cached application detail after a successful pin, and not after a refusal', async () => {
+    server.use(http.patch(SET_DEFAULT_ROUTE, () => HttpResponse.json({ ok: true }, { status: 200 })));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 30_000 } } });
+    const key = getGetApplicationQueryKey('p1', 3);
+    queryClient.setQueryData(key, { data: {} });
+    const { result } = renderHookWithProviders(() => useSetDefaultVersion(baseInput()), queryClient);
+
+    await act(async () => {
+      await result.current.doSetDefaultVersion(7);
+    });
+
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
   });
 
   it('resolves false and reports the server refusal when the version is not this application’s', async () => {

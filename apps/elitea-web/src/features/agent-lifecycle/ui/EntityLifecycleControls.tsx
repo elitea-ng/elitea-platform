@@ -238,7 +238,7 @@ export function EntityLifecycleControls({
         onFork={(targetProjectId) => {
           if (entityId === undefined) return;
           lifecycle.fork.mutate(
-            { entityId: Number(entityId), targetProjectId },
+            { entityId: Number(entityId), targetProjectId, versionId },
             {
               onSuccess: (outcome) => {
                 setForkOpen(false);

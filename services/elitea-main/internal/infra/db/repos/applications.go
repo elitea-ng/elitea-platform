@@ -377,6 +377,16 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			app.Meta["parent_entity_id"] = entityID
 			app.Meta["parent_project_id"] = projectID
 		}
+		// #1995 — the icon an author uploads is bound to a VERSION
+		// (`application_versions.meta.icon_meta`), and the list read only the
+		// application row, so a card could never show it. The first version's
+		// icon rides on the list row's `meta` (passthrough, no schema change),
+		// the same version the fork signal above comes from.
+		if iconMeta, ok := versionMeta["icon_meta"].(map[string]any); ok {
+			if iconURL, _ := iconMeta["url"].(string); iconURL != "" {
+				app.Meta["icon_meta"] = iconMeta
+			}
+		}
 		app.Authors = []applications.Author{}
 		// The id comes from the VERSION, not from the user join, so an author
 		// whose account was deleted stays on the row with an empty name and

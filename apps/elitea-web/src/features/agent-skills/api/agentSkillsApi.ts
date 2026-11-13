@@ -147,6 +147,6 @@ export async function detachSkill(projectId: string, skillId: number, entityVers
 /**
  * The cap the server enforces on the write side
  * (`MaxSkillsPerEntityVersion`, `internal/api/v2/skills/handler.go`) and the
- * number production renders as "n/5 skills added".
+ * number the panel renders as "n/50 skills added" (raised from 5, #2023).
  */
-export const MAX_SKILLS_PER_AGENT = 5;
+export const MAX_SKILLS_PER_AGENT = 50;

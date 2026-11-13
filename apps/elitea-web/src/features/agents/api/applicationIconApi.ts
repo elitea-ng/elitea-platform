@@ -27,6 +27,7 @@ import {
 
 import {
   getGetApplicationQueryKey,
+  getListApplicationsQueryKey,
   replaceApplicationIcon as replaceApplicationIconRequest,
   uploadApplicationIcon as uploadApplicationIconRequest,
 } from '@/shared/api/generated/applications/applications';
@@ -94,6 +95,9 @@ export function useBindApplicationIconMutation(
     // header/list card showing the old icon until an unrelated refetch.
     onSuccess: (_data, params) => {
       void queryClient.invalidateQueries({ queryKey: getGetApplicationQueryKey(projectId, params.applicationId) });
+      // #1995: the agents list card shows this icon too, and its query is
+      // cached; without this the dashboard kept the old glyph for 30 s.
+      void queryClient.invalidateQueries({ queryKey: getListApplicationsQueryKey(projectId) });
     },
   });
 }

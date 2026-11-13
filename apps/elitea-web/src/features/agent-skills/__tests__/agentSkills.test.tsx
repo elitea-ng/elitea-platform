@@ -127,7 +127,7 @@ describe('AgentSkillsPanel', () => {
   it('shows the counter production shows', async () => {
     attached = [{ id: 3, name: 'Reviewer' }];
     renderWithProviders(panel());
-    await waitFor(() => expect(screen.getByTestId('agent-skills-counter')).toHaveTextContent('1/5 skills added.'));
+    await waitFor(() => expect(screen.getByTestId('agent-skills-counter')).toHaveTextContent('1/50 skills added.'));
   });
 
   // The picker's list is fetched when the MENU opens, which is what production
@@ -173,7 +173,7 @@ describe('AgentSkillsPanel', () => {
     await user.click(screen.getByTestId('agent-add-skill-button'));
     await user.click(await screen.findByTestId('agent-skill-option-3'));
 
-    await waitFor(() => expect(screen.getByTestId('agent-skills-counter')).toHaveTextContent('1/5'));
+    await waitFor(() => expect(screen.getByTestId('agent-skills-counter')).toHaveTextContent('1/50'));
     expect(within(screen.getByTestId('agent-attached-skill')).getByText('Reviewer')).toBeInTheDocument();
   });
 
@@ -209,12 +209,18 @@ describe('AgentSkillsPanel', () => {
     expect(screen.getByTestId('agent-skill-option-4')).not.toHaveAttribute('aria-disabled', 'true');
   });
 
-  // The server caps a version at five skills; a sixth is refused. The counter
-  // production renders reads "n/5" for the same reason.
-  it('stops offering the add control at the server cap', async () => {
-    attached = [1, 2, 3, 4, 5].map((id) => ({ id, name: `Skill ${String(id)}` }));
+  // The server caps a version at fifty skills (raised from five, #2023); one
+  // more is refused. The counter reads "n/50" for the same reason.
+  it('keeps offering the add control past five skills and stops at the server cap', async () => {
+    attached = Array.from({ length: 5 }, (_, index) => ({ id: index + 1, name: `Skill ${String(index + 1)}` }));
+    const { unmount } = renderWithProviders(panel());
+    await waitFor(() => expect(screen.getByTestId('agent-skills-counter')).toHaveTextContent('5/50'));
+    expect(screen.getByTestId('agent-add-skill-button')).not.toBeDisabled();
+    unmount();
+
+    attached = Array.from({ length: 50 }, (_, index) => ({ id: index + 1, name: `Skill ${String(index + 1)}` }));
     renderWithProviders(panel());
-    await waitFor(() => expect(screen.getByTestId('agent-skills-counter')).toHaveTextContent('5/5'));
+    await waitFor(() => expect(screen.getByTestId('agent-skills-counter')).toHaveTextContent('50/50'));
     expect(screen.getByTestId('agent-add-skill-button')).toBeDisabled();
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { filterVersionsBySearch, formatVersionTimestamp, searchableVersionName, versionCreatorLabel, versionMetaLine } from './AgentPipelineVersionSelector.search';
+import { toDisplayVersions, filterVersionsBySearch, formatVersionTimestamp, searchableVersionName, versionCreatorLabel, versionMetaLine } from './AgentPipelineVersionSelector.search';
 import type { SearchableVersion } from './AgentPipelineVersionSelector.search';
 
 function version(overrides: Partial<SearchableVersion> = {}): SearchableVersion {
@@ -103,5 +103,26 @@ describe('versionCreatorLabel / versionMetaLine', () => {
 
   it('is undefined when neither creator nor timestamp is known', () => {
     expect(versionMetaLine(version())).toBeUndefined();
+  });
+});
+
+describe('toDisplayVersions order (#1990, #1991)', () => {
+  const opts = [
+    { id: 1, name: 'base', created_at: '2026-11-01T00:00:00Z' },
+    { id: 2, name: 'v1', created_at: '2026-11-02T00:00:00Z' },
+    { id: 3, name: 'v2', created_at: '2026-11-03T00:00:00Z' },
+    { id: 4, name: 'v3', created_at: '2026-11-04T00:00:00Z' },
+  ] as never;
+
+  it('lists named versions newest first with base at the bottom', () => {
+    expect(toDisplayVersions(opts).map((v) => v.name)).toEqual(['v3', 'v2', 'v1', 'base']);
+  });
+
+  it('puts the pinned default at the top', () => {
+    expect(toDisplayVersions(opts, 2).map((v) => v.name)).toEqual(['v1', 'v3', 'v2', 'base']);
+  });
+
+  it('puts a pinned base at the top too', () => {
+    expect(toDisplayVersions(opts, 1).map((v) => v.name)).toEqual(['base', 'v3', 'v2', 'v1']);
   });
 });

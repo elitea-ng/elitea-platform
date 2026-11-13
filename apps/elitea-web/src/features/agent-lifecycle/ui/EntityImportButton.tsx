@@ -12,7 +12,8 @@ import { BaseModal } from '@/shared/ui/BaseModal';
 import type { EntityExportDocument } from '../api/lifecycleApi';
 import {
   ImportDocumentError,
-  parseImportDocument,
+  isImportableFileName,
+  readImportFile,
   summarizeImportDocument,
   type ImportDocumentSummary,
 } from '../lib/importDocument';
@@ -49,12 +50,12 @@ export function EntityImportButton({ isImporting, onImport, testIdPrefix }: Enti
     // again, and it does not while the input still holds that file.
     event.target.value = '';
     if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.json')) {
-      setError(t('features.agentLifecycle.import.onlyJson', 'Only .json export files can be imported.'));
+    if (!isImportableFileName(file.name)) {
+      setError(t('features.agentLifecycle.import.onlyJson', 'Only .json, .md and .zip files can be imported.'));
       return;
     }
     try {
-      const document = parseImportDocument(await file.text());
+      const document = await readImportFile(file);
       setPending({ document, summary: summarizeImportDocument(document) });
       setError(undefined);
     } catch (cause) {
@@ -81,7 +82,7 @@ export function EntityImportButton({ isImporting, onImport, testIdPrefix }: Enti
         ref={inputRef}
         hidden
         type="file"
-        accept=".json,application/json"
+        accept=".json,.md,.zip,application/json,text/markdown,application/zip"
         data-testid={`${testIdPrefix}-import-input`}
         onChange={(event) => {
           void handleFile(event);

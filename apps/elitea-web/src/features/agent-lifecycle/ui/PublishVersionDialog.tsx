@@ -78,6 +78,8 @@ export function PublishVersionDialog({
   const [versionName, setVersionName] = useState('');
   const [category, setCategory] = useState<PublishCategory | ''>('');
   const [agreed, setAgreed] = useState(false);
+  // #2025: set when Continue is pressed with a field missing, so the fields are marked.
+  const [attempted, setAttempted] = useState(false);
 
   // Reopening the dialog must not resume the previous attempt's step: the
   // author closed it, and a wizard that reopens on "Publishing" would publish
@@ -88,6 +90,7 @@ export function PublishVersionDialog({
     setVersionName('');
     setCategory('');
     setAgreed(false);
+    setAttempted(false);
   }, [open]);
 
   // The validation result arriving is what advances the wizard. Advancing on
@@ -118,11 +121,17 @@ export function PublishVersionDialog({
   // refuse it, and the reader is already looking at why.
   const handleConfirm = (): void => {
     if (step === 'preparation') {
-      if (!nameValid || !categoryChosen || !agreed || isValidating) return;
+      if (isValidating) return;
+      if (!nameValid || !categoryChosen || !agreed) {
+        setAttempted(true);
+        return;
+      }
       onValidate(versionName, category);
       return;
     }
-    if (blocked || isPublishing) return;
+    if (isPublishing) return;
+    // A FAIL is answered on screen, not by a click that does nothing (#2025).
+    if (blocked) return;
     setStep('publishing');
     onPublish(versionName, category, validation?.validationToken);
   };
@@ -168,9 +177,22 @@ export function PublishVersionDialog({
               onCategoryChange={setCategory}
               agreed={agreed}
               onAgreedChange={setAgreed}
+              showErrors={attempted}
             />
           ) : (
             validation !== undefined && <PublishValidationReport validation={validation} />
+          )}
+          {step === 'preparation' && attempted && (
+            <Typography
+              role="alert"
+              variant="bodySmall"
+              data-testid="publish-missing-summary"
+            >
+              {t(
+                'features.agentLifecycle.publish.missingSummary',
+                'Some required fields are missing. Fill in the marked fields to continue.',
+              )}
+            </Typography>
           )}
           {step === 'preparation' && !categoryChosen && (
             <Typography variant="bodySmall">

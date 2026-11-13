@@ -101,8 +101,10 @@ const ChatBoxInner = memo(function ChatBox({
   const messages = data.messageList.messages;
   // ADR-0050 D7c: who an unaddressed message goes to, derived once for the send, the stream identity, the attachments gate and "To:".
   const target = useResolvedTarget(activeParticipant, conversationParticipants, messages);
-  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated, grantableTools } = useChatBoxParticipant({ activeParticipant, conversationParticipants, target, isAgentsPage });
+  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated, grantableTools, welcomeMessage, participantStarters } = useChatBoxParticipant({ activeParticipant, conversationParticipants, target, isAgentsPage });
   const activeParticipantVersions = agentEditorParticipantDetails?.versions;
+  // #1988: the bound agent's own starters, unless the caller supplied a list (the editor's test pane passes its live form).
+  const effectiveStarters = conversationStarters ?? participantStarters;
   // ADR-0045: "Run to completion", on by default: the grant each send carries.
   const unattended = useChatBoxUnattended(conversationUuid, grantableTools, !editorTest);
 
@@ -113,7 +115,7 @@ const ChatBoxInner = memo(function ChatBox({
     activeParticipant: participantForEditor,
     participants: normalisedParticipants,
     userId,
-    conversationStarters,
+    conversationStarters: effectiveStarters,
     isAgentsPage,
     chatInput: chatInputRef,
     projectId,
@@ -312,7 +314,7 @@ const ChatBoxInner = memo(function ChatBox({
       <Box sx={chatColumnSx(isEmptyConversation)}>
         <ChatMessageList
           assistant={{ name: assistantName, conversationUuid }}
-          emptyState={<ChatEmptyGreeting userName={userName} />}
+          emptyState={<ChatEmptyGreeting userName={userName} welcomeMessage={welcomeMessage} />}
           chatHistory={composer.queued.decorate(messages)}
           isStreaming={isStreaming}
           userId={userId ?? ''}
@@ -332,7 +334,7 @@ const ChatBoxInner = memo(function ChatBox({
         {state.shouldShowStarters && (
           <ChatConversationStarters
             onSend={handleSendStarter}
-            conversationStarters={resolveConversationStarters(state.hasStarterBeenSent, messages.length, conversationStarters)}
+            conversationStarters={resolveConversationStarters(state.hasStarterBeenSent, messages.length, effectiveStarters)}
           />
         )}
       </Box>

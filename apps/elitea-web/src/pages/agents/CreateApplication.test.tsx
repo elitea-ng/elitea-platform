@@ -93,6 +93,15 @@ describe('CreateApplication', () => {
     expect(screen.getByTestId('agent-name-input')).toBeInTheDocument();
   });
 
+  // #2022: the create page had no "Build with AI" option; its slot was never filled.
+  it('offers "Build with AI" and opens the builder from it', async () => {
+    const user = userEvent.setup();
+    renderAgentsRoute(<CreateApplication />, '/agents/create', { projectId: '1' });
+
+    await user.click(await screen.findByTestId('build-with-ai-button'));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+  });
+
   it('typing into the CreateAgentForm name field enables Save once name/description are both filled', async () => {
     const user = userEvent.setup();
     renderAgentsRoute(<CreateApplication />, '/agents/create', { projectId: '1' });

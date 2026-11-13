@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ImportDocumentError, parseImportDocument, summarizeImportDocument } from './importDocument';
+import { ImportDocumentError, parseImportDocument, parseMarkdownAgent, summarizeImportDocument } from './importDocument';
 
 const exported = JSON.stringify({
   ok: true,
@@ -55,5 +55,23 @@ describe('summarizeImportDocument', () => {
     const summary = summarizeImportDocument({ applications: [{ name: 'A' }] });
     expect(summary.toolkitCount).toBe(0);
     expect(summary.skillCount).toBe(0);
+  });
+});
+
+describe('parseMarkdownAgent (#1996)', () => {
+  it('turns frontmatter and body into an import entry', () => {
+    const entry = parseMarkdownAgent(
+      '---\nname: Doc Bot\ndescription: answers\nmodel: gpt-5\ntemperature: 0\nagent_type: agent\nstep_limit: 5\n---\n\nBe helpful.\n',
+    ) as { name: string; entity: string; versions: { instructions: string; llm_settings: Record<string, unknown>; meta: Record<string, unknown> }[] };
+    expect(entry.name).toBe('Doc Bot');
+    expect(entry.entity).toBe('agents');
+    expect(entry.versions[0]?.instructions).toBe('Be helpful.');
+    expect(entry.versions[0]?.llm_settings).toEqual({ model_name: 'gpt-5', temperature: 0 });
+    expect(entry.versions[0]?.meta).toEqual({ step_limit: 5 });
+  });
+
+  it('refuses a file with no frontmatter or no name', () => {
+    expect(() => parseMarkdownAgent('hello')).toThrow(/frontmatter/);
+    expect(() => parseMarkdownAgent('---\ndescription: x\n---\nbody')).toThrow(/no name/);
   });
 });
