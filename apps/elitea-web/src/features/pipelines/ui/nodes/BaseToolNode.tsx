@@ -9,9 +9,8 @@
  * from the baseline call sites (`BaseToolNode.jsx:172-186`). Likewise,
  * `useFunctionInputMapping`/`useGetToolkitNameFromSchema` (unit A2d/A2g,
  * `lib/flow-editor/hooks/`), `ToolSelect` (unit A2h, `ui/select/`),
- * `SingleSelect` (`shared/ui`), `ToolTypes` (`entities/toolkit`, Wave-2
- * promotion), `NodeCard`/`CustomHandle` (this sub-unit's own siblings) all
- * landed and are used directly -- no compile blockers remain in this file.
+ * `SingleSelect` (`shared/ui`), `ToolTypes` (`entities/toolkit`), `NodeCard`/
+ * `CustomHandle` (siblings) all landed and are used directly.
  *
  * DISCLOSED REDESIGN: `useFunctionInputMapping` takes an explicit
  * `versionTools`/`yamlJsonObject`/`setYamlJsonObject` argument instead of
@@ -248,14 +247,16 @@ interface ToolFunctionSelectProps {
 function ToolFunctionSelect({ functionOptions, selectedTool, onChangeTool, onClearTool, disabled, catalogueReadFailed, catalogueDiscoveryDisabled, typeSchemasReadFailed, onRetry }: ToolFunctionSelectProps): ReactNode {
   if (functionOptions.length > 0) {
     return (
-      <SingleSelect
-        label={t('pipelines.flowEditor.baseToolNode.toolLabel', 'Tool')}
-        value={selectedTool}
-        onChange={onChangeTool}
-        options={[...functionOptions]}
-        disabled={disabled}
-        onClear={onClearTool}
-      />
+      <div className="nopan nodrag nowheel">
+        <SingleSelect
+          label={t('pipelines.flowEditor.baseToolNode.toolLabel', 'Tool')}
+          value={selectedTool}
+          onChange={onChangeTool}
+          options={[...functionOptions]}
+          disabled={disabled}
+          onClear={onClearTool}
+        />
+      </div>
     );
   }
   if (catalogueReadFailed || typeSchemasReadFailed) {

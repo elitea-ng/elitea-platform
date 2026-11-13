@@ -105,6 +105,8 @@ export interface AIAssistantModalProps {
   readonly fieldBinding?: AiAssistantFieldBinding;
   readonly fStringAutocomplete?: AiAssistantFStringAutocomplete;
   readonly pipelineContext?: AiAssistantPipelineContext;
+  /** Editor only: no prompt footer. Set where the AI assistant is not served, so the expand view still opens (#2007). */
+  readonly withoutAssistant?: boolean;
 }
 
 function buildChangeEvent(value: string, name: string | undefined, id: string | undefined): AiAssistantChangeEvent {
@@ -157,6 +159,7 @@ export function AIAssistantModal(props: AIAssistantModalProps): ReactNode {
     fieldBinding,
     fStringAutocomplete,
     pipelineContext,
+    withoutAssistant = false,
   } = props;
 
   const { enableFStringAutocomplete, stateVariableOptions, stateVariablesInfo, availableNodesInfo } = resolveAiAssistantModalOptions(
@@ -281,13 +284,15 @@ export function AIAssistantModal(props: AIAssistantModalProps): ReactNode {
       title={capitalizeFirstChar(title ?? '')}
       language={{ value: language, options: languageOptions, onChange: onChangeLanguage, disabled: isGenerating }}
       footer={
-        <AIPromptInput
-          disabled={disabled || isGenerating}
-          onGenerate={handleAIGenerate}
-          onStop={cancel}
-          isLoading={isGenerating}
-          promptValueRef={promptInputRef}
-        />
+        withoutAssistant ? undefined : (
+          <AIPromptInput
+            disabled={disabled || isGenerating}
+            onGenerate={handleAIGenerate}
+            onStop={cancel}
+            isLoading={isGenerating}
+            promptValueRef={promptInputRef}
+          />
+        )
       }
       content={
         <Box sx={combineSx(contentWrapperSx, contentBackgroundSx(showSplitView))}>
