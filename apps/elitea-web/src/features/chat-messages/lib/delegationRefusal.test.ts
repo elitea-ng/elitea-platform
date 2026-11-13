@@ -14,7 +14,7 @@ import { convertMessagesToChatHistory } from './convertMessagesToChatHistory';
 import type { ChatMessage } from './convertMessagesToChatHistory.types';
 import { MAX_DELEGATION_TOOLKIT_NAME_CHARS, parseDelegationRefusal } from './delegationRefusal';
 
-const SENTENCE = 'This run did not start because a saved agent or pipeline it runs needs a toolkit, tool or other grant that its caller does not hold; attach it to the caller, as the notice above says, or remove it from that agent or pipeline.';
+const SENTENCE = 'This run did not start because a saved agent or pipeline it runs needs a toolkit, tool or other grant that its caller does not hold; attach it to the caller or remove it from that agent or pipeline.';
 const CONTEXT = { name: 'Agent', now: () => '2026-11-13T00:00:00.000Z' };
 const question: ChatMessage = { id: 'q-1', role: ROLES.User, name: 'Alice', content: 'go', createdAt: '2026-11-13T00:00:00.000Z' };
 
@@ -43,15 +43,15 @@ describe('delegation refusal notice', () => {
     expect(parseDelegationRefusal({ node: 'agent', toolkit: overLimit })?.toolkit).toBe('y'.repeat(MAX_DELEGATION_TOOLKIT_NAME_CHARS));
   });
 
-  it('passes the name through the chat sanitizer and keeps only inert text', () => {
+  it('keeps the name exactly as written, markup included, as text', () => {
     const shown = (toolkit: string) => parseDelegationRefusal({ node: 'agent', toolkit })?.toolkit;
-    expect(shown('<script>alert(1)</script>Jira')).toBe('Jira');
-    expect(shown('<img src=x onerror=alert(1)>Jira')).toBe('Jira');
-    expect(shown('<a href="javascript:alert(1)">Jira</a>')).toBe('Jira');
-    // Markdown is never rendered: a link stays its literal text.
+    // Review 1 item 4: a tag-like part of a legitimate name is kept.
+    expect(shown('Jira <prod>')).toBe('Jira <prod>');
+    expect(shown('<script>alert(1)</script>Jira')).toBe('<script>alert(1)</script>Jira');
     expect(shown('[Jira](javascript:alert(1))')).toBe('[Jira](javascript:alert(1))');
     expect(shown('Team & Co')).toBe('Team & Co');
-    expect(shown('<script></script>')).toBeUndefined();
+    expect(shown('  Team\n\tGitHub  ')).toBe('Team GitHub');
+    expect(shown('   ')).toBeUndefined();
   });
 
   it('keeps the live notice on the answer the failure then settles', () => {

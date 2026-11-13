@@ -5,11 +5,10 @@
  * elitea-main shows only beside the run's FAILED terminal, and persists on the
  * message group's `meta.delegation_refused` so a reload shows it too. It is
  * display data: the node kind and the display name of the toolkit the missing
- * grant belongs to. An author wrote that name, so it is bounded, passed through
- * the chat's sanitizer and then shown as plain text, never as markup.
+ * grant belongs to. An author wrote that name, so it is bounded and shown as a
+ * plain React text node: never parsed as HTML or markdown, so it is inert and a
+ * name such as `Jira <prod>` is shown exactly as written.
  */
-import { sanitizeMarkdownHtml } from '@/shared/ui/lib/sanitizeMarkdownHtml';
-
 import { createAssistantMessage, findTarget, replaceAt, type ChatStreamContext } from './chatStreamShared';
 import type { ChatMessage } from './convertMessagesToChatHistory.types';
 import type { ChatStreamFrame } from './chatStreamFrame';
@@ -22,14 +21,10 @@ export interface DelegationRefusal {
   readonly toolkit?: string;
 }
 
-/**
- * The sanitized name as text: the sanitizer's output parsed into a detached
- * document (which runs no script and loads nothing) only to read its text.
- */
+/** The name as one line of text, bounded; whitespace runs collapse to one space. */
 function displayName(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
-  const parsed = new DOMParser().parseFromString(sanitizeMarkdownHtml(value), 'text/html');
-  const text = (parsed.body.textContent ?? '').replace(/\s+/g, ' ').trim();
+  const text = value.replace(/\s+/g, ' ').trim();
   const bounded = Array.from(text).slice(0, MAX_DELEGATION_TOOLKIT_NAME_CHARS).join('');
   return bounded === '' ? undefined : bounded;
 }
