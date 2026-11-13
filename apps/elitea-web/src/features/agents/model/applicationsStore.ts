@@ -47,9 +47,12 @@ export type VersionValidationEntry = Readonly<Record<string, unknown>>;
 interface ApplicationsState {
   readonly isSaving: boolean;
   readonly shouldRefetchDetails: boolean;
+  /** #1997 — the ⋮ menu's "Compare versions" item opens the version bar's compare modal through this flag. */
+  readonly compareVersionsOpen: boolean;
   readonly versionValidationInfo: Readonly<Record<string, readonly VersionValidationEntry[]>>;
   readonly setIsSaving: (isSaving: boolean) => void;
   readonly setShouldRefetchDetails: (shouldRefetch: boolean) => void;
+  readonly setCompareVersionsOpen: (open: boolean) => void;
   readonly setVersionValidationInfo: (key: string, info: readonly VersionValidationEntry[]) => void;
 }
 
@@ -59,9 +62,11 @@ export function createApplicationsStore(): ApplicationsStore {
   return create<ApplicationsState>((set) => ({
     isSaving: false,
     shouldRefetchDetails: false,
+    compareVersionsOpen: false,
     versionValidationInfo: {},
     setIsSaving: (isSaving) => set({ isSaving }),
     setShouldRefetchDetails: (shouldRefetchDetails) => set({ shouldRefetchDetails }),
+    setCompareVersionsOpen: (compareVersionsOpen) => set({ compareVersionsOpen }),
     setVersionValidationInfo: (key, info) =>
       set((state) => ({ versionValidationInfo: { ...state.versionValidationInfo, [key]: info } })),
   }));

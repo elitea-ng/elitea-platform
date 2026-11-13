@@ -3749,6 +3749,7 @@
   "features.agentLifecycle.import.title": "Import",
   "features.agentLifecycle.import.toolkits": "Toolkits",
   "features.agentLifecycle.import.unreadable": "This file could not be read.",
+  "features.agentLifecycle.menu.compareVersions": "Compare versions",
   "features.agentLifecycle.menu.entityGroup": "ENTITY",
   "features.agentLifecycle.menu.fork": "Fork",
   "features.agentLifecycle.menu.label": "Lifecycle actions",

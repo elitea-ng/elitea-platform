@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useState } from 'react';
 
 import CallSplitOutlinedIcon from '@mui/icons-material/CallSplitOutlined';
+import DifferenceOutlinedIcon from '@mui/icons-material/DifferenceOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
@@ -51,6 +52,8 @@ export interface EntityLifecycleMenuProps {
   /** `true` when the open version already has `status: published`. */
   readonly isPublished: boolean;
   readonly onShareVersion?: () => void;
+  /** #1997 — opens the version comparison. Omitted where there is nothing to compare (fewer than two versions). */
+  readonly onCompareVersions?: () => void;
   readonly onShareEntity: () => void;
   readonly onFork: () => void;
   readonly onPublish?: () => void;
@@ -71,6 +74,7 @@ export function EntityLifecycleMenu({
   disabled = false,
   isPublished,
   onShareVersion,
+  onCompareVersions,
   onShareEntity,
   onFork,
   onPublish,
@@ -119,6 +123,15 @@ export function EntityLifecycleMenu({
           >
             <LinkOutlinedIcon sx={iconSx} />
             {t('features.agentLifecycle.menu.shareVersion', 'Share version link')}
+          </MenuItem>
+        )}
+        {onCompareVersions !== undefined && (
+          <MenuItem
+            data-testid={`${testIdPrefix}-compare-versions-menuitem`}
+            onClick={run(onCompareVersions)}
+          >
+            <DifferenceOutlinedIcon sx={iconSx} />
+            {t('features.agentLifecycle.menu.compareVersions', 'Compare versions')}
           </MenuItem>
         )}
         <MenuItem

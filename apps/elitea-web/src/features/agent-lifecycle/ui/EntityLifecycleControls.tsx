@@ -49,6 +49,8 @@ export interface EntityLifecycleControlsProps {
   readonly activeVersionId: string | undefined;
   /** `application_versions.status` of the open version. */
   readonly activeVersionStatus: string | undefined;
+  /** #1997 — adds "Compare versions" to the menu's VERSION group. The caller owns the comparison modal. */
+  readonly onCompareVersions?: () => void;
   /** Adds an Export item to the menu's ENTITY group. Omitted where the editor already carries an Export button. */
   readonly onExport?: () => void;
   /** Adds a Delete item to the menu's ENTITY group. The caller owns the confirmation dialog. */
@@ -66,6 +68,7 @@ export function EntityLifecycleControls({
   activeVersionStatus,
   onExport,
   onDelete,
+  onCompareVersions,
 }: EntityLifecycleControlsProps): ReactNode {
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
@@ -136,6 +139,7 @@ export function EntityLifecycleControls({
         {...(versionId === undefined ? {} : { onShareVersion: () => share(versionId) })}
         onShareEntity={() => share(undefined)}
         {...entityActionHandlers(onExport, onDelete)}
+        {...(onCompareVersions === undefined ? {} : { onCompareVersions })}
         {...releaseHistoryHandler(entity, () => setHistoryOpen(true))}
         {...governanceHandler(entity, () => setGovernanceOpen(true))}
         onFork={() => {

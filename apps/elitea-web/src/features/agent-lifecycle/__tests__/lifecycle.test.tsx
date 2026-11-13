@@ -474,6 +474,35 @@ describe('EntityLifecycleMenu on its own', () => {
     expect(screen.getByTestId('agent-share-entity-menuitem')).toBeInTheDocument();
   });
 
+  it('#1997 offers "Compare versions" only when the caller passes a handler, and calls it', async () => {
+    const user = userEvent.setup();
+    const onCompareVersions = vi.fn();
+    const { unmount } = renderWithProviders(
+      <EntityLifecycleMenu
+        testIdPrefix="agent"
+        isPublished={false}
+        onShareEntity={vi.fn()}
+        onFork={vi.fn()}
+        onCompareVersions={onCompareVersions}
+      />,
+    );
+    await user.click(screen.getByTestId('agent-lifecycle-menu-button'));
+    await user.click(screen.getByTestId('agent-compare-versions-menuitem'));
+    expect(onCompareVersions).toHaveBeenCalledOnce();
+    unmount();
+
+    renderWithProviders(
+      <EntityLifecycleMenu
+        testIdPrefix="agent"
+        isPublished={false}
+        onShareEntity={vi.fn()}
+        onFork={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByTestId('agent-lifecycle-menu-button'));
+    expect(screen.queryByTestId('agent-compare-versions-menuitem')).not.toBeInTheDocument();
+  });
+
   it('disables the trigger while the entity id is unknown', () => {
     renderWithProviders(
       <EntityLifecycleMenu

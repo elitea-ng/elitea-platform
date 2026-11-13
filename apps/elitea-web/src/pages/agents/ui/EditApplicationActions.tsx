@@ -8,7 +8,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { useNavigate } from '@tanstack/react-router';
 
 import { EntityLifecycleControls } from '@/features/agent-lifecycle';
-import { DeleteApplicationButton, ExportApplicationButton, applicationServerErrorMessage } from '@/features/agents';
+import { DeleteApplicationButton, ExportApplicationButton, applicationServerErrorMessage, useApplicationsStore } from '@/features/agents';
 import { StopAgentButton } from '@/features/kill-switch';
 
 import { ChatWithAgentButton } from './ChatWithAgentButton';
@@ -67,6 +67,10 @@ export function EditApplicationActions({
   const listTab = tab ?? 'latest';
   const navigate = useNavigate();
   const forkTargets = useForkTargetProjects(projectId);
+  const openCompareVersions = useApplicationsStore((state) => state.setCompareVersionsOpen);
+  // #1997 — the version bar's compare modal, offered from the ⋮ menu too; same
+  // two-version gate as `CompareVersionsButton`.
+  const canCompare = (detail?.versions.length ?? 0) >= 2;
   const [error, setError] = useState<string | undefined>(undefined);
   const [notice, setNotice] = useState<string | undefined>(undefined);
 
@@ -155,6 +159,7 @@ export function EditApplicationActions({
         tab={tab}
         activeVersionId={activeVersion?.id}
         activeVersionStatus={activeVersion?.status}
+        {...(canCompare ? { onCompareVersions: () => openCompareVersions(true) } : {})}
       />
     </Box>
   );
