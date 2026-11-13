@@ -319,7 +319,7 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
 
   return {
     skillPhase: phase,
-    hasMentionableSkills: isAgent && mentionableItems.length > 0,
+    hasMentionableSkills: canMentionSkills(isAgent, mentionableItems),
     filteredItems,
     committedMentions,
     highlightedIndex,
@@ -331,4 +331,9 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     projectSkillIdsFor,
     resolveProjectSkillIds,
   };
+}
+
+/** An agent is active and at least one skill can be mentioned. */
+function canMentionSkills(isAgent: boolean, items: readonly SkillMentionItem[]): boolean {
+  return isAgent && items.length > 0;
 }

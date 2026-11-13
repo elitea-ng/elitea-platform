@@ -291,10 +291,7 @@ export function logout(serverUrl?: string, toolkitType?: string): boolean {
   forgetClientSecret('token', key);
   const tokens = loadTokens();
   const held = Boolean(tokens[key]);
-  if (held) {
-    delete tokens[key];
-    saveTokens(tokens);
-  }
+  if (held) saveTokens(Object.fromEntries(Object.entries(tokens).filter(([stored]) => stored !== key)));
   publishLogout(key);
   dispatchTokenChangeEvent(key, 'logout');
   return held;

@@ -280,7 +280,7 @@ export const PlusChatButton = memo(
                 <MainMenuList
                   items={visibleMenuItems}
                   onSelectSubmenu={handleSubmenuOpen}
-                  onPickSkill={onPickSkill ? handlePickSkill : undefined}
+                  onPickSkill={whenOffered(onPickSkill, handlePickSkill)}
                   attachRow={
                     <AttachmentButton
                       showLabel
@@ -334,3 +334,8 @@ export const PlusChatButton = memo(
 );
 
 PlusChatButton.displayName = 'PlusChatButton';
+
+/** The menu row's handler only when the composer offers the action (kept out of the component's complexity). */
+function whenOffered(offered: (() => void) | undefined, handler: () => void): (() => void) | undefined {
+  return offered === undefined ? undefined : handler;
+}
