@@ -3,6 +3,18 @@ import { describe, expect, it } from 'vitest';
 import { renderWithTheme } from '../lib/testTheme';
 import { CharacterCounter } from '.';
 
+describe('CharacterCounter — past the limit (issue 1968)', () => {
+  it('says by how many characters the text is over', () => {
+    const { getByText } = renderWithTheme(<CharacterCounter value={'x'.repeat(130)} maxLength={128} />);
+    expect(getByText(/2 characters over the limit/)).toBeInTheDocument();
+  });
+
+  it('counts characters, not UTF-16 units', () => {
+    const { getByText } = renderWithTheme(<CharacterCounter value={'😀'.repeat(10)} maxLength={12} />);
+    expect(getByText('2 characters left')).toBeInTheDocument();
+  });
+});
+
 describe('CharacterCounter', () => {
   it('shows the remaining character count', () => {
     const { getByText } = renderWithTheme(<CharacterCounter value="abc" maxLength={10} />);
@@ -73,8 +85,7 @@ describe('CharacterCounter — the states its five callers depend on', () => {
       <CharacterCounter value={'x'.repeat(50)} maxLength={32} data-testid="counter" />,
     );
 
-    expect(getByTestId('counter')).toHaveTextContent(
-      '0 characters left. You have reached the MAXIMUM character limit',
-    );
+    // Never "-18 characters left": past the limit it says by how much (issue 1968).
+    expect(getByTestId('counter')).toHaveTextContent('18 characters over the limit');
   });
 });

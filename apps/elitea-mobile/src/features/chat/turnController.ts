@@ -153,7 +153,7 @@ export interface TurnDeps {
    */
   handOff?: (prepared: PreparedTurn, hint: HandOffHint) => Promise<boolean>;
   /**
-   * The send was stored as a message for people alone (client contract 1.51) and started no turn, so there is no
+   * The send was stored as a message for people alone (client contract 1.53) and started no turn, so there is no
    * answer to stream: the caller drops the live turn and reads the transcript. Without it the turn settles at once.
    */
   onPosted?: () => void;

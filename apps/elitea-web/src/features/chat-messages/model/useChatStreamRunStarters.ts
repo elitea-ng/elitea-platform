@@ -270,7 +270,7 @@ export function useChatStreamRunStarters(
       } catch (error) {
         return classifyStartFailure(error);
       }
-      // A message for people alone (client contract 1.51) is stored and starts no
+      // A message for people alone (client contract 1.53) is stored and starts no
       // turn: no stream to watch, and NOT the "older backend" signal below, which
       // would have the caller emit the same message over the socket as a turn.
       if (started.turn_started === false) return { started: false, reason: "posted", ...(started.ignored?.length ? { ignored: started.ignored } : {}) };

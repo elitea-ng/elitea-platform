@@ -99,7 +99,7 @@ describe('ProposalReviewDialog', () => {
     const long = { ...proposal, draft: { ...proposal.draft, name: 'n'.repeat(80), description: 'd'.repeat(3000) } };
     renderWithProviders(<ProposalReviewDialog projectId="1" proposal={long} onClose={() => undefined} />);
     expect(screen.getByTestId('agent-proposal-name')).toHaveValue('n'.repeat(32));
-    expect(screen.getByTestId('agent-proposal-description')).toHaveValue('d'.repeat(2304));
+    expect(screen.getByTestId('agent-proposal-description')).toHaveValue('d'.repeat(2000));
   });
 
   it('refuses Create without a name', async () => {

@@ -3,17 +3,40 @@ package apierr
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type Response struct {
 	Error string `json:"error"`
+	// Field names the request property a validation refusal is about, and
+	// MaxLength the limit it broke. Both are omitted for every other error.
+	Field     string `json:"field,omitempty"`
+	MaxLength int    `json:"max_length,omitempty"`
 }
 
 type APIError struct {
 	Status  int
 	Code    string
 	Message string
+	// Field and MaxLength make a 400 field-level (see FieldTooLong).
+	Field     string
+	MaxLength int
+}
+
+// FieldTooLong is the 400 for a text property longer than max characters. It
+// carries the property name and the limit next to the message, so a client can
+// put the refusal on the right input.
+func FieldTooLong(field string, max int) error {
+	return &APIError{
+		Status:    http.StatusBadRequest,
+		Code:      "bad_request",
+		Message:   fmt.Sprintf("%s must be at most %d characters", field, max),
+		Field:     field,
+		MaxLength: max,
+	}
 }
 
 func (e *APIError) Error() string {
@@ -55,12 +78,38 @@ func Conflict(message string) error {
 	return &APIError{Status: http.StatusConflict, Code: "conflict", Message: message}
 }
 
+// lengthConstraints are the CHECK constraints tenant migration 0172 adds (issue
+// 1968), by the column they guard.
+var lengthConstraints = map[string][2]any{
+	"applications_description_max_len":       {"description", 2000},
+	"skills_description_max_len":             {"description", 2000},
+	"elitea_tools_description_max_len":       {"description", 2000},
+	"chat_conversation_folders_name_max_len": {"name", 128},
+}
+
+// fromLengthCheck turns a violation of one of those constraints into the 400 a
+// handler would have written, as a backstop for a writer that skipped the check.
+func fromLengthCheck(err error) *APIError {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		return nil
+	}
+	spec, ok := lengthConstraints[pgErr.ConstraintName]
+	if !ok {
+		return nil
+	}
+	return FieldTooLong(spec[0].(string), spec[1].(int)).(*APIError)
+}
+
 func Write(w http.ResponseWriter, err error) {
 	var apiErr *APIError
-	if errors.As(err, &apiErr) {
+	if !errors.As(err, &apiErr) {
+		apiErr = fromLengthCheck(err)
+	}
+	if apiErr != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(apiErr.Status)
-		_ = json.NewEncoder(w).Encode(Response{Error: apiErr.Message})
+		_ = json.NewEncoder(w).Encode(Response{Error: apiErr.Message, Field: apiErr.Field, MaxLength: apiErr.MaxLength})
 		return
 	}
 

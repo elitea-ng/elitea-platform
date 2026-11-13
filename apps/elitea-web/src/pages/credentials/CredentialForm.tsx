@@ -36,7 +36,9 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { NAME_MAX_LENGTH, isNearLimit } from '@/shared/lib/textLimits';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { combineSx } from '@/shared/ui/lib/combineSx';
 import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { PageToolbar, pageBodySx, pageSx } from '@/widgets/page-header';
@@ -139,6 +141,12 @@ export function CredentialForm(props: CredentialFormProps): ReactNode {
           helperText={c.fieldErrors['elitea_title']}
           fullWidth
           variant="standard"
+        />
+        <CharacterCounter
+          value={c.name}
+          maxLength={NAME_MAX_LENGTH}
+          visible={isNearLimit(c.name, NAME_MAX_LENGTH)}
+          data-testid="credential-name-counter"
         />
         {context.isTeamProject && (
           <FormControlLabel

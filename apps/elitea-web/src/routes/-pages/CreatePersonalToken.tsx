@@ -31,12 +31,10 @@
  *  - Uses `@/shared/i18n` for i18n, `DrawerPageHeader` and
  *    `GeneratedTokenDialog` from shared UI, and the query hooks from
  *    `entities/token/api/tokenApi`
- *  - `MAX_TOKEN_NAME_LENGTH` is a LOCAL override (768), not the constant of
- *    the same name `@/entities/token/model/constants` exports (64) — that
- *    file is outside this cluster's file scope. old-app parity is
- *    `MAX_VARIABLES_LENGTH` (apps/elitea-ui/src/common/constants.js:69 = 768);
- *    the entities constant needs its own follow-up fix for a single source
- *    of truth.
+ *  - The name limit is the contract's `NAME_MAX_LENGTH` (128, issue 1968), not
+ *    the old 768. The input does not cut what is typed or pasted: a name past
+ *    the limit shows `CharacterCounter` in the error colour and an error line,
+ *    and Generate stays disabled.
  */
 import { useCallback, useMemo, useState } from 'react';
 
@@ -53,6 +51,8 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate } from '@tanstack/react-router';
 
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
+import { NAME_MAX_LENGTH, isNearLimit, textLimitState } from '@/shared/lib/textLimits';
 import { DrawerPageHeader } from '@/shared/ui/settings/DrawerPageHeader';
 import { DiscardButton } from '@/shared/ui/DiscardButton';
 import { GeneratedTokenDialog } from '@/features/settings/ui/personal-tokens/GeneratedTokenDialog';
@@ -64,8 +64,7 @@ import { createTokenFailureMessage, TokenCreateError, TokenProjectNotice } from 
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { useTheme } from '@mui/material/styles';
 
-/** old-app parity: `MAX_VARIABLES_LENGTH` — see file-header deviation note. */
-const MAX_TOKEN_NAME_LENGTH = 768;
+const MAX_TOKEN_NAME_LENGTH = NAME_MAX_LENGTH;
 
 /* ── zod validation schema ─────────────────────────────────────────────── */
 
@@ -73,7 +72,9 @@ const validationSchema = z.object({
   name: z
     .string()
     .min(1, t('entities.token.form.nameRequired', 'Name is required'))
-    .max(MAX_TOKEN_NAME_LENGTH)
+    .refine((v) => !textLimitState(v, MAX_TOKEN_NAME_LENGTH).exceeded, {
+      message: t('entities.token.form.nameTooLong', 'The name must be 128 characters or fewer.'),
+    })
     .refine((v) => TOKEN_NAME_PATTERN.test(v), {
       message: t('entities.token.form.namePattern', 'Only alphanumeric characters, underscore and hyphen are allowed'),
     }),
@@ -159,7 +160,6 @@ export function CreatePersonalTokenPage() {
   }, [navigate]);
 
   const nameError = errors.name?.message;
-  const isAtCharacterLimit = name.length >= MAX_TOKEN_NAME_LENGTH;
 
   const isGenerateDisabled = !isValid || isGenerating || !hasChanged;
 
@@ -212,8 +212,8 @@ export function CreatePersonalTokenPage() {
                     id="name"
                     {...register('name')}
                     placeholder={t('entities.token.form.name', 'Name')}
-                    maxLength={MAX_TOKEN_NAME_LENGTH}
                     aria-label={t('entities.token.form.name', 'Name')}
+                    aria-invalid={nameError ? true : undefined}
                   />
                   {nameError && (
                     <Typography
@@ -224,35 +224,31 @@ export function CreatePersonalTokenPage() {
                       {nameError}
                     </Typography>
                   )}
-                  {isAtCharacterLimit && !nameError && (
-                    <Typography
-                      variant="bodySmall"
-                      color="text.secondary"
-                      sx={styles.helperText}
-                    >
-                      {t('entities.token.form.charLimit', `Maximum character limit reached (${MAX_TOKEN_NAME_LENGTH})`, { maxLength: MAX_TOKEN_NAME_LENGTH })}
-                    </Typography>
-                  )}
+                  <CharacterCounter
+                    value={name}
+                    maxLength={MAX_TOKEN_NAME_LENGTH}
+                    visible={isNearLimit(name, MAX_TOKEN_NAME_LENGTH)}
+                    sx={styles.helperText}
+                    data-testid="token-name-counter"
+                  />
                 </Box>
 
                 {/* Expiration row */}
                 <Box sx={styles.expirationRow}>
                   <Box sx={styles.measureField}>
-                    <select
+                    <Box
+                      component="select"
                       id="measure"
                       {...register('measure')}
-                      style={styles.select}
+                      sx={styles.select}
                       aria-label={t('entities.token.form.expirationPeriod', 'Expiration period')}
                     >
                       {TOKEN_EXPIRATION_OPTIONS.map((opt) => (
-                        <option
-                          key={opt.value}
-                          value={opt.value}
-                        >
+                        <option key={opt.value} value={opt.value}>
                           {opt.label}
                         </option>
                       ))}
-                    </select>
+                    </Box>
                   </Box>
                   {measure !== 'never' && (
                     <Box sx={styles.valueField}>
@@ -373,10 +369,19 @@ const getStyles = (theme: Theme): {
       marginLeft: '0.5rem',
     },
     input: baseInput,
+    // The open list is the browser's popup: inherited light text on its light
+    // background was unreadable in the dark theme. Colour both explicitly.
     select: {
       ...baseInput,
       cursor: 'pointer',
       appearance: 'auto',
+      color: theme.vars.palette.text.primary,
+      colorScheme: 'light',
+      ...theme.applyStyles('dark', { colorScheme: 'dark' }),
+      '& option': {
+        color: theme.vars.palette.text.primary,
+        backgroundColor: theme.vars.palette.background.paper,
+      },
     },
     numberInput: {
       ...baseInput,

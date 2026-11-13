@@ -83,6 +83,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentsoul"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 // maxDraftRequestBytes bounds the body. user_description and
@@ -104,14 +105,14 @@ const NotConfiguredCode = v2predict.NotConfiguredCode
 // genuine generation failure and is refused with 422.
 const (
 	skillNameMaxLength         = 64
-	skillDescriptionMaxLength  = 2304
+	skillDescriptionMaxLength  = entitylimits.MaxDescriptionLength
 	skillInstructionsMaxLength = v2skills.SkillInstructionsMaxLength
 
 	// PROJECT_CONTEXT_MAX_LEN in legacy/plugins/elitea_core/models/pd/project_context.py.
 	projectBackgroundMaxLength = 2500
 
 	applicationNameMaxLength            = 32
-	applicationDescriptionMaxLength     = 2304
+	applicationDescriptionMaxLength     = entitylimits.MaxDescriptionLength
 	applicationWelcomeMessageMaxLength  = 768
 	applicationStarterMaxLength         = 768
 	applicationMaxConversationStarters  = 4

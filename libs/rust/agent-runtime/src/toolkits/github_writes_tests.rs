@@ -3125,3 +3125,53 @@ mod open_pull_request {
         assert!(script.hits().is_empty(), "nothing reached the forge");
     }
 }
+
+/// A provider rejects the whole request when one function definition is
+/// malformed, which the user sees as a model failure with no hint of the
+/// toolkit. Hold every GitHub tool to the `OpenAI` function-calling rules.
+#[tokio::test]
+async fn every_github_tool_is_a_valid_openai_function_definition() {
+    let rig = rig(&Arc::new(Script::default())).await;
+    let tools = &rig.tools;
+    assert!(!tools.is_empty());
+    for tool in tools {
+        let name = tool.name();
+        assert!(
+            !name.is_empty()
+                && name.len() <= 64
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')),
+            "{name}"
+        );
+        assert!(!tool.description().is_empty(), "{name}");
+        // A tool with no parameter schema is sent without one, which every
+        // provider accepts.
+        let Some(schema) = tool.parameters_schema() else {
+            continue;
+        };
+        let object = schema
+            .as_object()
+            .unwrap_or_else(|| panic!("{name}: schema"));
+        assert_eq!(object.get("type"), Some(&json!("object")), "{name}");
+        for forbidden in ["anyOf", "oneOf", "allOf", "not", "enum", "$ref"] {
+            assert!(
+                !object.contains_key(forbidden),
+                "{name}: top-level {forbidden}"
+            );
+        }
+        if let Some(properties) = object.get("properties") {
+            assert!(properties.is_object(), "{name}: properties");
+        }
+        if let Some(required) = object.get("required").and_then(Value::as_array) {
+            let properties = object.get("properties").and_then(Value::as_object);
+            for key in required {
+                let key = key.as_str().unwrap_or_else(|| panic!("{name}: required"));
+                assert!(
+                    properties.is_some_and(|properties| properties.contains_key(key)),
+                    "{name}: required {key} is not a property"
+                );
+            }
+        }
+    }
+}

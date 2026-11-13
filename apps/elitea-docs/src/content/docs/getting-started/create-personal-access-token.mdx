@@ -21,6 +21,10 @@ The token value is shown only once, in the dialog right after you generate it. I
 </Step>
 </Steps>
 
+## Name limit
+
+A token name is at most 128 characters. The field shows a counter as you approach the limit and **Generate** stays disabled while the name is longer. The same limit applies to the names of agents, pipelines, toolkits, credentials, folders, conversations and skills, and descriptions are at most 2000 characters; the API answers 400 with `field` and `max_length` for a longer value.
+
 ## Use the token
 
 Send it as a bearer token against Elitea's API (see [API usage](/integrations/third-party-integrations/api-usage)). From the token list, you can also pick a model and download a ready-made settings file (VS Code JSON or JetBrains XML) pre-filled with your token, the model and your project id.

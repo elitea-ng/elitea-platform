@@ -4,7 +4,7 @@ import { log } from '@/lib/log';
 import { handOffToOutbox } from '@/sync/appOutbox';
 
 /**
- * Sends a message for people alone (client contract 1.51): it mentions people and addresses no agent.
+ * Sends a message for people alone (client contract 1.53): it mentions people and addresses no agent.
  * Main stores it as the sender's message and notifies the people; it starts no turn, so there is no
  * live turn, no stream and no pending answer here. The transcript is read again to show the message.
  *

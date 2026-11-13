@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef } from 'react';
 
 import { t } from '@/shared/i18n';
+import { NAME_MAX_LENGTH, clipToLimit } from '@/shared/lib/textLimits';
 import { ROLES } from '@/shared/lib/enums';
 import type { SocketClient } from '@/shared/api/socket/client';
 import type { Participant } from '@/entities/participant';
@@ -77,7 +78,7 @@ function buildFreshConversation(
   activeParticipantId: string | number | undefined,
 ): ChatConversation {
   return {
-    name: `Chat with ${applicationName ?? ''}`,
+    name: clipToLimit(`Chat with ${applicationName ?? ''}`, NAME_MAX_LENGTH),
     is_private: true,
     source: 'agent',
     participants: applicationParticipant ? [applicationParticipant] : [],

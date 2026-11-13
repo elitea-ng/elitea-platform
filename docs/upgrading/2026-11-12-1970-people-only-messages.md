@@ -8,13 +8,13 @@ names are notified, and **no agent or model turn starts**.
 
 - **Who is affected:** everyone who mentions a person in a chat; API and SDK
   clients that send `user_ids` or `is_mentioning_everyone` with a
-  `participant_id` and no `addressed_to`; client builders (client contract 1.51).
+  `participant_id` and no `addressed_to`; client builders (client contract 1.53).
 - **What to do:** nothing in the web, desktop and mobile apps. A client that
   means an agent for a message with mentions sends it in `addressed_to`
   (`@Agent` / `#Agent`, or the agent picked as the target in the web composer).
   `participant_id` alone no longer addresses an agent when a message mentions
   people, because clients fill it in for every unaddressed message.
-- **Behaviour:** client contract 1.51 (additive). `sendChatMessage` answers
+- **Behaviour:** client contract 1.53 (additive). `sendChatMessage` answers
   `201` with `ChatMessagePosted` (`message_id`, `created`, `turn_started: false`)
   and no `events_url` for such a message. The decision is made in Main before
   `participant_id`, `llm_settings` and the execution contract are read.

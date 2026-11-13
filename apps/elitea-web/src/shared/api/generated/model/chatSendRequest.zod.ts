@@ -76,7 +76,7 @@ export const ChatSendRequest = zod
       .max(chatSendRequestAddressedToMax)
       .optional()
       .describe(
-        "ADR-0050 decision 7c — the agents this message is for, by participant id (positive, unique). In a conversation with several agents the first answers now and the others answer after it, in order. Empty or absent: the floor decides, except that a message that mentions people (`user_ids`, `is_mentioning_everyone`) and addresses no agent is for those people alone and starts no turn (client contract 1.51). An id that is not an agent of the conversation answers 422 `addressee_not_in_conversation`.",
+        "ADR-0050 decision 7c — the agents this message is for, by participant id (positive, unique). In a conversation with several agents the first answers now and the others answer after it, in order. Empty or absent: the floor decides, except that a message that mentions people (`user_ids`, `is_mentioning_everyone`) and addresses no agent is for those people alone and starts no turn (client contract 1.53). An id that is not an agent of the conversation answers 422 `addressee_not_in_conversation`.",
       ),
     conversation_uuid: zod
       .uuid()
@@ -98,7 +98,7 @@ export const ChatSendRequest = zod
       .array(zod.int())
       .optional()
       .describe(
-        "USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again. With no `addressed_to` the message is for these people alone: it is stored and notifies them, and starts no turn (client contract 1.51).",
+        "USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again. With no `addressed_to` the message is for these people alone: it is stored and notifies them, and starts no turn (client contract 1.53).",
       ),
     is_mentioning_everyone: zod
       .boolean()

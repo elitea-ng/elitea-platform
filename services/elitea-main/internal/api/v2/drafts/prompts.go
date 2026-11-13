@@ -18,7 +18,7 @@ Reply with ONE JSON object and nothing else. No markdown code fences, no comment
 
 Keys, all required:
   "name"          string. Lowercase letters, digits and hyphens only, no leading or trailing hyphen, at most 64 characters. It must not contain "claude" or "anthropic".
-  "description"   string. One or two sentences saying what the skill is for. At most 2304 characters.
+  "description"   string. One or two sentences saying what the skill is for. At most 2000 characters.
   "instructions"  string. Markdown. The instructions the agent follows: what to do, in what order, what to produce, and what to avoid. Write them for the agent, addressed to the agent. At most 50000 characters.
   "tags"          array of short lowercase topical strings. May be empty.
 
@@ -30,7 +30,7 @@ Reply with ONE JSON object and nothing else. No markdown code fences, no comment
 
 Keys:
   "name"                   string, required. At most 32 characters. A short, specific name — not a sentence.
-  "description"            string, required. One or two sentences saying what the agent does and who it is for. At most 2304 characters.
+  "description"            string, required. One or two sentences saying what the agent does and who it is for. At most 2000 characters.
   "instructions"           string, required. Markdown. The agent's system prompt: its role, how it works, the order it does things in, what it produces, and what it must not do. Write it addressed to the agent.
   "welcome_message"        string, optional. The first thing the agent says. At most 768 characters.
   "conversation_starters"  array of at most 4 short strings, optional. Each is a complete opening request a user could send, at most 768 characters.

@@ -7146,7 +7146,7 @@ export const getSendChatMessageUrl = (
  * answer of this conversation is still settling, the server waits up to
  * about 3 s before it decides.
  *
- * PEOPLE-ONLY MESSAGES (client contract 1.51). A message that mentions
+ * PEOPLE-ONLY MESSAGES (client contract 1.53). A message that mentions
  * people (`user_ids`, or `is_mentioning_everyone`) and names no agent
  * in `addressed_to` is a message to those people. It is stored in the
  * conversation as the sender's message and notifies the people it

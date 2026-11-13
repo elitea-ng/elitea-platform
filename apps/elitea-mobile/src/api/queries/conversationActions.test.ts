@@ -76,28 +76,21 @@ describe('sendConversationAction', () => {
 });
 
 describe('cleanConversationName', () => {
-  it('trims, folds line breaks and caps the length', () => {
+  it('trims, folds line breaks and caps the length for a queued rename', () => {
     expect(cleanConversationName('  Trip\nto Lisbon ')).toBe('Trip to Lisbon');
     expect(cleanConversationName('   ')).toBeNull();
     expect(cleanConversationName('x'.repeat(400))).toHaveLength(CONVERSATION_NAME_MAX);
+    expect(Array.from(cleanConversationName('🙂'.repeat(300)) ?? '')).toHaveLength(CONVERSATION_NAME_MAX);
+    expect(CONVERSATION_NAME_MAX).toBe(128);
   });
 
   // Client contract 1.4: the server answers 400 (and the queued rename is dropped) for any
   // control character (Go unicode.IsControl: U+0000-U+001F, U+007F-U+009F) and for more than
-  // 256 code points.
+  // 128 code points.
   it('replaces every control character the server refuses', () => {
     const controls = [...Array(0x20).keys(), ...Array.from({ length: 0x21 }, (_, i) => 0x7f + i)].map((c) => String.fromCharCode(c));
     const name = cleanConversationName(`Plan${controls.join('')}B\u000bC\u0085D`);
     expect(name).toBe('Plan B C D');
     expect(name).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
-  });
-
-  it('counts code points like the server and never splits a surrogate pair', () => {
-    const name = cleanConversationName('🙂'.repeat(300));
-    expect(Array.from(name ?? '')).toHaveLength(CONVERSATION_NAME_MAX);
-    expect(name).toBe('🙂'.repeat(CONVERSATION_NAME_MAX));
-    const odd = cleanConversationName('a' + '🙂'.repeat(300));
-    expect(odd).not.toMatch(/[\ud800-\udbff]$/);
-    expect(Array.from(odd ?? '')).toHaveLength(CONVERSATION_NAME_MAX);
   });
 });

@@ -91,7 +91,8 @@ describe('ApplicationEditForm', () => {
   });
 
   it('shows the at-limit hint only while the name field is focused at the max length', async () => {
-    renderForm({ name: 'x'.repeat(32) });
+    // An existing agent is held to the server's 128 (issue 1968), not the create form's 32.
+    renderForm({ name: 'x'.repeat(128) });
     const input = await screen.findByTestId('agent-name-input');
     // The name counter mounts only at the limit, so its absence is a real
     // absence. The description counter is a different test id — it is always
@@ -105,6 +106,15 @@ describe('ApplicationEditForm', () => {
     expect(counter).toHaveTextContent('0 characters left. You have reached the MAXIMUM character limit');
   });
 
+  it('does not cut a pasted description and shows how far over the limit it is (issue 1968)', async () => {
+    renderForm({ description: 'x'.repeat(2003) });
+    const input = (await screen.findByTestId('agent-description-input')) as HTMLTextAreaElement;
+    expect(input).not.toHaveAttribute('maxlength');
+    expect(input.value).toHaveLength(2003);
+    expect(screen.getByTestId('agent-description-counter')).toHaveTextContent('3 characters over the limit');
+    expect(screen.getByTestId('agent-description-counter')).toBeVisible();
+  });
+
   it('renders an existing tag passed via the tags prop', async () => {
     renderForm({ tags: [{ id: 1, name: 'billing', data: null }] });
     expect(await screen.findByText('billing')).toBeInTheDocument();
@@ -115,7 +125,7 @@ describe('ApplicationEditForm', () => {
     const input = await screen.findByTestId('agent-description-input');
     // #848 — the counter's line is now reserved always (never unmounted),
     // so the SAME node is found before focus too; only its visibility toggles.
-    const counter = screen.getByText(`${2304 - 'Does things'.length} characters left`);
+    const counter = screen.getByText(`${2000 - 'Does things'.length} characters left`);
     expect(counter).not.toBeVisible();
     await userEvent.setup().click(input);
     expect(counter).toBeVisible();
@@ -203,7 +213,7 @@ describe('ApplicationEditForm', () => {
     await user.click(input);
     // #848 — the same node persists across blur (never unmounted); only its
     // visibility toggles back to hidden.
-    const counter = screen.getByText(`${2304 - 'Does things'.length} characters left`);
+    const counter = screen.getByText(`${2000 - 'Does things'.length} characters left`);
     expect(counter).toBeVisible();
     await user.tab();
     expect(counter).not.toBeVisible();

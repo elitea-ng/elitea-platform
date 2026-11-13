@@ -16,6 +16,7 @@ const PUBLIC_SURFACE = [
   'ApplicationValidator',
   'CreateApplicationTabBar',
   'applicationCreationSchema',
+  'applicationEditSchema',
   'applyMcpToolStatus',
   'isAttachmentsEnabled',
   'subApplicationTools',

@@ -25,6 +25,8 @@ import type { Conversation } from '@/entities/conversation';
 import { SaveAsTeamDialog } from '@/features/agent-teams';
 import { ShareLinkDialog } from '@/features/chat-conversation-list';
 import { t } from '@/shared/i18n';
+import { NAME_MAX_LENGTH, exceedsLimit, isNearLimit } from '@/shared/lib/textLimits';
+import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { activityGlyph, activityTitleBold, useRowActivity } from '@/shared/lib/conversationActivity';
 import { ConversationActivityGlyph } from '@/shared/ui/ConversationActivity';
 import { BaseModal } from '@/shared/ui/BaseModal';
@@ -51,19 +53,22 @@ export interface ConversationRowProps {
 /** The title being edited in place: Enter saves, Escape or leaving the field cancels. */
 function RenameField({ conversation, indent, onDone }: { readonly conversation: Conversation; readonly indent: number; readonly onDone: (name: string | null) => void }): React.JSX.Element {
   const [value, setValue] = useState(conversation.name);
+  const tooLong = exceedsLimit(value, NAME_MAX_LENGTH);
+  // Enter does not save a name past the limit (issue 1968); the counter says by how much.
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === 'Enter') onDone(value.trim());
-    else if (event.key === 'Escape') onDone(null);
+    if (event.key === 'Enter') {
+      if (!tooLong) onDone(value.trim());
+    } else if (event.key === 'Escape') onDone(null);
   };
   return (
-    <Box sx={{ paddingLeft: 1 + indent, paddingRight: 0.5, minHeight: '1.75rem', display: 'flex', alignItems: 'center' }}>
+    <Box sx={{ paddingLeft: 1 + indent, paddingRight: 0.5, minHeight: '1.75rem', display: 'flex', alignItems: 'center', flexWrap: 'wrap' }}>
       <InputBase
         value={value}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={onKeyDown}
         onBlur={() => onDone(null)}
         inputRef={(node: HTMLInputElement | null) => node?.focus()}
-        inputProps={{ 'aria-label': t('desktop.chats.renameLabel', 'Conversation name'), 'data-testid': 'shell-conversation-rename' }}
+        inputProps={{ 'aria-label': t('desktop.chats.renameLabel', 'Conversation name'), 'aria-invalid': tooLong || undefined, 'data-testid': 'shell-conversation-rename' }}
         sx={(theme: Theme) => ({
           flex: 1,
           paddingX: 0.5,
@@ -72,6 +77,14 @@ function RenameField({ conversation, indent, onDone }: { readonly conversation: 
           background: theme.vars.palette.background.default,
           typography: 'labelSmall',
         })}
+      />
+      <CharacterCounter
+        value={value}
+        maxLength={NAME_MAX_LENGTH}
+        visible={isNearLimit(value, NAME_MAX_LENGTH)}
+        textVariant="labelSmall"
+        sx={{ flexBasis: '100%' }}
+        data-testid="shell-conversation-rename-counter"
       />
     </Box>
   );

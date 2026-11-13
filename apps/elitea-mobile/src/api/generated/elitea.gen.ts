@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.51
+ * client contract:    1.53
  * operations sha256:  90f7ce0d441261594219777baafedfb6c11c64e23476f55952ced30a49d7d69e
  */
 export interface paths {
@@ -1284,7 +1284,7 @@ export interface paths {
          *     answer of this conversation is still settling, the server waits up to
          *     about 3 s before it decides.
          *
-         *     PEOPLE-ONLY MESSAGES (client contract 1.51). A message that mentions
+         *     PEOPLE-ONLY MESSAGES (client contract 1.53). A message that mentions
          *     people (`user_ids`, or `is_mentioning_everyone`) and names no agent
          *     in `addressed_to` is a message to those people. It is stored in the
          *     conversation as the sender's message and notifies the people it
@@ -2858,7 +2858,7 @@ export interface components {
             /** @description Equal to `execution_id` (legacy name). */
             task_id: string;
         };
-        /** @description Client contract 1.51. A people-only message that was stored with no turn behind it (sendChatMessage). There is no execution, no `response_message_id` and no `events_url`: a client renders the message and waits for nothing. */
+        /** @description Client contract 1.53. A people-only message that was stored with no turn behind it (sendChatMessage). There is no execution, no `response_message_id` and no `events_url`: a client renders the message and waits for nothing. */
         ChatMessagePosted: {
             /** @description False when the same `question_id` was already stored (a replay); nobody is notified again. */
             created: boolean;
@@ -2929,7 +2929,7 @@ export interface components {
         };
         /** @description The body of a chat send. NOTE(W2): internal/api/v2/agentexecution/route.go:143 (`currentApplicationStartBody`). The body must be ONE JSON value of at most 512 KiB. */
         ChatSendRequest: {
-            /** @description ADR-0050 decision 7c — the agents this message is for, by participant id (positive, unique). In a conversation with several agents the first answers now and the others answer after it, in order. Empty or absent: the floor decides, except that a message that mentions people (`user_ids`, `is_mentioning_everyone`) and addresses no agent is for those people alone and starts no turn (client contract 1.51). An id that is not an agent of the conversation answers 422 `addressee_not_in_conversation`. */
+            /** @description ADR-0050 decision 7c — the agents this message is for, by participant id (positive, unique). In a conversation with several agents the first answers now and the others answer after it, in order. Empty or absent: the floor decides, except that a message that mentions people (`user_ids`, `is_mentioning_everyone`) and addresses no agent is for those people alone and starts no turn (client contract 1.53). An id that is not an agent of the conversation answers 422 `addressee_not_in_conversation`. */
             addressed_to?: number[];
             /**
              * Format: uuid
@@ -2974,7 +2974,7 @@ export interface components {
              */
             release_id?: number;
             unattended?: components["schemas"]["ChatUnattendedRequest"];
-            /** @description USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again. With no `addressed_to` the message is for these people alone: it is stored and notifies them, and starts no turn (client contract 1.51). */
+            /** @description USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again. With no `addressed_to` the message is for these people alone: it is stored and notifies them, and starts no turn (client contract 1.53). */
             user_ids?: number[];
         };
         ChatStartAttachment: {
@@ -3272,6 +3272,7 @@ export interface components {
             meta?: {
                 [key: string]: unknown;
             };
+            /** @description Limit: at most 128 characters (issue 1968). Not declared as `maxLength` because the `client` subset is additive-only (ADR-0025 decision 6); the server answers 400 with `field` and `max_length`. */
             name?: string;
             /** @description Participants to add at creation. Each needs `entity_name` and `entity_meta`; `entity_meta.project_id` defaults to this project. */
             participants?: components["schemas"]["ConversationParticipant"][];
@@ -3733,6 +3734,10 @@ export interface components {
         ErrorResponse: {
             /** @description Human-readable error message */
             error: string;
+            /** @description Only on a 400 for a text property over its length limit (client contract 1.52): the request property, e.g. `name` or `description`. */
+            field?: string;
+            /** @description Only with `field`: the limit in characters. An entity name is at most 128 characters and a description at most 2000. */
+            max_length?: number;
         };
         /** @description Client contract 1.11. The body of forkConversation. An absent body forks the whole conversation with the default name. */
         ForkConversationRequest: {
@@ -3752,7 +3757,7 @@ export interface components {
             message_id?: string;
             /** @description `fork` (the default) or `rewind`. A rewind is a fork that also records the abandoned turns after the fork point as `forked_from.branch_summary`; it needs `message_id`. Any other value answers 400. */
             mode?: string;
-            /** @description The new conversation's name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 256 characters or with a control character answers 400. */
+            /** @description The new conversation's name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 128 characters or with a control character answers 400. */
             name?: string;
         };
         /**
@@ -4690,7 +4695,7 @@ export interface components {
             meta?: {
                 [key: string]: unknown;
             };
-            /** @description The new title, trimmed; 1 to 256 characters after trimming, no control characters. `null` does not rename. */
+            /** @description The new title, trimmed; 1 to 128 characters after trimming, no control characters. `null` does not rename. */
             name?: string | null;
         };
         /** @description A conversation as updateConversation answers it. `id` is the numeric id AS A STRING, as in createConversation's answer; `uuid` is the id the chat send path takes. NOTE(W2): internal/infra/db/repos/conversations.go:685 (`Update`) fills these from the UPDATE's RETURNING row. Any other key it carries (a `message_count` of 0, which is not counted here) is not part of the answer's meaning. */
@@ -7204,7 +7209,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChatExecutionStarted"];
                 };
             };
-            /** @description Client contract 1.51. The message was for people alone: it is stored (`created` true) or was already stored (`created` false) and no turn was started. */
+            /** @description Client contract 1.53. The message was for people alone: it is stored (`created` true) or was already stored (`created` false) and no turn was started. */
             201: {
                 headers: {
                     [name: string]: unknown;

@@ -24,9 +24,9 @@
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from '@mui/material/styles';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
@@ -101,6 +101,48 @@ describe('Participants — the users row', () => {
 
     expect(screen.queryByTestId('users-section')).toBeNull();
     expect(screen.getByTestId('participants-container')).toBeTruthy();
+  });
+});
+
+describe('Participants — the "+N" overflow (#1964)', () => {
+  const EIGHT = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((initial, index) => userRow(String(index + 1), `${initial} Person`));
+
+  it('expands to list the hidden participants and collapses again', async () => {
+    renderRail(EIGHT, true);
+
+    const toggle = await screen.findByTestId('users-overflow-toggle');
+    expect(toggle.textContent).toBe('+3');
+    expect(screen.queryByTestId('users-overflow-list')).toBeNull();
+    expect(screen.queryByText('F Person')).toBeNull();
+
+    fireEvent.click(toggle);
+
+    const list = await screen.findByTestId('users-overflow-list');
+    expect(list.textContent).toContain('F Person');
+    expect(list.textContent).toContain('H Person');
+    expect(screen.getByTestId('users-overflow-toggle').getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.click(screen.getByTestId('users-overflow-toggle'));
+    expect(screen.queryByTestId('users-overflow-list')).toBeNull();
+  });
+
+  it('offers the remove action on a hidden participant', async () => {
+    const onDelete = vi.fn();
+    configureGeneratedClient({ baseUrl: BASE });
+    server.use(http.get(`${BASE}/social/author`, () => HttpResponse.json({ id: '1', name: 'Reader' })));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <Participants participants={EIGHT as never} inspector onDeleteParticipant={onDelete} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByTestId('users-overflow-toggle'));
+    const hidden = (await screen.findByTestId('users-overflow-list')).firstElementChild as HTMLElement;
+    fireEvent.mouseEnter(hidden);
+    expect(await within(hidden).findByTestId('DeleteIcon')).toBeTruthy();
   });
 });
 

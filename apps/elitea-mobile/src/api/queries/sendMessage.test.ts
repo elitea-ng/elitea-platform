@@ -131,7 +131,7 @@ describe('restorePreparedTurn with mentions and attachments', () => {
   });
 });
 
-describe('a message for people alone (contract 1.51)', () => {
+describe('a message for people alone (contract 1.53)', () => {
   const people = { userIds: [42], everyone: false };
 
   it('carries no participant and no model settings, whatever the conversation binds', () => {

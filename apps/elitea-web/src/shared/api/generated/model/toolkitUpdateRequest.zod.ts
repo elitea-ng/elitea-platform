@@ -42,11 +42,18 @@
  */
 import * as zod from "zod";
 
+export const toolkitUpdateRequestNameMax = 128;
+
+export const toolkitUpdateRequestDescriptionMax = 2000;
+
 export const ToolkitUpdateRequest = zod
   .object({
-    name: zod.string().min(1).optional(),
+    name: zod.string().min(1).max(toolkitUpdateRequestNameMax).optional(),
     type: zod.string().optional(),
-    description: zod.string().optional(),
+    description: zod
+      .string()
+      .max(toolkitUpdateRequestDescriptionMax)
+      .optional(),
     meta: zod
       .record(zod.string(), zod.unknown())
       .optional()

@@ -7,6 +7,7 @@ import { useAgentAttachments } from '../useAgentAttachments';
 import type { UseAgentAttachmentsResult } from '../useAgentAttachments';
 import { buildApplicationParticipant, getInitialChatHistory, getWelcomeMessage } from './applicationChat.helpers';
 import type { ChatApplicationVersionDetails, ChatConversation, ChatHistoryMessage, ChatSource } from './applicationChat.types';
+import { NAME_MAX_LENGTH, clipToLimit } from '@/shared/lib/textLimits';
 
 /**
  * Conversation-lifecycle slice of `useApplicationChat` — restore-by-id,
@@ -110,7 +111,7 @@ function useInitializeConversationEffect(
 
     setIsCreating(true);
     setActiveConversation({
-      name: `Chat with ${applicationName ?? ''}`,
+      name: clipToLimit(`Chat with ${applicationName ?? ''}`, NAME_MAX_LENGTH),
       is_private: true,
       source,
       participants: [applicationParticipant],

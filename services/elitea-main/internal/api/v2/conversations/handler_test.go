@@ -2071,7 +2071,7 @@ func TestAddParticipant_AnswersOnlyTheAddedRowsInRequestOrder(t *testing.T) {
 
 // TestUpdate_ValidatesTheName pins the rename half of client contract 1.4
 // (updateConversation): a `name` the body states must be a string that is not
-// blank after trimming, at most 256 characters and free of control
+// blank after trimming, at most 128 characters and free of control
 // characters, and it is stored trimmed. A body that does not state `name`
 // (or states null) is a settings write and passes the repository no name.
 func TestUpdate_ValidatesTheName(t *testing.T) {
@@ -2092,9 +2092,8 @@ func TestUpdate_ValidatesTheName(t *testing.T) {
 		{"a NUL", `{"name": "one\u0000two"}`, http.StatusBadRequest, ""},
 		{"padded", `{"name": "  Trip notes  "}`, http.StatusOK, "Trip notes"},
 		{"at the limit", `{"name": "` + long + `"}`, http.StatusOK, long},
-		// agent-zefir PR #63 caps its rename field at CONVERSATION_NAME_MAX =
-		// 256 and sends what it accepts; the server must take that name.
-		{"the app's 256 limit", `{"name": "` + appLimit + `"}`, http.StatusOK, appLimit},
+		// Issue 1968 lowered the limit from 256 to 128 for every entity name.
+		{"the old 256 limit", `{"name": "` + appLimit + `"}`, http.StatusBadRequest, ""},
 		{"null is absent", `{"name": null, "is_private": true}`, http.StatusOK, ""},
 		{"absent", `{"meta": {"k": 1}}`, http.StatusOK, ""},
 	}

@@ -75,7 +75,7 @@ export const ChatMessagePosted = zod
       ),
   })
   .describe(
-    "Client contract 1.51. A people-only message that was stored with no turn behind it (sendChatMessage). There is no execution, no `response_message_id` and no `events_url`: a client renders the message and waits for nothing.",
+    "Client contract 1.53. A people-only message that was stored with no turn behind it (sendChatMessage). There is no execution, no `response_message_id` and no `events_url`: a client renders the message and waits for nothing.",
   );
 
 export type ChatMessagePosted = zod.input<typeof ChatMessagePosted>;

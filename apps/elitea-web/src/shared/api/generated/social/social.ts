@@ -62,6 +62,7 @@ import type {
   FeedbackCreateRequest,
   FeedbackListResponse,
   InvalidClientVersionError,
+  LanguagePreference,
   ListFeedbacksParams,
   N400Response,
   N401Response,
@@ -1014,6 +1015,505 @@ export function useUpdateCurrentAuthorTheme<
 } {
   const queryOptions = getUpdateCurrentAuthorThemeQueryOptions(
     themePreference,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getCurrentAuthorLanguageResponse200 = {
+  data: LanguagePreference;
+  status: 200;
+};
+
+export type getCurrentAuthorLanguageResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getCurrentAuthorLanguageResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getCurrentAuthorLanguageResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getCurrentAuthorLanguageResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getCurrentAuthorLanguageResponseSuccess =
+  getCurrentAuthorLanguageResponse200 & {
+    headers: Headers;
+  };
+export type getCurrentAuthorLanguageResponseError = (
+  | getCurrentAuthorLanguageResponse400
+  | getCurrentAuthorLanguageResponse401
+  | getCurrentAuthorLanguageResponse426
+  | getCurrentAuthorLanguageResponse500
+) & {
+  headers: Headers;
+};
+
+export type getCurrentAuthorLanguageResponse =
+  | getCurrentAuthorLanguageResponseSuccess
+  | getCurrentAuthorLanguageResponseError;
+
+export const getGetCurrentAuthorLanguageUrl = () => {
+  return `/social/author/language`;
+};
+
+/**
+ * Client contract 1.51. internal/api/v2/social/language.go
+ * (GetLanguagePreference). Reads `personalization.language` from the
+ * caller's own centry.social_users row, keyed on the authenticated
+ * principal's owning user id. `language` is null when the user has never
+ * chosen one, or when the stored value is not a language tag.
+ * @summary Get the authenticated user's own interface-language preference
+ */
+export const getCurrentAuthorLanguage = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getCurrentAuthorLanguageResponse> => {
+  return eliteaFetch<getCurrentAuthorLanguageResponse>(
+    getGetCurrentAuthorLanguageUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetCurrentAuthorLanguageQueryKey = () => {
+  return [`/social/author/language`] as const;
+};
+
+export const getGetCurrentAuthorLanguageQueryOptions = <
+  TData = Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+  TError =
+    N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetCurrentAuthorLanguageQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getCurrentAuthorLanguage>>
+  > = ({ signal }) => getCurrentAuthorLanguage({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetCurrentAuthorLanguageQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getCurrentAuthorLanguage>>
+>;
+export type GetCurrentAuthorLanguageQueryError =
+  N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response;
+
+export function useGetCurrentAuthorLanguage<
+  TData = Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+  TError =
+    N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+          TError,
+          Awaited<ReturnType<typeof getCurrentAuthorLanguage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetCurrentAuthorLanguage<
+  TData = Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+  TError =
+    N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+          TError,
+          Awaited<ReturnType<typeof getCurrentAuthorLanguage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetCurrentAuthorLanguage<
+  TData = Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+  TError =
+    N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Get the authenticated user's own interface-language preference
+ */
+
+export function useGetCurrentAuthorLanguage<
+  TData = Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+  TError =
+    N400Response | N401Response | ClientUpgradeRequiredResponse | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getCurrentAuthorLanguage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetCurrentAuthorLanguageQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateCurrentAuthorLanguageResponse200 = {
+  data: LanguagePreference;
+  status: 200;
+};
+
+export type updateCurrentAuthorLanguageResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type updateCurrentAuthorLanguageResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateCurrentAuthorLanguageResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type updateCurrentAuthorLanguageResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type updateCurrentAuthorLanguageResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type updateCurrentAuthorLanguageResponseSuccess =
+  updateCurrentAuthorLanguageResponse200 & {
+    headers: Headers;
+  };
+export type updateCurrentAuthorLanguageResponseError = (
+  | updateCurrentAuthorLanguageResponse400
+  | updateCurrentAuthorLanguageResponse401
+  | updateCurrentAuthorLanguageResponse404
+  | updateCurrentAuthorLanguageResponse426
+  | updateCurrentAuthorLanguageResponse500
+) & {
+  headers: Headers;
+};
+
+export type updateCurrentAuthorLanguageResponse =
+  | updateCurrentAuthorLanguageResponseSuccess
+  | updateCurrentAuthorLanguageResponseError;
+
+export const getUpdateCurrentAuthorLanguageUrl = () => {
+  return `/social/author/language`;
+};
+
+/**
+ * Client contract 1.51. internal/api/v2/social/language.go
+ * (UpdateLanguagePreference). Merges `language` into the caller's
+ * personalization blob; every other key is kept. Creates the caller's
+ * social profile row when there is none. Answers the stored preference.
+ * The value is also returned as `personalization.language` by
+ * GET /social/author.
+ * @summary Set the authenticated user's own interface-language preference
+ */
+export const updateCurrentAuthorLanguage = async (
+  languagePreference: LanguagePreference,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateCurrentAuthorLanguageResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updateCurrentAuthorLanguageResponse>(
+    getUpdateCurrentAuthorLanguageUrl(),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(languagePreference),
+    },
+  );
+};
+
+export const getUpdateCurrentAuthorLanguageQueryKey = (
+  languagePreference?: LanguagePreference,
+) => {
+  return ["PUT", `/social/author/language`, languagePreference] as const;
+};
+
+export const getUpdateCurrentAuthorLanguageQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  languagePreference: LanguagePreference,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateCurrentAuthorLanguageQueryKey(languagePreference);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>
+  > = ({ signal }) =>
+    updateCurrentAuthorLanguage(languagePreference, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateCurrentAuthorLanguageQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>
+>;
+export type UpdateCurrentAuthorLanguageQueryError =
+  | N400Response
+  | N401Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useUpdateCurrentAuthorLanguage<
+  TData = Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  languagePreference: LanguagePreference,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+          TError,
+          Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateCurrentAuthorLanguage<
+  TData = Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  languagePreference: LanguagePreference,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+          TError,
+          Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateCurrentAuthorLanguage<
+  TData = Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  languagePreference: LanguagePreference,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Set the authenticated user's own interface-language preference
+ */
+
+export function useUpdateCurrentAuthorLanguage<
+  TData = Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  languagePreference: LanguagePreference,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateCurrentAuthorLanguage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateCurrentAuthorLanguageQueryOptions(
+    languagePreference,
     options,
   );
 

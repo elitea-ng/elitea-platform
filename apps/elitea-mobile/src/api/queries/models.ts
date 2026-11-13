@@ -1,3 +1,4 @@
+import { clipToLimit, NAME_MAX_LENGTH } from '@elitea/client-core/limits';
 import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 
@@ -118,7 +119,7 @@ export async function startConversationWithModel(
   client: ApiClient = sessionApiClient(),
 ): Promise<{ id: number; uuid: string | null }> {
   const body: CreateConversationRequest = {
-    name: model.displayName.slice(0, 200),
+    name: clipToLimit(model.displayName, NAME_MAX_LENGTH),
     is_private: true,
     participants: [
       {

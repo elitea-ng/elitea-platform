@@ -4,10 +4,13 @@ import { useCallback, useEffect, useState } from 'react';
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { NAME_MAX_LENGTH } from '@elitea/client-core/limits';
+
 import type { Tag } from '@/entities/tag';
 import { CharacterCounter } from '@/shared/ui/CharacterCounter';
 import { t } from '@/shared/i18n';
-import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
+import { MAX_DESCRIPTION_LENGTH } from '@/shared/lib/limits';
+import { characterCount, exceedsLimit } from '@/shared/lib/textLimits';
 import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
@@ -166,12 +169,12 @@ export function ApplicationEditForm({
                     onFocus={() => toggleFieldFocus(PROMPT_PAYLOAD_KEY.name)}
                     value={localName}
                     required
-                    slotProps={{ htmlInput: { maxLength: MAX_NAME_LENGTH, 'data-testid': 'agent-name-input' } }}
+                    slotProps={{ htmlInput: { 'data-testid': 'agent-name-input' } }}
                   />
-                  {isFocused(PROMPT_PAYLOAD_KEY.name) && localName.length === MAX_NAME_LENGTH && (
+                  {isFocused(PROMPT_PAYLOAD_KEY.name) && characterCount(localName) >= NAME_MAX_LENGTH && (
                     <CharacterCounter
                       value={localName}
-                      maxLength={MAX_NAME_LENGTH}
+                      maxLength={NAME_MAX_LENGTH}
                       textVariant="labelSmall"
                       sx={nameCharactersLabelSx}
                       data-testid="agent-name-counter"
@@ -195,7 +198,7 @@ export function ApplicationEditForm({
                   value={description}
                   error={descriptionError !== undefined}
                   helperText={descriptionError}
-                  slotProps={{ htmlInput: { maxLength: MAX_DESCRIPTION_LENGTH, 'data-testid': 'agent-description-input' } }}
+                  slotProps={{ htmlInput: { 'data-testid': 'agent-description-input' } }}
                 />
                 {/* #848 — never unmount: this counter sits in normal flow
                   * directly above `AgentTagEditor` below, and unmounting on
@@ -206,7 +209,7 @@ export function ApplicationEditForm({
                   value={description}
                   maxLength={MAX_DESCRIPTION_LENGTH}
                   textVariant="labelSmall"
-                  visible={isFocused(PROMPT_PAYLOAD_KEY.description) && description.length > 0}
+                  visible={(isFocused(PROMPT_PAYLOAD_KEY.description) && description.length > 0) || exceedsLimit(description, MAX_DESCRIPTION_LENGTH)}
                   sx={descriptionCharactersLabelSx}
                   data-testid="agent-description-counter"
                 />

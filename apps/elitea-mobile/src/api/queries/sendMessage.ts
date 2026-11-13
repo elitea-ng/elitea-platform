@@ -75,7 +75,7 @@ export interface TurnRequest {
 }
 
 /**
- * Whether a message is for people alone (contract 1.51): it mentions people and addresses no agent. Main stores it and
+ * Whether a message is for people alone (contract 1.53): it mentions people and addresses no agent. Main stores it and
  * notifies them and starts no turn, so it carries no participant and no model settings and nothing streams.
  */
 export function isPeopleOnlyTurn(request: Pick<TurnRequest, 'mentions' | 'addressedTo'>): boolean {
@@ -296,7 +296,7 @@ const MessagePosted = z.looseObject({
   turn_started: z.literal(false),
 });
 
-/** A people-only message that was stored with no turn behind it (contract 1.51): nothing to stream. */
+/** A people-only message that was stored with no turn behind it (contract 1.53): nothing to stream. */
 export interface PostedMessage {
   posted: true;
   messageId: string;
