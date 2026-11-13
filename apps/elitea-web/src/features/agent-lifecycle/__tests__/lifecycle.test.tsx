@@ -546,8 +546,7 @@ describe('EntityLifecycleMenu on its own', () => {
         isPublished={false}
         onShareEntity={vi.fn()}
         onFork={vi.fn()}
-        onExport={onExport}
-        onDelete={vi.fn()}
+        entityActions={{ onExport, onDelete: vi.fn() }}
       />,
     );
     await user.click(screen.getByTestId('pipeline-lifecycle-menu-button'));
@@ -566,8 +565,7 @@ describe('EntityLifecycleMenu on its own', () => {
         isPublished={false}
         onShareEntity={vi.fn()}
         onFork={vi.fn()}
-        onExport={vi.fn()}
-        onDelete={onDelete}
+        entityActions={{ onExport: vi.fn(), onDelete }}
       />,
     );
     await user.click(screen.getByTestId('pipeline-lifecycle-menu-button'));

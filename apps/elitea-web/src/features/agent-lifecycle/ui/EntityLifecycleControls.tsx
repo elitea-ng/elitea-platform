@@ -138,7 +138,7 @@ export function EntityLifecycleControls({
         isPublished={isPublished}
         {...(versionId === undefined ? {} : { onShareVersion: () => share(versionId) })}
         onShareEntity={() => share(undefined)}
-        {...entityActionHandlers(onExport, onDelete)}
+        entityActions={entityActionHandlers(onExport, onDelete)}
         {...(onCompareVersions === undefined ? {} : { onCompareVersions })}
         {...releaseHistoryHandler(entity, () => setHistoryOpen(true))}
         {...governanceHandler(entity, () => setGovernanceOpen(true))}

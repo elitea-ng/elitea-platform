@@ -106,7 +106,7 @@ describe('versionCreatorLabel / versionMetaLine', () => {
   });
 });
 
-describe('toDisplayVersions order (#1990, #1991)', () => {
+describe('toDisplayVersions order (issues 1990 and 1991)', () => {
   const opts = [
     { id: 1, name: 'base', created_at: '2026-11-01T00:00:00Z' },
     { id: 2, name: 'v1', created_at: '2026-11-02T00:00:00Z' },

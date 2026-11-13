@@ -58,10 +58,12 @@ export interface EntityLifecycleMenuProps {
   readonly onFork: () => void;
   readonly onPublish?: () => void;
   readonly onUnpublish?: () => void;
-  /** Export the whole entity as markdown. Omitted where the editor carries its own Export button. */
-  readonly onExport?: () => void;
-  /** Delete the whole entity. The caller owns the confirmation. Omitted where the editor carries its own Delete button. */
-  readonly onDelete?: () => void;
+  /**
+   * ENTITY-group extras: `onExport` exports the whole entity as markdown, `onDelete` deletes it (the
+   * caller owns the confirmation). Each is omitted where the editor carries its own button. One object
+   * so the component stays within the §3.5 prop budget.
+   */
+  readonly entityActions?: { readonly onExport?: () => void; readonly onDelete?: () => void };
   /** Opens the release history (agents only; a pipeline has no releases). */
   readonly onReleaseHistory?: () => void;
   /** Opens the governance dialog: registry, change requests, attestations (agents only). */
@@ -79,12 +81,13 @@ export function EntityLifecycleMenu({
   onFork,
   onPublish,
   onUnpublish,
-  onExport,
-  onDelete,
+  entityActions,
   onReleaseHistory,
   onGovernance,
   testIdPrefix,
 }: EntityLifecycleMenuProps): ReactNode {
+  const onExport = entityActions?.onExport;
+  const onDelete = entityActions?.onDelete;
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const close = (): void => setAnchorEl(null);
   const run = (action: (() => void) | undefined) => (): void => {
