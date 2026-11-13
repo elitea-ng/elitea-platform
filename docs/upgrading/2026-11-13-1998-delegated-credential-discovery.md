@@ -13,7 +13,7 @@ internal address (an on-premises ADFS or Keycloak). Public providers such as
 `login.microsoftonline.com` need nothing.
 
 What to do: add the provider's host to `ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST` on
-`elitea-main`. Without it the check answers 400 `oauth_discovery_failed` and the
+`elitea-main`. Without it the check answers 400 `toolkit.oauth_discovery_failed` and the
 credential form says the discovery endpoint could not be read.
 
 Also in this change (#2020): a refused chat turn (422

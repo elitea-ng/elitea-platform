@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/faults"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 )
@@ -149,7 +150,7 @@ func writeDiscoveryFailed(w http.ResponseWriter) {
 		"message": "The OAuth discovery endpoint could not be read. It must be an https address that " +
 			"publishes OAuth metadata and that the platform may reach " +
 			"(an administrator can allow a private host with ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST).",
-		"reason": "oauth_discovery_failed",
+		"reason": string(faults.ToolkitOauthDiscoveryFailed),
 	})
 }
 

@@ -85,8 +85,8 @@ func TestCheckConnectionOfADelegatedCredentialNeverFetchesUnguarded(t *testing.T
 	handler := NewHandler(nil) // no guard composed
 	recorder := postDelegatedCheck(t, handler, "sharepoint",
 		`{"oauth_discovery_endpoint":"https://login.example.test/tenant-1"}`)
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "oauth_discovery_failed") {
-		t.Fatalf("status = %d body = %s, want a 400 naming oauth_discovery_failed", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "toolkit.oauth_discovery_failed") {
+		t.Fatalf("status = %d body = %s, want a 400 naming toolkit.oauth_discovery_failed", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -164,7 +164,7 @@ func TestCheckConnectionOfADelegatedCredentialWithoutIssuerIsAFailure(t *testing
 			`{"authorization_endpoint":"` + tenant + `/a","token_endpoint":"` + tenant + `/t"}`))}, nil
 	}
 	recorder := postDelegatedCheck(t, handler, "sharepoint", `{"oauth_discovery_endpoint":"`+tenant+`"}`)
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "oauth_discovery_failed") ||
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "toolkit.oauth_discovery_failed") ||
 		strings.Contains(recorder.Body.String(), `[""]`) {
 		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
 	}
