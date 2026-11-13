@@ -45,7 +45,7 @@ Built-in modules — attachments, image creation, data analysis, planner, smart 
 
 ### Instructions, variables, and mentions
 
-Type `/` in Instructions to mention a toolkit, MCP, agent, or pipeline already attached to the agent, and `~` to mention an attached skill. A `{{variable_name}}` placeholder in Instructions automatically adds a matching input field to the **Variables** section.
+The Instructions field is a text input: it starts compact and grows with what you type, and the expand button opens it full screen for long instructions. Type `/` in Instructions to mention a toolkit, MCP, agent, or pipeline already attached to the agent, and `~` to mention an attached skill. A `{{variable_name}}` placeholder in Instructions automatically adds a matching input field to the **Variables** section.
 
 ### Editor notes
 
@@ -84,13 +84,15 @@ The **Avatar** tab holds the version's avatar pack: the pictures the chat shows 
 
 Select **Upload** on a card to fill it, or **Remove** to clear it. Removing the still removes the whole pack. Every file is at most 2 MiB and 512 px, and a loop is at most 4 seconds and plays forever. The server reads the file type from the file itself, not from its name. It refuses a file that breaks a rule and says why, for example a video with sound or an SVG with a script. Lottie and Rive files are not accepted.
 
-When the project has an image generation model, **Generate** makes the pictures for you. **Generate stills** makes four candidates from the persona's display name, role and voice; select one to use it as the still. **Generate loop** makes a looping animated WebP of the still for the state you choose. The project's budget pays for each call. There is no video generation.
+When the project has an image generation model, **Generate** makes the pictures for you. **Generate stills** makes four candidates from the persona's display name, role and voice; select one to use it as the still. **Generate loop** makes a looping animated WebP of the still for the state you choose; its frames are made at the same time, so a loop takes about as long as one picture. The project's budget pays for each call. There is no video generation.
 
-The pack is saved with the version by **Save**, like the other fields. Save also makes the still the version's icon, so an older app shows it. Publishing and a new version keep the pack. Export, import and fork do not carry it yet: the copy keeps the still as its icon, and you upload the state files again.
+The pack is saved with the version by **Save**, like the other fields. Save also makes the still the version's icon, so an older app shows it. Publishing and a new version keep the pack. **Fork** copies the pack and its files into the target project. **Export** puts the files in the exported file, and **Import** stores them in the project you import into, so the pack survives a move to another installation.
+
+A generated or uploaded file that no version uses is deleted after 7 days. That includes the candidates you did not pick.
 
 ## Test the agent
 
-The embedded chat panel on the right lets you send messages, pick a model and its settings (Reasoning for reasoning models, Creativity for standard ones, Max Completion Tokens), and iterate without leaving the page. When context management is on for the project, a Context Budget widget appears above the panel after the first message.
+The embedded chat panel on the right (below the form on a narrow screen) lets you send messages, pick a model and its settings (Reasoning for reasoning models, Creativity for standard ones, Max Completion Tokens), and iterate without leaving the page. It is there when the page opens, also right after you create the agent, and starts its conversation when you first click into the message box. Opening the page, **Clear chat** and the model picker start nothing. That conversation belongs to the agent and does not appear in your **Chats** list; coming back to the agent's page picks it up again. The panel runs the saved version, so save to try your latest edits; **Clear chat** deletes the conversation and starts over. To keep a conversation with the agent in **Chats**, click **Open in Chats** in the toolbar. When context management is on for the project, a Context Budget widget appears above the panel after the first message.
 
 ## Versions
 
@@ -117,7 +119,7 @@ A saved agent's editor includes an **Evaluation** tab to define what "good" look
 
 ## History
 
-A saved agent's editor also includes a **History** tab: every past conversation that used this agent, newest first, with its date, a derived duration, and its message count. Select a run to see its recorded trace — the tool calls and thinking steps the runtime logged for that conversation. An agent with no past conversations shows an empty state rather than a blank panel.
+A saved agent's editor also includes a **History** tab: every past conversation that used this agent, newest first, including the chats you had in the editor's own chat panel. Each entry shows the first message you wrote (the conversation's title if there is none), then its start time in your local time, the version, a derived duration, and its message count. Select a run to see the whole exchange, your message included, and below it the recorded trace: the tool calls and thinking steps the runtime logged for that conversation. An agent with no past conversations shows an empty state rather than a blank panel.
 
 <Note>
 Selecting a run in History does not currently reload that conversation into the Test panel above — there is no live restore path from this tab (issue #868, same disclosed gap as pipelines' equivalent History tab).

@@ -18,6 +18,7 @@ import {
   useDeleteConfiguration,
   useUpdateConfiguration,
 } from '@/features/credentials';
+import { NAME_MAX_LENGTH, exceedsLimit } from '@/shared/lib/textLimits';
 import { t } from '@/shared/i18n';
 import type { ConfigSchemaNode, ConfigurationTypeDescriptor } from '@/features/credentials';
 
@@ -163,9 +164,9 @@ function editConfigId(mode: CredentialFormMode): string | undefined {
   return mode.kind === 'edit' ? mode.configId : undefined;
 }
 
-/** Split out of the hook body — one more condition there would push `useCredentialFormController` over the §3.5 complexity budget. */
+/** Split out of the hook body — one more condition there would push `useCredentialFormController` over the §3.5 complexity budget. A name past the contract limit is refused, not cut (issue 1968). */
 function canSubmit(canUpdate: boolean, label: string, effectiveType: string | undefined, isSaving: boolean): boolean {
-  return canUpdate && label.trim() !== '' && Boolean(effectiveType) && !isSaving;
+  return canUpdate && label.trim() !== '' && !exceedsLimit(label, NAME_MAX_LENGTH) && Boolean(effectiveType) && !isSaving;
 }
 
 interface FormSeedingSetters {
@@ -294,9 +295,8 @@ export function useCredentialFormController(props: CredentialFormControllerProps
   const isSaving = createConfiguration.isPending || updateConfiguration.isPending;
   const canSave = canSubmit(context.canUpdate, name, effectiveType, isSaving);
 
-  // Collapses 4 separate `save` dependencies into 1
-  // — keeps the `useCallback` dependency array within the §3.5 budget
-  // (≤8 entries) without losing memoization correctness (this object is
+  // Collapses 4 separate `save` dependencies into 1 — keeps the `useCallback`
+  // dependency array within the §3.5 budget (≤8 entries) without losing memoization correctness (this object is
   // itself re-derived only when one of the four fields actually changes).
   const formValues = useMemo(() => ({ name, eliteaTitle, shared, data }), [name, eliteaTitle, shared, data]);
 

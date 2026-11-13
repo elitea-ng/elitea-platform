@@ -179,11 +179,12 @@ impl BriefView {
         let memory_entries = brief
             .memory_entries
             .iter()
-            .map(|id| {
+            // #1900: only as `N·TAG` with this turn's tag; the child's block
+            // names the entry by its bare id.
+            .map(|reference| {
                 self.recalled
                     .as_ref()
-                    .and_then(|recalled| recalled.content(id))
-                    .map(|content| (id.clone(), content))
+                    .and_then(|recalled| recalled.cited(reference))
                     .ok_or(BRIEF_MEMORY_NOT_RECALLED)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -226,6 +227,18 @@ impl WorkerSubAgents {
             .cloned()
             .collect()
     }
+}
+
+/// Whether the named toolset lists the same tools in any context (#1819).
+/// Every toolset this host offers a child is one the parent already bound:
+/// the configured toolkits and the MCP connections (listed once per
+/// connection, under the connection's own authorization, and frozen into the
+/// binding), and the in-process toolsets (internal tools, memory,
+/// attachments, workspace), whose tools are fixed. So a child's listing of
+/// any of them is the one the binding froze, and a spawn may list it once.
+/// A name the host did not offer is not known to be static.
+fn lists_statically(offered: &[Arc<dyn Toolset>], name: &str) -> bool {
+    offered.iter().any(|toolset| toolset.name() == name)
 }
 
 #[cfg(test)]
@@ -281,6 +294,10 @@ impl SubAgentHost for WorkerSubAgents {
 
     async fn toolsets(&self, _child: &ChildIdentity) -> Result<Vec<Arc<dyn Toolset>>, HostError> {
         Ok(self.toolsets.clone())
+    }
+
+    fn toolset_lists_statically(&self, toolset: &str) -> bool {
+        lists_statically(&self.toolsets, toolset)
     }
 
     /// The facade admits only the config its binding fixes, the one it

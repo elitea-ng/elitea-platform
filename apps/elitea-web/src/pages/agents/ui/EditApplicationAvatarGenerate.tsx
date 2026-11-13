@@ -21,10 +21,10 @@ import { AGENT_STATE, type AgentState } from '@elitea/client-core/stream';
 
 import type { AgentMediaObject } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import type { AgentSoulDraft } from '@/shared/lib/agentSoulDraft';
 import { SingleSelect } from '@/shared/ui/SingleSelect';
 
 import { agentMediaErrorMessage, useGenerateAgentMedia } from '../lib/agentMediaApi';
-import type { AgentSoulDraft } from '../lib/agentSoulDraft';
 
 export interface EditApplicationAvatarGenerateProps {
   readonly projectId: string;

@@ -67,6 +67,7 @@ function toVersionWriteRequest(draft: ApplicationVersionDraft): VersionWriteRequ
     // create POST stores it exactly as the edit PUT does.
     ...(draft.welcomeMessage !== undefined ? { welcome_message: draft.welcomeMessage } : {}),
     conversation_starters: [...draft.conversationStarters],
+    ...(draft.soul !== undefined ? { soul: draft.soul } : {}),
     variables: draft.variables.map((variable) => ({
       name: variable.name,
       value: variable.value,

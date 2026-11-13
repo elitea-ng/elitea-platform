@@ -103,6 +103,23 @@ func TestRuntimeCapabilitiesInternalToolsOnRust(t *testing.T) {
 	}
 }
 
+// #1969: image_generation is available exactly when the deployment names an
+// image model, the same value the worker reads. A blank value is none.
+func TestRuntimeCapabilitiesImageGenerationFollowsTheConfiguredModel(t *testing.T) {
+	t.Parallel()
+
+	for model, want := range map[string]bool{"": false, "   ": false, " img-1 ": true} {
+		body := getCapabilities(t, append(
+			catalogueOptions(t, "rust"),
+			toolkits.WithWorkerImplementation("rust"),
+			toolkits.WithImageGenerationModel(model),
+		)...)
+		if got := body.InternalTools["image_generation"]; got != want {
+			t.Errorf("image model %q: internal_tools[image_generation]=%v, want %v", model, got, want)
+		}
+	}
+}
+
 // ask_user (the Rust worker's clarification tool, not a Modules toggle) is
 // deliberately not reported on.
 func TestRuntimeCapabilitiesInternalToolsExcludesOutOfScopeNames(t *testing.T) {

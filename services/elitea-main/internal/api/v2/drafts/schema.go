@@ -192,13 +192,20 @@ func definitionOf(draft ApplicationDraft) map[string]any {
 	for _, starter := range draft.ConversationStarters {
 		starters = append(starters, starter)
 	}
-	return map[string]any{
+	definition := map[string]any{
 		"name":                  draft.Name,
 		"description":           draft.Description,
 		"instructions":          draft.Instructions,
 		"welcome_message":       draft.WelcomeMessage,
 		"conversation_starters": starters,
 	}
+	if len(draft.Soul) > 0 {
+		var soul any
+		if err := json.Unmarshal(draft.Soul, &soul); err == nil {
+			definition["soul"] = soul
+		}
+	}
+	return definition
 }
 
 // SchemaUnavailableCode is the machine code of a draft refused because the

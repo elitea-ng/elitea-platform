@@ -4,7 +4,9 @@
 //! A **profile** names the child (`display_name`), gives it a short `soul`
 //! in place of the fixed role text, narrows its tools (`tools`, #1613) and
 //! names its `model` (`"inherit"`, or a model of the run's catalogue that the
-//! host lets a child use, #1825) and `avatar` (a key, stored only).
+//! host lets a child use, #1825) and `avatar` (a key of the closed default set
+//! [`DEFAULT_AVATAR_KEYS`], issue 1870: any other key is dropped, so the child
+//! has no avatar and the clients draw the brand mark).
 //!
 //! A **brief** is everything the creator passes the child beside the task:
 //! `excerpts` of messages in the creator's own view, `attachments` it can
@@ -27,8 +29,20 @@ use crate::tool_envelope::RequestedTool;
 pub const MAX_DISPLAY_NAME_CHARS: usize = 60;
 /// The longest soul, in bytes.
 pub const MAX_SOUL_BYTES: usize = 2 * 1024;
-/// The longest avatar key, in bytes.
-pub const MAX_AVATAR_BYTES: usize = 128;
+/// The default avatar keys a profile may name (issue 1870): a CLOSED set. The
+/// clients draw each as an image
+/// (`libs/ts/client-core/src/conversation/defaultAvatars.ts`, which names the
+/// same animals; `default_avatar_keys_match_client_core` reads it).
+pub const DEFAULT_AVATAR_KEYS: [&str; 8] = [
+    "default:owl",
+    "default:hawk",
+    "default:fox",
+    "default:wolf",
+    "default:bear",
+    "default:otter",
+    "default:heron",
+    "default:lynx",
+];
 /// The most tool keys of `profile.tools`.
 pub const MAX_PROFILE_TOOLS: usize = 64;
 /// The most entries of each brief list.
@@ -350,14 +364,10 @@ pub fn parse_profile(args: &Value) -> Result<Profile, String> {
         .transpose()?
         .filter(|model| model != INHERIT_MODEL);
     let avatar = optional_text(profile, "avatar")?
-        .map(|avatar| {
-            if avatar.len() > MAX_AVATAR_BYTES || avatar.chars().any(char::is_control) {
-                Err("`profile.avatar` must be a short avatar key.".to_owned())
-            } else {
-                Ok(avatar)
-            }
-        })
-        .transpose()?;
+        // The avatar is cosmetic: a key outside the closed set never fails the
+        // spawn, it is dropped (no avatar; clients draw the brand mark). The
+        // tool schema keeps the enum as guidance.
+        .filter(|avatar| DEFAULT_AVATAR_KEYS.contains(&avatar.as_str()));
     Ok(Profile {
         display_name,
         soul,

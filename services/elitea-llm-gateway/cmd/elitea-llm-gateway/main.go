@@ -1210,6 +1210,17 @@ func gatewayMetrics(extra ...gatewayMetric) []gatewayMetric {
 			v:    expvar.Get(name),
 		})
 	}
+	// Issue 1969: the image money-path controls. An image billed on the flat
+	// per-image ESTIMATE has no catalog price. The counter is how an operator
+	// sees that a model needs one.
+	for _, name := range llmproxy.ImageMetricNames() {
+		metrics = append(metrics, gatewayMetric{
+			name: name,
+			kind: "counter",
+			help: imageMetricHelp(name),
+			v:    expvar.Get(name),
+		})
+	}
 	// The price-catalog schema controls. A gateway pod that rolls out ahead of
 	// elitea-migrate reads a gateway_models table with no audio price columns.
 	// The catalog SELECT degrades to the pre-0086 statement so TOKEN pricing
@@ -1257,6 +1268,19 @@ func gatewayMetrics(extra ...gatewayMetric) []gatewayMetric {
 		},
 	)
 	return metrics
+}
+
+// imageMetricHelp returns the help text for one image counter. Its default is a
+// generic sentence, never an empty string, for the reason audioMetricHelp gives.
+func imageMetricHelp(name string) string {
+	switch name {
+	case llmproxy.MetricImageFallbackEstimate:
+		return "Count of image requests billed at the flat per-image ESTIMATE, because the provider reported no token usage and the catalog holds no per-image price for the model. Add a price for the model."
+	case llmproxy.MetricImageBudgetRefused:
+		return "Count of image requests refused before dispatch because the estimated cost did not fit in the remaining project or member budget."
+	default:
+		return "An image money-path counter published by the llmproxy package."
+	}
 }
 
 // audioMetricHelp returns the help text for one audio counter.

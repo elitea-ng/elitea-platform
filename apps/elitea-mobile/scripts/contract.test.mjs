@@ -283,10 +283,10 @@ describe('client contract 1.46', () => {
     assert.ok(media.get.tags.includes('client'));
     assert.deepEqual(media.get.security, []);
     for (const type of ['image/png', 'image/jpeg', 'image/webp']) assert.ok(media.get.responses['200'].content[type], type);
-    // The 1.38 lock keeps the property a string; the description says it carries the pack object.
+    // The 1.38 lock keeps the property a string, deprecated by 1.49 (#1881).
     const persona = doc.components.schemas.ConversationParticipantPersona.properties.avatar_pack;
     assert.equal(persona.type, 'string');
-    assert.match(persona.description, /Client contract 1\.46/);
+    assert.equal(persona.deprecated, true);
   });
 });
 
@@ -296,6 +296,51 @@ describe('client contract 1.48', () => {
     const lane = doc.components.schemas.SubAgentLane;
     for (const key of ['agent_id', 'parent_call_id', 'ordinal', 'status', 'items']) assert.ok(lane?.required.includes(key), key);
     assert.equal(doc.components.schemas.SubAgentLaneItem?.properties.type.enum.join(','), 'tool,text');
-    assert.equal(doc.info['x-elitea-client-contract'], '1.48');
+  });
+});
+
+describe('client contract 1.49', () => {
+  it('types the participant avatar pack as an object of its own (#1881)', () => {
+    const { doc } = buildContract();
+    const persona = doc.components.schemas.ConversationParticipantPersona.properties;
+    assert.deepEqual(persona.avatar_pack_v1.allOf, [{ $ref: '#/components/schemas/AgentAvatarPackV1' }]);
+    assert.match(persona.avatar_pack_v1.description, /Client contract 1\.49/);
+    assert.ok(doc.components.schemas.AgentAvatarPackV1.required.includes('slots'));
+  });
+});
+
+describe('client contract 1.50', () => {
+  it('nests a depth-2 sub-agent lane under its parent (issue 1872)', () => {
+    const { doc } = buildContract();
+    const lane = doc.components.schemas.SubAgentLane.properties;
+    assert.deepEqual(lane.depth.enum, [1, 2]);
+    assert.equal(lane.children.items.$ref, '#/components/schemas/SubAgentLaneChild');
+    assert.equal(doc.components.schemas.SubAgentLaneChild.properties.children, undefined);
+    // At least 1.50: a later bump keeps the depth-2 lane, so pinning the exact
+    // version only broke every following contract change.
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 50), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.50`);
+  });
+});
+
+describe('client contract 1.52', () => {
+  it('states the name and description limits (issue 1968)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 52), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.52`);
+    const error = doc.components.schemas.ErrorResponse.properties;
+    assert.equal(error.field.type, 'string');
+    assert.equal(error.max_length.type, 'integer');
+  });
+});
+
+describe('client contract 1.53', () => {
+  it('answers a message for people alone without a turn (issue 1970)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 53), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.53`);
+    const posted = doc.components.schemas.ChatMessagePosted;
+    assert.ok(posted.required.includes('turn_started'));
+    assert.equal(posted.properties.turn_started.type, 'boolean');
   });
 });

@@ -17,7 +17,7 @@
 //! fence into it, the lifecycle and the projector record into it, and the
 //! settlement path drains and forgets it.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -29,6 +29,7 @@ use super::elitea::runtime::v1::{
     ExecutionFenceV1, ExecutionIdentityV1, RetrievalSummaryV1, RetrievedDocumentV1,
     RunStepContentV1, RunStepKindV1, RunStepV1,
 };
+use super::execution_registry::{ExecutionRegistry, GenerationKey};
 
 /// At most this many steps ride one `ReportRunSteps` request.
 pub(crate) const MAX_STEPS_PER_REPORT: usize = 64;
@@ -79,10 +80,6 @@ pub(crate) const MAX_UNSENT_STEP_AGE: Duration = Duration::from_secs(2);
 /// Main costs the run one bounded attempt per window, not one per step.
 const EARLY_RETRY_DELAY: Duration = Duration::from_secs(2);
 const MAX_EARLY_RETRY_DELAY: Duration = Duration::from_secs(30);
-/// The most executions the registry holds; past it the oldest is dropped.
-const MAX_TRACKED_EXECUTIONS: usize = 4_096;
-/// An execution not settled within this is dropped with its unsent steps.
-const MAX_TRACKED_AGE: Duration = Duration::from_hours(12);
 
 /// Process-wide count of steps that were dropped instead of reported (a
 /// non-retryable rejection, a Main that does not serve the RPC, retries
@@ -809,16 +806,24 @@ impl CommandKey {
     }
 }
 
-struct Tracked {
-    recorder: Arc<RunStepRecorder>,
-    since: Instant,
+impl GenerationKey for CommandKey {
+    fn execution_id(&self) -> &str {
+        &self.execution_id
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation
+    }
 }
 
-/// The commands this process is running, each with its one recorder.
+/// The commands this process is running, each with its one recorder, in the
+/// generic [`ExecutionRegistry`] (#1948): an execution not settled within its
+/// age bound, an older generation and the oldest entry of a full registry are
+/// dropped with their unsent steps.
 /// Production uses [`RunStepRegistry::global`]; a test may hold its own.
 #[derive(Default)]
 pub struct RunStepRegistry {
-    tracked: Mutex<HashMap<CommandKey, Tracked>>,
+    tracked: ExecutionRegistry<CommandKey, RunStepRecorder>,
 }
 
 impl RunStepRegistry {
@@ -829,58 +834,21 @@ impl RunStepRegistry {
         Arc::clone(GLOBAL.get_or_init(|| Arc::new(Self::default())))
     }
 
-    fn with_tracked<T>(&self, apply: impl FnOnce(&mut HashMap<CommandKey, Tracked>) -> T) -> T {
-        let mut tracked = self
-            .tracked
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        apply(&mut tracked)
-    }
-
     /// The command's recorder, created on first use. A newer generation of
     /// the execution drops the older generations' recorders (their claims
     /// are gone; their unsent steps are logged and counted).
     #[must_use]
     pub(crate) fn recorder(&self, identity: &ExecutionIdentityV1) -> Arc<RunStepRecorder> {
         let key = CommandKey::of_identity(identity);
-        let (recorder, evicted) = self.with_tracked(|tracked| {
-            if let Some(existing) = tracked.get(&key) {
-                return (Arc::clone(&existing.recorder), Vec::new());
-            }
-            let now = Instant::now();
-            let mut evicted = Vec::new();
-            tracked.retain(|other, entry| {
-                let keep = now.duration_since(entry.since) < MAX_TRACKED_AGE
-                    && !(other.execution_id == key.execution_id
-                        && other.generation < key.generation);
-                if !keep {
-                    evicted.push(Arc::clone(&entry.recorder));
-                }
-                keep
-            });
-            if tracked.len() >= MAX_TRACKED_EXECUTIONS
-                && let Some(oldest) = tracked
-                    .iter()
-                    .min_by_key(|(_, entry)| entry.since)
-                    .map(|(key, _)| key.clone())
-                && let Some(entry) = tracked.remove(&oldest)
-            {
-                evicted.push(entry.recorder);
-            }
-            let recorder = RunStepRecorder::new(&key.execution_id);
-            tracked.insert(
-                key,
-                Tracked {
-                    recorder: Arc::clone(&recorder),
-                    since: now,
-                },
-            );
-            (recorder, evicted)
-        });
-        for stale in evicted {
-            stale.drop_pending("execution_evicted");
-        }
-        recorder
+        let execution_id = key.execution_id.clone();
+        self.tracked.get_or_make_evicting(
+            key,
+            |_| true,
+            || RunStepRecorder::new(&execution_id),
+            |stale| {
+                stale.drop_pending("execution_evicted");
+            },
+        )
     }
 
     /// Bind the live claim (its full identity and fence): early reports
@@ -892,11 +860,7 @@ impl RunStepRegistry {
     /// The command's recorder when it has one.
     #[must_use]
     pub(crate) fn find(&self, identity: &ExecutionIdentityV1) -> Option<Arc<RunStepRecorder>> {
-        self.with_tracked(|tracked| {
-            tracked
-                .get(&CommandKey::of_identity(identity))
-                .map(|entry| Arc::clone(&entry.recorder))
-        })
+        self.tracked.get(&CommandKey::of_identity(identity))
     }
 
     /// The recorder of the newest generation of `execution_id` this process
@@ -904,22 +868,14 @@ impl RunStepRegistry {
     /// check, ADR-0043 decision 2) where only the execution is known.
     #[must_use]
     pub(crate) fn find_execution(&self, execution_id: &str) -> Option<Arc<RunStepRecorder>> {
-        self.with_tracked(|tracked| {
-            tracked
-                .iter()
-                .filter(|(key, _)| key.execution_id == execution_id)
-                .max_by_key(|(key, _)| key.generation)
-                .map(|(_, entry)| Arc::clone(&entry.recorder))
-        })
+        self.tracked.newest_of_execution(execution_id)
     }
 
     /// Stop tracking a settled command; anything still buffered is dropped
     /// (logged and counted).
     pub(crate) fn forget(&self, identity: &ExecutionIdentityV1) {
-        if let Some(entry) =
-            self.with_tracked(|tracked| tracked.remove(&CommandKey::of_identity(identity)))
-        {
-            entry.recorder.drop_pending("settled_with_unsent_steps");
+        if let Some(recorder) = self.tracked.forget(&CommandKey::of_identity(identity)) {
+            recorder.drop_pending("settled_with_unsent_steps");
         }
     }
 }

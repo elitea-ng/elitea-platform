@@ -218,6 +218,16 @@ type Decision struct {
 	// snapshot it read. The audio routes read it to refuse a model the catalog
 	// cannot price, rather than bill it zero against a budget (audio.go).
 	Budgeted bool
+	// SpentNano and HardLimitNano are the authoritative NATS counter and the
+	// hard ceiling the decision was made against. GovernanceStore.CheckBudget
+	// sets them, and ONLY when NATS answered (NATS_HEALTHY) and the scope has a
+	// ceiling; otherwise both are 0. An admission that carries an estimate
+	// (an image call, issue 1969) reads them to refuse a request whose estimate
+	// does not fit in what is left. Decide does not use reqCostNano on the
+	// healthy path, and it must not: the soft-alert re-read passes the cost it
+	// just billed there, and "spent + that cost > limit" would count it twice.
+	SpentNano     int64
+	HardLimitNano int64
 	// Capped reports the decision came from a state where this replica may
 	// spend only its share of a fleet allowance (FRESH_SAFE, FRESH_NEAR).
 	Capped bool

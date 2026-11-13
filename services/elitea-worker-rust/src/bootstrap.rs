@@ -821,6 +821,7 @@ mod tests {
             index_model_call_cap: None,
             memory_embedding_model: None,
             toolkit_model_call_cap: None,
+            image_generation_model: None,
             agent_model_checkpoint_recovery: false,
             agent_node_recovery: false,
             governed_security_context: false,

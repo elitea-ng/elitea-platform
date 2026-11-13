@@ -1039,6 +1039,71 @@ BEGIN
             entries JSONB NOT NULL DEFAULT ''[]''::jsonb CHECK (jsonb_typeof(entries) = ''array''),
             created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
         )', schema_name, schema_name);
+    -- The view stored as a delta against the reader's previous one (issue
+    -- 1893). The same shape as tenant/0169_chat_message_context_view_frames.sql,
+    -- which carries the full account.
+    EXECUTE format('
+        CREATE TABLE IF NOT EXISTS %I.chat_message_context_view_frames (
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            conversation_id INTEGER NOT NULL
+                REFERENCES %I.chat_conversations (id) ON DELETE CASCADE,
+            reader_participant_id INTEGER NOT NULL CHECK (reader_participant_id > 0),
+            base_frame_id BIGINT
+                REFERENCES %I.chat_message_context_view_frames (id) ON DELETE CASCADE,
+            depth INTEGER NOT NULL CHECK (depth >= 0),
+            body JSONB NOT NULL CHECK (jsonb_typeof(body) = ''array''),
+            entry_count INTEGER NOT NULL CHECK (entry_count >= 0),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+            CONSTRAINT chat_message_context_view_frames_base_older
+                CHECK (base_frame_id IS NULL OR base_frame_id < id),
+            CONSTRAINT chat_message_context_view_frames_keyframe_depth
+                CHECK ((base_frame_id IS NULL) = (depth = 0))
+        )', schema_name, schema_name, schema_name);
+    EXECUTE format('
+        CREATE INDEX IF NOT EXISTS chat_message_context_view_frames_reader_newest
+            ON %I.chat_message_context_view_frames (conversation_id, reader_participant_id, id DESC)',
+        schema_name);
+    EXECUTE format('
+        CREATE INDEX IF NOT EXISTS chat_message_context_view_frames_base
+            ON %I.chat_message_context_view_frames (base_frame_id)
+            WHERE base_frame_id IS NOT NULL', schema_name);
+    EXECUTE format('
+        ALTER TABLE %I.chat_message_context_views
+            ADD COLUMN IF NOT EXISTS frame_id BIGINT
+                REFERENCES %I.chat_message_context_view_frames (id) ON DELETE CASCADE',
+        schema_name, schema_name);
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chat_message_context_views_frame_entries'
+          AND conrelid = format('%I.chat_message_context_views', schema_name)::regclass
+    ) THEN
+        EXECUTE format('
+            ALTER TABLE %I.chat_message_context_views
+                ADD CONSTRAINT chat_message_context_views_frame_entries
+                CHECK (frame_id IS NULL OR entries = ''[]''::jsonb)', schema_name);
+    END IF;
+    EXECUTE format('
+        CREATE INDEX IF NOT EXISTS chat_message_context_views_frame
+            ON %I.chat_message_context_views (frame_id)
+            WHERE frame_id IS NOT NULL', schema_name);
+    -- One row per sub-agent lane of an answer (issue 1923). The same shape as
+    -- tenant/0170_chat_message_subagent_lanes.sql, which carries the full
+    -- account: a fresh tenant that never replays the tenant history still
+    -- needs it, because every accepted lane frame writes it.
+    EXECUTE format('
+        CREATE TABLE IF NOT EXISTS %I.chat_message_subagent_lanes (
+            message_group_id integer NOT NULL
+                REFERENCES %I.chat_message_group (id) ON DELETE CASCADE,
+            agent_id text NOT NULL CHECK (length(agent_id) BETWEEN 1 AND 128),
+            ordinal integer NOT NULL CHECK (ordinal >= 1),
+            lane jsonb NOT NULL CHECK (jsonb_typeof(lane) = ''object''),
+            created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            PRIMARY KEY (message_group_id, agent_id)
+        )', schema_name, schema_name);
+    EXECUTE format('
+        CREATE UNIQUE INDEX IF NOT EXISTS chat_message_subagent_lanes_ordinal
+            ON %I.chat_message_subagent_lanes (message_group_id, ordinal)', schema_name);
 
 END;
 $$ LANGUAGE plpgsql;

@@ -14,6 +14,8 @@ import type { AnyRouter } from '@tanstack/react-router';
 import { render } from '@testing-library/react';
 import type { RenderResult } from '@testing-library/react';
 
+import { SocketClientContext } from '@/shared/api/socket/client';
+import { createTestSocketClient } from '@/shared/api/socket/testing';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { NavBlockerDialog } from '@/widgets/app-shell';
 
@@ -63,11 +65,14 @@ function buildTestRouter(
   withNavBlocker: boolean,
 ): AnyRouter {
   const rootRoute = createRootRoute({
+    // The agent page mounts `ChatBox` (its test chat), which reads
+    // `useSocketClient()`; `AppProviders` mounts a real provider around every
+    // page, so the fixture mounts the in-memory double the other page fixtures use.
     component: () => (
-      <>
+      <SocketClientContext.Provider value={createTestSocketClient()}>
         {withNavBlocker && <NavBlockerDialog />}
         <Outlet />
-      </>
+      </SocketClientContext.Provider>
     ),
   });
 

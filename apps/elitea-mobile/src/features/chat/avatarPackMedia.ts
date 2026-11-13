@@ -1,28 +1,30 @@
-import { avatarPackOf, avatarSource, type AvatarMotion, type AvatarPack } from '@elitea/client-core/conversation';
+import { avatarPackOf, isVideoUrl, type AvatarMotion, type AvatarPack } from '@elitea/client-core/conversation';
 
 import type { components } from '@/api/generated/elitea.gen';
 import type { BaseFetch } from '@/api/middleware';
 import { noRedirectFetch } from '@/api/noRedirectFetch';
-import { rasterTypeOf } from '@/features/discover/agentIconData';
-import { base64Of, fetchBrandAsset } from '@/theme/brandAssets';
+import { agentMediaFileName, agentMediaFiles, type AgentMediaFiles } from '@/features/chat/agentMediaFiles';
+import { fetchVettedMedia, type VettedMediaType } from '@/features/media/vettedMedia';
+import { base64Of } from '@/theme/brandAssets';
 
 /**
- * An agent's avatar pack on mobile (ADR-0050 decision 6, issue 1835).
+ * An agent's avatar pack on mobile (ADR-0050 decision 6, issues 1835 and 1864).
  *
- * Client contract 1.46: the participants read serves the version's pack as
- * `persona.avatar_pack` (an object, although the 1.38 lock keeps that property typed as a
- * string), and the pack media route (`getAgentMedia`) belongs to the client contract. The app
- * reads the pack only from a server that speaks 1.46.
+ * Client contract 1.49 serves the version's pack as `persona.avatar_pack_v1`, an
+ * `AgentAvatarPackV1` object (#1881). Servers 1.46 to 1.48 sent the same object as
+ * `persona.avatar_pack`, the string 1.38 reserved; the app reads that key only when the new one is
+ * absent. The pack media route (`getAgentMedia`) belongs to the client contract since 1.46, and the
+ * app reads a pack only from a server that speaks 1.46.
  *
- * What this build can draw, from `avatarSource` (`@elitea/client-core/conversation`):
- * - a still image slot (PNG, JPEG, static WebP) replaces the default motion for its state;
- * - an animated WebP or a video slot (MP4, WebM) cannot play here: React Native's `Image` does
- *   not animate WebP (Android ships `expo.webp.animated=false`, iOS animates GIF only) and the
- *   app has no video component (expo-video needs a new native build). An animated WebP shows the
- *   still and a video its poster, with the default motion over it, so the state still reads;
+ * What the app draws for a state (`packMediaPlan`):
+ * - a still image slot (PNG, JPEG, static WebP) or an animated WebP slot, with expo-image, which
+ *   plays an animated WebP on both platforms; the state's own media carries its motion, so the
+ *   default motion pack is not drawn over it;
+ * - a video slot (MP4, WebM): a muted, looping expo-video player over its poster, no default motion;
  * - an SVG is not drawn: an SVG slot falls back to the still, an SVG still to the old icon
  *   (`meta.icon_meta`) or the monogram;
- * - reduced motion: `avatarMotion` answers `still`, so only the still is downloaded and shown.
+ * - reduced motion: `avatarMotion` answers `still`, so only the still is downloaded, and it is shown
+ *   without playing (an animated WebP still shows its first frame).
  */
 export const AVATAR_PACK_CONTRACT = { major: 1, minor: 46 } as const;
 
@@ -33,14 +35,33 @@ type Participant = components['schemas']['ConversationParticipant'];
 
 /** The participant's usable avatar pack, or undefined (none, an unknown schema, no usable still). */
 export function participantAvatarPack(participant: Participant | undefined): AvatarPack | undefined {
-  // Contract 1.46: the lock types it as a string; the server sends an object. Read it as unknown.
-  return avatarPackOf((participant?.persona as { avatar_pack?: unknown } | undefined)?.avatar_pack);
+  const persona = participant?.persona as { avatar_pack_v1?: unknown; avatar_pack?: unknown } | undefined;
+  // 1.49 sends `avatar_pack_v1`; a 1.46 to 1.48 server sent the object as `avatar_pack`.
+  return avatarPackOf(persona?.avatar_pack_v1 ?? persona?.avatar_pack);
+}
+
+/**
+ * Every agent participant's usable pack by participant id, validated once (issue 1883): the thread
+ * builds it once per conversation read, not once per avatar per render.
+ */
+export function avatarPacksById(participants: readonly Participant[] | undefined): ReadonlyMap<number, AvatarPack> {
+  const packs = new Map<number, AvatarPack>();
+  for (const participant of participants ?? []) {
+    const pack = participantAvatarPack(participant);
+    const id = Number(participant.id);
+    if (pack !== undefined && Number.isFinite(id)) packs.set(id, pack);
+  }
+  return packs;
 }
 
 /** What one avatar downloads and shows for a state. */
 export interface PackMediaPlan {
-  /** `/api/v2/agent_media/{project}/{sha256}.{ext}`: a PNG, JPEG or WebP. */
+  /** `/api/v2/agent_media/{project}/{sha256}.{ext}`: a PNG, JPEG, WebP, MP4 or WebM. */
   readonly path: string;
+  /** `video` plays muted and looping over `poster`; `image` is drawn (and an animated WebP played). */
+  readonly kind: 'image' | 'video';
+  /** A video's poster: its own, else the still. */
+  readonly poster?: string;
   /** The state's own media: the default motion pack is not drawn over it. */
   readonly ownMotion: boolean;
 }
@@ -48,57 +69,74 @@ export interface PackMediaPlan {
 const drawable = (path: string) => !path.endsWith('.svg');
 
 /**
- * The pack media to show for `motion`, or null when the pack has nothing the app can draw (no
- * pack, or an SVG still): the caller then shows the old icon or the monogram.
+ * The pack media to show for `motion`, from an already validated pack (`avatarPackOf`), or null
+ * when there is nothing the app can draw (no pack, or an SVG still): the caller then shows the old
+ * icon or the monogram.
  */
-export function packMediaPlan(pack: unknown, motion: AvatarMotion): PackMediaPlan | null {
-  const usable = avatarPackOf(pack);
-  if (usable === undefined) return null;
-  const still = usable.slots.still?.url;
-  const stillPlan = still !== undefined && drawable(still) ? { path: still, ownMotion: false } : null;
-  const source = avatarSource(usable, undefined, motion);
-  if (source === undefined) return stillPlan;
-  if (source.kind === 'video') {
-    // No video component in this build: the poster, with the default motion so the state reads.
-    return source.poster !== undefined && drawable(source.poster) ? { path: source.poster, ownMotion: false } : stillPlan;
+export function packMediaPlan(pack: AvatarPack | undefined, motion: AvatarMotion): PackMediaPlan | null {
+  if (pack === undefined) return null;
+  const still = pack.slots.still?.url;
+  const stillPlan: PackMediaPlan | null = still !== undefined && drawable(still) ? { path: still, kind: 'image', ownMotion: false } : null;
+  const slot = motion === 'still' ? undefined : pack.slots[motion];
+  if (slot === undefined || !drawable(slot.url)) return stillPlan;
+  if (isVideoUrl(slot.url)) {
+    const poster = slot.poster_url !== undefined && drawable(slot.poster_url) ? slot.poster_url : stillPlan?.path;
+    return { path: slot.url, kind: 'video', ...(poster !== undefined ? { poster } : {}), ownMotion: true };
   }
-  return drawable(source.src) ? { path: source.src, ownMotion: source.ownMotion } : stillPlan;
+  return { path: slot.url, kind: 'image', ownMotion: true };
 }
 
-/** A checked pack media file: a `data:` URI to draw, or `animated` (an animated WebP this build cannot play). */
-export type AgentMedia = { readonly kind: 'image'; readonly uri: string } | { readonly kind: 'animated' };
-
-/** Whether WebP bytes are an animation: a VP8X header with the animation flag (RFC 9649 §2.7). */
-export function isAnimatedWebp(bytes: Uint8Array): boolean {
-  const at = (i: number, text: string) => [...text].every((ch, k) => bytes[i + k] === ch.charCodeAt(0));
-  return bytes.length >= 21 && at(0, 'RIFF') && at(8, 'WEBP') && at(12, 'VP8X') && (bytes[20] & 0x02) !== 0;
+/** A checked pack media file the view can draw: a file (or, if it could not be stored, `data:`) URI. */
+export interface AgentMedia {
+  readonly kind: 'image' | 'video';
+  readonly uri: string;
 }
 
-/** How one pack media file is used. */
-export interface AgentMediaOptions {
-  /**
-   * The file is the pack's still. The server accepts an animated WebP as the still, and `<Image>`
-   * with animation off draws its first frame, so a still keeps its bytes either way.
-   */
-  readonly still?: boolean;
-}
+const TYPE_OF_EXTENSION: Record<string, VettedMediaType> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  webp: 'image/webp',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+};
 
 /**
- * One pack media file, or null. Downloaded the way Discover's icons are (SEC-3): on the workspace
- * origin only, redirects refused, no credential, a 200 with a raster Content-Type, at most
- * MAX_AGENT_MEDIA_BYTES, and the bytes must start with a PNG, JPEG or WebP signature. Only those
- * bytes reach `<Image>`. An animated WebP state slot keeps no bytes at all; an animated WebP
- * still is kept and drawn as its first frame.
+ * One pack media file, or null. Downloaded the SEC-3 way (`fetchVettedMedia`): on the workspace
+ * origin only, redirects refused, no credential, a 200 whose Content-Type and leading bytes are
+ * both the type the url's extension names, at most MAX_AGENT_MEDIA_BYTES. The checked bytes are
+ * written to the app's caches (`agentMediaFiles`), and a file already there is used without a
+ * download: the name is the server's content address. An image that could not be stored is drawn
+ * from a `data:` URI instead; a video needs a file.
  */
-export async function fetchAgentMedia(
+export function fetchAgentMedia(
   uri: string,
-  options: AgentMediaOptions = {},
   fetchImpl: BaseFetch = noRedirectFetch,
+  files: AgentMediaFiles = agentMediaFiles,
 ): Promise<AgentMedia | null> {
-  const bytes = await fetchBrandAsset(uri, /^image\/(png|jpeg|webp)$/, MAX_AGENT_MEDIA_BYTES, fetchImpl);
-  if (bytes === null) return null;
-  const mime = rasterTypeOf(bytes);
-  if (mime === null) return null;
-  if (options.still !== true && mime === 'image/webp' && isAnimatedWebp(bytes)) return { kind: 'animated' };
-  return { kind: 'image', uri: `data:${mime};base64,${base64Of(bytes)}` };
+  // The same content address asked for twice at once (two avatars of one agent, a state naming the
+  // still's file) is one download and one write; the entry is dropped when it settles.
+  const key = uri;
+  const running = inFlight.get(key);
+  if (running !== undefined && running.files === files) return running.promise;
+  const promise = downloadAgentMedia(uri, fetchImpl, files).finally(() => {
+    if (inFlight.get(key)?.promise === promise) inFlight.delete(key);
+  });
+  inFlight.set(key, { files, promise });
+  return promise;
+}
+
+const inFlight = new Map<string, { files: AgentMediaFiles; promise: Promise<AgentMedia | null> }>();
+
+async function downloadAgentMedia(uri: string, fetchImpl: BaseFetch, files: AgentMediaFiles): Promise<AgentMedia | null> {
+  const name = agentMediaFileName(uri);
+  const type = name === null ? undefined : TYPE_OF_EXTENSION[name.slice(name.lastIndexOf('.') + 1)];
+  if (type === undefined) return null;
+  const kind = type.startsWith('video/') ? 'video' : 'image';
+  const cached = files.cached(uri);
+  if (cached !== null) return { kind, uri: cached };
+  const media = await fetchVettedMedia(uri, { maxBytes: MAX_AGENT_MEDIA_BYTES, types: [type] }, fetchImpl);
+  if (media === null) return null;
+  const stored = files.store(uri, media.bytes);
+  if (stored !== null) return { kind, uri: stored };
+  return kind === 'image' ? { kind, uri: `data:${media.type};base64,${base64Of(media.bytes)}` } : null;
 }

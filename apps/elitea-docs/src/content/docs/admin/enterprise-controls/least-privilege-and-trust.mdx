@@ -134,6 +134,7 @@ A chat answer shows this as `error_code: egress_policy_invalid`. A synchronous t
 - The task status of a run that failed with `EGRESS_POLICY_INVALID` can show `DEADLINE_EXCEEDED`. The run's events, the chat answer and index records show the refusal code.
 - A refused policy is settled at the next dispatch pass. A chat answer and a synchronous tool call report it immediately.
 - A governed toolkit that holds only a credential digest uses the credential grants that exist when the run is dispatched.
+- In governed mode, a direct toolkit call that you start yourself, such as **Test** on a toolkit, is denied: it runs inside no agent run, so it has no agent identity and no frozen credential reference. A code-sandbox toolkit call that an agent run makes is not a direct call of this kind: it inherits the run's agent binding and frozen credential references, and only the toolkits that the agent holds can redeem. See [Direct toolkit calls](/deployment/credential-governance#direct-toolkit-calls).
 - The worker's summary does not count bytes (`bytes_up` and `bytes_down` are 0). If the worker restarts before it sends the summary, or if the run is not settled within 12 hours, that summary is lost. The refusal itself still reaches the agent and the run's events.
 - An index run counts each request to a host, not each document.
 - A remote MCP server with no selected tools is checked when the run starts, and appears only in the refused hosts if it is refused.

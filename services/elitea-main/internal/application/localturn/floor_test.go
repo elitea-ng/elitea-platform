@@ -42,7 +42,7 @@ func (s *floorFakeStore) StartLocalTurn(ctx context.Context, record StartRecord)
 		turn.FloorQuestionID = record.FloorTurn.QuestionID
 		turn.FloorTargets = []int64{11, 12, 13}
 	}
-	return turn, nil
+	return record.Admitted(turn), nil
 }
 
 type floorFakeReader struct {

@@ -290,6 +290,9 @@ func (g *GovernanceStore) CheckBudget(
 
 	dec := failmode.Decide(natsUp, authoritativeNano, replicaDegradedNano, snap, reqCostNano, params)
 	dec.Budgeted = !snap.IsUnlimited && snap.HardLimitNano > 0
+	if natsUp && dec.Budgeted {
+		dec.SpentNano, dec.HardLimitNano = authoritativeNano, snap.HardLimitNano
+	}
 	if dec.Verdict == failmode.Allow && dec.Capped && !checkOnly && holds != nil {
 		dec = g.reserve(dec, degradedKey, holds, params)
 	}

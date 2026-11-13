@@ -82,6 +82,12 @@ const meteredOperationsMigrationPath = "shared/0174_gateway_metered_operations.s
 // model reasoning defaults table, under a guarded CREATE SCHEMA.
 const reasoningTokensMigrationPath = "shared/0225_model_reasoning_control.sql"
 
+// imagePricingMigrationPath is the SEVENTH file of the gateway schema (issue
+// 1969): the per-image price catalog and the image columns of the request log.
+// The gateway image billing reads the table and its request-log writer names
+// the columns, so a test database built without it answers 42P01 or 42703.
+const imagePricingMigrationPath = "shared/0243_gateway_image_pricing.sql"
+
 // tokenBindingMigrationPath is the access-token project binding (ADR-0018,
 // spec-llm-project-scope §3), inside the LEDGERED corpus.
 //
@@ -230,11 +236,15 @@ func GatewayMigrationSQL() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	imagePricing, err := ledgeredMigrationSQL(imagePricingMigrationPath)
+	if err != nil {
+		return "", err
+	}
 	// A newline between them: the ledgered runner executes each file separately,
 	// and concatenating without a separator would splice the last statement of
 	// one onto the first of the next. 0086 comes last because it ALTERs the
 	// table 0067 creates.
-	return base + "\n" + dimensions + "\n" + audio + "\n" + requestLog + "\n" + metered + "\n" + reasoning, nil
+	return base + "\n" + dimensions + "\n" + audio + "\n" + requestLog + "\n" + metered + "\n" + reasoning + "\n" + imagePricing, nil
 }
 
 // TokenBindingMigrationSQL returns the token project binding migration as SQL,

@@ -78,6 +78,7 @@ describe('draftRequestBody', () => {
     assert.equal(turns.at(-1)?.content, 'turn 28');
     assert.deepEqual(body['current_draft'], { name: 'Old', description: 'd', instructions: 'i' });
     assert.deepEqual(draftRequestBody({ request: 'x' }), { user_description: 'x' });
+    assert.deepEqual(draftRequestBody({ request: 'x', soulDeclined: true }), { user_description: 'x', soul_declined: true });
   });
 });
 
@@ -98,5 +99,12 @@ describe('refusals and turns', () => {
   it('reads a one-shot draft like a streamed one', () => {
     assert.equal(readDraft(complete)?.name, 'Incident Triager');
     assert.equal(readDraft({ description: 'x' }), undefined);
+  });
+
+  it('carries the proposed persona (issue 1644) and drops a soul that is not an object', () => {
+    const soul = { schema: 'elitea.soul/v1', role: 'Incident lead' };
+    assert.deepEqual(readDraft({ ...complete, soul })?.soul, soul);
+    assert.equal('soul' in (readDraft(complete) ?? {}), false);
+    for (const bad of [null, 'be nice', ['x'], 3]) assert.equal('soul' in (readDraft({ ...complete, soul: bad }) ?? {}), false);
   });
 });

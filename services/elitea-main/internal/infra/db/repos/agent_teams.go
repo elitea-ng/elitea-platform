@@ -51,9 +51,9 @@ func scanAgentTeam(row pgx.Row) (agentteams.Stored, error) {
 	return team, err
 }
 
-// ListTeams answers a project's teams by name, with their members, and the
+// ListTeams answers a project's teams by name (a page after `after` when one is given, else at `offset`), with their members, and the
 // total before limit and offset. query filters on the name.
-func (s *AgentTeams) ListTeams(ctx context.Context, projectID int64, query string, limit, offset int) ([]agentteams.Stored, int, error) {
+func (s *AgentTeams) ListTeams(ctx context.Context, projectID int64, query string, limit, offset int, after *agentteams.ListCursor) ([]agentteams.Stored, int, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -70,12 +70,26 @@ SELECT count(*) FROM elitea_chat.agent_teams AS team
 WHERE team.project_id = $1 AND ($2 = '' OR team.name ILIKE $2)`, projectID, pattern).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("agent teams: count: %w", err)
 	}
-	rows, err := s.pool.Query(ctx, `
+	// A keyset cursor replaces the offset: the page starts after the last
+	// (lower(name), id) the caller holds, and no OFFSET is scanned past.
+	var rows pgx.Rows
+	var err error
+	if after != nil {
+		rows, err = s.pool.Query(ctx, `
+SELECT `+agentTeamColumns+`
+FROM elitea_chat.agent_teams AS team
+WHERE team.project_id = $1 AND ($2 = '' OR team.name ILIKE $2)
+  AND (lower(team.name), team.id) > (lower($4::text), $5::bigint)
+ORDER BY lower(team.name), team.id
+LIMIT $3`, projectID, pattern, limit, after.Name, after.ID)
+	} else {
+		rows, err = s.pool.Query(ctx, `
 SELECT `+agentTeamColumns+`
 FROM elitea_chat.agent_teams AS team
 WHERE team.project_id = $1 AND ($2 = '' OR team.name ILIKE $2)
 ORDER BY lower(team.name), team.id
 LIMIT $3 OFFSET $4`, projectID, pattern, limit, offset)
+	}
 	if err != nil {
 		return nil, 0, fmt.Errorf("agent teams: list: %w", err)
 	}

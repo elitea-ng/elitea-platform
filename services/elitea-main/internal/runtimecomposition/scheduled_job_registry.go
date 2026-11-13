@@ -22,9 +22,11 @@ func scheduledJobs(
 	indexHandler schedulingapp.Handler,
 	retentionHandler schedulingapp.Handler,
 	patExpiryHandler schedulingapp.Handler,
+	agentMediaHandler schedulingapp.Handler,
 	indexSchedule schedulingapp.Schedule,
 	retentionSchedule schedulingapp.Schedule,
 	patExpirySchedule schedulingapp.Schedule,
+	agentMediaSchedule schedulingapp.Schedule,
 ) []schedulingapp.Job {
 	jobs := []schedulingapp.Job{
 		{
@@ -68,6 +70,21 @@ func scheduledJobs(
 
 			Description: "Notifies users whose personal access tokens are about to expire.",
 			Cadence:     patExpirySweepCadence,
+			MinInterval: time.Minute,
+		})
+	}
+	// #1855. Same terms: no object store or no pool, no job.
+	if agentMediaHandler != nil && agentMediaSchedule != nil {
+		jobs = append(jobs, schedulingapp.Job{
+			ID:       agentMediaOrphanSweepCapability,
+			Revision: agentMediaOrphanSweepRevision,
+			Mode:     schedulingapp.ModeLocalBounded,
+			Schedule: agentMediaSchedule,
+			Timeout:  agentMediaOrphanSweepHandlerTimeout,
+			Handler:  agentMediaHandler,
+
+			Description: "Deletes agent avatar media that no agent, revision or conversation names any more, after a grace period.",
+			Cadence:     agentMediaOrphanSweepCadence,
 			MinInterval: time.Minute,
 		})
 	}

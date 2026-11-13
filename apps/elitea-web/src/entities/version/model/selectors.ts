@@ -17,15 +17,41 @@ export const LATEST_VERSION_NAME = 'base';
  * otherwise fall back to the version named `LATEST_VERSION_NAME` ("base");
  * otherwise `undefined` (no default resolvable).
  */
-export function selectDefaultVersion(
-  versions: readonly VersionSummary[],
+export function selectDefaultVersion<V extends { readonly id: string; readonly name: string }>(
+  versions: readonly V[],
   defaultVersionId: string | undefined,
-): VersionSummary | undefined {
+): V | undefined {
   if (defaultVersionId !== undefined) {
     const byId = versions.find((version) => version.id === defaultVersionId);
     if (byId !== undefined) return byId;
   }
   return versions.find((version) => version.name === LATEST_VERSION_NAME);
+}
+
+/**
+ * The numeric id of the version an agent RUNS when nothing pins one, read off
+ * a raw agent detail's `versions` and `meta.default_version_id`: the ONE rule
+ * (`selectDefaultVersion`: the recorded default, else `base`), then the first
+ * version that has a usable id. The desktop host's `default_version_of`
+ * (`src-tauri/src/d0/api.rs`) and the Go `GET application` (`detailVersionID`)
+ * apply the same order, so the web editor, the web send and the host never
+ * run different versions (issue 1941). `is_default` is not read: the server
+ * derives it from `meta.default_version_id`.
+ *
+ * `undefined` when no version has a positive integer id.
+ */
+export function defaultRunVersionId(
+  versions: readonly { readonly id?: unknown; readonly name?: unknown }[],
+  defaultVersionId: unknown,
+): number | undefined {
+  const usable = versions.flatMap((version) => {
+    const id = Number(version.id);
+    return Number.isSafeInteger(id) && id > 0 ? [{ id: String(id), name: typeof version.name === 'string' ? version.name : '' }] : [];
+  });
+  const wanted = Number(defaultVersionId);
+  const picked =
+    selectDefaultVersion(usable, Number.isSafeInteger(wanted) && wanted > 0 ? String(wanted) : undefined) ?? usable[0];
+  return picked === undefined ? undefined : Number(picked.id);
 }
 
 /**

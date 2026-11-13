@@ -89,24 +89,85 @@ fn an_unreadable_attachment_is_refused() {
     );
 }
 
-/// A memory entry must have come from `recall` in this turn.
+fn memory_brief(references: &[&str]) -> Brief {
+    Brief {
+        memory_entries: references
+            .iter()
+            .map(|&reference| reference.to_owned())
+            .collect(),
+        ..Brief::default()
+    }
+}
+
+/// A memory entry must have come from `recall` in this turn, and is cited
+/// by the `memory_ref` recall showed (#1900), never its bare id.
 #[test]
 fn a_memory_entry_must_have_been_recalled() {
-    let brief = Brief {
-        memory_entries: vec!["7".to_owned()],
-        ..Brief::default()
-    };
-    assert_eq!(view(None).check(&brief), Err(BRIEF_MEMORY_NOT_RECALLED));
     let recalled = Arc::new(RecalledEntries::default());
+    let cited = recalled.memory_ref("7").expect("a tag");
+    let brief = memory_brief(&[&cited]);
+    assert_eq!(view(None).check(&brief), Err(BRIEF_MEMORY_NOT_RECALLED));
     assert_eq!(
         view(Some(Arc::clone(&recalled))).check(&brief),
         Err(BRIEF_MEMORY_NOT_RECALLED)
     );
     recalled.record_for_test("7", "the team prefers short reports");
-    let checked = view(Some(recalled)).check(&brief).unwrap();
+    let checked = view(Some(Arc::clone(&recalled))).check(&brief).unwrap();
     assert_eq!(
         checked.memory_entries,
         [("7".to_owned(), "the team prefers short reports".to_owned())]
+    );
+    assert_eq!(
+        view(Some(recalled)).check(&memory_brief(&["7"])),
+        Err(BRIEF_MEMORY_NOT_RECALLED)
+    );
+}
+
+/// #1900: an entry Main recalled into the instructions is cited only as
+/// `N·TAG` with the tag of Main's marks: a bare `[memory N]` copied into the
+/// author's instructions, or a mark with another tag, cites nothing.
+#[test]
+fn a_memory_entry_is_cited_only_with_the_turn_tag() {
+    use crate::agents::request::RecalledMemoryEntry;
+    let recalled = Arc::new(RecalledEntries::seeded(
+        &[RecalledMemoryEntry {
+            entry_id: "42".to_owned(),
+            content: "the team ships on Fridays".to_owned(),
+        }],
+        Some("k7f2m6q3xz"),
+    ));
+    let checked = view(Some(Arc::clone(&recalled)))
+        .check(&memory_brief(&["42·k7f2m6q3xz"]))
+        .unwrap();
+    assert_eq!(
+        checked.memory_entries,
+        [("42".to_owned(), "the team ships on Fridays".to_owned())]
+    );
+    for refused in ["42", "[memory 42]", "42·aaaaaaaaaa", "42·K7F2M6Q3XZ", "42·"] {
+        assert_eq!(
+            view(Some(Arc::clone(&recalled))).check(&memory_brief(&[refused])),
+            Err(BRIEF_MEMORY_NOT_RECALLED),
+            "{refused}"
+        );
+    }
+    // Without Main's tag (an input from before field 78, a rolling deploy)
+    // the prompt showed bare ids, so only a bare id cites the entry
+    // (`a_bare_id_cites_only_when_main_sent_no_tag` covers the rest).
+    let untagged = Arc::new(RecalledEntries::seeded(
+        &[RecalledMemoryEntry {
+            entry_id: "42".to_owned(),
+            content: "the team ships on Fridays".to_owned(),
+        }],
+        None,
+    ));
+    assert!(
+        view(Some(Arc::clone(&untagged)))
+            .check(&memory_brief(&["42"]))
+            .is_ok()
+    );
+    assert_eq!(
+        view(Some(Arc::clone(&untagged))).check(&memory_brief(&["42·k7f2m6q3xz"])),
+        Err(BRIEF_MEMORY_NOT_RECALLED)
     );
 }
 
@@ -196,23 +257,20 @@ fn a_child_binds_the_named_model_or_none() {
 #[test]
 fn an_auto_recalled_memory_entry_may_be_named() {
     use crate::agents::request::RecalledMemoryEntry;
-    let recalled = Arc::new(RecalledEntries::seeded(&[RecalledMemoryEntry {
-        entry_id: "42".to_owned(),
-        content: "the team ships on Fridays".to_owned(),
-    }]));
-    let named = Brief {
-        memory_entries: vec!["42".to_owned()],
-        ..Brief::default()
-    };
+    let recalled = Arc::new(RecalledEntries::seeded(
+        &[RecalledMemoryEntry {
+            entry_id: "42".to_owned(),
+            content: "the team ships on Fridays".to_owned(),
+        }],
+        Some("k7f2m6q3xz"),
+    ));
+    let named = memory_brief(&["42·k7f2m6q3xz"]);
     let checked = view(Some(Arc::clone(&recalled))).check(&named).unwrap();
     assert_eq!(
         checked.memory_entries,
         [("42".to_owned(), "the team ships on Fridays".to_owned())]
     );
-    let made_up = Brief {
-        memory_entries: vec!["42".to_owned(), "43".to_owned()],
-        ..Brief::default()
-    };
+    let made_up = memory_brief(&["42·k7f2m6q3xz", "43·k7f2m6q3xz"]);
     assert_eq!(
         view(Some(recalled)).check(&made_up),
         Err(BRIEF_MEMORY_NOT_RECALLED)
@@ -239,4 +297,20 @@ fn a_normalized_history_text_is_kept_as_it_is() {
         None,
     );
     assert!(raw.check(&excerpt("m-1", "one line two")).is_ok());
+}
+
+/// #1819: a toolset the parent bound (a toolkit, or an MCP connection frozen
+/// into the binding) lists statically for a spawn; a name the host never
+/// offered does not.
+#[test]
+fn a_bound_toolset_lists_statically_and_an_unknown_one_does_not() {
+    use adk_rust::Toolset;
+    use adk_rust::tool::BasicToolset;
+    let offered: Vec<Arc<dyn Toolset>> = vec![
+        Arc::new(BasicToolset::new("jira", Vec::new())),
+        Arc::new(BasicToolset::new("mcp_docs", Vec::new())),
+    ];
+    assert!(super::lists_statically(&offered, "jira"));
+    assert!(super::lists_statically(&offered, "mcp_docs"));
+    assert!(!super::lists_statically(&offered, "other"));
 }

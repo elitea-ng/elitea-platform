@@ -20,14 +20,14 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
-
 import {
   SOUL_MAX_TEXT_BYTES,
   soulDraftProblems,
   soulFromDraft,
   soulTextBytes,
   type AgentSoulDraft,
-} from '../lib/agentSoulDraft';
+} from '@/shared/lib/agentSoulDraft';
+
 import type { EditApplicationVersionFieldsState } from '../lib/useEditApplicationVersionFields';
 
 export interface EditApplicationPersonaPanelProps {

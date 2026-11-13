@@ -78,11 +78,11 @@ func TestAgentTeamsCrudAndUniqueName(t *testing.T) {
 		t.Fatalf("other project err = %v", err)
 	}
 
-	rows, total, err := store.ListTeams(ctx, 1, "100%_crew", 50, 0)
+	rows, total, err := store.ListTeams(ctx, 1, "100%_crew", 50, 0, nil)
 	if err != nil || total != 0 || len(rows) != 0 {
 		t.Fatalf("a LIKE metacharacter matched: rows=%d total=%d err=%v", len(rows), total, err)
 	}
-	rows, total, err = store.ListTeams(ctx, 1, "lease", 50, 0)
+	rows, total, err = store.ListTeams(ctx, 1, "lease", 50, 0, nil)
 	if err != nil || total != 1 || len(rows) != 1 || len(rows[0].Members) != 2 {
 		t.Fatalf("rows=%+v total=%d err=%v", rows, total, err)
 	}
@@ -176,5 +176,30 @@ func TestAConversationFromATeamRoundTrips(t *testing.T) {
 	}
 	if _, _, err := store.ConversationRoster(ctx, 1, created.ID); !errors.Is(err, agentteams.ErrInvalid) {
 		t.Fatalf("unpinned lead err = %v, want ErrInvalid", err)
+	}
+}
+
+// A keyset cursor pages by (lower(name), id), so a team deleted between pages
+// does not make the next page skip one (issue 1955).
+func TestAgentTeamsKeysetPaging(t *testing.T) {
+	pool, ctx := newAgentTeamsPool(t)
+	store := NewAgentTeams(pool)
+	for _, name := range []string{"Alpha", "bravo", "Charlie", "delta"} {
+		if _, err := store.CreateTeam(ctx, 1, teamActor, teamOfTwo(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, total, err := store.ListTeams(ctx, 1, "", 2, 0, nil)
+	if err != nil || total != 4 || len(first) != 2 || first[1].Name != "bravo" {
+		t.Fatalf("first=%+v total=%d err=%v", first, total, err)
+	}
+	// The team the first page ended on is deleted before the second is read:
+	// an offset of 2 would now skip "Charlie"; the cursor does not.
+	if err := store.DeleteTeam(ctx, 1, first[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := store.ListTeams(ctx, 1, "", 2, 0, &agentteams.ListCursor{Name: first[1].Name, ID: first[1].ID})
+	if err != nil || len(second) != 2 || second[0].Name != "Charlie" || second[1].Name != "delta" {
+		t.Fatalf("second=%+v err=%v", second, err)
 	}
 }

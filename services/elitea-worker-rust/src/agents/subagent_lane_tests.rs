@@ -101,6 +101,8 @@ fn the_hooks_queue_the_child_lifecycle() {
     assert_eq!(entries[0]["display_name"], "Owl");
     assert_eq!(entries[0]["avatar"], "default:owl");
     assert_eq!(entries[0]["parent_call_id"], "call-spawn");
+    assert_eq!(entries[0]["depth"], 1);
+    assert!(entries[0].get("parent_agent_id").is_none());
     assert_eq!(entries[1]["args_summary"], "src/main.rs");
     assert!(!entries[1].to_string().contains("sk-secret"));
     assert_eq!(entries[2]["ok"], true);
@@ -131,6 +133,36 @@ fn the_lane_is_bounded_per_child() {
     }
     assert_eq!(all.len(), MAX_EVENTS_PER_CHILD + 2);
     assert_eq!(all.last().unwrap()["kind"], "finished");
+}
+
+fn grandchild() -> ChildIdentity {
+    ChildIdentity {
+        agent_id: "a_0000cafe".to_owned(),
+        parent_call_id: "call-nested-spawn".to_owned(),
+        label: None,
+        ordinal: 2,
+        depth: 2,
+        parent_agent_id: Some("a_0000beef".to_owned()),
+        record: SpawnRecord::new(
+            &Profile {
+                display_name: Some("Hawk".to_owned()),
+                ..Profile::default()
+            },
+            &Brief::default(),
+        ),
+    }
+}
+
+/// A depth-2 start's entry carries its depth and its parent's agent id, so
+/// Main can nest it under its parent's lane (#1872).
+#[test]
+fn a_grandchilds_start_carries_its_depth_and_parent() {
+    let lane = SubAgentLane::default();
+    lane.started(&grandchild());
+    let entries = lane.drain();
+    assert_eq!(entries[0]["depth"], 2);
+    assert_eq!(entries[0]["parent_agent_id"], "a_0000beef");
+    assert_eq!(entries[0]["agent_id"], "a_0000cafe");
 }
 
 /// A child still running when the run ends is stopped with it, once.

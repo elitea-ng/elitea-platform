@@ -78,7 +78,15 @@ describe('AccountMenu', () => {
     await waitFor(() => expect(screen.getByTestId('shell-account')).toHaveTextContent('sso@example.com'));
   });
 
-  it('saves a new language and reloads to apply it', async () => {
+  it('saves a new language, stores it on the server and reloads to apply it', async () => {
+    const saved: unknown[] = [];
+    server.use(
+      http.put('/api/v2/social/author/language', async ({ request }) => {
+        const body = (await request.json()) as { language: unknown };
+        saved.push(body.language);
+        return HttpResponse.json(body);
+      }),
+    );
     const user = userEvent.setup();
     const { reload } = mount();
     await user.click(screen.getByTestId('shell-account'));
@@ -88,7 +96,21 @@ describe('AccountMenu', () => {
     expect(within(languages).getByRole('menuitemradio', { name: 'Español' })).not.toBeChecked();
     await user.click(within(languages).getByRole('menuitemradio', { name: 'Español' }));
     expect(createStorage('local').get('lang')).toBe('es');
-    expect(reload).toHaveBeenCalledOnce();
+    await waitFor(() => expect(reload).toHaveBeenCalledOnce());
+    expect(saved).toEqual(['es']);
+  });
+
+  it('still reloads when the server refuses the language', async () => {
+    server.use(http.put('/api/v2/social/author/language', () => HttpResponse.json({ error: 'x' }, { status: 500 })));
+    const user = userEvent.setup();
+    const { reload } = mount();
+    await user.click(screen.getByTestId('shell-account'));
+    await user.click(await screen.findByTestId('shell-account-language'));
+    await user.click(within(await screen.findByRole('menu', { name: 'Language' })).getByRole('menuitemradio', { name: 'Español' }));
+    await waitFor(() => expect(reload).toHaveBeenCalledOnce());
+    expect(createStorage('local').get('lang')).toBe('es');
+    // Not confirmed: the sync pushes it again rather than applying the server's older value.
+    expect(createStorage('local').get('lang.unsynced')).toBe('es');
   });
 
   it('does not reload when the current language is chosen again', async () => {

@@ -248,6 +248,7 @@ pub(crate) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionReques
             context_view_history: None,
             context_view_binding: None,
             recalled_memory: Vec::new(),
+            recalled_memory_tag: None,
         },
     }
 }

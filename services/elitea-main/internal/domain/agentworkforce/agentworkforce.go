@@ -8,11 +8,13 @@
 // existing machinery:
 //
 //   - watch: the registry's under_review flag and a notice to the owner.
-//   - demote: the narrowing (Narrowing) is written onto the agent's draft
-//     version, which the owner publishes through the agent's release path
-//     (an ADR-0040 change request when its tier asks approval); the
-//     published release keeps its tools and capabilities until then. A lead
-//     role and the heartbeat are taken away at once.
+//   - demote: the approval publishes the narrowing (Narrowing) at once,
+//     cut from the published versions (not the draft), as a new release;
+//     no ADR-0040 change request is opened, because the approval is the
+//     review (issue 1873). The same narrowing goes onto the draft, so the
+//     owner's other draft edits stay and a later publish of the draft does
+//     not undo it. Without a published version only the draft is narrowed.
+//     A lead role and the heartbeat are taken away at once.
 //   - suspend: an ADR-0041 agent suspension of source dismissal; runs are
 //     refused with execution_suspended and in-flight runs are cancelled.
 //   - retire: the new registry state retired. The agent is unpublished, taken
@@ -270,21 +272,21 @@ func IsHRAgent(meta map[string]any) bool { return HasCapability(meta, ReviewCapa
 // Narrowing is the exact narrowing of a demotion (ADR-0050 decision 5g).
 // Every field only takes away.
 type Narrowing struct {
-	// RemoveToolkitIDs detaches these toolkits from the agent's draft.
+	// RemoveToolkitIDs detaches these toolkits from the agent's published
+	// versions and its draft.
 	RemoveToolkitIDs []int64 `json:"remove_toolkit_ids,omitempty"`
 	// MemoryReview sets the memory write mode to review.
 	MemoryReview bool `json:"memory_review,omitempty"`
-	// ProactivityOff turns the heartbeat off: the draft's proactivity block
-	// (#1618) gets mode "off", and the agent's heartbeat settings row is
-	// disabled at once, since the heartbeat reads the RELEASE's block and
-	// that keeps its block until the narrowed draft is published.
+	// ProactivityOff turns the heartbeat off: the proactivity block (#1618)
+	// of the published versions and the draft gets mode "off", and the
+	// agent's heartbeat settings row is disabled at once.
 	ProactivityOff bool `json:"proactivity_off,omitempty"`
 	// RemoveCapabilities removes can_propose_agents and can_review_agents.
 	RemoveCapabilities []string `json:"remove_capabilities,omitempty"`
 	// RemoveLead drops the agent as the lead of every conversation it leads.
 	RemoveLead bool `json:"remove_lead,omitempty"`
-	// ToolkitTypeCeiling keeps only toolkits of these types on the draft
-	// (an allowlist; empty is no ceiling).
+	// ToolkitTypeCeiling keeps only toolkits of these types on the
+	// published versions and the draft (an allowlist; empty is no ceiling).
 	ToolkitTypeCeiling []string `json:"toolkit_type_ceiling,omitempty"`
 }
 

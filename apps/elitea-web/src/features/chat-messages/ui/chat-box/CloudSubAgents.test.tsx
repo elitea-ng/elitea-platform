@@ -32,6 +32,16 @@ describe('cloud sub-agents under a chat answer (client contract 1.48)', () => {
     expect(row.querySelector('[data-testid="chat-message-avatar"]')).not.toBeNull();
   });
 
+  it("draws the image of a child's avatar key, and the brand mark for an unknown key", () => {
+    const { rerender } = renderWithTheme(<ApplicationAnswer answer={answer([lane({ avatar: 'default:hawk' })])} messageId="m" />);
+    expect(screen.getByTestId('default-avatar')).toHaveAttribute('data-avatar-name', 'hawk');
+    expect(screen.getByTestId('default-avatar')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByTestId('default-avatar')).not.toHaveAttribute('role');
+    rerender(<ApplicationAnswer answer={answer([lane({ avatar: 'default:unknown' })])} messageId="m" />);
+    expect(screen.queryByTestId('default-avatar')).toBeNull();
+    expect(screen.getByTestId('cloud-subagent').querySelector('svg')).not.toBeNull();
+  });
+
   it('folds a settled child and opens its final answer on demand, as text', async () => {
     renderWithTheme(<ApplicationAnswer answer={answer([lane({ status: 'completed', result: '<b>Two</b> callers.' }, false)])} messageId="m" />);
     expect(screen.getByTestId('cloud-subagent')).toHaveTextContent('Sub-agent 1');
@@ -52,5 +62,21 @@ describe('cloud sub-agents under a chat answer (client contract 1.48)', () => {
   it('an answer without sub-agents shows none', () => {
     renderWithTheme(<ApplicationAnswer answer={answer([])} messageId="m" />);
     expect(screen.queryByTestId('cloud-subagents')).toBeNull();
+  });
+
+  // Issue 1872: a depth-2 grandchild renders nested, inside its parent's own
+  // body, so a settled (folded) parent shows it once opened.
+  it('shows a nested grandchild under its parent', async () => {
+    const parent = lane({
+      status: 'completed',
+      children: [lane({ agentId: 'a_2', parentCallId: 'call-nested', ordinal: 2, depth: 2, parentAgentId: 'a_1', displayName: 'Hawk', status: 'completed' })],
+    });
+    renderWithTheme(<ApplicationAnswer answer={answer([parent])} messageId="m" />);
+    expect(screen.getAllByTestId('cloud-subagent')).toHaveLength(1);
+    await userEvent.click(screen.getByRole('button', { name: /Owl/ }));
+    const rows = screen.getAllByTestId('cloud-subagent');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent('Owl');
+    expect(rows[1]).toHaveTextContent('Hawk');
   });
 });

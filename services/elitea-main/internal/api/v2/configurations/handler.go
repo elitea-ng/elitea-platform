@@ -19,6 +19,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -1136,6 +1137,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if !decodeBoundedJSON(w, r, &body) {
 		return
 	}
+	if refuseOverlongConfigurationName(w, body, true) {
+		return
+	}
 	// A retired type (application/configurations/retired.go) is refused before
 	// anything else: as an unknown type it would otherwise be stored.
 	if configurationapp.IsRetiredConfigurationType(strVal(body, "type")) {
@@ -1408,6 +1412,9 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 
 	var body map[string]any
 	if !decodeBoundedJSON(w, r, &body) {
+		return
+	}
+	if refuseOverlongConfigurationName(w, body, false) {
 		return
 	}
 	// A change TO a retired type is refused before the database is read.
@@ -2298,4 +2305,29 @@ func configurationQueryIDs(values url.Values) ([]int32, error) {
 func writeRetiredConfigurationTypeRefusal(w http.ResponseWriter) {
 	writeCurrentConfigurationMutationError(
 		w, http.StatusBadRequest, configurationapp.RetiredPgvectorConfigurationMessage, "type")
+}
+
+// refuseOverlongConfigurationName answers 400 when a configuration's label or
+// display name (`elitea_title`, or its alias `name`) is over the shared name
+// limit (issue 1968). A configuration has no description column.
+//
+// The title is the key other rows reference a credential by, and one stored
+// before the limit may be longer; only a create (`checkTitle`) is held to it, so
+// an edit that sends the stored title back is not refused.
+func refuseOverlongConfigurationName(w http.ResponseWriter, body map[string]any, checkTitle bool) bool {
+	fields := []string{"label"}
+	if checkTitle {
+		fields = append(fields, "elitea_title", "name")
+	}
+	for _, field := range fields {
+		value, ok := body[field].(string)
+		if !ok {
+			continue
+		}
+		if err := entitylimits.CheckName(field, value); err != nil {
+			apierr.Write(w, err)
+			return true
+		}
+	}
+	return false
 }

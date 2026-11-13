@@ -58,20 +58,53 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
+	// Model rows and image rows go in two transactions. The image table is
+	// shared migration 0243. A scheduler that rolls out ahead of elitea-migrate
+	// gets 42P01 for it, and one transaction would then roll the token prices
+	// back with it. See syncImages.
+	var models, images []NormalizedModelPrice
+	for _, m := range merged {
+		if m.Image != nil {
+			images = append(images, m)
+		} else {
+			models = append(models, m)
+		}
+	}
+	offered := 0
+	if len(models) > 0 {
+		n, locked, err := s.syncModels(ctx, models)
+		if err != nil || !locked {
+			return 0, err
+		}
+		offered += n
+	}
+	if len(images) > 0 {
+		n, err := s.syncImages(ctx, images)
+		if err != nil {
+			return offered, err
+		}
+		offered += n
+	}
+	return offered, nil
+}
+
+// syncModels writes the gateway_models rows in one transaction. locked is false
+// when another replica holds the advisory lock (a benign no-op).
+func (s *Syncer) syncModels(ctx context.Context, merged []NormalizedModelPrice) (n int, locked bool, err error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	// Rollback is a no-op after a successful Commit; safe to always defer.
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var locked bool
-	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, advisoryLockKey).Scan(&locked); err != nil {
-		return 0, err
+	var got bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, advisoryLockKey).Scan(&got); err != nil {
+		return 0, false, err
 	}
-	if !locked {
+	if !got {
 		s.logger.Info("pricesync: advisory lock held by another replica; skipping this pass")
-		return 0, nil
+		return 0, false, nil
 	}
 
 	for _, m := range merged {
@@ -112,11 +145,11 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 					"model", m.ModelName, "provider", m.Provider,
 					"missing_column", undefinedColumnName(err), "err", err)
 			}
-			return 0, err
+			return 0, false, err
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	// len(merged) is the number of rows OFFERED, which since 0097 is not the
 	// number written: a row an operator has priced by hand is skipped by the
@@ -124,7 +157,75 @@ func (s *Syncer) Sync(ctx context.Context) (int, error) {
 	// RETURNING clause per row, and nothing consumes this count except a log
 	// line, so it is reported for what it is rather than made exact.
 	s.logger.Info("pricesync: catalog pass complete", "models_offered", len(merged))
-	return len(merged), nil
+	return len(merged), true, nil
+}
+
+// undefinedTableCode is the PostgreSQL SQLSTATE for "relation does not exist".
+const undefinedTableCode = "42P01"
+
+// syncImages writes the per-image price rows in their own transaction under
+// the same advisory lock.
+//
+// A database without shared migration 0243 answers 42P01 (or 42703). That is
+// the "scheduler rolled out ahead of elitea-migrate" skew, and the token prices
+// are already committed, so this pass logs the cause and returns no error: the
+// next pass retries. Any other error is returned.
+func (s *Syncer) syncImages(ctx context.Context, images []NormalizedModelPrice) (int, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var locked bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, advisoryLockKey).Scan(&locked); err != nil {
+		return 0, err
+	}
+	if !locked {
+		s.logger.Info("pricesync: advisory lock held by another replica; skipping the image prices")
+		return 0, nil
+	}
+	for _, m := range images {
+		if err := s.upsertImage(ctx, tx, m); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && (pgErr.Code == undefinedTableCode || pgErr.Code == undefinedColumnCode) {
+				s.logger.Error("pricesync: the image price table is missing; apply the pending elitea-main "+
+					"shared migrations (0243_gateway_image_pricing.sql). Image prices were not refreshed this "+
+					"pass; the token prices were. The next pass retries.", "err", err)
+				return 0, nil
+			}
+			return 0, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	s.logger.Info("pricesync: image price pass complete", "image_prices_offered", len(images))
+	return len(images), nil
+}
+
+// upsertImage writes one per-image price row. Every price column is in BOTH
+// halves of the statement for the reason upsert gives, and an operator-priced
+// row (price_overridden) is left as authored.
+func (s *Syncer) upsertImage(ctx context.Context, tx Tx, m NormalizedModelPrice) error {
+	const q = `
+		INSERT INTO gateway.gateway_model_image_prices (
+			provider, model_name, size, quality,
+			usd_per_image, usd_per_1m_pixels,
+			source, source_synced_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now())
+		ON CONFLICT (provider, model_name, size, quality) DO UPDATE SET
+			usd_per_image     = EXCLUDED.usd_per_image,
+			usd_per_1m_pixels = EXCLUDED.usd_per_1m_pixels,
+			source            = EXCLUDED.source,
+			source_synced_at  = EXCLUDED.source_synced_at,
+			updated_at        = now()
+		WHERE NOT gateway_model_image_prices.price_overridden`
+	return tx.Exec(ctx, q,
+		m.Provider, m.ModelName, m.Image.Size, m.Image.Quality,
+		m.Image.UsdPerImage, m.Image.UsdPer1MPixels,
+		m.Source,
+	)
 }
 
 // collect fetches and normalises every source, then merges by precedence.

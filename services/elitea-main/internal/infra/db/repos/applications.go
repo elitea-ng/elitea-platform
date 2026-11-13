@@ -643,6 +643,27 @@ func (r *ApplicationsRepo) Delete(ctx context.Context, projectID, applicationID 
 	if ct.RowsAffected() == 0 {
 		return apierr.NotFound("application not found")
 	}
+	// ADR-0042, issue 1658: the agent's memory outlives the agent for the
+	// retention period. Record when it lost its agent, in this transaction.
+	// The probe stays: tenant migrations are applied by elitea-migrate, not
+	// at Main's boot, so a tenant may not carry tenant/0171 yet (a 42P01
+	// inside this transaction would abort the delete). It names the
+	// validated schema, not a hand-built one.
+	var orphans *string
+	if err := tx.QueryRow(ctx, `SELECT to_regclass($1)::text`,
+		s+".agent_memory_orphans").Scan(&orphans); err != nil {
+		return fmt.Errorf("applications: delete: probe agent_memory_orphans: %w", err)
+	}
+	if orphans != nil {
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+INSERT INTO %[1]s.agent_memory_orphans (application_id)
+SELECT $1::bigint
+WHERE EXISTS (SELECT 1 FROM %[1]s.agent_memory_entries WHERE application_id = $1::bigint)
+   OR EXISTS (SELECT 1 FROM %[1]s.agent_memory_subject_optouts WHERE application_id = $1::bigint)
+ON CONFLICT (application_id) DO NOTHING`, s), applicationID); err != nil {
+			return fmt.Errorf("applications: delete: record the agent's memory orphan: %w", err)
+		}
+	}
 	return tx.Commit(ctx)
 }
 

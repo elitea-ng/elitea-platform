@@ -33,8 +33,8 @@ func TestArtifactRetentionScheduledJobsIncludesBothIndexAndSweepJobs(t *testing.
 		t.Fatal(err)
 	}
 	jobs := scheduledJobs(
-		stubSchedulingHandler{}, stubSchedulingHandler{}, stubSchedulingHandler{},
-		schedule, schedule, schedule,
+		stubSchedulingHandler{}, stubSchedulingHandler{}, stubSchedulingHandler{}, stubSchedulingHandler{},
+		schedule, schedule, schedule, schedule,
 	)
 	registry, err := scheduledJobRegistry(currentIndexScheduleLeaseDuration, jobs...)
 	if err != nil {
@@ -42,8 +42,8 @@ func TestArtifactRetentionScheduledJobsIncludesBothIndexAndSweepJobs(t *testing.
 	}
 
 	registered := registry.RegisteredJobs()
-	if len(registered) != 3 {
-		t.Fatalf("expected exactly 3 registered jobs, got %d: %+v", len(registered), registered)
+	if len(registered) != 4 {
+		t.Fatalf("expected exactly 4 registered jobs, got %d: %+v", len(registered), registered)
 	}
 	revisionByID := make(map[string]string, len(registered))
 	for _, job := range registered {
@@ -61,6 +61,10 @@ func TestArtifactRetentionScheduledJobsIncludesBothIndexAndSweepJobs(t *testing.
 	if revisionByID[patExpirySweepCapability] != patExpirySweepRevision {
 		t.Errorf("personal access token expiry sweep job missing or has the wrong revision: %+v", revisionByID)
 	}
+	// #1855: the agent-media orphan sweep, on the same terms.
+	if revisionByID[agentMediaOrphanSweepCapability] != agentMediaOrphanSweepRevision {
+		t.Errorf("agent media orphan sweep job missing or has the wrong revision: %+v", revisionByID)
+	}
 }
 
 func TestScheduledJobsKeepsIndexSchedulingWithoutArtifactStore(t *testing.T) {
@@ -68,7 +72,7 @@ func TestScheduledJobsKeepsIndexSchedulingWithoutArtifactStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs := scheduledJobs(stubSchedulingHandler{}, nil, nil, schedule, nil, nil)
+	jobs := scheduledJobs(stubSchedulingHandler{}, nil, nil, nil, schedule, nil, nil, nil)
 	registry, err := scheduledJobRegistry(currentIndexScheduleLeaseDuration, jobs...)
 	if err != nil {
 		t.Fatal(err)

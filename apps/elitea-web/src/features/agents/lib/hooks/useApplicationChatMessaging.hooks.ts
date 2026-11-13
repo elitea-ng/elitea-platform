@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 
 import { t } from '@/shared/i18n';
+import { NAME_MAX_LENGTH, clipToLimit } from '@/shared/lib/textLimits';
 import { ROLES } from '@/shared/lib/enums';
 import type { Participant } from '@/entities/participant';
 
@@ -134,7 +135,7 @@ async function createConversationOnFirstMessage(
   try {
     const result = await adapter.createConversation({
       is_private: true,
-      name: `Chat with ${applicationName ?? ''}`,
+      name: clipToLimit(`Chat with ${applicationName ?? ''}`, NAME_MAX_LENGTH),
       source,
       meta: { single_participant: applicationParticipant, internal_tools: applicationVersionDetails?.meta?.internal_tools },
       participants: [applicationParticipant],

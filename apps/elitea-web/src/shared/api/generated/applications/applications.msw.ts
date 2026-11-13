@@ -4573,6 +4573,25 @@ export const getGenerateApplicationDraftResponseMock = (
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
   ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  soul: faker.helpers.arrayElement([
+    {
+      ...{
+        schema: "elitea.soul/v1",
+        display_name: "Mira",
+        pronouns: "they/them",
+        role: "Release coordinator",
+        voice: ["concise", "warm", "direct"],
+        values: ["safety before speed", "cite sources"],
+        boundaries: ["never merges without a green CI"],
+        relationships: [
+          { agent: "ci-doctor", stance: "delegate failing builds" },
+        ],
+        proactive_goals: ["watch release branches for red CI"],
+        body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+      },
+    },
+    undefined,
+  ]),
   suggested_toolkits: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
@@ -12912,48 +12931,37 @@ export const getGetRecommendationsResponseMock = (
   ...overrideResponse,
 });
 
-export const getGetDocumentLoadersResponseMock = (
-  overrideResponse: Partial<Extract<DocumentLoadersResponse, object>> = {},
-): DocumentLoadersResponse => ({
-  items: Array.from(
-    { length: faker.number.int({ min: 1, max: 10 }) },
-    (_, i) => i + 1,
-  ).map(() => ({
-    type: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    description: faker.string.alpha({ length: { min: 10, max: 20 } }),
-    supported_extensions: Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-  })),
-  total: faker.number.int(),
-  document_types: faker.helpers.arrayElement([
-    {
-      [faker.string.alphanumeric(5)]: faker.string.alpha({
-        length: { min: 10, max: 20 },
-      }),
+export const getGetDocumentLoadersResponseMock =
+  (): DocumentLoadersResponse => ({
+    items: [
+      {
+        type: "document_types",
+        name: "Document types",
+        description: "File extensions the indexer loads as documents.",
+        supported_extensions: [".md", ".pdf", ".txt"],
+      },
+      {
+        type: "image_types",
+        name: "Image types",
+        description: "File extensions the indexer loads as images.",
+        supported_extensions: [".png"],
+      },
+      {
+        type: "code_types",
+        name: "Code types",
+        description: "File extensions the indexer loads as plain-text code.",
+        supported_extensions: [".py"],
+      },
+    ],
+    total: 3,
+    document_types: {
+      ".md": "text/markdown",
+      ".pdf": "application/pdf",
+      ".txt": "text/plain",
     },
-    undefined,
-  ]),
-  image_types: faker.helpers.arrayElement([
-    {
-      [faker.string.alphanumeric(5)]: faker.string.alpha({
-        length: { min: 10, max: 20 },
-      }),
-    },
-    undefined,
-  ]),
-  code_types: faker.helpers.arrayElement([
-    {
-      [faker.string.alphanumeric(5)]: faker.string.alpha({
-        length: { min: 10, max: 20 },
-      }),
-    },
-    undefined,
-  ]),
-  ...overrideResponse,
-});
+    image_types: { ".png": "image/png" },
+    code_types: { ".py": "text/plain" },
+  });
 
 export const getGetAuthorDetailResponseMock = (
   overrideResponse: Partial<Extract<AuthorDetail, object>> = {},

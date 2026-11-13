@@ -348,6 +348,17 @@ describe('CreatePipeline', () => {
     expect(useNavBlockerStore.getState().isBlockNav).toBe(false);
   });
 
+  // #1979: the compact Instructions field hides the gutter for agent prose only. The page must
+  // say it is a pipeline, or its YAML loses its line numbers.
+  it('keeps line numbers beside the pipeline YAML', { timeout: 20_000 }, async () => {
+    const { container } = renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
+
+    await screen.findByTestId('agent-name-input');
+    const gutters = container.querySelector('.cm-gutters');
+    expect(gutters).toBeInstanceOf(HTMLElement);
+    expect(getComputedStyle(gutters as HTMLElement).display).not.toBe('none');
+  });
+
   /*
    * The other half of the same rule: the starter graph is a STARTING POINT,
    * never a replacement for the author's own document. What the editor holds

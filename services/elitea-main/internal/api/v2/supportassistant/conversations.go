@@ -20,6 +20,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 // ChatStore is the slice of the chat repository this package REUSES rather than
@@ -149,8 +150,8 @@ func (h *Handler) CreateConversation(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = defaultConversationName
 	}
-	if len(name) > maxConversationNameLength {
-		apierr.WriteStatus(w, http.StatusBadRequest, "name is too long")
+	if err := entitylimits.CheckName("name", name); err != nil {
+		apierr.Write(w, err)
 		return
 	}
 

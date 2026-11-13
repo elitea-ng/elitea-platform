@@ -43,6 +43,19 @@ export {
   type AvatarSlotName,
   type AvatarSource,
 } from './avatarPack';
+export {
+  DEFAULT_AVATARS,
+  DEFAULT_AVATAR_GRID,
+  DEFAULT_AVATAR_KEYS,
+  DEFAULT_AVATAR_NAMES,
+  DEFAULT_AVATAR_PREFIX,
+  defaultAvatarKey,
+  defaultAvatarOf,
+  type DefaultAvatar,
+  type DefaultAvatarName,
+  type DefaultAvatarRole,
+  type DefaultAvatarShape,
+} from './defaultAvatars';
 export { MOTION_KIND, MOTION_SPEC, MOTION_TONE, type MotionKind, type MotionSpec, type MotionTone } from './motionSpec';
 export {
   DEFAULT_FLOOR,
@@ -52,6 +65,7 @@ export {
   firstAnswerer,
   floorOf,
   foldSideTalk,
+  isPeopleOnly,
   metaWithLead,
   sideTalkLabel,
   type AddressableAgent,

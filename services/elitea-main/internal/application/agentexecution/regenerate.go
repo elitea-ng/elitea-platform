@@ -9,6 +9,7 @@ import (
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
@@ -44,6 +45,11 @@ type CurrentRegenerationTarget struct {
 	// worker as this turn's question (issue 1903). False for a later
 	// addressed agent, which answers the person's existing question.
 	QuestionIsOwn bool
+	// ThreadID is the worker session thread the regenerated answer ran in
+	// (issue 1869), "" for an answer that settled none. The regeneration
+	// reuses it, as a continuation does, so the agent's session is the one
+	// its first answer wrote.
+	ThreadID string
 }
 
 func (target CurrentRegenerationTarget) Validate() error {
@@ -316,22 +322,36 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		}
 		resolved.VersionDetails = frozen
 		start.QuestionID = request.RegenerationID
-		// #870: memory recall is wired on turn START only — see
-		// continue.go's call site for why regeneration deliberately does not
-		// re-run it. "" preserves this call site's pre-#870 behavior.
-		input, view, err := currentApplicationInputWithView(start, resolved, toolkitGuardrails, nil, "",
-			// #946: project context is NOT a per-turn recall like memories —
-			// it is standing project configuration, so a resumed or
-			// regenerated turn in the same project must carry the same
-			// context the original start carried. Read here rather than
-			// passed "" (projectcontext.go's header).
-			service.resolveCurrentProjectContextText(ctx, request.ProjectID))
+		// #870: the person's memories are recalled on turn START only (see
+		// continue.go's call site), so "" for them. #1659: the agent's own
+		// notes are resolved again, for the same input and the same version,
+		// so a regenerated answer runs with the notes the first one had.
+		agentMemory := service.resolveAgentMemory(
+			ctx, request.ProjectID, resolved.ApplicationID, target.ConversationUUID,
+			currentMemoryRecallUserInputText(userInput), frozen,
+		)
+		// #946: project context is NOT a per-turn recall like memories —
+		// it is standing project configuration, so a resumed or
+		// regenerated turn in the same project must carry the same
+		// context the original start carried. Read here rather than
+		// passed "" (projectcontext.go's header).
+		projectContext := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
+		if agentMemory.Text != "" {
+			projectContext = agentmemory.Neutralize(projectContext)
+		}
+		input, view, err := currentApplicationInputWithView(start, resolved, toolkitGuardrails, nil,
+			agentMemory.Text, projectContext)
 		if err != nil {
 			return nil, nil, "", err
 		}
 		input.ContextSettings = contextSettings
 		input.IsRegenerate = true
 		input.CurrentMessageId = regeneratedQuestionID(target)
+		// Issue 1869: the regenerated answer runs in the session thread its
+		// first answer ran in; no conversation read decides it again.
+		sessionThread := regenerationSessionThread(target)
+		input.ThreadId = &sessionThread
+		input.RecalledMemory, input.RecalledMemoryTag = recalledMemoryInput(agentMemory, input.GetApplication())
 		turn.ApplicationID = resolved.ApplicationID
 		turn.ApplicationVersionID = resolved.ApplicationVersionID
 		turn.ContextView = newContextViewRecord(target.TargetParticipantID, resolved.ParticipantContextHistory, view, input)

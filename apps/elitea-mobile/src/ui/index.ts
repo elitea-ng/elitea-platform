@@ -24,4 +24,5 @@ export { sheetOptions, type SheetSize } from './sheet';
 export { nativeTabsProps } from './tabs';
 export { Text, toneColor, type TextProps, type TextTone } from './Text';
 export { TextField, type TextFieldProps } from './TextField';
+export { DESCRIPTION_MAX_LENGTH, NAME_MAX_LENGTH, exceedsLimit, limitMessage, type LimitMessage } from './textLimit';
 export { maxScale, maxScales, monogramStyle, ramp, textStyles, type TypeRole } from './type';

@@ -61,7 +61,7 @@ export interface BrandThemeProviderProps {
  * Right-to-left languages: the desktop entry applies the language (which sets
  * `dir="rtl"` on the document) and installs an emotion cache whose RTL plugin
  * mirrors physical properties (`paddingLeft`, `left`, `textAlign: 'left'`, …)
- * app-wide (`entries/desktop/rtlStyleCache.ts`), both before the first render.
+ * app-wide (`./rtlStyleCache.ts`), both before the first render.
  * The plugin is loaded only then, so the web app's bundle never carries it.
  * Left-to-right keeps emotion's default cache, so its styles are untouched.
  */

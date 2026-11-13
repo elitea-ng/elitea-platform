@@ -80,8 +80,10 @@ import (
 	v2predict "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/predict"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentsoul"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 // maxDraftRequestBytes bounds the body. user_description and
@@ -103,14 +105,14 @@ const NotConfiguredCode = v2predict.NotConfiguredCode
 // genuine generation failure and is refused with 422.
 const (
 	skillNameMaxLength         = 64
-	skillDescriptionMaxLength  = 2304
+	skillDescriptionMaxLength  = entitylimits.MaxDescriptionLength
 	skillInstructionsMaxLength = v2skills.SkillInstructionsMaxLength
 
 	// PROJECT_CONTEXT_MAX_LEN in legacy/plugins/elitea_core/models/pd/project_context.py.
 	projectBackgroundMaxLength = 2500
 
 	applicationNameMaxLength            = 32
-	applicationDescriptionMaxLength     = 2304
+	applicationDescriptionMaxLength     = entitylimits.MaxDescriptionLength
 	applicationWelcomeMessageMaxLength  = 768
 	applicationStarterMaxLength         = 768
 	applicationMaxConversationStarters  = 4
@@ -270,16 +272,21 @@ type SuggestedResource struct {
 // always present (never null) — [] when no repository was composed for that
 // category, or when nothing scored above zero.
 type ApplicationDraft struct {
-	Name                 string              `json:"name"`
-	Description          string              `json:"description"`
-	Instructions         string              `json:"instructions"`
-	WelcomeMessage       string              `json:"welcome_message"`
-	ConversationStarters []string            `json:"conversation_starters"`
-	SuggestedToolkits    []SuggestedResource `json:"suggested_toolkits"`
-	SuggestedMCP         []SuggestedResource `json:"suggested_mcp"`
-	SuggestedPipelines   []SuggestedResource `json:"suggested_pipelines"`
-	SuggestedAgents      []SuggestedResource `json:"suggested_agents"`
-	SuggestedSkills      []SuggestedResource `json:"suggested_skills"`
+	Name                 string   `json:"name"`
+	Description          string   `json:"description"`
+	Instructions         string   `json:"instructions"`
+	WelcomeMessage       string   `json:"welcome_message"`
+	ConversationStarters []string `json:"conversation_starters"`
+	// Soul is the proposed persona (ADR-0050 decision 1a): an AgentSoulV1
+	// document the model wrote and agentsoul.Normalize checked, the bytes the
+	// create body sends as version_details.soul. Absent when the model wrote
+	// none; it never names a capability.
+	Soul               json.RawMessage     `json:"soul,omitempty"`
+	SuggestedToolkits  []SuggestedResource `json:"suggested_toolkits"`
+	SuggestedMCP       []SuggestedResource `json:"suggested_mcp"`
+	SuggestedPipelines []SuggestedResource `json:"suggested_pipelines"`
+	SuggestedAgents    []SuggestedResource `json:"suggested_agents"`
+	SuggestedSkills    []SuggestedResource `json:"suggested_skills"`
 }
 
 // ProjectContextDraft is legacy's GenerateProjectContextDraftResponse.
@@ -395,7 +402,7 @@ func (h *Handler) GenerateApplicationDraft(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	draft, failure := h.finishApplicationDraft(r.Context(), chi.URLParam(r, "projectID"), content)
+	draft, failure := h.finishApplicationDraft(r.Context(), chi.URLParam(r, "projectID"), content, false)
 	if failure != nil {
 		failure.log(r.Context())
 		writeJSON(w, failure.status, map[string]any{"error": failure.message, "code": failure.code})
@@ -427,7 +434,7 @@ const (
 // finishApplicationDraft turns the model's text into the validated draft. It
 // is the one path both application draft routes take from model text to
 // answer, so they truncate, validate and suggest identically.
-func (h *Handler) finishApplicationDraft(ctx context.Context, projectID, content string) (ApplicationDraft, *draftFailure) {
+func (h *Handler) finishApplicationDraft(ctx context.Context, projectID, content string, soulDeclined bool) (ApplicationDraft, *draftFailure) {
 	unusable := func(text, otherwise string, cause error) *draftFailure {
 		message := truncatedOrUnusable(text, otherwise)
 		code := draftUnparseableCode
@@ -446,6 +453,7 @@ func (h *Handler) finishApplicationDraft(ctx context.Context, projectID, content
 		Instructions         string   `json:"instructions"`
 		WelcomeMessage       string   `json:"welcome_message"`
 		ConversationStarters []string `json:"conversation_starters"`
+		Soul                 any      `json:"soul"`
 	}
 	if err := json.Unmarshal([]byte(object), &raw); err != nil {
 		return ApplicationDraft{}, unusable(object, "the model returned unusable JSON", err)
@@ -468,6 +476,24 @@ func (h *Handler) finishApplicationDraft(ctx context.Context, projectID, content
 		Instructions:         strings.TrimSpace(truncate(raw.Instructions, applicationInstructionsSanityLength)),
 		WelcomeMessage:       strings.TrimSpace(truncate(raw.WelcomeMessage, applicationWelcomeMessageMaxLength)),
 		ConversationStarters: starters,
+	}
+	// The persona the model proposed (ADR-0050 decision 1a, issue 1644): the
+	// same refusal codes as a version write, so a soul that names a tool,
+	// credential or permission never reaches the reviewer.
+	// The persona is optional, so a proposal that fails the rules is dropped
+	// (and logged) rather than costing the reviewer the whole draft. Only an
+	// unloadable schema, which is not the model's fault, still fails. A
+	// persona the reviewer declined is never returned.
+	if !soulDeclined {
+		soul, failure := proposedSoul(raw.Soul)
+		switch {
+		case failure == nil:
+			draft.Soul = soul
+		case failure.status == http.StatusUnprocessableEntity:
+			slog.WarnContext(ctx, "draft: the proposed persona was dropped", "code", failure.code, "err", failure.cause)
+		default:
+			return ApplicationDraft{}, failure
+		}
 	}
 	// AgentDefinition (v2.yaml) is the rule: a missing name, description or
 	// instructions is refused, the same way on both routes.
@@ -800,4 +826,41 @@ func (h *Handler) authorizeSkillEdit(w http.ResponseWriter, r *http.Request) boo
 	}
 	writeError(w, http.StatusForbidden, "skill details access is required")
 	return false
+}
+
+// proposedSoul checks the soul a model proposed with agentsoul.Normalize and
+// answers its canonical JSON. Nothing, null and a soul that holds only the
+// schema key are "no soul". The model need not write the `schema` key: the
+// version is fixed, so it is added.
+func proposedSoul(value any) (json.RawMessage, *draftFailure) {
+	object, ok := value.(map[string]any)
+	if value == nil || (ok && len(object) == 0) {
+		return nil, nil
+	}
+	if ok {
+		// A copy: the caller's map is never written to.
+		copied := make(map[string]any, len(object)+1)
+		for key, item := range object {
+			copied[key] = item
+		}
+		object = copied
+		if _, has := object["schema"]; !has {
+			object["schema"] = agentsoul.SchemaID
+		}
+		if len(object) == 1 {
+			return nil, nil
+		}
+		value = object
+	}
+	normalized, err := agentsoul.Normalize(value)
+	if err != nil {
+		var refused *agentsoul.Error
+		if errors.As(err, &refused) {
+			return nil, &draftFailure{status: http.StatusUnprocessableEntity, code: refused.Code,
+				message: "the generated persona is not usable: " + refused.Message, cause: err}
+		}
+		return nil, &draftFailure{status: http.StatusInternalServerError, code: SchemaUnavailableCode,
+			message: "the persona schema could not be loaded", cause: err}
+	}
+	return normalized, nil
 }

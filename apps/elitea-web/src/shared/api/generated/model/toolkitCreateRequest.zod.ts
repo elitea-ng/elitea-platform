@@ -42,15 +42,22 @@
  */
 import * as zod from "zod";
 
+export const toolkitCreateRequestNameMax = 128;
+
+export const toolkitCreateRequestDescriptionMax = 2000;
+
 export const ToolkitCreateRequest = zod
   .object({
-    name: zod.string().min(1).optional(),
+    name: zod.string().min(1).max(toolkitCreateRequestNameMax).optional(),
     type: zod
       .string()
       .describe(
         "Toolkit type key, e.g. `github`, `slack`, `sql`. The set is open — `toolkit_types` is served by a separate handler that this spec does not yet cover.\n",
       ),
-    description: zod.string().optional(),
+    description: zod
+      .string()
+      .max(toolkitCreateRequestDescriptionMax)
+      .optional(),
     meta: zod
       .record(zod.string(), zod.unknown())
       .optional()

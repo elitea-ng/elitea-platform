@@ -1111,7 +1111,19 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// idle_compaction, an idle compaction run's own marker for the
 	// analytics (ADR-0050 decision 9b2, issue 1921). Backfilled from
 	// agent_idle_compactions; no permission.
-	require.EqualValues(t, 240, Head(shared))
+	//
+	// 241: shared/0241_agent_teams_keyset_index.sql, the (project_id,
+	// lower(name), id) index behind the Teams list's keyset paging (issue
+	// 1955). No data, no permission.
+	//
+	// 242: shared/0242_token_name_limit.sql, a personal access token's name
+	// truncated to the 128-character limit (issue 1968). No permission.
+	//
+	// 243: shared/0243_gateway_image_pricing.sql, the per-image price catalog
+	// gateway.gateway_model_image_prices and the kind, image_count, image_size,
+	// image_quality and pricing_source columns of gateway.llm_request_logs
+	// (issue 1969). No backfill, no permission.
+	require.EqualValues(t, 243, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1387,7 +1399,26 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// answer was given: reader, mode, window, digest and the projected
 	// message ids with why each was dropped (ADR-0050 decision 9, issue
 	// 1669). No data, no permission.
-	require.EqualValues(t, 167, Head(tenant))
+	//
+	// 169: tenant/0169_chat_message_context_view_frames.sql, an answer's view
+	// stored as a delta against the reader's previous one: the immutable
+	// chat_message_context_view_frames chain (keyframe every 64) and
+	// chat_message_context_views.frame_id (issue 1893). Rows written before
+	// it keep their full entries. No data, no permission.
+	//
+	// 170: tenant/0170_chat_message_subagent_lanes.sql, one row per
+	// sub-agent lane (chat_message_subagent_lanes), replacing the
+	// whole-array rewrite of chat_message_group.meta.subagents_v1 (#1823
+	// follow-up, issue 1923). No data, no permission.
+	//
+	// 171: tenant/0171_agent_memory_orphans.sql, when an agent's memory
+	// lost its agent, so the retention sweep can purge it after the
+	// retention period (ADR-0042, issue 1658). No data, no permission.
+	//
+	// 172: tenant/0172_entity_name_description_limits.sql, entity
+	// descriptions truncated to 2000 characters and names to 128, with CHECK
+	// constraints where only the handlers write (issue 1968). No permission.
+	require.EqualValues(t, 172, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

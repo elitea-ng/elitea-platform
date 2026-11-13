@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 )
 
@@ -84,25 +85,62 @@ SELECT $1, participant.id, '{"version_id": 71}'::jsonb, now() AT TIME ZONE 'UTC'
 		t.Fatal(err)
 	}
 
+	// A participant of THIS project whose agent is another application, bound
+	// (wrongly) to version 71: the version is not its agent's, so no pack
+	// (#1856 keeps the same-application guard through the fold).
+	if _, err := pool.Exec(ctx, `INSERT INTO p_1.applications (id, name, description, owner_id) VALUES (62, 'Other Agent', 'fixture', 11)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+WITH participant AS (
+    INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta)
+    VALUES (gen_random_uuid(), 'application', '{"id": 62, "project_id": 1}'::jsonb)
+    RETURNING id
+)
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+SELECT $1, participant.id, '{"version_id": 71}'::jsonb, now() AT TIME ZONE 'UTC' FROM participant`, conversationID); err != nil {
+		t.Fatal(err)
+	}
+
 	participants, err := NewConversationsRepo(pool).ListParticipants(ctx, "1", itoa(int64(conversationID)))
 	if err != nil {
 		t.Fatalf("list participants: %v", err)
 	}
-	if len(participants) != 2 {
+	if len(participants) != 3 {
 		t.Fatalf("participants = %d", len(participants))
 	}
-	local, foreign := participants[0], participants[1]
-	if project, _ := positiveInteger(local.EntityMeta["project_id"]); project != 1 {
-		local, foreign = foreign, local
+	var local, foreign, otherApplication conversations.Participant
+	for _, participant := range participants {
+		project, _ := positiveInteger(participant.EntityMeta["project_id"])
+		application, _ := positiveInteger(participant.EntityMeta["id"])
+		switch {
+		case project == 2:
+			foreign = participant
+		case application == 62:
+			otherApplication = participant
+		default:
+			local = participant
+		}
 	}
-	if _, ok := foreign.Persona["avatar_pack"]; ok {
+	if _, ok := foreign.Persona["avatar_pack_v1"]; ok {
 		t.Fatalf("another project's participant got this project's pack: %v", foreign.Persona)
 	}
-	got, _ := local.Persona["avatar_pack"].(map[string]any)
+	if _, ok := otherApplication.Persona["avatar_pack_v1"]; ok {
+		t.Fatalf("another application's participant got this version's pack: %v", otherApplication.Persona)
+	}
+	// One read answers both: the publication status beside the pack.
+	if local.Meta["version_status"] != "draft" {
+		t.Fatalf("meta.version_status = %v, want draft in the same read", local.Meta["version_status"])
+	}
+	got, _ := local.Persona["avatar_pack_v1"].(map[string]any)
 	slots, _ := got["slots"].(map[string]any)
 	stillSlot, _ := slots["still"].(map[string]any)
 	if stillSlot["url"] != still {
-		t.Fatalf("persona.avatar_pack = %v", local.Persona)
+		t.Fatalf("persona.avatar_pack_v1 = %v", local.Persona)
+	}
+	// Contract 1.49 (#1881): the reserved string key never carries the object.
+	if _, ok := local.Persona["avatar_pack"]; ok {
+		t.Fatalf("the deprecated persona.avatar_pack was served: %v", local.Persona)
 	}
 
 	// Cleared: the next read carries no pack.
@@ -114,7 +152,7 @@ SELECT $1, participant.id, '{"version_id": 71}'::jsonb, now() AT TIME ZONE 'UTC'
 		t.Fatal(err)
 	}
 	for _, participant := range participants {
-		if _, ok := participant.Persona["avatar_pack"]; ok {
+		if _, ok := participant.Persona["avatar_pack_v1"]; ok {
 			t.Fatalf("a cleared pack still reached the persona: %v", participant.Persona)
 		}
 	}

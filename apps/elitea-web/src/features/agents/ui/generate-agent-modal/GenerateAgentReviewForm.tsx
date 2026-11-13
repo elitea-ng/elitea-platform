@@ -16,12 +16,14 @@ import {
   MAX_NAME_LENGTH,
   MAX_WELCOME_MESSAGE_LENGTH,
 } from '@/shared/lib/limits';
+import { characterCount } from '@/shared/lib/textLimits';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { PlusIcon } from '@/shared/ui/icons/plus-icon';
 
 import { validateAgentDraft } from '../../lib/helpers/agentDraftValidation.helpers';
 import type { AgentDraft } from '../../lib/agentDraft';
+import { GenerateAgentPersona } from './GenerateAgentPersona';
 import { ResourceSuggestions } from './ResourceSuggestions';
 
 /**
@@ -112,8 +114,8 @@ export function GenerateAgentReviewForm({ draft, onChange, onValidationChange, s
           size="small"
           value={draft.name}
           onChange={(e) => handleFieldChange('name', e.target.value)}
-          slotProps={{ htmlInput: { maxLength: MAX_NAME_LENGTH, 'data-testid': 'agent-draft-name-input' } }}
-          helperText={validationErrors.name ?? `${draft.name.length}/${MAX_NAME_LENGTH}`}
+          slotProps={{ htmlInput: { 'data-testid': 'agent-draft-name-input' } }}
+          helperText={validationErrors.name ?? `${characterCount(draft.name)}/${MAX_NAME_LENGTH}`}
           error={Boolean(validationErrors.name)}
         />
       </Box>
@@ -133,8 +135,8 @@ export function GenerateAgentReviewForm({ draft, onChange, onValidationChange, s
           maxRows={4}
           value={draft.description}
           onChange={(e) => handleFieldChange('description', e.target.value)}
-          slotProps={{ htmlInput: { maxLength: MAX_DESCRIPTION_LENGTH, 'data-testid': 'agent-draft-description-input' } }}
-          helperText={validationErrors.description ?? `${draft.description.length}/${MAX_DESCRIPTION_LENGTH}`}
+          slotProps={{ htmlInput: { 'data-testid': 'agent-draft-description-input' } }}
+          helperText={validationErrors.description ?? `${characterCount(draft.description)}/${MAX_DESCRIPTION_LENGTH}`}
           error={Boolean(validationErrors.description)}
         />
       </Box>
@@ -247,6 +249,10 @@ export function GenerateAgentReviewForm({ draft, onChange, onValidationChange, s
             </Box>
           </Box>
         </Box>
+      )}
+
+      {draft.soul !== undefined && (
+        <GenerateAgentPersona soul={draft.soul} onRemove={() => onChange({ ...draft, soul: undefined, soul_declined: true })} />
       )}
 
       <ResourceSuggestions

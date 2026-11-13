@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.48",
+  "client_contract": "1.53",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -48,6 +48,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -162,6 +168,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -284,6 +296,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -299,6 +317,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -314,6 +338,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -329,6 +359,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -344,6 +380,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -386,6 +428,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -401,6 +449,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -460,6 +514,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -475,6 +535,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -490,6 +556,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -532,6 +604,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -605,6 +683,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -620,6 +704,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -635,6 +725,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -677,6 +773,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -744,6 +846,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -759,6 +867,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -801,6 +915,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -860,6 +980,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -875,6 +1001,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -917,6 +1049,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1013,6 +1151,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1028,6 +1172,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1043,6 +1193,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1085,6 +1241,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1131,6 +1293,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1146,6 +1314,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1161,6 +1335,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1176,6 +1356,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1218,6 +1404,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1259,6 +1451,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1274,6 +1472,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1289,6 +1493,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1304,6 +1514,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1346,6 +1562,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1361,6 +1583,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1432,6 +1660,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1447,6 +1681,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1558,6 +1798,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1691,6 +1937,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -1895,6 +2147,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2032,6 +2290,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2047,6 +2311,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2199,6 +2469,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2214,6 +2490,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2368,6 +2650,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2491,6 +2779,12 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "max_length": {
+                      "type": "integer"
                     }
                   }
                 }
@@ -2508,6 +2802,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2523,6 +2823,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2538,6 +2844,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2580,6 +2892,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2595,6 +2913,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2814,6 +3138,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -2893,6 +3223,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -3115,6 +3451,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -3740,6 +4082,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -3755,6 +4103,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -3770,6 +4124,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -3812,6 +4172,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -4127,6 +4493,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -4142,6 +4514,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -4157,6 +4535,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -4242,6 +4626,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -4257,6 +4647,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -4272,6 +4668,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -4314,6 +4716,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -5533,6 +5941,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -5548,6 +5962,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -5563,6 +5983,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -5846,6 +6272,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -5861,6 +6293,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -5876,6 +6314,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6119,6 +6563,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6134,6 +6584,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6247,6 +6703,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6262,6 +6724,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6277,6 +6745,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6292,6 +6766,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6307,6 +6787,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6349,6 +6835,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6364,6 +6856,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6761,6 +7259,233 @@
                           "avatar_pack": {
                             "type": "string"
                           },
+                          "avatar_pack_v1": {
+                            "type": "object",
+                            "required": [
+                              "schema",
+                              "slots"
+                            ],
+                            "properties": {
+                              "schema": {
+                                "type": "string"
+                              },
+                              "slots": {
+                                "type": "object",
+                                "required": [
+                                  "still"
+                                ],
+                                "properties": {
+                                  "error": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "idle": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "speaking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "still": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "success": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "thinking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "waiting": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "waking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "working": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
                           "display_name": {
                             "type": "string"
                           },
@@ -6825,6 +7550,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6840,6 +7571,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6855,6 +7592,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -6897,6 +7640,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -7043,6 +7792,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -7058,6 +7813,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -7073,6 +7834,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -7088,6 +7855,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -7130,6 +7903,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -7450,6 +8229,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -7465,6 +8250,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -7526,6 +8317,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -7749,6 +8546,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -7827,6 +8630,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -7988,6 +8797,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8003,6 +8818,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8045,6 +8866,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8141,6 +8968,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8156,6 +8989,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8171,6 +9010,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8213,6 +9058,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8431,6 +9282,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8446,6 +9303,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8461,6 +9324,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8476,6 +9345,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8518,6 +9393,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8762,6 +9643,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8777,6 +9664,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8792,6 +9685,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -8834,6 +9733,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9138,6 +10043,127 @@
                                   "type": "string",
                                   "max_length": 120
                                 },
+                                "children": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "agent_id",
+                                      "items",
+                                      "ordinal",
+                                      "parent_call_id",
+                                      "status"
+                                    ],
+                                    "properties": {
+                                      "agent_id": {
+                                        "type": "string"
+                                      },
+                                      "avatar": {
+                                        "type": "string",
+                                        "max_length": 120
+                                      },
+                                      "depth": {
+                                        "type": "integer",
+                                        "enum": [
+                                          "1",
+                                          "2"
+                                        ]
+                                      },
+                                      "display_name": {
+                                        "type": "string",
+                                        "max_length": 120
+                                      },
+                                      "error": {
+                                        "type": "string"
+                                      },
+                                      "input_tokens": {
+                                        "type": "integer"
+                                      },
+                                      "items": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "required": [
+                                            "type"
+                                          ],
+                                          "properties": {
+                                            "args_summary": {
+                                              "type": "string",
+                                              "max_length": 240
+                                            },
+                                            "call_id": {
+                                              "type": "string"
+                                            },
+                                            "ok": {
+                                              "type": "boolean"
+                                            },
+                                            "summary": {
+                                              "type": "string",
+                                              "max_length": 240
+                                            },
+                                            "text": {
+                                              "type": "string",
+                                              "max_length": 600
+                                            },
+                                            "tool": {
+                                              "type": "string",
+                                              "max_length": 120
+                                            },
+                                            "type": {
+                                              "type": "string",
+                                              "enum": [
+                                                "text",
+                                                "tool"
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "max_items": 96
+                                      },
+                                      "label": {
+                                        "type": "string",
+                                        "max_length": 120
+                                      },
+                                      "ordinal": {
+                                        "type": "integer",
+                                        "minimum": 1
+                                      },
+                                      "output_tokens": {
+                                        "type": "integer"
+                                      },
+                                      "parent_agent_id": {
+                                        "type": "string"
+                                      },
+                                      "parent_call_id": {
+                                        "type": "string"
+                                      },
+                                      "result": {
+                                        "type": "string",
+                                        "max_length": 2000
+                                      },
+                                      "status": {
+                                        "type": "string",
+                                        "enum": [
+                                          "budget_exhausted",
+                                          "cancelled",
+                                          "completed",
+                                          "failed",
+                                          "running"
+                                        ]
+                                      },
+                                      "steps": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  }
+                                },
+                                "depth": {
+                                  "type": "integer",
+                                  "enum": [
+                                    "1",
+                                    "2"
+                                  ]
+                                },
                                 "display_name": {
                                   "type": "string",
                                   "max_length": 120
@@ -9199,6 +10225,9 @@
                                 },
                                 "output_tokens": {
                                   "type": "integer"
+                                },
+                                "parent_agent_id": {
+                                  "type": "string"
                                 },
                                 "parent_call_id": {
                                   "type": "string"
@@ -9356,6 +10385,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9371,6 +10406,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9386,6 +10427,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9447,6 +10494,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9556,6 +10609,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9571,6 +10630,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9586,6 +10651,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9601,6 +10672,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9643,6 +10720,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9658,6 +10741,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9793,6 +10882,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9808,6 +10903,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9823,6 +10924,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -9865,6 +10972,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -10463,6 +11576,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -10478,6 +11597,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -10864,6 +11989,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -10960,6 +12091,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11141,6 +12278,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11156,6 +12299,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11221,6 +12370,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11298,6 +12453,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11313,6 +12474,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11328,6 +12495,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11343,6 +12516,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11386,6 +12565,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11524,6 +12709,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11539,6 +12730,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11581,6 +12778,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11863,6 +13066,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11878,6 +13087,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11893,6 +13108,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -11935,6 +13156,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -12067,6 +13294,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -12082,6 +13315,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -12097,6 +13336,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -12139,6 +13384,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -12394,6 +13645,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -12544,6 +13801,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -12926,6 +14189,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -13076,6 +14345,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -13296,6 +14571,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -13446,6 +14727,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -13758,6 +15045,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -13854,6 +15147,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -14104,6 +15403,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -14254,6 +15559,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -14441,6 +15752,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -14591,6 +15908,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15164,6 +16487,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15319,6 +16648,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15468,6 +16803,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15624,6 +16965,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15639,6 +16986,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15673,8 +17026,8 @@
         }
       }
     },
-    "GET /social/author/theme": {
-      "operation_id": "getCurrentAuthorTheme",
+    "GET /social/author/language": {
+      "operation_id": "getCurrentAuthorLanguage",
       "parameters": {
         "header:x-client-version": {
           "schema": {
@@ -15688,10 +17041,10 @@
             "application/json": {
               "type": "object",
               "required": [
-                "theme_mode"
+                "language"
               ],
               "properties": {
-                "theme_mode": {
+                "language": {
                   "type": "string",
                   "nullable": true
                 }
@@ -15709,6 +17062,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15724,6 +17083,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15766,6 +17131,130 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /social/author/theme": {
+      "operation_id": "getCurrentAuthorTheme",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "theme_mode"
+              ],
+              "properties": {
+                "theme_mode": {
+                  "type": "string",
+                  "nullable": true
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15899,6 +17388,12 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "max_length": {
+                      "type": "integer"
                     }
                   }
                 }
@@ -15916,6 +17411,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15931,6 +17432,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15946,6 +17453,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -15988,6 +17501,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -16003,6 +17522,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -16157,6 +17682,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -16172,6 +17703,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -16283,6 +17820,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -16941,6 +18484,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -16956,6 +18505,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -16971,6 +18526,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -16986,6 +18547,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -17028,6 +18595,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -17457,6 +19030,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -17472,6 +19051,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -17634,6 +19219,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -17908,6 +19499,12 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "max_length": {
+                      "type": "integer"
                     }
                   }
                 }
@@ -17925,6 +19522,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -17940,6 +19543,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -17955,6 +19564,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -17970,6 +19585,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -17985,6 +19606,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18027,6 +19654,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18101,6 +19734,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18116,6 +19755,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18131,6 +19776,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18146,6 +19797,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18188,6 +19845,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18203,6 +19866,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18218,6 +19887,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18331,6 +20006,233 @@
                       "properties": {
                         "avatar_pack": {
                           "type": "string"
+                        },
+                        "avatar_pack_v1": {
+                          "type": "object",
+                          "required": [
+                            "schema",
+                            "slots"
+                          ],
+                          "properties": {
+                            "schema": {
+                              "type": "string"
+                            },
+                            "slots": {
+                              "type": "object",
+                              "required": [
+                                "still"
+                              ],
+                              "properties": {
+                                "error": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "idle": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "speaking": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "still": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "success": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "thinking": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "waiting": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "waking": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                },
+                                "working": {
+                                  "type": "object",
+                                  "required": [
+                                    "url"
+                                  ],
+                                  "properties": {
+                                    "generated_by": {
+                                      "type": "string",
+                                      "max_length": 256
+                                    },
+                                    "media_type": {
+                                      "type": "string"
+                                    },
+                                    "poster_url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "max_length": 160
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
                         },
                         "display_name": {
                           "type": "string"
@@ -18475,6 +20377,233 @@
                           "avatar_pack": {
                             "type": "string"
                           },
+                          "avatar_pack_v1": {
+                            "type": "object",
+                            "required": [
+                              "schema",
+                              "slots"
+                            ],
+                            "properties": {
+                              "schema": {
+                                "type": "string"
+                              },
+                              "slots": {
+                                "type": "object",
+                                "required": [
+                                  "still"
+                                ],
+                                "properties": {
+                                  "error": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "idle": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "speaking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "still": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "success": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "thinking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "waiting": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "waking": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  },
+                                  "working": {
+                                    "type": "object",
+                                    "required": [
+                                      "url"
+                                    ],
+                                    "properties": {
+                                      "generated_by": {
+                                        "type": "string",
+                                        "max_length": 256
+                                      },
+                                      "media_type": {
+                                        "type": "string"
+                                      },
+                                      "poster_url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      },
+                                      "url": {
+                                        "type": "string",
+                                        "max_length": 160
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
                           "display_name": {
                             "type": "string"
                           },
@@ -18517,6 +20646,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18532,6 +20667,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18547,6 +20688,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18589,6 +20736,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18877,6 +21030,9 @@
                   }
                 }
               },
+              "soul_declined": {
+                "type": "boolean"
+              },
               "user_description": {
                 "type": "string"
               }
@@ -18902,6 +21058,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18917,6 +21079,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18932,6 +21100,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18947,6 +21121,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -18989,6 +21169,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -19151,6 +21337,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -19342,6 +21534,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -19771,6 +21969,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -20058,6 +22262,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -20432,6 +22642,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -20719,6 +22935,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -20867,6 +23089,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -21154,6 +23382,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -21298,6 +23532,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -21313,6 +23553,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -21328,6 +23574,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -21370,6 +23622,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -21470,6 +23728,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -21485,6 +23749,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -21500,6 +23770,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -21515,6 +23791,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -21557,6 +23839,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -21820,6 +24108,43 @@
             }
           }
         },
+        "201": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "created",
+                "message_id",
+                "turn_started"
+              ],
+              "properties": {
+                "created": {
+                  "type": "boolean"
+                },
+                "ignored": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "llm_settings",
+                      "mcp_tokens",
+                      "release_id",
+                      "skills",
+                      "unattended"
+                    ]
+                  }
+                },
+                "message_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "turn_started": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
         "400": {
           "content": {
             "application/json": {
@@ -21860,6 +24185,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -22082,6 +24413,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -22326,6 +24663,233 @@
                       "avatar_pack": {
                         "type": "string"
                       },
+                      "avatar_pack_v1": {
+                        "type": "object",
+                        "required": [
+                          "schema",
+                          "slots"
+                        ],
+                        "properties": {
+                          "schema": {
+                            "type": "string"
+                          },
+                          "slots": {
+                            "type": "object",
+                            "required": [
+                              "still"
+                            ],
+                            "properties": {
+                              "error": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "idle": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "speaking": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "still": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "success": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "thinking": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "waiting": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "waking": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              },
+                              "working": {
+                                "type": "object",
+                                "required": [
+                                  "url"
+                                ],
+                                "properties": {
+                                  "generated_by": {
+                                    "type": "string",
+                                    "max_length": 256
+                                  },
+                                  "media_type": {
+                                    "type": "string"
+                                  },
+                                  "poster_url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  },
+                                  "url": {
+                                    "type": "string",
+                                    "max_length": 160
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
                       "display_name": {
                         "type": "string"
                       },
@@ -22352,6 +24916,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -22367,6 +24937,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -22382,6 +24958,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -22397,6 +24979,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -22439,6 +25027,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -22642,6 +25236,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -22657,6 +25257,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -22824,6 +25430,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -23179,6 +25791,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -23648,6 +26266,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -24182,6 +26806,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -24595,6 +27225,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -24993,6 +27629,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -25008,6 +27650,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -25124,6 +27772,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -25290,6 +27944,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -25305,6 +27965,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -25370,6 +28036,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -25630,6 +28302,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -25996,6 +28674,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -26320,6 +29004,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -26632,6 +29322,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -26880,6 +29576,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -27192,6 +29894,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -27371,6 +30079,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -27575,6 +30289,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -27803,6 +30523,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -28115,6 +30841,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -28379,6 +31111,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -28750,6 +31488,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -29015,6 +31759,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -29381,6 +32131,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -29590,6 +32346,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -29902,6 +32664,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30116,6 +32884,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30258,6 +33032,12 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "max_length": {
+                      "type": "integer"
                     }
                   }
                 }
@@ -30275,6 +33055,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30290,6 +33076,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30305,6 +33097,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30347,6 +33145,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30362,6 +33166,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30434,6 +33244,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30449,6 +33265,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30464,6 +33286,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30632,6 +33460,12 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "max_length": {
+                      "type": "integer"
                     }
                   }
                 }
@@ -30649,6 +33483,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30664,6 +33504,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30679,6 +33525,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30721,6 +33573,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30794,6 +33652,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30809,6 +33673,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30824,6 +33694,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30866,6 +33742,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30961,6 +33843,12 @@
                   "properties": {
                     "error": {
                       "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "max_length": {
+                      "type": "integer"
                     }
                   }
                 }
@@ -30978,6 +33866,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -30993,6 +33887,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -31008,6 +33908,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -31050,6 +33956,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -31240,6 +34152,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -31498,6 +34416,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -31687,6 +34611,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -31999,6 +34929,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -32202,6 +35138,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -32217,6 +35159,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -32380,6 +35328,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -32395,6 +35349,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -32441,6 +35401,162 @@
                 },
                 "ok": {
                   "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "PUT /social/author/language": {
+      "operation_id": "updateCurrentAuthorLanguage",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "language"
+            ],
+            "properties": {
+              "language": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "language"
+              ],
+              "properties": {
+                "language": {
+                  "type": "string",
+                  "nullable": true
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -32501,6 +35617,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -32516,6 +35638,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -32531,6 +35659,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }
@@ -32573,6 +35707,12 @@
               "properties": {
                 "error": {
                   "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
                 }
               }
             }

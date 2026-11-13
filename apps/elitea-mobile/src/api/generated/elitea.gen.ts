@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.48
+ * client contract:    1.53
  * operations sha256:  90f7ce0d441261594219777baafedfb6c11c64e23476f55952ced30a49d7d69e
  */
 export interface paths {
@@ -1283,6 +1283,23 @@ export interface paths {
          *     run answers 422 `unsupported_agent_execution`. While the previous
          *     answer of this conversation is still settling, the server waits up to
          *     about 3 s before it decides.
+         *
+         *     PEOPLE-ONLY MESSAGES (client contract 1.53). A message that mentions
+         *     people (`user_ids`, or `is_mentioning_everyone`) and names no agent
+         *     in `addressed_to` is a message to those people. It is stored in the
+         *     conversation as the sender's message and notifies the people it
+         *     names, and it starts NO turn: not the conversation's model, not the
+         *     agent the history last addressed, and not a lead agent. The answer
+         *     is 201 with `turn_started` false and no `events_url`; there is
+         *     nothing to stream. The decision is the server's and is made before
+         *     `participant_id`, `llm_settings` and `execution_contract` are read
+         *     (`participant_id` is what a client sends for any unaddressed message,
+         *     so it does not say that an agent was addressed); the `execution_contract`
+         *     query value only has to be one of the two. A message that addresses
+         *     an agent (`addressed_to`) still goes to that agent whether or not it
+         *     also mentions people, and its people are notified. A message with no
+         *     mention is unchanged. `question_id` is the idempotency key here too:
+         *     a replay answers 201 with `created` false and notifies nobody again.
          */
         post: operations["sendChatMessage"];
         delete?: never;
@@ -2841,6 +2858,20 @@ export interface components {
             /** @description Equal to `execution_id` (legacy name). */
             task_id: string;
         };
+        /** @description Client contract 1.53. A people-only message that was stored with no turn behind it (sendChatMessage). There is no execution, no `response_message_id` and no `events_url`: a client renders the message and waits for nothing. */
+        ChatMessagePosted: {
+            /** @description False when the same `question_id` was already stored (a replay); nobody is notified again. */
+            created: boolean;
+            /** @description The run inputs the message carried that no turn will read, because nobody was asked to run: `llm_settings`, `mcp_tokens` (when not empty), `skills`, `unattended`, `release_id`. Absent when there were none. A client may say that no agent was asked. */
+            ignored?: ("llm_settings" | "mcp_tokens" | "skills" | "unattended" | "release_id")[];
+            /**
+             * Format: uuid
+             * @description The stored message group's UUID, equal to the request's `question_id`.
+             */
+            message_id: string;
+            /** @description Always false; the field lets a client tell this answer from ChatExecutionStarted without reading the status. */
+            turn_started: boolean;
+        };
         /** @description A project skill picked for one turn, by id. */
         ChatProjectSkillPick: {
             /**
@@ -2898,7 +2929,7 @@ export interface components {
         };
         /** @description The body of a chat send. NOTE(W2): internal/api/v2/agentexecution/route.go:143 (`currentApplicationStartBody`). The body must be ONE JSON value of at most 512 KiB. */
         ChatSendRequest: {
-            /** @description ADR-0050 decision 7c — the agents this message is for, by participant id (positive, unique). In a conversation with several agents the first answers now and the others answer after it, in order. Empty or absent: the floor decides. An id that is not an agent of the conversation answers 422 `addressee_not_in_conversation`. */
+            /** @description ADR-0050 decision 7c — the agents this message is for, by participant id (positive, unique). In a conversation with several agents the first answers now and the others answer after it, in order. Empty or absent: the floor decides, except that a message that mentions people (`user_ids`, `is_mentioning_everyone`) and addresses no agent is for those people alone and starts no turn (client contract 1.53). An id that is not an agent of the conversation answers 422 `addressee_not_in_conversation`. */
             addressed_to?: number[];
             /**
              * Format: uuid
@@ -2943,7 +2974,7 @@ export interface components {
              */
             release_id?: number;
             unattended?: components["schemas"]["ChatUnattendedRequest"];
-            /** @description USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again. */
+            /** @description USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again. With no `addressed_to` the message is for these people alone: it is stored and notifies them, and starts no turn (client contract 1.53). */
             user_ids?: number[];
         };
         ChatStartAttachment: {
@@ -3241,6 +3272,7 @@ export interface components {
             meta?: {
                 [key: string]: unknown;
             };
+            /** @description Limit: at most 128 characters (issue 1968). Not declared as `maxLength` because the `client` subset is additive-only (ADR-0025 decision 6); the server answers 400 with `field` and `max_length`. */
             name?: string;
             /** @description Participants to add at creation. Each needs `entity_name` and `entity_meta`; `entity_meta.project_id` defaults to this project. */
             participants?: components["schemas"]["ConversationParticipant"][];
@@ -3502,8 +3534,13 @@ export interface components {
         };
         /** @description Client contract 1.38: the agent's persona in this conversation, from the soul of the version the conversation runs, refreshed on every turn. Absent when the agent has none. Show `display_name` instead of the agent's name when it is set. */
         ConversationParticipantPersona: {
-            /** @description Client contract 1.46 (ADR-0050 decision 6): on a read, the avatar pack of the version the agent participant runs, an AgentAvatarPackV1 OBJECT, read live from the version on every participants read; absent when the version has none (the client then shows `entity_settings.icon_meta`). It stays declared as a string, the "reserved" type contract 1.38 locked, because a type change is a breaking change within the major. A client reads the value as unknown JSON and validates it (`avatarPackOf` in `@elitea/client-core/conversation`); a value that is not a valid pack is ignored. A create request does not set it. */
+            /**
+             * @deprecated
+             * @description Deprecated by client contract 1.49: read `avatar_pack_v1`. Reserved by contract 1.38 as a string. Servers 1.46 to 1.48 sent the avatar pack OBJECT here, against its declared type, so a strict codegen client could reject the whole participant (issue 1881). From 1.49 the server never sends this property. A client that still talks to a 1.46 to 1.48 server may read it as unknown JSON and validate it (`avatarPackOf` in `@elitea/client-core/conversation`). A create request does not set it.
+             */
             avatar_pack?: string;
+            /** @description Client contract 1.49 (ADR-0050 decision 6, issue 1881): on a read, the avatar pack of the version the agent participant runs, read live from the version on every participants read; absent when the version has none (the client then shows `entity_settings.icon_meta`). Only a participant of the conversation's own project, bound to a version of its own agent, carries it. A client still validates it (`avatarPackOf`) and ignores a value that is not a valid pack. A create request does not set it. */
+            avatar_pack_v1?: components["schemas"]["AgentAvatarPackV1"];
             display_name?: string;
             pronouns?: string;
             role?: string;
@@ -3697,6 +3734,10 @@ export interface components {
         ErrorResponse: {
             /** @description Human-readable error message */
             error: string;
+            /** @description Only on a 400 for a text property over its length limit (client contract 1.52): the request property, e.g. `name` or `description`. */
+            field?: string;
+            /** @description Only with `field`: the limit in characters. An entity name is at most 128 characters and a description at most 2000. */
+            max_length?: number;
         };
         /** @description Client contract 1.11. The body of forkConversation. An absent body forks the whole conversation with the default name. */
         ForkConversationRequest: {
@@ -3716,7 +3757,7 @@ export interface components {
             message_id?: string;
             /** @description `fork` (the default) or `rewind`. A rewind is a fork that also records the abandoned turns after the fork point as `forked_from.branch_summary`; it needs `message_id`. Any other value answers 400. */
             mode?: string;
-            /** @description The new conversation's name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 256 characters or with a control character answers 400. */
+            /** @description The new conversation's name. Absent: the source name with " (fork)" added ("New conversation (fork)" when the source name is blank). Trimmed; blank, longer than 128 characters or with a control character answers 400. */
             name?: string;
         };
         /**
@@ -3740,6 +3781,8 @@ export interface components {
             conversation_history?: components["schemas"]["DraftConversationTurn"][];
             current_draft?: components["schemas"]["AgentDefinition"];
             llm_settings?: components["schemas"]["DraftLlmSettings"];
+            /** @description True when the reviewer removed the persona from the draft. The model is told not to write one and the answer carries none. A `current_draft.soul` that fails the soul rules is refused with 422 and the soul's own code instead of being dropped. */
+            soul_declined?: boolean;
             /** @description This turn's request, in plain text. Required and non-blank. */
             user_description: string;
         };
@@ -4500,11 +4543,18 @@ export interface components {
             /** @description The message, at most 16 KiB of UTF-8 and not only white space. */
             content: string;
         };
-        /** @description Client contract 1.48 (ADR-0050 decision 4). A temporary sub-agent a cloud run started with `spawn_agent`, as the answer keeps it (`metadata.subagents_v1`). Untrusted text: render it as plain text. */
+        /** @description Client contract 1.48 (ADR-0050 decision 4), nesting 1.50 (issue 1872). A temporary sub-agent a cloud run started with `spawn_agent`, as the answer keeps it (`metadata.subagents_v1`). Untrusted text: render it as plain text. */
         SubAgentLane: {
             agent_id: string;
             /** @description The profile's avatar key (`default:<name>`); display only. */
             avatar?: string;
+            /** @description Client contract 1.50. This lane's own sub-agents (depth 2), folded here by Main from their own rows; absent or empty for a depth-1 lane with no nested children. A `SubAgentLane` here never itself carries `children` (sub-agent depth is at most 2), so the items are `SubAgentLaneChild`. */
+            children?: components["schemas"]["SubAgentLaneChild"][];
+            /**
+             * @description Client contract 1.50. 1 for a child of the run's agent, 2 for a child of a child (agents.subagents_max_depth). Absent reads as 1 (an older answer).
+             * @enum {integer}
+             */
+            depth?: 1 | 2;
             /** @description The profile's display name; absent when the spawn named none. */
             display_name?: string;
             /** @description Why it stopped short (`subagent_failed`, `subagent_cancelled`, ...). */
@@ -4514,6 +4564,40 @@ export interface components {
             label?: string;
             ordinal: number;
             output_tokens?: number;
+            /** @description Client contract 1.50. The `agent_id` of the sub-agent that started this one; present only at depth 2. Render nested: this lane appears under its parent's `children`, not at the top level of `metadata.subagents_v1`. */
+            parent_agent_id?: string;
+            /** @description The `tool_run_id` of the `spawn_agent` call that started it. */
+            parent_call_id: string;
+            /** @description Its final text (or the text it had when it stopped). */
+            result?: string;
+            /**
+             * @description `running` on a lane whose answer is still streaming; a settled answer's children are settled (a child the run's end stopped is `cancelled`).
+             * @enum {string}
+             */
+            status: "running" | "completed" | "failed" | "budget_exhausted" | "cancelled";
+            steps?: number;
+        };
+        /** @description Client contract 1.50 (issue 1872). A depth-2 sub-agent lane under its parent's `children`: a `SubAgentLane` without `children` of its own. */
+        SubAgentLaneChild: {
+            agent_id: string;
+            /** @description The profile's avatar key (`default:<name>`); display only. */
+            avatar?: string;
+            /**
+             * @description Client contract 1.50. 1 for a child of the run's agent, 2 for a child of a child (agents.subagents_max_depth). Absent reads as 1 (an older answer).
+             * @enum {integer}
+             */
+            depth?: 1 | 2;
+            /** @description The profile's display name; absent when the spawn named none. */
+            display_name?: string;
+            /** @description Why it stopped short (`subagent_failed`, `subagent_cancelled`, ...). */
+            error?: string;
+            input_tokens?: number;
+            items: components["schemas"]["SubAgentLaneItem"][];
+            label?: string;
+            ordinal: number;
+            output_tokens?: number;
+            /** @description Client contract 1.50. The `agent_id` of the sub-agent that started this one; present only at depth 2. Render nested: this lane appears under its parent's `children`, not at the top level of `metadata.subagents_v1`. */
+            parent_agent_id?: string;
             /** @description The `tool_run_id` of the `spawn_agent` call that started it. */
             parent_call_id: string;
             /** @description Its final text (or the text it had when it stopped). */
@@ -4611,7 +4695,7 @@ export interface components {
             meta?: {
                 [key: string]: unknown;
             };
-            /** @description The new title, trimmed; 1 to 256 characters after trimming, no control characters. `null` does not rename. */
+            /** @description The new title, trimmed; 1 to 128 characters after trimming, no control characters. `null` does not rename. */
             name?: string | null;
         };
         /** @description A conversation as updateConversation answers it. `id` is the numeric id AS A STRING, as in createConversation's answer; `uuid` is the id the chat send path takes. NOTE(W2): internal/infra/db/repos/conversations.go:685 (`Update`) fills these from the UPDATE's RETURNING row. Any other key it carries (a `message_count` of 0, which is not counted here) is not part of the answer's meaning. */
@@ -7123,6 +7207,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatExecutionStarted"];
+                };
+            };
+            /** @description Client contract 1.53. The message was for people alone: it is stored (`created` true) or was already stored (`created` false) and no turn was started. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatMessagePosted"];
                 };
             };
             /** @description A malformed request, path/body mismatch, an invalid UUID, a bad mention or attachment list. */

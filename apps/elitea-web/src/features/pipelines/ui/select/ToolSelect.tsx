@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useCallback, useMemo } from 'react';
 
+import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { SingleSelect, type SingleSelectOption } from '@/shared/ui/SingleSelect';
@@ -122,14 +123,19 @@ export function ToolSelect(props: ToolSelectProps): ReactNode {
   }, [onSelectTool]);
 
   return (
-    <SingleSelect
-      sx={selectSx}
-      label={label}
-      value={selectedToolkit}
-      onChange={onChangeTool}
-      onClear={onClear}
-      options={tools}
-      disabled={disabled}
-    />
+    // `nopan nodrag nowheel`: this renders inside a React Flow node, whose drag layer
+    // swallows the mousedown MUI's Select opens on — without the shield the picker
+    // shows "None" and never opens (#2005). Same shield its multi-select siblings carry.
+    <Box className="nopan nodrag nowheel">
+      <SingleSelect
+        sx={selectSx}
+        label={label}
+        value={selectedToolkit}
+        onChange={onChangeTool}
+        onClear={onClear}
+        options={tools}
+        disabled={disabled}
+      />
+    </Box>
   );
 }

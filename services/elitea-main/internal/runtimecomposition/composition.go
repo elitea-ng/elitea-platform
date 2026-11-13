@@ -1124,6 +1124,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		agentStart = agentStart.WithMentionNotifications(
 			repos.NewChatMentionNotificationRepo(dependencies.AdmissionPool),
 		)
+		// A message for people alone is stored without a turn
+		// (people_message.go); the same pool, the same setter idiom.
+		var humanMessages agentexecutionapp.HumanMessageStore = repos.NewHumanMessageRepo(dependencies.AdmissionPool)
+		if dependencies.ConversationActivity != nil {
+			humanMessages = activityHumanMessages{next: humanMessages, activity: dependencies.ConversationActivity}
+		}
+		agentStart = agentStart.WithHumanMessages(humanMessages)
 		// An attached IMAGE reaches the model as bytes (#979). Same setter
 		// idiom; the reader is the SAME repository the native runtime's
 		// attachment route uses, so both paths agree about what a chat
@@ -2367,6 +2374,27 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				retentionSchedule = parsedRetentionSchedule
 			}
 
+			// The agent-media orphan sweep (#1855): it reads every tenant's
+			// references and deletes from the object store, so it needs both.
+			var agentMediaHandler schedulingapp.Handler
+			var agentMediaSchedule schedulingapp.Schedule
+			if dependencies.ObjectStore != nil && dependencies.AdmissionPool != nil {
+				agentMediaReferences, agentMediaReferencesErr := repos.NewAgentMediaReferencesRepository(dependencies.AdmissionPool)
+				if agentMediaReferencesErr != nil {
+					return nil, fmt.Errorf("construct agent media references repository: %w", agentMediaReferencesErr)
+				}
+				agentMediaSweep, agentMediaSweepErr := newAgentMediaOrphanSweep(agentMediaReferences, dependencies.ObjectStore)
+				if agentMediaSweepErr != nil {
+					return nil, fmt.Errorf("construct agent media orphan sweep: %w", agentMediaSweepErr)
+				}
+				parsedAgentMediaSchedule, agentMediaScheduleErr := schedulingapp.ParseCron(agentMediaOrphanSweepCadence)
+				if agentMediaScheduleErr != nil {
+					return nil, fmt.Errorf("parse agent media orphan sweep cadence: %w", agentMediaScheduleErr)
+				}
+				agentMediaHandler = agentMediaSweep
+				agentMediaSchedule = parsedAgentMediaSchedule
+			}
+
 			// The personal-access-token expiry notice (#940 A3). Built here
 			// beside the retention sweep because it is the same kind of thing:
 			// a periodic producer whose whole effect is a row a user reads.
@@ -2415,8 +2443,8 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			registry, registryErr := scheduledJobRegistry(
 				schedulerConfig.LeaseDuration,
 				scheduledJobs(
-					indexDueWork, retentionHandler, patExpiryHandler,
-					schedule, retentionSchedule, patExpirySchedule,
+					indexDueWork, retentionHandler, patExpiryHandler, agentMediaHandler,
+					schedule, retentionSchedule, patExpirySchedule, agentMediaSchedule,
 				)...,
 			)
 			if registryErr != nil {

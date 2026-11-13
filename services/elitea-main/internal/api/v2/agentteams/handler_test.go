@@ -25,9 +25,11 @@ type fakeStore struct {
 	lead     int
 	missing  int
 	rosterOf string
+	after    *agentteams.ListCursor
 }
 
-func (s *fakeStore) ListTeams(context.Context, int64, string, int, int) ([]agentteams.Stored, int, error) {
+func (s *fakeStore) ListTeams(_ context.Context, _ int64, _ string, _, _ int, after *agentteams.ListCursor) ([]agentteams.Stored, int, error) {
+	s.after = after
 	out := []agentteams.Stored{}
 	for _, team := range s.teams {
 		out = append(out, team)
@@ -225,5 +227,26 @@ func TestNilStoreAnswers503(t *testing.T) {
 	handler.List(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d", recorder.Code)
+	}
+}
+
+// The keyset position of a page (issue 1955): both halves or neither.
+func TestListReadsTheKeysetCursor(t *testing.T) {
+	store := &fakeStore{teams: map[int64]agentteams.Stored{}}
+	router := newRouter(store, &fakeChat{})
+	if code, _ := serve(router, http.MethodGet, "/agent_teams/prompt_lib/1?after_name=Release%20crew&after_id=3", ""); code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	if store.after == nil || store.after.Name != "Release crew" || store.after.ID != 3 {
+		t.Fatalf("cursor = %+v", store.after)
+	}
+	store.after = nil
+	if code, _ := serve(router, http.MethodGet, "/agent_teams/prompt_lib/1", ""); code != http.StatusOK || store.after != nil {
+		t.Fatalf("no cursor: status = %d, cursor = %+v", code, store.after)
+	}
+	for _, query := range []string{"after_name=x", "after_id=3", "after_name=x&after_id=0", "after_name=x&after_id=nope"} {
+		if code, _ := serve(router, http.MethodGet, "/agent_teams/prompt_lib/1?"+query, ""); code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", query, code)
+		}
 	}
 }

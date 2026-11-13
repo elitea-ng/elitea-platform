@@ -25,6 +25,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 type Handler struct {
@@ -36,6 +37,9 @@ type Handler struct {
 	// reasoningModels reads the catalogue for the save-time thinking rules
 	// (reasoning.go); nil applies the value check only.
 	reasoningModels ReasoningModelCatalog
+	// memoryAuto limits meta.memory.write auto to the agent's risk tier
+	// (memory_auto.go); nil accepts it for every tier.
+	memoryAuto MemoryAutoGate
 }
 
 func NewHandler(repo applications.Repository, pool ...*pgxpool.Pool) *Handler {
@@ -154,16 +158,48 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		"meta": map[string]any{"default_version_id": defaultVersionID},
 	}
 
-	// Include version_details for the first (latest) version — matches the
-	// legacy response contract.
-	if len(versions) > 0 {
-		firstVersionID := versions[0]["id"].(string)
-		if vd := h.fetchVersionDetails(r.Context(), projectID, applicationID, firstVersionID); vd != nil {
+	// Include version_details for the DEFAULT version (the one meta names,
+	// else "base", else the first listed) — the same rule as GetDefaultVersion
+	// and the web's selectDefaultVersion. It used to be versions[0], so an
+	// agent page opened without a version in the URL showed whichever version
+	// sorted first, not the default (issue 1568).
+	if id := detailVersionID(versions); id != "" {
+		if vd := h.fetchVersionDetails(r.Context(), projectID, applicationID, id); vd != nil {
 			result["version_details"] = vd
 		}
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+// detailVersionID is the id of the version whose details Get embeds: the one
+// flagged is_default (derived from meta.default_version_id), else the one named
+// "base", else the first listed; "" for an empty list. Only a version whose id
+// is a positive integer counts, as in the web's defaultRunVersionId and the
+// desktop host's default_version_of, so a row with a blank or non-numeric id
+// is never the answer and the three clients cannot pick different versions.
+func detailVersionID(versions []map[string]any) string {
+	var usable []map[string]any
+	for _, version := range versions {
+		id, _ := version["id"].(string)
+		if n, err := strconv.ParseInt(id, 10, 64); err == nil && n > 0 {
+			usable = append(usable, version)
+		}
+	}
+	for _, version := range usable {
+		if isDefault, _ := version["is_default"].(bool); isDefault {
+			return version["id"].(string)
+		}
+	}
+	for _, version := range usable {
+		if name, _ := version["name"].(string); name == defaultVersionName {
+			return version["id"].(string)
+		}
+	}
+	if len(usable) > 0 {
+		return usable[0]["id"].(string)
+	}
+	return ""
 }
 
 // getVersions returns the application's version summaries and the id of the
@@ -539,6 +575,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := entitylimits.CheckBody(body); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+
 	req := applications.CreateRequest{
 		ProjectID:   projectID,
 		Name:        strVal(body, "name"),
@@ -556,6 +597,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var initialVariables []any
 	var initialTags []any
 	if versions, ok := body["versions"].([]any); ok && len(versions) > 0 {
+		// Every entry is checked, not just the one that seeds the agent.
+		if err := checkVersionNames(versions); err != nil {
+			apierr.Write(w, err)
+			return
+		}
 		if vBody, ok := versions[0].(map[string]any); ok {
 			// Validate model_project_id if llm_settings provided
 			if llm, ok := vBody["llm_settings"].(map[string]any); ok {
@@ -576,7 +622,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 				apierr.Write(w, notesErr)
 				return
 			}
-			if !h.checkRunCaps(w, r, projectID, "", vBody) {
+			if !h.checkRunCaps(w, r, projectID, "", vBody) || !h.checkMemoryAuto(w, r, projectID, "", vBody) {
 				return
 			}
 			if !checkOutputContracts(w, vBody, bodyAgentType(vBody, "")) {
@@ -929,6 +975,18 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if v, ok := body["version"].(map[string]any); ok {
 		versionData = v
 	}
+	if err := entitylimits.CheckBody(body); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	if versionData != nil {
+		if name, ok := versionData["name"].(string); ok {
+			if err := entitylimits.CheckName("version.name", name); err != nil {
+				apierr.Write(w, err)
+				return
+			}
+		}
+	}
 
 	// Validate version IDs if provided
 	if versionData != nil {
@@ -1226,6 +1284,10 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, apierr.BadRequest("version name is required"))
 		return
 	}
+	if err := entitylimits.CheckName("name", name); err != nil {
+		apierr.Write(w, err)
+		return
+	}
 
 	user, ownerID, ok := principal(r)
 	if !ok {
@@ -1239,7 +1301,7 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, notesErr)
 		return
 	}
-	if !h.checkRunCaps(w, r, projectID, applicationID, body) {
+	if !h.checkRunCaps(w, r, projectID, applicationID, body) || !h.checkMemoryAuto(w, r, projectID, applicationID, body) {
 		return
 	}
 	if !checkOutputContracts(w, body, bodyAgentType(body, h.storedApplicationAgentType(r.Context(), projectID, applicationID, body))) {
@@ -1363,6 +1425,10 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 			apierr.Write(w, apierr.BadRequest("name cannot be empty"))
 			return
 		}
+		if err := entitylimits.CheckName("name", name); err != nil {
+			apierr.Write(w, err)
+			return
+		}
 		v.Name = name
 		v.Present.Name = true
 	}
@@ -1424,7 +1490,7 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if meta, ok := body["meta"].(map[string]any); ok {
-		if !h.checkRunCaps(w, r, projectID, applicationID, body) {
+		if !h.checkRunCaps(w, r, projectID, applicationID, body) || !h.checkMemoryAuto(w, r, projectID, applicationID, body) {
 			return
 		}
 		v.Meta = meta
@@ -2531,4 +2597,21 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.WriteHeader(code)
 	// connection already committed; ignore write error
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// checkVersionNames refuses a version name over the entity name limit in any
+// entry of a `versions` array (issue 1968); the error names the entry.
+func checkVersionNames(versions []any) error {
+	for i, entry := range versions {
+		vBody, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, ok := vBody["name"].(string); ok {
+			if err := entitylimits.CheckName(fmt.Sprintf("versions[%d].name", i), name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

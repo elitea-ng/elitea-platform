@@ -26,7 +26,7 @@ use super::families::github::commits::{
 };
 use elitea_connectors::github::client::{project_commit_tree_sha, project_tree_sha};
 
-use super::families::github::config::{GitHubAuthKind, GitHubToolkitConfig};
+use super::families::github::config::{GitHubAuthKind, GitHubConfigFault, GitHubToolkitConfig};
 use super::families::github::projects::{test_project_project_issues, test_project_query_payload};
 use super::families::github::pull_requests::{
     test_project_pull_request_detail, test_project_pull_request_files,
@@ -2688,4 +2688,142 @@ impl elitea_connectors::transport::Transport for NoTransport {
     {
         panic!("a schema check must not send a request");
     }
+}
+
+/// #1978: the web form saves a GitHub toolkit with `repository: ""` until the
+/// user fills it in. That is a configuration the user can fix, so the run
+/// names the setting; before, it ended as the bare `INTERNAL` failure.
+#[tokio::test]
+async fn a_blank_repository_is_refused_with_the_setting_to_edit_not_a_bare_failure() {
+    use super::families::UnsupportedSetting;
+    use super::families::index_tools::{IndexToolSupport, IndexToolsWithheld};
+    use super::materialize::{
+        ToolsetMaterializationErrorCode, left_out_toolkits_notice_text,
+        materialize_configured_toolsets_reporting_refusals,
+    };
+
+    // The exact settings the web form's `toolInitialValues` produces for a
+    // toolkit that has a credential selected and nothing else filled in.
+    let mut form = settings(
+        &json!({"base_url": "https://api.github.com", "access_token": "stored-secret-token"}),
+        &["get_me"],
+    );
+    form.insert("repository".to_owned(), json!(""));
+    let Err(error) = GitHubToolkitConfig::parse(&form) else {
+        panic!("a blank repository was accepted");
+    };
+    assert_eq!(error.fault(), GitHubConfigFault::Repository);
+    let version = json!({"tools":[{
+        "id":7,"type":"github","toolkit_name":"Agent1 GitHub","settings":form
+    }]});
+    let snapshot = FrozenToolSnapshot::from_version_details(version.as_object().expect("version"))
+        .expect("GitHub snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let materialized = materialize_configured_toolsets_reporting_refusals(
+        &snapshot,
+        &policy(&[]),
+        &Map::new(),
+        None,
+        IndexToolSupport::Withheld(IndexToolsWithheld::NoVectorStore),
+    )
+    .await
+    .expect("a toolkit with a fixable setting does not fail the agent");
+    assert!(materialized.toolsets.is_empty());
+    let notice = left_out_toolkits_notice_text(&materialized.left_out).expect("a notice");
+    assert!(notice.contains("Agent1 GitHub"), "{notice}");
+    assert!(notice.contains(UnsupportedSetting::GitHubRepository.reason()));
+    assert!(!notice.contains("stored-secret-token"));
+
+    let Err(error) = materialize_configured_toolsets_with_tokens_and_authorization(
+        &snapshot,
+        &policy(&[]),
+        &Map::new(),
+    )
+    .await
+    else {
+        panic!("a caller with no notice must not drop the toolkit silently");
+    };
+    assert_eq!(
+        error.refusal_reason(),
+        Some(UnsupportedSetting::GitHubRepository.reason())
+    );
+    assert_eq!(
+        error.code(),
+        ToolsetMaterializationErrorCode::InvalidConfiguration,
+        "a missing setting stays user-fixable configuration, not a missing capability"
+    );
+}
+
+#[test]
+fn every_config_refusal_names_its_setting() {
+    let cases = [
+        (
+            json!({"base_url": "http://api.github.com", "access_token": "t"}),
+            "ghe/repo",
+            GitHubConfigFault::PlainHttpBaseUrl,
+        ),
+        (
+            json!({"base_url": "not a url", "access_token": "t"}),
+            "ghe/repo",
+            GitHubConfigFault::BaseUrl,
+        ),
+        (
+            json!({"base_url": "https://api.github.com", "username": "u"}),
+            "ghe/repo",
+            GitHubConfigFault::Authentication,
+        ),
+        (
+            json!({"base_url": "https://api.github.com", "access_token": "t"}),
+            "not-a-repository",
+            GitHubConfigFault::Repository,
+        ),
+    ];
+    for (configuration, repository, expected) in cases {
+        let mut case = settings(&configuration, &["get_me"]);
+        case.insert("repository".to_owned(), json!(repository));
+        let Err(error) = GitHubToolkitConfig::parse(&case) else {
+            panic!("{expected:?}: accepted");
+        };
+        assert_eq!(error.fault(), expected);
+    }
+    let mut non_text = settings(
+        &json!({"base_url": "https://api.github.com", "access_token": "t"}),
+        &["get_me"],
+    );
+    non_text.insert("repository".to_owned(), json!(5));
+    let Err(error) = GitHubToolkitConfig::parse(&non_text) else {
+        panic!("a non-text repository was accepted");
+    };
+    assert_eq!(
+        error.fault(),
+        GitHubConfigFault::Other,
+        "an unclassified setting still reaches the run as the named GitHubSettings refusal"
+    );
+    let mut no_credential = settings(&json!(null), &["get_me"]);
+    no_credential.remove("github_configuration");
+    let Err(error) = GitHubToolkitConfig::parse(&no_credential) else {
+        panic!("a toolkit with no credential was accepted");
+    };
+    assert_eq!(error.fault(), GitHubConfigFault::Credential);
+}
+
+/// No default: a GitHub Enterprise credential whose URL was cleared must be
+/// refused by name, never pointed (with its token) at the public API.
+#[test]
+fn a_blank_base_url_is_refused_by_name_not_defaulted() {
+    for blank in [json!(""), json!(null), json!("   ")] {
+        let Err(error) = GitHubToolkitConfig::parse(&settings(
+            &json!({"base_url": blank, "access_token": "t"}),
+            &["get_me"],
+        )) else {
+            panic!("a blank base URL was accepted");
+        };
+        assert_eq!(error.fault(), GitHubConfigFault::BaseUrl);
+    }
+    let Err(error) =
+        GitHubToolkitConfig::parse(&settings(&json!({"access_token": "t"}), &["get_me"]))
+    else {
+        panic!("an absent base URL was accepted");
+    };
+    assert_eq!(error.fault(), GitHubConfigFault::BaseUrl);
 }

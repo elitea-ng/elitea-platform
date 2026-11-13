@@ -348,6 +348,32 @@ impl UnattendedTurn {
         }
     }
 
+    /// This turn under a NEW grant id, for the start retried after Main
+    /// answered the first one for a participant that changed: that first
+    /// start already wrote the chain's row under the old id, so a second
+    /// start with it collides (422 `unattended_grant_refused`). Only a chain
+    /// root takes one; a continuation keeps the chain's.
+    #[must_use]
+    pub fn regranted(&self) -> Self {
+        let mut turn = self.clone();
+        if turn.chain_root_execution_id.is_none() {
+            turn.grant.grant_id = Some(uuid::Uuid::new_v4().hyphenated().to_string());
+        }
+        turn
+    }
+
+    /// Keep the grant id the platform admitted (`LocalTurnStarted.unattended`)
+    /// on a chain root, so the chain's continuations and its HITL records
+    /// carry the id Main knows, whichever start it answered.
+    pub fn adopt_admitted_grant_id(&mut self, admitted: Option<&str>) {
+        if self.chain_root_execution_id.is_none()
+            && let Some(id) = admitted
+            && !id.is_empty()
+        {
+            self.grant.grant_id = Some(id.to_owned());
+        }
+    }
+
     /// The next turn of the chain, after a turn of execution `execution_id`.
     #[must_use]
     pub fn next(&self, execution_id: &str) -> Self {
@@ -410,6 +436,16 @@ pub struct StartedChain {
     /// The effective chain limits.
     #[serde(default)]
     pub chain: Option<Value>,
+}
+
+impl StartedChain {
+    /// A start answer that names no grant id is the start's own: the id the
+    /// request carried is the chain's (the retried start, issue 1563).
+    pub fn fill_grant_id(&mut self, sent: Option<&str>) {
+        if self.grant_id.as_deref().is_none_or(str::is_empty) {
+            self.grant_id = sent.map(str::to_owned);
+        }
+    }
 }
 
 /// How a chain ended: the commit's `chain_outcome` on the chain's last turn.
@@ -726,6 +762,25 @@ pub fn default_wait(kind: &str) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_start_answer_without_a_grant_id_takes_the_one_sent() {
+        let mut omitted = super::StartedChain::default();
+        omitted.fill_grant_id(Some("new"));
+        assert_eq!(omitted.grant_id.as_deref(), Some("new"));
+        let mut empty = super::StartedChain {
+            grant_id: Some(String::new()),
+            ..Default::default()
+        };
+        empty.fill_grant_id(Some("new"));
+        assert_eq!(empty.grant_id.as_deref(), Some("new"));
+        let mut echoed = super::StartedChain {
+            grant_id: Some("main".into()),
+            ..Default::default()
+        };
+        echoed.fill_grant_id(Some("new"));
+        assert_eq!(echoed.grant_id.as_deref(), Some("main"));
+    }
+
     use super::*;
 
     fn grant(value: Value) -> Result<UnattendedGrant, TurnError> {

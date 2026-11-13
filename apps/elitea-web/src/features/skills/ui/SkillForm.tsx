@@ -178,7 +178,7 @@ export function SkillForm({
           disabled={disabled}
           error={showErrors && errors.name !== undefined}
           helperText={showErrors ? errors.name : undefined}
-          slotProps={{ htmlInput: { maxLength: SKILL_NAME_MAX_LENGTH, 'data-testid': 'skill-name-input' } }}
+          slotProps={{ htmlInput: { 'data-testid': 'skill-name-input' } }}
         />
       </Box>
       <CharacterCounter
@@ -197,7 +197,7 @@ export function SkillForm({
         error={showErrors && errors.description !== undefined}
         helperText={showErrors ? errors.description : undefined}
         slotProps={{
-          htmlInput: { maxLength: SKILL_DESCRIPTION_MAX_LENGTH, 'data-testid': 'skill-description-input' },
+          htmlInput: { 'data-testid': 'skill-description-input' },
         }}
       />
       <CharacterCounter

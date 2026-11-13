@@ -43,10 +43,14 @@
 import * as zod from "zod";
 import { SkillVersion } from "./skillVersion.zod";
 
+export const skillCreateRequestNameMax = 128;
+
+export const skillCreateRequestDescriptionMax = 2000;
+
 export const SkillCreateRequest = zod
   .object({
-    name: zod.string().optional(),
-    description: zod.string().optional(),
+    name: zod.string().max(skillCreateRequestNameMax).optional(),
+    description: zod.string().max(skillCreateRequestDescriptionMax).optional(),
     type: zod
       .string()
       .optional()

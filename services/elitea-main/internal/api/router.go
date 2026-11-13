@@ -344,6 +344,9 @@ type RouterConfig struct {
 	// (the Rust indexing runtime), so their type schema carries the
 	// memory_scope setting.
 	MemoryOnVectorStore bool
+	// ImageGenerationModel is the deployment's image model (#1969), from
+	// ELITEA_IMAGE_GENERATION_MODEL, the value the worker reads too.
+	ImageGenerationModel string
 	// WorkerImplementation is the plain "python"/"rust" worker name (#865,
 	// #866) — the same value runtimecomposition.WorkerImplementationFromEnv
 	// derived to build ToolkitWorkerCapability above, restated here because
@@ -1562,6 +1565,7 @@ func newToolkitHandler(
 	if cfg.WorkerImplementation != "" {
 		options = append(options, v2toolkits.WithWorkerImplementation(cfg.WorkerImplementation))
 	}
+	options = append(options, v2toolkits.WithImageGenerationModel(cfg.ImageGenerationModel))
 	if cfg.Pool != nil {
 		// The save-time thinking rule (ADR-0038) reads the catalogue the
 		// agent editor and the chat participants read.
@@ -3755,6 +3759,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					appHandler := v2apps.NewHandler(cfg.AppsRepo, cfg.Pool).
 						WithRunCapsChecker(runCaps.checker).
 						WithReasoningModels(chatDefaults{models: reasoningModels})
+					// A nil gate stays out of the interface: a typed nil would
+					// read as a gate.
+					if gate := newMemoryAutoGate(cfg.Pool); gate != nil {
+						appHandler.WithMemoryAutoGate(gate)
+					}
 					r.With(projectPermission("models.applications.applications.list")).
 						Get("/applications/prompt_lib/{projectID}", appHandler.List)
 					r.With(projectPermission("models.applications.applications.create")).

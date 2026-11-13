@@ -156,6 +156,13 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
         self
     }
 
+    /// The image model of the `image_generation` internal tool (#1969).
+    #[must_use]
+    pub(crate) fn with_image_generation_model(mut self, model: Option<String>) -> Self {
+        self.direct = self.direct.with_image_generation_model(model);
+        self
+    }
+
     /// Lend the Office runtime to direct agents and pipeline nodes (ADR-0032
     /// P3). Direct toolkit calls (`toolkit.call_tool.v1`) do not serve the
     /// Office families.

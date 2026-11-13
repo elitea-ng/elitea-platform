@@ -20,6 +20,7 @@ import {
   adhocParticipants,
   buildChatStreamContext,
   buildRegenerateBody,
+  buildPeopleMessageBody,
   buildStartBody,
   creationMeta,
   internalToolsSaveFailure,
@@ -30,7 +31,7 @@ import {
   type SendDeps,
   type UploadAttachmentsOutcome,
 } from "./useChatBoxSend.helpers";
-import { addressedIdsOf, NO_TARGET, startParticipantId, targetForAddressed, type ResolvedTarget } from "./useChatBoxSend.floor";
+import { addressedIdsOf, isPeopleOnlyPayload, NO_TARGET, startParticipantId, targetForAddressed, type ResolvedTarget } from "./useChatBoxSend.floor";
 
 /** @public Params for `useChatBoxSend`. */
 export interface UseChatBoxSendParams {
@@ -178,6 +179,8 @@ export function useChatBoxSend(
       readonly payload: Record<string, unknown>;
     }): Promise<StreamStartOutcome> => {
       if (projectId === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
+      // A message for people alone starts no turn: no model, agent or stream, and nothing to fall back to.
+      if (isPeopleOnlyPayload(payload)) return requireTestTransport(await startDetailed({ projectId, conversationUuid, contract: conversationApi.contracts.application, body: buildPeopleMessageBody({ conversationUuid, projectId: projectIdString, payload }) }));
       // A canvas save still in flight lands first: the turn reads the
       // canvas's newest version into its history (shared/lib/canvasSaveGate).
       await settleCanvasSaves();

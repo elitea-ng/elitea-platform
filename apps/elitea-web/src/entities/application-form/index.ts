@@ -30,7 +30,7 @@
  * intra-slice import and can be promoted to this list once a real
  * toolkit-validation endpoint exists for them to serve).
  */
-export { applicationCreationSchema } from './model/validation';
+export { applicationCreationSchema, applicationEditSchema } from './model/validation';
 export type { ApplicationCreationInput } from './model/validation';
 
 export { useCreateApplicationInitialValues } from './model/initialValues';
@@ -47,7 +47,6 @@ export { CreateApplicationTabBar } from './ui/CreateApplicationTabBar';
 export type { CreateApplicationTabBarProps } from './ui/CreateApplicationTabBar';
 
 export { ApplicationSaveButton } from './ui/ApplicationSaveButton';
-export type { ApplicationSaveButtonProps } from './ui/ApplicationSaveButton';
 
 export { ApplicationValidator } from './ui/ApplicationValidator';
 export type { ApplicationValidatorProps, UseValidateVersion } from './ui/ApplicationValidator';

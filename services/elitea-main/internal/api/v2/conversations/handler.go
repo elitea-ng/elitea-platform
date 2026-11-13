@@ -28,6 +28,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
@@ -800,6 +801,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 	var conv Conversation
 	if name, ok := body["name"].(string); ok {
+		if err := entitylimits.CheckName("name", name); err != nil {
+			apierr.Write(w, err)
+			return
+		}
 		conv.Name = name
 	}
 	// The create path carries settings too: the composer sends
@@ -989,15 +994,12 @@ func (h *Handler) statesStoredName(r *http.Request, projectID, conversationID st
 	return current.Name == stated
 }
 
-// MaxConversationNameLength is the longest name a rename stores, in
-// characters (runes). The legacy ConversationUpdate capped it at 50
-// (elitea_core/utils/chat_constants.py); the create route here never did, so
-// conversations named from a first message are longer, and a rename of one
-// must still be able to send its name back. 256 bounds what a client can
-// write without refusing a name the product itself produces, and is the
-// limit agent-zefir's rename field (CONVERSATION_NAME_MAX) enforces, so the
-// app's longest accepted title is never refused here.
-const MaxConversationNameLength = 256
+// MaxConversationNameLength is the longest name a rename or a create stores,
+// in characters (runes): the one entity name limit (pkg/entitylimits, issue
+// 1968). It was 256 (and 50 in the legacy ConversationUpdate); the migration
+// truncates a stored name over 128, and the web and mobile clients cut a title
+// they derive from a first message to it.
+const MaxConversationNameLength = entitylimits.MaxNameLength
 
 // conversationNameFromBody reads the `name` a PUT states (client contract 1.4
 // updateConversation, and the web rail's rename). Absent or null means the
@@ -1022,7 +1024,7 @@ func conversationNameFromBody(body map[string]any) (string, error) {
 		return "", apierr.BadRequest("name must not be empty")
 	}
 	if utf8.RuneCountInString(name) > MaxConversationNameLength {
-		return "", apierr.BadRequest(fmt.Sprintf("name must be at most %d characters", MaxConversationNameLength))
+		return "", apierr.FieldTooLong("name", MaxConversationNameLength)
 	}
 	for _, r := range name {
 		if unicode.IsControl(r) {

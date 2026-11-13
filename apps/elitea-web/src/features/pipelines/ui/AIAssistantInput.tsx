@@ -169,7 +169,17 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
 
   const [showAIAssistantModal, setShowAIAssistantModal] = useState(false);
 
-  const handleOpenAIAssistant = useCallback(() => setShowAIAssistantModal(true), []);
+  // The sparkle trigger opens the modal WITH the assistant; the toolbar's full-screen action opens
+  // the same modal as a plain editor, so the two buttons never do the same thing (#2007 review).
+  const [assistantInModal, setAssistantInModal] = useState(false);
+  const handleOpenAIAssistant = useCallback(() => {
+    setAssistantInModal(true);
+    setShowAIAssistantModal(true);
+  }, []);
+  const handleOpenFullScreen = useCallback(() => {
+    setAssistantInModal(false);
+    setShowAIAssistantModal(true);
+  }, []);
   const handleCloseAIAssistant = useCallback(() => setShowAIAssistantModal(false), []);
 
   const detectedLanguage = useMemo(() => language ?? detectContentType(value), [language, value]);
@@ -201,6 +211,11 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
       <InputBase
         {...inputBaseProps}
         {...(fieldName.toLowerCase() === 'code' ? { expand: { minRows: 3, maxRows: 8 } } : {})}
+        // Copy + full-screen, hover-revealed, on every field. Router Condition, State Modifier
+        // Jinja template and Decision description had neither, and with the assistant trigger
+        // hidden there was no way to open the full text at all (#2007).
+        actions={{ enabled: true, showCopy: true, showFullScreen: true }}
+        onFullScreen={handleOpenFullScreen}
       />
       {aiAssistantServed && (
         <Tooltip
@@ -221,7 +236,7 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
           </IconButton>
         </Tooltip>
       )}
-      {aiAssistantServed && showAIAssistantModal && <AIAssistantModal {...modalProps} />}
+      {showAIAssistantModal && <AIAssistantModal {...modalProps} withoutAssistant={!aiAssistantServed || !assistantInModal} />}
     </Box>
   );
 });

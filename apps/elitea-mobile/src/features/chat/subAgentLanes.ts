@@ -18,6 +18,15 @@ export function subAgentGroupLabel(lane: Pick<CloudSubAgentLane, 'displayName' |
   return `${lane.displayName ?? `Sub-agent ${lane.ordinal}`} · temporary`;
 }
 
+/**
+ * The group label of a nested (depth-2) child (#1872): its own label, after
+ * its parent's, so the flat tool-step list still reads which sub-agent
+ * started which — the app has no indented tree view for this list.
+ */
+function nestedSubAgentGroupLabel(parentLabel: string, lane: Pick<CloudSubAgentLane, 'displayName' | 'ordinal'>): string {
+  return `${parentLabel} › ${lane.displayName ?? `Sub-agent ${lane.ordinal}`} · temporary`;
+}
+
 const REPORT_STATUS: Record<Exclude<CloudSubAgentLane['status'], 'running'>, ToolStatus> = {
   completed: 'done',
   failed: 'error',
@@ -34,6 +43,7 @@ function reportStep(lane: CloudSubAgentLane, label: string): ToolStep {
     displayName: null,
     toolkit: null,
     parentAgent: label,
+    parentAvatar: lane.avatar ?? null,
     status,
     startedAt: null,
     endedAt: null,
@@ -48,6 +58,41 @@ function reportStep(lane: CloudSubAgentLane, label: string): ToolStep {
 }
 
 /**
+ * One lane's own tool calls as steps, then its final answer once settled,
+ * under `label`; then the same for its nested (depth-2) children (#1872),
+ * under a label built from this one, so the flat list still shows which
+ * sub-agent started which.
+ */
+function laneSteps(lane: CloudSubAgentLane, label: string, steps: ToolStep[]): void {
+  for (const item of lane.items) {
+    if (item.type !== 'tool') continue;
+    const status = item.ok === undefined && lane.status !== 'running' ? 'error' : STATUS_BY_OK(item.ok);
+    steps.push({
+      id: `${lane.agentId}:${item.callId}`,
+      name: item.tool === '' ? 'tool' : item.tool,
+      displayName: null,
+      toolkit: null,
+      parentAgent: label,
+      parentAvatar: lane.avatar ?? null,
+      status,
+      startedAt: null,
+      endedAt: null,
+      inputs: item.argsSummary ?? null,
+      inputsTruncated: false,
+      output: item.ok === true ? (item.summary ?? null) : null,
+      outputTruncated: false,
+      partial: true,
+      error: item.ok === false ? (item.summary ?? 'Failed') : item.ok === undefined && status === 'error' ? 'Stopped' : null,
+      chunks: null,
+    });
+  }
+  if (lane.status !== 'running') steps.push(reportStep(lane, label));
+  for (const child of lane.children ?? []) {
+    laneSteps(child, nestedSubAgentGroupLabel(label, child), steps);
+  }
+}
+
+/**
  * The children's tool calls as steps, then each settled child's final answer. Once the answer settled (`settled`), a
  * child the worker never ended was stopped with it, and a call of a stopped
  * child that never returned reads as stopped.
@@ -55,29 +100,7 @@ function reportStep(lane: CloudSubAgentLane, label: string): ToolStep {
 export function subAgentSteps(lanes: readonly CloudSubAgentLane[], settled = false): ToolStep[] {
   const steps: ToolStep[] = [];
   for (const lane of settled ? settleSubAgentLanes(lanes) : lanes) {
-    const label = subAgentGroupLabel(lane);
-    for (const item of lane.items) {
-      if (item.type !== 'tool') continue;
-      const status = item.ok === undefined && lane.status !== 'running' ? 'error' : STATUS_BY_OK(item.ok);
-      steps.push({
-        id: `${lane.agentId}:${item.callId}`,
-        name: item.tool === '' ? 'tool' : item.tool,
-        displayName: null,
-        toolkit: null,
-        parentAgent: label,
-        status,
-        startedAt: null,
-        endedAt: null,
-        inputs: item.argsSummary ?? null,
-        inputsTruncated: false,
-        output: item.ok === true ? (item.summary ?? null) : null,
-        outputTruncated: false,
-        partial: true,
-        error: item.ok === false ? (item.summary ?? 'Failed') : item.ok === undefined && status === 'error' ? 'Stopped' : null,
-        chunks: null,
-      });
-    }
-    if (lane.status !== 'running') steps.push(reportStep(lane, label));
+    laneSteps(lane, subAgentGroupLabel(lane), steps);
   }
   return steps;
 }

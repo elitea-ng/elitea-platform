@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.48"
+  x-elitea-client-contract: "1.53"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -2819,7 +2819,7 @@ components:
           description: >
             The new conversation's name. Absent: the source name with
             " (fork)" added ("New conversation (fork)" when the source name is
-            blank). Trimmed; blank, longer than 256 characters or with a
+            blank). Trimmed; blank, longer than 128 characters or with a
             control character answers 400.
         mode:
           type: string
@@ -3034,17 +3034,28 @@ components:
         role: { type: string }
         avatar_pack:
           type: string
+          deprecated: true
           description: >-
-            Client contract 1.46 (ADR-0050 decision 6): on a read, the avatar pack of
-            the version the agent participant runs, an AgentAvatarPackV1
-            OBJECT, read live from the version on every participants read;
-            absent when the version has none (the client then shows
-            `entity_settings.icon_meta`). It stays declared as a string, the
-            "reserved" type contract 1.38 locked, because a type change is a
-            breaking change within the major. A client reads the value as
-            unknown JSON and validates it (`avatarPackOf` in
-            `@elitea/client-core/conversation`); a value that is not a valid
-            pack is ignored. A create request does not set it.
+            Deprecated by client contract 1.49: read `avatar_pack_v1`. Reserved
+            by contract 1.38 as a string. Servers 1.46 to 1.48 sent the avatar
+            pack OBJECT here, against its declared type, so a strict codegen
+            client could reject the whole participant (issue 1881). From 1.49 the
+            server never sends this property. A client that still talks to a
+            1.46 to 1.48 server may read it as unknown JSON and validate it
+            (`avatarPackOf` in `@elitea/client-core/conversation`). A create
+            request does not set it.
+        avatar_pack_v1:
+          allOf: [{ $ref: '#/components/schemas/AgentAvatarPackV1' }]
+          description: >-
+            Client contract 1.49 (ADR-0050 decision 6, issue 1881): on a read, the
+            avatar pack of the version the agent participant runs, read live
+            from the version on every participants read; absent when the
+            version has none (the client then shows
+            `entity_settings.icon_meta`). Only a participant of the
+            conversation's own project, bound to a version of its own agent,
+            carries it. A client still validates it (`avatarPackOf`) and
+            ignores a value that is not a valid pack. A create request does
+            not set it.
 
     # --- Client frame catalogue (client contract 1.1). The `data` of an
     # `execution.node_event` SSE event, per `data.type`; see
@@ -3122,9 +3133,10 @@ components:
     SubAgentLane:
       type: object
       description: >-
-        Client contract 1.48 (ADR-0050 decision 4). A temporary sub-agent a
-        cloud run started with `spawn_agent`, as the answer keeps it
-        (`metadata.subagents_v1`). Untrusted text: render it as plain text.
+        Client contract 1.48 (ADR-0050 decision 4), nesting 1.50 (issue 1872). A
+        temporary sub-agent a cloud run started with `spawn_agent`, as the
+        answer keeps it (`metadata.subagents_v1`). Untrusted text: render it
+        as plain text.
       required: [agent_id, parent_call_id, ordinal, status, items]
       properties:
         agent_id: { type: string }
@@ -3132,6 +3144,88 @@ components:
           type: string
           description: The `tool_run_id` of the `spawn_agent` call that started it.
         ordinal: { type: integer, minimum: 1 }
+        depth:
+          type: integer
+          enum: [1, 2]
+          description: >-
+            Client contract 1.50. 1 for a child of the run's agent, 2 for a
+            child of a child (agents.subagents_max_depth). Absent reads as
+            1 (an older answer).
+        parent_agent_id:
+          type: string
+          description: >-
+            Client contract 1.50. The `agent_id` of the sub-agent that
+            started this one; present only at depth 2. Render nested: this
+            lane appears under its parent's `children`, not at the top
+            level of `metadata.subagents_v1`.
+        children:
+          type: array
+          description: >-
+            Client contract 1.50. This lane's own sub-agents (depth 2),
+            folded here by Main from their own rows; absent or empty for a
+            depth-1 lane with no nested children. A `SubAgentLane` here
+            never itself carries `children` (sub-agent depth is at most 2),
+            so the items are `SubAgentLaneChild`.
+          items:
+            $ref: '#/components/schemas/SubAgentLaneChild'
+        label: { type: string, maxLength: 120 }
+        display_name:
+          type: string
+          maxLength: 120
+          description: The profile's display name; absent when the spawn named none.
+        avatar:
+          type: string
+          maxLength: 120
+          description: The profile's avatar key (`default:<name>`); display only.
+        status:
+          type: string
+          enum: [running, completed, failed, budget_exhausted, cancelled]
+          description: >-
+            `running` on a lane whose answer is still streaming; a settled
+            answer's children are settled (a child the run's end stopped is
+            `cancelled`).
+        items:
+          type: array
+          maxItems: 96
+          items:
+            $ref: '#/components/schemas/SubAgentLaneItem'
+        steps: { type: integer }
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        result:
+          type: string
+          maxLength: 2000
+          description: Its final text (or the text it had when it stopped).
+        error:
+          type: string
+          description: Why it stopped short (`subagent_failed`, `subagent_cancelled`, ...).
+
+    SubAgentLaneChild:
+      type: object
+      description: >-
+        Client contract 1.50 (issue 1872). A depth-2 sub-agent lane under its
+        parent's `children`: a `SubAgentLane` without `children` of its own.
+      required: [agent_id, parent_call_id, ordinal, status, items]
+      properties:
+        agent_id: { type: string }
+        parent_call_id:
+          type: string
+          description: The `tool_run_id` of the `spawn_agent` call that started it.
+        ordinal: { type: integer, minimum: 1 }
+        depth:
+          type: integer
+          enum: [1, 2]
+          description: >-
+            Client contract 1.50. 1 for a child of the run's agent, 2 for a
+            child of a child (agents.subagents_max_depth). Absent reads as
+            1 (an older answer).
+        parent_agent_id:
+          type: string
+          description: >-
+            Client contract 1.50. The `agent_id` of the sub-agent that
+            started this one; present only at depth 2. Render nested: this
+            lane appears under its parent's `children`, not at the top
+            level of `metadata.subagents_v1`.
         label: { type: string, maxLength: 120 }
         display_name:
           type: string
@@ -3656,7 +3750,10 @@ components:
         internal/api/v2/conversations/handler.go:653 (`Create`). Unknown keys
         are ignored.
       properties:
-        name: { type: string }
+        name:
+          type: string
+          description: >
+            Limit: at most 128 characters (issue 1968). Not declared as `maxLength` because the `client` subset is additive-only (ADR-0025 decision 6); the server answers 400 with `field` and `max_length`.
         is_private:
           type: boolean
           description: Defaults to private when absent. A non-boolean value is a 400.
@@ -3728,7 +3825,7 @@ components:
           type: string
           nullable: true
           description: >
-            The new title, trimmed; 1 to 256 characters after trimming, no
+            The new title, trimmed; 1 to 128 characters after trimming, no
             control characters. `null` does not rename.
         is_private:
           type: boolean
@@ -4209,9 +4306,11 @@ components:
             ADR-0050 decision 7c — the agents this message is for, by
             participant id (positive, unique). In a conversation with several
             agents the first answers now and the others answer after it, in
-            order. Empty or absent: the floor decides. An id that is not an
-            agent of the conversation answers 422
-            `addressee_not_in_conversation`.
+            order. Empty or absent: the floor decides, except that a message
+            that mentions people (`user_ids`, `is_mentioning_everyone`) and
+            addresses no agent is for those people alone and starts no turn
+            (client contract 1.53). An id that is not an agent of the
+            conversation answers 422 `addressee_not_in_conversation`.
           items:
             type: integer
             format: int64
@@ -4259,7 +4358,9 @@ components:
             is admitted — on both execution contracts (an ad-hoc model chat
             notifies since client contract 1.1). An id that is not a project
             member is dropped silently; a replay of the same `question_id`
-            notifies nobody again.
+            notifies nobody again. With no `addressed_to` the message is for
+            these people alone: it is stored and notifies them, and starts no
+            turn (client contract 1.53).
           items: { type: integer, format: int64 }
         is_mentioning_everyone:
           type: boolean
@@ -4502,6 +4603,36 @@ components:
             True when this request admitted the turn; false when it replayed an
             earlier admission with the same idempotency key (the same
             `execution_id` and `events_url` come back).
+
+    ChatMessagePosted:
+      type: object
+      description: >-
+        Client contract 1.53. A people-only message that was stored with no
+        turn behind it (sendChatMessage). There is no execution, no
+        `response_message_id` and no `events_url`: a client renders the
+        message and waits for nothing.
+      required: [message_id, created, turn_started]
+      properties:
+        message_id:
+          type: string
+          format: uuid
+          description: The stored message group's UUID, equal to the request's `question_id`.
+        created:
+          type: boolean
+          description: False when the same `question_id` was already stored (a replay); nobody is notified again.
+        turn_started:
+          type: boolean
+          description: Always false; the field lets a client tell this answer from ChatExecutionStarted without reading the status.
+        ignored:
+          type: array
+          description: >-
+            The run inputs the message carried that no turn will read, because
+            nobody was asked to run: `llm_settings`, `mcp_tokens` (when not
+            empty), `skills`, `unattended`, `release_id`. Absent when there
+            were none. A client may say that no agent was asked.
+          items:
+            type: string
+            enum: [llm_settings, mcp_tokens, skills, unattended, release_id]
 
     WorkspaceHandoffError:
       type: object
@@ -7495,6 +7626,17 @@ components:
         error:
           type: string
           description: Human-readable error message
+        field:
+          type: string
+          description: >
+            Only on a 400 for a text property over its length limit (client
+            contract 1.52): the request property, e.g. `name` or
+            `description`.
+        max_length:
+          type: integer
+          description: >
+            Only with `field`: the limit in characters. An entity name is at
+            most 128 characters and a description at most 2000.
       description: >
         NOTE(W2): wire truth from pkg/apierr/apierr.go:47-59 (apierr.Write
         encodes `{"error": message}`) and the handlers' inline
@@ -11776,6 +11918,16 @@ components:
             At most four, each at most 768 characters. Blank entries are
             dropped rather than returned as empty chips.
           items: { type: string }
+        soul:
+          description: >
+            ADR-0050 decision 1a: the persona the model proposed, checked
+            with the same rules as a version write (an AgentSoulV1 document).
+            A proposal that fails those rules is dropped and the rest of the
+            draft is returned. Absent when the model proposed none or the
+            proposal was dropped. The review form shows it
+            and the create body sends it as `version_details.soul`.
+          allOf:
+            - $ref: '#/components/schemas/AgentSoulV1'
         suggested_toolkits:
           type: array
           items: { $ref: '#/components/schemas/SuggestedResource' }
@@ -12241,6 +12393,13 @@ components:
           items: { $ref: '#/components/schemas/DraftConversationTurn' }
         current_draft:
           $ref: '#/components/schemas/AgentDefinition'
+        soul_declined:
+          type: boolean
+          description: >
+            True when the reviewer removed the persona from the draft. The
+            model is told not to write one and the answer carries none. A
+            `current_draft.soul` that fails the soul rules is refused with
+            422 and the soul's own code instead of being dropped.
         llm_settings:
           $ref: '#/components/schemas/DraftLlmSettings'
       example:
@@ -13207,8 +13366,8 @@ components:
     ApplicationCreateRequest:
       type: object
       properties:
-        name: { type: string }
-        description: { type: string }
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
         type: { type: string }
         icon: { type: string }
         versions:
@@ -13227,8 +13386,8 @@ components:
     ApplicationUpdateRequest:
       type: object
       properties:
-        name: { type: string }
-        description: { type: string }
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
         icon: { type: string }
         version:
           type: object
@@ -13238,7 +13397,7 @@ components:
               oneOf: [{ type: string }, { type: integer }]
             id:
               oneOf: [{ type: string }, { type: integer }]
-            name: { type: string }
+            name: { type: string, maxLength: 128 }
             instructions: { type: string }
           additionalProperties: true
           x-elitea-passthrough: >-
@@ -13255,6 +13414,7 @@ components:
       properties:
         name:
           type: string
+          maxLength: 128
           description: >
             Omit the key to leave the stored name alone. An explicit empty
             string is REFUSED with a 400 on the PUT: the column is NOT NULL
@@ -16443,8 +16603,8 @@ components:
     SkillCreateRequest:
       type: object
       properties:
-        name: { type: string }
-        description: { type: string }
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
         type:
           type: string
           description: Accepted but NOT persisted (repos/skills.go).
@@ -16504,6 +16664,7 @@ components:
       properties:
         name:
           type: string
+          maxLength: 128
           description: >-
             Must be non-empty and not "base" (400 otherwise); a duplicate
             name for this skill is a 409.
@@ -17044,10 +17205,11 @@ components:
       properties:
         name:
           type: string
+          maxLength: 128
           nullable: true
           description: >
             Required as a KEY. An absent `name` is a 400; an explicit null is
-            stored and read back as null. Longer than 768 bytes is a 400.
+            stored and read back as null. Longer than 128 characters is a 400.
         expires:
           allOf: [{ $ref: '#/components/schemas/TokenExpiration' }]
           nullable: true
@@ -17946,8 +18108,9 @@ components:
         personalization, which is where apps/elitea-web put them while this
         endpoint still dropped every other top-level key; the top-level
         placement wins, and a nested one is rewritten into the columns.
-        `personalization.theme_mode` is the one key this endpoint never
-        writes: it belongs to PUT /social/author/theme, so any value sent
+        `personalization.theme_mode` and `personalization.language` are the
+        keys this endpoint never writes: they belong to PUT
+        /social/author/theme and /social/author/language, so any value sent
         here is dropped and the stored one is carried forward, even when
         personalization itself is absent.
 
@@ -17970,6 +18133,24 @@ components:
         desktop app, which run on different origins and so share no browser
         storage. Stored in centry.social_users.personalization under
         `theme_mode` (internal/api/v2/social/theme.go).
+
+    LanguagePreference:
+      type: object
+      required: [language]
+      properties:
+        language:
+          type: string
+          nullable: true
+          description: >
+            A language tag such as `en`, `de`, `pt-BR` or `zh-Hant-TW`. On a
+            read, null means the user has never chosen one, and a client keeps
+            its own local choice. A write must send a tag of that shape; null
+            or anything else is a 400. A client with no catalogue for a stored
+            tag falls back to its default language.
+      description: >
+        The caller's interface-language preference, shared by the web, desktop
+        and mobile clients. Stored in centry.social_users.personalization
+        under `language` (internal/api/v2/social/language.go).
 
     CurrentAvatarResponse:
       type: object
@@ -18174,14 +18355,14 @@ components:
         an empty one. Marking `name` required here would make the generated
         client stricter than the server and reject requests the API accepts.
       properties:
-        name: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 128 }
         type:
           type: string
           description: >
             Toolkit type key, e.g. `github`, `slack`, `sql`. The set is
             open — `toolkit_types` is served by a separate handler that this
             spec does not yet cover.
-        description: { type: string }
+        description: { type: string, maxLength: 2000 }
         meta:
           type: object
           additionalProperties: true
@@ -18215,9 +18396,9 @@ components:
         handler dispatch to a different operation entirely (tool↔entity
         relation, see the `updateToolkit` description and issue #38).
       properties:
-        name: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 128 }
         type: { type: string }
-        description: { type: string }
+        description: { type: string, maxLength: 2000 }
         meta:
           type: object
           additionalProperties: true
@@ -28277,6 +28458,23 @@ paths:
         run answers 422 `unsupported_agent_execution`. While the previous
         answer of this conversation is still settling, the server waits up to
         about 3 s before it decides.
+
+        PEOPLE-ONLY MESSAGES (client contract 1.53). A message that mentions
+        people (`user_ids`, or `is_mentioning_everyone`) and names no agent
+        in `addressed_to` is a message to those people. It is stored in the
+        conversation as the sender's message and notifies the people it
+        names, and it starts NO turn: not the conversation's model, not the
+        agent the history last addressed, and not a lead agent. The answer
+        is 201 with `turn_started` false and no `events_url`; there is
+        nothing to stream. The decision is the server's and is made before
+        `participant_id`, `llm_settings` and `execution_contract` are read
+        (`participant_id` is what a client sends for any unaddressed message,
+        so it does not say that an agent was addressed); the `execution_contract`
+        query value only has to be one of the two. A message that addresses
+        an agent (`addressed_to`) still goes to that agent whether or not it
+        also mentions people, and its people are notified. A message with no
+        mention is unchanged. `question_id` is the idempotency key here too:
+        a replay answers 201 with `created` false and notifies nobody again.
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
@@ -28300,6 +28498,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ChatExecutionStarted'
+        '201':
+          description: >-
+            Client contract 1.53. The message was for people alone: it is
+            stored (`created` true) or was already stored (`created` false)
+            and no turn was started.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatMessagePosted'
         '400':
           description: A malformed request, path/body mismatch, an invalid UUID, a bad mention or attachment list.
           content:
@@ -36317,9 +36524,13 @@ paths:
       description: |
         internal/api/v2/agentteams/handler.go's List (ADR-0050 decision 8,
         issue 1620). A saved team is a project's roster of agents with its
-        floor policy and lead. Gated on `models.teams.list`. Most recently
-        updated first; `query` filters by a case-insensitive substring of the
-        name.
+        floor policy and lead. Gated on `models.teams.list`. Ordered by
+        lower-cased name, then id; `query` filters by a case-insensitive
+        substring of the name. Page by `offset`, or, stable under concurrent
+        writes, by keyset: pass the last team's `name` and `id` as
+        `after_name` and `after_id` (both or neither; `offset` is then
+        ignored), so a team created or deleted between pages cannot shift
+        the window.
       tags: [chat]
       parameters:
         - name: query
@@ -36335,6 +36546,16 @@ paths:
           in: query
           required: false
           schema: { type: integer, minimum: 0, default: 0 }
+        - name: after_name
+          in: query
+          required: false
+          schema: { type: string, maxLength: 128 }
+          description: Keyset cursor, the `name` of the last team held. Goes with `after_id`.
+        - name: after_id
+          in: query
+          required: false
+          schema: { type: integer, format: int64, minimum: 1 }
+          description: Keyset cursor, the `id` of the last team held. Goes with `after_name`.
       responses:
         '200':
           description: One page of the project's teams.
@@ -36343,7 +36564,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AgentTeamList'
         '400':
-          description: limit, offset or query is not valid.
+          description: limit, offset, query or the keyset cursor is not valid.
           content:
             application/json:
               schema:
@@ -38566,6 +38787,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DocumentLoadersResponse'
+              # A SERVED catalogue, so a generated mock is deterministic: the
+              # faker default could leave all three maps out, which reads as
+              # "this deployment allows no file types" and turns attachments
+              # off at random in every test that renders the composer.
+              example:
+                items:
+                  - type: document_types
+                    name: Document types
+                    description: File extensions the indexer loads as documents.
+                    supported_extensions: ['.md', '.pdf', '.txt']
+                  - type: image_types
+                    name: Image types
+                    description: File extensions the indexer loads as images.
+                    supported_extensions: ['.png']
+                  - type: code_types
+                    name: Code types
+                    description: File extensions the indexer loads as plain-text code.
+                    supported_extensions: ['.py']
+                total: 3
+                document_types: { .md: text/markdown, .pdf: application/pdf, .txt: text/plain }
+                image_types: { .png: image/png }
+                code_types: { .py: text/plain }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '501':
@@ -43167,6 +43410,63 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ThemePreference'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '404': { $ref: '#/components/responses/404' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /social/author/language:
+    get:
+      operationId: getCurrentAuthorLanguage
+      summary: Get the authenticated user's own interface-language preference
+      description: |
+        Client contract 1.51. internal/api/v2/social/language.go
+        (GetLanguagePreference). Reads `personalization.language` from the
+        caller's own centry.social_users row, keyed on the authenticated
+        principal's owning user id. `language` is null when the user has never
+        chosen one, or when the stored value is not a language tag.
+      tags: [social, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '200':
+          description: The caller's language preference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguagePreference'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '500': { $ref: '#/components/responses/500' }
+
+    put:
+      operationId: updateCurrentAuthorLanguage
+      summary: Set the authenticated user's own interface-language preference
+      description: |
+        Client contract 1.51. internal/api/v2/social/language.go
+        (UpdateLanguagePreference). Merges `language` into the caller's
+        personalization blob; every other key is kept. Creates the caller's
+        social profile row when there is none. Answers the stored preference.
+        The value is also returned as `personalization.language` by
+        GET /social/author.
+      tags: [social, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LanguagePreference'
+      responses:
+        '200':
+          description: The stored preference
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguagePreference'
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '404': { $ref: '#/components/responses/404' }

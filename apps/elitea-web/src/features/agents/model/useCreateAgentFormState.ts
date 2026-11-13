@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { OutputContract } from '@/shared/api/generated/model';
 import { MAX_NAME_LENGTH } from '@/shared/lib/limits';
+import { characterCount } from '@/shared/lib/textLimits';
 import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
 import { contextResolver } from '@/shared/lib/string';
 
@@ -236,7 +237,7 @@ export function useCreateAgentFormState(values: AgentDraftValues, onFieldChange:
   return {
     name,
     description: values.description ?? '',
-    nameAtMax: name.length === MAX_NAME_LENGTH,
+    nameAtMax: characterCount(name) >= MAX_NAME_LENGTH,
     nameFocused: isFocused(PROMPT_PAYLOAD_KEY.name),
     descriptionFocused: isFocused(PROMPT_PAYLOAD_KEY.description),
     variables,

@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 use super::child::{self, Child, InputRefused};
 use super::profile::{
     self, BRIEF_ATTACHMENT_NOT_READABLE, BRIEF_EXCERPT_NOT_VISIBLE, BRIEF_MEMORY_NOT_RECALLED,
-    Brief, MAX_AVATAR_BYTES, MAX_BRIEF_ITEMS, MAX_BRIEF_TEXT_CHARS, MAX_DISPLAY_NAME_CHARS,
-    MAX_PROFILE_TOOLS, MAX_SOUL_BYTES, Profile, SUBAGENT_MODEL_NOT_ALLOWED, SpawnRecord,
+    Brief, MAX_BRIEF_ITEMS, MAX_BRIEF_TEXT_CHARS, MAX_DISPLAY_NAME_CHARS, MAX_PROFILE_TOOLS,
+    MAX_SOUL_BYTES, Profile, SUBAGENT_MODEL_NOT_ALLOWED, SpawnRecord,
 };
 use super::{
     CHILD_AGENT_PREFIX, CLOSE_AGENT, ChildIdentity, DEFAULT_WAIT_SECONDS, DEPTH_EXCEEDED,
@@ -153,7 +153,7 @@ fn brief_refused(code: &str) -> Value {
             "An attachment in `context.attachments` is not one you can read in this turn. Name only this turn's attachment ids."
         }
         BRIEF_MEMORY_NOT_RECALLED => {
-            "A memory entry in `context.memory_entries` is not one you were given in this turn: an id on a `[memory N, ...]` line of your notes, or one `recall` gave you. Recall it first, or pass it as a fact."
+            "A memory entry in `context.memory_entries` is not one you were given in this turn. Name it exactly as its mark shows it, `N·TAG` from a `[memory N·TAG, ...]` line of your notes, or the `memory_ref` that `recall` gave you; a bare number or a mark without this turn's tag is not one of your notes. Recall it first, or pass it as a fact."
         }
         _ => "The brief could not be checked.",
     };
@@ -208,8 +208,8 @@ fn spawn_schema() -> Value {
                     },
                     "avatar": {
                         "type": "string",
-                        "maxLength": MAX_AVATAR_BYTES,
-                        "description": "An avatar key of at most 128 bytes, such as \"default:owl\""
+                        "enum": profile::DEFAULT_AVATAR_KEYS,
+                        "description": "One of the default avatar keys, such as \"default:owl\"; any other key is ignored and the sub-agent has no avatar"
                     }
                 },
                 "additionalProperties": false
@@ -248,7 +248,7 @@ fn spawn_schema() -> Value {
                         "type": "array",
                         "maxItems": MAX_BRIEF_ITEMS,
                         "items": {"type": "string"},
-                        "description": "Ids of memory entries you were given in this turn: N on a [memory N, ...] line of your notes, or an entry_id from recall"
+                        "description": "Memory entries you were given in this turn, each as N·TAG exactly as its [memory N·TAG, ...] line of your notes shows it, or a memory_ref from recall"
                     }
                 },
                 "additionalProperties": false

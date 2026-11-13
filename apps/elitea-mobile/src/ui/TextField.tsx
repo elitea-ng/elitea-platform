@@ -6,6 +6,7 @@ import { useDesign } from '@/design/DesignProvider';
 import { Icon } from './Icon';
 import { hitTarget } from './platform';
 import { Text } from './Text';
+import { limitMessage } from './textLimit';
 import { maxScale, ramp } from './type';
 
 export interface TextFieldProps extends Omit<TextInputProps, 'style'> {
@@ -15,6 +16,12 @@ export interface TextFieldProps extends Omit<TextInputProps, 'style'> {
   error?: string | null;
   note?: string | null;
   noteTestID?: string;
+  /**
+   * The most characters the field may hold (issue 1968: names 128, descriptions 2000). The field
+   * does not cut the text: it shows how many characters are left near the limit and, past it, an
+   * error. The form blocks Save with `exceedsLimit` from `./textLimit`.
+   */
+  characterLimit?: number;
 }
 
 /**
@@ -23,7 +30,10 @@ export interface TextFieldProps extends Omit<TextInputProps, 'style'> {
  * grouped-form style and the Material 3 outlined field's label), the field grows with the text
  * size (minHeight, not height) and keeps the 44/48 target.
  */
-export function TextField({ label, error, note, noteTestID, onFocus, onBlur, ...rest }: TextFieldProps) {
+export function TextField({ label, error: errorProp, note: noteProp, noteTestID, characterLimit, onFocus, onBlur, ...rest }: TextFieldProps) {
+  const limit = characterLimit === undefined ? null : limitMessage(rest.value ?? '', characterLimit);
+  const error = errorProp ?? limit?.error ?? null;
+  const note = [noteProp, limit?.note].filter(Boolean).join(' ') || null;
   const { colors, radius } = useDesign();
   const [focused, setFocused] = useState(false);
   const border = error ? colors.danger : focused ? colors.focus : colors.separatorStrong;

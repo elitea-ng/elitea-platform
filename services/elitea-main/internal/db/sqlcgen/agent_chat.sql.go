@@ -502,7 +502,10 @@ WITH resolved AS MATERIALIZED (
            question_group.id,
            jsonb_build_object(
                'execution_generation',
-               $10::text
+               $10::text,
+               -- #1944: this turn wrote its question.
+               'question_own',
+               TRUE
            ),
            TRUE,
            -- Strictly after its question, and NEVER in the future (#1082).
@@ -931,7 +934,13 @@ WITH resolved AS MATERIALIZED (
            question_ref.id,
            jsonb_build_object(
                'execution_generation',
-               $18::text
+               $18::text,
+               -- #1944: whether this turn wrote the question (it did not when
+               -- it answers a question an earlier turn already wrote).
+               -- ResolveCurrentRegeneration reads it; the heuristic there is
+               -- only for an answer from before this flag.
+               'question_own',
+               resolved.reused_question_group_id IS NULL
            ),
            TRUE,
            -- Strictly after its question, and NEVER in the future (#1082).
@@ -1465,6 +1474,20 @@ LEFT JOIN LATERAL (
                    ELSE 'user'
                END AS role,
                CASE
+                   -- Sent to people, not asked of the reader: always named, even
+                   -- when the asking person wrote it, and marked as such.
+                   WHEN message_group.meta ->> 'people_only' = 'true'
+                   THEN jsonb_build_object(
+                       'elitea_author', jsonb_build_object(
+                           'kind', 'person',
+                           'name', COALESCE(
+                               NULLIF(btrim(author.meta ->> 'user_name'), ''),
+                               NULLIF(btrim(author.entity_meta ->> 'user_name'), ''),
+                               ''
+                           )
+                       ),
+                       'elitea_addressed', 'people'
+                   )
                    WHEN author.id = author_participant.id
                      OR author.id = target_participant.id
                    THEN '{}'::jsonb
@@ -1570,6 +1593,16 @@ LEFT JOIN LATERAL (
             FROM regexp_matches(message_canvas.canvas_content, chr(96) || '+', 'g') AS backtick_run(run)
         ) AS canvas_fence ON TRUE
         CROSS JOIN LATERAL (
+            SELECT jsonb_build_object(
+                       'type', 'text',
+                       'text', '[Sent to people only: this message is for the people it @mentions and was not addressed to you.]'
+                   ) AS chunk,
+                   -1 AS chunk_index
+            WHERE message_item.item_type = 'text_message'
+              AND message_item.order_index = 0
+              AND message_group.meta ->> 'people_only' = 'true'
+              AND COALESCE(message_text.content, '') <> ''
+            UNION ALL
             SELECT jsonb_build_object(
                        'type', 'text', 'text', message_text.content
                    ) AS chunk,
@@ -1746,6 +1779,18 @@ LEFT JOIN LATERAL (
                             statement_timestamp() AT TIME ZONE 'UTC'
                         )
                   )
+              )
+              -- A message the person wrote to PEOPLE (a people-only post,
+              -- PostHumanMessage) never gets a reply, so the pair rule above
+              -- would drop it from every later turn. It is a visible message
+              -- like any other person's (ADR-0050 decision 9a), identified by
+              -- the marker its writer sets, NOT by "a user group with no
+              -- reply": that would bring back the question of a failed or
+              -- aborted turn.
+              OR (
+                  author.entity_name = 'user'
+                  AND message_group.reply_to_id IS NULL
+                  AND message_group.meta ->> 'people_only' = 'true'
               )
           )
         GROUP BY message_group.id, message_group.created_at, message_group.uuid,
@@ -2475,6 +2520,20 @@ LEFT JOIN LATERAL (
                    ELSE 'user'
                END AS role,
                CASE
+                   -- Sent to people, not asked of the reader: always named, even
+                   -- when the asking person wrote it, and marked as such.
+                   WHEN message_group.meta ->> 'people_only' = 'true'
+                   THEN jsonb_build_object(
+                       'elitea_author', jsonb_build_object(
+                           'kind', 'person',
+                           'name', COALESCE(
+                               NULLIF(btrim(author.meta ->> 'user_name'), ''),
+                               NULLIF(btrim(author.entity_meta ->> 'user_name'), ''),
+                               ''
+                           )
+                       ),
+                       'elitea_addressed', 'people'
+                   )
                    WHEN author.id = author_participant.id
                      OR author.id = target_participant.id
                    THEN '{}'::jsonb
@@ -2580,6 +2639,16 @@ LEFT JOIN LATERAL (
             FROM regexp_matches(message_canvas.canvas_content, chr(96) || '+', 'g') AS backtick_run(run)
         ) AS canvas_fence ON TRUE
         CROSS JOIN LATERAL (
+            SELECT jsonb_build_object(
+                       'type', 'text',
+                       'text', '[Sent to people only: this message is for the people it @mentions and was not addressed to you.]'
+                   ) AS chunk,
+                   -1 AS chunk_index
+            WHERE message_item.item_type = 'text_message'
+              AND message_item.order_index = 0
+              AND message_group.meta ->> 'people_only' = 'true'
+              AND COALESCE(message_text.content, '') <> ''
+            UNION ALL
             SELECT jsonb_build_object(
                        'type', 'text', 'text', message_text.content
                    ) AS chunk,
@@ -2760,6 +2829,18 @@ LEFT JOIN LATERAL (
                             statement_timestamp() AT TIME ZONE 'UTC'
                         )
                   )
+              )
+              -- A message the person wrote to PEOPLE (a people-only post,
+              -- PostHumanMessage) never gets a reply, so the pair rule above
+              -- would drop it from every later turn. It is a visible message
+              -- like any other person's (ADR-0050 decision 9a), identified by
+              -- the marker its writer sets, NOT by "a user group with no
+              -- reply": that would bring back the question of a failed or
+              -- aborted turn.
+              OR (
+                  author.entity_name = 'user'
+                  AND message_group.reply_to_id IS NULL
+                  AND message_group.meta ->> 'people_only' = 'true'
               )
           )
         GROUP BY message_group.id, message_group.created_at, message_group.uuid,
@@ -3749,16 +3830,25 @@ SELECT conversation.uuid AS conversation_uuid,
            WHEN 'dummy' THEN 'adhoc'
        END::text AS regeneration_kind,
        question_text.content::text AS user_input,
-       -- #1903: this answer's own turn wrote its question, so no earlier
-       -- answer replies to it. A later addressed agent answers the person's
-       -- existing question instead, which is in its history already.
-       NOT EXISTS (
-           SELECT 1
-           FROM chat_message_group AS earlier_answer
-           WHERE earlier_answer.reply_to_id = question.id
-             AND earlier_answer.conversation_id = conversation.id
-             AND earlier_answer.id < response.id
-       )::boolean AS question_is_own
+       -- #1903, #1944: this answer's own turn wrote its question. A later
+       -- addressed agent answers the person's existing question instead,
+       -- which is in its history already. The answer records it at start
+       -- (meta.question_own); for an answer from before that, no earlier
+       -- answer replying to the question is the heuristic fallback.
+       COALESCE(
+           CASE WHEN jsonb_typeof(response.meta -> 'question_own') = 'boolean'
+                THEN (response.meta ->> 'question_own')::boolean END,
+           NOT EXISTS (
+               SELECT 1
+               FROM chat_message_group AS earlier_answer
+               WHERE earlier_answer.reply_to_id = question.id
+                 AND earlier_answer.conversation_id = conversation.id
+                 AND earlier_answer.id < response.id
+           )
+       )::boolean AS question_is_own,
+       -- #1869: the session thread the answer ran in, so a regeneration keeps it
+       -- ("" for an answer that settled none).
+       COALESCE(response.meta ->> 'thread_id', '')::text AS thread_id
 FROM chat_message_group AS response
 JOIN chat_conversations AS conversation
   ON conversation.id = response.conversation_id
@@ -3841,7 +3931,8 @@ type ResolveCurrentRegenerationRow struct {
 	ResponseIsStreaming bool        `db:"response_is_streaming" json:"response_is_streaming"`
 	RegenerationKind    string      `db:"regeneration_kind" json:"regeneration_kind"`
 	UserInput           string      `db:"user_input" json:"user_input"`
-	QuestionIsOwn       *bool       `db:"question_is_own" json:"question_is_own"`
+	QuestionIsOwn       bool        `db:"question_is_own" json:"question_is_own"`
+	ThreadID            string      `db:"thread_id" json:"thread_id"`
 }
 
 func (q *Queries) ResolveCurrentRegeneration(ctx context.Context, arg ResolveCurrentRegenerationParams) (ResolveCurrentRegenerationRow, error) {
@@ -3855,6 +3946,7 @@ func (q *Queries) ResolveCurrentRegeneration(ctx context.Context, arg ResolveCur
 		&i.RegenerationKind,
 		&i.UserInput,
 		&i.QuestionIsOwn,
+		&i.ThreadID,
 	)
 	return i, err
 }

@@ -58,6 +58,25 @@ describe('useAgentDraftApproval', () => {
     expect(result.current.isApproving).toBe(false);
   });
 
+  it("sends the reviewed persona as the new version's soul, and none when it was removed (issue 1644)", async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      getCreateApplicationMockHandler(async (info) => {
+        bodies.push(await info.request.json());
+        return { id: '42', name: 'A', description: '', type: 'interface', icon: '', owner_id: 'u1', created_at: '2026-01-01T00:00:00Z' };
+      }),
+    );
+    const { result } = renderHook(() => useAgentDraftApproval({ projectId: 'p1' }), { wrapper: createWrapper() });
+    const soul = { schema: 'elitea.soul/v1', display_name: 'Mira', role: 'Incident lead' };
+    const selection = { selectedAgentIds: new Set<number | string>(), selectedPipelineIds: new Set<number | string>() };
+    await act(async () => {
+      await result.current.approve({ ...EMPTY_AGENT_DRAFT, name: 'A', soul }, selection);
+      await result.current.approve({ ...EMPTY_AGENT_DRAFT, name: 'A' }, selection);
+    });
+    expect((bodies[0] as { versions: [{ soul?: unknown }] }).versions[0].soul).toEqual(soul);
+    expect((bodies[1] as { versions: [{ soul?: unknown }] }).versions[0]).not.toHaveProperty('soul');
+  });
+
   it('sends the trimmed name and mapped version fields on create', async () => {
     let capturedBody: unknown;
     server.use(

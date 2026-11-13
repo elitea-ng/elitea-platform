@@ -3300,6 +3300,35 @@
       ]
     },
     {
+      "$comment": "The user's shared interface-language preference (web, desktop and mobile agree on it). Handwritten over eliteaFetch for the same background-request reason as the theme read.",
+      "id": "social.getLanguagePreference",
+      "method": "GET",
+      "path": "/social/author/language",
+      "operationId": "getCurrentAuthorLanguage",
+      "source": "handwritten",
+      "responseSchema": "LanguagePreference",
+      "fixture": null,
+      "usedBy": [
+        "shared/api/languagePreference.ts",
+        "app/LanguageSync.tsx"
+      ]
+    },
+    {
+      "$comment": "Saved by the account menu's Language choice before it reloads, and by the sync to seed a never-stored server value or retry an unconfirmed choice. Background like the read.",
+      "id": "social.updateLanguagePreference",
+      "method": "PUT",
+      "path": "/social/author/language",
+      "operationId": "updateCurrentAuthorLanguage",
+      "source": "handwritten",
+      "responseSchema": "LanguagePreference",
+      "fixture": null,
+      "usedBy": [
+        "shared/api/languagePreference.ts",
+        "widgets/account-menu/ui/AccountMenu.tsx",
+        "app/LanguageSync.tsx"
+      ]
+    },
+    {
       "id": "admin.getAdminProjectCloudExecutor",
       "method": "GET",
       "path": "/admin/project_cloud_executor/administration/{project_id}",

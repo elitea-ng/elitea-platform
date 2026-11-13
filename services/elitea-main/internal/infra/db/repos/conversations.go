@@ -298,7 +298,6 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 	}
 	r.enrichAgentParticipantTools(ctx, s, items)
 	r.enrichAgentParticipantPublication(ctx, s, items)
-	r.enrichAgentParticipantAvatarPack(ctx, s, items)
 	r.enrichParticipantNesting(ctx, s, items)
 	return items, nil
 }
@@ -424,9 +423,14 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 	// name the marker never reached, while the meta key is written or the whole
 	// statement is not. The name marker stays as the fallback for versions
 	// withdrawn before that key existed.
+	//
+	// The same row answers the avatar pack (ADR-0050 decision 6, #1856): it
+	// used to be a third round trip over these very ids.
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
 		SELECT av.id, COALESCE(av.status, ''), COALESCE(av.name, ''),
-		       COALESCE(av.meta->>'withdrawn_from_name', '')
+		       COALESCE(av.meta->>'withdrawn_from_name', ''),
+		       av.application_id,
+		       CASE WHEN jsonb_typeof(av.avatar_pack) = 'object' THEN av.avatar_pack::text END
 		FROM %s.application_versions av
 		WHERE av.id = ANY($1::int[])`, s), versionIDs)
 	if err != nil {
@@ -435,21 +439,35 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 	defer rows.Close()
 
 	type publication struct {
-		status    string
-		withdrawn bool
+		status      string
+		withdrawn   bool
+		application int64
+		pack        map[string]any
 	}
 	resolved := map[int32]publication{}
 	for rows.Next() {
 		var versionID int32
 		var status, name, withdrawnFrom string
-		if err := rows.Scan(&versionID, &status, &name, &withdrawnFrom); err != nil {
+		var applicationID *int64
+		var rawPack *string
+		if err := rows.Scan(&versionID, &status, &name, &withdrawnFrom, &applicationID, &rawPack); err != nil {
 			continue
 		}
-		resolved[versionID] = publication{
+		state := publication{
 			status: status,
 			withdrawn: status != applicationVersionStatusPublished &&
 				(withdrawnFrom != "" || strings.Contains(name, withdrawnVersionNameMarker)),
 		}
+		if applicationID != nil {
+			state.application = *applicationID
+		}
+		if rawPack != nil {
+			var pack map[string]any
+			if json.Unmarshal([]byte(*rawPack), &pack) == nil {
+				state.pack = pack
+			}
+		}
+		resolved[versionID] = state
 	}
 	if rows.Err() != nil {
 		return
@@ -466,78 +484,38 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 		for _, i := range indexes {
 			items[i].Meta["version_status"] = state.status
 			items[i].Meta["version_withdrawn"] = state.withdrawn
+			if state.pack != nil && participantOwnsVersion(items[i], s, state.application) {
+				if items[i].Persona == nil {
+					items[i].Persona = map[string]any{}
+				}
+				// Client contract 1.49 (#1881): the object goes under its own
+				// key. `persona.avatar_pack` is the string contract 1.38
+				// reserved; 1.46 to 1.48 put the object there, which a strict
+				// codegen client could reject with the whole participant.
+				items[i].Persona[participantAvatarPackKey] = state.pack
+			}
 		}
 	}
 }
 
-// enrichAgentParticipantAvatarPack adds the avatar pack of an agent
-// participant's version to its persona as `persona.avatar_pack` (ADR-0050
-// decision 6, the "later avatar_pack" of Participant.Persona). It is read
-// live, not snapshotted like the rest of the persona: a pack names
-// content-addressed media, so a new still shows from the next read. The
-// client falls back to `entity_settings.icon_meta` without one. An
-// enrichment only: a tenant without the column (tenant/0165 not yet run)
-// keeps its participants as read.
-func (r *ConversationsRepo) enrichAgentParticipantAvatarPack(
-	ctx context.Context,
-	s string,
-	items []conversations.Participant,
-) {
-	// Version ids are per-schema serials, so only a participant of THIS
-	// project is looked up here, and its version must belong to its own
-	// application: a catalogue agent's version 42 is not this project's
-	// version 42 (the same guard as enrichParticipantNesting).
-	type versionKey struct {
-		application int64
-		version     int32
-	}
-	byVersion := map[versionKey][]int{}
-	for i := range items {
-		if items[i].EntityName != participantEntityApplication {
-			continue
-		}
-		applicationID, okApplication := positiveInteger(items[i].EntityMeta["id"])
-		project, okProject := positiveInteger(items[i].EntityMeta["project_id"])
-		versionID, okVersion := participantVersionID(items[i].EntitySettings)
-		if !okApplication || !okProject || !okVersion || schema(strconv.FormatInt(project, 10)) != s {
-			continue
-		}
-		key := versionKey{application: applicationID, version: versionID}
-		byVersion[key] = append(byVersion[key], i)
-	}
-	if len(byVersion) == 0 {
-		return
-	}
-	versionIDs := make([]int32, 0, len(byVersion))
-	for key := range byVersion {
-		versionIDs = append(versionIDs, key.version)
-	}
-	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
-		SELECT av.application_id, av.id, av.avatar_pack::text
-		FROM %s.application_versions av
-		WHERE av.id = ANY($1::int[]) AND jsonb_typeof(av.avatar_pack) = 'object'`, s), versionIDs)
-	if err != nil {
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var applicationID int64
-		var versionID int32
-		var raw string
-		if err := rows.Scan(&applicationID, &versionID, &raw); err != nil {
-			continue
-		}
-		var pack map[string]any
-		if json.Unmarshal([]byte(raw), &pack) != nil {
-			continue
-		}
-		for _, i := range byVersion[versionKey{application: applicationID, version: versionID}] {
-			if items[i].Persona == nil {
-				items[i].Persona = map[string]any{}
-			}
-			items[i].Persona["avatar_pack"] = pack
-		}
-	}
+// participantAvatarPackKey is the persona key the avatar pack is served
+// under (client contract 1.49).
+const participantAvatarPackKey = "avatar_pack_v1"
+
+// participantOwnsVersion is the avatar pack's guard (ADR-0050 decision 6).
+// The pack reaches the persona as `persona.avatar_pack_v1`, read live rather
+// than snapshotted like the rest of the persona: a pack names
+// content-addressed media, so a new still shows from the next read, and the
+// client falls back to `entity_settings.icon_meta` without one. Version ids
+// are per-schema serials, so only a participant of THIS project gets it, and
+// only when the version belongs to its own application: a catalogue agent's
+// version 42 is not this project's version 42 (the same guard as
+// enrichParticipantNesting). The publication fields keep their older,
+// unguarded reading.
+func participantOwnsVersion(item conversations.Participant, s string, application int64) bool {
+	applicationID, okApplication := positiveInteger(item.EntityMeta["id"])
+	project, okProject := positiveInteger(item.EntityMeta["project_id"])
+	return okApplication && okProject && application == applicationID && schema(strconv.FormatInt(project, 10)) == s
 }
 
 // applicationVersionStatusPublished is the status a version in the catalogue
@@ -2083,6 +2061,13 @@ func (r *ConversationsRepo) GetMessageByUUID(ctx context.Context, projectID, mes
 
 	var meta map[string]any
 	_ = json.Unmarshal(metaBytes, &meta) // best-effort: DB column is trusted JSON
+	// issue 1923: this answer's sub-agent lanes are rows of their own
+	// (chat_message_subagent_lanes), folded onto meta.subagents_v1 here.
+	if lanesByGroup, err := subAgentLanesByGroup(ctx, r.pool, s, []int{groupID}); err != nil {
+		return nil, err
+	} else {
+		applySubAgentLanes(&meta, lanesByGroup[groupID])
+	}
 
 	// Get message items with their content, ordered
 	qi := fmt.Sprintf(`SELECT mi.id, mi.uuid::text, mi.item_type, mi.order_index, mi.meta,
@@ -3105,6 +3090,20 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 
 	if len(groupIDs) == 0 {
 		return []map[string]any{}, nil
+	}
+
+	// issue 1923: each answer's sub-agent lanes are rows of their own
+	// (chat_message_subagent_lanes), folded onto meta.subagents_v1 here so
+	// this route reads the same shape ListMessages and GetMessageByUUID do.
+	lanesByGroup, err := subAgentLanesByGroup(ctx, r.pool, s, groupIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i, group := range groups {
+		if metaObj, ok := group["meta"].(map[string]any); ok {
+			applySubAgentLanes(&metaObj, lanesByGroup[groupIDs[i]])
+			groups[i]["meta"] = metaObj
+		}
 	}
 
 	// Fetch message_items with their payload for all groups.

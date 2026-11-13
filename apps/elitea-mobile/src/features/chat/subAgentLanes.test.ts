@@ -29,6 +29,8 @@ describe('cloud sub-agents (client contract 1.48)', () => {
       ['read_file', 'running', 'Owl · temporary'],
     ]);
     expect(groupByAgent(steps).map((g) => g.agent)).toEqual(['Owl · temporary']);
+    // Issue 1870: the profile's avatar key reaches the group, to draw its image.
+    expect(groupByAgent(steps).map((g) => g.avatar)).toEqual(['default:owl']);
     // Settled without the child's end: it was stopped with the run.
     const stopped = subAgentSteps(turn.subAgents, true);
     expect(stopped[1]).toMatchObject({ status: 'error', error: 'Stopped' });
@@ -45,6 +47,28 @@ describe('cloud sub-agents (client contract 1.48)', () => {
 
   it('names an unnamed child by its ordinal', () => {
     expect(subAgentGroupLabel({ displayName: undefined, ordinal: 2 })).toBe('Sub-agent 2 · temporary');
+  });
+
+  // #1872: a depth-2 grandchild nests under its parent; this app has no
+  // tree view for the tool-step list, so its steps follow the parent's with
+  // a label built from the parent's, "<parent> › <child> · temporary".
+  it('nests a grandchild under its parent in the flat tool-step list', () => {
+    let turn = INITIAL_TURN;
+    for (const entry of [
+      started,
+      { kind: 'started', agent_id: 'a_2', parent_call_id: 'call-nested', ordinal: 2, depth: 2, parent_agent_id: 'a_1', display_name: 'Hawk' },
+      { kind: 'tool_start', agent_id: 'a_2', call_id: 'k9', tool: 'grep' },
+      { kind: 'finished', agent_id: 'a_2', status: 'completed', result: 'Nested answer.' },
+      { kind: 'finished', agent_id: 'a_1', status: 'completed', result: 'Two callers.' },
+    ]) {
+      turn = reduceTurn(turn, lane(entry));
+    }
+    const steps = subAgentSteps(turn.subAgents);
+    expect(steps.map((s) => [s.name, s.parentAgent])).toEqual([
+      ['Final answer', 'Owl · temporary'],
+      ['grep', 'Owl · temporary › Hawk · temporary'],
+      ['Final answer', 'Owl · temporary › Hawk · temporary'],
+    ]);
   });
 
   it('reads a reloaded answer’s lanes from meta.subagents_v1', () => {

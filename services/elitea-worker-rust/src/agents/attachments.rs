@@ -819,6 +819,23 @@ fn bounded_reference_text(value: &Value) -> bool {
     })
 }
 
+/// The conversation's attachment bucket is where generated images are saved
+/// (#1969): the same platform answer the data tools use.
+#[async_trait::async_trait]
+impl elitea_agent_runtime::toolkits::ImageArtifactBucket for ClaimAttachmentBucket {
+    async fn artifact_bucket(
+        &self,
+    ) -> Result<String, elitea_agent_runtime::toolkits::ImageBucketError> {
+        use elitea_agent_runtime::toolkits::AttachmentBucketError as Source;
+        use elitea_agent_runtime::toolkits::AttachmentBucketResolver as _;
+        use elitea_agent_runtime::toolkits::ImageBucketError as Failure;
+        self.attachment_bucket().await.map_err(|error| match error {
+            Source::NotAvailable => Failure::NotAvailable,
+            Source::Unavailable => Failure::Unavailable,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;

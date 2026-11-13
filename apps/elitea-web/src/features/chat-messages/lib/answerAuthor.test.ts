@@ -73,6 +73,16 @@ describe('convertMessagesToChatHistory', () => {
     });
   });
 
+  it('reads the avatar pack from avatar_pack_v1 (contract 1.49) and from avatar_pack (1.46 to 1.48)', () => {
+    const url = `/api/v2/agent_media/1/${'ab'.repeat(32)}.png`;
+    const pack = { schema: 'elitea.avatar_pack/v1', slots: { still: { url } } };
+    for (const persona of [{ avatar_pack_v1: pack }, { avatar_pack: pack }]) {
+      const withPack: MessageParticipantWire[] = [{ id: '2', entity_name: 'application', kind: 'agent', persona }];
+      const [answer] = convertMessagesToChatHistory([group({ author_participant_id: 2 })], withPack);
+      expect(answer).toMatchObject({ authorAvatarPack: { slots: { still: { url } } } });
+    }
+  });
+
   it('keeps the agent name when the agent has no persona', () => {
     const [answer] = convertMessagesToChatHistory([group({ author_participant_id: 3 })], participants);
     expect(answer?.authorName).toBe('CI Doctor');

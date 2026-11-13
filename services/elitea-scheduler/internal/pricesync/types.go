@@ -114,6 +114,32 @@ type RawModelPrice struct {
 	InputCostPerCharacter *float64
 	// OutputCostPerCharacter is the per-character output price (text-to-speech).
 	OutputCostPerCharacter *float64
+	// Image, when set, makes this row an IMAGE price for one (model, size,
+	// quality) and not a gateway_models row: every other price field is nil
+	// and the syncer writes it to gateway.gateway_model_image_prices.
+	Image *RawImagePrice
+}
+
+// RawImagePrice is one per-image price exactly as a source published it, in
+// that source's own Denomination. PerImage is the USD price of ONE image and is
+// NOT scaled by the Normalizer: the unit is the image, not a count of 1M.
+// PerPixel is the USD price of ONE pixel and is scaled to per-1M pixels by the
+// same factor as every other price. Size is "WIDTHxHEIGHT" or "" (any size).
+// Quality is "" for any quality.
+type RawImagePrice struct {
+	Size     string
+	Quality  string
+	PerImage *float64
+	PerPixel *float64
+}
+
+// NormalizedImagePrice is a RawImagePrice in the catalog's units: USD per
+// image, and USD per 1,000,000 pixels.
+type NormalizedImagePrice struct {
+	Size           string
+	Quality        string
+	UsdPerImage    *float64
+	UsdPer1MPixels *float64
 }
 
 // NormalizedModelPrice is a RawModelPrice converted to the canonical per-1M
@@ -136,10 +162,18 @@ type NormalizedModelPrice struct {
 	InputCostPer1MCharacters  *float64
 	OutputCostPer1MCharacters *float64
 	Source                    string
+	// Image is set for an image price row (see RawModelPrice.Image).
+	Image *NormalizedImagePrice
 }
 
-// key is the natural key mirroring the gateway_models UNIQUE(provider, model_name).
-func (n NormalizedModelPrice) key() string { return n.Provider + "\x00" + n.ModelName }
+// key is the natural key mirroring the gateway_models UNIQUE(provider,
+// model_name), or the image price table's primary key for an image row.
+func (n NormalizedModelPrice) key() string {
+	if n.Image != nil {
+		return "image\x00" + n.Provider + "\x00" + n.ModelName + "\x00" + n.Image.Size + "\x00" + n.Image.Quality
+	}
+	return n.Provider + "\x00" + n.ModelName
+}
 
 // PriceSource is one upstream price feed. Sources are composed in precedence
 // order by the Syncer; each declares the denomination its upstream uses so the
@@ -175,7 +209,21 @@ func (Normalizer) Normalize(raw RawModelPrice, denom Denomination, source string
 	if err != nil {
 		return NormalizedModelPrice{}, err
 	}
+	var image *NormalizedImagePrice
+	if raw.Image != nil {
+		image = &NormalizedImagePrice{
+			Size:    raw.Image.Size,
+			Quality: raw.Image.Quality,
+			// A per-image price is the price of ONE image under every
+			// denomination a source can declare for its tokens, so it is
+			// copied and never scaled. Only the per-pixel price is a count
+			// price, and it takes the one conversion factor.
+			UsdPerImage:    raw.Image.PerImage,
+			UsdPer1MPixels: mul(raw.Image.PerPixel, factor),
+		}
+	}
 	return NormalizedModelPrice{
+		Image:              image,
 		Provider:           raw.Provider,
 		ModelName:          raw.ModelName,
 		InputCostPer1M:     mul(raw.InputCost, factor),

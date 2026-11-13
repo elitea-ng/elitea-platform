@@ -179,6 +179,38 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.53
+
+| Area | What |
+|---|---|
+| Messages for people alone (issue 1970) | A message that mentions people (`user_ids`, `is_mentioning_everyone`) and addresses no agent is stored and notifies them, and starts no turn: `sendChatMessage` answers 201 `ChatMessagePosted` with `turn_started` false and no `events_url`. The app renders the message and streams nothing (`src/features/chat/peopleMessage.ts`, `src/api/queries/sendMessage.ts`). A server before 1.53 started an agent turn for such a message. |
+
+## Client contract 1.52
+
+| Area | What |
+|---|---|
+| Name and description limits (issue 1968) | An entity name (agent, pipeline, toolkit, credential, token, folder, conversation, skill) is at most 128 characters and a description at most 2000, counted in characters. A longer one answers 400 with `field` and `max_length` next to `error` (`ErrorResponse`). The app shows a counter and blocks the save past the limit (`src/ui/textLimit.ts`); the limits come from `@elitea/client-core`. A server before 1.52 stored longer text. |
+
+## Client contract 1.50
+
+| Area | What |
+|---|---|
+| Nested sub-agent lanes (ADR-0050 decision 4, issue 1872) | At `subagents.max_depth` 2 a `started` entry may carry `depth` (1 or 2, absent reads as 1) and, at depth 2, `parent_agent_id`. A stored `SubAgentLane` may carry `children` (`SubAgentLaneChild`, one level, never with children of its own). The app has no tree view: a grandchild's tool steps follow its parent's under a label built from both ("Owl · temporary › Hawk · temporary", `src/features/chat/subAgentLanes.ts`). A server before 1.50 sends none of these. |
+
+## Client contract 1.49
+
+| Area | What |
+|---|---|
+| Avatar pack typed (#1881) | `persona.avatar_pack_v1` is an `AgentAvatarPackV1` object, so the generated type is the pack. `persona.avatar_pack` stays the string 1.38 reserved and is deprecated; a 1.49 server never sends it, so a client built for 1.46 to 1.48, which reads only `avatar_pack`, loses the pack (and shows the old icon) until it is updated. The app reads `avatar_pack_v1`, then the object a 1.46 to 1.48 server sent as `avatar_pack` (`participantAvatarPack`), and validates either with `avatarPackOf`. |
+
+Issue 1864: the app plays a state's own file. An image or an animated WebP is drawn with expo-image, which
+animates WebP on both platforms; an MP4 or WebM loop plays muted and looping with expo-video, over its
+poster until its first frame, with no controls, never taking the audio session, and not keeping the screen
+on. Both modules need a new native build. Every file is still downloaded the SEC-3 way, now checked against
+the type its extension names, and written to `<caches>/agent-media/<digest of origin>/<sha256>.<ext>`
+(issue 1882): the view gets the file URI, a file already there is not downloaded again, and the folder is
+deleted with its workspace. Reduced motion still downloads and shows only the still, drawn without playing.
+
 ## Client contract 1.48
 
 | Area | What |

@@ -368,6 +368,7 @@ export function CreatePipeline(): ReactNode {
           <CreatePipelineAdmissionAlert admission={admission} />
           <Box data-testid="create-pipeline-form-panel">
             <CreateAgentForm
+              entityType="pipeline"
               values={pipelineDraftValues}
               onFieldChange={handlePipelineFieldChange}
               disabled={isCreating}
