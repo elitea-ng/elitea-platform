@@ -2088,6 +2088,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2configs.WithStoredConfigurationResolver(cfg.ConfigStoredResolver),
 		v2configs.WithSecretSealer(configurationSecretSealer(cfg.Pool)),
 		v2configs.WithPublicProjectID(apimw.PublicProjectID()),
+		v2configs.WithOAuthDiscoveryGuard(mcpAuthorizationEgressGuard(cfg)),
 		v2configs.WithModelDefaults(cfg.PlatformModelDefaults),
 	)
 	artifactHandler := cfg.ArtifactHandler

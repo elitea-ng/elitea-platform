@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -1022,6 +1023,38 @@ func (e *unsupportedCurrentAgentStart) Unwrap() []error {
 		return []error{ErrUnsupportedCurrentAgentStart}
 	}
 	return []error{ErrUnsupportedCurrentAgentStart, e.cause}
+}
+
+// UnsupportedReasons returns the fixed reason strings an unsupported-start
+// refusal carries, outermost stage first ("model resolution", then the
+// specific cause). It reads only the reasons this package and the repository
+// wrote, never a wrapped dependency's own error text, so what it returns is
+// safe to show to the person who sent the message. A bare sentinel yields none.
+func UnsupportedReasons(err error) []string {
+	var reasons []string
+	var walk func(error)
+	walk = func(current error) {
+		if current == nil {
+			return
+		}
+		if typed, ok := current.(*unsupportedCurrentAgentStart); ok {
+			if typed.reason != "" && !slices.Contains(reasons, typed.reason) {
+				reasons = append(reasons, typed.reason)
+			}
+			walk(typed.cause)
+			return
+		}
+		switch wrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			for _, inner := range wrapped.Unwrap() {
+				walk(inner)
+			}
+		case interface{ Unwrap() error }:
+			walk(wrapped.Unwrap())
+		}
+	}
+	walk(err)
+	return reasons
 }
 
 // unsupportedStart names a refusal. The reason must be a fixed string: it

@@ -89,6 +89,8 @@ export interface PlusChatButtonProps {
   attachmentButtonRef?: RefObject<AttachmentButtonHandle | null>;
   /** The desktop composer's look: the trigger is a plain `ComposerIconButton`; the menu is the same. */
   native?: boolean;
+  /** Shows a "Skills" row that calls this (#2017): the composer inserts `~` and opens its skill picker. Absent: no row. */
+  onPickSkill?: () => void;
 }
 
 /** The "+" trigger, in the web's or the desktop composer's look; the same id, name and handler either way. */
@@ -132,6 +134,7 @@ export const PlusChatButton = memo(
     entitySubmenus,
     attachmentButtonRef,
     native = false,
+    onPickSkill,
   }: PlusChatButtonProps) => {
     const [menuOpen, setMenuOpen] = useState(false);
     const [activeSubmenu, setActiveSubmenu] = useState<SubmenuKey | null>(null);
@@ -196,6 +199,11 @@ export const PlusChatButton = memo(
       onCreateToolkit?.(true);
       closeMenu();
     }, [onCreateToolkit, closeMenu]);
+
+    const handlePickSkill = useCallback(() => {
+      closeMenu();
+      onPickSkill?.();
+    }, [closeMenu, onPickSkill]);
 
     const handleSelectParticipant = useCallback(
       (participant: unknown) => {
@@ -272,6 +280,7 @@ export const PlusChatButton = memo(
                 <MainMenuList
                   items={visibleMenuItems}
                   onSelectSubmenu={handleSubmenuOpen}
+                  onPickSkill={onPickSkill ? handlePickSkill : undefined}
                   attachRow={
                     <AttachmentButton
                       showLabel

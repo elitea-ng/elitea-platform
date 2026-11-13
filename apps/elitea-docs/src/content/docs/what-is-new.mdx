@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Chat says why an agent could not answer, and Skills are in the + menu
+
+When a message to an agent cannot start, the error now names the reason (for example, that the agent's model is not available in the project, or that the conversation no longer has the agent) instead of the same sentence every time. The **+** menu in the chat has a **Skills** row: it puts a `~` in the message box and opens the skill picker. The SharePoint **Login** button for a delegated credential now opens the Microsoft sign-in window; the platform reads the identity provider's OAuth metadata for it, so a provider on a private network needs the platform's MCP OAuth egress allowlist. See [Chat](/menus/chat).
+
 ## Fixes: notifications, toolkit sign-in, the toolkit list and participants
 
 Every notification in the Notifications Center now has text; a kind of event the page has no sentence for shows its name (for example "Agent approval required"). The log-out icon next to a credential that signs in when you use the toolkit appears only while you are signed in, so it no longer reports a log-out that did not happen. Clicking **Toolkits & Indexes** or **MCPs** in the sidebar no longer takes you to the Create page while the list is loading again. When removing someone from a conversation is refused (the conversation's owner cannot be removed), the page says why. The toolkit editor in a chat says in words when **Save** saved, was blocked by fields that are not valid, or was refused by the server, and the SharePoint **Login** button says why when it cannot start the sign-in.

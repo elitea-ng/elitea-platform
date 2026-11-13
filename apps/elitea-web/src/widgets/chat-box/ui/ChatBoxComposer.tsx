@@ -17,6 +17,7 @@ import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxFloorTarget } from './ChatBoxFloorTarget';
 import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
+import { startSkillMention } from './ChatBoxSkillPick';
 import { ChatBoxSteeringNotice, ChatBoxSteeringOffer } from './ChatBoxQueuedMessages';
 import type { ChatBoxVoiceFeedback } from './ChatBoxVoiceFeedback';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
@@ -148,6 +149,7 @@ export function ChatBoxComposer(props: ChatBoxComposerProps): ReactNode {
           runToCompletion: { unattended: tools.unattended, disabled: isInputLoading },
           entitySubmenus: { ...extensions.entitySubmenus, onSelectParticipant: entityActions.onSelectParticipant, getParticipantMenuState: entityActions.getParticipantMenuState },
           ...buildCreateHandlerProps(extensions.editorCallbacks),
+          onPickSkill: () => startSkillMention(chatInputRef.current, mentions.onInputChange),
         })}
         refs={refs}
       />

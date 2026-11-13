@@ -1,0 +1,134 @@
+package configurations
+
+// check_connection_oauth.go answers a check of a DELEGATED (per-user OAuth)
+// credential with the 401 the browser opens its sign-in window on (#1998).
+//
+// A SharePoint credential in delegated mode carries no secret: it names an
+// identity provider (`oauth_discovery_endpoint`, "https://login.microsoftonline.com/{tenant}"),
+// the scopes to ask for, and the signed-in user supplies the token. There is
+// nothing for the server to test with, so a check can only say "this
+// credential needs the user to authorise it" -- 401, `requires_authorization`,
+// and `auth_metadata` holding the authorization-server metadata the browser's
+// OAuth modal needs (shared/api/reauth-policy.ts resourceAuthorizationBody and
+// features/toolkits/sharepoint/lib/hooks/useSharepointAuthModal.hooks.ts read
+// exactly this shape). Without it the "Log in" button had nothing to open, and
+// the type answered "not supported yet".
+//
+// The discovery document is fetched through the MCP authorization egress guard
+// (ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST) and internal/mcpoauth's walk, the same
+// ones the MCP OAuth proxies use, because the endpoint is authored by the
+// caller: an unguarded fetch would let a project member make this service read
+// from an internal address.
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
+)
+
+const (
+	oauthDiscoveryEndpointField = "oauth_discovery_endpoint"
+	oauthDiscoveryTimeout       = 5 * time.Second
+)
+
+// WithOAuthDiscoveryGuard supplies the egress guard the delegated-credential
+// check reads its discovery document through. Without it the check refuses to
+// fetch: it never falls back to an unguarded client.
+func WithOAuthDiscoveryGuard(guard *egress.Guard) Option {
+	return func(handler *Handler) {
+		if guard == nil {
+			return
+		}
+		transport := guard.Transport()
+		client := &http.Client{
+			Transport: transport,
+			// Metadata documents never redirect; following one would read from
+			// a host the guard was never asked about.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
+		handler.oauthDiscovery = &mcpoauth.Fetcher{
+			Do: client.Do, Validate: guard.Validate, PerFetch: oauthDiscoveryTimeout,
+		}
+	}
+}
+
+// delegatedOAuthEndpoint is the discovery endpoint a credential names, or ""
+// when it names none (an app-only credential).
+func delegatedOAuthEndpoint(data map[string]any) string {
+	endpoint, _ := data[oauthDiscoveryEndpointField].(string)
+	return strings.TrimSpace(endpoint)
+}
+
+// delegatedAuthorization answers one check of a delegated credential. It
+// writes the response and reports true when the credential is delegated.
+func (h *Handler) delegatedAuthorization(w http.ResponseWriter, r *http.Request, data map[string]any) bool {
+	endpoint := delegatedOAuthEndpoint(data)
+	if endpoint == "" {
+		return false
+	}
+	metadata, err := h.discoverDelegatedIssuer(r.Context(), endpoint)
+	if err != nil {
+		slog.WarnContext(r.Context(), "check_connection: OAuth discovery failed", "err", err)
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"success": false,
+			"message": "The OAuth discovery endpoint could not be read. It must be an https address that " +
+				"publishes OAuth metadata and that the platform may reach " +
+				"(an administrator can allow a private host with ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST).",
+			"reason": "oauth_discovery_failed",
+		})
+		return true
+	}
+	issuer, _ := metadata["issuer"].(string)
+	resourceMetadata := map[string]any{
+		"resource":                   endpoint,
+		"authorization_servers":      []string{issuer},
+		"oauth_authorization_server": metadata,
+	}
+	if scopes, ok := mcpoauth.BoundedMetadataList(data["scopes"]); ok {
+		resourceMetadata["scopes_supported"] = scopes
+	}
+	writeJSON(w, http.StatusUnauthorized, map[string]any{
+		"success":                false,
+		"requires_authorization": true,
+		"message":                "This credential signs in per user. Log in to authorise it.",
+		"auth_metadata": map[string]any{
+			"server_url":        endpoint,
+			"resource_metadata": resourceMetadata,
+		},
+	})
+	return true
+}
+
+// discoverDelegatedIssuer reads the authorization-server metadata of the
+// identity provider a credential names. Microsoft's tenant URL
+// ("…/{tenant}") publishes its v2.0 document under "…/{tenant}/v2.0" with that
+// issuer, so the v2.0 form is tried first and the URL as written second.
+func (h *Handler) discoverDelegatedIssuer(ctx context.Context, endpoint string) (map[string]any, error) {
+	if h.oauthDiscovery == nil {
+		return nil, mcpoauth.ErrDiscoveryMetadata
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, mcpoauth.ErrDiscoveryMetadata
+	}
+	trimmed := strings.TrimRight(endpoint, "/")
+	candidates := []string{endpoint}
+	if !strings.HasSuffix(parsed.Path, "/v2.0") && !strings.HasSuffix(parsed.Path, "/v2.0/") {
+		candidates = []string{trimmed + "/v2.0", endpoint}
+	}
+	var lastErr error
+	for _, candidate := range candidates {
+		metadata, err := h.oauthDiscovery.AuthorizationServer(ctx, candidate)
+		if err == nil {
+			return metadata, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}

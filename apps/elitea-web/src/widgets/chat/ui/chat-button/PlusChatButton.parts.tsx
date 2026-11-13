@@ -14,6 +14,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 import { ArrowRightIcon } from '@/shared/ui/icons/arrow-right-icon';
+import { SkillIcon } from '@/shared/ui/icons/skill-icon';
 import { MenuRowIcon, MenuRowText, menuRowSx } from '@/shared/ui/native-menu';
 
 import { AttachmentButton } from './AttachmentButton';
@@ -67,6 +68,8 @@ export interface MainMenuListProps {
   readonly onSelectSubmenu: (key: SubmenuKey, anchor: HTMLElement) => void;
   /** The "Attach files" row rendered above the categories — see this component's doc. */
   readonly attachRow: ReactNode;
+  /** The "Skills" row below the categories: a direct action (it opens the "~" picker in the composer), not a submenu. Absent: no row. */
+  readonly onPickSkill?: (() => void) | undefined;
 }
 
 /** A row of the main menu: the native menu row (`menuRowSx`), clickable. */
@@ -103,7 +106,7 @@ const chevronSx = (theme: Theme) => ({
  * mid-move. That is the failure a leave-handler plus a re-entry timer is
  * usually written to paper over.
  */
-export function MainMenuList({ items, onSelectSubmenu, attachRow }: MainMenuListProps): ReactNode {
+export function MainMenuList({ items, onSelectSubmenu, attachRow, onPickSkill }: MainMenuListProps): ReactNode {
   return (
     <Box role="menu" sx={{ padding: 0.5 }}>
       {attachRow}
@@ -128,6 +131,24 @@ export function MainMenuList({ items, onSelectSubmenu, attachRow }: MainMenuList
           <Box component="span" aria-hidden sx={chevronSx}><ArrowRightIcon /></Box>
         </Box>
       ))}
+      {onPickSkill && (
+        <Box
+          role="menuitem"
+          tabIndex={0}
+          data-testid="plus-menu-skills"
+          sx={rowSx}
+          onClick={onPickSkill}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onPickSkill();
+            }
+          }}
+        >
+          <MenuRowIcon><SkillIcon /></MenuRowIcon>
+          <MenuRowText>{t('widgets.chat.plusChatButton.menuSkills', 'Skills')}</MenuRowText>
+        </Box>
+      )}
     </Box>
   );
 }
