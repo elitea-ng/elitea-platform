@@ -6210,5 +6210,12 @@
   "chat-participants.users.lessLabel": "Show less",
   "chat-participants.users.showLess": "Hide additional participants",
   "chat-participants.users.showMore": "Show {{count}} more participants",
-  "widgets.chatBox.peopleOnlyNotice": "Sent to people only: no agent was asked."
+  "widgets.chatBox.peopleOnlyNotice": "Sent to people only: no agent was asked.",
+  "artifacts.rename.confirm": "Rename",
+  "artifacts.rename.label": "File name",
+  "artifacts.rename.stale": "That file no longer exists, so it cannot be renamed.",
+  "artifacts.rename.title": "Rename file",
+  "artifacts.table.renameSelected": "Rename selected file",
+  "common.rename": "Rename",
+  "artifacts.create.retentionDefaultHelp": "Leave empty to use the project's default retention."
 }

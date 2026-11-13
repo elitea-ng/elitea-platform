@@ -95,7 +95,7 @@ describe('CreateBucket', () => {
     });
   });
 
-  it('lowercases the typed name and sends the retention window on create (#2002, #2018)', async () => {
+  it('lowercases the typed name and sends the retention window on create (issue 2002, #2018)', async () => {
     const user = userEvent.setup();
     renderArtifactsRoute(<CreateBucket />, '/artifacts/create-bucket');
     const input = await screen.findByLabelText('Name');

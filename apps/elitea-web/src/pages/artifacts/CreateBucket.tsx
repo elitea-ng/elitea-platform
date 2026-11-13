@@ -139,7 +139,7 @@ function RetentionField(props: {
   const { value, error, isEditing, onChange } = props;
   const hint = isEditing
     ? t('artifacts.edit.retentionHelp', 'Leave empty to keep files indefinitely.')
-    : t('artifacts.create.retentionHelp', "Leave empty to use the project's default retention.");
+    : t('artifacts.create.retentionDefaultHelp', "Leave empty to use the project's default retention.");
   return (
     <TextField
       fullWidth
