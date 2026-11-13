@@ -691,6 +691,7 @@ export * from "./moderationRequestCreate.zod";
 export * from "./moderationRequestList.zod";
 export * from "./moderationRequestRow.zod";
 export * from "./moderationStatusParams.zod";
+export * from "./moveObjectRequest.zod";
 export * from "./n400Response.zod";
 export * from "./n401Response.zod";
 export * from "./n403Response.zod";

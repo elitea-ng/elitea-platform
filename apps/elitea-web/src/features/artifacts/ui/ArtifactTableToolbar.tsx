@@ -1,6 +1,7 @@
 import type { ChangeEvent, ReactNode, RefObject } from 'react';
 
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
@@ -30,6 +31,10 @@ interface ArtifactTableToolbarProps {
   readonly onFilesPicked: (event: ChangeEvent<HTMLInputElement>) => void;
   readonly onDownloadSelected: () => void;
   readonly onDeleteSelected: () => void;
+  /** Exactly one file (not a folder) is selected. */
+  readonly canRenameSelected: boolean;
+  /** Absent when the caller may not rename; the button is then not rendered. */
+  readonly onRenameSelected?: (() => void) | undefined;
 }
 
 function retentionText(days: number | null): string {
@@ -144,6 +149,20 @@ export function ArtifactTableToolbar(props: ArtifactTableToolbarProps): ReactNod
             </BaseBtn>
           </span>
         </Tooltip>
+        {props.onRenameSelected !== undefined && (
+          <Tooltip title={t('artifacts.table.renameSelected', 'Rename selected file')}>
+            <span>
+              <BaseBtn
+                variant="icon"
+                aria-label={t('artifacts.table.renameSelected', 'Rename selected file')}
+                disabled={!props.canRenameSelected}
+                onClick={props.onRenameSelected}
+              >
+                <DriveFileRenameOutlineIcon fontSize="small" />
+              </BaseBtn>
+            </span>
+          </Tooltip>
+        )}
         <Tooltip title={t('artifacts.table.deleteSelected', 'Delete selected')}>
           <span>
             <BaseBtn

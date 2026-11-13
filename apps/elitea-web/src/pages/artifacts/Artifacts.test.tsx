@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as artifactsFeature from '@/features/artifacts';
 import * as chatMessagesFeature from '@/features/chat-messages';
+import * as authApi from '@/shared/api/generated/auth/auth';
 import { SocketClientContext } from '@/shared/api/socket/client';
 import { createTestSocketClient } from '@/shared/api/socket/testing';
 import * as sharedArtifacts from '@/shared/api/artifacts';
@@ -47,8 +48,10 @@ const mocks = {
   deleteBucket: vi.fn(),
   deleteFile: vi.fn(),
   deleteMany: vi.fn(),
+  renameFile: vi.fn(),
   stageFiles: vi.fn(),
   refreshFiles: vi.fn(),
+  permissions: ['configuration.artifacts.artifacts.create', 'configuration.artifacts.artifacts.delete'],
   uploadOptions: undefined as { onUploaded: () => unknown } | undefined,
   fetchArtifactBlob: vi.fn(),
   triggerBlobDownload: vi.fn(),
@@ -75,6 +78,7 @@ interface ArtifactTableMockProps {
   readonly onDownload: (item: MockItem) => void;
   readonly onDownloadMany: (items: readonly MockItem[]) => void;
   readonly onDelete: (items: readonly MockItem[]) => void;
+  readonly onRename?: (item: MockItem) => void;
   readonly onUpload: (files: readonly File[]) => void;
 }
 
@@ -118,6 +122,12 @@ function MockArtifactTable(props: ArtifactTableMockProps): ReactNode {
       <button onClick={() => props.onDownloadMany([file, folder])}>download-many</button>
       <button onClick={() => props.onDelete([file])}>delete-file</button>
       <button onClick={() => props.onDelete([])}>delete-empty</button>
+      {props.onRename !== undefined && (
+        <>
+          <button onClick={() => props.onRename?.({ ...file, id: 'folder/old.md', key: 'folder/old.md', name: 'old.md' })}>rename-nested-file</button>
+          <button onClick={() => props.onRename?.(file)}>rename-readme</button>
+        </>
+      )}
       <button onClick={() => props.onUpload([new File(['x'], 'x.txt')])}>upload-file</button>
     </section>
   );
@@ -151,7 +161,14 @@ describe('Artifacts page', () => {
     mocks.buckets.data = [bucket];
     mocks.buckets.isFetching = false;
     mocks.buckets.isError = false;
-    mocks.files.data = [{ key: 'readme.md', size: 12, lastModified: '2026-01-01T00:00:00Z', bucket: 'docs' }];
+    mocks.files.data = [
+      { key: 'readme.md', size: 12, lastModified: '2026-01-01T00:00:00Z', bucket: 'docs' },
+      { key: 'folder/old.md', size: 3, lastModified: '2026-01-01T00:00:00Z', bucket: 'docs' },
+    ];
+    mocks.permissions = ['configuration.artifacts.artifacts.create', 'configuration.artifacts.artifacts.delete'];
+    vi.spyOn(authApi, 'usePermissionList').mockImplementation((() => ({
+      data: { data: mocks.permissions.map((name) => ({ name, enabled: true })) },
+    })) as never);
     mocks.files.isFetching = false;
     mocks.files.isError = false;
     mocks.storage.data = [{ id: 'storage-1', title: 'Primary', shared: false }];
@@ -161,6 +178,7 @@ describe('Artifacts page', () => {
       mocks.deleteBucket,
       mocks.deleteFile,
       mocks.deleteMany,
+      mocks.renameFile,
     ]) {
       mutation.mockReset().mockResolvedValue(undefined);
     }
@@ -192,6 +210,7 @@ describe('Artifacts page', () => {
       deleteBucket: { mutateAsync: mocks.deleteBucket },
       deleteFile: { mutateAsync: mocks.deleteFile },
       deleteMany: { mutateAsync: mocks.deleteMany, isPending: false },
+      renameFile: { mutateAsync: mocks.renameFile, isPending: false },
       refreshFiles: mocks.refreshFiles,
     } as never);
     const uploadHookResult = {
@@ -386,6 +405,68 @@ describe('Artifacts page', () => {
     }));
     await user.click(await screen.findByRole('button', { name: 'delete-empty' }));
     expect(mocks.deleteMany).toHaveBeenCalledTimes(1);
+  });
+
+  /* #2015 — rename a file in place: the folder part of the key stays, a refusal is shown */
+  it('renames a file keeping its folder and shows the server refusal', async () => {
+    const user = userEvent.setup();
+    renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'rename-nested-file' }));
+    const field = screen.getByRole('textbox', { name: 'File name' });
+    await user.clear(field);
+    await user.type(field, 'new.md');
+    mocks.renameFile.mockRejectedValueOnce(new Error('A file with that name already exists.'));
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(await screen.findByText('A file with that name already exists.')).toBeInTheDocument();
+    expect(mocks.renameFile).toHaveBeenCalledWith({ bucket: 'docs', from: 'folder/old.md', to: 'folder/new.md' });
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'File name' })).not.toBeInTheDocument());
+  });
+
+  /* #2015 — the move route needs create AND delete; without both Rename is not offered at all */
+  it.each([
+    ['no permission', []],
+    ['create only', ['configuration.artifacts.artifacts.create']],
+    ['delete only', ['configuration.artifacts.artifacts.delete']],
+  ])('does not offer Rename with %s', async (_name, granted) => {
+    mocks.permissions = granted;
+    renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await screen.findByRole('button', { name: 'open-folder' });
+    expect(screen.queryByRole('button', { name: 'rename-nested-file' })).not.toBeInTheDocument();
+  });
+
+  /* #2015 — a selection that vanished since the list was read is refused, not sent to the server */
+  it('refuses to rename a file that no longer exists', async () => {
+    const user = userEvent.setup();
+    mocks.files.data = [{ key: 'readme.md', size: 12, lastModified: '2026-01-01T00:00:00Z', bucket: 'docs' }];
+    renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'rename-nested-file' }));
+    expect(await screen.findByText('That file no longer exists, so it cannot be renamed.')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'File name' })).not.toBeInTheDocument();
+    expect(mocks.renameFile).not.toHaveBeenCalled();
+  });
+
+  /* #2015 — an open canvas on the renamed file is closed: saving it would re-create the old key */
+  it('closes the canvas that was editing the renamed file', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(sharedArtifacts, 'listBuckets').mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      data: { buckets: [{ name: 'docs', is_pinned: false, created_at: '2026-01-01T00:00:00Z' }] },
+    });
+    renderArtifactsRoute(withSocket(<Artifacts />), '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'preview-file' }));
+    await user.click(await screen.findByRole('button', { name: 'open-in-canvas' }));
+    await screen.findByTestId('canvas-editor-root', {}, { timeout: 15_000 });
+    await user.click(screen.getByRole('button', { name: 'close-preview', hidden: true }));
+    await user.click(await screen.findByRole('button', { name: 'rename-readme', hidden: true }));
+    const field = screen.getByRole('textbox', { name: 'File name' });
+    await user.clear(field);
+    await user.type(field, 'renamed.md');
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    await waitFor(() => expect(mocks.renameFile).toHaveBeenCalledWith({ bucket: 'docs', from: 'readme.md', to: 'renamed.md' }));
+    await waitFor(() => expect(screen.queryByTestId('artifacts-canvas-editor')).not.toBeInTheDocument());
   });
 
   it('drives the bucket tree, the edit route and the collapse toggle', async () => {

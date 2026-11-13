@@ -21,5 +21,6 @@ export { ArtifactTable } from './ui/ArtifactTable';
 export { BucketSidebar } from './ui/BucketSidebar';
 export { DuplicateResolutionDialog } from './ui/DuplicateResolutionDialog';
 export { FilePreviewCanvas } from './ui/FilePreviewCanvas';
+export { RenameArtifactDialog } from './ui/RenameArtifactDialog';
 export { UploadPathDialog } from './ui/UploadPathDialog';
 export { ZipDownloadProgressDialog } from './ui/ZipDownloadProgressDialog';

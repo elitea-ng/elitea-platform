@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.53"
+  x-elitea-client-contract: "1.54"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -16221,6 +16221,17 @@ components:
           description: >
             An empty array is 400 InvalidArgument — it never means "delete
             the bucket" (S9).
+
+    MoveObjectRequest:
+      type: object
+      required: [from, to]
+      properties:
+        from: { type: string, description: The object's current key. }
+        to: { type: string, description: The new key. Same key rules as an upload. }
+        overwrite:
+          type: boolean
+          default: false
+          description: Replace an existing object at `to`; false answers 409 AlreadyExists.
 
     BatchDeleteObjectsResponse:
       type: object
@@ -40816,6 +40827,58 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         '404':
           description: Not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /artifacts/objects/{projectID}/{bucket}:move:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: integer }
+      - name: bucket
+        in: path
+        required: true
+        schema: { type: string }
+
+    post:
+      operationId: moveObject
+      summary: Rename or move one object inside its bucket
+      description: >
+        Copies the object to `to`, then deletes `from`, so the caller sees one
+        name or the other, never both (#2015). Needs the upload and the delete
+        permission and the bucket's write access. `to` follows the upload's key
+        rules; an existing target is 409 AlreadyExists unless `overwrite` is
+        true. Answers the upload's response shape for the new key.
+      tags: [artifacts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MoveObjectRequest'
+      responses:
+        '200':
+          description: Moved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadObjectResponse'
+        '400':
+          description: Missing or invalid key, or from equals to
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: Bucket or source object not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: The target key exists and overwrite is false
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }

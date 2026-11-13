@@ -748,6 +748,247 @@ func (h *Handler) BatchDeleteObjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "failed": failed})
 }
 
+// moveObjectRequest is the body of MoveObject
+// (components/schemas/MoveObjectRequest in api/openapi/v2.yaml).
+type moveObjectRequest struct {
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Overwrite bool   `json:"overwrite"`
+}
+
+// capReader refuses to hand out more than limit bytes (storage.ErrTooLarge)
+// and stops as soon as ctx is done, so a streamed copy is bounded and
+// cancellable.
+type capReader struct {
+	ctx   context.Context
+	r     io.Reader
+	limit int64
+	n     int64
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	if c.n > c.limit {
+		return 0, storage.ErrTooLarge
+	}
+	return n, err
+}
+
+// copyObjectBytes copies src to dst inside the store when the backend can
+// (S3 CopyObject, Azure Copy Blob), else streams the bytes through Put,
+// capped at maxBytes (the upload limit) and cancelled with ctx.
+func (h *Handler) copyObjectBytes(ctx context.Context, src, dst storage.ObjectRef, contentType string, maxBytes int64) (storage.ObjectInfo, error) {
+	info, err := storage.CopyObject(ctx, h.store, src, dst)
+	if !errors.Is(err, storage.ErrNotSupported) {
+		return info, err
+	}
+	body, _, err := h.store.Get(ctx, src, nil)
+	if err != nil {
+		return storage.ObjectInfo{}, err
+	}
+	defer func() { _ = body.Close() }()
+	return h.store.Put(ctx, dst, &capReader{ctx: ctx, r: body, limit: maxBytes}, storage.PutOptions{ContentType: contentType, ContentLength: -1})
+}
+
+// MoveObject renames or moves one object inside its bucket (#2015). The
+// order is what keeps it safe:
+//
+//  1. the target name is claimed in the metadata table (insert-if-absent; the
+//     unique (bucket, key) index decides between racing callers) unless
+//     overwrite is true, so a refused move is a 409, never a silent
+//     replacement;
+//  2. the bytes are copied;
+//  3. the target row is finalised with the source's metadata (created_at,
+//     expires_at, digest, classification), so a rename does not restart the
+//     retention window;
+//  4. the source row goes, then the source bytes.
+//
+// A failure rolls back only what this call created: a claim it took and the
+// bytes it wrote under that claim. With overwrite=true nothing at the target
+// is ever deleted on failure (it may be the file the caller asked to replace,
+// or one a concurrent writer made). A source blob that cannot be deleted after
+// its row is gone is logged, not failed: the move happened. It needs the same
+// bucket access an upload needs (the route additionally requires the delete
+// permission, because the old key goes away). The new key follows the same key
+// rules and system-bucket rule as an upload.
+func (h *Handler) MoveObject(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := parseProjectID(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid project id")
+		return
+	}
+	projectIDStr := chi.URLParam(r, "projectID")
+	bucket := chi.URLParam(r, "bucket")
+	bucketRow, ok := h.requireBucketForUpload(w, r, projectID, bucket)
+	if !ok {
+		return
+	}
+
+	var req moveObjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "InvalidArgument", "invalid request body")
+		return
+	}
+	if req.From == "" || req.To == "" {
+		writeError(w, http.StatusBadRequest, "InvalidArgument", "from and to are required")
+		return
+	}
+	if req.From == req.To {
+		writeError(w, http.StatusBadRequest, "InvalidArgument", "from and to are the same key")
+		return
+	}
+	srcRef, err := storage.NewObjectRef(projectIDStr, bucket, req.From)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "InvalidKey", err.Error())
+		return
+	}
+	dstRef, err := storage.NewObjectRef(projectIDStr, bucket, req.To)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "InvalidKey", err.Error())
+		return
+	}
+	// The system-bucket rule, on both keys the body names.
+	if !h.allowKeys(w, r, projectID, bucketRow, []string{req.From, req.To}) {
+		return
+	}
+	ctx := r.Context()
+
+	srcInfo, err := h.store.Stat(ctx, srcRef)
+	if err != nil {
+		h.writeStorageError(ctx, w, "stat object", err)
+		return
+	}
+	_, maxBytes, err := h.resolveObjectSizeLimit(ctx, projectID)
+	if err != nil {
+		h.writeInternal(w, r, "resolve object size limit", err)
+		return
+	}
+	contentType := srcInfo.ContentType
+	if contentType == "" {
+		contentType = mimeFromExtension(req.To)
+	}
+
+	// The source's own row carries what must survive a rename. An object
+	// with no row (written before metadata was tracked) gets a fresh one.
+	var srcRow *repos.ObjectRow
+	rows, err := h.repo.ListObjects(ctx, bucketRow.ID, req.From)
+	if err != nil {
+		h.writeInternal(w, r, "read object metadata", err)
+		return
+	}
+	for i := range rows {
+		if rows[i].Key == req.From {
+			srcRow = &rows[i]
+		}
+	}
+	input := repos.NewObjectInput{
+		BucketID:  bucketRow.ID,
+		Key:       req.To,
+		MediaType: contentType,
+		ExpiresAt: computeExpiresAt(bucketRow.RetentionDays),
+	}
+	if srcRow != nil {
+		input.DigestAlg, input.Digest = srcRow.DigestAlg, srcRow.Digest
+		input.Classification, input.ScanState = srcRow.Classification, srcRow.ScanState
+		input.ExpiresAt = srcRow.ExpiresAt
+		created := srcRow.CreatedAt
+		input.CreatedAt = &created
+	}
+
+	// Claim the target name. Only a claim this call took is ever rolled back.
+	claimed := false
+	releaseRow := func() {
+		if derr := h.repo.DeleteObjects(ctx, bucketRow.ID, []string{req.To}); derr != nil {
+			h.logInternal(ctx, "move rollback: release target claim", derr)
+		}
+	}
+	rollback := func() {
+		if !claimed {
+			return
+		}
+		releaseRow()
+		if derr := h.store.Delete(ctx, dstRef); derr != nil {
+			h.logInternal(ctx, "move rollback: delete copied bytes", derr)
+		}
+	}
+	if !req.Overwrite {
+		got, err := h.repo.ReserveObjectKey(ctx, bucketRow.ID, req.To, contentType, input.ExpiresAt)
+		if err != nil {
+			h.writeInternal(w, r, "claim target key", err)
+			return
+		}
+		if !got {
+			writeError(w, http.StatusConflict, "AlreadyExists", "key already exists; pass overwrite=true to replace it")
+			return
+		}
+		claimed = true
+		// Bytes with no row (untracked) also mean the name is taken.
+		_, statErr := h.store.Stat(ctx, dstRef)
+		if statErr == nil {
+			releaseRow()
+			writeError(w, http.StatusConflict, "AlreadyExists", "key already exists; pass overwrite=true to replace it")
+			return
+		}
+		if !errors.Is(statErr, storage.ErrNotFound) {
+			releaseRow()
+			h.writeStorageError(ctx, w, "stat object", statErr)
+			return
+		}
+	}
+
+	info, err := h.copyObjectBytes(ctx, srcRef, dstRef, contentType, maxBytes)
+	if err != nil {
+		rollback()
+		if errors.Is(err, storage.ErrTooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "TooLarge", "object exceeds the project's max_object_bytes limit")
+			return
+		}
+		h.writeStorageError(ctx, w, "copy object", err)
+		return
+	}
+	input.ByteLength = info.Size
+	row, err := h.repo.UpsertObject(ctx, input)
+	if err != nil {
+		rollback()
+		h.writeInternal(w, r, "record object metadata", err)
+		return
+	}
+	// The source row first: if it fails the source is still whole and the
+	// move can be retried; the copy is taken back only when this call made it.
+	if err := h.repo.DeleteObjects(ctx, bucketRow.ID, []string{req.From}); err != nil {
+		rollback()
+		h.writeInternal(w, r, "delete object metadata", err)
+		return
+	}
+	if err := h.store.Delete(ctx, srcRef); err != nil {
+		// The row is gone, so the move happened; the leftover blob is an
+		// orphan under the old name. Log it for cleanup rather than fail.
+		h.logInternal(ctx, "move: source bytes not deleted (orphan blob "+req.From+")", err)
+	}
+
+	storage.LogAudit(r.Context(), "object_moved", bucket, req.From+" -> "+req.To, projectIDStr, "success")
+	if h.events != nil {
+		h.events.Emit(r.Context(), projectIDStr, "artifact.moved", map[string]any{
+			"bucket": bucket,
+			"from":   req.From,
+			"key":    req.To,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"key":        info.Key,
+		"size_bytes": info.Size,
+		"media_type": contentType,
+		"etag":       info.ETag,
+		"created_at": row.CreatedAt,
+		"updated_at": row.UpdatedAt,
+	})
+}
+
 // streamObject performs the object read shared by both download
 // representations — the native route (DownloadObject) and the S3-shaped one
 // the SDK's artifact toolkit speaks (DownloadObjectS3, s3.go). Everything

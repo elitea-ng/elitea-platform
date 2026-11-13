@@ -660,9 +660,9 @@ func (q *Queries) UpdateArtifactBucketTags(ctx context.Context, arg UpdateArtifa
 const upsertArtifactObject = `-- name: UpsertArtifactObject :one
 INSERT INTO elitea_storage.objects (
     bucket_id, key, byte_length, media_type, digest_alg, digest,
-    classification, scan_state, expires_at
+    classification, scan_state, expires_at, created_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, now())
 )
 ON CONFLICT (bucket_id, key) DO UPDATE SET
     byte_length = EXCLUDED.byte_length,
@@ -672,6 +672,7 @@ ON CONFLICT (bucket_id, key) DO UPDATE SET
     classification = EXCLUDED.classification,
     scan_state = EXCLUDED.scan_state,
     expires_at = EXCLUDED.expires_at,
+    created_at = COALESCE($10::timestamptz, elitea_storage.objects.created_at),
     updated_at = now()
 RETURNING id, bucket_id, key, byte_length, media_type, digest_alg, digest,
     classification, scan_state, expires_at, created_at, updated_at
@@ -687,8 +688,12 @@ type UpsertArtifactObjectParams struct {
 	Classification string             `db:"classification" json:"classification"`
 	ScanState      string             `db:"scan_state" json:"scan_state"`
 	ExpiresAt      pgtype.Timestamptz `db:"expires_at" json:"expires_at"`
+	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
 }
 
+// created_at is NULL for an ordinary write (a new row is born now, an
+// existing row keeps its birth). A rename passes the source's created_at so
+// the object keeps its age under the new name (#2015).
 func (q *Queries) UpsertArtifactObject(ctx context.Context, arg UpsertArtifactObjectParams) (EliteaStorageObject, error) {
 	row := q.db.QueryRow(ctx, upsertArtifactObject,
 		arg.BucketID,
@@ -700,6 +705,7 @@ func (q *Queries) UpsertArtifactObject(ctx context.Context, arg UpsertArtifactOb
 		arg.Classification,
 		arg.ScanState,
 		arg.ExpiresAt,
+		arg.CreatedAt,
 	)
 	var i EliteaStorageObject
 	err := row.Scan(

@@ -36,6 +36,8 @@ interface ArtifactTableProps {
   readonly onDownload: (item: ArtifactListItem) => void;
   readonly onDownloadMany: (items: readonly ArtifactListItem[]) => void;
   readonly onDelete: (items: readonly ArtifactListItem[]) => void;
+  /** Absent when the caller may not rename: Rename is hidden in the rows and the toolbar. */
+  readonly onRename?: ((item: ArtifactListItem) => void) | undefined;
   readonly onUpload: (files: readonly File[]) => void;
 }
 
@@ -156,6 +158,13 @@ export function ArtifactTable(props: ArtifactTableProps): ReactNode {
         onFilesPicked={stageInputFiles}
         onDownloadSelected={() => props.onDownloadMany(selectedItems)}
         onDeleteSelected={() => props.onDelete(selectedItems)}
+        canRenameSelected={selectedItems.length === 1 && selectedItems[0]?.kind === 'file'}
+        {...(props.onRename === undefined ? {} : {
+          onRenameSelected: () => {
+            const [only] = selectedItems;
+            if (selectedItems.length === 1 && only?.kind === 'file') props.onRename?.(only);
+          },
+        })}
       />
       {props.error !== undefined && (
         <Typography
@@ -206,6 +215,7 @@ export function ArtifactTable(props: ArtifactTableProps): ReactNode {
                   onOpen={() => props.onPrefixChange(item.key)}
                   onPreview={props.onPreview}
                   onDownload={props.onDownload}
+                  onRename={props.onRename}
                   onDelete={(target) => props.onDelete([target])}
                 />
               ))}

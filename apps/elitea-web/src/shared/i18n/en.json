@@ -6227,5 +6227,12 @@
   "toolkits.editor.refusedFields": "The toolkit was not saved: some settings were refused. Check the highlighted fields.",
   "toolkits.editor.saveFailed": "The toolkit could not be saved. Try again.",
   "toolkits.editor.saved": "Toolkit saved.",
-  "widgets.chat.plusChatButton.menuSkills": "Skills"
+  "widgets.chat.plusChatButton.menuSkills": "Skills",
+  "artifacts.rename.confirm": "Rename",
+  "artifacts.rename.label": "File name",
+  "artifacts.rename.stale": "That file no longer exists, so it cannot be renamed.",
+  "artifacts.rename.title": "Rename file",
+  "artifacts.table.renameSelected": "Rename selected file",
+  "common.rename": "Rename",
+  "artifacts.create.retentionDefaultHelp": "Leave empty to use the project's default retention."
 }

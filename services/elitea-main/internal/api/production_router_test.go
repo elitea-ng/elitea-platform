@@ -2179,6 +2179,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/artifacts/grants/{projectID}/{grantID}:completeMultipart",
 		"POST /api/v2/artifacts/objects/{projectID}/{bucket}",
 		"POST /api/v2/artifacts/objects/{projectID}/{bucket}:batchDelete",
+		"POST /api/v2/artifacts/objects/{projectID}/{bucket}:move",
 		"POST /api/v2/auth/native/authorize/decision",
 		"POST /api/v2/auth/native/revoke",
 		"POST /api/v2/auth/native/token",

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
+import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import Box from '@mui/material/Box';
@@ -26,6 +27,8 @@ interface ArtifactGridRowProps {
   readonly onOpen: (item: ArtifactListItem) => void;
   readonly onPreview: (item: ArtifactListItem) => void;
   readonly onDownload: (item: ArtifactListItem) => void;
+  /** Absent when the caller may not rename (rename needs create + delete). */
+  readonly onRename?: ((item: ArtifactListItem) => void) | undefined;
   readonly onDelete: (item: ArtifactListItem) => void;
 }
 
@@ -128,6 +131,21 @@ export function ArtifactGridRow(props: ArtifactGridRowProps): ReactNode {
             <FileDownloadOutlinedIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+        {!isFolder && props.onRename !== undefined && (
+          <Tooltip title={t('common.rename', 'Rename')}>
+            <IconButton
+              size="small"
+              color="tertiary"
+              aria-label={`Rename ${props.item.name}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onRename?.(props.item);
+              }}
+            >
+              <DriveFileRenameOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
         <Tooltip title={t('common.delete', 'Delete')}>
           <IconButton
             size="small"

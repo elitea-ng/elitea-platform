@@ -78,13 +78,13 @@ describe('artifact query hooks', () => {
     client.setQueryData(artifactQueryKeys.files('p1', 'docs'), []);
     const hook = renderHookWithProviders(() => useArtifactMutations('p1'), client);
 
-    await act(() => hook.result.current.createBucket.mutateAsync('docs'));
+    await act(() => hook.result.current.createBucket.mutateAsync({ name: 'docs' }));
     await act(() => hook.result.current.pinBucket.mutateAsync({ name: 'reports', isPinned: true }));
     await act(() => hook.result.current.deleteBucket.mutateAsync('reports'));
     await act(() => hook.result.current.deleteFile.mutateAsync({ bucket: 'docs', key: 'a.txt' }));
     await act(() => hook.result.current.deleteMany.mutateAsync({ bucket: 'docs', keys: ['a.txt'] }));
 
-    expect(createArtifactBucket).toHaveBeenCalledWith('p1', 'docs');
+    expect(createArtifactBucket).toHaveBeenCalledWith('p1', 'docs', undefined);
     expect(setArtifactBucketPinned).toHaveBeenCalledWith('p1', 'reports', true);
     expect(removeArtifactBucket).toHaveBeenCalledWith('p1', 'reports');
     expect(removeArtifact).toHaveBeenCalledWith('p1', 'docs', 'a.txt');
@@ -94,6 +94,6 @@ describe('artifact query hooks', () => {
 
   it('rejects mutations when no project is selected', async () => {
     const hook = renderHookWithProviders(() => useArtifactMutations(undefined));
-    await expect(hook.result.current.createBucket.mutateAsync('docs')).rejects.toThrow('project');
+    await expect(hook.result.current.createBucket.mutateAsync({ name: 'docs' })).rejects.toThrow('project');
   });
 });
