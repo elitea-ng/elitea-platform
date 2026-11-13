@@ -13,6 +13,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 // CurrentRuntimeEntityBuilderRepository is the tenant-side half of the two
@@ -73,6 +74,8 @@ func (r *CurrentRuntimeEntityBuilderRepository) UpsertRuntimeSkillByName(
 	if actorID <= 0 || actorID > math.MaxInt32 {
 		return storage.RuntimeSkillRecord{}, errors.New("runtime skill write: actor is invalid")
 	}
+	// Model-written text: cut to the entity limits (issue 1968) rather than fail the write.
+	name, description = entitylimits.Truncate(name, entitylimits.MaxNameLength), entitylimits.Truncate(description, entitylimits.MaxDescriptionLength)
 	projectKey := strconv.FormatInt(projectID, 10)
 	tenantSchema := schema(projectKey)
 	ownerID, err := tenantschema.OwnerID(projectKey)

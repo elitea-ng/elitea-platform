@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
 )
@@ -275,6 +276,31 @@ func TestToolkitRepositoryLifecycleAgainstPostgres(t *testing.T) {
 		}
 		if _, _, err := repo.ListToolkits(ctx, "1", 1, 10); err != nil {
 			t.Fatalf("ListToolkits after the fork: %v", err)
+		}
+		if err := repo.DeleteToolkit(ctx, "1", forked.ID); err != nil {
+			t.Fatalf("DeleteToolkit the fork: %v", err)
+		}
+	})
+
+	// Issue 1968: a source already at the 128-character limit still forks, and the " (copy)"
+	// suffix stays inside the limit.
+	t.Run("the fork of a name at the limit stays inside it", func(t *testing.T) {
+		longName := strings.Repeat("字", 128)
+		if _, err := pool.Exec(ctx, `UPDATE p_1.elitea_tools SET name = $1 WHERE id = $2`, longName, toolkitID); err != nil {
+			t.Fatalf("lengthen the fixture name: %v", err)
+		}
+		defer func() {
+			if _, err := pool.Exec(ctx, `UPDATE p_1.elitea_tools SET name = 'lifecycle-fixture' WHERE id = $1`, toolkitID); err != nil {
+				t.Fatalf("restore the fixture name: %v", err)
+			}
+		}()
+		forked, err := repo.ForkToolkit(ctx, "1", map[string]any{"source_id": toolkitID})
+		if err != nil {
+			t.Fatalf("ForkToolkit: %v", err)
+		}
+		want := strings.Repeat("字", 128-len(" (copy)")) + " (copy)"
+		if forked.Name != want {
+			t.Errorf("forked name = %q (%d characters), want %d characters ending in (copy)", forked.Name, utf8.RuneCountInString(forked.Name), 128)
 		}
 		if err := repo.DeleteToolkit(ctx, "1", forked.ID); err != nil {
 			t.Fatalf("DeleteToolkit the fork: %v", err)

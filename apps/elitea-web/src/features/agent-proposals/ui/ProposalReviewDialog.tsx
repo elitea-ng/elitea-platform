@@ -28,6 +28,7 @@ import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { triggerBlobDownload } from '@/shared/lib/download';
 import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
+import { exceedsLimit } from '@/shared/lib/textLimits';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { BaseModal } from '@/shared/ui/BaseModal';
@@ -49,6 +50,13 @@ export interface ProposalReviewDialogProps {
 /** The runtime's sub-agent display name bound (agentproposal.MaxDisplayNameChars). */
 const MAX_DISPLAY_NAME_LENGTH = 60;
 
+/** Which of the review's name and description are past the entity limits (issue 1968); the inputs do not cut. */
+function textOverLimits(review: { readonly name: string; readonly description: string }): { nameTooLong: boolean; descriptionTooLong: boolean; anyTooLong: boolean } {
+  const nameTooLong = exceedsLimit(review.name, MAX_NAME_LENGTH);
+  const descriptionTooLong = exceedsLimit(review.description, MAX_DESCRIPTION_LENGTH);
+  return { nameTooLong, descriptionTooLong, anyTooLong: nameTooLong || descriptionTooLong };
+}
+
 export function ProposalReviewDialog({ projectId, proposal, onClose, onCreated }: ProposalReviewDialogProps): ReactNode {
   if (proposal === undefined) return null;
   return <ProposalReviewForm key={proposal.id} projectId={projectId} proposal={proposal} onClose={onClose} onCreated={onCreated} />;
@@ -65,6 +73,7 @@ function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: Proposa
   const busy = create.isPending || dismiss.isPending;
   const decided = proposal.status !== 'proposed';
   const nameMissing = review.name.trim() === '';
+  const { nameTooLong, descriptionTooLong, anyTooLong } = textOverLimits(review);
 
   const field =
     (key: keyof Omit<ReviewDraft, 'conversationStarters'>) =>
@@ -80,7 +89,7 @@ function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: Proposa
     });
 
   const submit = (): void => {
-    if (nameMissing || busy || decided) return;
+    if (nameMissing || anyTooLong || busy || decided) return;
     setError(undefined);
     create.mutate(
       { proposal, review, seeds: [...kept].sort((a, b) => a - b), existingApplicationId: madeId },
@@ -136,7 +145,7 @@ function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: Proposa
             <BaseBtn variant="secondary" onClick={reject} disabled={busy || decided} data-testid="agent-proposal-dismiss">
               {t('features.agentProposals.review.dismiss', 'Dismiss')}
             </BaseBtn>
-            <BaseBtn variant="contained" onClick={submit} disabled={busy || decided || nameMissing} data-testid="agent-proposal-create">
+            <BaseBtn variant="contained" onClick={submit} disabled={busy || decided || nameMissing || anyTooLong} data-testid="agent-proposal-create">
               {t('features.agentProposals.review.create', 'Create agent')}
             </BaseBtn>
           </>
@@ -157,8 +166,9 @@ function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: Proposa
             label={t('features.agentProposals.review.name', 'Name')}
             value={review.name}
             onChange={field('name')}
-            error={nameMissing}
-            slotProps={{ htmlInput: { maxLength: MAX_NAME_LENGTH, 'data-testid': 'agent-proposal-name' } }}
+            error={nameMissing || nameTooLong}
+            helperText={nameTooLong ? `Name must be ${MAX_NAME_LENGTH} characters or fewer` : undefined}
+            slotProps={{ htmlInput: { 'data-testid': 'agent-proposal-name' } }}
           />
           <TextField
             label={t('features.agentProposals.review.description', 'Description')}
@@ -166,7 +176,9 @@ function ProposalReviewForm({ projectId, proposal, onClose, onCreated }: Proposa
             onChange={field('description')}
             multiline
             minRows={2}
-            slotProps={{ htmlInput: { maxLength: MAX_DESCRIPTION_LENGTH, 'data-testid': 'agent-proposal-description' } }}
+            error={descriptionTooLong}
+            helperText={descriptionTooLong ? `Description must be ${MAX_DESCRIPTION_LENGTH} characters or fewer` : undefined}
+            slotProps={{ htmlInput: { 'data-testid': 'agent-proposal-description' } }}
           />
           <TextField
             label={t('features.agentProposals.review.instructions', 'Instructions')}

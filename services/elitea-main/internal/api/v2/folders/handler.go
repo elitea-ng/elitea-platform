@@ -16,6 +16,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )
@@ -803,6 +804,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := entitylimits.CheckName("name", folder.Name); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+
 	created, err := h.repo.Create(r.Context(), projectID, folder)
 	if err != nil {
 		apierr.Write(w, err)
@@ -840,6 +846,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if name, ok := patch["name"].(string); ok {
+			if err := entitylimits.CheckName("name", name); err != nil {
+				apierr.Write(w, err)
+				return
+			}
 			existing.Name = name
 		}
 		if parentID, ok := patch["parent_id"].(string); ok {
@@ -870,6 +880,10 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(body, &raw); err != nil {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
+		return
+	}
+	if err := entitylimits.CheckName("name", folder.Name); err != nil {
+		apierr.Write(w, err)
 		return
 	}
 

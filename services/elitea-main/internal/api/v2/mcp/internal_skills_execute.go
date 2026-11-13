@@ -17,6 +17,7 @@ import (
 	skillsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 type internalSkillExecutor interface {
@@ -174,7 +175,7 @@ func (executor *repositoryInternalSkillExecutor) create(
 	if err != nil {
 		return internalSkillBadRequest(err.Error())
 	}
-	description, err := boundedRequiredString(arguments, "description", 2304)
+	description, err := boundedRequiredString(arguments, "description", entitylimits.MaxDescriptionLength)
 	if err != nil {
 		return internalSkillBadRequest(err.Error())
 	}
@@ -285,7 +286,7 @@ func (executor *repositoryInternalSkillExecutor) update(
 			changed = true
 		}
 		if raw, present := arguments["description"]; present {
-			current.Description, err = boundedRequiredString(map[string]any{"description": raw}, "description", 2304)
+			current.Description, err = boundedRequiredString(map[string]any{"description": raw}, "description", entitylimits.MaxDescriptionLength)
 			if err != nil {
 				return internalSkillBadRequest(err.Error())
 			}

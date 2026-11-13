@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 
 import { useDesign } from '@/design/DesignProvider';
-import { Button, Text, TextField } from '@/ui';
+import { Button, DESCRIPTION_MAX_LENGTH, exceedsLimit, Text, TextField } from '@/ui';
 
 import type { AgentBuilder, EditableDraft } from './useAgentBuilder';
 
@@ -30,7 +30,7 @@ export function AgentBuilderView({ builder, onSaved }: { builder: AgentBuilder; 
     setEdited({ ...reviewed, conversation_starters: [...reviewed.conversation_starters] });
   }
 
-  const canSave = edited.name.trim() !== '' && edited.instructions.trim() !== '' && !builder.saving;
+  const canSave = edited.name.trim() !== '' && edited.instructions.trim() !== '' && !exceedsLimit(edited.description, DESCRIPTION_MAX_LENGTH) && !builder.saving;
   const save = () => {
     if (!canSave) return;
     void builder.save(edited).then((id) => {
@@ -78,7 +78,7 @@ export function AgentBuilderView({ builder, onSaved }: { builder: AgentBuilder; 
       {state.phase === 'review' ? (
         <>
           <TextField label="Name" value={edited.name} onChangeText={(name) => setEdited({ ...edited, name })} maxLength={32} testID="agent-builder-name" />
-          <TextField label="Description" value={edited.description} onChangeText={(description) => setEdited({ ...edited, description })} multiline />
+          <TextField label="Description" value={edited.description} onChangeText={(description) => setEdited({ ...edited, description })} multiline characterLimit={DESCRIPTION_MAX_LENGTH} testID="agent-builder-description" />
           <TextField label="Instructions" value={edited.instructions} onChangeText={(instructions) => setEdited({ ...edited, instructions })} multiline />
           <TextField
             label="Ask for a change"

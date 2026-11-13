@@ -1,3 +1,4 @@
+import { clipToLimit, NAME_MAX_LENGTH } from '@elitea/client-core/limits';
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { useCallback, useSyncExternalStore } from 'react';
 import { z } from 'zod';
@@ -384,7 +385,7 @@ export async function startConversationWithPublicAgent(
   agent: Pick<PublicAgent, 'id' | 'publicProjectId' | 'name' | 'versionId'>,
   client: ApiClient = sessionApiClient(),
 ): Promise<{ id: number; uuid: string }> {
-  const body: CreateConversationBody = { name: agent.name.slice(0, 200), is_private: true, participants: [] };
+  const body: CreateConversationBody = { name: clipToLimit(agent.name, NAME_MAX_LENGTH), is_private: true, participants: [] };
   const create = await client.POST('/elitea_core/conversations/prompt_lib/{project_id}', {
     params: { path: { project_id: String(projectId) } },
     body,

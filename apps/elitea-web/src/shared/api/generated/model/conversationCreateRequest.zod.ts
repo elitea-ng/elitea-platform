@@ -47,7 +47,12 @@ export const conversationCreateRequestParticipantsMax = 100;
 
 export const ConversationCreateRequest = zod
   .object({
-    name: zod.string().optional(),
+    name: zod
+      .string()
+      .optional()
+      .describe(
+        "Limit: at most 128 characters (issue 1968). Not declared as `maxLength` because the `client` subset is additive-only (ADR-0025 decision 6); the server answers 400 with `field` and `max_length`.\n",
+      ),
     is_private: zod
       .boolean()
       .optional()

@@ -3,7 +3,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 
-import { applicationCreationSchema, type ApplicationCreationInput } from '@/entities/application-form';
+import { applicationEditSchema, type ApplicationCreationInput } from '@/entities/application-form';
 import { applicationWriteHooks } from '@/features/agents';
 import { usePipelineGraphDraft } from '@/features/pipelines';
 import type { ApplicationDetail, ApplicationVersionDetail } from '@/shared/api/generated/model';
@@ -71,7 +71,7 @@ export function useEditPipelineForm(
   );
 
   const form = useForm<ApplicationCreationInput>({
-    resolver: zodResolver(applicationCreationSchema),
+    resolver: zodResolver(applicationEditSchema),
     mode: 'onChange',
     values: defaultValues,
   });

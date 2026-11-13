@@ -81,12 +81,12 @@ async function openRowMenu(page: Page, conversationId: string): Promise<void> {
 }
 
 /* elitea_issues: #6562 — duplicating a conversation whose name is well past any legacy
- * "~50 character" concern still succeeds; the app's (copy)-suffix scheme has no length
- * cap to trip over. */
+ * "~50 character" concern still succeeds. Since issue 1968 names stop at 128 characters, so a
+ * source AT that limit is the hard case: the duplicate clips it to fit the (copy) suffix. */
 test('#6562: duplicating a very long-named conversation succeeds with the suffix appended', async ({ page }) => {
   test.setTimeout(60_000);
-  // 180 chars: comfortably past the legacy ~50-char limit this issue depended on.
-  const longName = uniqueName('L').padEnd(180, 'x');
+  // 128 chars: the server's limit, far past the legacy ~50-char limit this issue depended on.
+  const longName = uniqueName('L').padEnd(128, 'x');
   const originalId = await createConversation(page.request, longName);
   let duplicateId: string | undefined;
   try {
@@ -104,7 +104,7 @@ test('#6562: duplicating a very long-named conversation succeeds with the suffix
     expect(body.id, 'duplication must not fail silently for a long name').toBeDefined();
     duplicateId = String(body.id);
     expect(body.name ?? '').toContain('(copy)');
-    expect((body.name ?? '').length, 'the duplicate name is not silently truncated to some legacy cap').toBeGreaterThan(longName.length);
+    expect(body.name ?? '', 'the duplicate keeps the source name up to the suffix').toBe(`${longName.slice(0, 128 - ' (copy)'.length)} (copy)`);
 
     await expect(page).toHaveURL(new RegExp(`/chat/${duplicateId}$`), { timeout: 15_000 });
   } finally {
