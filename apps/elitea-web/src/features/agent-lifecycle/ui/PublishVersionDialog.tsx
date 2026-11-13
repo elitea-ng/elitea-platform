@@ -192,6 +192,9 @@ export function PublishVersionDialog({
   );
 }
 
+/** The current step is the element tests read. */
+const CURRENT_STEP_TEST_ID = { 'data-testid': 'publish-step' } as const;
+
 function PublishStepper({ step }: { readonly step: Step }): ReactNode {
   return (
     <Box sx={stepperSx}>
@@ -201,7 +204,7 @@ function PublishStepper({ step }: { readonly step: Step }): ReactNode {
           component="span"
           variant="labelSmall"
           color={name === step ? 'text.primary' : 'text.secondary'}
-          {...(name === step ? { 'data-testid': 'publish-step' } : {})}
+          {...(name === step ? CURRENT_STEP_TEST_ID : {})}
         >
           {stepLabel(name)}
         </Typography>
