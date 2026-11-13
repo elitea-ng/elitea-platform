@@ -21,6 +21,8 @@ export interface ChatMessage {
   readonly responseMetadata?: Readonly<Record<string, unknown>> | undefined;
   /** Persisted `meta.skipped_capabilities`: what this turn was configured with but could not serve. Live turns carry it in `responseMetadata`. */
   readonly skippedCapabilities?: unknown;
+  /** FU-335: a delegation refused at start (`agent_delegation_refused`, or persisted `meta.delegation_refused`). */
+  readonly delegationRefusal?: unknown;
   /** Persisted `meta.grounding` (ADR-0043 decision 5): the grounding indicator of a citing agent's answer. Live turns carry it in `responseMetadata`. */
   readonly grounding?: unknown;
   /**

@@ -335,6 +335,7 @@ export function convertMessagesToChatHistory(
         ? nodeRecoveryBinding(uuid, meta?.execution_generation, meta?.node_recovery_required_v1) : undefined,
       staticPause: staticPauseBinding(uuid, meta?.execution_generation, meta?.thread_id, meta?.pipeline_static_v1, meta?.pipeline_static_tools_v1),
       ...(meta?.skipped_capabilities === undefined ? {} : { skippedCapabilities: meta.skipped_capabilities }),
+      ...(meta?.delegation_refused === undefined ? {} : { delegationRefusal: meta.delegation_refused }),
       ...(meta?.grounding === undefined ? {} : { grounding: meta.grounding }),
       ...subAgentsOf(meta?.subagents_v1, messageGroup.is_streaming === true),
       ...answerMarks(meta, reply_to_id === undefined ? false : continuedRows.has(String(reply_to_id))),

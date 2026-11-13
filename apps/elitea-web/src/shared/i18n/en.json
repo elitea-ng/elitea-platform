@@ -6210,5 +6210,9 @@
   "chat-participants.users.lessLabel": "Show less",
   "chat-participants.users.showLess": "Hide additional participants",
   "chat-participants.users.showMore": "Show {{count}} more participants",
-  "widgets.chatBox.peopleOnlyNotice": "Sent to people only: no agent was asked."
+  "widgets.chatBox.peopleOnlyNotice": "Sent to people only: no agent was asked.",
+  "features.chatMessages.delegationRefusal.agentGrant": "A saved agent that an Agent node of this run runs needs a grant its caller does not hold.",
+  "features.chatMessages.delegationRefusal.agentToolkit": "A saved agent that an Agent node of this run runs needs the toolkit \"{{toolkit}}\", which its caller does not hold. Attach it to the caller, or remove it from the saved agent.",
+  "features.chatMessages.delegationRefusal.pipelineGrant": "A saved pipeline that a pipeline node of this run runs needs a grant its caller does not hold.",
+  "features.chatMessages.delegationRefusal.pipelineToolkit": "A saved pipeline that a pipeline node of this run runs needs the toolkit \"{{toolkit}}\", which its caller does not hold. Attach it to the caller, or remove it from the saved pipeline."
 }

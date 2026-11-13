@@ -185,6 +185,8 @@ export interface MessageGroupMetaWire {
   readonly pipeline_static_tools_v1?: unknown;
   /** What the turn was configured with but could not serve (worker `skipped_capabilities`); see `features/chat-messages/lib/skippedCapabilities`. */
   readonly skipped_capabilities?: unknown;
+  /** FU-335: a delegation refused at start; see `features/chat-messages/lib/delegationRefusal`. */
+  readonly delegation_refused?: unknown;
   /** The grounding indicator of a citing agent's answer (worker `grounding`); see `features/chat-messages/lib/grounding`. */
   readonly grounding?: unknown;
   /** Client contract 1.48: the cloud answer's temporary sub-agents (`@elitea/client-core/stream` `parseSubAgentLanes`). */

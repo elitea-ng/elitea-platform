@@ -36,6 +36,7 @@ import Typography from '@mui/material/Typography';
 import { messageNodeRecoveryBinding } from '../../lib/nodeRecoveryBinding';
 import { NodeRecoveryNotice } from './NodeRecoveryNotice';
 import { SkippedCapabilitiesNotice } from './SkippedCapabilitiesNotice';
+import { DelegationRefusalNotice } from './DelegationRefusalNotice';
 import { skippedCapabilitiesOf } from '../../lib/skippedCapabilities';
 import { GroundingIndicator } from './GroundingIndicator';
 import { ContinuedAutomaticallyLabel, StepLimitNotice } from './UnattendedMarkers';
@@ -326,6 +327,7 @@ export function ApplicationAnswer({
           ) : (
             <>
               {renderedContent}
+              {!!exception && <DelegationRefusalNotice refusal={answer.delegationRefusal} />}
               {!!exception && <ErrorTrace error={exception} />}
               {!!exception && <BudgetUsageLink code={answer.failureCode} />}
               {!!exception && <CapOverrideAction projectId={feedbackProjectId} messageId={messageId} code={answer.failureCode} cap={answer.failureCap} />}

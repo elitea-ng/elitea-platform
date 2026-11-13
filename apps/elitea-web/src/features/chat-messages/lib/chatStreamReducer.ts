@@ -1,6 +1,7 @@
 import { applyNodeRecoveryFrame } from './chatStreamNodeRecovery';
 import { applyStaticPauseFrame } from './chatStreamStaticPause';
 import { applySkippedCapabilitiesFrame } from './chatStreamSkipped';
+import { applyDelegationRefusalFrame } from './delegationRefusal';
 /**
  * lib/chatStreamReducer.ts — the chat streaming reducer (issue #93, Surface B).
  *
@@ -126,10 +127,10 @@ export function applyChatStreamFrame(
     // point: an unported frame must be inert, never a partial write.
     history
   );
-  const next = applyFanoutParkedFrame(applySkippedCapabilitiesFrame(
+  const next = applyDelegationRefusalFrame(applyFanoutParkedFrame(applySkippedCapabilitiesFrame(
     applyNodeRecoveryFrame(applyStaticPauseFrame(reduced, frame, context), frame, context),
     frame,
-  ), frame);
+  ), frame), frame, context);
   const stamped = withAnswerParticipant(next, frame, context);
   if (!isTurnTerminalFrame(frame)) return stamped;
   return settleTerminal(stamped, frame);
