@@ -184,8 +184,8 @@ const SkillEntityTypeAgent = "agent"
 // (legacy/plugins/elitea_core/utils/skill_utils.py:31). The read side already
 // publishes the same number: applicationskills.MaxCurrentApplicationSkills,
 // which the old skill picker renders as "n/5 skills added" and uses to disable
-// the menu. Without the same cap on the write side the counter can show 6/5.
-const MaxSkillsPerEntityVersion = 5
+// the menu (raised from the legacy 5 to 50, #2023). Without the same cap on the write side the counter can show 6/5.
+const MaxSkillsPerEntityVersion = 50
 
 // SkillInstructionsMaxLength is the one ceiling, in characters (runes), on a
 // skill version's instructions. elitea-web's editor already allows 50 000

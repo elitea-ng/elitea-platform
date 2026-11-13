@@ -1,12 +1,14 @@
 import { QueryClient } from '@tanstack/react-query';
 import { act, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
 import { renderHookWithProviders } from '../__tests__/testUtils';
+
+import { getGetApplicationQueryKey } from '@/shared/api/generated/applications/applications';
 
 import { useSetDefaultVersion } from './useSetDefaultVersion';
 
@@ -76,6 +78,39 @@ describe('useSetDefaultVersion', () => {
     });
 
     expect(calls).toBe(2);
+  });
+
+  // #1991: the cached application detail embeds the default version; leaving
+  // it fresh made reopening the agent replay the old default.
+  it('invalidates the cached application detail after a successful pin, and not after a refusal', async () => {
+    server.use(http.patch(SET_DEFAULT_ROUTE, () => HttpResponse.json({ ok: true }, { status: 200 })));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 30_000 } } });
+    const key = getGetApplicationQueryKey('p1', 3);
+    queryClient.setQueryData(key, { data: {} });
+    const { result } = renderHookWithProviders(() => useSetDefaultVersion(baseInput()), queryClient);
+
+    await act(async () => {
+      await result.current.doSetDefaultVersion(7);
+    });
+
+    expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+  });
+
+  // The pin succeeded; the cache refresh is housekeeping. Awaiting it let a
+  // refetch failure (or a slow one) turn a successful pin into a reported failure.
+  it('does not wait for the detail refetch: a pending or failing refresh cannot fail a successful pin', async () => {
+    server.use(http.patch(SET_DEFAULT_ROUTE, () => HttpResponse.json({ ok: true }, { status: 200 })));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.spyOn(queryClient, 'invalidateQueries').mockReturnValue(new Promise<void>(() => undefined));
+    const { result } = renderHookWithProviders(() => useSetDefaultVersion(baseInput()), queryClient);
+
+    let ok;
+    await act(async () => {
+      ok = await result.current.doSetDefaultVersion(7);
+    });
+
+    expect(ok).toBe(true);
+    expect(result.current.error).toBeUndefined();
   });
 
   it('resolves false and reports the server refusal when the version is not this application’s', async () => {

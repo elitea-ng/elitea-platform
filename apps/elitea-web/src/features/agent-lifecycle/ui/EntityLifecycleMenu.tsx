@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useState } from 'react';
 
 import CallSplitOutlinedIcon from '@mui/icons-material/CallSplitOutlined';
+import DifferenceOutlinedIcon from '@mui/icons-material/DifferenceOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
@@ -51,14 +52,18 @@ export interface EntityLifecycleMenuProps {
   /** `true` when the open version already has `status: published`. */
   readonly isPublished: boolean;
   readonly onShareVersion?: () => void;
+  /** #1997 — opens the version comparison. Omitted where there is nothing to compare (fewer than two versions). */
+  readonly onCompareVersions?: () => void;
   readonly onShareEntity: () => void;
   readonly onFork: () => void;
   readonly onPublish?: () => void;
   readonly onUnpublish?: () => void;
-  /** Export the whole entity as markdown. Omitted where the editor carries its own Export button. */
-  readonly onExport?: () => void;
-  /** Delete the whole entity. The caller owns the confirmation. Omitted where the editor carries its own Delete button. */
-  readonly onDelete?: () => void;
+  /**
+   * ENTITY-group extras: `onExport` exports the whole entity as markdown, `onDelete` deletes it (the
+   * caller owns the confirmation). Each is omitted where the editor carries its own button. One object
+   * so the component stays within the §3.5 prop budget.
+   */
+  readonly entityActions?: { readonly onExport?: () => void; readonly onDelete?: () => void };
   /** Opens the release history (agents only; a pipeline has no releases). */
   readonly onReleaseHistory?: () => void;
   /** Opens the governance dialog: registry, change requests, attestations (agents only). */
@@ -71,22 +76,18 @@ export function EntityLifecycleMenu({
   disabled = false,
   isPublished,
   onShareVersion,
+  onCompareVersions,
   onShareEntity,
   onFork,
   onPublish,
   onUnpublish,
-  onExport,
-  onDelete,
+  entityActions,
   onReleaseHistory,
   onGovernance,
   testIdPrefix,
 }: EntityLifecycleMenuProps): ReactNode {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const close = (): void => setAnchorEl(null);
-  const run = (action: (() => void) | undefined) => (): void => {
-    close();
-    action?.();
-  };
 
   return (
     <>
@@ -112,40 +113,11 @@ export function EntityLifecycleMenu({
         >
           {t('features.agentLifecycle.menu.versionGroup', 'VERSION')}
         </Typography>
-        {onShareVersion !== undefined && (
-          <MenuItem
-            data-testid={`${testIdPrefix}-share-version-menuitem`}
-            onClick={run(onShareVersion)}
-          >
-            <LinkOutlinedIcon sx={iconSx} />
-            {t('features.agentLifecycle.menu.shareVersion', 'Share')}
-          </MenuItem>
-        )}
-        <MenuItem
-          data-testid={`${testIdPrefix}-fork-menuitem`}
-          onClick={run(onFork)}
-        >
-          <CallSplitOutlinedIcon sx={iconSx} />
-          {t('features.agentLifecycle.menu.fork', 'Fork')}
-        </MenuItem>
-        {onPublish !== undefined && !isPublished && (
-          <MenuItem
-            data-testid={`${testIdPrefix}-publish-menuitem`}
-            onClick={run(onPublish)}
-          >
-            <PublicOutlinedIcon sx={iconSx} />
-            {t('features.agentLifecycle.menu.publish', 'Publish')}
-          </MenuItem>
-        )}
-        {onUnpublish !== undefined && isPublished && (
-          <MenuItem
-            data-testid={`${testIdPrefix}-unpublish-menuitem`}
-            onClick={run(onUnpublish)}
-          >
-            <PublicOffOutlinedIcon sx={iconSx} />
-            {t('features.agentLifecycle.menu.unpublish', 'Unpublish')}
-          </MenuItem>
-        )}
+        <MenuEntry testId={`${testIdPrefix}-share-version-menuitem`} icon={<LinkOutlinedIcon sx={iconSx} />} label={t('features.agentLifecycle.menu.shareVersion', 'Share version link')} action={onShareVersion} onClose={close} />
+        <MenuEntry testId={`${testIdPrefix}-compare-versions-menuitem`} icon={<DifferenceOutlinedIcon sx={iconSx} />} label={t('features.agentLifecycle.menu.compareVersions', 'Compare versions')} action={onCompareVersions} onClose={close} />
+        <MenuEntry testId={`${testIdPrefix}-fork-menuitem`} icon={<CallSplitOutlinedIcon sx={iconSx} />} label={t('features.agentLifecycle.menu.fork', 'Fork')} action={onFork} onClose={close} />
+        <MenuEntry testId={`${testIdPrefix}-publish-menuitem`} icon={<PublicOutlinedIcon sx={iconSx} />} label={t('features.agentLifecycle.menu.publish', 'Publish')} action={isPublished ? undefined : onPublish} onClose={close} />
+        <MenuEntry testId={`${testIdPrefix}-unpublish-menuitem`} icon={<PublicOffOutlinedIcon sx={iconSx} />} label={t('features.agentLifecycle.menu.unpublish', 'Unpublish')} action={isPublished ? onUnpublish : undefined} onClose={close} />
         <Divider />
         <Typography
           variant="labelSmall"
@@ -153,51 +125,47 @@ export function EntityLifecycleMenu({
         >
           {t('features.agentLifecycle.menu.entityGroup', 'ENTITY')}
         </Typography>
-        <MenuItem
-          data-testid={`${testIdPrefix}-share-entity-menuitem`}
-          onClick={run(onShareEntity)}
-        >
-          <LinkOutlinedIcon sx={iconSx} />
-          {t('features.agentLifecycle.menu.shareEntity', 'Share')}
-        </MenuItem>
-        {onReleaseHistory !== undefined && (
-          <MenuItem
-            data-testid={`${testIdPrefix}-release-history-menuitem`}
-            onClick={run(onReleaseHistory)}
-          >
-            <HistoryOutlinedIcon sx={iconSx} />
-            {t('features.agentLifecycle.menu.releaseHistory', 'Release history')}
-          </MenuItem>
-        )}
-        {onGovernance !== undefined && (
-          <MenuItem
-            data-testid={`${testIdPrefix}-governance-menuitem`}
-            onClick={run(onGovernance)}
-          >
-            <GavelOutlinedIcon sx={iconSx} />
-            {t('features.agentLifecycle.menu.governance', 'Governance')}
-          </MenuItem>
-        )}
-        {onExport !== undefined && (
-          <MenuItem
-            data-testid={`${testIdPrefix}-export-menuitem`}
-            onClick={run(onExport)}
-          >
-            <FileDownloadOutlinedIcon sx={iconSx} />
-            {t('features.agentLifecycle.menu.export', 'Export')}
-          </MenuItem>
-        )}
-        {onDelete !== undefined && (
-          <MenuItem
-            data-testid={`${testIdPrefix}-delete-menuitem`}
-            onClick={run(onDelete)}
-          >
-            <DeleteOutlineIcon sx={iconSx} />
-            {t('features.agentLifecycle.menu.delete', 'Delete')}
-          </MenuItem>
-        )}
+        <MenuEntry testId={`${testIdPrefix}-share-entity-menuitem`} icon={<LinkOutlinedIcon sx={iconSx} />} label={t('features.agentLifecycle.menu.shareEntity', 'Share agent link')} action={onShareEntity} onClose={close} />
+        <MenuEntry testId={`${testIdPrefix}-release-history-menuitem`} icon={<HistoryOutlinedIcon sx={iconSx} />} label={t('features.agentLifecycle.menu.releaseHistory', 'Release history')} action={onReleaseHistory} onClose={close} />
+        <MenuEntry testId={`${testIdPrefix}-governance-menuitem`} icon={<GavelOutlinedIcon sx={iconSx} />} label={t('features.agentLifecycle.menu.governance', 'Governance')} action={onGovernance} onClose={close} />
+        <MenuEntry testId={`${testIdPrefix}-export-menuitem`} icon={<FileDownloadOutlinedIcon sx={iconSx} />} label={t('features.agentLifecycle.menu.export', 'Export')} action={entityActions?.onExport} onClose={close} />
+        <MenuEntry testId={`${testIdPrefix}-delete-menuitem`} icon={<DeleteOutlineIcon sx={iconSx} />} label={t('features.agentLifecycle.menu.delete', 'Delete')} action={entityActions?.onDelete} onClose={close} />
       </Menu>
     </>
+  );
+}
+
+/**
+ * One menu row. Renders nothing while `action` is absent, which is how the
+ * optional items (a pipeline's missing publish, an editor's own Export) stay
+ * out of the DOM. A lookup of rows instead of one `&&` per row keeps the menu
+ * within the §3.5 cyclomatic-complexity budget (12).
+ */
+function MenuEntry({
+  testId,
+  icon,
+  label,
+  action,
+  onClose,
+}: {
+  readonly testId: string;
+  readonly icon: ReactNode;
+  readonly label: string;
+  readonly action: (() => void) | undefined;
+  readonly onClose: () => void;
+}): ReactNode {
+  if (action === undefined) return null;
+  return (
+    <MenuItem
+      data-testid={testId}
+      onClick={() => {
+        onClose();
+        action();
+      }}
+    >
+      {icon}
+      {label}
+    </MenuItem>
   );
 }
 

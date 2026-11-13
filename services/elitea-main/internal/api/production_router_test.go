@@ -943,7 +943,7 @@ func TestProductionRouterMountsOnlyExactCurrentApplicationSkillsPathWhenComposed
 				"\"total\":1,\"page\":1,\"page_size\":1,\"total_pages\":1," +
 				"\"skills\":[{\"name\":\"deploy\",\"description\":\"Deploy safely\",\"skill_id\":17," +
 				"\"version_id\":19,\"version_name\":\"release\",\"version_missing\":false," +
-				"\"icon_meta\":null}],\"max_skills\":5}\n",
+				"\"icon_meta\":null}],\"max_skills\":50}\n",
 		},
 		{
 			method: http.MethodGet,
@@ -967,14 +967,14 @@ func TestProductionRouterMountsOnlyExactCurrentApplicationSkillsPathWhenComposed
 			path:          "/api/v2/elitea_core/application_skills/prompt_lib/7/0",
 			authenticated: true,
 			want:          http.StatusOK,
-			wantBody:      "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":5}\n",
+			wantBody:      "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":50}\n",
 		},
 		{
 			method:        http.MethodGet,
 			path:          "/api/v2/elitea_core/application_skills/prompt_lib/7/9999999999999999999999999999999999999999",
 			authenticated: true,
 			want:          http.StatusOK,
-			wantBody:      "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":5}\n",
+			wantBody:      "{\"items\":[],\"total\":0,\"page\":1,\"page_size\":0,\"total_pages\":0,\"skills\":[],\"max_skills\":50}\n",
 		},
 		{
 			method: http.MethodGet,

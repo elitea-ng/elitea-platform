@@ -129,8 +129,21 @@ export async function unpublishVersion(projectId: string, versionId: number): Pr
  * export omits all four, so forking a plain export produces a copy that does
  * not know where it came from (`internal/api/v2/eliteacore/handler.go`).
  */
-export async function fetchForkDocument(projectId: string, entityId: number): Promise<EntityExportDocument> {
-  const envelope = await exportApplication(projectId, entityId, { fork: true });
+export async function fetchForkDocument(
+  projectId: string,
+  entityId: number,
+  versionId?: number | string,
+): Promise<EntityExportDocument> {
+  // The server wants a number. Coerce, and omit the key for anything that is
+  // not one (NaN from a bad route param) rather than sending `follow_version_ids=NaN`.
+  const followId = versionId === undefined ? Number.NaN : Number(versionId);
+  // `follow_version_ids` names the version the fork copies (#1993). Without it
+  // the server keeps the newest, so forking the version an author had open
+  // copied a different one.
+  const envelope = await exportApplication(projectId, entityId, {
+    fork: true,
+    ...(Number.isInteger(followId) && followId > 0 ? { follow_version_ids: [followId] } : {}),
+  });
   return body<EntityExportDocument>(envelope);
 }
 

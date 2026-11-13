@@ -204,6 +204,21 @@ describe('publish', () => {
     expect(recorded).toHaveLength(0);
   });
 
+  // #2025: Continue with required fields missing used to do nothing at all.
+  it('marks every missing field when Continue is pressed with the form incomplete', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(controls());
+    await openMenu(user);
+    await user.click(screen.getByTestId('agent-publish-menuitem'));
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(recorded).toHaveLength(0);
+    expect(screen.getByTestId('publish-missing-summary')).toBeInTheDocument();
+    expect(screen.getByTestId('publish-category-error')).toBeInTheDocument();
+    expect(screen.getByTestId('publish-terms-error')).toBeInTheDocument();
+    expect(screen.getByTestId('publish-version-name')).toHaveAttribute('aria-invalid', 'true');
+  });
+
   // The server refuses `v 1` with a 400 and a regex message. Sending it and
   // rendering the refusal is worse than not sending it.
   it('sends nothing when the version name breaks the server rule', async () => {
@@ -387,6 +402,8 @@ describe('fork', () => {
     const write = recorded.find((call) => call.url.includes('/fork/'));
     expect(read?.url).toContain(`/prompt_lib/${PROJECT}/7`);
     expect(read?.url).toContain('fork=true');
+    // #1993: the open version (11) is the one copied, not the newest.
+    expect(read?.url).toContain('follow_version_ids=11');
     expect(write?.url).toContain('/fork/prompt_lib/5');
     expect(write?.body).toMatchObject({ applications: [{ id: '7', name: 'Audit Agent' }] });
   });
@@ -457,6 +474,35 @@ describe('EntityLifecycleMenu on its own', () => {
     expect(screen.getByTestId('agent-share-entity-menuitem')).toBeInTheDocument();
   });
 
+  it('#1997 offers "Compare versions" only when the caller passes a handler, and calls it', async () => {
+    const user = userEvent.setup();
+    const onCompareVersions = vi.fn();
+    const { unmount } = renderWithProviders(
+      <EntityLifecycleMenu
+        testIdPrefix="agent"
+        isPublished={false}
+        onShareEntity={vi.fn()}
+        onFork={vi.fn()}
+        onCompareVersions={onCompareVersions}
+      />,
+    );
+    await user.click(screen.getByTestId('agent-lifecycle-menu-button'));
+    await user.click(screen.getByTestId('agent-compare-versions-menuitem'));
+    expect(onCompareVersions).toHaveBeenCalledOnce();
+    unmount();
+
+    renderWithProviders(
+      <EntityLifecycleMenu
+        testIdPrefix="agent"
+        isPublished={false}
+        onShareEntity={vi.fn()}
+        onFork={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByTestId('agent-lifecycle-menu-button'));
+    expect(screen.queryByTestId('agent-compare-versions-menuitem')).not.toBeInTheDocument();
+  });
+
   it('disables the trigger while the entity id is unknown', () => {
     renderWithProviders(
       <EntityLifecycleMenu
@@ -500,8 +546,7 @@ describe('EntityLifecycleMenu on its own', () => {
         isPublished={false}
         onShareEntity={vi.fn()}
         onFork={vi.fn()}
-        onExport={onExport}
-        onDelete={vi.fn()}
+        entityActions={{ onExport, onDelete: vi.fn() }}
       />,
     );
     await user.click(screen.getByTestId('pipeline-lifecycle-menu-button'));
@@ -520,8 +565,7 @@ describe('EntityLifecycleMenu on its own', () => {
         isPublished={false}
         onShareEntity={vi.fn()}
         onFork={vi.fn()}
-        onExport={vi.fn()}
-        onDelete={onDelete}
+        entityActions={{ onExport: vi.fn(), onDelete }}
       />,
     );
     await user.click(screen.getByTestId('pipeline-lifecycle-menu-button'));
@@ -618,7 +662,37 @@ describe('import', () => {
         onImport={vi.fn()}
       />,
     );
-    await user.upload(screen.getByTestId('agents-import-input'), exportedFile(document, 'agent.md'));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Only .json');
+    await user.upload(screen.getByTestId('agents-import-input'), exportedFile(document, 'agent.txt'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Only .json, .md and .zip');
+  });
+
+  // #1996: a .md agent file (the Export ?format=md shape) and a zip of them
+  // were refused with "Only .json export files can be imported."
+  it('previews a .md agent file with YAML frontmatter', async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    renderWithProviders(
+      <EntityImportButton
+        testIdPrefix="agents"
+        isImporting={false}
+        onImport={vi.fn()}
+      />,
+    );
+    const markdown = '---\nname: Doc Bot\ndescription: answers\nmodel: gpt-5\n---\n\nBe helpful.';
+    await user.upload(screen.getByTestId('agents-import-input'), exportedFile(markdown, 'doc.agent.md'));
+    expect(await screen.findByText('Doc Bot')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('names a markdown file with no frontmatter instead of the extension', async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    renderWithProviders(
+      <EntityImportButton
+        testIdPrefix="agents"
+        isImporting={false}
+        onImport={vi.fn()}
+      />,
+    );
+    await user.upload(screen.getByTestId('agents-import-input'), exportedFile('just text', 'x.md'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('YAML frontmatter');
   });
 });

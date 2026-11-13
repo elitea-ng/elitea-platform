@@ -18,6 +18,7 @@ import DialogContentText from '@mui/material/DialogContentText';
 import DialogTitle from '@mui/material/DialogTitle';
 import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
+import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 
@@ -63,6 +64,8 @@ export function StopAgentButton({ projectId, applicationId, onError }: StopAgent
           <Chip
             color="error"
             size="small"
+            variant="outlined"
+            sx={stoppedChipSx}
             data-testid="agent-stopped-chip"
             label={
               projectWide
@@ -100,6 +103,7 @@ export function StopAgentButton({ projectId, applicationId, onError }: StopAgent
         size="small"
         color="error"
         variant="outlined"
+        sx={stopButtonSx}
         data-testid="stop-agent-button"
         disabled={suspensions.isLoading}
         onClick={() => setOpen(true)}
@@ -145,3 +149,21 @@ export function StopAgentButton({ projectId, applicationId, onError }: StopAgent
     </>
   );
 }
+
+/*
+ * #2026: both read as barely-there in the light theme (the chip's text was a
+ * pale tint on white, the button dark on dark). The colours are set from the
+ * error token on a transparent ground so they hold on either theme.
+ */
+const stoppedChipSx: SxProps<Theme> = (theme: Theme) => ({
+  color: theme.vars.palette.error.main,
+  borderColor: theme.vars.palette.error.main,
+  backgroundColor: 'transparent',
+  fontWeight: 600,
+});
+
+const stopButtonSx: SxProps<Theme> = (theme: Theme) => ({
+  color: theme.vars.palette.error.main,
+  borderColor: theme.vars.palette.error.main,
+  backgroundColor: 'transparent',
+});

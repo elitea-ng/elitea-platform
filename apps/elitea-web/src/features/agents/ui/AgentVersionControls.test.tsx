@@ -78,9 +78,10 @@ describe('AgentVersionControls', () => {
     const versionRows = getAllByRole('menuitem').filter(
       (item) => item.dataset['testid'] !== 'agent-version-set-default',
     );
+    // Issue 1990: named versions first, `base` at the bottom.
     expect(versionRows.map((item) => item.textContent)).toEqual([
-      expect.stringContaining('base'),
       expect.stringContaining('v1'),
+      expect.stringContaining('base'),
     ]);
     await userEvent.click(getByRole('menuitem', { name: /^v1/ }));
 

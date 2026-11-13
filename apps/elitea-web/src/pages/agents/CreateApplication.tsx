@@ -32,6 +32,7 @@ import {
 } from './lib/createApplicationDraftState';
 import { agentSaveErrorMessage } from './lib/agentSaveErrorMessage';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
+import { BuildWithAiButton } from './ui/BuildWithAiButton';
 
 const contentSx: SxProps<Theme> = {
   flex: 1,
@@ -283,6 +284,19 @@ export function CreateApplication(): ReactNode {
     [],
   );
 
+  // #2022: the agent the "Build with AI" draft created opens like a saved one.
+  const handleBuiltWithAi = useCallback(
+    (agentId: string) => {
+      disarmUnsavedChangesNavBlocker();
+      void navigate({
+        to: '/agents/$tab/$agentId',
+        params: { tab: params.tab ?? 'latest', agentId },
+        search: { isFromCreation: 'true' },
+      });
+    },
+    [navigate, params.tab],
+  );
+
   const handleCancel = useCallback(() => {
     // #133: Cancel IS the explicit "throw this draft away" action, so it
     // does not also get the unsaved-changes prompt — same as the
@@ -336,6 +350,12 @@ export function CreateApplication(): ReactNode {
             onFieldChange={handleAgentFieldChange}
             disabled={isCreating}
             metaControls={{ contextHistoryError: contextBlockRefusal(createDraftError) }}
+            generateAgentButtonSlot={
+              <BuildWithAiButton
+                projectId={projectId}
+                onCreated={handleBuiltWithAi}
+              />
+            }
             modelSettingsSlot={
               <AgentModelSettings
                 projectId={projectId}

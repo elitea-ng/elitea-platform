@@ -25,6 +25,10 @@ Files in an Artifacts bucket now have a **Rename** action, on the row and in the
 
 A bucket name you type with capital letters is lowercased as you type, so **Create bucket** no longer fails silently. **Retention (days)** is now on the New bucket form too, not only when you edit a bucket; leave it empty on a new bucket to use the project's default retention. Bucket names follow the server's rule (a lowercase letter first, 2 to 63 characters). A pinned bucket keeps its pin icon visible in the list, and the text cursor shows in the Code and Canvas editors on the dark theme.
 
+## Agent versions, import and publishing fixes
+
+The version list puts the pinned default first and `base` last, and a pinned default stays selected when you reopen the agent. **Fork** copies the version you have open, not the newest one. **Share** is now two clear items, **Share version link** (opens that version) and **Share agent link**. **Compare versions** is also in the ⋮ menu. **Import** accepts `.md` agent files and `.zip` files of them as well as `.json`. A saved welcome message and conversation starters show in a new chat with the agent. An uploaded icon shows on the agent's card. An agent can hold up to 50 skills (it was 5). Publishing now marks the missing fields instead of doing nothing, and a passing check can be published when the platform runs on several replicas. **Build with AI** is back on the new-agent page, and the Stop agent button is readable in the light theme. See [Import and export](/how-tos/agents-pipelines/import-export) and [Forking](/how-tos/agents-pipelines/forking).
+
 ## The agent page has its chat back
 
 The chat panel on the right of the agent page works again, also on a new agent right after you save it. Its conversation belongs to the agent and no longer lands in your **Chats** list; **Open in Chats** in the toolbar starts an ordinary conversation when you want one there. The Instructions field now grows with its text instead of filling the page. See [Test the agent](/menus/agents#test-the-agent).

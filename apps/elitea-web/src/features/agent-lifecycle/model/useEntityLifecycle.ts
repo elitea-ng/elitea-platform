@@ -54,6 +54,8 @@ interface ValidateVariables {
 
 interface ForkVariables {
   readonly entityId: number;
+  /** The version to copy; the newest when absent. */
+  readonly versionId?: number | undefined;
   readonly targetProjectId: string;
 }
 
@@ -147,7 +149,7 @@ export function useEntityLifecycle(projectId: string | undefined, entityId: stri
     // fork handler reads only the body, so a fork built from anything else
     // loses the parent pointers and every version variable.
     mutationFn: async (variables) =>
-      forkEntity(variables.targetProjectId, await fetchForkDocument(projectId ?? '', variables.entityId)),
+      forkEntity(variables.targetProjectId, await fetchForkDocument(projectId ?? '', variables.entityId, variables.versionId)),
   });
 
   const exportDocument = useCallback(

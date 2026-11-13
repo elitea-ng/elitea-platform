@@ -24,7 +24,7 @@ const (
 	CurrentApplicationSkillsPath       = "/api/v2/elitea_core/application_skills/prompt_lib/{projectID}/{appVersionID}"
 	CurrentApplicationSkillsMode       = auth.PermissionModeDefault
 	CurrentApplicationSkillsPermission = "models.applications.applications.details"
-	MaxCurrentApplicationSkills        = 5
+	MaxCurrentApplicationSkills        = 50
 )
 
 const (

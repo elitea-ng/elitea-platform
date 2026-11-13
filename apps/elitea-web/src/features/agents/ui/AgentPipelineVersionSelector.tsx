@@ -176,7 +176,7 @@ export function AgentPipelineVersionSelector({
   // `versions` prop the caller already supplies, with no server round trip.
   const [searchQuery, setSearchQuery] = useState('');
 
-  const displayVersions = useMemo(() => toDisplayVersions(versions), [versions]);
+  const displayVersions = useMemo(() => toDisplayVersions(versions, defaultVersionId), [versions, defaultVersionId]);
 
   // ELITEA-3278/3280 — filtered by name+creator, in the SAME order
   // `toDisplayVersions` already sorted (`.filter()` never reorders), so the
@@ -192,11 +192,12 @@ export function AgentPipelineVersionSelector({
   );
 
   // With no active version yet (the page opened on the agent URL, or the open version was just deleted)
-  // the trigger shows the DEFAULT version, not whichever sorts first ("base" always does; issue 1568).
+  // the trigger shows the DEFAULT version, not whichever sorts first (issue 1568).
   const selectedVersion = useMemo(
     () =>
       displayVersions.find((v) => v.id === applicationVersionId) ??
       displayVersions.find((v) => defaultVersionId !== undefined && v.id === defaultVersionId) ??
+      displayVersions.find((v) => v.isLatest) ??
       displayVersions[0],
     [applicationVersionId, defaultVersionId, displayVersions],
   );

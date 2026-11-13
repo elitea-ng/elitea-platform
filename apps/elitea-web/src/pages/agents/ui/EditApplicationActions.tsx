@@ -8,7 +8,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { useNavigate } from '@tanstack/react-router';
 
 import { EntityLifecycleControls } from '@/features/agent-lifecycle';
-import { DeleteApplicationButton, ExportApplicationButton, applicationServerErrorMessage } from '@/features/agents';
+import { DeleteApplicationButton, ExportApplicationButton, applicationServerErrorMessage, useApplicationsStore } from '@/features/agents';
 import { StopAgentButton } from '@/features/kill-switch';
 
 import { ChatWithAgentButton } from './ChatWithAgentButton';
@@ -67,6 +67,10 @@ export function EditApplicationActions({
   const listTab = tab ?? 'latest';
   const navigate = useNavigate();
   const forkTargets = useForkTargetProjects(projectId);
+  const openCompareVersions = useApplicationsStore((state) => state.setCompareVersionsOpen);
+  // #1997 — the version bar's compare modal, offered from the ⋮ menu too; same
+  // two-version gate as `CompareVersionsButton`.
+  const canCompare = hasTwoVersions(detail);
   const [error, setError] = useState<string | undefined>(undefined);
   const [notice, setNotice] = useState<string | undefined>(undefined);
 
@@ -97,23 +101,7 @@ export function EditApplicationActions({
 
   return (
     <Box sx={wrapperSx}>
-      {error !== undefined && (
-        <Typography
-          role="alert"
-          variant="bodySmall"
-        >
-          {error}
-        </Typography>
-      )}
-      {notice !== undefined && (
-        <Typography
-          component="output"
-          variant="bodySmall"
-          data-testid="agent-copy-notice"
-        >
-          {notice}
-        </Typography>
-      )}
+      <ActionMessages error={error} notice={notice} />
       <ChatWithAgentButton
         projectId={projectId}
         applicationId={applicationId}
@@ -153,11 +141,47 @@ export function EditApplicationActions({
         entityId={applicationId}
         entityName={name ?? ''}
         tab={tab}
-        activeVersionId={activeVersion?.id}
+        activeVersionId={currentVersionId}
         activeVersionStatus={activeVersion?.status}
+        {...(canCompare ? { onCompareVersions: () => openCompareVersions(true) } : {})}
       />
     </Box>
   );
+}
+
+function ActionMessages({
+  error,
+  notice,
+}: {
+  readonly error: string | undefined;
+  readonly notice: string | undefined;
+}): ReactNode {
+  return (
+    <>
+      {error !== undefined && (
+        <Typography
+          role="alert"
+          variant="bodySmall"
+        >
+          {error}
+        </Typography>
+      )}
+      {notice !== undefined && (
+        <Typography
+          component="output"
+          variant="bodySmall"
+          data-testid="agent-copy-notice"
+        >
+          {notice}
+        </Typography>
+      )}
+    </>
+  );
+}
+
+/** Same two-version gate as `CompareVersionsButton`. */
+function hasTwoVersions(detail: ApplicationDetail | undefined): boolean {
+  return (detail?.versions.length ?? 0) >= 2;
 }
 
 const wrapperSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.25rem' };

@@ -32,6 +32,8 @@ export interface ApplicationListRow {
   readonly authors?: readonly { readonly id?: string; readonly name: string; readonly avatar?: string; readonly deleted?: boolean }[];
   readonly tags?: readonly string[];
   readonly createdAt?: string;
+  /** #1995 — the uploaded icon (`meta.icon_meta.url`); the agent glyph when absent. */
+  readonly iconUrl?: string;
   /**
    * #915 — set by the caller (which already holds the router's `navigate`)
    * when this row is a fork, to render a "Forked from" link that opens the
@@ -77,7 +79,18 @@ export function ApplicationListPanel({
         id: row.id,
         name: row.name,
         description: row.description,
-        icon: entityTypeIcon('agent'),
+        icon:
+          row.iconUrl === undefined ? (
+            entityTypeIcon('agent')
+          ) : (
+            <Box
+              component="img"
+              src={row.iconUrl}
+              alt=""
+              data-testid="application-card-icon"
+              sx={iconImageSx}
+            />
+          ),
         authors: row.authors ?? [],
         tags: (row.tags ?? []).map((tag) => ({ id: tag, name: tag })),
         ...(row.createdAt === undefined ? {} : { createdAt: row.createdAt }),
@@ -119,5 +132,12 @@ export function ApplicationListPanel({
     </>
   );
 }
+
+const iconImageSx: SxProps<Theme> = (theme: Theme) => ({
+  width: '100%',
+  height: '100%',
+  objectFit: 'cover',
+  borderRadius: theme.vars.shape.radiusPill,
+});
 
 const loadMoreSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', justifyContent: 'center', padding: theme.spacing(2) });

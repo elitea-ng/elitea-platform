@@ -49,6 +49,8 @@ export interface EntityLifecycleControlsProps {
   readonly activeVersionId: string | undefined;
   /** `application_versions.status` of the open version. */
   readonly activeVersionStatus: string | undefined;
+  /** #1997 — adds "Compare versions" to the menu's VERSION group. The caller owns the comparison modal. */
+  readonly onCompareVersions?: () => void;
   /** Adds an Export item to the menu's ENTITY group. Omitted where the editor already carries an Export button. */
   readonly onExport?: () => void;
   /** Adds a Delete item to the menu's ENTITY group. The caller owns the confirmation dialog. */
@@ -66,6 +68,7 @@ export function EntityLifecycleControls({
   activeVersionStatus,
   onExport,
   onDelete,
+  onCompareVersions,
 }: EntityLifecycleControlsProps): ReactNode {
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
@@ -104,38 +107,21 @@ export function EntityLifecycleControls({
   // One conversion, at this boundary. Every lifecycle route takes the version
   // id as a path integer; an unparseable id disables the whole version group
   // rather than sending `NaN` into a URL.
-  const numericVersionId = activeVersionId === undefined ? undefined : Number(activeVersionId);
-  const versionId = numericVersionId !== undefined && Number.isFinite(numericVersionId) ? numericVersionId : undefined;
+  const versionId = parseVersionId(activeVersionId);
   const canPublish = entity === 'agents' && versionId !== undefined;
   const isPublished = activeVersionStatus === 'published';
 
   return (
     <Box sx={wrapperSx}>
-      {notice !== undefined && (
-        <Typography
-          component="output"
-          variant="bodySmall"
-          data-testid="lifecycle-notice"
-        >
-          {notice}
-        </Typography>
-      )}
-      {error !== undefined && (
-        <Typography
-          role="alert"
-          variant="bodySmall"
-          data-testid="lifecycle-error"
-        >
-          {error}
-        </Typography>
-      )}
+      <LifecycleMessages notice={notice} error={error} />
       <EntityLifecycleMenu
         testIdPrefix={entity === 'agents' ? 'agent' : 'pipeline'}
         disabled={entityId === undefined}
         isPublished={isPublished}
         {...(versionId === undefined ? {} : { onShareVersion: () => share(versionId) })}
         onShareEntity={() => share(undefined)}
-        {...entityActionHandlers(onExport, onDelete)}
+        entityActions={entityActionHandlers(onExport, onDelete)}
+        {...(onCompareVersions === undefined ? {} : { onCompareVersions })}
         {...releaseHistoryHandler(entity, () => setHistoryOpen(true))}
         {...governanceHandler(entity, () => setGovernanceOpen(true))}
         onFork={() => {
@@ -238,7 +224,7 @@ export function EntityLifecycleControls({
         onFork={(targetProjectId) => {
           if (entityId === undefined) return;
           lifecycle.fork.mutate(
-            { entityId: Number(entityId), targetProjectId },
+            { entityId: Number(entityId), targetProjectId, versionId },
             {
               onSuccess: (outcome) => {
                 setForkOpen(false);
@@ -285,6 +271,44 @@ function releaseHistoryHandler(entity: LifecycleEntity, open: () => void): { onR
 /** Governance exists for agents only, like release history. */
 function governanceHandler(entity: LifecycleEntity, open: () => void): { onGovernance?: () => void } {
   return entity === 'agents' ? { onGovernance: open } : {};
+}
+
+function LifecycleMessages({
+  notice,
+  error,
+}: {
+  readonly notice: string | undefined;
+  readonly error: string | undefined;
+}): ReactNode {
+  return (
+    <>
+      {notice !== undefined && (
+        <Typography
+          component="output"
+          variant="bodySmall"
+          data-testid="lifecycle-notice"
+        >
+          {notice}
+        </Typography>
+      )}
+      {error !== undefined && (
+        <Typography
+          role="alert"
+          variant="bodySmall"
+          data-testid="lifecycle-error"
+        >
+          {error}
+        </Typography>
+      )}
+    </>
+  );
+}
+
+/** The version id as the path integer every lifecycle route takes; `undefined` when absent or unparseable. */
+function parseVersionId(id: string | undefined): number | undefined {
+  if (id === undefined) return undefined;
+  const parsed = Number(id);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function numericId(id: string | undefined): number | undefined {

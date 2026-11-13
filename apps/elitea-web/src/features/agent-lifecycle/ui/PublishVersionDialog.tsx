@@ -11,6 +11,7 @@ import { BaseModal } from '@/shared/ui/BaseModal';
 import { isValidPublishVersionName, type NormalizedPublishValidation, type PublishCategory } from '../lib/publishValidation';
 import { PublishPreparationStep } from './PublishPreparationStep';
 import { PublishValidationReport } from './PublishValidationReport';
+import { PublishWizardMessages } from './PublishWizardMessages';
 
 /**
  * The three-step publish wizard, matching the one production shows
@@ -78,6 +79,10 @@ export function PublishVersionDialog({
   const [versionName, setVersionName] = useState('');
   const [category, setCategory] = useState<PublishCategory | ''>('');
   const [agreed, setAgreed] = useState(false);
+  // #2025: set when Continue is pressed with a field missing, so the fields are marked.
+  const [attempted, setAttempted] = useState(false);
+  // Publish pressed while validation FAILED: the reason is spelled out below.
+  const [publishRefused, setPublishRefused] = useState(false);
 
   // Reopening the dialog must not resume the previous attempt's step: the
   // author closed it, and a wizard that reopens on "Publishing" would publish
@@ -88,6 +93,8 @@ export function PublishVersionDialog({
     setVersionName('');
     setCategory('');
     setAgreed(false);
+    setAttempted(false);
+    setPublishRefused(false);
   }, [open]);
 
   // The validation result arriving is what advances the wizard. Advancing on
@@ -118,11 +125,20 @@ export function PublishVersionDialog({
   // refuse it, and the reader is already looking at why.
   const handleConfirm = (): void => {
     if (step === 'preparation') {
-      if (!nameValid || !categoryChosen || !agreed || isValidating) return;
+      if (isValidating) return;
+      if (!nameValid || !categoryChosen || !agreed) {
+        setAttempted(true);
+        return;
+      }
       onValidate(versionName, category);
       return;
     }
-    if (blocked || isPublishing) return;
+    if (isPublishing) return;
+    // A FAIL is answered on screen, not by a click that does nothing (#2025).
+    if (blocked) {
+      setPublishRefused(true);
+      return;
+    }
     setStep('publishing');
     onPublish(versionName, category, validation?.validationToken);
   };
@@ -146,19 +162,7 @@ export function PublishVersionDialog({
             other two are rendered so a reader can see where they are in the
             wizard rather than only which button is next.
           */}
-          <Box sx={stepperSx}>
-            {STEPS.map((name) => (
-              <Typography
-                key={name}
-                component="span"
-                variant="labelSmall"
-                color={name === step ? 'text.primary' : 'text.secondary'}
-                {...(name === step ? { 'data-testid': 'publish-step' } : {})}
-              >
-                {stepLabel(name)}
-              </Typography>
-            ))}
-          </Box>
+          <PublishStepper step={step} />
           {step === 'preparation' ? (
             <PublishPreparationStep
               versionName={versionName}
@@ -168,38 +172,44 @@ export function PublishVersionDialog({
               onCategoryChange={setCategory}
               agreed={agreed}
               onAgreedChange={setAgreed}
+              showErrors={attempted}
             />
           ) : (
             validation !== undefined && <PublishValidationReport validation={validation} />
           )}
-          {step === 'preparation' && !categoryChosen && (
-            <Typography variant="bodySmall">
-              {t(
-                'features.agentLifecycle.publish.categoryRequired',
-                'Choose a category. The Catalog groups published agents by it, and an agent with no category does not appear there.',
-              )}
-            </Typography>
-          )}
-          {blocked && (
-            <Typography
-              role="alert"
-              variant="bodySmall"
-            >
-              {t('features.agentLifecycle.publish.blocked', 'This version cannot be published until validation passes.')}
-            </Typography>
-          )}
-          {error !== undefined && (
-            <Typography
-              role="alert"
-              variant="bodySmall"
-              data-testid="publish-error"
-            >
-              {error}
-            </Typography>
-          )}
+          <PublishWizardMessages
+            isPreparation={step === 'preparation'}
+            attempted={attempted}
+            categoryChosen={categoryChosen}
+            blocked={blocked}
+            publishRefused={publishRefused}
+            validation={validation}
+            error={error}
+          />
         </Box>
       }
     />
+  );
+}
+
+/** The current step is the element tests read. */
+const CURRENT_STEP_TEST_ID = { 'data-testid': 'publish-step' } as const;
+
+function PublishStepper({ step }: { readonly step: Step }): ReactNode {
+  return (
+    <Box sx={stepperSx}>
+      {STEPS.map((name) => (
+        <Typography
+          key={name}
+          component="span"
+          variant="labelSmall"
+          color={name === step ? 'text.primary' : 'text.secondary'}
+          {...(name === step ? CURRENT_STEP_TEST_ID : {})}
+        >
+          {stepLabel(name)}
+        </Typography>
+      ))}
+    </Box>
   );
 }
 

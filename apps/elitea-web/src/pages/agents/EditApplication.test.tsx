@@ -371,9 +371,10 @@ describe('EditApplication', () => {
     // same menu; every command item carries a test id, so filtering on its
     // absence keeps this an assertion about the version rows alone.
     const versionRows = items.filter((item) => item.dataset['testid'] === undefined);
+    // Issue 1990: named versions first, `base` at the bottom.
     expect(versionRows.map((item) => item.textContent)).toEqual([
-      expect.stringContaining('base'),
       expect.stringContaining('v1'),
+      expect.stringContaining('base'),
     ]);
 
     /*
@@ -983,10 +984,11 @@ describe('leaving the editor', () => {
 
     const description = await screen.findByTestId('agent-description-input', {}, { timeout: 15_000 });
     await user.type(description, ' edited');
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    // Text queries, not role: see the next case for why role queries are too slow on this page.
+    await user.click(screen.getByText('Cancel', { selector: 'button' }));
     // The dialog's confirm is 'Discard'; the tab bar's own trigger is
     // 'Cancel', so the confirm name is what disambiguates the two.
-    await user.click(await screen.findByRole('button', { name: 'Discard' }));
+    await user.click(await screen.findByText('Discard', { selector: 'button' }));
 
     await waitFor(() => {
       expect(router.state.location.pathname).toBe('/agents/all');
@@ -1004,13 +1006,16 @@ describe('leaving the editor', () => {
     // The form's inputs render before the detail fetch settles, but the
     // toolbar (and its Cancel) waits for `!isFetching` — await the BUTTON,
     // not a form field, or this races the fetch.
-    await user.click(await screen.findByRole('button', { name: 'Cancel' }, { timeout: 15_000 }));
-    await screen.findByText('Are you sure you want to discard changes?');
-    // Two 'Cancel' buttons exist now — the tab bar's own trigger and the
-    // dialog's dismiss. The dialog renders in a portal at the END of the
-    // body, so the last match is its button.
-    const cancels = screen.getAllByRole('button', { name: 'Cancel' });
-    await user.click(cancels[cancels.length - 1] as HTMLElement);
+    //
+    // By TEXT, not role: a polled `findByRole` recomputes accessible roles over the whole editor
+    // on every retry, which under CI coverage ran this file to 400 s and this case past its 30 s
+    // budget. The text query is the same assertion at a fraction of the cost.
+    await user.click(await screen.findByText('Cancel', { selector: 'button' }, { timeout: 15_000 }));
+    const question = await screen.findByText('Are you sure you want to discard changes?');
+    // Two 'Cancel' buttons exist now — the tab bar's own trigger and the dialog's dismiss; scope
+    // to the dialog.
+    const dialog = question.closest('[role="dialog"]') as HTMLElement;
+    await user.click(within(dialog).getByText('Cancel', { selector: 'button' }));
 
     expect(router.state.location.pathname).toBe('/agents/all/42');
   });
