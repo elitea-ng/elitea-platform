@@ -117,20 +117,7 @@ SELECT replay.cursor,
        replay.event_bytes,
        replay.event_digest,
        CASE
-           -- FU-335: the notice of a delegation refused at start is shown
-           -- only beside the run's FAILED terminal; nothing else changes.
-           WHEN replay.event_type = 'execution.node_event'
-            AND COALESCE(convert_from(replay.event_bytes, 'UTF8')::jsonb ->> 'type', '') = 'agent_delegation_refused'
-           THEN EXISTS (
-               SELECT 1
-               FROM elitea_runtime.output_inbox AS terminal
-               WHERE terminal.execution_id = replay.execution_id
-                 AND terminal.generation = replay.generation
-                 AND terminal.payload_type = 'RUNTIME_FAILURE'
-                 AND terminal.projected_at IS NOT NULL
-           )
-           WHEN replay.event_type = 'execution.node_event'
-            AND COALESCE(convert_from(replay.event_bytes, 'UTF8')::jsonb ->> 'type', '') IN (
+           WHEN frame.frame_type IN (
                 'full_message',
                 'agent_hitl_interrupt',
                 'mcp_authorization_required'
@@ -148,6 +135,14 @@ SELECT replay.cursor,
        COALESCE(binding.participant_id, 0),
        COALESCE(binding.addressed_to, '{}'::integer[])
 FROM elitea_runtime.execution_replay_events AS replay
+-- A node event's JSON is decoded once per row.
+CROSS JOIN LATERAL (
+    SELECT CASE
+               WHEN replay.event_type = 'execution.node_event'
+               THEN COALESCE(convert_from(replay.event_bytes, 'UTF8')::jsonb ->> 'type', '')
+               ELSE ''
+           END AS frame_type
+) AS frame
 -- shared/0227: the participant an agent run answers as, stamped on its
 -- frames by the event handler (ADR-0050 decision 7b).
 LEFT JOIN elitea_runtime.agent_execution_jobs AS binding
@@ -156,6 +151,21 @@ LEFT JOIN elitea_runtime.agent_execution_jobs AS binding
 WHERE replay.projection_project_id = $1
   AND replay.execution_id = $2
   AND replay.cursor > $3
+  -- FU-335: the notice of a delegation refused at start is served only once
+  -- the execution has a FAILED terminal at or after its generation. Until
+  -- then it is skipped, never a barrier: a run that ends any other way (a
+  -- lost claim, a deadline, a stop) still delivers what follows it.
+  AND (
+      frame.frame_type <> 'agent_delegation_refused'
+      OR EXISTS (
+          SELECT 1
+          FROM elitea_runtime.output_inbox AS terminal
+          WHERE terminal.execution_id = replay.execution_id
+            AND terminal.generation >= replay.generation
+            AND terminal.payload_type = 'RUNTIME_FAILURE'
+            AND terminal.projected_at IS NOT NULL
+      )
+  )
 ORDER BY replay.cursor
 LIMIT $4`, projectionProjectID, executionID, effectiveCursor, limit-len(events))
 	if err != nil {

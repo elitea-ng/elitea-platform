@@ -136,8 +136,68 @@ func TestPostgresAnOrdinaryFinalMessageStaysHiddenOnAFailedRun(t *testing.T) {
 func TestPostgresASucceededRunIsUnchangedAndHidesTheNotice(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	_, after := replayWithTerminal(t, pool, "final-succeeded", "AGENT_EXECUTION_RESULT", ordinaryFinalMessage, delegationNoticeEvent)
-	if len(after) != 1 || after[0] != "full_message" {
-		t.Fatalf("a succeeded run must show its final message and no notice: %v", after)
+	if len(after) != 2 || after[0] != "full_message" || after[1] != "index.ingest.completed" {
+		t.Fatalf("a succeeded run must show its final message and terminal, and no notice: %v", after)
+	}
+}
+
+// Review 1 item 2: a notice whose run never gets a FAILED terminal (a lost
+// claim, a deadline, a stop) is skipped, never a barrier: what follows it is
+// still delivered.
+func TestPostgresAHiddenNoticeNeverHoldsBackALaterTerminal(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	_, after := replayWithTerminal(t, pool, "notice-other-end", "INDEX_INGEST_RESULT", delegationNoticeEvent)
+	if len(after) != 1 || after[0] != "index.ingest.completed" {
+		t.Fatalf("the later terminal was held back behind a hidden notice: %v", after)
+	}
+}
+
+// Review 1 item 2: a notice in generation N with no terminal in N, then a
+// terminal in N+1: the N+1 terminal is delivered, and the stale notice is not.
+func TestPostgresANoticeOfAnEarlierGenerationNeverHidesTheNextTerminal(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	progress, terminal := preparePostgresNodeEventConcurrencyFixture(t, pool, "notice-generations")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	nodes, err := NewNodeEventsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress.BrowserData = []byte(delegationNoticeEvent)
+	if _, err := nodes.ProjectNodeEvent(ctx, progress); err != nil {
+		t.Fatal(err)
+	}
+	executionID := terminal.Fence.ExecutionID
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.execution_jobs
+SELECT (jsonb_populate_record(NULL::elitea_runtime.execution_jobs,
+        to_jsonb(job) || jsonb_build_object('generation', 2, 'command_id', job.command_id || '-g2',
+            'idempotency_key', job.idempotency_key || '-g2'))).*
+FROM elitea_runtime.execution_jobs AS job
+WHERE job.execution_id = $1 AND job.generation = 1`, executionID); err != nil {
+		t.Fatalf("open generation 2: %v", err)
+	}
+	failed := []byte(`{"code":"AUTHORIZATION_FAILED","safe_message":"refused","retryable":false}`)
+	digest := runtimedomain.SHA256(failed)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.execution_replay_events (
+    event_id, execution_id, generation, projection_project_id, event_type, event_bytes, event_digest
+) SELECT $1, $2, 2, job.projection_project_id, 'execution.failed', $3, $4
+FROM elitea_runtime.execution_jobs AS job
+WHERE job.execution_id = $2 AND job.generation = 2`,
+		"generation-2-failed", executionID, failed, digest[:]); err != nil {
+		t.Fatalf("generation 2 terminal: %v", err)
+	}
+	replay, err := NewReplayEventsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served, err := replay.Replay(ctx, terminal.ProjectionProjectID, executionID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(served) != 1 || served[0].Type != "execution.failed" {
+		t.Fatalf("generation 2's terminal was not delivered past generation 1's notice: %+v", served)
 	}
 }
 
