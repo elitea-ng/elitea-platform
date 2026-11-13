@@ -14,7 +14,6 @@ import Tooltip from '@mui/material/Tooltip';
 import { t } from '@/shared/i18n';
 import { LogoutIcon } from '@/shared/ui/icons/logout-icon';
 
-import { logout } from '../lib/storage';
 
 import { McpLogoutModal } from './McpLogoutModal';
 
@@ -31,14 +30,14 @@ export function McpLogoutButton({ serverUrl, toolkitType, authorizationLabel, on
   const [showLogoutSuccess, setShowLogoutSuccess] = useState(false);
   const [wasLoggedIn, setWasLoggedIn] = useState(true);
 
-  const onConfirmLogout = useCallback(() => {
-    // A logout that found no grant in this browser must not claim one was
-    // revoked (#1999); it still tells other tabs to drop theirs.
-    setWasLoggedIn(serverUrl ? logout(serverUrl, toolkitType) : true);
+  const onConfirmLogout = useCallback((held: boolean) => {
+    // The modal has already forgotten the grant; a logout that found none in this browser must not
+    // claim one was revoked (#1999). Logging out again here would always find nothing.
+    setWasLoggedIn(held);
     setShowLogoutModal(false);
     setShowLogoutSuccess(true);
     onSuccess?.();
-  }, [serverUrl, toolkitType, onSuccess]);
+  }, [onSuccess]);
 
   const onLogout = useCallback((event: { stopPropagation: () => void }) => {
     event.stopPropagation();
