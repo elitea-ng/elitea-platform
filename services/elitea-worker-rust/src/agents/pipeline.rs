@@ -670,6 +670,16 @@ impl PipelineNativeAgentAssembler {
             None
         };
         tracing::Span::current().record("stage", "toolsets");
+        // FU-335: the delegation ceiling is the root's own frozen,
+        // policy-applied attachments, the same set an ordinary root holds
+        // (`ordinary.rs`). It is taken BEFORE the alias reduction below,
+        // which only keeps credentials of unused toolkits from being
+        // materialized here; it is never a grant rule.
+        let delegation_root = super::application_tools::root_delegation_scope(
+            runtime_context,
+            super::request::AgentExecutionKind::Application,
+            &toolsets,
+        );
         let aliases = profile.definition().runtime_toolkit_aliases();
         let selected_snapshot = toolsets.retain_toolkit_names(&aliases);
         // The claim is lent to the `artifact` family here as on the ordinary
@@ -832,11 +842,7 @@ impl PipelineNativeAgentAssembler {
         // ADR-0044 decision 3: every saved agent or pipeline a node runs is a
         // delegation from this pipeline, narrowed against its own grants.
         let materialization = ApplicationMaterializationPath::native_graph(continuation)
-            .with_delegation(super::application_tools::root_delegation_scope(
-                runtime_context,
-                super::request::AgentExecutionKind::Application,
-                &selected_snapshot,
-            ))
+            .with_delegation(delegation_root)
             .with_governed(governed.clone());
         let application_runtime = context
             .clone()
