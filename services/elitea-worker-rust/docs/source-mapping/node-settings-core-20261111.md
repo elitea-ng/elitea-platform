@@ -188,7 +188,7 @@ No new dependency in any tree.
 | C4 nested mapping both directions | done | `node_settings_definition.rs:161`, `compiler.rs:950` | Worker `a_continuing_parent_never_maps_node_errors_into_or_out_of_a_child`, `a_child_that_owns_node_errors_compiles_nested_and_hides_its_list`; 2 vectors |
 | C5 Router continue needs an explicit default | done, raw key in all three layers | `node_settings_definition.rs:87,202`, `node_settings.go:318`, `nodeSettings.helpers.ts` `NODE_CHECKS` | Worker `a_router_without_an_explicit_default_refuses_continue` (key absent, parser fills END); 3 vectors |
 | C6 error handle | done | `nodeErrorRoute.helpers.ts`, `useConnectNodes.ts`, `deletionOperations.helpers.ts` | Web `nodeErrorRoute.helpers.test.ts` (5 tests) |
-| C7 Main first | upgrade note `docs/upgrading/2026-11-11-0-node-settings-core.md` leads with it | — | — |
+| C7 Main first | upgrade note `docs/upgrading/2026-11-11-2055-node-settings-core.md` leads with it | — | — |
 
 ### C2: retry conditions (for PR B; nothing is retried in PR A)
 
