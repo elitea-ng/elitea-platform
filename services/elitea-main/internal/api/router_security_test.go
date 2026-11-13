@@ -498,3 +498,35 @@ func TestArtifactObjectRouteDeniesPermissionScopedToDifferentProject(t *testing.
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 }
+
+// TestArtifactMoveRequiresBothCreateAndDelete: a rename writes the new key and
+// removes the old one, so either permission alone is refused (#2015).
+func TestArtifactMoveRequiresBothCreateAndDelete(t *testing.T) {
+	cases := []struct {
+		name       string
+		granted    []string
+		wantStatus int
+	}{
+		{name: "create only", granted: []string{artifactPermissionCreate}, wantStatus: http.StatusForbidden},
+		{name: "delete only", granted: []string{artifactPermissionDelete}, wantStatus: http.StatusForbidden},
+		{name: "both", granted: []string{artifactPermissionCreate, artifactPermissionDelete}, wantStatus: http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			router := NewRouter(RouterConfig{
+				AuthValidator:              testTokenValidator{user: authenticatedTestUser()},
+				PrincipalValidator:         testPrincipalValidator{},
+				AppsRepo:                   struct{ applications.Repository }{},
+				ArtifactHandler:            v2artifacts.NewHandler(alwaysSucceedsArtifactRepo{}, alwaysSucceedsArtifactStore{}),
+				ArtifactPermissionResolver: fakePermissionResolver{granted: tc.granted},
+			})
+			req := testAuthHeader(httptest.NewRequest(http.MethodPost, "/api/v2/artifacts/objects/1/reports:move", strings.NewReader(`{"from":"a.txt","to":"b.txt","overwrite":true}`)))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+		})
+	}
+}

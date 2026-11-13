@@ -3,8 +3,10 @@ package artifacts_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +49,10 @@ type fakeRepo struct {
 	// admins holds the (projectID, userID) pairs IsProjectAdmin answers true
 	// for.
 	admins map[fakeMemberKey]bool
+	// failUpsertKey makes UpsertObject refuse that key; failDeleteKey makes
+	// DeleteObjects refuse a call naming it (move failure-path tests).
+	failUpsertKey string
+	failDeleteKey string
 }
 
 // fakeMemberKey identifies one member of one project. A struct key rather
@@ -264,6 +270,12 @@ func (r *fakeRepo) UpsertObject(_ context.Context, input repos.NewObjectInput) (
 	if prev, ok := r.objects[k]; ok {
 		created = prev.createdAt // mirrors ON CONFLICT: created_at is kept
 	}
+	if input.CreatedAt != nil {
+		created = *input.CreatedAt
+	}
+	if r.failUpsertKey != "" && r.failUpsertKey == input.Key {
+		return repos.ObjectRow{}, errors.New("fakeRepo: upsert refused")
+	}
 	r.objects[k] = fakeObjectRecord{
 		bucketID: input.BucketID, key: input.Key, byteLength: input.ByteLength, expiresAt: input.ExpiresAt,
 		createdAt: created,
@@ -276,9 +288,39 @@ func (r *fakeRepo) UpsertObject(_ context.Context, input repos.NewObjectInput) (
 	return row, nil
 }
 
+// ReserveObjectKey mirrors the insert-if-absent claim: a zero-length row.
+func (r *fakeRepo) ReserveObjectKey(_ context.Context, bucketID int64, key, _ string, expiresAt *time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k := fakeObjectKey(bucketID, key)
+	if _, ok := r.objects[k]; ok {
+		return false, nil
+	}
+	r.objects[k] = fakeObjectRecord{bucketID: bucketID, key: key, expiresAt: expiresAt, createdAt: time.Now()}
+	return true, nil
+}
+
+func (r *fakeRepo) ListObjects(_ context.Context, bucketID int64, prefix string) ([]repos.ObjectRow, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var rows []repos.ObjectRow
+	for _, o := range r.objects {
+		if o.bucketID == bucketID && strings.HasPrefix(o.key, prefix) {
+			rows = append(rows, repos.ObjectRow{BucketID: bucketID, Key: o.key, ByteLength: o.byteLength,
+				ExpiresAt: o.expiresAt, CreatedAt: o.createdAt})
+		}
+	}
+	return rows, nil
+}
+
 func (r *fakeRepo) DeleteObjects(_ context.Context, bucketID int64, keys []string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, key := range keys {
+		if r.failDeleteKey != "" && r.failDeleteKey == key {
+			return errors.New("fakeRepo: delete refused")
+		}
+	}
 	for _, key := range keys {
 		delete(r.objects, fakeObjectKey(bucketID, key))
 	}

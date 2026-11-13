@@ -82,6 +82,10 @@ type NewObjectInput struct {
 	Classification string
 	ScanState      string
 	ExpiresAt      *time.Time
+	// CreatedAt, when set, is the row's birth instant; a rename passes the
+	// source's so the object keeps its age. Nil: born now (a new row) or
+	// keeps its birth (an existing one).
+	CreatedAt *time.Time
 }
 
 type artifactObjectQueries interface {
@@ -142,6 +146,7 @@ func (r *ArtifactObjectsRepository) UpsertObject(ctx context.Context, input NewO
 		Classification: classification,
 		ScanState:      scanState,
 		ExpiresAt:      toTimestamptz(input.ExpiresAt),
+		CreatedAt:      toTimestamptz(input.CreatedAt),
 	})
 	if err != nil {
 		return ObjectRow{}, fmt.Errorf("upsert artifact object: %w", err)
