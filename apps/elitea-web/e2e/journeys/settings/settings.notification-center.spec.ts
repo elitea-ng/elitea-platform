@@ -60,7 +60,7 @@ interface MockRow {
  */
 function stateOfRows(initial: readonly MockRow[]): {
   readonly rows: MockRow[];
-  readonly writes: Array<{ ids: readonly string[] | 'all'; is_seen: boolean }>;
+  readonly writes: Array<{ ids: readonly number[] | 'all'; is_seen: boolean }>;
 } {
   return { rows: initial.map((r) => ({ ...r })), writes: [] };
 }
@@ -87,7 +87,7 @@ async function mockNotifications(
       return;
     }
     if (method === 'PUT') {
-      const payload = route.request().postDataJSON() as { ids: readonly string[] | 'all'; is_seen: boolean };
+      const payload = route.request().postDataJSON() as { ids: readonly number[] | 'all'; is_seen: boolean };
       state.writes.push(payload);
       if (payload.ids === 'all') {
         state.rows.forEach((r) => {
@@ -95,11 +95,11 @@ async function mockNotifications(
         });
       } else {
         state.rows.forEach((r) => {
-          // Ids leave the client as STRINGS — `normalizeNotification`
-          // (`api/normalize.ts`) coerces every id with `String(wire.id)`,
-          // and the bulk mutation round-trips whatever id the row carries
-          // client-side, not the wire's original numeric one.
-          if (payload.ids.includes(String(r.id))) r.is_seen = payload.is_seen;
+          // Ids leave the client as INTEGERS — the server's contract types
+          // `ids` as integer[] and answered string ids with 400 (issue 1973),
+          // so `toWireIds` (`features/notifications/api/notifications.ts`)
+          // converts the client-side string ids back before the write.
+          if (payload.ids.includes(r.id)) r.is_seen = payload.is_seen;
         });
       }
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
@@ -134,7 +134,7 @@ test('ELITEA-0745: selecting an unread row and marking it read sends the right w
   await markRead.click();
 
   await expect(page.getByRole('alert')).toHaveText('Notifications marked as read');
-  expect(state.writes).toEqual([{ ids: ['9001'], is_seen: true }]);
+  expect(state.writes).toEqual([{ ids: [9001], is_seen: true }]);
   expect(state.rows.find((r) => r.id === 9001)?.is_seen).toBe(true);
 
   // The selection is cleared on success — both bulk actions disable again.
@@ -161,7 +161,7 @@ test('ELITEA-0741: selecting an already-read row and marking it unread reverts i
   await markUnread.click();
 
   await expect(page.getByRole('alert')).toHaveText('Notifications marked as unread');
-  expect(state.writes).toEqual([{ ids: ['9101'], is_seen: false }]);
+  expect(state.writes).toEqual([{ ids: [9101], is_seen: false }]);
   expect(state.rows.find((r) => r.id === 9101)?.is_seen).toBe(false);
 });
 

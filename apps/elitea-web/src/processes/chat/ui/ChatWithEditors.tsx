@@ -20,6 +20,7 @@ import { useChatWithEditors } from './ChatWithEditors.hooks';
 import { ChatCanvasDrawer } from './ChatCanvasDrawer';
 import { ChatEditorColumn } from './ChatEditorColumn';
 import { useCanvasCreation } from './useCanvasCreation';
+import { useChatAgentConfig } from './useChatAgentConfig';
 import { useChatPipelineConfig } from './useChatPipelineConfig';
 import { useCreateChatReset } from './useCreateChatReset';
 import { FileCanvasDrawer } from './FileCanvasDrawer';
@@ -209,6 +210,14 @@ export function ChatWithEditors(): ReactNode {
     enabled: isEditingPipeline && !editPipeline.isPipelineCreateMode,
   });
 
+  // The agent editor's EDIT-mode form and Save (#1972) — without it an agent
+  // opened from the participant rail had a header over an empty body.
+  const agentConfig = useChatAgentConfig({
+    projectId,
+    participant: agentForEditor,
+    enabled: isEditingAgent && !editAgent.isCreateMode,
+  });
+
   return (
     <>
       {/*
@@ -303,7 +312,7 @@ export function ChatWithEditors(): ReactNode {
           */}
         {isAnyEditorOpen && (
           <ChatEditorColumn
-            agent={{ isEditing: isEditingAgent, agentForEditor, editAgent, agentCreation }}
+            agent={{ isEditing: isEditingAgent, agentForEditor, editAgent, agentCreation, config: agentConfig }}
             pipeline={{ isEditing: isEditingPipeline, editPipeline, pipelineCreation, config: pipelineConfig }}
             toolkit={{ isEditing: isEditingToolkit, editToolkit, toolkitCreation, toolkitWriteDeps }}
           />

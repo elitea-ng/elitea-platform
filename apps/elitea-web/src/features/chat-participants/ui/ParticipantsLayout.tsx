@@ -65,6 +65,8 @@ const nativeCaptionSx = (theme) => ({ fontWeight: 600, color: theme.vars.palette
 
 interface UserDisplay {
   usersToDisplay: TransformedParticipant[];
+  /** Every user, uncapped — the rail slices it itself so the people behind "+N" can be listed (#1964). */
+  allUsers?: TransformedParticipant[];
   hasOverflow: boolean;
   visibleCount: number;
   maxVisibleUsers: number;
@@ -233,11 +235,12 @@ interface ExpandedParticipantsContentProps {
   sections: SectionConfig;
   actions: ParticipantActions;
   usersToRender: TransformedParticipant[];
+  hiddenUsers: TransformedParticipant[];
   usersOverflowCount: number;
 }
 
 function ExpandedParticipantsContent({
-  inspector, users, sections, actions, usersToRender, usersOverflowCount,
+  inspector, users, sections, actions, usersToRender, hiddenUsers, usersOverflowCount,
 }: ExpandedParticipantsContentProps) {
   return (
     <>
@@ -246,6 +249,7 @@ function ExpandedParticipantsContent({
         <UsersRow
           usersToRender={usersToRender}
           overflowCount={usersOverflowCount}
+          hiddenUsers={hiddenUsers}
           activeParticipantId={sections.activeParticipantId}
           onSelectParticipant={actions.onSelectParticipant!}
           onDeleteParticipant={actions.onDeleteParticipant}
@@ -298,6 +302,7 @@ export function ParticipantsLayout({
   const componentWidth = useContainerWidth(containerRef);
   const effectiveMaxVisibleUsers = deriveEffectiveMaxVisibleUsers(componentWidth, users.maxVisibleUsers);
   const usersToRender = users.usersToDisplay.slice(0, effectiveMaxVisibleUsers);
+  const hiddenUsers = (users.allUsers ?? users.usersToDisplay).slice(effectiveMaxVisibleUsers);
   const usersOverflowCount = users.visibleCount - effectiveMaxVisibleUsers;
 
   return (
@@ -359,6 +364,7 @@ export function ParticipantsLayout({
               sections={sections}
               actions={actions}
               usersToRender={usersToRender}
+              hiddenUsers={hiddenUsers}
               usersOverflowCount={usersOverflowCount}
             />
           )}

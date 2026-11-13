@@ -19,32 +19,30 @@
  * their own render-prop with its own prop shape, so this file exports one hook
  * per slot over a single shared component.
  *
- * DISCLOSED DEVIATION — "create new credential" NAVIGATES.
+ * DISCLOSED DEVIATION — "create new credential" OPENS ANOTHER TAB.
  * The baseline reveals the new credential's own fields INLINE inside the
  * toolkit form (`setShowConfigurableFields`, driving `ToolkitForm`'s existing
  * `onCreateConfiguration`/`isCreatingConfiguration` pair). The slot context
  * (`CredentialLikeFieldContext`) carries no handle for that, so this supplier
- * sends the user to the real create-credential route instead. The action is
- * real either way, and it is a deliberate user choice. Unsaved toolkit edits
- * are not preserved across it — `EditToolkit.tsx`'s own doc comment already
- * records that this page drops nav-blocking-while-dirty. Removing the create
+ * opens the real create-credential route in a NEW tab instead
+ * (`./openCreateCredentialTab.ts`), so the unsaved toolkit edits stay in this
+ * one (navigating this tab lost them silently, issue 1965). The picker's
+ * refresh action lists the new credential on return. Removing the create
  * rows instead was rejected: a project with no saved credential of the wanted
  * type would then get a picker with nothing in it at all.
  */
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 
-import { useNavigate } from '@tanstack/react-router';
+import { useRouter } from '@tanstack/react-router';
 
 import { CredentialsSelect, useCredentialValidation } from '@/features/credentials';
 
 import { useCredentialRows, type CredentialPickerRow } from './useCredentialRows';
+import { openCreateCredentialTab } from './openCreateCredentialTab';
 import { DelegatedCredentialStatus, delegatedCredentialKey } from './DelegatedCredentialStatus';
 
 /** The section every credential-kind property carries. */
 const CREDENTIALS_SECTION = 'credentials';
-
-/** Route `/_shell/credentials/create-credential/$credentialType` (`src/routes/_shell/credentials/create-credential.$credentialType.tsx`). */
-const CREATE_CREDENTIAL_ROUTE = '/credentials/create-credential/$credentialType';
 
 /** The toolkit settings shape for a saved credential reference: `{elitea_title, private}` (baseline `ToolBaseProperty.jsx`'s `settings[k]`). */
 interface StoredCredentialValue {
@@ -140,7 +138,7 @@ export interface ToolkitCredentialPickerProps {
 
 export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): ReactNode {
   const { projectId, section, configurationTypes, value, onChange, field, onlyPublic = false, onRefusalChange, isCreating = false } = props;
-  const navigate = useNavigate();
+  const router = useRouter();
   const { rows, hasFetchedData, isFetching, refresh } = useCredentialRows({ projectId, section, configurationTypes, onlyPublic });
   const validation = useCredentialValidation();
 
@@ -163,8 +161,8 @@ export function ToolkitCredentialPicker(props: ToolkitCredentialPickerProps): Re
   );
 
   const openCreatePage = useCallback(() => {
-    void navigate({ to: CREATE_CREDENTIAL_ROUTE, params: { credentialType } });
-  }, [navigate, credentialType]);
+    openCreateCredentialTab(router, credentialType);
+  }, [router, credentialType]);
 
   const revalidate = useRevalidate({ rows, projectId, validation });
   const resetStatuses = validation.resetStatuses;

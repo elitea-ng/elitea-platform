@@ -39,7 +39,7 @@ export function RowMenu({ items, label, testId = 'shell-conversation-more' }: { 
           if ('separator' in item) return <MenuDivider key={`separator-${String(index)}`} />;
           if ('submenu' in item) {
             return (
-              <NativeSubmenu key={item.label} label={item.label} disabled={item.enabled === false} minWidth="10rem">
+              <NativeSubmenu key={item.label} label={item.label} disabled={item.enabled === false} minWidth="10rem" reserveIconColumn={false}>
                 {(closeSubmenu) =>
                   item.submenu.map((child) => (
                     <Leaf

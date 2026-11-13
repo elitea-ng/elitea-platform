@@ -277,6 +277,27 @@ describe('useChatWithEditors', () => {
       ]);
     });
 
+    it('agentCreation.onAgentCreated closes the editor so the chat returns to its default view (#1971)', async () => {
+      server.use(
+        http.post('/api/v2/elitea_core/participants/prompt_lib/:projectId/:conversationId', () =>
+          HttpResponse.json([{ id: 'p1', entity_name: 'application', entity_meta: { id: '99' } }]),
+        ),
+      );
+      const { result } = renderHook(() => useChatWithEditors({ projectId: 'proj-1', conversationId: 'convo-1' }), { wrapper });
+      act(() => {
+        result.current.editAgent.onShowAgentEditorCreator();
+      });
+      expect(result.current.isEditingAgent).toBe(true);
+
+      await act(async () => {
+        await result.current.agentCreation.onAgentCreated({ id: '99', name: 'New Agent', version_details: { id: 'v9' } });
+      });
+
+      expect(result.current.isEditingAgent).toBe(false);
+      expect(result.current.editAgent.editingAgent).toBeNull();
+      expect(result.current.editAgent.isCreateMode).toBe(false);
+    });
+
     it('toolkitCreation.onToolkitCreated POSTs the new toolkit as a "toolkit" participant', async () => {
       const seen: { body?: unknown } = {};
       server.use(

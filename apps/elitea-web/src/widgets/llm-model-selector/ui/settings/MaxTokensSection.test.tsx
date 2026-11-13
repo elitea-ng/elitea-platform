@@ -48,4 +48,25 @@ describe('MaxTokensSection', () => {
       screen.queryByRole('button', { name: 'Clear the max tokens value' }),
     ).not.toBeInTheDocument();
   });
+
+  it('puts the value input on the same line as the remaining-tokens input (#1966)', () => {
+    renderWithTheme(
+      <MaxTokensSection value={5000} onChange={vi.fn()} onBlur={vi.fn()} onFocus={vi.fn()} maxOutputTokens={16000} />,
+    );
+
+    const valueColumn = screen.getByLabelText('max_tokens').closest('[class*="MuiBox-root"]') as HTMLElement;
+    const remainingColumn = screen.getByLabelText('remaining_tokens').closest('[class*="MuiBox-root"]') as HTMLElement;
+    // Both columns open with a caption of the same text, so the fields share one top edge;
+    // the value column's caption is a hidden spacer.
+    const spacer = screen.getByTestId('max-tokens-input-spacer');
+    expect(valueColumn).toContainElement(spacer);
+    expect(spacer).toHaveAttribute('aria-hidden', 'true');
+    expect(spacer.textContent).toBe('Remaining tokens');
+    expect(remainingColumn.querySelector('p, span')?.textContent).toBe('Remaining tokens');
+  });
+
+  it('renders no spacer while the mode is auto', () => {
+    renderWithTheme(<MaxTokensSection value={DEFAULT_MAX_TOKENS} onChange={vi.fn()} onBlur={vi.fn()} onFocus={vi.fn()} />);
+    expect(screen.queryByTestId('max-tokens-input-spacer')).not.toBeInTheDocument();
+  });
 });

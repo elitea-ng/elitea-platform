@@ -61,6 +61,15 @@ export interface UseChatPipelineConfigParams {
   readonly participant: ChatConfigParticipant | null | undefined;
   /** Edit mode only — create mode has its own form and its own POST. */
   readonly enabled: boolean;
+  /**
+   * Which entity the form edits. `'pipeline'` (the default) hides the
+   * instructions field and sends only `step_limit` in `meta`; `'application'`
+   * (an agent opened from the participant rail, #1972) shows instructions and
+   * merges the stored `meta` before overriding `step_limit`, because the
+   * version PUT REPLACES `meta` wholesale and an agent's meta carries more
+   * than the step limit (notes, memory block, icon).
+   */
+  readonly entityType?: 'application' | 'pipeline';
 }
 
 /**
@@ -204,7 +213,7 @@ function seedDraft(
 }
 
 /** The draft in version-write shape. Own function for the same budget reason. */
-function toVersionBody(draft: ChatPipelineDraft, versionName: string | undefined) {
+function toVersionBody(draft: ChatPipelineDraft, versionName: string | undefined, storedMeta?: Record<string, unknown>) {
   const details = draft.version_details;
   return {
     name: versionName ?? 'latest',
@@ -213,7 +222,7 @@ function toVersionBody(draft: ChatPipelineDraft, versionName: string | undefined
     conversation_starters: [...(details.conversation_starters ?? [])],
     variables: (details.variables ?? []).map((variable) => ({ name: variable.name, value: variable.value })),
     tags: (details.tags ?? []).map((name) => ({ name })),
-    meta: { step_limit: details.meta?.step_limit ?? 25 },
+    meta: { ...storedMeta, step_limit: details.meta?.step_limit ?? 25 },
   };
 }
 
@@ -260,6 +269,7 @@ export function useChatPipelineConfig({
   projectId,
   participant,
   enabled,
+  entityType = 'pipeline',
 }: UseChatPipelineConfigParams): UseChatPipelineConfigResult {
   const applicationId = numericId(participant?.entity_meta?.id);
   const versionId = numericId(participant?.entity_settings?.version_id);
@@ -316,8 +326,8 @@ export function useChatPipelineConfig({
       tools: null,
       information: (
         <CreateAgentForm
-          entityType="pipeline"
-          showInstructions={false}
+          entityType={entityType}
+          showInstructions={entityType === 'application'}
           values={draft}
           onFieldChange={onFieldChange}
           tagsSlot={
@@ -330,7 +340,17 @@ export function useChatPipelineConfig({
         />
       ),
     }),
-    [draft, onFieldChange, projectId, tagValue, onTagsChange],
+    [draft, onFieldChange, projectId, tagValue, onTagsChange, entityType],
+  );
+
+  // What the save carries over from the stored version: its name, and for an
+  // agent its stored `meta` (the version PUT replaces `meta` wholesale).
+  const storedVersion = useMemo(
+    () => ({
+      name: version?.name,
+      meta: entityType === 'application' ? (version?.meta as Record<string, unknown> | undefined) : undefined,
+    }),
+    [version?.name, version?.meta, entityType],
   );
 
   const onSaveVersion = useCallback(
@@ -340,7 +360,7 @@ export function useChatPipelineConfig({
         projectId,
         applicationId,
         versionId,
-        version: toVersionBody(draft, version?.name),
+        version: toVersionBody(draft, storedVersion.name, storedVersion.meta),
         applicationName: draft.name,
         applicationDescription: draft.description,
       }).then((result) => {
@@ -354,7 +374,7 @@ export function useChatPipelineConfig({
         }
       });
     },
-    [projectId, applicationId, versionId, onSave, draft, version?.name, refetch],
+    [projectId, applicationId, versionId, onSave, draft, storedVersion, refetch],
   );
 
   return {

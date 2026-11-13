@@ -16,6 +16,8 @@ import type { ParticipantsProps } from './Participants.types';
 
 interface UserDisplay {
   usersToDisplay: TransformedParticipant[];
+  /** Every user, uncapped — the rail slices it itself so the people behind "+N" can be listed (#1964). */
+  allUsers?: TransformedParticipant[];
   hasOverflow: boolean;
   visibleCount: number;
   maxVisibleUsers: number;
