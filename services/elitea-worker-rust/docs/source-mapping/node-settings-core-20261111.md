@@ -294,14 +294,39 @@ Scanners (`cargo deny`, `govulncheck`, `npm audit`) are run by the orchestrating
 | Worker × deterministic step, fail + `continue`/`error_output` | R | `SettingsNode` one update | real PG `after` and `before` |
 | Worker × run-once revisit | R | run-once set in the step checkpoint | real PG `once` |
 | Worker × `node_errors` full | F typed `pipeline.node_errors.exhausted` | `node_settings_runtime.rs:115` | `the_node_errors_bound_holds_at_64_and_fails_typed_at_65` |
-| Web × reload | R (settings and state from storage) | YAML round trip | `nodeErrorRoute.helpers.test.ts` round trip; browser pending |
+| Web × reload | R (settings and state from storage) | YAML round trip | `nodeErrorRoute.helpers.test.ts` round trip; browser §11 (pipelines 171 and 174 after a reload) |
 | Code rows (P10 retry, wait, timeout, owner recovery) | — | PR B | — |
 | Worker × settled failure inside a saved child pipeline (D15) | — | PR B (FU-348) | not claimed here: the compile and mapping rules are unit-tested only |
 
 ## 11. Browser evidence
 
-Pending (orchestrating session): cases 1 (State Modifier and Router `continue`), 6 (run once, State Modifier
-variant) and 7 (refusals and regression) of PLAN §6.
+Real-model disposable stacks with the production profile, Claude in Chrome as `admin@centry.user`. Fixtures
+(pipelines) were created through the app's API; every setting change and every connection was made in the UI.
+
+- **Stack p5b1.** Images Main, Worker and Web `p5b1-1eb1b57e2`; Web later `p5b1-9f6b8d1b0`. Verify-profile 50/0.
+  | Case | Result |
+  |---|---|
+  | 1 `continue` + Router on `node_errors` (chat 887) | the Router read the entry and took its route |
+  | 2 `error_output` (chat 889, pipeline 174) | the handler answered "pipeline.state_modifier.failed at shape" |
+  | 3 run once in a loop (chat 890) | visits = 3, body runs = 1 |
+  | 5 the same loop without run once (chat 891) | body runs = 3 |
+  | 7 Main refusals | every invalid block 400 with the readable text; an empty `settings: {}` saves (201) |
+  | W1, W2 (fixed in `3ecc056eb`, §17) | pipeline 174: the On error select shows "Continue (using error output)" before and after a reload; the Error output handle and its stored edge to `handler` render |
+  | W3 / D12 | pre-existing, FU-351 (§14). Pipeline 184 (failing State Modifier `continue`, then an LLM node): the timeline shows only the LLM step; the answer "1 error was recorded." proves `node_errors` reached the LLM. D12 is unit-tested only in this PR |
+- **Stack p5b1c, on the merged head `8919362c2`.** Images Main and Web `p5b1-8919362c2`, Worker `p5b1-1eb1b57e2`
+  (the merge changes no PR A Worker code; Worker lib 3370 passed on the merged head). Binary checks: Main
+  `PIPELINE_NODE_SETTINGS_INVALID` present; the Web bundle holds the W1/W2 fix (`t.retry_on_fail===!0`). Verify-profile
+  50/0.
+  - **C6, connecting the handle (pipeline 171, created without `settings:`).**
+    - Choosing "Continue (using error output)" shows the inline refusal "needs an error transition" and the Error
+      output handle.
+    - Main refuses a save of that incomplete block (HTTP 400 "Node shape: On error 'error output' needs an error
+      transition.", checked through the API).
+    - Dragging the handle onto `handler` clears both refusals. The saved YAML holds `settings: {on_error:
+      error_output, error_transition: handler}`, with `transition: done` and every other node unchanged.
+    - After a reload, the error edge and `shape → done` are drawn and the select shows the stored value.
+    - A run answers "handled: pipeline.state_modifier.failed".
+- Both stacks are torn down with their volumes.
 
 ## 12. Fixtures
 
@@ -439,3 +464,16 @@ Evidence: `5b1/evidence/browser-w-failing-first.txt` (4 tests failed first).
 | W1 the On error select showed "Stop pipeline" for a stored `on_error: error_output` | The panel read the block through the strict admission parser (`readNodeSettings` → `parseNodeSettings`); an incomplete block (`error_output` before its route is connected) is refused there, so the panel fell back to every default | `readNodeSettings` reads each field on its own (`nodeSettings.helpers.ts`); the refusal stays the admission issue's job | `NodeSettings.test.tsx` "displays On error for ..." (error output without a target, continue, an invalid block) and "shows the stored toggles even while the block is incomplete" |
 | W2 no error output handle | The same read: the handle is shown only for `on_error: error_output`, which the strict read hid while the route was missing, so the route could never be connected (C6). With a stored valid route the handle and its edge already rendered in tests (`StateModifierNode.test.tsx` "with a stored target" passed before the fix; `nodeErrorRoute.helpers.test.ts` "is drawn from the error handle") | as W1 | `StateModifierNode.test.tsx` "renders the error output handle without a target yet" / "with a stored target", "renders no error output handle for continue or stop"; connecting: `nodeErrorRoute.helpers.test.ts` (C6) |
 | W3 empty "Run 1 details" timeline for a State Modifier/Router-only pipeline | Pre-existing, not PR A. The run timeline gets its entries only from LLM and tool events and from `agent_on_transitional_edge` (`apps/elitea-web/src/features/pipelines/lib/flow-editor/helpers/parseRunsByEvent.helpers.ts:76-84`; entries pushed at `parseRunsByEvent.agentHandlers.ts:35,90,133` and `parseRunsByEvent.edgeHandlers.ts:52,71`). The Rust Worker emits no `agent_on_transitional_edge` at all (no occurrence in `services/elitea-worker-rust/src` or `libs/rust`), and the deterministic families emit no LLM or tool event, so such a run has no timeline step and no state to show. Populating it is a new protocol event, which 5b-1 does not add (D12) | — | — |
+
+## 18. Merge with `origin/main` `fdab93771` (2026-11-13)
+
+The only conflict was `en.json`, appended on both sides; both were kept. Counts on `8919362c2`:
+
+| Suite | Result |
+|---|---|
+| Worker clippy `--all-targets --all-features -D warnings` | clean |
+| Worker lib `--all-features` | 3370 passed, 0 failed, 147 ignored |
+| Main `go build ./...`, `pipelinelimits` | ok |
+| faults gate | `faults`, `grpcrecover`, `httperr`, `logx` ok; `cmd/faultsgen` no test files |
+| Web tsc, oxlint, `i18n-backfill --check` | clean |
+| Web pipelines + i18n vitest | 247 files, 2779 passed, 1 expected fail |
