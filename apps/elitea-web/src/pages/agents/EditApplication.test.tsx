@@ -371,9 +371,10 @@ describe('EditApplication', () => {
     // same menu; every command item carries a test id, so filtering on its
     // absence keeps this an assertion about the version rows alone.
     const versionRows = items.filter((item) => item.dataset['testid'] === undefined);
+    // Issue 1990: named versions first, `base` at the bottom.
     expect(versionRows.map((item) => item.textContent)).toEqual([
-      expect.stringContaining('base'),
       expect.stringContaining('v1'),
+      expect.stringContaining('base'),
     ]);
 
     /*
