@@ -41,15 +41,26 @@
     data only: the node kind and the toolkit's bounded display name (`W/agents/events.rs:4259-4295`,
     `L/delegation.rs:273-291`).
   - **Main shows that notice only beside a FAILED terminal (option a).** The replay query serves an
-    `agent_delegation_refused` row only once the execution has a projected `RUNTIME_FAILURE` terminal at or after the
-    notice's generation, and otherwise SKIPS it, never a barrier: a run that ends any other way (lost claim, deadline,
+    `agent_delegation_refused` row only beside a projected `RUNTIME_FAILURE` terminal of the notice's OWN generation
+    (never beside another generation's failure, e.g. after a regenerate or resend), and otherwise SKIPS it, never a
+    barrier: a run that ends any other way (lost claim, deadline,
     stop) still delivers what follows (`M/infra/db/repos/replay_events.go:154-168`, review 1 item 2). A node event's
     JSON is decoded once per row (`:138-145`, review 1 item 5). Every other `full_message` on a failed run stays
     hidden as before, and a succeeded run is unchanged.
   - **Can a refused run be reclaimed under a new generation? No.** A reclaim takes a new claim attempt under the
     SAME generation (`M/infra/db/repos/claims.go:384-389,410-430`); it re-assembles, refuses again and ends with its
-    own `RUNTIME_FAILURE` in that generation, which releases the earlier notice too. The gate is still written so it
-    cannot stall: `terminal.generation >= replay.generation`, and a hidden notice is skipped. Its ingest wakes no stream (`M/runtimecomposition/execution_replay_wake.go:290-292`):
+    own `RUNTIME_FAILURE` in that generation, which releases the earlier notice too, so nothing needs a later
+    generation: the gate is `terminal.generation = replay.generation`, and a hidden notice is skipped.
+  - **Client-frame contract (review 1 item 1).** `agent_delegation_refused` is in `x-elitea-client-frames` with
+    `ClientFrameDelegationRefused` (`code` enum, `node` `agent|pipeline`, `toolkit` nullable, at most 128), client
+    contract 1.54 (`API_CONTRACT.md`, discovery `document.go`), the Worker capture
+    (`W/agents/client_frames_tests.rs` → `testdata/client-frames/rust.json`), the Rust floor in
+    `M/api/clientcontract/frames_test.go`, the lock regenerated with `-update`, and the Go server
+    (oapi-codegen v2.7.2, reproducing HEAD byte for byte first) and Web client (`check-generated-client.mjs --write`)
+    regenerated. The mobile app does not render this frame (README 1.54 entry). Its generated
+    `src/api/generated/elitea.gen.ts` changes only its `client contract:` header line (the pruned operations are
+    unchanged); it was regenerated with `npm run contract:gen` (openapi-typescript 7.13.0), and
+    `check:generated-client` and `contract.test.mjs` (23 of 23) pass. Its ingest wakes no stream (`M/runtimecomposition/execution_replay_wake.go:290-292`):
     a wake for a still-hidden row would make every waiter re-read the same barrier, so it is delivered with the
     failure, at the replay poll, like every failure today. For a reload, the failure projection copies the newest
     notice's node kind and toolkit name into the message group's `meta.delegation_refused`, only for
@@ -143,7 +154,9 @@ Counts on the branch head:
   ok (272 s), `internal/runtimecomposition` ok, `internal/transport/runtimegrpc/output` ok; `go build ./...` ok.
 - Web: `tsc --noEmit` clean, `oxlint` clean, `i18n-backfill --check` OK (4 keys added), `check-dead-code` (knip) OK,
   vitest 7 affected files 182 passed (the 10 new among them).
-- Production size of the notice change: Main +41 / -3 lines, Web +101 / -3 lines (5 of them `en.json`).
+- Final Main+Web production size against `origin/main`: hand-written +193 / -10 (Main 98 incl. 30 of `v2.yaml` and
+  2 of `API_CONTRACT.md`, Web 96 incl. 5 of `en.json`); generated +5718 / -5262 (`api.gen.go` +5570/-5261, the
+  client-contract lock +75/-1, the Web zod model +72 and its index +1, the mobile client header +1/-1).
 - C3: the FU-323a / FU-338 proofs pass unmodified, among them
   `root_saved_agent_frontier::postgres_a_root_saved_agent_node_lost_mid_model_resumes_from_its_model_checkpoint`,
   `postgres_a_root_agent_step_changed_after_its_grant_is_refused`,
@@ -228,6 +241,8 @@ PostgreSQL 18 database created per test. No database fixture was written by hand
 ## Follow-ups
 
 - FU-353: a nested saved agent's Attachments and Agent memory tools (separate cause, decision needed).
+- Own-generation gate test: `TestPostgresANoticeIsNotShownBesideAnotherGenerationsFailure` (gen-1 notice, gen-2
+  failure: notice not shown, failure delivered); failed first under the `>=` gate.
 - FU-354: a depth refusal at a graph node keeps the generic authorization text and gets no notice.
 - FU-355: the refused-pipeline-tool step records the inner Agent's delegation evidence, not P1's.
 - Live latency: the notice and the failure reach an open chat at the replay poll, as every failure does today
