@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useCallback, useState } from 'react';
 
 import Box from '@mui/material/Box';
-import MuiTextField from '@mui/material/TextField';
+import type { SxProps, Theme } from '@mui/material/styles';
 
 import { BaseModal } from '../BaseModal';
 import { CharacterCounter } from '../CharacterCounter';
@@ -36,22 +36,18 @@ function FullScreenEditor({ value, onChange, ariaLabel, htmlInputProps }: FullSc
         field whose root and textarea take the available height has neither.
       */}
       {/*
-        `rows` (with no min/maxRows) makes MUI render a plain <textarea> instead of
-        TextareaAutosize, which would write a content-sized inline pixel height over
-        the `height: 100%` below and bring the dead space back.
+        A plain <textarea>, not MUI's multiline field: that always renders
+        TextareaAutosize, which writes a content-sized inline pixel height and
+        brings the dead space back.
       */}
-      <MuiTextField
-        multiline
-        rows={1}
-        fullWidth
-        variant="standard"
-        value={value}
+      <Box
+        component="textarea"
+        {...htmlInputProps}
+        aria-label={ariaLabel}
+        value={stringValue}
         onChange={onChange}
-        sx={{ flex: 1, minHeight: 0, display: 'flex' }}
-        slotProps={{
-          input: { disableUnderline: true, sx: { flex: 1, alignItems: 'stretch', overflow: 'auto' } },
-          htmlInput: { ...htmlInputProps, 'aria-label': ariaLabel, style: { height: '100%', overflow: 'auto' } },
-        }}
+        style={{ height: '100%' }}
+        sx={editorSx}
       />
       {maxLength !== undefined && (
         <CharacterCounter
@@ -147,3 +143,17 @@ export function StyledInputEnhancer({
     </>
   );
 }
+
+const editorSx: SxProps<Theme> = {
+  flex: 1,
+  minHeight: 0,
+  width: '100%',
+  resize: 'none',
+  overflow: 'auto',
+  border: 0,
+  outline: 0,
+  padding: 0,
+  background: 'transparent',
+  color: 'text.primary',
+  font: 'inherit',
+};
