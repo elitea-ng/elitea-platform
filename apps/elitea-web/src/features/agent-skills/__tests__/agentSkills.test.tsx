@@ -12,7 +12,7 @@ import type { ReactElement } from 'react';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { useListApplicationSkills } from '@/shared/api/generated/skills/skills';
@@ -189,6 +189,37 @@ describe('AgentSkillsPanel', () => {
       entity_version_id: 11,
       entity_type: 'agent',
     });
+  });
+
+  // Issue 2051: the picker had no way to start a new skill.
+  it('offers Create new in the picker and hands over to the caller (issue 2051)', async () => {
+    const user = userEvent.setup();
+    const onCreateNew = vi.fn();
+    renderWithProviders(panel({ onCreateNew }));
+    await screen.findByTestId('agent-skills-counter');
+    await user.click(screen.getByTestId('agent-add-skill-button'));
+    await user.click(await screen.findByTestId('agent-skill-create-new'));
+    expect(onCreateNew).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no Create new when the caller supplies no way to create', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(panel());
+    await screen.findByTestId('agent-skills-counter');
+    await user.click(screen.getByTestId('agent-add-skill-button'));
+    await screen.findByTestId('agent-skill-option-3');
+    expect(screen.queryByTestId('agent-skill-create-new')).not.toBeInTheDocument();
+  });
+
+  // Issue 2052: an attached skill is a card with open-in-new-tab and delete, like a toolkit.
+  it('draws an attached skill with an open-in-new-tab and a delete icon (issue 2052)', async () => {
+    attached = [{ id: 3, name: 'Reviewer' }];
+    const user = userEvent.setup();
+    const onOpenSkill = vi.fn();
+    renderWithProviders(panel({ onOpenSkill }));
+    await user.click(await screen.findByTestId('agent-open-skill-3'));
+    expect(onOpenSkill).toHaveBeenCalledWith(3);
+    expect(screen.getByTestId('agent-detach-skill-3')).toBeInTheDocument();
   });
 
   it('offers no attach for a skill that has no version to attach', async () => {

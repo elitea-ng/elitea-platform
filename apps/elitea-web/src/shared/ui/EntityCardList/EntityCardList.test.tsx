@@ -152,6 +152,27 @@ describe('EntityCardList', () => {
     expect(getAllByTestId('entity-list-row')).toHaveLength(2);
   });
 
+  // Issue 2050: sortable columns carry a sort icon, and the active one says which way.
+  it('draws a sort icon on each sortable column header and flips it on click (issue 2050)', () => {
+    const { getAllByTestId, getAllByRole } = renderWithTheme(
+      <EntityCardList
+        items={ITEMS}
+        view="table"
+      />,
+    );
+    expect(getAllByTestId('entity-list-sort-icon')).toHaveLength(2);
+    const [nameHeader] = getAllByRole('columnheader');
+    expect(nameHeader).toHaveAttribute('aria-sort', 'none');
+    act(() => {
+      fireEvent.click(nameHeader as HTMLElement);
+    });
+    expect(nameHeader).toHaveAttribute('aria-sort', 'descending');
+    act(() => {
+      fireEvent.click(nameHeader as HTMLElement);
+    });
+    expect(nameHeader).toHaveAttribute('aria-sort', 'ascending');
+  });
+
   /**
    * DEFECT this closes. With no `view` prop the grid reads `?view=` off the
    * URL, and it used to read it at RENDER TIME only — so the value moved and

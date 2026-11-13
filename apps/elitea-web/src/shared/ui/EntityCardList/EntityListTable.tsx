@@ -1,5 +1,8 @@
 import { useMemo, useState, type ReactNode } from 'react';
 
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -71,6 +74,7 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
           <HeaderCell
             label={t('shared.entityList.table.name', 'Name & Description')}
             active={sortField === 'name'}
+            descending={descending}
             onClick={() => {
               toggleSort('name');
             }}
@@ -80,6 +84,7 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
           <HeaderCell
             label={t('shared.entityList.table.created', 'Created')}
             active={sortField === 'createdAt'}
+            descending={descending}
             onClick={() => {
               toggleSort('createdAt');
             }}
@@ -199,15 +204,30 @@ function formatCreated(iso: string): string {
 interface HeaderCellProps {
   readonly label: string;
   readonly active?: boolean;
+  readonly descending?: boolean;
   readonly onClick?: () => void;
 }
 
-function HeaderCell({ label, active = false, onClick }: HeaderCellProps): ReactNode {
+/** Issue 2050: a sortable column says so, and which way it is sorted. */
+function SortIcon({ active, descending }: { readonly active: boolean; readonly descending: boolean }): ReactNode {
+  const Icon = !active ? UnfoldMoreIcon : descending ? ArrowDownwardIcon : ArrowUpwardIcon;
+  return (
+    <Icon
+      data-testid="entity-list-sort-icon"
+      sx={{ width: '1rem', height: '1rem', flexShrink: 0, opacity: active ? 1 : 0.5 }}
+    />
+  );
+}
+
+function HeaderCell({ label, active = false, descending = true, onClick }: HeaderCellProps): ReactNode {
+  const sortable = onClick !== undefined;
+  const ariaSort = !sortable || !active ? 'none' : descending ? 'descending' : 'ascending';
   return (
     <Box
       component="th"
       scope="col"
-      sx={headerCellSx(onClick !== undefined)}
+      aria-sort={ariaSort}
+      sx={headerCellSx(sortable)}
       onClick={onClick}
     >
       <Typography
@@ -216,6 +236,12 @@ function HeaderCell({ label, active = false, onClick }: HeaderCellProps): ReactN
       >
         {label}
       </Typography>
+      {sortable && (
+        <SortIcon
+          active={active}
+          descending={descending}
+        />
+      )}
     </Box>
   );
 }
