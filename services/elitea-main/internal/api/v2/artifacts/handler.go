@@ -65,6 +65,10 @@ type Repository interface {
 	// project-quota check below meaningless without them.
 	UpsertObject(ctx context.Context, input repos.NewObjectInput) (repos.ObjectRow, error)
 	DeleteObjects(ctx context.Context, bucketID int64, keys []string) error
+	// ReserveObjectKey and ListObjects back MoveObject (#2015): the first
+	// claims the target name atomically, the second reads the source row.
+	ReserveObjectKey(ctx context.Context, bucketID int64, key, mediaType string, expiresAt *time.Time) (bool, error)
+	ListObjects(ctx context.Context, bucketID int64, keyPrefix string) ([]repos.ObjectRow, error)
 	SumProjectBytes(ctx context.Context, projectID int64) (int64, error)
 	// CreateTransferGrant, GetTransferGrant, MarkTransferGrantConsumed, and
 	// GetBucketByID are S15's additions, backing grants.go. GetBucketByID

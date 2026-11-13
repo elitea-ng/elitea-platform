@@ -29,6 +29,7 @@ const NOOP = {
   onPreview: vi.fn(),
   onDownload: vi.fn(),
   onDelete: vi.fn(),
+  onRename: vi.fn(),
 };
 
 /* onetest: elitea_issues: #4447, #3758 — the fixed-width name column that clips a long file/folder

@@ -23,6 +23,9 @@ use super::state_modifier::template_value;
 use super::yaml::{valid_graph_id, valid_output_key};
 use crate::bounded_yaml;
 
+/// The state key a Router writes its chosen label to.
+pub const ROUTER_OUTPUT_KEY: &str = "router_output";
+
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
 const MAX_CONDITION_BYTES: usize = 64 * 1024;
 const MAX_RENDERED_BYTES: usize = 8 * 1024;
@@ -122,6 +125,12 @@ impl RouteTargets {
             .chain(std::iter::once(self.default.target.as_str()))
     }
 
+    /// The default route: its target and its public label.
+    #[must_use]
+    pub fn default_route(&self) -> (&str, &str) {
+        (self.default.target.as_str(), self.default.label.as_str())
+    }
+
     pub fn labels(&self) -> impl Iterator<Item = &str> {
         self.routes.iter().map(|route| route.label.as_str())
     }
@@ -201,6 +210,13 @@ impl RouterNodeDefinition {
         self.routes.declared()
     }
 
+    /// The default route (`default_output`, END when the YAML omits it):
+    /// its target and its public label.
+    #[must_use]
+    pub fn default_route(&self) -> (&str, &str) {
+        self.routes.default_route()
+    }
+
     #[must_use]
     pub fn config_digest(&self) -> [u8; 32] {
         let mut context = digest::Context::new(&digest::SHA256);
@@ -251,7 +267,7 @@ impl Node for RouterNode {
             tracing::Span::current().record("stage", "route_selection");
             let (target, label) = self.definition.routes.resolve(&rendered);
             Ok(NodeOutput::new()
-                .with_update("router_output", Value::String(label.to_owned()))
+                .with_update(ROUTER_OUTPUT_KEY, Value::String(label.to_owned()))
                 .with_goto([graph_target(target)]))
         }
         .instrument(span.clone())

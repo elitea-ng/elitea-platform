@@ -8,6 +8,7 @@
  * helpers`, `./nodeType.helpers`, `./yamlUpdate.helpers`) are unit A2c's
  * landed, real exports — not stubs.
  */
+import { clearDeletedErrorTarget, clearErrorRoute, ERROR_OUTPUT_HANDLE } from './nodeErrorRoute.helpers';
 import {
   CONDITION_NODE_ID_SUFFIX,
   DECISION_NODE_ID_SUFFIX,
@@ -174,7 +175,9 @@ export function cleanupNodeReferences(yamlNode: YamlPipelineNode, nodeId: string
 export function handleNormalNodeDeletion(node: FlowNode, yamlJsonObject: YamlPipelineDocument): YamlPipelineDocument {
   const result = {
     ...yamlJsonObject,
-    nodes: yamlJsonObject.nodes?.filter(yamlNode => yamlNode.id !== node.id).map(yamlNode => cleanupNodeReferences(yamlNode, node.id)),
+    nodes: yamlJsonObject.nodes
+      ?.filter(yamlNode => yamlNode.id !== node.id)
+      .map(yamlNode => clearDeletedErrorTarget(cleanupNodeReferences(yamlNode, node.id), node.id)),
     // Clear entry_point if the deleted node was the entry point
     ...(yamlJsonObject.entry_point === node.id ? { entry_point: undefined } : {}),
   } as YamlPipelineDocument;
@@ -328,6 +331,10 @@ export function processEdgeDeletion(
   yamlJsonObject: YamlPipelineDocument,
   newFlowNodes: readonly FlowNode[],
 ): YamlAndFlowNodes {
+  // 5b-1 (C6): the error output edge is `settings.error_transition`, never a transition.
+  if (edge.sourceHandle === ERROR_OUTPUT_HANDLE) {
+    return { yamlJsonObject: clearErrorRoute(yamlJsonObject, edge.source), flowNodes: [...newFlowNodes] };
+  }
   const targetNode = flowNodes.find(node => node.id === edge.target);
   if (!targetNode) {
     return { yamlJsonObject, flowNodes: [...newFlowNodes] };

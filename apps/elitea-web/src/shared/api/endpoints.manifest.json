@@ -760,6 +760,18 @@
       ]
     },
     {
+      "id": "artifacts.renameArtifact",
+      "method": "POST",
+      "path": "/artifacts/objects/{projectID}/{bucket}:move",
+      "operationId": "moveObject",
+      "source": "generated",
+      "responseSchema": "UploadObjectResponse",
+      "fixture": null,
+      "usedBy": [
+        "features/artifacts"
+      ]
+    },
+    {
       "id": "artifacts.updateBucketPin",
       "method": "PATCH",
       "path": "/artifacts/buckets/{projectID}/{bucket}",

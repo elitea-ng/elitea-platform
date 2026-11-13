@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.54
+
+| Area | What |
+|---|---|
+| Rename an artifact file (issue 2015) | `moveObject` — `POST /artifacts/objects/{projectID}/{bucket}:move` with `{from, to, overwrite?}` renames or moves a file inside a bucket; 409 when the target exists and `overwrite` is not set. The app has no artifacts screens, so nothing calls it yet. |
+
 ## Client contract 1.53
 
 | Area | What |

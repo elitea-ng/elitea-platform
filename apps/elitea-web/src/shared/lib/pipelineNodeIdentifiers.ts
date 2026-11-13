@@ -84,6 +84,8 @@ function normalizeNode(node: unknown): unknown {
     routes: normalizeRoutes,
     condition: (value) => patch(value, LEGACY_CONDITION_RULES),
     decision: (value) => patch(value, LEGACY_DECISION_RULES),
+    // 5b-1: the error route is a route target like `transition`.
+    settings: (value) => patch(value, { error_transition: normalizeOne }),
   });
   // Type-gated: the editor reads these two only on the node types that own them.
   if (node['type'] === 'map') return patch(base, { worker: normalizeOne });

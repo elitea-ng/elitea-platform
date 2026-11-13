@@ -869,6 +869,9 @@ type Querier interface {
 	// turn's worker reads to decide the file has already been extracted.
 	UpdateCurrentAgentAttachmentContent(ctx context.Context, arg UpdateCurrentAgentAttachmentContentParams) (int64, error)
 	UpdateCurrentIndexScheduleToolkitMeta(ctx context.Context, arg UpdateCurrentIndexScheduleToolkitMetaParams) (int64, error)
+	// created_at is NULL for an ordinary write (a new row is born now, an
+	// existing row keeps its birth). A rename passes the source's created_at so
+	// the object keeps its age under the new name (#2015).
 	UpsertArtifactObject(ctx context.Context, arg UpsertArtifactObjectParams) (EliteaStorageObject, error)
 	// ON CONFLICT DO UPDATE, not DO NOTHING: a retried chunk_index (client
 	// timeout, network retry) must overwrite the previous bytes for that index,

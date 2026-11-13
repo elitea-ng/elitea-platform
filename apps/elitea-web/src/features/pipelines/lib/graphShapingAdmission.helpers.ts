@@ -8,7 +8,8 @@ import {
   validateExtensionPointer, validateShapingName, type ExtensionValidator,
 } from './graphExtensionValidation.helpers';
 
-const COMMON = ['id', 'type', 'source', 'output', 'limits', 'transition'];
+// `settings` is checked by nodeSettings.helpers.ts (5b-1).
+const COMMON = ['id', 'type', 'source', 'output', 'limits', 'transition', 'settings'];
 function validateCommon(document: YamlPipelineDocument, node: YamlPipelineNode, sourceType: string, check: ExtensionValidator): void {
   validateDeclaredExtensionChannel(document, node['source'], 'source', [sourceType], check);
   const outputs = validateExtensionList(node.output, 'output', 1, check);
