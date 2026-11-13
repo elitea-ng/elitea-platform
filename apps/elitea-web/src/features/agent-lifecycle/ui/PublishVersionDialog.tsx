@@ -80,6 +80,8 @@ export function PublishVersionDialog({
   const [agreed, setAgreed] = useState(false);
   // #2025: set when Continue is pressed with a field missing, so the fields are marked.
   const [attempted, setAttempted] = useState(false);
+  // Publish pressed while validation FAILED: the reason is spelled out below.
+  const [publishRefused, setPublishRefused] = useState(false);
 
   // Reopening the dialog must not resume the previous attempt's step: the
   // author closed it, and a wizard that reopens on "Publishing" would publish
@@ -91,6 +93,7 @@ export function PublishVersionDialog({
     setCategory('');
     setAgreed(false);
     setAttempted(false);
+    setPublishRefused(false);
   }, [open]);
 
   // The validation result arriving is what advances the wizard. Advancing on
@@ -131,7 +134,10 @@ export function PublishVersionDialog({
     }
     if (isPublishing) return;
     // A FAIL is answered on screen, not by a click that does nothing (#2025).
-    if (blocked) return;
+    if (blocked) {
+      setPublishRefused(true);
+      return;
+    }
     setStep('publishing');
     onPublish(versionName, category, validation?.validationToken);
   };
@@ -209,6 +215,24 @@ export function PublishVersionDialog({
             >
               {t('features.agentLifecycle.publish.blocked', 'This version cannot be published until validation passes.')}
             </Typography>
+          )}
+          {blocked && publishRefused && (
+            <Box
+              role="alert"
+              data-testid="publish-blocked-reason"
+            >
+              {(validation?.criticalIssues ?? []).map((finding) => (
+                <Typography
+                  key={finding.id}
+                  variant="bodySmall"
+                >
+                  {finding.text}
+                </Typography>
+              ))}
+              {(validation?.criticalIssues.length ?? 0) === 0 && validation?.summary !== undefined && (
+                <Typography variant="bodySmall">{validation.summary}</Typography>
+              )}
+            </Box>
           )}
           {error !== undefined && (
             <Typography

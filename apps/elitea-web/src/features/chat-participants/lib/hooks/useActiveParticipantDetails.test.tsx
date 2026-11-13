@@ -71,3 +71,38 @@ it('keeps the latest target\'s details when the earlier read answers last', asyn
   expect(screen.getByTestId('details')).toHaveTextContent('144');
   expect(screen.getByTestId('details')).toHaveAttribute('data-loading', 'false');
 });
+
+// The participant is bound to version 165, but carries the id as a NUMBER while
+// the version list holds strings: a strict comparison fell back to the default
+// version (164), so the chat showed ITS starters and welcome message (#2032).
+function BoundProbe(): ReactElement {
+  const { activeParticipantDetails } = useActiveParticipantDetails({
+    activeParticipant: { entity_name: 'application', entity_meta: { id: 143, project_id: '2' }, entity_settings: { version_id: 165 } },
+  });
+  const details = activeParticipantDetails['version_details'] as { welcome_message?: string } | undefined;
+  return <output data-testid="bound">{details?.welcome_message ?? ''}</output>;
+}
+
+it('reads the bound version, not the default one, when the participant carries a numeric version id', async () => {
+  server.use(
+    http.get('*/elitea_core/application/prompt_lib/2/:id', () =>
+      HttpResponse.json({
+        id: 143,
+        name: 'Agent',
+        versions: [{ id: '164', name: 'base' }, { id: '165', name: 'v2' }],
+        version_details: { id: '164', welcome_message: 'default welcome' },
+      }),
+    ),
+    http.get('*/elitea_core/version/prompt_lib/2/143/165', () =>
+      HttpResponse.json({ id: '165', application_id: '143', name: 'v2', status: 'draft', welcome_message: 'bound welcome' }),
+    ),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const router = createRouter({
+    routeTree: createRootRoute({ component: () => <QueryClientProvider client={queryClient}><BoundProbe /></QueryClientProvider> }),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+    context: { auth: { getSelectedProjectId: () => '2' } },
+  });
+  render(<RouterProvider router={router} />);
+  await waitFor(() => expect(screen.getByTestId('bound')).toHaveTextContent('bound welcome'));
+});

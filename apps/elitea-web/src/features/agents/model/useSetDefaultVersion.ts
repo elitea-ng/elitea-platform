@@ -91,7 +91,8 @@ export function useSetDefaultVersion(input: UseSetDefaultVersionInput): UseSetDe
         // Leaving it alone meant leaving the agent and opening it again
         // inside the window replayed the old default (usually `base`) and the
         // pinned version was neither selected nor listed first.
-        if (ok) await queryClient.invalidateQueries({ queryKey: getGetApplicationQueryKey(input.projectId, input.applicationId) });
+        // Fire-and-forget: the pin has already succeeded, so a failing refetch must not report it as failed.
+        if (ok) void queryClient.invalidateQueries({ queryKey: getGetApplicationQueryKey(input.projectId, input.applicationId) });
         return ok;
       } catch (caught) {
         setError(caught);

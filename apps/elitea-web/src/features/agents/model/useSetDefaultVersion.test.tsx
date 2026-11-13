@@ -1,7 +1,7 @@
 import { QueryClient } from '@tanstack/react-query';
 import { act, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
@@ -94,6 +94,23 @@ describe('useSetDefaultVersion', () => {
     });
 
     expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+  });
+
+  // The pin succeeded; the cache refresh is housekeeping. Awaiting it let a
+  // refetch failure (or a slow one) turn a successful pin into a reported failure.
+  it('does not wait for the detail refetch: a pending or failing refresh cannot fail a successful pin', async () => {
+    server.use(http.patch(SET_DEFAULT_ROUTE, () => HttpResponse.json({ ok: true }, { status: 200 })));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.spyOn(queryClient, 'invalidateQueries').mockReturnValue(new Promise<void>(() => undefined));
+    const { result } = renderHookWithProviders(() => useSetDefaultVersion(baseInput()), queryClient);
+
+    let ok;
+    await act(async () => {
+      ok = await result.current.doSetDefaultVersion(7);
+    });
+
+    expect(ok).toBe(true);
+    expect(result.current.error).toBeUndefined();
   });
 
   it('resolves false and reports the server refusal when the version is not this application’s', async () => {

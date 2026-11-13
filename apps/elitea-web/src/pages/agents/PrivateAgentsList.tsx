@@ -55,6 +55,7 @@ function iconUrlOf(application: Application): string | undefined {
 
 function toRow(application: Application, onSelectForkedFrom: (id: string) => void): ApplicationListRow {
   const forkedFrom = forkedFromId(application);
+  const iconUrl = iconUrlOf(application);
   return {
     id: application.id,
     name: applicationName(application),
@@ -65,7 +66,7 @@ function toRow(application: Application, onSelectForkedFrom: (id: string) => voi
     })),
     tags: application.tags ?? [],
     createdAt: application.created_at,
-    ...(iconUrlOf(application) === undefined ? {} : { iconUrl: iconUrlOf(application) as string }),
+    ...(iconUrl === undefined ? {} : { iconUrl }),
     ...(forkedFrom === undefined ? {} : { forkedFrom: { onClick: () => onSelectForkedFrom(forkedFrom) } }),
   };
 }

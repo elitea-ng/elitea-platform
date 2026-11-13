@@ -55,8 +55,8 @@ export function EntityImportButton({ isImporting, onImport, testIdPrefix }: Enti
       return;
     }
     try {
-      const document = await readImportFile(file);
-      setPending({ document, summary: summarizeImportDocument(document) });
+      const { document, skipped } = await readImportFile(file);
+      setPending({ document, summary: summarizeImportDocument(document, skipped) });
       setError(undefined);
     } catch (cause) {
       setError(
@@ -127,6 +127,21 @@ export function EntityImportButton({ isImporting, onImport, testIdPrefix }: Enti
               <Typography variant="bodySmall">
                 {t('features.agentLifecycle.import.skills', 'Skills')}: {pending.summary.skillCount}
               </Typography>
+              {pending.summary.skipped.length > 0 ? (
+                <Box>
+                  <Typography variant="bodySmall">
+                    {t('features.agentLifecycle.import.skipped', 'Not imported (this file cannot carry them)')}:
+                  </Typography>
+                  {pending.summary.skipped.map((item) => (
+                    <Typography
+                      key={item}
+                      variant="bodySmall"
+                    >
+                      {item}
+                    </Typography>
+                  ))}
+                </Box>
+              ) : null}
             </Box>
           ) : null
         }

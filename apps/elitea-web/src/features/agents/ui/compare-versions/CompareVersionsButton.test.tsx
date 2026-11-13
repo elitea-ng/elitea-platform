@@ -12,6 +12,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import type { AgentPipelineVersionOption } from '../../lib/types';
+import { useApplicationsStore } from '../../model/applicationsStore';
 import { CompareVersionsButton } from './CompareVersionsButton';
 
 const BASE = '/api/v2';
@@ -23,9 +24,9 @@ const versions: AgentPipelineVersionOption[] = [
   { id: 3, name: 'v1', created_at: '2026-02-01T00:00:00Z' },
 ];
 
-function renderButton(node: ReactNode): void {
+function renderButton(node: ReactNode): ReturnType<typeof render> {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  render(
+  return render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider
         theme={theme}
@@ -231,5 +232,33 @@ describe('CompareVersionsButton', () => {
     await user.click(screen.getByRole('tab', { name: 'Tools & Skills' }));
     expect(screen.getByText('Release Notes Skill')).toBeInTheDocument();
     expect(screen.getByText('skill')).toBeInTheDocument();
+  });
+});
+
+describe('CompareVersionsButton open flag (#2032)', () => {
+  const props = { projectId: '7', applicationId: 42, versions, activeVersionId: 1 };
+
+  afterEach(() => {
+    useApplicationsStore.setState({ compareVersionsOpen: false });
+  });
+
+  it('clears a left-open flag when the button unmounts, so the next agent opens no modal', async () => {
+    const user = userEvent.setup();
+    const view = renderButton(<CompareVersionsButton {...props} />);
+    await user.click(screen.getByTestId('compare-versions-button'));
+    expect(useApplicationsStore.getState().compareVersionsOpen).toBe(true);
+    view.unmount();
+    expect(useApplicationsStore.getState().compareVersionsOpen).toBe(false);
+  });
+
+  it('clears the flag when the button cannot render (fewer than two versions)', () => {
+    useApplicationsStore.setState({ compareVersionsOpen: true });
+    renderButton(
+      <CompareVersionsButton
+        {...props}
+        versions={[versions[0] as AgentPipelineVersionOption]}
+      />,
+    );
+    expect(useApplicationsStore.getState().compareVersionsOpen).toBe(false);
   });
 });

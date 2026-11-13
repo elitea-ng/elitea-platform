@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useEffect } from 'react';
 
 import DifferenceOutlinedIcon from '@mui/icons-material/DifferenceOutlined';
 import IconButton from '@mui/material/IconButton';
@@ -38,7 +39,17 @@ export function CompareVersionsButton(props: CompareVersionsButtonProps): ReactN
   const open = useApplicationsStore((state) => state.compareVersionsOpen);
   const setOpen = useApplicationsStore((state) => state.setCompareVersionsOpen);
 
-  if (versions.length < 2 || activeVersionId === undefined) return null;
+  const canCompare = versions.length >= 2 && activeVersionId !== undefined;
+
+  // The flag lives in a module store, so it outlives this component. A flag left
+  // set when the button unmounts (navigating to another agent) or stops being
+  // offered would pop the modal the next time one renders.
+  useEffect(() => {
+    if (!canCompare) setOpen(false);
+  }, [canCompare, setOpen]);
+  useEffect(() => () => setOpen(false), [setOpen]);
+
+  if (!canCompare) return null;
 
   return (
     <>

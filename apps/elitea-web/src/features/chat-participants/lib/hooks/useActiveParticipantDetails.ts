@@ -33,17 +33,20 @@ async function fetchAndMergeVersionDetails(
   entityProjectId: string,
 ): Promise<Record<string, unknown>> {
   if (!versionId) return details.version_details || {};
-  if ((details.version_details as Record<string, unknown>)?.id === versionId) return details.version_details || {};
+  // A participant can carry the id as a number, the version list as strings (or the reverse); a strict
+  // comparison then fell back to the DEFAULT version and showed its starters and welcome message.
+  const wanted = String(versionId);
+  if (String((details.version_details as Record<string, unknown>)?.id) === wanted) return details.version_details || {};
 
   const versions = (details.versions as Record<string, unknown>[]) || [];
-  const versionExists = versions.some((v) => v.id === versionId);
+  const versionExists = versions.some((v) => String(v.id) === wanted);
   if (!versionExists) return details.version_details || {};
 
-  const versionName = versions.find((v) => v.id === versionId)?.name || '';
+  const versionName = versions.find((v) => String(v.id) === wanted)?.name || '';
   return fetchOriginalVersionDetails(
     entityName,
     String(entityMeta?.id),
-    versionId,
+    wanted,
     entityProjectId,
     versionName,
   );
