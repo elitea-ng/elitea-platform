@@ -548,7 +548,9 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 			continue
 		}
 
+		turnStarted := time.Now()
 		output, agentErr := o.agentTurn(ctx, ref, actor(run), version, testCase)
+		turnEvidence := agentTurnEvidence(time.Since(turnStarted), agentErr)
 		for _, binding := range run.Snapshot.Bindings {
 			if ctx.Err() != nil {
 				return nil
@@ -566,7 +568,11 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 				})
 				continue
 			}
-			o.store(ctx, ref, o.scoreOne(ctx, ref, actor(run), version.ModelName, testCase, binding, dimension, output, agentErr))
+			scored := o.scoreOne(ctx, ref, actor(run), version.ModelName, testCase, binding, dimension, output, agentErr)
+			for key, value := range turnEvidence {
+				scored.Evidence[key] = value
+			}
+			o.store(ctx, ref, scored)
 		}
 
 		done++
@@ -579,6 +585,24 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 		progress.tick()
 	}
 	return nil
+}
+
+// agentTurnEvidence is what a case's evidence records about the agent turn's
+// speed (issue 2011, step A): the wall time of the one blocking completion in
+// milliseconds, and whether it ended on a deadline. It is stored on every
+// result row of the case, so a reader gets one latency per case without a
+// column or a migration. The judge's calls are not part of it.
+func agentTurnEvidence(elapsed time.Duration, agentErr error) map[string]any {
+	evidence := map[string]any{"agent_latency_ms": elapsed.Milliseconds()}
+	if agentErr != nil && (errors.Is(agentErr, context.DeadlineExceeded) || isTimeoutError(agentErr)) {
+		evidence["agent_timed_out"] = true
+	}
+	return evidence
+}
+
+func isTimeoutError(err error) bool {
+	var timeout interface{ Timeout() bool }
+	return errors.As(err, &timeout) && timeout.Timeout()
 }
 
 // scoreOne produces exactly one result row and never panics on a nil judge.

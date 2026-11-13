@@ -51,3 +51,11 @@ export function runErrorMessage(error: unknown): string | undefined {
     t('features.agentEvaluation.runs.startFailed', 'Failed to start the run.'),
   );
 }
+
+/** The reason a write was refused, as a sentence: the server's own text when it sent one. */
+export function evaluationErrorSentence(error: unknown): string {
+  return (
+    evaluationErrorMessage(error, t('features.agentEvaluation.enhance.saveFailed', 'The request failed.')) ??
+    t('features.agentEvaluation.enhance.saveFailed', 'The request failed.')
+  );
+}

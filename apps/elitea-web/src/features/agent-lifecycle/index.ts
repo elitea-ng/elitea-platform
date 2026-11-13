@@ -20,3 +20,5 @@ export type { LifecycleEntity } from './lib/shareLink';
 export type { EntityExportDocument } from './api/lifecycleApi';
 export { PermissionTrimmingTable, trimmingItemKey } from './ui/PermissionTrimmingTable';
 export { credentialReviewErrorMessage } from './api/trimmingApi';
+export { RequestPublishDialog } from './ui/RequestPublishDialog';
+export { useAgentRegistry } from './api/governanceApi';

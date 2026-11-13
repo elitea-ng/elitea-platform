@@ -135,6 +135,7 @@ import type {
   EvalDatasetDetail,
   EvalDatasetList,
   EvalDatasetWriteRequest,
+  EvalEnhanceProposal,
   EvalRun,
   EvalRunList,
   EvalRunStartRequest,
@@ -3756,6 +3757,259 @@ export function useGetEvalScorecard<
     params,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type enhanceEvalRunResponse200 = {
+  data: EvalEnhanceProposal;
+  status: 200;
+};
+
+export type enhanceEvalRunResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type enhanceEvalRunResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type enhanceEvalRunResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type enhanceEvalRunResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type enhanceEvalRunResponse422 = {
+  data: ErrorResponse;
+  status: 422;
+};
+
+export type enhanceEvalRunResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type enhanceEvalRunResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type enhanceEvalRunResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type enhanceEvalRunResponseSuccess = enhanceEvalRunResponse200 & {
+  headers: Headers;
+};
+export type enhanceEvalRunResponseError = (
+  | enhanceEvalRunResponse401
+  | enhanceEvalRunResponse403
+  | enhanceEvalRunResponse404
+  | enhanceEvalRunResponse409
+  | enhanceEvalRunResponse422
+  | enhanceEvalRunResponse500
+  | enhanceEvalRunResponse502
+  | enhanceEvalRunResponse503
+) & {
+  headers: Headers;
+};
+
+export type enhanceEvalRunResponse =
+  enhanceEvalRunResponseSuccess | enhanceEvalRunResponseError;
+
+export const getEnhanceEvalRunUrl = (projectId: string, runId: string) => {
+  return `/elitea_core/eval_run_enhance/prompt_lib/${projectId}/${runId}`;
+};
+
+/**
+ * One model call, through the same gateway hop the judge and the AI-draft
+ * routes use, reads the run's PINNED agent definition (the frozen agent
+ * of a gate run, else the version row the run names) and the scored
+ * results that missed their targets with their outputs, scores and judge
+ * rationale. It answers up to three kinds of fix: an instruction patch,
+ * dimension rubric or target changes, and dataset expected-output
+ * changes.
+ *
+ * NOTHING IS WRITTEN. Each accepted fix is saved by the route that owns
+ * that write: a new agent version (which an agent above the low risk tier
+ * can publish only through a change request and its release gate), a
+ * dimension update, a dataset case update. A fix that names a dimension
+ * or case outside the evidence, an operator outside the set, an empty
+ * text or a no-op is dropped before it is answered. The call carries no
+ * run attribution, so it is not counted in the run's own analytics.
+ *
+ * Needs the run create permission (it spends model tokens) and the
+ * version read permission (the answer quotes the instructions).
+ * @summary Propose fixes for the cases a finished run missed (Enhance with AI)
+ */
+export const enhanceEvalRun = async (
+  projectId: string,
+  runId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<enhanceEvalRunResponse> => {
+  return eliteaFetch<enhanceEvalRunResponse>(
+    getEnhanceEvalRunUrl(projectId, runId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getEnhanceEvalRunQueryKey = (projectId: string, runId: string) => {
+  return [
+    "POST",
+    `/elitea_core/eval_run_enhance/prompt_lib/${projectId}/${runId}`,
+  ] as const;
+};
+
+export const getEnhanceEvalRunQueryOptions = <
+  TData = Awaited<ReturnType<typeof enhanceEvalRun>>,
+  TError =
+    N401Response | N403Response | N404Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof enhanceEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getEnhanceEvalRunQueryKey(projectId, runId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof enhanceEvalRun>>> = ({
+    signal,
+  }) => enhanceEvalRun(projectId, runId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof enhanceEvalRun>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type EnhanceEvalRunQueryResult = NonNullable<
+  Awaited<ReturnType<typeof enhanceEvalRun>>
+>;
+export type EnhanceEvalRunQueryError =
+  N401Response | N403Response | N404Response | ErrorResponse | N500Response;
+
+export function useEnhanceEvalRun<
+  TData = Awaited<ReturnType<typeof enhanceEvalRun>>,
+  TError =
+    N401Response | N403Response | N404Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof enhanceEvalRun>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof enhanceEvalRun>>,
+          TError,
+          Awaited<ReturnType<typeof enhanceEvalRun>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useEnhanceEvalRun<
+  TData = Awaited<ReturnType<typeof enhanceEvalRun>>,
+  TError =
+    N401Response | N403Response | N404Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof enhanceEvalRun>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof enhanceEvalRun>>,
+          TError,
+          Awaited<ReturnType<typeof enhanceEvalRun>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useEnhanceEvalRun<
+  TData = Awaited<ReturnType<typeof enhanceEvalRun>>,
+  TError =
+    N401Response | N403Response | N404Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof enhanceEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Propose fixes for the cases a finished run missed (Enhance with AI)
+ */
+
+export function useEnhanceEvalRun<
+  TData = Awaited<ReturnType<typeof enhanceEvalRun>>,
+  TError =
+    N401Response | N403Response | N404Response | ErrorResponse | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof enhanceEvalRun>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getEnhanceEvalRunQueryOptions(projectId, runId, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

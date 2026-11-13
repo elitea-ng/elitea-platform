@@ -117,6 +117,26 @@ A saved agent's editor includes an **Evaluation** tab to define what "good" look
   <Tab title="Runs">Start a run against a dataset and your dimensions. Runs poll for progress while this tab stays open — leaving it pauses polling until you return — and produce a scorecard with one score per dimension per case when they finish.</Tab>
 </Tabs>
 
+### Insights on a finished run
+
+Open a finished run's scorecard to see three cards above the scores:
+
+- **Consumption** shows the tokens and estimated cost of the agent's answers and of the judge, side by side, with a total. The money is an estimate at the catalogue rate. A run that started before consumption was recorded, or whose calls the gateway has pruned, says so instead of showing zero. The card needs the analytics permission. If the run carries limits, they are listed under the figures.
+- **Efficiency** shows the latency of the agent's answer at p50 and p95, how many answers timed out, and tokens and cost per case. Latency is recorded from now on; a run scored before that reads "not recorded".
+- **Compared with the previous run** shows the change in the overall score, in each dimension's average, in p50 latency and in cost per case against the nearest earlier scored run of the same dataset.
+
+These measure one model turn per case: the run does not use tools or toolkits, so there are no tool or trajectory metrics yet.
+
+### Enhance with AI
+
+When a finished run missed a target, the scorecard offers **Enhance with AI** (it needs the permission to start runs). The model reads the agent version the run scored and the results that missed, with the outputs and the judge's rationale, and proposes up to three kinds of fix, which you review one step at a time:
+
+1. **Instructions**: a revised version of the instructions, shown as a diff. Accepting creates a new **draft** version of the agent. Nothing is published: a draft follows the agent's normal release path, so an agent above low risk goes through a change request and its release gate. Use **Request publish** in the last step, or publish from the agent page.
+2. **Rubrics and targets**: a changed rubric or target for a dimension. It applies to new runs; this run keeps the rubric it was scored with.
+3. **Expected outputs**: a corrected expected answer for a case in the dataset.
+
+Nothing is saved until the last step, and you can untick any change. Each saved fix goes through the same permissions as editing it by hand, and a refused one is reported with its reason while the others are still saved.
+
 ## History
 
 A saved agent's editor also includes a **History** tab: every past conversation that used this agent, newest first, including the chats you had in the editor's own chat panel. Each entry shows the first message you wrote (the conversation's title if there is none), then its start time in your local time, the version, a derived duration, and its message count. Select a run to see the whole exchange, your message included, and below it the recorded trace: the tool calls and thinking steps the runtime logged for that conversation. An agent with no past conversations shows an empty state rather than a blank panel.

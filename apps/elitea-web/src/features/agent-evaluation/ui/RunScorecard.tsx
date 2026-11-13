@@ -11,7 +11,7 @@
  * zero. Zero is a real and very bad score; printing it for an unscorable case
  * would report a bad prompt as a bad agent.
  */
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -20,9 +20,13 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { EvalRun, EvalRunResult, EvalScorecard } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { isRunTerminal, useEvalRun, useEvalScorecard } from '../model/useEvalRuns';
+import { useEvaluationPermissions } from '../model/useEvaluationPermissions';
+import { EnhanceWizard } from './EnhanceWizard';
+import { RunInsights } from './RunInsights';
 
 const rowSx: SxProps<Theme> = {
   display: 'flex',
@@ -58,6 +62,7 @@ function resultScoreText(result: EvalRunResult): string {
 }
 
 interface ScorecardBodyProps {
+  readonly projectId: string | undefined;
   readonly scorecard: EvalScorecard;
   /** The LIVE run, from the progress poll — not the snapshot inside `scorecard`. */
   readonly liveRun: EvalRun | undefined;
@@ -68,7 +73,10 @@ interface ScorecardBodyProps {
  * function inside the §3.5 cyclomatic-complexity budget of 12, and because it
  * has no queries of its own: it is a pure function of the two values above.
  */
-function ScorecardBody({ scorecard, liveRun }: ScorecardBodyProps): ReactNode {
+function ScorecardBody({ projectId, scorecard, liveRun }: ScorecardBodyProps): ReactNode {
+  const dimensionNames = new Map(
+    Object.entries(scorecard.run.snapshot?.dimensions ?? {}).map(([id, dimension]) => [id, dimension.name ?? id]),
+  );
   return (
     <>
       <Typography variant="bodySmall" color="text.secondary" data-testid="scorecard-progress">
@@ -102,6 +110,8 @@ function ScorecardBody({ scorecard, liveRun }: ScorecardBodyProps): ReactNode {
             )
           : t('features.agentEvaluation.scorecard.runtimePlane', 'Scored by running the agent.')}
       </Typography>
+
+      <RunInsights projectId={projectId} scorecard={scorecard} dimensionNames={dimensionNames} />
 
       {scorecard.results.length === 0 && (
         <Typography component="output" variant="bodyMedium">
@@ -168,6 +178,11 @@ export function RunScorecard(props: RunScorecardProps): ReactNode {
   const scorecardQuery = useEvalScorecard(projectId, runId);
   const scorecard = scorecardQuery.data;
   const liveRun = runQuery.data ?? scorecard?.run;
+  const permissions = useEvaluationPermissions(projectId);
+  const [enhancingRunId, setEnhancingRunId] = useState<string | undefined>(undefined);
+  // Enhance reads a FINISHED run that scored something; it spends model tokens, so it takes the run create permission.
+  const canEnhance =
+    permissions.canStartRuns && liveRun?.status === 'finished' && scorecard?.results.some((result) => result.target_met === false) === true;
 
   return (
     <BaseModal
@@ -191,7 +206,13 @@ export function RunScorecard(props: RunScorecardProps): ReactNode {
             </Typography>
           )}
 
-          {scorecard !== undefined && <ScorecardBody scorecard={scorecard} liveRun={liveRun} />}
+          {scorecard !== undefined && <ScorecardBody projectId={projectId} scorecard={scorecard} liveRun={liveRun} />}
+          {canEnhance && (
+            <BaseBtn variant="secondary" data-testid="run-enhance" onClick={() => setEnhancingRunId(runId)}>
+              {t('features.agentEvaluation.enhance.open', 'Enhance with AI')}
+            </BaseBtn>
+          )}
+          <EnhanceWizard projectId={projectId} runId={enhancingRunId} onClose={() => setEnhancingRunId(undefined)} />
         </Box>
       }
     />
