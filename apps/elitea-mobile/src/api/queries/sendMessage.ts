@@ -1,3 +1,4 @@
+import { isPeopleOnly } from '@elitea/client-core/conversation';
 import { z } from 'zod';
 
 import { sessionApiClient, type ApiClient } from '@/api/client';
@@ -73,6 +74,14 @@ export interface TurnRequest {
   addressedTo?: number[] | null;
 }
 
+/**
+ * Whether a message is for people alone (contract 1.53): it mentions people and addresses no agent. Main stores it and
+ * notifies them and starts no turn, so it carries no participant and no model settings and nothing streams.
+ */
+export function isPeopleOnlyTurn(request: Pick<TurnRequest, 'mentions' | 'addressedTo'>): boolean {
+  return isPeopleOnly({ mentionedUserIds: request.mentions?.userIds, mentionsEveryone: request.mentions?.everyone, addressedTo: request.addressedTo ?? [] });
+}
+
 /** The server refuses more addressees than this (Main's `turntaking.MaxAddressed`). */
 export const MAX_ADDRESSED_IDS = 16;
 
@@ -96,8 +105,10 @@ export function prepareTurn(request: TurnRequest): PreparedTurn {
   if (!QUESTION_ID_RE.test(request.questionId)) throw new TurnInputError('question_id');
   if (request.userInput.trim() === '') throw new TurnInputError('empty');
   if (!Number.isSafeInteger(request.projectId) || request.projectId <= 0) throw new TurnInputError('invalid');
-  const model = request.model ?? null;
-  const minParticipant = model === null ? 1 : 0;
+  const peopleOnly = isPeopleOnlyTurn(request);
+  // A message for people alone has no answerer: no agent, no model.
+  const model = peopleOnly ? null : (request.model ?? null);
+  const minParticipant = model === null && !peopleOnly ? 1 : 0;
   if (!Number.isSafeInteger(request.participantId) || request.participantId < minParticipant) {
     throw new TurnInputError('invalid');
   }
@@ -118,7 +129,7 @@ export function prepareTurn(request: TurnRequest): PreparedTurn {
       ...(attachments.length > 0 ? { attachments: attachments.map((a) => ({ filepath: a.filepath, name: a.name })) } : {}),
     },
     project_id: request.projectId,
-    participant_id: request.participantId,
+    ...(peopleOnly ? {} : { participant_id: request.participantId }),
     conversation_uuid: request.conversationUuid,
     question_id: request.questionId,
     ...(userIds.length > 0 ? { user_ids: userIds } : {}),
@@ -217,9 +228,9 @@ const StoredBody = z.object({
     .optional(),
 });
 
-/** The contract a prepared turn is sent with: a model turn is adhoc. */
-export function executionContractOf(request: Pick<TurnRequest, 'model'>): ExecutionContract {
-  return request.model ? ADHOC_EXECUTION_CONTRACT : EXECUTION_CONTRACT;
+/** The contract a prepared turn is sent with: a model turn is adhoc (a people-only message is neither; the server decides it first). */
+export function executionContractOf(request: Pick<TurnRequest, 'model' | 'mentions' | 'addressedTo'>): ExecutionContract {
+  return request.model && !isPeopleOnlyTurn(request) ? ADHOC_EXECUTION_CONTRACT : EXECUTION_CONTRACT;
 }
 
 /**
@@ -279,6 +290,23 @@ const TurnStartErrorBody = z.looseObject({
   retryable: z.boolean().nullish(),
 });
 
+const MessagePosted = z.looseObject({
+  message_id: z.string().max(512),
+  created: z.boolean().nullish(),
+  turn_started: z.literal(false),
+});
+
+/** A people-only message that was stored with no turn behind it (contract 1.53): nothing to stream. */
+export interface PostedMessage {
+  posted: true;
+  messageId: string;
+  /** False when the same question_id was already stored (a replay). */
+  created: boolean;
+}
+
+/** Whether a send's answer is a stored people-only message rather than a turn to stream. */
+export const isPostedMessage = (started: StartedTurn | PostedMessage): started is PostedMessage => 'posted' in started;
+
 export interface StartedTurn {
   executionId: string;
   /** Validated same-origin API path of the execution's event stream. */
@@ -319,7 +347,7 @@ export class TurnStartError extends Error {
 export async function startTurn(
   prepared: PreparedTurn,
   options: { client?: ApiClient; signal?: AbortSignal } = {},
-): Promise<StartedTurn> {
+): Promise<StartedTurn | PostedMessage> {
   const client = options.client ?? sessionApiClient();
   const { request, bodyJson } = prepared;
   let result;
@@ -341,14 +369,18 @@ export async function startTurn(
     throw error;
   }
 
-  return readStarted(result);
+  return readStarted(result, true);
 }
 
 type PostResult = { data?: unknown; error?: unknown; response: Response };
 
 /** A send's or a continuation's answer: the validated execution, or a TurnStartError. */
-function readStarted({ data, error, response }: PostResult): StartedTurn {
+function readStarted(result: PostResult, allowPosted: true): StartedTurn | PostedMessage;
+function readStarted(result: PostResult, allowPosted?: false): StartedTurn;
+function readStarted({ data, error, response }: PostResult, allowPosted = false): StartedTurn | PostedMessage {
   if (response.ok) {
+    const posted = allowPosted ? MessagePosted.safeParse(data) : null;
+    if (posted?.success) return { posted: true, messageId: posted.data.message_id, created: posted.data.created !== false };
     const parsed = TurnStarted.safeParse(data);
     if (!parsed.success || !isSameOriginApiPath(parsed.data.events_url)) {
       throw new TurnStartError({ kind: 'bad_response' });

@@ -51,6 +51,7 @@ import type {
   AgentTeamList,
   CanvasPresence,
   ChatExecutionStarted,
+  ChatMessagePosted,
   ClearMemories200,
   ConversationAttachmentChunkReceived,
   ConversationAttachmentUploaded,
@@ -1968,16 +1969,37 @@ export const getListConversationMessagesResponseMock = (
 });
 
 export const getSendChatMessageResponseMock = (
-  overrideResponse: Partial<Extract<ChatExecutionStarted, object>> = {},
-): ChatExecutionStarted => ({
-  task_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  command_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  response_message_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  created: faker.datatype.boolean(),
-  ...overrideResponse,
-});
+  overrideResponse: Partial<
+    Extract<ChatExecutionStarted | ChatMessagePosted, object>
+  > = {},
+): ChatExecutionStarted | ChatMessagePosted =>
+  faker.helpers.arrayElement([
+    {
+      task_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      command_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      response_message_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      created: faker.datatype.boolean(),
+      ...overrideResponse,
+    },
+    {
+      message_id: faker.string.uuid(),
+      created: faker.datatype.boolean(),
+      turn_started: faker.datatype.boolean(),
+      ignored: faker.helpers.arrayElement([
+        faker.helpers.arrayElements([
+          "llm_settings",
+          "mcp_tokens",
+          "skills",
+          "unattended",
+          "release_id",
+        ] as const),
+        undefined,
+      ]),
+      ...overrideResponse,
+    },
+  ]);
 
 export const getStartLocalTurnResponseMock = (
   overrideResponse: Partial<Extract<LocalTurnStarted, object>> = {},
@@ -4342,9 +4364,13 @@ export const getListConversationMessagesMockHandler = (
 export const getSendChatMessageMockHandler = (
   overrideResponse?:
     | ChatExecutionStarted
+    | ChatMessagePosted
     | ((
         info: Parameters<Parameters<typeof http.post>[1]>[0],
-      ) => Promise<ChatExecutionStarted> | ChatExecutionStarted),
+      ) =>
+        | Promise<ChatExecutionStarted | ChatMessagePosted>
+        | ChatExecutionStarted
+        | ChatMessagePosted),
   options?: RequestHandlerOptions,
 ) => {
   return http.post(

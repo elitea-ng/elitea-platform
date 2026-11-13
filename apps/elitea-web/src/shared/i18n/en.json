@@ -6200,5 +6200,6 @@
   "shared.ui.characterCounter.over": "characters over the limit. Shorten the text to save.",
   "chat-participants.users.lessLabel": "Show less",
   "chat-participants.users.showLess": "Hide additional participants",
-  "chat-participants.users.showMore": "Show {{count}} more participants"
+  "chat-participants.users.showMore": "Show {{count}} more participants",
+  "widgets.chatBox.peopleOnlyNotice": "Sent to people only: no agent was asked."
 }

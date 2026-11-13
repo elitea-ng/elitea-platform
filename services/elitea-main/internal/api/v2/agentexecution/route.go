@@ -57,6 +57,14 @@ type StartUseCase interface {
 		context.Context,
 		agentexecutionapp.CurrentAdhocStartRequest,
 	) (agentexecutionapp.CurrentApplicationStartOutcome, error)
+	// IsPeopleOnly decides whether a message is for people alone, on its
+	// effective audience (members other than the sender, or @everyone).
+	IsPeopleOnly(context.Context, agentexecutionapp.CurrentApplicationStartRequest) bool
+	// PostPeopleMessage stores a message for people alone and starts no turn.
+	PostPeopleMessage(
+		context.Context,
+		agentexecutionapp.CurrentApplicationStartRequest,
+	) (agentexecutionapp.PostedMessage, error)
 	RegenerateCurrentAgent(
 		context.Context,
 		agentexecutionapp.CurrentRegenerationRequest,
@@ -336,6 +344,53 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 		return
 	}
 	origin := startTriggerOrigin(user)
+	// A message for people alone starts no turn (people_message.go). Decided
+	// here, on the mentions and the addressed agents, before any participant
+	// or contract rule: `participant_id` is what a client fills in for any
+	// unaddressed message, so it cannot say an agent was addressed.
+	peopleRequest := agentexecutionapp.CurrentApplicationStartRequest{
+		ProjectID: projectID, ActorUserID: actorUserID,
+		ConversationUUID: conversationID,
+		QuestionID:       body.QuestionID, UserInput: body.Payload.UserInput,
+		InteractionUUID:  body.InteractionUUID,
+		Attachments:      attachments,
+		MentionedUserIDs: mentioned,
+		MentionsEveryone: body.SendingToEveryone,
+		TriggerOrigin:    origin,
+		AddressedTo:      body.AddressedTo,
+	}
+	// A message whose only people are not really there (non-members, or its own
+	// sender) is an ordinary message. A client that sent it as people-only names
+	// no participant and no model, though, so there is nobody to run it: it is
+	// stored rather than refused (422), and notifies nobody.
+	noAnswerer := body.ParticipantID <= 0 && absentJSON(body.LLMSettings)
+	if handler.useCase.IsPeopleOnly(request.Context(), peopleRequest) ||
+		(noAnswerer && agentexecutionapp.HumanOrigin(origin) &&
+			agentexecutionapp.PeopleOnly(mentioned, body.SendingToEveryone, body.AddressedTo)) {
+		peopleRequest.AddressedTo = nil
+		posted, err := handler.useCase.PostPeopleMessage(request.Context(), peopleRequest)
+		if err != nil {
+			slog.Error("people-only message post failed", "err", err)
+			if errors.Is(err, agentexecutionapp.ErrPeopleMessagesUnavailable) {
+				writeUnsupported(writer)
+				return
+			}
+			writeStartError(writer, err)
+			return
+		}
+		answer := map[string]any{
+			"message_id":   posted.MessageID,
+			"created":      posted.Created,
+			"turn_started": false,
+		}
+		// The run inputs the message carried that no turn will read, so a client
+		// can say that no agent was asked.
+		if ignored := ignoredRunInputs(body.LLMSettings, body.MCPTokens, projectSkillIDs, body.Unattended != nil, body.ReleaseID); len(ignored) > 0 {
+			answer["ignored"] = ignored
+		}
+		writeJSON(writer, http.StatusCreated, answer)
+		return
+	}
 	var outcome agentexecutionapp.CurrentApplicationStartOutcome
 	switch contract {
 	case CurrentApplicationStartContract:
@@ -796,6 +851,28 @@ func writePipelineLimit(writer http.ResponseWriter, refusal error) {
 		return
 	}
 	writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{"error": api.Code, "message": api.Message})
+}
+
+// ignoredRunInputs names the run inputs of a people-only message that no turn
+// reads (ChatMessagePosted.ignored), in a fixed order.
+func ignoredRunInputs(llmSettings, mcpTokens json.RawMessage, skills []int64, unattended bool, releaseID int64) []string {
+	var ignored []string
+	if !absentJSON(llmSettings) {
+		ignored = append(ignored, "llm_settings")
+	}
+	if !absentJSON(mcpTokens) && !emptyJSONObject(mcpTokens) {
+		ignored = append(ignored, "mcp_tokens")
+	}
+	if len(skills) > 0 {
+		ignored = append(ignored, "skills")
+	}
+	if unattended {
+		ignored = append(ignored, "unattended")
+	}
+	if releaseID != 0 {
+		ignored = append(ignored, "release_id")
+	}
+	return ignored
 }
 
 func writeUnsupported(writer http.ResponseWriter) {

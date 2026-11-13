@@ -133,6 +133,30 @@ func TestFloorSingleAgentConversationIsUnchanged(t *testing.T) {
 	}
 }
 
+// An address in a one-agent (mixed) conversation is validated against its agent and
+// routes to it: "@Clarifier @Aksana check this" reaches the agent, and an id that is
+// not its agent is refused, as with several agents. There is still no floor to run.
+func TestFloorSingleAgentConversationRoutesAnAddress(t *testing.T) {
+	store := &floorStoreStub{floor: ConversationFloor{Agents: []FloorAgent{{ParticipantID: 21}}}}
+	service, admissions := floorStartService(t, store)
+	request := validCurrentApplicationStartRequest()
+	request.TargetParticipantID = 5 // the client's sticky target is not the addressed agent
+	request.AddressedTo = []int64{21}
+	if _, err := service.StartCurrentApplication(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	submitted := admissions.requests[0]
+	if submitted.CurrentTurn.TargetParticipantID != 21 || submitted.Floor != nil {
+		t.Fatalf("target=%d floor=%+v", submitted.CurrentTurn.TargetParticipantID, submitted.Floor)
+	}
+
+	service, admissions = floorStartService(t, store)
+	request.AddressedTo = []int64{99}
+	if _, err := service.StartCurrentApplication(context.Background(), request); !errors.Is(err, ErrFloorAddressee) || len(admissions.requests) != 0 {
+		t.Fatalf("err=%v admissions=%d", err, len(admissions.requests))
+	}
+}
+
 func TestFloorOffWithoutAStore(t *testing.T) {
 	service, admissions := floorStartService(t, nil)
 	request := validCurrentApplicationStartRequest()

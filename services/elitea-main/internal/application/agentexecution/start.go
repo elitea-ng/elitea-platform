@@ -346,6 +346,9 @@ type CurrentApplicationStartService struct {
 	// floor reads a conversation's floor (WithFloor, floor.go); nil turns
 	// the turn-taking engine off.
 	floor FloorStore
+	// humanMessages stores a people-only message (WithHumanMessages,
+	// people_message.go); nil refuses one.
+	humanMessages HumanMessageStore
 }
 
 // WithAttachmentImages attaches the reader that lets an attached IMAGE reach

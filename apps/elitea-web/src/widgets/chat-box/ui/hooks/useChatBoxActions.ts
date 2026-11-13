@@ -97,9 +97,11 @@ export function useChatBoxActions({
         // then fails still leaves a conversation the route and the rail have
         // to learn about (see `SendResult`).
         if (result.createdConversation) onConversationCreated?.(result.createdConversation);
+        // A message that went to people only, with run inputs no agent read: a small notice, not an error.
+        if (result.notice !== undefined) onSkillsUnavailable?.(result.notice);
       });
     },
-    [data.attachments.state, handlers, state, chatInputRef, onConversationCreated, readAloudStop, takeAddressedTo],
+    [data.attachments.state, handlers, state, chatInputRef, onConversationCreated, onSkillsUnavailable, readAloudStop, takeAddressedTo],
   );
 
   const handleSend = useCallback(

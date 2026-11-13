@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.52",
+  "client_contract": "1.53",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -24103,6 +24103,43 @@
                 },
                 "task_id": {
                   "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "201": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "created",
+                "message_id",
+                "turn_started"
+              ],
+              "properties": {
+                "created": {
+                  "type": "boolean"
+                },
+                "ignored": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "llm_settings",
+                      "mcp_tokens",
+                      "release_id",
+                      "skills",
+                      "unattended"
+                    ]
+                  }
+                },
+                "message_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "turn_started": {
+                  "type": "boolean"
                 }
               }
             }

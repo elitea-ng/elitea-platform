@@ -403,6 +403,22 @@ describe('TurnController', () => {
     expect(h.controller.getSnapshot().turn.error).toEqual({ message: FAILURE_TEXT.badResponse, retryable: false });
   });
 
+  it('a stored people-only message (201, no turn) is delivered: no stream, no failure', async () => {
+    const onPosted = jest.fn();
+    const h = harness([() => json(201, { message_id: QID, created: true, turn_started: false })], { onPosted });
+    await h.controller.start();
+    expect(onPosted).toHaveBeenCalledTimes(1);
+    expect(h.stream.transport).not.toHaveBeenCalled();
+    expect(h.controller.getSnapshot().turn.error).toBeNull();
+  });
+
+  it('without an onPosted hook it settles at once', async () => {
+    const h = harness([() => json(201, { message_id: QID, created: false, turn_started: false })]);
+    await h.controller.start();
+    expect(h.onSettle).toHaveBeenCalledTimes(1);
+    expect(h.stream.transport).not.toHaveBeenCalled();
+  });
+
   it('reattaches with the same body and replays the stream from the start', async () => {
     const h = harness([() => started(), () => started({ created: false })]);
     void h.controller.start();

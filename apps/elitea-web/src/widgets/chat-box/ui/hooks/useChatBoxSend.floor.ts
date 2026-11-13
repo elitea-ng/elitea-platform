@@ -5,7 +5,7 @@
  *
  * Split out of `useChatBoxSend.helpers.ts`, which is at its §3.5 length budget.
  */
-import { MAX_ADDRESSED } from '@elitea/client-core/conversation';
+import { MAX_ADDRESSED, isPeopleOnly } from '@elitea/client-core/conversation';
 
 /** A positive integer participant id, from a number or its decimal string; `undefined` otherwise. */
 export function positiveParticipantId(raw: unknown): number | undefined {
@@ -53,6 +53,37 @@ export function addressedIdsOf(raw: unknown): number[] {
     if (ids.length === MAX_ADDRESSED) break;
   }
   return ids;
+}
+
+/**
+ * Whether a composer payload is for people alone: it carries mentions (`userIds` as positive integers, or
+ * `isMentioningEveryone`) and addresses no agent (`addressedTo`). Main decides the same from the start body, so a
+ * message this answers `true` for is stored and starts no turn: the send opens no stream and shows no pending answer.
+ */
+export function isPeopleOnlyPayload(payload: Readonly<Record<string, unknown>>): boolean {
+  const raw = payload['userIds'];
+  const mentionedUserIds = Array.isArray(raw) ? raw.filter((value) => positiveId(value) !== undefined) : [];
+  return isPeopleOnly({ mentionedUserIds, mentionsEveryone: payload['isMentioningEveryone'] === true, addressedTo: addressedIdsOf(payload['addressedTo']) });
+}
+
+/**
+ * The agents a message addresses once the composer's PICKED agent is counted. A message with mentions and no
+ * `@Agent` / `#Agent` is for people alone, so an agent the person picked on purpose has to travel as an address to
+ * keep the turn (Main cannot tell a pick from the sticky `participant_id`). Only an application participant is an
+ * agent: a picked model is not addressable and does not turn a message to people into a model turn.
+ */
+export function addressedWithPick(addressedTo: readonly number[] | undefined, picked: unknown, mentions: { readonly userIds?: readonly unknown[] | undefined; readonly everyone?: boolean | undefined }, participants: readonly unknown[] | undefined): readonly number[] | undefined {
+  const forPeople = isPeopleOnly({ mentionedUserIds: mentions.userIds, mentionsEveryone: mentions.everyone, addressedTo });
+  const id = forPeople ? pickedAgentId(picked) : undefined;
+  // Only an agent of THIS conversation: Main refuses an addressee that is not one (422), which would drop the whole message.
+  const pickedAgent = id !== undefined && (participants ?? []).some((row) => resolvedTarget(row).participantId === id) ? id : undefined;
+  return pickedAgent === undefined ? addressedTo : [pickedAgent];
+}
+
+/** The id of a picked application participant (an agent); `undefined` for a model, a person or nothing. */
+function pickedAgentId(picked: unknown): number | undefined {
+  const row = (picked ?? {}) as { readonly id?: unknown; readonly entity_name?: unknown; readonly entityName?: unknown };
+  return (row.entity_name ?? row.entityName) === 'application' ? positiveId(row.id) : undefined;
 }
 
 /** The start body's `addressed_to`, present only when the message addresses someone. */

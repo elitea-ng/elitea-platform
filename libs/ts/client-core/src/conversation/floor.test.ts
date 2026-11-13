@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { DEFAULT_FLOOR, MAX_ADDRESSED, addressedTo, firstAnswerer, floorOf, foldSideTalk, metaWithLead, sideTalkLabel } from './floor';
+import { DEFAULT_FLOOR, MAX_ADDRESSED, addressedTo, firstAnswerer, floorOf, foldSideTalk, isPeopleOnly, metaWithLead, sideTalkLabel } from './floor';
 import { MESSAGE_CLASS, type MessageClass } from './messageClass';
 
 describe('floorOf', () => {
@@ -93,5 +93,18 @@ describe('sideTalkLabel', () => {
   it('names the author and addressees', () => {
     assert.equal(sideTalkLabel('Analyst', ['Reviewer', '']), 'Analyst → Reviewer');
     assert.equal(sideTalkLabel('Analyst', []), 'Analyst');
+  });
+});
+
+describe('isPeopleOnly', () => {
+  it('is true for people with no addressed agent', () => {
+    assert.equal(isPeopleOnly({ mentionedUserIds: ['11'] }), true);
+    assert.equal(isPeopleOnly({ mentionsEveryone: true, addressedTo: [] }), true);
+  });
+  it('is false once an agent is addressed, or when nobody is mentioned', () => {
+    assert.equal(isPeopleOnly({ mentionedUserIds: ['11'], addressedTo: [21] }), false);
+    assert.equal(isPeopleOnly({ mentionsEveryone: true, addressedTo: [21] }), false);
+    assert.equal(isPeopleOnly({}), false);
+    assert.equal(isPeopleOnly({ mentionedUserIds: [], mentionsEveryone: false }), false);
   });
 });
