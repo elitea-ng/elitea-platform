@@ -180,6 +180,7 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 
 | Code | What happened | What to do | Who sees it | Retry | Raised by |
 |---|---|---|---|---|---|
+| `toolkit.oauth_discovery_failed` | The OAuth discovery endpoint could not be read, so the connection check could not find the identity provider. | Use an https discovery endpoint that publishes OAuth metadata; an administrator can allow a private host with ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST. | both | no | elitea-main |
 | `toolkit.settings_unresolved` | The toolkit's settings could not be resolved, so the request could not run. | Check the toolkit's credentials and configuration, then reload the page. | both | yes | elitea-main |
 
 ### workload

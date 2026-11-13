@@ -49,6 +49,10 @@ type Fetcher struct {
 	// Flags are boolean authorization server fields projected as well, such
 	// as client_id_metadata_document_supported.
 	Flags []string
+	// IssuerMatch, when set, replaces the default "published issuer is the
+	// requested URL" test of AuthorizationServer. It is for callers that know
+	// one provider publishes a templated issuer. MCP discovery leaves it nil.
+	IssuerMatch func(published, requested string) bool
 }
 
 // Discovered is a fail-closed walk of protected-resource then
@@ -191,7 +195,7 @@ func (f Fetcher) AuthorizationServer(ctx context.Context, rawIssuer string) (map
 		// "https://api.box.com"). That is the same URL, so it is accepted. A
 		// real mismatch moves on to the next candidate document.
 		published, ok := metadata["issuer"].(string)
-		if !ok || !EquivalentMetadataURL(published, rawIssuer) {
+		if !ok || !f.issuerMatches(published, rawIssuer) {
 			continue
 		}
 		return f.project(rawIssuer, metadata)
@@ -200,6 +204,13 @@ func (f Fetcher) AuthorizationServer(ctx context.Context, rawIssuer string) (map
 		return nil, ErrDiscoveryTimeout
 	}
 	return nil, ErrDiscoveryMetadata
+}
+
+func (f Fetcher) issuerMatches(published, requested string) bool {
+	if EquivalentMetadataURL(published, requested) {
+		return true
+	}
+	return f.IssuerMatch != nil && f.IssuerMatch(published, requested)
 }
 
 func (f Fetcher) project(rawIssuer string, metadata map[string]any) (map[string]any, error) {

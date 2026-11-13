@@ -248,6 +248,7 @@ export interface ToolkitEditorSaveButtonProps {
   readonly deps: ToolkitEditorDeps;
   readonly onToolkitCreated: (result: ToolkitWriteResult) => void;
   readonly onToolkitSaved: (result: ToolkitWriteResult, toolkitData: ToolkitFormValues) => void;
+  readonly onBlocked?: (() => void) | undefined;
 }
 
 export function ToolkitEditorSaveButton({
@@ -261,6 +262,7 @@ export function ToolkitEditorSaveButton({
   deps,
   onToolkitCreated,
   onToolkitSaved,
+  onBlocked,
 }: ToolkitEditorSaveButtonProps): ReactNode {
   const toolSchema = editToolDetail?.schema as ToolSchemaLike | undefined;
 
@@ -285,7 +287,8 @@ export function ToolkitEditorSaveButton({
       values={{ ...editToolDetail, id: toolkitId } as ToolkitFormValues}
       isDirty={isDirty}
       hasErrors={validationState.hasErrors}
-      triggerValidation={validationState.triggerValidation}
+      // A refused click shows the invalid fields AND says why nothing happened (#2016).
+      triggerValidation={() => { validationState.triggerValidation(); onBlocked?.(); }}
       projectId={saveProjectId}
       saveToolkit={deps.saveToolkit}
       onToolkitSaved={onToolkitSaved}

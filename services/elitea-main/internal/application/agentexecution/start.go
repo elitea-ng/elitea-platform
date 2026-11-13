@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -1007,6 +1008,8 @@ func validJSONArray(value []byte) bool {
 type unsupportedCurrentAgentStart struct {
 	reason string
 	cause  error
+	// code marks a refusal the sender may be told (start_refusal.go).
+	code StartRefusal
 }
 
 func (e *unsupportedCurrentAgentStart) Error() string {
@@ -1022,6 +1025,37 @@ func (e *unsupportedCurrentAgentStart) Unwrap() []error {
 		return []error{ErrUnsupportedCurrentAgentStart}
 	}
 	return []error{ErrUnsupportedCurrentAgentStart, e.cause}
+}
+
+// UnsupportedReasons returns the fixed sentences of the refusals in err that
+// carry a registered StartRefusal code, outermost first. Free-form reasons
+// (stage names, join descriptions) and wrapped dependency errors are never
+// returned: they go to the log only. A bare sentinel yields none.
+func UnsupportedReasons(err error) []string {
+	var reasons []string
+	var walk func(error)
+	walk = func(current error) {
+		if current == nil {
+			return
+		}
+		if typed, ok := current.(*unsupportedCurrentAgentStart); ok {
+			if sentence := startRefusalSentences[typed.code]; sentence != "" && !slices.Contains(reasons, sentence) {
+				reasons = append(reasons, sentence)
+			}
+			walk(typed.cause)
+			return
+		}
+		switch wrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			for _, inner := range wrapped.Unwrap() {
+				walk(inner)
+			}
+		case interface{ Unwrap() error }:
+			walk(wrapped.Unwrap())
+		}
+	}
+	walk(err)
+	return reasons
 }
 
 // unsupportedStart names a refusal. The reason must be a fixed string: it

@@ -141,6 +141,8 @@ export interface ChatBoxInputSlotsProps {
   readonly onCreateAgent?: (() => void) | undefined;
   readonly onCreatePipeline?: (() => void) | undefined;
   readonly onCreateToolkit?: ((isMcp?: boolean) => void) | undefined;
+  /** The "+" menu's "Skills" row (#2017): inserts `~` and opens the skill picker. Absent: no row. */
+  readonly onPickSkill?: (() => void) | undefined;
   /** The desktop composer row; defaults to the build (`NATIVE`), a test sets it. */
   readonly native?: boolean;
   /** "Run to completion" (ADR-0045), on by default; it sits after the voice controls, before Send. None when it is not offered. */
@@ -235,6 +237,7 @@ export function buildChatBoxInputSlots({
   onCreateAgent,
   onCreatePipeline,
   onCreateToolkit,
+  onPickSkill,
   voice,
   voiceInput,
   native = NATIVE,
@@ -290,6 +293,7 @@ export function buildChatBoxInputSlots({
     ...optField('onCreateAgent', onCreateAgent),
     ...optField('onCreatePipeline', onCreatePipeline),
     ...optField('onCreateToolkit', onCreateToolkit),
+    ...optField('onPickSkill', onPickSkill),
   };
   const webSlots: ChatBoxInputSlotsResult = {
     sendControl: (props: SendControlSlotProps) => <SendButton {...buildSendButtonProps(props)} />,

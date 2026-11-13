@@ -41,6 +41,17 @@ describe('McpLogoutButton', () => {
     expect(screen.getByText('You have successfully logged out!')).toBeInTheDocument();
   });
 
+  it('says the user was not logged in when no grant was held', async () => {
+    const user = userEvent.setup();
+    renderWithTheme(<McpLogoutButton serverUrl="https://mcp.example.com" />);
+
+    await user.click(screen.getByRole('button', { name: /log out/i }));
+    await user.click(screen.getByRole('button', { name: 'Log out' }));
+
+    expect(screen.getByText('You were not logged in.')).toBeInTheDocument();
+    expect(screen.queryByText('You have successfully logged out!')).not.toBeInTheDocument();
+  });
+
   it('cancelling the modal leaves the token untouched', async () => {
     const user = userEvent.setup();
     setAccessToken('https://mcp.example.com', 'tok', 3600, undefined, undefined, undefined);
