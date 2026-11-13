@@ -140,14 +140,14 @@ describe('import size limits (#2032)', () => {
   it('refuses a zip with more than 50 agent files', async () => {
     const zip = new JSZip();
     for (let i = 0; i < 51; i += 1) zip.file(`a${String(i)}.md`, agent(`n${String(i)}`));
-    const file = new File([await zip.generateAsync({ type: 'uint8array' })], 'many.zip');
+    const file = new File([await zip.generateAsync({ type: 'arraybuffer' })], 'many.zip');
     await expect(readImportFile(file)).rejects.toThrow(/more than 50/);
   });
 
   it('refuses an entry over 1 MiB before inflating it', async () => {
     const zip = new JSZip();
     zip.file('huge.md', agent('h') + 'a'.repeat(2 * 1024 * 1024));
-    const file = new File([await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })], 'huge.zip');
+    const file = new File([await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' })], 'huge.zip');
     await expect(readImportFile(file)).rejects.toThrow(/huge\.md is larger than 1 MiB/);
   });
 
@@ -155,7 +155,7 @@ describe('import size limits (#2032)', () => {
     const zip = new JSZip();
     const chunk = 'a'.repeat(900 * 1024);
     for (let i = 0; i < 12; i += 1) zip.file(`p${String(i)}.md`, agent(`p${String(i)}`) + chunk);
-    const file = new File([await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })], 'total.zip');
+    const file = new File([await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' })], 'total.zip');
     await expect(readImportFile(file)).rejects.toThrow(/total\.zip is larger than 10 MiB/);
   });
 
@@ -163,7 +163,7 @@ describe('import size limits (#2032)', () => {
     const zip = new JSZip();
     zip.file('a.md', agent('A'));
     zip.file('b.md', agent('B'));
-    const file = new File([await zip.generateAsync({ type: 'uint8array' })], 'ok.zip');
+    const file = new File([await zip.generateAsync({ type: 'arraybuffer' })], 'ok.zip');
     const { document } = await readImportFile(file);
     expect(document.applications).toHaveLength(2);
   });
