@@ -28,10 +28,11 @@ interface FieldProps {
   readonly field: TextKey;
   readonly label: string;
   readonly multiline: boolean;
+  readonly required?: boolean;
   readonly onChange: (next: AiEditFields) => void;
 }
 
-function Field({ draft, field, label, multiline, onChange }: FieldProps): ReactNode {
+function Field({ draft, field, label, multiline, required = false, onChange }: FieldProps): ReactNode {
   return (
     <TextField
       fullWidth
@@ -39,6 +40,8 @@ function Field({ draft, field, label, multiline, onChange }: FieldProps): ReactN
       minRows={multiline ? 2 : 1}
       maxRows={8}
       label={label}
+      required={required}
+      error={required && draft[field].trim() === ''}
       value={draft[field]}
       onChange={(event) => onChange({ ...draft, [field]: event.target.value })}
     />
@@ -49,7 +52,7 @@ export function AiEditReviewForm({ current, draft, onChange }: AiEditReviewFormP
   return (
     <Box sx={reviewSx}>
       <Typography variant="labelMedium">{t('features.agents.aiEdit.proposedChanges', 'Proposed changes')}</Typography>
-      <Field draft={draft} field="name" label={t('features.agents.aiEdit.fieldName', 'Name')} multiline={false} onChange={onChange} />
+      <Field draft={draft} field="name" label={t('features.agents.aiEdit.fieldName', 'Name')} multiline={false} required onChange={onChange} />
       <Field draft={draft} field="description" label={t('features.agents.aiEdit.fieldDescription', 'Description')} multiline onChange={onChange} />
       <TextDiffHighlight
         original={current.instructions}

@@ -13,7 +13,7 @@ import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { generateContentBlocking, readGeneratedContent, type AiEditLlmSettings } from '../../api/aiEdit';
-import { buildAiEditInput, parseAiEditDraft, type AiEditFields } from '../../lib/aiEditDraft';
+import { aiEditPatch, buildAiEditInput, parseAiEditDraft, type AiEditFields } from '../../lib/aiEditDraft';
 import { applicationErrorMessage } from '../../lib/errorMessage';
 import { AiEditReviewForm } from './AiEditReviewForm';
 
@@ -51,7 +51,8 @@ export interface EditInstructionsWithAiModalProps {
   /** The resolved Service Prompt — the caller's gate guarantees it is non-empty. */
   readonly basePrompt: string;
   readonly llmSettings: AiEditLlmSettings;
-  readonly onApply: (fields: AiEditFields) => void;
+  /** Only the fields the review changed, relative to what the prompt was built from. */
+  readonly onApply: (patch: Partial<AiEditFields>) => void;
 }
 
 type Phase = 'prompt' | 'loading' | 'review';
@@ -62,6 +63,8 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
   const [phase, setPhase] = useState<Phase>('prompt');
   const [request, setRequest] = useState('');
   const [proposed, setProposed] = useState<AiEditFields>(current);
+  // What the prompt was built from. The review diffs against it and Apply writes the difference to it.
+  const [snapshot, setSnapshot] = useState<AiEditFields>(current);
   const [error, setError] = useState<string | undefined>(undefined);
 
   const generationTokenRef = useRef(0);
@@ -72,6 +75,7 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
     setPhase('prompt');
     setRequest('');
     setProposed(current);
+    setSnapshot(current);
     setError(undefined);
   }, [open, current]);
 
@@ -85,6 +89,7 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
   const handleGenerate = useCallback(async (): Promise<void> => {
     if (request.trim() === '') return;
     const token = ++generationTokenRef.current;
+    const base = current;
     const controller = new AbortController();
     abortRef.current = controller;
     setPhase('loading');
@@ -93,7 +98,7 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
       const result = await generateContentBlocking(
         projectId,
         {
-          user_input: buildAiEditInput(basePrompt, current, request.trim()),
+          user_input: buildAiEditInput(basePrompt, base, request.trim()),
           chat_history: [],
           llm_settings: llmSettings,
         },
@@ -108,7 +113,8 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
         return;
       }
       // The prompt asks for a JSON agent configuration; plain text stands for the instructions alone.
-      setProposed(parseAiEditDraft(content, current) ?? { ...current, instructions: content });
+      setSnapshot(base);
+      setProposed(parseAiEditDraft(content, base) ?? { ...base, instructions: content });
       setPhase('review');
     } catch (caught) {
       if (token !== generationTokenRef.current) return;
@@ -123,9 +129,9 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
   }, [basePrompt, current, llmSettings, projectId, request]);
 
   const handleApply = useCallback(() => {
-    onApply(proposed);
+    onApply(aiEditPatch(snapshot, proposed));
     handleClose();
-  }, [handleClose, onApply, proposed]);
+  }, [handleClose, onApply, proposed, snapshot]);
 
   const content =
     phase === 'loading' ? (
@@ -140,7 +146,7 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
       </Box>
     ) : phase === 'review' ? (
       <AiEditReviewForm
-        current={current}
+        current={snapshot}
         draft={proposed}
         onChange={setProposed}
       />
@@ -180,7 +186,7 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
         <BaseBtn
           variant="elitea"
           size="small"
-          disabled={proposed.instructions.trim() === ''}
+          disabled={proposed.instructions.trim() === '' || proposed.name.trim() === ''}
           onClick={handleApply}
         >
           {t('features.agents.aiEdit.apply', 'Apply')}

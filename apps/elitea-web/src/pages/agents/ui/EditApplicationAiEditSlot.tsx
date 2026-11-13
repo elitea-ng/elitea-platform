@@ -53,21 +53,16 @@ export function EditApplicationAiEditSlot({ editor, projectId, disabled }: EditA
     }),
     [name, description, instructions, welcome_message, conversation_starters],
   );
-  // Each proposed field lands in ITS field, through the same `onFieldChange`
+  // Each changed field lands in ITS field, through the same `onFieldChange`
   // every other edit uses, so an applied edit reaches the save body AND the
-  // dirty comparison the nav blocker reads (#133). Unchanged fields are not
-  // written, so Apply never dirties what the model left alone.
-  const apply = (next: typeof current): void => {
-    if (next.name !== current.name) editor.onFieldChange('name', next.name);
-    if (next.description !== current.description) editor.onFieldChange('description', next.description);
-    if (next.instructions !== current.instructions) editor.onFieldChange('version_details.instructions', next.instructions);
-    if (next.welcome_message !== current.welcome_message) {
-      editor.onFieldChange('version_details.welcome_message', next.welcome_message);
-    }
-    const starters = next.conversation_starters.filter((starter) => starter.trim() !== '');
-    if (starters.join('\n') !== current.conversation_starters.join('\n')) {
-      editor.onFieldChange('version_details.conversation_starters', starters);
-    }
+  // dirty comparison the nav blocker reads (#133). The modal passes only the
+  // fields the review changed, and never a blank name.
+  const apply = (patch: Partial<typeof current>): void => {
+    if (patch.name !== undefined) editor.onFieldChange('name', patch.name);
+    if (patch.description !== undefined) editor.onFieldChange('description', patch.description);
+    if (patch.instructions !== undefined) editor.onFieldChange('version_details.instructions', patch.instructions);
+    if (patch.welcome_message !== undefined) editor.onFieldChange('version_details.welcome_message', patch.welcome_message);
+    if (patch.conversation_starters !== undefined) editor.onFieldChange('version_details.conversation_starters', patch.conversation_starters);
   };
   return (
     <EditInstructionsWithAiButton

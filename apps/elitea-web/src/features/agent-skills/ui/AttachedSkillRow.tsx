@@ -73,16 +73,19 @@ export function AttachedSkillRow({ skill, onOpen, onDetach, isDetaching }: Attac
           title={t('features.agentSkills.detach', 'Detach skill')}
           placement="top"
         >
-          <IconButton
-            color="tertiary"
-            size="small"
-            aria-label={t('features.agentSkills.detach', 'Detach skill')}
-            data-testid={`agent-detach-skill-${String(skill.id)}`}
-            disabled={isDetaching}
-            onClick={onDetach}
-          >
-            <DeleteIcon sx={iconSx} />
-          </IconButton>
+          {/* A disabled button fires no pointer events, so the Tooltip needs a live wrapper. */}
+          <span>
+            <IconButton
+              color="tertiary"
+              size="small"
+              aria-label={t('features.agentSkills.detach', 'Detach skill')}
+              data-testid={`agent-detach-skill-${String(skill.id)}`}
+              disabled={isDetaching}
+              onClick={onDetach}
+            >
+              <DeleteIcon sx={iconSx} />
+            </IconButton>
+          </span>
         </Tooltip>
       )}
     </Box>

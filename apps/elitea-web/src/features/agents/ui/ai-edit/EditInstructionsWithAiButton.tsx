@@ -34,7 +34,7 @@ export interface EditInstructionsWithAiButtonProps {
   readonly projectId: string | undefined;
   readonly current: AiEditFields;
   readonly llmSettings: AgentLlmSettings | null | undefined;
-  readonly onApply: (fields: AiEditFields) => void;
+  readonly onApply: (patch: Partial<AiEditFields>) => void;
   readonly disabled?: boolean | undefined;
 }
 
