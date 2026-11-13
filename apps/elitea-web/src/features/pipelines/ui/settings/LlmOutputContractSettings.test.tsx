@@ -50,6 +50,12 @@ function savedNode(document: YamlPipelineDocument): Record<string, unknown> {
 }
 
 describe('LlmOutputContractSettings', () => {
+  it('sits under the React Flow drag shield so its dropdown can open inside a node (#2003)', () => {
+    renderNode(DOCUMENT);
+
+    expect(screen.getAllByRole('combobox')[0]?.closest('.nopan.nodrag')).not.toBeNull();
+  });
+
   it('writes the contract into the node YAML as a mapping', async () => {
     const user = userEvent.setup();
     const latest = renderNode(DOCUMENT);

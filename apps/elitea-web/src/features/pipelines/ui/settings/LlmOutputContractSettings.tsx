@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { useCallback, useContext, useMemo } from 'react';
 
+import Box from '@mui/material/Box';
+
 import type { OutputContract } from '@/shared/api/generated/model';
 import { OutputContractField, readOutputContract } from '@/shared/ui/OutputContractField';
 
@@ -37,11 +39,15 @@ export function LlmOutputContractSettings({ id, disabled }: LlmOutputContractSet
 
   if (yamlNode === undefined || yamlNode.structured_output === true) return null;
   return (
-    <OutputContractField
-      value={readOutputContract(yamlNode['output_contract'])}
-      onChange={onChange}
-      disabled={disabled}
-      testIdPrefix="llm-node-output-contract"
-    />
+    // The kind/format pickers open on mousedown, which a React Flow node's drag layer swallows
+    // unless the control sits under `nopan nodrag` (#2003).
+    <Box className="nopan nodrag nowheel">
+      <OutputContractField
+        value={readOutputContract(yamlNode['output_contract'])}
+        onChange={onChange}
+        disabled={disabled}
+        testIdPrefix="llm-node-output-contract"
+      />
+    </Box>
   );
 }

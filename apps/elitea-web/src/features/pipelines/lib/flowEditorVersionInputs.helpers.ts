@@ -89,6 +89,24 @@ interface ResolvedToolFields {
   readonly selectedTools: readonly string[] | undefined;
 }
 
+/**
+ * An EMPTY mapping-level `selected_tools` is "no narrowing", not "no tools":
+ * `entity_tool_mapping.selected_tools` defaults to `[]` for every attach that
+ * names no selection, and the runtime's own read (`agent_chat.sql`) only lets
+ * the mapping win when it is non-empty. Letting `[]` win here (a `??` on a
+ * non-nullish empty array) emptied every node's tool list for a toolkit that
+ * had its tools enabled on its own page (#2003). When both are present the
+ * mapping narrows the toolkit's own list, falling back to the mapping when
+ * the two do not intersect (same as the runtime).
+ */
+function resolveSelectedTools(mapping: readonly string[] | undefined, toolkit: readonly string[] | undefined): readonly string[] | undefined {
+  const narrowed = mapping !== undefined && mapping.length > 0 ? mapping : undefined;
+  if (narrowed === undefined) return toolkit;
+  if (toolkit === undefined || toolkit.length === 0) return narrowed;
+  const intersection = narrowed.filter(name => toolkit.includes(name));
+  return intersection.length > 0 ? intersection : narrowed;
+}
+
 function resolveToolFields(raw: unknown): ResolvedToolFields {
   const tool = asRawVersionTool(raw);
   const blob = opaqueToolBlob(tool);
@@ -101,7 +119,7 @@ function resolveToolFields(raw: unknown): ResolvedToolFields {
     agentType: asString(tool.agent_type) ?? asString(blob.agent_type) ?? tool.entity_type,
     toolNames: asToolNameList(tool.tools) ?? asToolNameList(blob.tools),
     mcp: asBoolean(tool.meta?.mcp) ?? asBoolean(blob.meta?.mcp),
-    selectedTools: asStringArray(tool.selected_tools) ?? asStringArray(blob.selected_tools),
+    selectedTools: resolveSelectedTools(asStringArray(tool.selected_tools), asStringArray(blob.selected_tools)),
   };
 }
 
