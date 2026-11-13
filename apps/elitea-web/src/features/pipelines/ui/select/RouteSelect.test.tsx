@@ -157,7 +157,7 @@ describe('RouteSelect', () => {
     const updater = setFlowEdges.mock.calls[0]?.[0];
     expect(typeof updater).toBe('function');
     const routeEdge = (target: string): FlowEdge =>
-      ({ id: `edge-${target}`, source: 'Router 1', sourceHandle: 'routerNode_routes', target, type: 'custom' }) as FlowEdge;
+      ({ id: `edge-${target}`, source: 'Router 1', sourceHandle: 'routerNode_routes', target, type: 'custom' });
     const remaining = (updater as (prev: FlowEdge[]) => FlowEdge[])([routeEdge('Tool 1'), routeEdge('Tool 2')]);
     expect(remaining.map(candidate => candidate.target)).toEqual(['Tool 2']);
   });

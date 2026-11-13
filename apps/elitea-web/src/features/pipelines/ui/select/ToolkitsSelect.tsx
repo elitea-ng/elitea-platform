@@ -77,13 +77,7 @@ export function ToolkitsSelect(props: ToolkitsSelectProps): ReactNode {
       const updatedToolNames: Record<string, readonly string[]> = {};
 
       for (const toolkitName of newValue) {
-        // The option value is the schema-derived name, so that match wins; `toolkit_name` is the fallback.
-        const toolkitObj =
-          versionTools.find(candidate => getToolkitNameFromSchema(candidate) === toolkitName) ??
-          versionTools.find(candidate => candidate.toolkit_name === toolkitName);
-        const availableTools = (toolkitObj?.tools ?? toolkitObj?.settings?.selected_tools ?? []).map(tool =>
-          typeof tool === 'string' ? tool : (tool.name ?? ''),
-        );
+        const availableTools = availableToolNames(findToolkit(versionTools, toolkitName, getToolkitNameFromSchema));
         const existing = currentToolNames[toolkitName];
         updatedToolNames[toolkitName] = existing ? existing.filter(tool => availableTools.includes(tool)) : availableTools;
       }
@@ -104,4 +98,17 @@ export function ToolkitsSelect(props: ToolkitsSelectProps): ReactNode {
       className="nopan nodrag"
     />
   );
+}
+
+/** The option value is the schema-derived name, so that match wins; `toolkit_name` is the fallback (#2003). */
+function findToolkit(
+  versionTools: readonly PipelineToolEntry[],
+  toolkitName: string,
+  nameFromSchema: (tool: PipelineToolEntry) => string,
+): PipelineToolEntry | undefined {
+  return versionTools.find(candidate => nameFromSchema(candidate) === toolkitName) ?? versionTools.find(candidate => candidate.toolkit_name === toolkitName);
+}
+
+function availableToolNames(toolkit: PipelineToolEntry | undefined): string[] {
+  return (toolkit?.tools ?? toolkit?.settings?.selected_tools ?? []).map(tool => (typeof tool === 'string' ? tool : (tool.name ?? '')));
 }
