@@ -14,6 +14,7 @@ A few chart values feed many components. Set each once; a component's own value,
 | `global.publicUrl` | empty | The origin browsers open, for example `https://elitea.example.com` (a scheme, a host and an optional port; no path). It fills `main.env.DEPLOYMENT_URL`; `main.env.OIDC_REDIRECT_URI` as `<publicUrl>/auth/oidc/callback`, when `main.env.OIDC_ISSUER_URL` is set; the authentication document's `public_origin`, when the chart renders a document; `llmGateway.env.GATEWAY_SELF_LLM_ORIGINS` as `<publicUrl>/llm,http://elitea-main:8080/llm`; `worker.runtime.publicBaseUrl`; `worker.runtimeSession.expectedIdentity` as `spiffe://<host>/ns/<release namespace>/sa/agent-worker`; and the host of every `main.ingress.hosts` and `tls[].hosts` entry, when that list is empty. |
 | `global.trustedProxyCidrs` | `[]` | The proxies whose `X-Forwarded-For` elitea-main believes. It fills `main.env.ELITEA_TRUSTED_PROXY_CIDRS` (comma-joined) and the authentication document's `trusted_proxy_cidrs`. On GKE: the pod CIDR, `35.191.0.0/16` and `130.211.0.0/22`. |
 | `global.otelEndpoint` | empty | An OTLP/HTTP collector outside the chart. See [Observability](#observability). |
+| `global.imageGenerationModel` | empty | The gateway image model (for example `dall-e-3` or `gpt-image-1`) the agents' `image_generation` internal tool calls. It fills the worker's `image_generation_model` and `main.env.ELITEA_IMAGE_GENERATION_MODEL`, so the chat toggle and the worker agree. Empty: the tool is not offered and the toggle says no image model is configured. Images are billed per image by the gateway. |
 | `certManager.issuers.internal` | `elitea-internal-ca`, kind empty | The issuer of the LLM gateway's, DeepWiki's and Inventory's mTLS Certificates (`*.mtls.issuerRef`). |
 | `certManager.issuers.runtime` | `elitea-runtime-ca`, kind empty | The issuer of elitea-vector's and Qdrant's Certificates, the DeepWiki and Inventory callback client certificates and the egress proxy's audit certificate. |
 | `certManager.issuers.create` | `false` | `true`: the chart makes both, namespaced (see below). |
@@ -127,6 +128,16 @@ A smaller, faster process with the platform's native agent runtime (checkpointin
 </Tabs>
 
 `runtime.json` — the worker's own configuration document — is byte-identical either way; only the process and its capability surface differ.
+
+## Image generation model
+
+The chat **Image creation** module needs one image model for the whole deployment. Set `global.imageGenerationModel` to the registry name of an image model, for example `gpt-image-1` or `dall-e-3`. The chart gives the value to elitea-main (`ELITEA_IMAGE_GENERATION_MODEL`) and to the worker (`image_generation_model` in `runtime.json`), so the Modules toggle and the worker agree. A value you set yourself in `main.env.ELITEA_IMAGE_GENERATION_MODEL` or `worker.runtime.imageGenerationModel` wins over the global one.
+
+<Warning title="The model must be a global shared model">
+The gateway looks the model name up in the catalogue of the project that makes the call. The name works in every project only when it names a global model (a model of the public project with `shared` on, an administrator adds it as a platform model). A model that one project owns works in that project only. In any other project the assistant answers that the deployment's image model is not available there, and asks you to share it as a global model.
+</Warning>
+
+Leave the value empty to keep image generation off: the toggle then shows disabled. Choosing an image model per project is not supported yet. The tool changes its allowed sizes, image count and quality values by the model family (`dall-e-3`, `dall-e-2`, `gpt-image-*`); other models take the image count and the size `auto` only.
 
 ## Object storage and artifacts
 

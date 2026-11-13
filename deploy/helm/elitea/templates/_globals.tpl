@@ -130,6 +130,16 @@ the values (it is the first template Helm renders).
 {{- if and $hasDoc (not $doc.trusted_proxy_cidrs) -}}{{- $_ := set $doc "trusted_proxy_cidrs" $cidrs -}}{{- end -}}
 {{- end -}}
 
+{{- /* ── global.imageGenerationModel (#1969) ──
+       One value feeds elitea-main's ELITEA_IMAGE_GENERATION_MODEL and the
+       worker's image_generation_model. An explicit main.env key or
+       worker.runtime.imageGenerationModel wins, so no key is rendered twice. */ -}}
+{{- if $g.imageGenerationModel -}}
+{{- if not (get $mainEnv "ELITEA_IMAGE_GENERATION_MODEL") -}}{{- $_ := set $mainEnv "ELITEA_IMAGE_GENERATION_MODEL" $g.imageGenerationModel -}}{{- end -}}
+{{- if not (kindIs "map" $v.worker.runtime) -}}{{- $_ := set $v.worker "runtime" dict -}}{{- end -}}
+{{- if not $v.worker.runtime.imageGenerationModel -}}{{- $_ := set $v.worker.runtime "imageGenerationModel" $g.imageGenerationModel -}}{{- end -}}
+{{- end -}}
+
 {{- /* ── OpenTelemetry ── */ -}}
 {{- $endpoint := include "elitea.otelEndpoint" . -}}
 {{- range $c := list "main" "scheduler" "llmGateway" "deepwiki" "inventory" "vector" -}}

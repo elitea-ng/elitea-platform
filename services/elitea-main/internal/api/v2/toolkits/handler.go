@@ -131,6 +131,9 @@ type Handler struct {
 	// image this deployment runs, served as-is by RuntimeCapabilities. See
 	// WithWorkerImplementation (capabilities_handler.go).
 	workerImplementation string
+	// imageGenerationModel is the deployment's image model (#1969), the same
+	// value the worker's runtime.json carries; empty means none configured.
+	imageGenerationModel string
 	// settingsValidator resolves a credential reference before it is persisted.
 	// Nil restores the pre-#613 behaviour: every save accepted unresolved. See
 	// settings_validation.go.

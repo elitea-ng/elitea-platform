@@ -12,7 +12,9 @@ use serde_json::{Map, Value, json};
 
 use super::families::artifact::ArtifactToolAuthority;
 use super::families::imagegen::{
-    ImageGenConfigErrorCode, ImageGenToolkitConfig, build_imagegen_toolset, build_with_host,
+    ImageArtifactBucket, ImageBucketError, ImageFamily, ImageGenConfigErrorCode,
+    ImageGenToolkitConfig, ImageGenerationAuthority, MODEL_NOT_FOUND_REASON,
+    build_image_generation_toolset, build_imagegen_toolset, build_with_host,
 };
 use super::families::office_host::{
     ImageEditRequest, ImageGenerateRequest, MAX_IMAGE_EDIT_INPUT_BYTES, OfficeFailure,
@@ -885,4 +887,377 @@ async fn a_selection_of_only_unknown_tools_is_refused_naming_them() {
         json!({"selected_tools": ["paint", "edit_image"]}),
     ))
     .expect("accepted");
+}
+
+struct Bucket(Result<&'static str, ImageBucketError>);
+
+#[async_trait]
+impl ImageArtifactBucket for Bucket {
+    async fn artifact_bucket(&self) -> Result<String, ImageBucketError> {
+        self.0.map(str::to_owned)
+    }
+}
+
+const GPT: &str = "gpt-image-1";
+
+async fn internal_tool(
+    host: FakeHost,
+    model: Option<&str>,
+    bucket: Result<&'static str, ImageBucketError>,
+) -> (Arc<FakeHost>, Vec<Arc<dyn Tool>>) {
+    let host = Arc::new(host);
+    let shared: SharedOfficeToolHost = Arc::clone(&host) as SharedOfficeToolHost;
+    let authority = ImageGenerationAuthority::new(shared, model, Arc::new(Bucket(bucket)));
+    let tools = match build_image_generation_toolset(&authority, &policy()).expect("builds") {
+        Some(toolset) => toolset
+            .tools(context() as Arc<dyn ReadonlyContext>)
+            .await
+            .expect("tools"),
+        None => Vec::new(),
+    };
+    (host, tools)
+}
+
+async fn run_internal(tools: &[Arc<dyn Tool>], args: Value) -> Value {
+    tools[0]
+        .execute(context() as Arc<dyn ToolContext>, args)
+        .await
+        .expect("a failure is a result, not an error")
+}
+
+/// A structured failure: its reason, its message and whether it is retryable.
+fn failure(value: &Value) -> (&str, &str, bool) {
+    assert_eq!(value["status"], "error", "{value}");
+    (
+        value["reason"].as_str().expect("reason"),
+        value["message"].as_str().expect("message"),
+        value["retryable"].as_bool().expect("retryable"),
+    )
+}
+
+#[tokio::test]
+async fn the_internal_tool_needs_a_model_and_an_images_host() {
+    let (_, none) = internal_tool(FakeHost::default(), None, Ok("conv")).await;
+    assert!(none.is_empty());
+    let (_, blank) = internal_tool(FakeHost::default(), Some("  "), Ok("conv")).await;
+    assert!(blank.is_empty());
+    let no_api = FakeHost {
+        no_images: true,
+        ..FakeHost::default()
+    };
+    let (_, none) = internal_tool(no_api, Some(GPT), Ok("conv")).await;
+    assert!(none.is_empty());
+    let (_, some) = internal_tool(FakeHost::default(), Some(GPT), Ok("conv")).await;
+    assert_eq!(some.len(), 1);
+    assert_eq!(some[0].name(), "image_generation");
+    let schema = some[0].parameters_schema().expect("schema");
+    assert_eq!(schema["required"], json!(["prompt"]));
+}
+
+#[test]
+fn the_schema_follows_the_models_family() {
+    let schema = |model: &str| ImageFamily::of(model).parameters_schema();
+    let sizes = |s: &Value| s["properties"]["size"]["enum"].clone();
+
+    let dall_e_3 = schema("openai/dall-e-3");
+    assert_eq!(dall_e_3["properties"]["n"]["maximum"], json!(1));
+    assert_eq!(
+        sizes(&dall_e_3),
+        json!(["1024x1024", "1792x1024", "1024x1792"])
+    );
+    assert_eq!(
+        dall_e_3["properties"]["quality"]["enum"],
+        json!(["standard", "hd"])
+    );
+
+    let dall_e_2 = schema("dall-e-2");
+    assert_eq!(dall_e_2["properties"]["n"]["maximum"], json!(4));
+    assert_eq!(sizes(&dall_e_2), json!(["256x256", "512x512", "1024x1024"]));
+    assert!(dall_e_2["properties"].get("quality").is_none());
+
+    let gpt = schema("GPT-Image-1");
+    assert_eq!(gpt["properties"]["n"]["maximum"], json!(4));
+    assert_eq!(
+        sizes(&gpt),
+        json!(["1024x1024", "1536x1024", "1024x1536", "auto"])
+    );
+    assert_eq!(
+        gpt["properties"]["quality"]["enum"],
+        json!(["low", "medium", "high", "auto"])
+    );
+
+    let unknown = schema("my-flux-model");
+    assert_eq!(unknown["properties"]["n"]["maximum"], json!(4));
+    assert_eq!(sizes(&unknown), json!(["auto"]));
+    assert!(unknown["properties"]["quality"].get("enum").is_none());
+    assert_eq!(unknown["properties"]["prompt"]["maxLength"], json!(8192));
+}
+
+#[tokio::test]
+async fn the_internal_tool_saves_artifacts_and_answers_references_not_bytes() {
+    let (host, tools) = internal_tool(FakeHost::default(), Some(GPT), Ok("conv")).await;
+    let out = run_internal(
+        &tools,
+        json!({"prompt": "a fox", "size": "1024x1536", "n": 2, "quality": "high"}),
+    )
+    .await;
+    assert_eq!(out["status"], "success");
+    let artifacts = out["artifacts"].as_array().expect("artifacts");
+    assert_eq!(artifacts.len(), 2);
+    assert_eq!(artifacts[0]["filepath"], "/conv/generated-generate-0.png");
+    let message = out["message"].as_str().expect("message");
+    assert!(message.contains("2 image(s)"));
+    // The fake host knows no link: the model is told to give the file paths.
+    assert!(
+        message.contains("give the user the file paths"),
+        "{message}"
+    );
+    assert!(!message.contains("The chat shows"), "{message}");
+    assert!(!out.to_string().contains("base64"));
+    let asked = host.generated.lock().expect("generated");
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].model, GPT);
+    assert_eq!(asked[0].size.as_deref(), Some("1024x1536"));
+    assert_eq!(asked[0].count, 2);
+    assert_eq!(asked[0].quality.as_deref(), Some("high"));
+    let writes = host.writes.lock().expect("writes");
+    assert_eq!(writes.len(), 2);
+    assert_eq!(writes[0].0, "conv");
+    assert_eq!(writes[0].2, "image/png");
+}
+
+#[tokio::test]
+async fn the_internal_tool_defaults_and_auto_leave_size_and_quality_to_the_model() {
+    let (host, tools) = internal_tool(FakeHost::default(), Some(GPT), Ok("conv")).await;
+    run_internal(
+        &tools,
+        json!({"prompt": "x", "size": "auto", "quality": "auto"}),
+    )
+    .await;
+    let asked = host.generated.lock().expect("generated");
+    assert_eq!(asked[0].size, None);
+    assert_eq!(asked[0].quality, None);
+    assert_eq!(asked[0].count, 1);
+}
+
+#[tokio::test]
+async fn an_unknown_model_passes_a_free_quality_through() {
+    let (host, tools) = internal_tool(FakeHost::default(), Some("my-flux"), Ok("conv")).await;
+    run_internal(&tools, json!({"prompt": "x", "quality": "ultra", "n": 3})).await;
+    {
+        let asked = host.generated.lock().expect("generated");
+        assert_eq!(asked[0].quality.as_deref(), Some("ultra"));
+        assert_eq!(asked[0].count, 3);
+    }
+    // The conservative size list: only `auto`.
+    let out = run_internal(&tools, json!({"prompt": "x", "size": "1024x1024"})).await;
+    let (reason, message, retryable) = failure(&out);
+    assert_eq!((reason, retryable), ("invalid_argument", false));
+    assert!(message.contains("must be one of: auto"), "{message}");
+}
+
+#[tokio::test]
+async fn each_family_refuses_what_it_cannot_take_before_the_billed_call() {
+    for (model, args, expected) in [
+        ("dall-e-3", json!({"prompt": "x", "n": 2}), "`n` must be 1"),
+        (
+            "dall-e-3",
+            json!({"prompt": "x", "size": "512x512"}),
+            "`size` must be one of",
+        ),
+        (
+            "dall-e-3",
+            json!({"prompt": "x", "quality": "high"}),
+            "`quality` must be one of",
+        ),
+        (
+            "dall-e-2",
+            json!({"prompt": "x", "n": 5}),
+            "between 1 and 4",
+        ),
+        (
+            "dall-e-2",
+            json!({"prompt": "x", "size": "1792x1024"}),
+            "`size` must be one of",
+        ),
+        (
+            "dall-e-2",
+            json!({"prompt": "x", "quality": "hd"}),
+            "`quality` is not offered",
+        ),
+        (
+            GPT,
+            json!({"prompt": "x", "size": "256x256"}),
+            "`size` must be one of",
+        ),
+        (
+            GPT,
+            json!({"prompt": "x", "quality": "hd"}),
+            "`quality` must be one of",
+        ),
+        (GPT, json!({}), "`prompt` is required"),
+        (GPT, json!({"prompt": "  "}), "`prompt` is required"),
+        (GPT, json!({"prompt": "x", "n": 0}), "between 1 and 4"),
+        (GPT, json!({"prompt": "x", "n": 5}), "between 1 and 4"),
+        (GPT, json!({"prompt": "x", "n": "two"}), "whole number"),
+        (
+            GPT,
+            json!({"prompt": "x", "size": 3}),
+            "`size` must be a string",
+        ),
+    ] {
+        let (host, tools) = internal_tool(FakeHost::default(), Some(model), Ok("conv")).await;
+        let out = run_internal(&tools, args).await;
+        let (reason, message, retryable) = failure(&out);
+        assert_eq!(
+            (reason, retryable),
+            ("invalid_argument", false),
+            "{model}: {message}"
+        );
+        assert!(message.contains(expected), "{model}: {message}");
+        assert!(host.generated.lock().expect("generated").is_empty());
+    }
+    // dall-e-3's own values pass.
+    let (host, tools) = internal_tool(FakeHost::default(), Some("dall-e-3"), Ok("conv")).await;
+    let out = run_internal(
+        &tools,
+        json!({"prompt": "x", "size": "1792x1024", "quality": "hd"}),
+    )
+    .await;
+    assert_eq!(out["status"], "success");
+    assert_eq!(host.generated.lock().expect("generated").len(), 1);
+}
+
+#[tokio::test]
+async fn the_prompt_length_is_counted_in_characters() {
+    let (host, tools) = internal_tool(FakeHost::default(), Some(GPT), Ok("conv")).await;
+    // 8192 four-byte characters: 32 KiB of bytes, but within the character cap.
+    let fits = "😀".repeat(8192);
+    let out = run_internal(&tools, json!({"prompt": fits})).await;
+    assert_eq!(out["status"], "success");
+    let over = "é".repeat(8193);
+    let out = run_internal(&tools, json!({"prompt": over})).await;
+    let (reason, message, _) = failure(&out);
+    assert_eq!(reason, "invalid_argument");
+    assert!(message.contains("8192 characters"), "{message}");
+    assert_eq!(host.generated.lock().expect("generated").len(), 1);
+}
+
+#[tokio::test]
+async fn the_internal_tool_maps_every_gateway_refusal_to_a_structured_error() {
+    let (host, tools) = internal_tool(FakeHost::default(), Some(GPT), Ok("conv")).await;
+    for (kind, reason_code, code, retryable, expected) in [
+        (
+            OfficeFailure::BudgetRefused,
+            "scripted",
+            "budget_exceeded",
+            false,
+            "budget is exhausted",
+        ),
+        (
+            OfficeFailure::InvalidRequest,
+            "scripted",
+            "content_policy",
+            false,
+            "content policy",
+        ),
+        (
+            OfficeFailure::RateLimited,
+            "scripted",
+            "rate_limited",
+            true,
+            "rate-limited",
+        ),
+        (
+            OfficeFailure::Timeout,
+            "scripted",
+            "timeout",
+            true,
+            "timed out",
+        ),
+        (
+            OfficeFailure::AccessRefused,
+            "scripted",
+            "access_refused",
+            false,
+            "refused access",
+        ),
+        (
+            OfficeFailure::Unreachable,
+            "scripted",
+            "provider_error",
+            false,
+            "could not be reached",
+        ),
+        (
+            OfficeFailure::ReplyUnusable,
+            "scripted",
+            "provider_error",
+            false,
+            "may have been billed",
+        ),
+        (
+            OfficeFailure::NoModel,
+            MODEL_NOT_FOUND_REASON,
+            "model_not_available",
+            false,
+            "image model gpt-image-1 is not available in this project; ask an administrator to share it as a global model",
+        ),
+    ] {
+        host.answer_with(Err(OfficeHostError::new(kind, reason_code)));
+        let out = run_internal(&tools, json!({"prompt": "x"})).await;
+        let (got, message, got_retry) = failure(&out);
+        assert_eq!((got, got_retry), (code, retryable), "{kind:?}: {message}");
+        assert!(message.contains(expected), "{kind:?}: {message}");
+    }
+    assert!(host.writes.lock().expect("writes").is_empty());
+}
+
+#[tokio::test]
+async fn the_internal_tool_names_a_missing_bucket_before_it_generates() {
+    for (bucket, expected, retryable) in [
+        (
+            Err(ImageBucketError::NotAvailable),
+            "no conversation artifact bucket",
+            false,
+        ),
+        (
+            Err(ImageBucketError::Unavailable),
+            "unavailable right now",
+            true,
+        ),
+    ] {
+        let (host, tools) = internal_tool(FakeHost::default(), Some(GPT), bucket).await;
+        let out = run_internal(&tools, json!({"prompt": "x"})).await;
+        let (reason, message, got_retry) = failure(&out);
+        assert_eq!((reason, got_retry), ("bucket_unavailable", retryable));
+        assert!(message.contains(expected), "{message}");
+        assert!(host.generated.lock().expect("generated").is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_failed_save_is_not_retryable_because_the_images_were_billed() {
+    let host = FakeHost::default();
+    *host.fail_write.lock().expect("fail") = Some(1);
+    let (_, tools) = internal_tool(host, Some(GPT), Ok("conv")).await;
+    let out = run_internal(&tools, json!({"prompt": "x"})).await;
+    let (reason, _, retryable) = failure(&out);
+    assert_eq!((reason, retryable), ("save_failed", false));
+}
+
+#[tokio::test]
+async fn the_internal_tool_reports_a_partial_save() {
+    let host = FakeHost::default();
+    *host.fail_write.lock().expect("fail") = Some(2);
+    let (_, tools) = internal_tool(host, Some(GPT), Ok("conv")).await;
+    let out = run_internal(&tools, json!({"prompt": "x", "n": 2})).await;
+    assert_eq!(out["status"], "partial");
+    assert_eq!(out["artifacts"].as_array().expect("artifacts").len(), 1);
+    assert!(
+        out["error"]
+            .as_str()
+            .expect("error")
+            .contains("saved 1 of 2")
+    );
 }

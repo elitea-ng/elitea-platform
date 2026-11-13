@@ -617,6 +617,10 @@ pub(crate) fn images_failure(error: &ImagesError) -> OfficeHostError {
             Refusal::Conflict => (OfficeFailure::Conflict, "office_host.images_conflict"),
             Refusal::Unavailable => (OfficeFailure::Unreachable, "office_host.images_unavailable"),
         },
+        ImagesError::ModelNotFound => (
+            OfficeFailure::NoModel,
+            elitea_agent_runtime::toolkits::MODEL_NOT_FOUND_REASON,
+        ),
         ImagesError::RequestTooLarge => (
             OfficeFailure::TooLarge,
             "office_host.images_request_too_large",
@@ -663,6 +667,7 @@ impl OfficeToolHost for ClaimOfficeHost {
             prompt: &request.prompt,
             size: request.size.as_deref(),
             count: request.count,
+            quality: request.quality.as_deref(),
         };
         self.charge_image_call()?;
         client.generate(context, &call).await.map_err(|error| {
@@ -693,6 +698,7 @@ impl OfficeToolHost for ClaimOfficeHost {
             prompt: &prompt,
             size: None,
             count: 1,
+            quality: None,
         };
         self.charge_image_call()?;
         client

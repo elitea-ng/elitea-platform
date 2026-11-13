@@ -141,6 +141,12 @@ pub struct RuntimeDeployConfig {
     /// the agent's own `max_model_turns`. Absent, 200. Zero is refused.
     #[serde(default)]
     pub toolkit_model_call_cap: Option<u32>,
+    /// The image generation model (#1969): the registry name of the
+    /// project's `image_generation_model` the `image_generation` internal tool
+    /// asks the gateway for. Absent, the tool is not offered and the agent
+    /// is told so (the Modules toggle reports it). Bounded text.
+    #[serde(default)]
+    pub image_generation_model: Option<String>,
     pub ca_path: PathBuf,
     pub certificate_path: PathBuf,
     pub private_key_path: PathBuf,
@@ -535,6 +541,9 @@ impl RuntimeDeployConfig {
         validate_grpc_target(&self.output_target)?;
         if let Some(target) = &self.vector_target {
             validate_grpc_target(target)?;
+        }
+        if let Some(model) = &self.image_generation_model {
+            require_bounded_text(model, 256)?;
         }
         if let Some(model) = &self.memory_embedding_model {
             require_bounded_text(model, 256)?;
@@ -1277,6 +1286,26 @@ mod tests {
         value["agent_checkpoint_connection_path"] = Value::Null;
         let loaded: super::RuntimeDeployConfig = serde_json::from_value(value).expect("no storage");
         assert!(loaded.validate().is_err());
+    }
+
+    #[test]
+    fn the_image_generation_model_is_optional_and_bounded() {
+        let mut value = config(Path::new("/runtime"));
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(loaded.image_generation_model, None);
+        assert!(loaded.validate().is_ok());
+        value["image_generation_model"] = json!("gpt-image-1");
+        let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            loaded.image_generation_model.as_deref(),
+            Some("gpt-image-1")
+        );
+        assert!(loaded.validate().is_ok());
+        for invalid in [json!(""), json!("a\nb"), json!("m".repeat(257))] {
+            value["image_generation_model"] = invalid;
+            let loaded: super::RuntimeDeployConfig = serde_json::from_value(value.clone()).unwrap();
+            assert!(loaded.validate().is_err());
+        }
     }
 
     #[test]

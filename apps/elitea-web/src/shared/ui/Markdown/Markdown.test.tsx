@@ -71,6 +71,16 @@ describe('Markdown', () => {
     expect(img?.getAttribute('alt')).toBe('a diagram');
   });
 
+  // #1969: the image_generation tool answers one root-relative artifact link
+  // per image (the worker's object_link), which chat must show inline.
+  it('renders the root-relative artifact link the image_generation tool returns', () => {
+    const src = '/api/v2/artifacts/artifact/default/7/conv/generated-generate-0.png';
+    const { container } = renderWithTheme(<Markdown>{`![generated-generate-0.png](${src})`}</Markdown>);
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('src')).toBe(src);
+  });
+
   it('renders a literal <img> tag inline', () => {
     const { container } = renderWithTheme(<Markdown>{'See: <img src="https://example.com/pic.png" alt="pic" /> above.'}</Markdown>);
     const img = container.querySelector('img');

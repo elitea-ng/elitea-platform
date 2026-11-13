@@ -34,6 +34,9 @@ const MAX_REFUSAL_BYTES: usize = 64 * 1024;
 pub(crate) enum CallError {
     /// The gateway refused the call.
     Refused(Refusal),
+    /// The gateway answered 404 `model_not_found`: the model is not in the
+    /// calling project's catalogue. Only the images route tells it apart.
+    ModelNotFound,
     /// The channel could not carry the request or the response, or the
     /// deadline passed.
     Transport,
@@ -49,6 +52,7 @@ impl fmt::Display for CallError {
             Self::Refused(refusal) => {
                 write!(formatter, "the model gateway refused: {}", refusal.code())
             }
+            Self::ModelNotFound => formatter.write_str("the model gateway does not know the model"),
             Self::Transport => formatter.write_str("the model gateway transport failed"),
             Self::TooLarge => formatter.write_str("the model gateway response exceeds its bound"),
             Self::Malformed => formatter.write_str("the model gateway request is malformed"),
@@ -144,6 +148,9 @@ pub(crate) async fn send(
                 .await
                 .map(http_body_util::Collected::to_bytes)
                 .unwrap_or_default();
+            if status == 404 && String::from_utf8_lossy(&body).contains("model_not_found") {
+                return Err(CallError::ModelNotFound);
+            }
             Err(CallError::Refused(
                 Refusal::classify(status, &body).unwrap_or(Refusal::Rejected),
             ))

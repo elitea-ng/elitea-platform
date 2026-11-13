@@ -34,6 +34,8 @@ pub(crate) const PROJECT_CONTEXT_BUILDER_TOOL_NAME: &str = "project_context_buil
 /// with, marks it served ([`InternalToolCatalog::serving_data_analysis`]).
 /// Pipelines and nested child agents bind no data tools, and keep saying so.
 pub(crate) const DATA_ANALYSIS_TOOL_NAME: &str = "data_analysis";
+/// The image generation toggle (#1969), served like `data_analysis`.
+pub(crate) const IMAGE_GENERATION_TOOL_NAME: &str = "image_generation";
 const SKILLS_BUILDER_TOOLSET_NAME: &str = "skills_builder";
 const PROJECT_CONTEXT_BUILDER_TOOLSET_NAME: &str = "project_context_builder";
 const CREATE_SKILL_TOOL_NAME: &str = "create_or_update_skill";
@@ -133,6 +135,9 @@ pub(crate) struct InternalToolCatalog {
     project_context_builder: bool,
     /// ADR-0033: the data tools, bound when the run can read the bucket.
     data_analysis: bool,
+    /// #1969: the image generation tool, bound when the run has an image
+    /// model and the images API.
+    image_generation: bool,
     /// The planner, Smart Tools Selection and attachments toggles. Flags
     /// beside the others, for the same reason: they are served, not skipped.
     planner: bool,
@@ -151,6 +156,7 @@ impl InternalToolCatalog {
             skills_builder: false,
             project_context_builder: false,
             data_analysis: false,
+            image_generation: false,
             planner: false,
             lazy_tools: false,
             attachments: false,
@@ -178,6 +184,9 @@ impl InternalToolCatalog {
                     if name == DATA_ANALYSIS_TOOL_NAME {
                         catalog.data_analysis = true;
                     }
+                    if name == IMAGE_GENERATION_TOOL_NAME {
+                        catalog.image_generation = true;
+                    }
                     // Same contract as the toolkit-family skip
                     // (`agent_toolkit_skipped` in materialize.rs): the agent
                     // runs WITHOUT a capability its author asked for, and a
@@ -190,7 +199,7 @@ impl InternalToolCatalog {
                     // data_analysis is logged where it is actually omitted
                     // (`toolsets`, `data_analysis_toolset`): the ordinary
                     // assembly serves it.
-                    if name != DATA_ANALYSIS_TOOL_NAME {
+                    if name != DATA_ANALYSIS_TOOL_NAME && name != IMAGE_GENERATION_TOOL_NAME {
                         log_skipped(name);
                     }
                     if let Some(index) = PLATFORM_INTERNAL_TOOLS
@@ -221,6 +230,7 @@ impl InternalToolCatalog {
             skills_builder: self.skills_builder || other.skills_builder,
             project_context_builder: self.project_context_builder || other.project_context_builder,
             data_analysis: self.data_analysis || other.data_analysis,
+            image_generation: self.image_generation || other.image_generation,
             planner: self.planner || other.planner,
             lazy_tools: self.lazy_tools || other.lazy_tools,
             attachments: self.attachments || other.attachments,
@@ -262,6 +272,72 @@ impl InternalToolCatalog {
             self.skipped &= !(1 << index);
         }
         self
+    }
+
+    #[must_use]
+    pub(crate) const fn image_generation_enabled(self) -> bool {
+        self.image_generation
+    }
+
+    /// This catalog with `image_generation` marked as served (see
+    /// [`Self::serving_data_analysis`]).
+    #[must_use]
+    pub(crate) fn serving_image_generation(mut self) -> Self {
+        if self.image_generation
+            && let Some(index) = PLATFORM_INTERNAL_TOOLS
+                .iter()
+                .position(|name| *name == IMAGE_GENERATION_TOOL_NAME)
+        {
+            self.skipped &= !(1 << index);
+        }
+        self
+    }
+
+    /// The image generation tool for this run, when the toggle is on, the run
+    /// has an image model and the images API, and the tool policy admits it.
+    /// A toggle that binds nothing keeps its "not available" notice, and the
+    /// log says why.
+    pub(crate) fn image_generation_toolset(
+        self,
+        authority: Option<&elitea_agent_runtime::toolkits::ImageGenerationAuthority>,
+        policy: &Arc<elitea_agent_runtime::toolkits::ToolAdmissionPolicy>,
+    ) -> Option<Arc<dyn Toolset>> {
+        if !self.image_generation {
+            return None;
+        }
+        let Some(authority) = authority else {
+            log_skipped(IMAGE_GENERATION_TOOL_NAME);
+            return None;
+        };
+        if let Some(reason) = authority.withheld() {
+            tracing::warn!(
+                event = "agent_internal_tool_skipped",
+                reason_code = "image_generation_withheld",
+                internal_tool = IMAGE_GENERATION_TOOL_NAME,
+                reason,
+                "the image_generation toggle binds no tool on this run"
+            );
+            return None;
+        }
+        match elitea_agent_runtime::toolkits::build_image_generation_toolset(authority, policy) {
+            Ok(Some(toolset)) => Some(Arc::new(toolset)),
+            Ok(None) => {
+                tracing::warn!(
+                    event = "agent_internal_tool_blocked",
+                    internal_tool = IMAGE_GENERATION_TOOL_NAME,
+                    "the deployment's tool policy blocks image generation"
+                );
+                None
+            }
+            Err(_) => {
+                tracing::error!(
+                    event = "agent_internal_tool_invalid",
+                    internal_tool = IMAGE_GENERATION_TOOL_NAME,
+                    "the image generation tool definition was refused"
+                );
+                None
+            }
+        }
     }
 
     /// The data tools for this run, when the toggle is on, the run has the
@@ -389,6 +465,10 @@ impl InternalToolCatalog {
     /// knew.
     pub(crate) fn toolsets(self, builders: Option<&BuilderToolAuthority>) -> Vec<Arc<dyn Toolset>> {
         let mut toolsets: Vec<Arc<dyn Toolset>> = Vec::new();
+        if builders.is_none() && self.image_generation {
+            // Pipelines and nested agents: bound by the ordinary assembly only.
+            log_skipped(IMAGE_GENERATION_TOOL_NAME);
+        }
         if builders.is_none() && self.data_analysis {
             // Pipelines and nested agents: the data tools are bound by the
             // ordinary assembly only.
@@ -1750,6 +1830,98 @@ mod tests {
         assert!(names.contains(&"describe_data") && names.contains(&"chart_data"));
         // No sandbox lent: free-form code is not offered.
         assert!(!names.contains(&"run_analysis_code"));
+    }
+
+    #[tokio::test]
+    async fn the_image_toolset_needs_the_toggle_a_model_an_images_host_and_policy_consent() {
+        use std::collections::BTreeMap;
+
+        use async_trait::async_trait;
+        use elitea_agent_runtime::toolkits::{
+            ImageArtifactBucket, ImageBucketError, ImageGenerationAuthority, OfficeFailure,
+            OfficeHostError, OfficeModelRequest, OfficeObjectWritten, OfficeToolHost,
+            ToolAdmissionPolicy,
+        };
+
+        struct Host(bool);
+        #[async_trait]
+        impl OfficeToolHost for Host {
+            fn serves_images(&self) -> bool {
+                self.0
+            }
+            async fn read_object(
+                &self,
+                _: &str,
+                _: &str,
+                _: u64,
+            ) -> Result<Vec<u8>, OfficeHostError> {
+                Err(OfficeHostError::new(OfficeFailure::NotFound, "none"))
+            }
+            async fn write_object(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+                _: Vec<u8>,
+                _: bool,
+            ) -> Result<OfficeObjectWritten, OfficeHostError> {
+                Err(OfficeHostError::new(OfficeFailure::AccessRefused, "none"))
+            }
+            async fn complete(&self, _: OfficeModelRequest) -> Result<String, OfficeHostError> {
+                Err(OfficeHostError::new(OfficeFailure::NoModel, "none"))
+            }
+        }
+        struct Bucket;
+        #[async_trait]
+        impl ImageArtifactBucket for Bucket {
+            async fn artifact_bucket(&self) -> Result<String, ImageBucketError> {
+                Ok("conv".to_owned())
+            }
+        }
+
+        let allow = Arc::new(ToolAdmissionPolicy::new(&[], &BTreeMap::new()).expect("policy"));
+        let block = Arc::new(
+            ToolAdmissionPolicy::new(&["imagegen".to_owned()], &BTreeMap::new()).expect("policy"),
+        );
+        let authority = |served: bool, model: Option<&str>| {
+            ImageGenerationAuthority::new(Arc::new(Host(served)), model, Arc::new(Bucket))
+        };
+        let on = InternalToolCatalog::from_names(&["image_generation".to_owned()]).unwrap();
+        let off = InternalToolCatalog::from_names(&[ASK_USER_TOOL_NAME.to_owned()]).unwrap();
+        let ready = authority(true, Some("img-1"));
+
+        assert!(off.image_generation_toolset(Some(&ready), &allow).is_none());
+        assert!(on.image_generation_toolset(None, &allow).is_none());
+        assert!(
+            on.image_generation_toolset(Some(&authority(true, None)), &allow)
+                .is_none()
+        );
+        assert!(
+            on.image_generation_toolset(Some(&authority(false, Some("img-1"))), &allow)
+                .is_none()
+        );
+        assert!(on.image_generation_toolset(Some(&ready), &block).is_none());
+        let toolset = on
+            .image_generation_toolset(Some(&ready), &allow)
+            .expect("toolset");
+        let tools = toolset
+            .tools(Arc::new(SimpleToolContext::new("internal-tools-test")))
+            .await
+            .expect("tools");
+        assert_eq!(
+            tools.iter().map(|t| t.name()).collect::<Vec<_>>(),
+            ["image_generation"]
+        );
+        // Until the assembly serves it, the toggle keeps its notice.
+        assert_eq!(
+            on.skipped_tools_notice_text().as_deref(),
+            Some("internal tool 'image_generation' is not available on this worker")
+        );
+        assert_eq!(
+            on.serving_image_generation().skipped_tools_notice_text(),
+            None
+        );
+        assert!(on.image_generation_enabled());
     }
     /// The "omitted" warning is for runs that omit the tool: not for a parse
     /// whose assembly then serves it.

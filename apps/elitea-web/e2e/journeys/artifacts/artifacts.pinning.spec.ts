@@ -63,7 +63,9 @@ async function openArtifacts(page: Page): Promise<void> {
 // either navigates again or reads rows next, so it waits for the shell first.
 async function reenterArtifacts(page: Page, url: string): Promise<void> {
   await page.waitForLoadState('networkidle');
-  await page.goto(url);
+  // `commit`, not the default `load`: WebKit can hold `load` past 60 s on this
+  // page (P3, webkit-1of3), and readiness is the shell check below anyway.
+  await page.goto(url, { waitUntil: 'commit' });
   await page.waitForURL('**/artifacts**', { timeout: 15_000 });
   await expect(page.getByTestId('sidebar-collapse-toggle')).toBeVisible({ timeout: 30_000 });
 }
@@ -319,7 +321,8 @@ test.describe('artifacts bucket pinning', () => {
     await page.getByLabel(`Edit ${PIN_A}`).click();
     await page.waitForURL('**/create-bucket**', { timeout: 10_000 });
 
-    const nameField = page.getByLabel('Name');
+    // exact: a substring match also takes a chat-rail row such as "More for autotest_renamed-…".
+    const nameField = page.getByLabel('Name', { exact: true });
     await expect(nameField).toHaveValue(PIN_A);
     await expect(nameField).toHaveAttribute('readonly', '');
 
