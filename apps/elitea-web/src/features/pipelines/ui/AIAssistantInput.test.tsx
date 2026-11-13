@@ -1,6 +1,7 @@
 import type { ReactElement, ReactNode } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -151,7 +152,9 @@ describe('AIAssistantInput', () => {
     const ui = renderInput({ value: 'a long condition', fieldName: 'condition', label: 'Condition' });
 
     await user.hover(ui.getByDisplayValue('a long condition'));
-    await user.click(ui.getByRole('button', { name: 'Full screen view' }));
+    // fireEvent, not user.click: user-event's pointer move from the field to the toolbar fires a
+    // mouseleave on the hover container, which unmounts the hover-revealed toolbar mid-click.
+    fireEvent.click(ui.getByRole('button', { name: 'Full screen view' }));
 
     expect(ui.getByLabelText('Close')).toBeInTheDocument();
     expect(ui.queryByPlaceholderText('Describe your idea to generate or rewrite the value.')).toBeNull();
@@ -168,7 +171,9 @@ describe('AIAssistantInput', () => {
     expect(ui.getByRole('button', { name: 'AI Assistant' })).toBeInTheDocument();
 
     await user.hover(ui.getByDisplayValue('a long condition'));
-    await user.click(ui.getByRole('button', { name: 'Full screen view' }));
+    // fireEvent, not user.click: user-event's pointer move from the field to the toolbar fires a
+    // mouseleave on the hover container, which unmounts the hover-revealed toolbar mid-click.
+    fireEvent.click(ui.getByRole('button', { name: 'Full screen view' }));
 
     expect(ui.getByLabelText('Close')).toBeInTheDocument();
     expect(ui.queryByPlaceholderText('Describe your idea to generate or rewrite the value.')).toBeNull();
