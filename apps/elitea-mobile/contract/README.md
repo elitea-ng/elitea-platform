@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.54
+
+| Area | What |
+|---|---|
+| Delegation refused at start (FU-335) | A run whose saved agent or pipeline needs a grant its caller does not hold ends with `AUTHORIZATION_FAILED` and a standalone sentence; beside it the stream serves an `agent_delegation_refused` frame (`ClientFrameDelegationRefused`: `node`, and the toolkit's display name or null) and the answer keeps it as `meta.delegation_refused`. The app does not render the frame yet and ignores it; the failure sentence reads on its own. |
+
 ## Client contract 1.53
 
 | Area | What |

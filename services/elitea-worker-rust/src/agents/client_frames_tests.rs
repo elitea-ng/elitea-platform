@@ -311,6 +311,25 @@ fn capture() -> BTreeMap<&'static str, Value> {
     {
         captured.insert(name, frame);
     }
+    // FU-335: the notice of a delegation refused at start.
+    let notice = super::events::delegation_refused_assembly_notice(
+        &super::events::AssemblyNoticeIdentity {
+            stream_id: "stream-1",
+            message_id: "message-1",
+            sio_event: "chat_predict",
+            execution_generation: "1",
+            thread_id: "thread-1",
+        },
+        elitea_agent_runtime::delegation::DelegatedCallee::Agent,
+        &elitea_agent_runtime::delegation::DelegationRefusal::GrantMissing {
+            kind: elitea_agent_runtime::delegation::GrantKind::Toolkit,
+            name: "Team GitHub".to_owned(),
+            toolkit: None,
+        },
+        timestamp(4),
+    )
+    .expect("delegation notice");
+    captured.insert("delegation_refused", current(&notice));
     captured
 }
 

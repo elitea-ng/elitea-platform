@@ -256,6 +256,7 @@ export * from "./clientFrameAgentToolEnd.zod";
 export * from "./clientFrameAgentToolOutputChunk.zod";
 export * from "./clientFrameAgentToolPaused.zod";
 export * from "./clientFrameAgentToolStart.zod";
+export * from "./clientFrameDelegationRefused.zod";
 export * from "./clientFrameEnvelope.zod";
 export * from "./clientFrameHitlInterrupt.zod";
 export * from "./clientFrameHitlInterruptDetail.zod";

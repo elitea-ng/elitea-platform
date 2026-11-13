@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.53",
+  "client_contract": "1.54",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -35722,6 +35722,80 @@
     }
   },
   "frames": {
+    "agent_delegation_refused": {
+      "type": "object",
+      "required": [
+        "response_metadata",
+        "type"
+      ],
+      "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "content": {
+          "nullable": true
+        },
+        "created_at": {
+          "type": "string",
+          "nullable": true
+        },
+        "message_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
+        },
+        "response_metadata": {
+          "type": "object",
+          "required": [
+            "delegation_refused"
+          ],
+          "properties": {
+            "delegation_refused": {
+              "type": "object",
+              "required": [
+                "code",
+                "node",
+                "toolkit"
+              ],
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "DELEGATION_GRANT_MISSING"
+                  ]
+                },
+                "node": {
+                  "type": "string",
+                  "enum": [
+                    "agent",
+                    "pipeline"
+                  ]
+                },
+                "toolkit": {
+                  "type": "string",
+                  "nullable": true,
+                  "max_length": 128
+                }
+              }
+            }
+          },
+          "open": true
+        },
+        "stream_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "open": true
+    },
     "agent_hitl_interrupt": {
       "type": "object",
       "required": [

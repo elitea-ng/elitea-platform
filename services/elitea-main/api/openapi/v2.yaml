@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.53"
+  x-elitea-client-contract: "1.54"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3312,6 +3312,34 @@ components:
                     result: { type: string }
                     error: { type: string }
 
+    ClientFrameDelegationRefused:
+      description: >-
+        Client contract 1.54 (FU-335). A saved agent or pipeline that a node of
+        the run delegates to needs a grant its caller does not hold, so the run
+        did not start. Served only beside the run's FAILED terminal (code
+        AUTHORIZATION_FAILED); show it above the failure text. The persisted
+        answer keeps the same block as `meta.delegation_refused`. A client that
+        does not know the frame ignores it. Not terminal. `toolkit` is the
+        author-written display name of the toolkit the grant belongs to, null
+        for a grant without one: render it as plain text.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              type: object
+              additionalProperties: true
+              required: [delegation_refused]
+              properties:
+                delegation_refused:
+                  type: object
+                  additionalProperties: false
+                  required: [code, node, toolkit]
+                  properties:
+                    code: { type: string, enum: [DELEGATION_GRANT_MISSING] }
+                    node: { type: string, enum: [agent, pipeline] }
+                    toolkit: { type: string, nullable: true, maxLength: 128 }
     ClientFrameAgentState:
       description: >-
         Client contract 1.38: the participant moved to a new state. The
@@ -21431,6 +21459,7 @@ x-elitea-client-frames:
   agent_requires_confirmation: '#/components/schemas/ClientFrameRequiresConfirmation'
   agent_state: '#/components/schemas/ClientFrameAgentState'
   agent_subagent: '#/components/schemas/ClientFrameAgentSubAgent'
+  agent_delegation_refused: '#/components/schemas/ClientFrameDelegationRefused'
 
 paths:
   /.well-known/elitea-client:

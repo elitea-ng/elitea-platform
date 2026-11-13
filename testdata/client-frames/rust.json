@@ -1,4 +1,26 @@
 {
+  "delegation_refused": {
+    "agent_name": null,
+    "content": null,
+    "created_at": "2026-08-14T12:00:04+00:00",
+    "execution_generation": "1",
+    "message_id": "message-1",
+    "parent_message_id": null,
+    "question_id": null,
+    "references": [],
+    "response_metadata": {
+      "delegation_refused": {
+        "code": "DELEGATION_GRANT_MISSING",
+        "node": "agent",
+        "toolkit": "Team GitHub"
+      },
+      "thread_id": "thread-1"
+    },
+    "sio_event": "chat_predict",
+    "stream_id": "stream-1",
+    "thinking": null,
+    "type": "agent_delegation_refused"
+  },
   "hitl_interrupt": {
     "agent_name": null,
     "content": "Review the generated answer.",

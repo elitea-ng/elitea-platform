@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
+import YAML from 'yaml';
+
 import { CLIENT_OPERATIONS, ContractError, SPEC, buildContract, generateTypes, prune } from './contract.mjs';
 
 describe('the spec source', () => {
@@ -331,6 +333,18 @@ describe('client contract 1.52', () => {
     const error = doc.components.schemas.ErrorResponse.properties;
     assert.equal(error.field.type, 'string');
     assert.equal(error.max_length.type, 'integer');
+  });
+});
+
+describe('client contract 1.54', () => {
+  it('names the delegation-refused frame (FU-335)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 54), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.54`);
+    // The frame catalogue is not part of the pruned client: read it from the spec. The app does
+    // not render the frame yet and ignores it.
+    const spec = YAML.parse(readFileSync(SPEC, 'utf8'));
+    assert.equal(spec['x-elitea-client-frames']?.agent_delegation_refused, '#/components/schemas/ClientFrameDelegationRefused');
   });
 });
 
