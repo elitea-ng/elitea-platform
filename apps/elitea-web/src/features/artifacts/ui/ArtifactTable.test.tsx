@@ -25,6 +25,7 @@ function renderTable(overrides: Partial<Parameters<typeof ArtifactTable>[0]> = {
     onDownload: vi.fn(),
     onDownloadMany: vi.fn(),
     onDelete: vi.fn(),
+    onRename: vi.fn(),
     onUpload: vi.fn(),
     ...overrides,
   };
@@ -46,6 +47,24 @@ describe('ArtifactTable', () => {
     expect(props.onDownload).toHaveBeenCalledWith(expect.objectContaining({ key: 'alpha.txt' }));
     await user.click(screen.getByRole('button', { name: 'Delete beta.svg' }));
     expect(props.onDelete).toHaveBeenCalledWith([expect.objectContaining({ key: 'beta.svg' })]);
+  });
+
+  /* #2015 — Rename on a file row and in the toolbar (one selected file only; folders have none) */
+  it('offers Rename on file rows and for a single selected file', async () => {
+    const user = userEvent.setup();
+    const props = renderTable();
+    expect(screen.queryByRole('button', { name: 'Rename folder' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Rename alpha.txt' }));
+    expect(props.onRename).toHaveBeenCalledWith(expect.objectContaining({ key: 'alpha.txt' }));
+
+    const toolbarRename = screen.getByRole('button', { name: 'Rename selected file' });
+    expect(toolbarRename).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: 'Select beta.svg' }));
+    expect(toolbarRename).toBeEnabled();
+    await user.click(toolbarRename);
+    expect(props.onRename).toHaveBeenLastCalledWith(expect.objectContaining({ key: 'beta.svg' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select alpha.txt' }));
+    expect(toolbarRename).toBeDisabled();
   });
 
   /**

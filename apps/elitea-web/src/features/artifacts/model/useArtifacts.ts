@@ -10,6 +10,7 @@ import {
   removeArtifact,
   removeArtifacts,
   removeArtifactBucket,
+  renameArtifact,
   setArtifactBucketPinned,
   setArtifactBucketRetention,
 } from '../api/artifactsApi';
@@ -97,11 +98,16 @@ export function useArtifactMutations(projectId: string | undefined) {
       removeArtifact(requiredProjectId(), bucket, key),
     onSuccess: (_data, variables) => refreshFiles(variables.bucket),
   });
+  const renameFile = useMutation({
+    mutationFn: ({ bucket, from, to }: { readonly bucket: string; readonly from: string; readonly to: string }) =>
+      renameArtifact(requiredProjectId(), bucket, from, to),
+    onSuccess: (_data, variables) => refreshFiles(variables.bucket),
+  });
   const deleteMany = useMutation({
     mutationFn: ({ bucket, keys }: { readonly bucket: string; readonly keys: readonly string[] }) =>
       removeArtifacts(requiredProjectId(), bucket, keys),
     onSuccess: (_data, variables) => refreshFiles(variables.bucket),
   });
 
-  return { createBucket, editBucketRetention, pinBucket, deleteBucket, deleteFile, deleteMany, refreshFiles };
+  return { createBucket, editBucketRetention, pinBucket, deleteBucket, deleteFile, deleteMany, renameFile, refreshFiles };
 }

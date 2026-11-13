@@ -21,6 +21,7 @@ import {
   FilePreviewCanvas,
   getExpandedArtifactPaths,
   type ArtifactListItem,
+  RenameArtifactDialog,
   UploadPathDialog,
   useArtifactBuckets,
   useArtifactMutations,
@@ -72,6 +73,8 @@ export function Artifacts(): ReactNode {
   const [selectedStorage, setSelectedStorage] = useState<string>();
   const [bucketsCollapsed, setBucketsCollapsed] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<readonly ArtifactListItem[]>([]);
+  const [pendingRename, setPendingRename] = useState<ArtifactListItem>();
+  const [renameError, setRenameError] = useState<string>();
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<(() => void)>();
   const [actionError, setActionError] = useState<string>();
@@ -176,6 +179,18 @@ export function Artifacts(): ReactNode {
   }, [currentPrefix, downloadFile, files.data, projectId, selectedBucket, zip]);
 
   const canvas = useArtifactCanvas(projectId, selectedBucket?.name, mutations.refreshFiles);
+  const confirmRename = (name: string): void => {
+    if (selectedBucket === undefined || pendingRename === undefined) return;
+    // The folder part of the key stays; only the file name changes (#2015).
+    const folder = pendingRename.key.slice(0, pendingRename.key.lastIndexOf('/') + 1);
+    setRenameError(undefined);
+    void mutations.renameFile
+      .mutateAsync({ bucket: selectedBucket.name, from: pendingRename.key, to: `${folder}${name}` })
+      .then(() => setPendingRename(undefined))
+      .catch((cause: unknown) => {
+        setRenameError(cause instanceof Error ? cause.message : 'Failed to rename the file.');
+      });
+  };
   const confirmDelete = (): void => {
     if (selectedBucket === undefined) return;
     const keys = expandFoldersToArtifactKeys(pendingDelete, files.data ?? []);
@@ -288,6 +303,10 @@ export function Artifacts(): ReactNode {
             }}
             onDownloadMany={downloadItems}
             onDelete={setPendingDelete}
+            onRename={(item) => {
+              setRenameError(undefined);
+              setPendingRename(item);
+            }}
             onUpload={upload.stageFiles}
           />
         ) : (
@@ -325,6 +344,13 @@ export function Artifacts(): ReactNode {
         onCancel={zip.cancel}
       />
       {canvas.node /* "Open in canvas" (issue #878) — see lib/useArtifactCanvas.tsx */}
+      <RenameArtifactDialog
+        item={pendingRename}
+        pending={mutations.renameFile.isPending}
+        error={renameError}
+        onClose={() => setPendingRename(undefined)}
+        onSubmit={confirmRename}
+      />
       <Dialog
         open={pendingDelete.length > 0}
         onClose={() => setPendingDelete([])}

@@ -47,6 +47,7 @@ const mocks = {
   deleteBucket: vi.fn(),
   deleteFile: vi.fn(),
   deleteMany: vi.fn(),
+  renameFile: vi.fn(),
   stageFiles: vi.fn(),
   refreshFiles: vi.fn(),
   uploadOptions: undefined as { onUploaded: () => unknown } | undefined,
@@ -75,6 +76,7 @@ interface ArtifactTableMockProps {
   readonly onDownload: (item: MockItem) => void;
   readonly onDownloadMany: (items: readonly MockItem[]) => void;
   readonly onDelete: (items: readonly MockItem[]) => void;
+  readonly onRename: (item: MockItem) => void;
   readonly onUpload: (files: readonly File[]) => void;
 }
 
@@ -118,6 +120,7 @@ function MockArtifactTable(props: ArtifactTableMockProps): ReactNode {
       <button onClick={() => props.onDownloadMany([file, folder])}>download-many</button>
       <button onClick={() => props.onDelete([file])}>delete-file</button>
       <button onClick={() => props.onDelete([])}>delete-empty</button>
+      <button onClick={() => props.onRename({ ...file, id: 'folder/old.md', key: 'folder/old.md', name: 'old.md' })}>rename-nested-file</button>
       <button onClick={() => props.onUpload([new File(['x'], 'x.txt')])}>upload-file</button>
     </section>
   );
@@ -161,6 +164,7 @@ describe('Artifacts page', () => {
       mocks.deleteBucket,
       mocks.deleteFile,
       mocks.deleteMany,
+      mocks.renameFile,
     ]) {
       mutation.mockReset().mockResolvedValue(undefined);
     }
@@ -192,6 +196,7 @@ describe('Artifacts page', () => {
       deleteBucket: { mutateAsync: mocks.deleteBucket },
       deleteFile: { mutateAsync: mocks.deleteFile },
       deleteMany: { mutateAsync: mocks.deleteMany, isPending: false },
+      renameFile: { mutateAsync: mocks.renameFile, isPending: false },
       refreshFiles: mocks.refreshFiles,
     } as never);
     const uploadHookResult = {
@@ -386,6 +391,22 @@ describe('Artifacts page', () => {
     }));
     await user.click(await screen.findByRole('button', { name: 'delete-empty' }));
     expect(mocks.deleteMany).toHaveBeenCalledTimes(1);
+  });
+
+  /* #2015 — rename a file in place: the folder part of the key stays, a refusal is shown */
+  it('renames a file keeping its folder and shows the server refusal', async () => {
+    const user = userEvent.setup();
+    renderArtifactsRoute(<Artifacts />, '/artifacts?bucket=docs');
+    await user.click(await screen.findByRole('button', { name: 'rename-nested-file' }));
+    const field = screen.getByRole('textbox', { name: 'File name' });
+    await user.clear(field);
+    await user.type(field, 'new.md');
+    mocks.renameFile.mockRejectedValueOnce(new Error('A file with that name already exists.'));
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    expect(await screen.findByText('A file with that name already exists.')).toBeInTheDocument();
+    expect(mocks.renameFile).toHaveBeenCalledWith({ bucket: 'docs', from: 'folder/old.md', to: 'folder/new.md' });
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'File name' })).not.toBeInTheDocument());
   });
 
   it('drives the bucket tree, the edit route and the collapse toggle', async () => {

@@ -4,6 +4,7 @@ import { uploadArtifactObject } from '@/shared/api/artifacts';
 import { getConfig } from '@/shared/config';
 
 import { useChatConfig } from '../api/chatConfigApi';
+import { describeUploadFailure } from '../lib/uploadFailure';
 import { computeSecurePath, validateFileName, validateFolderPath } from '../lib/pathValidation';
 import type { ArtifactUploadPlan } from './types';
 import type { Artifact } from '@/entities/artifact';
@@ -130,15 +131,19 @@ export function useArtifactUpload(options: UseArtifactUploadOptions) {
             fileKey: `${targetPrefix}${file.name}`,
             file,
           }).then((result) => {
-            if (!result.ok) throw new Error(file.name);
+            if (!result.ok) throw new Error(describeUploadFailure(result.error));
           }),
         ),
       );
-      const failedNames = results
-        .map((result, index) => (result.status === 'rejected' ? files[index]?.name : undefined))
-        .filter((name): name is string => name !== undefined);
+      const failedNames: string[] = [];
+      const reasons = new Set<string>();
+      results.forEach((result, index) => {
+        if (result.status !== 'rejected') return;
+        failedNames.push(files[index]?.name ?? '');
+        if (result.reason instanceof Error) reasons.add(result.reason.message);
+      });
       if (failedNames.length > 0) {
-        setError(`Failed to upload: ${failedNames.join(', ')}.`);
+        setError(`Failed to upload: ${failedNames.join(', ')}. ${[...reasons].join(' ')}`.trim());
       }
       await options.onUploaded();
       setPendingFiles([]);

@@ -118,6 +118,20 @@ describe('useArtifactUpload', () => {
     await waitFor(() => expect(hook.result.current.error).toContain('Failed to upload'));
   });
 
+  /* #2004 — a WAF/proxy HTML 403 must be named, not collapsed into a bare "Failed to upload" */
+  it('says the upload was blocked before reaching Elitea when a proxy answers with HTML', async () => {
+    const hook = renderUpload([]);
+    vi.mocked(uploadArtifactObject).mockResolvedValue({
+      ok: false,
+      error: { kind: 'http', status: 403, url: '/upload', body: '<html><body>Forbidden</body></html>' },
+    });
+    act(() => hook.result.current.stageFiles([new File(['pdf'], 'report.pdf')]));
+    act(() => hook.result.current.confirmPath(''));
+    await waitFor(() => expect(hook.result.current.error).toBe(
+      'Failed to upload: report.pdf. The upload was blocked before it reached Elitea (HTTP 403 from a proxy). Ask your administrator.',
+    ));
+  });
+
   it('uploads a batch best-effort — one failing file does not stop the others from completing', async () => {
     const hook = renderUpload([]);
     vi.mocked(uploadArtifactObject).mockImplementation(({ fileKey }) =>

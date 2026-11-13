@@ -21,6 +21,7 @@ import {
   removeArtifact,
   removeArtifacts,
   removeArtifactBucket,
+  renameArtifact,
   setArtifactBucketPinned,
   setArtifactBucketRetention,
 } from './artifactsApi';
@@ -129,6 +130,23 @@ describe('artifacts API', () => {
     expect(deleteBucket).toHaveBeenCalledWith(1, 'reports');
     expect(deleteObject).toHaveBeenCalledWith(1, 'docs', 'a.txt');
     expect(batchDeleteObjects).toHaveBeenCalledWith(1, 'docs', { keys: ['a.txt', 'b.txt'] });
+  });
+
+  /* #2015 — rename is a server move: POST :move with {from, to}, never replacing silently */
+  it('renames a file through the :move operation and names a taken name', async () => {
+    vi.mocked(eliteaFetch).mockResolvedValue(okResponse as never);
+    await renameArtifact('1', 'docs', 'a/old.txt', 'a/new.txt');
+    expect(eliteaFetch).toHaveBeenCalledWith('/artifacts/objects/1/docs:move', {
+      method: 'POST',
+      body: JSON.stringify({ from: 'a/old.txt', to: 'a/new.txt' }),
+    });
+
+    vi.mocked(eliteaFetch).mockRejectedValue(
+      new generatedMutator.EliteaApiError({ kind: 'http', status: 409, url: '/x', body: null }),
+    );
+    await expect(renameArtifact('1', 'docs', 'a.txt', 'b.txt')).rejects.toThrow('already exists');
+    vi.mocked(eliteaFetch).mockRejectedValue(new Error('boom'));
+    await expect(renameArtifact('1', 'docs', 'a.txt', 'b.txt')).rejects.toThrow('Failed to rename');
   });
 
   it('rejects a non-numeric project id rather than building a bad URL', async () => {

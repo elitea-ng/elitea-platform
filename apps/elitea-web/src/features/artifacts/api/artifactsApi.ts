@@ -7,7 +7,7 @@ import {
   deleteObject,
   updateBucket,
 } from '@/shared/api/generated/artifacts/artifacts';
-import { eliteaFetch } from '@/shared/api/generated/mutator';
+import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { listArtifacts, listBuckets } from '@/shared/api/artifacts';
 
 import type { ArtifactStorageConfiguration } from '../model/types';
@@ -155,6 +155,29 @@ export async function removeArtifact(projectId: string, bucket: string, key: str
 export async function removeArtifacts(projectId: string, bucket: string, keys: readonly string[]): Promise<void> {
   if (keys.length === 0) return;
   await batchDeleteObjects(toProjectID(projectId), bucket, { keys: [...keys] });
+}
+
+/**
+ * Rename or move one file inside its bucket (#2015): `POST
+ * /artifacts/objects/{projectID}/{bucket}:move` copies to `to` and then
+ * deletes `from` on the server, so a failure leaves the original in place.
+ * A name that is already taken is refused (409) rather than replaced.
+ */
+export async function renameArtifact(projectId: string, bucket: string, from: string, to: string): Promise<void> {
+  try {
+    await eliteaFetch<unknown>(
+      `/artifacts/objects/${toProjectID(projectId)}/${encodeURIComponent(bucket)}:move`,
+      { method: 'POST', body: JSON.stringify({ from, to }) },
+    );
+  } catch (cause) {
+    if (cause instanceof EliteaApiError && cause.failure.kind === 'http') {
+      if (cause.failure.status === 409) throw new Error('A file with that name already exists.');
+      if (cause.failure.status === 404) throw new Error('The file no longer exists.');
+      if (cause.failure.status === 400) throw new Error('That name is not allowed.');
+      if (cause.failure.status === 403) throw new Error('You do not have permission to rename this file.');
+    }
+    throw new Error('Failed to rename the file.');
+  }
 }
 
 function configurationTitle(configuration: ConfigurationWire): string {

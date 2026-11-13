@@ -1215,6 +1215,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 
 	listBuckets, createBucket, getBucket, updateBucket, deleteBucket := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
 	listObjects, uploadObject, batchDeleteObjects, downloadObject, statObject, deleteObject := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact, notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
+	moveObject := notImplementedArtifact
 	createTransferGrant, commitTransferGrant := notImplementedArtifact, notImplementedArtifact
 	presignUploadPart, completeMultipartUpload, abortMultipartUpload := notImplementedArtifact, notImplementedArtifact, notImplementedArtifact
 	listObjectsS3, downloadObjectS3 := notImplementedArtifact, notImplementedArtifact
@@ -1225,6 +1226,7 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 			deps.Handler.ListBuckets, deps.Handler.CreateBucket, deps.Handler.GetBucket, deps.Handler.UpdateBucket, deps.Handler.DeleteBucket
 		listObjects, uploadObject, batchDeleteObjects, downloadObject, statObject, deleteObject =
 			deps.Handler.ListObjects, deps.Handler.UploadObject, deps.Handler.BatchDeleteObjects, deps.Handler.DownloadObject, deps.Handler.StatObject, deps.Handler.DeleteObject
+		moveObject = deps.Handler.MoveObject
 		createTransferGrant, commitTransferGrant = deps.Handler.CreateTransferGrant, deps.Handler.CommitTransferGrant
 		presignUploadPart, completeMultipartUpload, abortMultipartUpload =
 			deps.Handler.PresignUploadPart, deps.Handler.CompleteMultipartUpload, deps.Handler.AbortMultipartUpload
@@ -1297,6 +1299,9 @@ func mountArtifactRoutes(r chi.Router, deps ArtifactDeps) {
 				// trailing chi wildcard, not the spec's literal {key} — see
 				// S7/S9 for why.
 				r.With(del).Post("/objects/{projectID}/{bucket}:batchDelete", batchDeleteObjects)
+				// Rename/move (#2015): writes the new key (create) and removes
+				// the old one (delete), so it needs both.
+				r.With(create).With(del).Post("/objects/{projectID}/{bucket}:move", moveObject)
 				r.With(del).Delete("/objects/{projectID}/{bucket}/*", deleteObject)
 
 				// The SDK's by-filepath object read (#978), an ALIAS of the
