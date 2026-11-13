@@ -72,6 +72,8 @@ interface UsePagedToolkitRowsResult {
   readonly isFetchingMore: boolean;
   readonly isError: boolean;
   readonly hasMore: boolean;
+  /** Whether the server holds rows past the ones loaded, regardless of a fetch in flight. The redirect gate reads THIS, not `hasMore` (#2000). */
+  readonly hasMoreRawPages: boolean;
   readonly totalCount: number;
   readonly onLoadMore: () => void;
 }
@@ -138,7 +140,13 @@ function usePagedToolkitRows(projectId: string | undefined, isMCP: boolean): Use
   }
 
   const totalCount = wire?.total ?? 0;
-  const hasMore = !query.isFetching && (resolvedPage + 1) * PAGE_SIZE < totalCount;
+  // `hasMore` hides "load more" while a fetch is in flight; the redirect gate must NOT
+  // inherit that. Re-entering the page (a click on the sidebar label) shows cached rows
+  // while a refetch runs, and for those moments `hasMore` read false: a project whose
+  // first page held only toolkits (so no MCPs yet) was taken to the Create page as if it
+  // were empty, and the same refetch sent it back there from the list (#2000).
+  const hasMoreRawPages = (resolvedPage + 1) * PAGE_SIZE < totalCount;
+  const hasMore = !query.isFetching && hasMoreRawPages;
   const onLoadMore = useCallback(() => setPage((prev) => prev + 1), []);
 
   return {
@@ -147,6 +155,7 @@ function usePagedToolkitRows(projectId: string | undefined, isMCP: boolean): Use
     isFetchingMore: query.isFetching && resolvedPage > 0,
     isError: query.isError,
     hasMore,
+    hasMoreRawPages,
     totalCount,
     onLoadMore,
   };
@@ -191,7 +200,7 @@ function useToolkitsListData(projectId: string | undefined, isMCP: boolean, isPu
     isPublicProject: isPublicProjectFlag,
     isLoading: paged.isLoading,
     isError: paged.isError,
-    hasMoreRawPages: paged.hasMore,
+    hasMoreRawPages: paged.hasMoreRawPages,
     scopedItemCount: scopedRows.length,
     selectedTypesCount: selectedTypes.length,
   });

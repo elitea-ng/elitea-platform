@@ -48,6 +48,7 @@ import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ChatBox, toParticipant } from '@/widgets/chat-box';
 
 import { ForkErrorSnackbar, ForkedFromLink, useChatFork } from './ChatFork';
+import { ParticipantRemoveErrorSnackbar, useParticipantRemoveError } from './ParticipantRemoveError';
 import { ChatCloudBrowserTab, useCloudBrowserSession } from './ChatCloudBrowserTab';
 import { ChatParticipantsPanel } from './ChatParticipantsPanel';
 import { handoffExtensions } from './handoffExtensions';
@@ -182,6 +183,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   const llm = useChatModelSettings({ activeConversation, projectId, userId: user?.id });
   const { getLocalActiveParticipant, setLocalActiveParticipant, clearLocalActiveParticipant } = useLocalActiveParticipant();
   const { mutate: deleteParticipant } = useDeleteParticipantMutation();
+  const removeError = useParticipantRemoveError();
   /**
    * elitea_issues #5367 (adjacent finding): `<ParticipantsWrapper>` below
    * never received an `isMcpVisible` prop, and `Participants.tsx` defaults
@@ -264,10 +266,11 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
             setActiveParticipant(undefined);
             clearLocalActiveParticipant(conversationId);
           },
+          onError: removeError.report,
         },
       );
     },
-    [activeParticipant, clearLocalActiveParticipant, conversationId, deleteParticipant, projectId],
+    [activeParticipant, clearLocalActiveParticipant, conversationId, deleteParticipant, projectId, removeError.report],
   );
 
   const handleEditParticipant = useCallback(
@@ -319,6 +322,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
         />
         </Box>
         <ForkErrorSnackbar fork={fork} />
+        <ParticipantRemoveErrorSnackbar state={removeError} />
       </Box>
       {/*
         * The participants rail. `features/chat-participants` was complete and

@@ -155,6 +155,8 @@ function mentionedProjectSkillIds(text: string, items: readonly SkillMentionItem
 
 export interface UseChatSkillMentionResult {
   readonly skillPhase: MentionPhaseValue;
+  /** An agent is active and at least one skill can be mentioned: the "~" picker can open with something in it. */
+  readonly hasMentionableSkills: boolean;
   readonly filteredItems: readonly SkillMentionItem[];
   readonly committedMentions: readonly CommittedSkillMention[];
   readonly highlightedIndex: number;
@@ -317,6 +319,7 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
 
   return {
     skillPhase: phase,
+    hasMentionableSkills: canMentionSkills(isAgent, mentionableItems),
     filteredItems,
     committedMentions,
     highlightedIndex,
@@ -328,4 +331,9 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     projectSkillIdsFor,
     resolveProjectSkillIds,
   };
+}
+
+/** An agent is active and at least one skill can be mentioned. */
+function canMentionSkills(isAgent: boolean, items: readonly SkillMentionItem[]): boolean {
+  return isAgent && items.length > 0;
 }

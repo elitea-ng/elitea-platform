@@ -4,8 +4,9 @@ import { ThemeProvider } from '@mui/material/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import type { AnyRouter } from '@tanstack/react-router';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { delay } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getGetPlatformSettingsMockHandler, getGetPlatformSettingsResponseMock } from '@/shared/api/generated/admin/admin.msw';
@@ -72,7 +73,7 @@ function renderToolkitsPage(content: ReactElement, initialPath: string, projectI
       </ThemeProvider>
     </QueryClientProvider>,
   );
-  return { ...view, router };
+  return { ...view, router, queryClient };
 }
 
 const globals = globalThis as unknown as Record<string, unknown>;
@@ -260,6 +261,47 @@ describe('Toolkits', () => {
     const { router } = renderToolkitsPage(<Toolkits />, '/toolkits/all', 'proj-1');
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/toolkits/create'));
+  });
+
+  it('does not take a non-empty list to the Create page while a refetch is in flight (#2000)', async () => {
+    // The first page holds toolkits only (no MCP among them) and the server has more rows:
+    // that is "not known to be empty". Re-entering the page refetches, and during that fetch
+    // `hasMore` reads false — the gate must not read that as "nothing more to load".
+    const rows = [toolkitRow({ id: 'tk-1', name: 'My GitHub', type: 'github' })];
+    let calls = 0;
+    server.use(
+      getListToolkitInstancesMockHandler(async () => {
+        calls += 1;
+        if (calls > 1) await delay(300);
+        return { rows, total: 40 };
+      }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const mountPage = () => {
+      const router = buildTestRouter('/mcps/all', <Toolkits isMCP />, 'proj-1');
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+            <RouterProvider router={router} />
+          </ThemeProvider>
+        </QueryClientProvider>,
+      );
+      return { router, view };
+    };
+    const first = mountPage();
+    await waitFor(() => expect(calls).toBe(1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    first.view.unmount();
+
+    // The second visit: the cached rows paint at once, a refetch (300ms) runs behind them.
+    const { router } = mountPage();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+    expect(calls).toBe(2);
+    expect(router.state.location.pathname).toBe('/mcps/all');
   });
 
   it('renders the MCPs search and list-panel test hook when isMCP is true', async () => {

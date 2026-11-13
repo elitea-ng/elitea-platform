@@ -27,7 +27,7 @@ export function DelegatedCredentialStatus({ credential }: { readonly credential:
           ? t('pages.toolkits.oauth.savedAuthorization', 'Saved authorization')
           : t('pages.toolkits.oauth.authorizationOnUse', 'Authorize this credential when you use the toolkit.')}
       </Typography>
-      {/* Keep logout available even without a local grant: another tab can still hold one. */}
+      {/* Kept without a local grant: another tab can hold one. The button says "You were not logged in" when nothing was revoked (#1999). */}
       <McpLogoutButton serverUrl={tokenKey} authorizationLabel={credential.displayLabel} />
     </Box>
   );
