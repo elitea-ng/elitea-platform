@@ -58,8 +58,35 @@ describe('startSkillMention (#2017)', () => {
 
   it('does nothing without a composer', () => {
     const onInputChange = vi.fn();
-    startSkillMention(null, onInputChange);
+    startSkillMention(null, onInputChange)();
     vi.runAllTimers();
     expect(onInputChange).not.toHaveBeenCalled();
+  });
+
+  it('takes focus again after the menu that was clicked has closed', () => {
+    const handle = fakeHandle('', 0);
+    startSkillMention(handle, vi.fn());
+    expect(handle.focus).toHaveBeenCalledTimes(1);
+    vi.runAllTimers();
+    expect(handle.focus).toHaveBeenCalledTimes(2);
+  });
+
+  it('announces nothing once cancelled (the composer unmounted)', () => {
+    const handle = fakeHandle('', 0);
+    const onInputChange = vi.fn();
+    const cancel = startSkillMention(handle, onInputChange);
+    cancel();
+    vi.runAllTimers();
+    expect(onInputChange).not.toHaveBeenCalled();
+    expect(handle.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the content when the timer fires, not when the insert was made', () => {
+    const handle = fakeHandle('', 0);
+    const onInputChange = vi.fn();
+    startSkillMention(handle, onInputChange);
+    handle.insertTextAtCursor('x');
+    vi.runAllTimers();
+    expect(onInputChange).toHaveBeenCalledWith('~x');
   });
 });

@@ -29,17 +29,28 @@ func TestWriteStartErrorNamesTheUnsupportedReason(t *testing.T) {
 		},
 		{
 			name: "one reason",
-			err:  agentexecutionapp.UnsupportedCurrentAgentStart("the agent is not part of this conversation"),
-			want: "This agent turn cannot start: the agent is not part of this conversation.",
+			err:  agentexecutionapp.UnsupportedStartRefused(agentexecutionapp.RefusalAgentNotInConversation),
+			want: "This agent turn cannot start: the agent that should answer is not part of this conversation.",
 		},
 		{
-			name: "stage and cause, dependency text stays out",
+			name: "typed refusal shown; stage, unknown reason and dependency text stay out",
 			err: fmt.Errorf("start: %w", errors.Join(
 				agentexecutionapp.UnsupportedCurrentAgentStart("model resolution"),
-				agentexecutionapp.UnsupportedCurrentAgentStart("the requested model is not in the project's catalog"),
+				agentexecutionapp.UnsupportedCurrentAgentStart("internal stage: join x failed"),
+				agentexecutionapp.UnsupportedStartRefused(agentexecutionapp.RefusalModelUnavailable),
 				errors.New("dial tcp 10.0.0.1:5432: connection refused"),
 			)),
-			want: "This agent turn cannot start: model resolution: the requested model is not in the project's catalog.",
+			want: "This agent turn cannot start: " + agentexecutionapp.StartRefusalSentence(agentexecutionapp.RefusalModelUnavailable) + ".",
+		},
+		{
+			name: "unknown free-form reason falls back to the generic sentence",
+			err:  agentexecutionapp.UnsupportedCurrentAgentStart("join x on table y failed"),
+			want: generic,
+		},
+		{
+			name: "unregistered code is not shown",
+			err:  agentexecutionapp.UnsupportedStartRefused(agentexecutionapp.StartRefusal("made_up")),
+			want: generic,
 		},
 	}
 	for _, tc := range cases {

@@ -18,15 +18,23 @@ interface SkillPickHandle extends ChatInputHandle {
 
 const SKILL_PICK_TRIGGER = '~';
 
-export function startSkillMention(handle: SkillPickHandle | null | undefined, onInputChange: (value: string) => void): void {
-  if (!handle) return;
+/**
+ * Inserts the trigger and returns a function that cancels the pending
+ * announcement (the caller runs it when the composer unmounts). The menu the
+ * click came from hands focus back to its button when it closes, so focus is
+ * taken again together with the announcement; the value is read then, from the
+ * handle, after the insert has committed.
+ */
+export function startSkillMention(handle: SkillPickHandle | null | undefined, onInputChange: (value: string) => void): () => void {
+  if (!handle) return () => undefined;
   const content = handle.getInputContent();
   const caret = handle.getCursorPosition() ?? content.length;
   const previous = caret > 0 ? content.charAt(caret - 1) : '';
   handle.focus();
   handle.insertTextAtCursor(previous !== '' && !/\s/.test(previous) ? ` ${SKILL_PICK_TRIGGER}` : SKILL_PICK_TRIGGER);
-  // After the commit: the layout effect that moves the caret has run by then.
-  setTimeout(() => {
+  const timer = setTimeout(() => {
+    handle.focus();
     onInputChange(handle.getInputContent());
   }, 0);
+  return () => clearTimeout(timer);
 }

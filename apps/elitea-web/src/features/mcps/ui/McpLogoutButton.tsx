@@ -29,9 +29,12 @@ export interface McpLogoutButtonProps {
 export function McpLogoutButton({ serverUrl, toolkitType, authorizationLabel, onSuccess, sx }: McpLogoutButtonProps): ReactNode {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [showLogoutSuccess, setShowLogoutSuccess] = useState(false);
+  const [wasLoggedIn, setWasLoggedIn] = useState(true);
 
   const onConfirmLogout = useCallback(() => {
-    if (serverUrl) logout(serverUrl, toolkitType);
+    // A logout that found no grant in this browser must not claim one was
+    // revoked (#1999); it still tells other tabs to drop theirs.
+    setWasLoggedIn(serverUrl ? logout(serverUrl, toolkitType) : true);
     setShowLogoutModal(false);
     setShowLogoutSuccess(true);
     onSuccess?.();
@@ -87,10 +90,12 @@ export function McpLogoutButton({ serverUrl, toolkitType, authorizationLabel, on
       >
         <Alert
           onClose={onCloseLogoutSuccess}
-          severity="success"
+          severity={wasLoggedIn ? 'success' : 'info'}
           variant="filled"
         >
-          {t('mcps.logout.success', 'You have successfully logged out!')}
+          {wasLoggedIn
+            ? t('mcps.logout.success', 'You have successfully logged out!')
+            : t('mcps.logout.notLoggedIn', 'You were not logged in.')}
         </Alert>
       </Snackbar>
     </>

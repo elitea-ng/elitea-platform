@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -93,5 +94,36 @@ func TestPostgresDiagnoseCurrentApplicationTurnNamesTheFailedCondition(t *testin
 				t.Fatalf("reasons = %q, want one containing %q", reasons, tc.want)
 			}
 		})
+	}
+}
+
+// brokenDiagnosis runs a statement that fails in place of the diagnostic.
+type brokenDiagnosis struct{ sqlExecutor }
+
+func (b brokenDiagnosis) QueryRow(ctx context.Context, _ string, _ ...any) sqlRow {
+	return b.sqlExecutor.QueryRow(ctx, "SELECT 1/0")
+}
+
+// A diagnostic that fails must not abort the caller's transaction (SQLSTATE
+// 25P02 on every later statement): it runs in a savepoint and the refusal
+// falls back to the generic sentence.
+func TestPostgresDiagnoseFailureLeavesTheTransactionUsable(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	tx, err := pool.BeginTx(t.Context(), pgx.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(t.Context()) }()
+	refusal := currentApplicationTurnRefusal(
+		t.Context(), brokenDiagnosis{pgxExecutor{queryer: tx}},
+		mustCurrentPGUUID(t, "10000000-0000-4000-8000-000000000031"), 11, 21, 1, 2,
+		mustCurrentPGUUID(t, "20000000-0000-4000-8000-000000000031"),
+	)
+	reasons := agentexecutionapp.UnsupportedReasons(refusal)
+	if len(reasons) != 1 || !strings.Contains(reasons[0], "could not be matched") {
+		t.Fatalf("reasons = %q", reasons)
+	}
+	if _, err := tx.Exec(t.Context(), "SELECT 1"); err != nil {
+		t.Fatalf("the transaction is aborted after a failed diagnosis: %v", err)
 	}
 }

@@ -109,12 +109,16 @@ describe('credential-scoped toolkit logout through the mounted editor', () => {
     expect(loadLogoutMarker(KEY)).toBe(0);
   });
 
-  it('offers no logout (and so no "logged out" toast) while no authorization is held (#1999)', async () => {
+  it('keeps logout but says "not logged in" rather than "logged out" while no grant is held here (#1999)', async () => {
     installHandlers('openapi');
     renderEditor();
+    const user = userEvent.setup();
     const status = await screen.findByTestId('delegated-credential-status');
     expect(within(status).getByText('Authorize this credential when you use the toolkit.')).toBeInTheDocument();
-    expect(within(status).queryByRole('button', { name: 'Log out' })).not.toBeInTheDocument();
+    await user.click(within(status).getByRole('button', { name: 'Log out' }));
+    await user.click(within(await screen.findByTestId('mcp-logout-modal')).getByRole('button', { name: 'Log out' }));
+    expect(await screen.findByText('You were not logged in.')).toBeInTheDocument();
+    expect(screen.queryByText('You have successfully logged out!')).not.toBeInTheDocument();
   });
 
   it('does not show delegated logout for client credentials', async () => {

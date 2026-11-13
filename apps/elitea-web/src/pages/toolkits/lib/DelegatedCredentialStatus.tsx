@@ -27,8 +27,8 @@ export function DelegatedCredentialStatus({ credential }: { readonly credential:
           ? t('pages.toolkits.oauth.savedAuthorization', 'Saved authorization')
           : t('pages.toolkits.oauth.authorizationOnUse', 'Authorize this credential when you use the toolkit.')}
       </Typography>
-      {/* Logging out of a grant that is not held would still toast "You have successfully logged out!" (#1999), so the control exists only while there is one. */}
-      {hasStoredAuthorization && <McpLogoutButton serverUrl={tokenKey} authorizationLabel={credential.displayLabel} />}
+      {/* Kept without a local grant: another tab can hold one. The button says "You were not logged in" when nothing was revoked (#1999). */}
+      <McpLogoutButton serverUrl={tokenKey} authorizationLabel={credential.displayLabel} />
     </Box>
   );
 }

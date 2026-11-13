@@ -118,7 +118,7 @@ export function ToolkitEditor({ toolkit, isVisible, onCloseToolkitEditor, onTool
   const { toolkitValidation, reportSaveError, clearSaveErrors } = useToolkitSaveValidation();
   // #2016: a Save click is always answered in words (saved / blocked / refused).
   const notice = useToolkitEditorNotice();
-  const { failed: noticeFailed } = notice;
+  const { failed: noticeFailed, saved: noticeSaved } = notice;
 
   const { isDirty, setIsDirty, validationState, setValidationState, revertCredentialsRef, isCreating, isMCP, projectId, toolkitId, scopedProjectId, isPublic, isError, editToolDetail, formInitialValues, setFormInitialValues, handleChangeToolDetail, handleDiscard } = state;
 
@@ -185,9 +185,9 @@ export function ToolkitEditor({ toolkit, isVisible, onCloseToolkitEditor, onTool
         onToolkitUpdated?.(updated, true);
       }
       setIsDirty(false);
-      if (!isCreating) notice.saved();
+      if (!isCreating) noticeSaved();
     },
-    [isCreating, toolkit, onToolkitUpdated, setIsDirty, notice],
+    [isCreating, toolkit, onToolkitUpdated, setIsDirty, noticeSaved],
   );
 
   if (!toolkit) return null;

@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +55,7 @@ func WithOAuthDiscoveryGuard(guard *egress.Guard) Option {
 		}
 		handler.oauthDiscovery = &mcpoauth.Fetcher{
 			Do: client.Do, Validate: guard.Validate, PerFetch: oauthDiscoveryTimeout,
+			IssuerMatch: microsoftTemplatedIssuer,
 		}
 	}
 }
@@ -67,24 +69,32 @@ func delegatedOAuthEndpoint(data map[string]any) string {
 
 // delegatedAuthorization answers one check of a delegated credential. It
 // writes the response and reports true when the credential is delegated.
-func (h *Handler) delegatedAuthorization(w http.ResponseWriter, r *http.Request, data map[string]any) bool {
+func (h *Handler) delegatedAuthorization(w http.ResponseWriter, r *http.Request, projectID string, data map[string]any) bool {
 	endpoint := delegatedOAuthEndpoint(data)
 	if endpoint == "" {
 		return false
 	}
-	metadata, err := h.discoverDelegatedIssuer(r.Context(), endpoint)
-	if err != nil {
-		slog.WarnContext(r.Context(), "check_connection: OAuth discovery failed", "err", err)
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"success": false,
-			"message": "The OAuth discovery endpoint could not be read. It must be an https address that " +
-				"publishes OAuth metadata and that the platform may reach " +
-				"(an administrator can allow a private host with ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST).",
-			"reason": "oauth_discovery_failed",
+	release := h.acquireDiscoveryProbe(r.Context(), projectID)
+	if release == nil {
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{
+			"success": false, "reason": "rate_limited",
+			"message": "Rate limited: too many sign-in checks. Wait a minute, then try again.",
 		})
 		return true
 	}
+	defer release()
+	metadata, err := h.discoverDelegatedIssuer(r.Context(), endpoint)
+	if err != nil {
+		slog.WarnContext(r.Context(), "check_connection: OAuth discovery failed", "err", err)
+		writeDiscoveryFailed(w)
+		return true
+	}
 	issuer, _ := metadata["issuer"].(string)
+	if issuer == "" {
+		slog.WarnContext(r.Context(), "check_connection: OAuth discovery document has no issuer")
+		writeDiscoveryFailed(w)
+		return true
+	}
 	resourceMetadata := map[string]any{
 		"resource":                   endpoint,
 		"authorization_servers":      []string{issuer},
@@ -131,4 +141,58 @@ func (h *Handler) discoverDelegatedIssuer(ctx context.Context, endpoint string) 
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+func writeDiscoveryFailed(w http.ResponseWriter) {
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"success": false,
+		"message": "The OAuth discovery endpoint could not be read. It must be an https address that " +
+			"publishes OAuth metadata and that the platform may reach " +
+			"(an administrator can allow a private host with ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST).",
+		"reason": "oauth_discovery_failed",
+	})
+}
+
+// microsoftTenantAliases are the multi-tenant authority names whose metadata
+// publishes a templated issuer instead of the URL it was read from.
+var microsoftTenantAliases = map[string]bool{"common": true, "organizations": true, "consumers": true}
+
+var microsoftIdentityHosts = map[string]bool{
+	"login.microsoftonline.com":        true,
+	"login.microsoftonline.us":         true,
+	"login.partner.microsoftonline.cn": true,
+}
+
+// microsoftTemplatedIssuer accepts the one non-identical issuer the Microsoft
+// identity platform legitimately publishes: for the alias tenants (common,
+// organizations, consumers) on a Microsoft login host the document carries
+// "https://<same host>/{tenantid}/v2.0". Every other provider and every other
+// path must match exactly.
+func microsoftTemplatedIssuer(published, requested string) bool {
+	req, err := url.Parse(requested)
+	if err != nil || req.Scheme != "https" || !microsoftIdentityHosts[strings.ToLower(req.Host)] {
+		return false
+	}
+	segments := strings.Split(strings.Trim(req.Path, "/"), "/")
+	if len(segments) == 0 || !microsoftTenantAliases[strings.ToLower(segments[0])] {
+		return false
+	}
+	if len(segments) > 2 || (len(segments) == 2 && segments[1] != "v2.0") {
+		return false
+	}
+	return published == "https://"+req.Host+"/{tenantid}/v2.0"
+}
+
+// acquireDiscoveryProbe bounds the discovery fetches (up to two reads of 5 s
+// each) per project and user with the model-test limiter, under its own key so
+// the two kinds of test do not spend each other's tokens.
+func (h *Handler) acquireDiscoveryProbe(ctx context.Context, projectID string) func() {
+	if h.modelProbes == nil {
+		return func() {}
+	}
+	user := "-"
+	if caller, ok := currentConfigurationMutationAuthorID(ctx); ok {
+		user = strconv.FormatInt(int64(caller), 10)
+	}
+	return h.modelProbes.acquire("oauth-discovery/" + projectID + "/" + user)
 }

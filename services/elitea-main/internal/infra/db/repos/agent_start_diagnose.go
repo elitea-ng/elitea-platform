@@ -3,6 +3,8 @@ package repos
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -28,7 +30,13 @@ import (
 //
 // Parameters: $1 conversation uuid, $2 caller user id, $3 target participant
 // id, $4 conversation's project id, $5 catalogue (public) project id,
-// $6 question uuid.
+// $6 question uuid, $7 the authorable internal tool names
+// (currentAuthorableInternalTools, the list the resolver SQL also carries; a
+// test keeps the two equal).
+//
+// The conversation is looked up by uuid alone because chat_conversations is a
+// TENANT table: the transaction is bound to the caller's project, so a
+// conversation of another project is not visible here and reads as missing.
 const diagnoseCurrentApplicationTurnSQL = `
 WITH conversation AS (
     SELECT c.id, c.meta
@@ -85,11 +93,7 @@ SELECT CASE
                       THEN c.meta -> 'internal_tools' ELSE '[]'::jsonb END
              ) AS tool(value)
         WHERE jsonb_typeof(tool.value) <> 'string'
-           OR tool.value #>> '{}' NOT IN (
-                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                  'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
-                  'pyodide', 'skills_builder', 'subagents', 'swarm'
-              )
+           OR tool.value #>> '{}' <> ALL ($7::text[])
     ) OR EXISTS (
         SELECT 1 FROM conversation AS c
         WHERE c.meta ? 'internal_tools' AND jsonb_typeof(c.meta -> 'internal_tools') <> 'array'
@@ -103,11 +107,7 @@ SELECT CASE
                  THEN v.meta::jsonb -> 'internal_tools' ELSE '[]'::jsonb END
         ) AS tool(value)
         WHERE jsonb_typeof(tool.value) <> 'string'
-           OR tool.value #>> '{}' NOT IN (
-                  'ask_user', 'attachments', 'data_analysis', 'image_generation',
-                  'internal_mcp', 'lazy_tools_mode', 'planner', 'project_context_builder',
-                  'pyodide', 'skills_builder', 'subagents', 'swarm'
-              )
+           OR tool.value #>> '{}' <> ALL ($7::text[])
     ) OR EXISTS (
         SELECT 1
         FROM target
@@ -154,27 +154,14 @@ SELECT CASE
 END
 `
 
-// currentApplicationTurnRefusals maps a diagnosis code to the sentence the
-// sender reads. Fixed text only: it reaches the 422 body and the log, so it
-// carries no id, name or other value from the conversation.
-var currentApplicationTurnRefusals = map[string]string{
-	"conversation_missing":        "this conversation does not exist in this project",
-	"caller_not_participant":      "you are not a participant of this conversation",
-	"agent_not_in_conversation":   "the agent that should answer is not part of this conversation",
-	"participant_not_agent":       "the participant that should answer is not an agent",
-	"foreign_project":             "the agent belongs to another project and is not published to this one",
-	"version_missing":             "the version of the agent this conversation uses no longer exists; open the agent, save it, and start a new conversation",
-	"conversation_internal_tools": "this conversation enables an internal tool this deployment does not run",
-	"agent_internal_tools":        "the agent enables an internal tool this deployment does not run",
-	"conversation_summarized":     "this conversation was summarized earlier and cannot be continued on this path; start a new conversation",
-	"toolkit_participant":         "a toolkit is a participant of this conversation, which this path does not continue; start a new conversation with the agent",
-	"answer_in_progress":          "the previous answer of this conversation is still being written; wait for it to finish",
-	"context_message":             "this conversation holds a context message this path cannot continue from; start a new conversation",
-}
-
 // currentApplicationTurnRefusal is the error for a resolve that found no row.
 // A diagnosis that itself fails (or finds nothing) falls back to the generic
 // reason: naming the wrong cause is worse than naming none.
+//
+// The diagnostic runs inside a SAVEPOINT: a failing statement aborts the
+// surrounding transaction (SQLSTATE 25P02) for every later statement, and the
+// caller's transaction must survive a diagnostic that cannot run. The failure
+// is logged (error only, no conversation data).
 func currentApplicationTurnRefusal(
 	ctx context.Context,
 	tx sqlExecutor,
@@ -185,19 +172,59 @@ func currentApplicationTurnRefusal(
 	catalogueProjectID int32,
 	questionID pgtype.UUID,
 ) error {
+	code, err := runTurnDiagnosis(ctx, tx, conversationUUID, actorUserID, targetParticipantID,
+		projectID, catalogueProjectID, questionID)
+	if err != nil {
+		slog.WarnContext(ctx, "agent start: refusal diagnosis failed", "err", err)
+		return agentexecutionapp.UnsupportedStartRefused(agentexecutionapp.RefusalNoTurnRow)
+	}
+	refusal := agentexecutionapp.StartRefusal(code)
+	if agentexecutionapp.StartRefusalSentence(refusal) != "" {
+		return agentexecutionapp.UnsupportedStartRefused(refusal)
+	}
+	return agentexecutionapp.UnsupportedStartRefused(agentexecutionapp.RefusalNoTurnRow)
+}
+
+func runTurnDiagnosis(
+	ctx context.Context,
+	tx sqlExecutor,
+	conversationUUID pgtype.UUID,
+	actorUserID int64,
+	targetParticipantID int32,
+	projectID int32,
+	catalogueProjectID int32,
+	questionID pgtype.UUID,
+) (string, error) {
+	const savepoint = "agent_start_diagnose"
+	if _, err := tx.Exec(ctx, "SAVEPOINT "+savepoint); err != nil {
+		return "", err
+	}
 	var code string
 	err := tx.QueryRow(
 		ctx, diagnoseCurrentApplicationTurnSQL,
 		conversationUUID, actorUserID, targetParticipantID,
 		int64(projectID), int64(catalogueProjectID), questionID,
+		authorableInternalToolNames(),
 	).Scan(&code)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return agentexecutionapp.UnsupportedCurrentAgentStart(genericNoTurnRow)
+		if _, rollbackErr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+savepoint); rollbackErr != nil {
+			slog.WarnContext(ctx, "agent start: diagnosis savepoint rollback failed", "err", rollbackErr)
+		}
+		return "", err
 	}
-	if reason, ok := currentApplicationTurnRefusals[code]; ok {
-		return agentexecutionapp.UnsupportedCurrentAgentStart(reason)
+	if _, releaseErr := tx.Exec(ctx, "RELEASE SAVEPOINT "+savepoint); releaseErr != nil {
+		return "", releaseErr
 	}
-	return agentexecutionapp.UnsupportedCurrentAgentStart(genericNoTurnRow)
+	return code, nil
 }
 
-const genericNoTurnRow = "the conversation, the agent or its saved version could not be matched for this turn"
+// authorableInternalToolNames is the resolver's allowlist, sorted, as the
+// diagnosis parameter.
+func authorableInternalToolNames() []string {
+	names := make([]string, 0, len(currentAuthorableInternalTools))
+	for name := range currentAuthorableInternalTools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}

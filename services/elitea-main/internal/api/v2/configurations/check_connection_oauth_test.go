@@ -112,3 +112,73 @@ func TestCheckConnectionOfAnAppOnlyCredentialIsNotAnAuthorizationRequest(t *test
 		t.Fatalf("app-only check answered 401: %s", recorder.Body.String())
 	}
 }
+
+func TestCheckConnectionOfAMicrosoftAliasTenantAcceptsTheTemplatedIssuer(t *testing.T) {
+	const alias = "https://login.microsoftonline.com/common"
+	var requested []string
+	handler := NewHandler(nil)
+	handler.oauthDiscovery = discoveryFetcher(map[string]string{
+		alias + "/v2.0/.well-known/openid-configuration": `{
+			"issuer": "https://login.microsoftonline.com/{tenantid}/v2.0",
+			"authorization_endpoint": "` + alias + `/oauth2/v2.0/authorize",
+			"token_endpoint": "` + alias + `/oauth2/v2.0/token"
+		}`,
+	}, &requested)
+	handler.oauthDiscovery.IssuerMatch = microsoftTemplatedIssuer
+	recorder := postDelegatedCheck(t, handler, "sharepoint", `{"oauth_discovery_endpoint":"`+alias+`"}`)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (body %s)", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"authorization_servers":["`+alias+`/v2.0"]`) {
+		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
+func TestMicrosoftTemplatedIssuerIsNarrow(t *testing.T) {
+	const tmpl = "https://login.microsoftonline.com/{tenantid}/v2.0"
+	for requested, want := range map[string]bool{
+		"https://login.microsoftonline.com/common/v2.0":      true,
+		"https://login.microsoftonline.com/organizations":    true,
+		"https://login.microsoftonline.com/some-tenant/v2.0": false,
+		"https://evil.example/common/v2.0":                   false,
+		"https://login.microsoftonline.com/common/x/v2.0":    false,
+		"http://login.microsoftonline.com/common/v2.0":       false,
+	} {
+		if got := microsoftTemplatedIssuer(tmpl, requested); got != want {
+			t.Errorf("%s: got %v want %v", requested, got, want)
+		}
+	}
+	if microsoftTemplatedIssuer("https://evil.example/{tenantid}/v2.0", "https://login.microsoftonline.com/common/v2.0") {
+		t.Error("a templated issuer on another host was accepted")
+	}
+}
+
+func TestCheckConnectionOfADelegatedCredentialWithoutIssuerIsAFailure(t *testing.T) {
+	const tenant = "https://login.example.test/tenant-1"
+	var requested []string
+	handler := NewHandler(nil)
+	handler.oauthDiscovery = discoveryFetcher(map[string]string{}, &requested)
+	handler.oauthDiscovery.IssuerMatch = func(string, string) bool { return true }
+	handler.oauthDiscovery.Do = func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(
+			`{"authorization_endpoint":"` + tenant + `/a","token_endpoint":"` + tenant + `/t"}`))}, nil
+	}
+	recorder := postDelegatedCheck(t, handler, "sharepoint", `{"oauth_discovery_endpoint":"`+tenant+`"}`)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "oauth_discovery_failed") ||
+		strings.Contains(recorder.Body.String(), `[""]`) {
+		t.Fatalf("status = %d body = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestCheckConnectionOfADelegatedCredentialIsRateLimited(t *testing.T) {
+	var requested []string
+	handler := NewHandler(nil)
+	handler.oauthDiscovery = discoveryFetcher(map[string]string{}, &requested)
+	var last *httptest.ResponseRecorder
+	for i := 0; i < modelProbeBurst+1; i++ {
+		last = postDelegatedCheck(t, handler, "sharepoint", `{"oauth_discovery_endpoint":"https://login.example.test/t"}`)
+	}
+	if last.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 (body %s)", last.Code, last.Body.String())
+	}
+}

@@ -773,6 +773,9 @@ func writeStartError(writer http.ResponseWriter, err error) {
 			"message": "This conversation has several agents. Pick the agent this message is for.",
 		})
 	case errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart):
+		// The full chain (stage names, causes) is for the log; the body
+		// carries only the registered sentences of typed refusals.
+		slog.Warn("agent turn refused as unsupported", "err", err)
 		writeUnsupportedBecause(writer, agentexecutionapp.UnsupportedReasons(err))
 	case errors.Is(err, agentexecutionapp.ErrCurrentAgentRegenerationStillFinalizing):
 		writer.Header().Set("Retry-After", "1")
