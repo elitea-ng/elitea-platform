@@ -107,7 +107,8 @@ describe('StopAgentButton', () => {
   it('draws the stopped chip and the stop button from the error colour, outlined', async () => {
     serve(['safety.suspend']);
     renderButton();
-    expect(await screen.findByTestId('stop-agent-button')).toHaveClass('MuiButton-outlinedError');
+    // MUI 9 sets variant and colour as separate classes (no compound `outlinedError`).
+    expect(await screen.findByTestId('stop-agent-button')).toHaveClass('MuiButton-outlined', 'MuiButton-colorError');
 
     active = [{ id: 3, scope: 'agent', project_id: 7, application_id: 31, reason: 'r', active: true }];
     renderButton();
