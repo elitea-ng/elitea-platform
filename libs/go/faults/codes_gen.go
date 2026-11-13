@@ -122,6 +122,8 @@ const (
 	RuntimeContextBudgetExceeded Code = "runtime.context_budget_exceeded"
 	// The execution deadline was exceeded.
 	RuntimeDeadlineExceeded Code = "runtime.deadline_exceeded"
+	// This run did not start because a saved agent or pipeline it runs needs a toolkit, tool or other grant that its caller does not hold; attach it to the caller, as the notice above says, or remove it from that agent or pipeline.
+	RuntimeDelegationGrantMissing Code = "runtime.delegation_grant_missing"
 	// A required runtime dependency is unavailable.
 	RuntimeDependencyUnavailable Code = "runtime.dependency_unavailable"
 	// The request cannot start because the agent instructions or settings exceed a platform input limit. Reduce the saved content or ask an administrator to inspect the support reference. This is not a model token limit.

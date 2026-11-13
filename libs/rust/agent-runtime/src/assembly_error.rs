@@ -14,6 +14,7 @@
 
 use std::fmt;
 
+use crate::delegation::{DelegatedCallee, RefusedDelegation};
 use crate::toolkits::DelegatedAuthorizationRequirement;
 
 /// Stable native assembly and result-selection failures.
@@ -87,6 +88,9 @@ pub struct NativeAgentAssemblyError {
     message: &'static str,
     authorization: Option<Box<DelegatedAuthorizationRequirement>>,
     cause: Option<NativeAgentAssemblyCause>,
+    /// A delegation refused before the run (ADR-0044 decision 3, FU-335):
+    /// the node kind and the refusal, for the lifecycle's readable notice.
+    delegation: Option<Box<(DelegatedCallee, RefusedDelegation)>>,
 }
 
 impl NativeAgentAssemblyError {
@@ -96,6 +100,7 @@ impl NativeAgentAssemblyError {
             message,
             authorization: None,
             cause: None,
+            delegation: None,
         }
     }
 
@@ -135,6 +140,25 @@ impl NativeAgentAssemblyError {
     #[must_use]
     pub fn authorization(&self) -> Option<&DelegatedAuthorizationRequirement> {
         self.authorization.as_deref()
+    }
+
+    /// Attach the refused delegation this failure ends the run with.
+    #[must_use]
+    pub fn with_delegation_refusal(
+        mut self,
+        callee: DelegatedCallee,
+        refused: RefusedDelegation,
+    ) -> Self {
+        self.delegation = Some(Box::new((callee, refused)));
+        self
+    }
+
+    /// The refused delegation, when this failure is one.
+    #[must_use]
+    pub fn delegation_refusal(&self) -> Option<(DelegatedCallee, &RefusedDelegation)> {
+        self.delegation
+            .as_deref()
+            .map(|(callee, refused)| (*callee, refused))
     }
 
     #[must_use]

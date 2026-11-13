@@ -229,6 +229,16 @@ impl GrantKind {
     }
 }
 
+/// The node kind a refused delegation was made from, so a readable notice can
+/// say which node of the run needs the grant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DelegatedCallee {
+    /// An Agent node (or a Map item or Parallel branch) running a saved agent.
+    Agent,
+    /// A pipeline node running a saved pipeline.
+    Pipeline,
+}
+
 /// A refused delegation. The model reads it as a tool result, and the
 /// delegation step records it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -253,6 +263,30 @@ impl DelegationRefusal {
         match self {
             Self::GrantMissing { .. } => GRANT_MISSING,
             Self::DepthExceeded { .. } => DEPTH_EXCEEDED,
+        }
+    }
+
+    /// The display name of the toolkit a missing grant belongs to: the only
+    /// grant detail a person-facing notice may show. Never a tool name, a
+    /// credential reference, a data class or a host.
+    #[must_use]
+    pub fn toolkit_display_name(&self) -> Option<&str> {
+        match self {
+            Self::GrantMissing {
+                kind: GrantKind::Toolkit,
+                name,
+                ..
+            } => Some(name),
+            Self::GrantMissing {
+                kind: GrantKind::Tool | GrantKind::Credential,
+                toolkit,
+                ..
+            } => toolkit.as_deref(),
+            Self::GrantMissing {
+                kind: GrantKind::DataClass | GrantKind::EgressHost,
+                ..
+            }
+            | Self::DepthExceeded { .. } => None,
         }
     }
 

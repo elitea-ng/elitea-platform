@@ -1675,8 +1675,12 @@ async fn a_saved_pipeline_nested_in_a_pipeline_tool_is_refused_by_name() {
     );
 }
 
+/// FU-335 (C2): a pipeline offered as a tool whose Agent node runs a refused
+/// saved agent is itself offered as that refusal. A graph node cannot answer
+/// a refusal as a tool result, so the refusal stays scoped to the pipeline
+/// tool: its call answers it by name, and an uncalled tool fails nothing.
 #[tokio::test]
-async fn a_pipeline_agent_node_offers_a_refused_saved_agent() {
+async fn a_pipeline_tool_whose_agent_node_is_refused_is_offered_as_the_refusal() {
     // root -> outer pipeline -> its node runs the saved agent `worker`.
     let fixture = Fixture::with_data_classes(
         BTreeMap::from([
@@ -1692,7 +1696,7 @@ async fn a_pipeline_agent_node_offers_a_refused_saved_agent() {
         ]),
         BTreeMap::from([((32, 42), vec!["pii"])]),
     );
-    let (runtime, _) = fixture
+    let (runtime, skipped) = fixture
         .build_delegated(
             reference((31, 41), "pipeline", "outer"),
             ApplicationContinuation::Scoped,
@@ -1700,21 +1704,23 @@ async fn a_pipeline_agent_node_offers_a_refused_saved_agent() {
         )
         .await
         .unwrap();
+    assert_eq!(skipped, []);
     let runtime = runtime.unwrap();
-    let outer = runtime.tools[0].tool.name();
-    assert_ne!(runtime.tools[0].model_name, REFUSED_DELEGATION_MODEL);
-    assert_eq!(runtime.presentations.delegation_of(outer).unwrap().depth, 1);
-    let worker = runtime
+    assert_eq!(runtime.tools[0].agent_type, "pipeline");
+    assert_eq!(runtime.tools[0].model_name, REFUSED_DELEGATION_MODEL);
+    let evidence = runtime
         .presentations
-        .child_tools(outer)
-        .unwrap()
-        .delegation_of("elitea_agent_32_v_42")
-        .expect("the pipeline's agent node records its delegation");
-    assert_eq!(worker.depth, 2);
+        .delegation_of(runtime.tools[0].tool.name())
+        .unwrap();
     assert_eq!(
-        worker.refusal.as_ref().map(DelegationRefusal::to_value),
-        Some(json!({"code":"DELEGATION_GRANT_MISSING","kind":"data_class","name":"pii"}))
+        evidence.depth, 2,
+        "the refused agent node is one level below"
     );
+    assert_eq!(
+        refusal_of(&runtime).await,
+        json!({"code":"DELEGATION_GRANT_MISSING","kind":"data_class","name":"pii"})
+    );
+    assert!(fixture.models.lock().unwrap().is_empty());
 }
 
 /// This process's resident set in bytes (`ps`, no unsafe code).

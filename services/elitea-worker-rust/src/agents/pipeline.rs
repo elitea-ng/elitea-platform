@@ -19,7 +19,7 @@ use adk_rust::{Agent, GenerateContentConfig, ReadonlyContext, Tool, Toolset};
 use async_trait::async_trait;
 use elitea_agent_runtime::approval_policy::ApprovalRule;
 use elitea_agent_runtime::delegation::{
-    Delegation, DelegationEvidence, DelegationScope, RefusedDelegation,
+    DelegatedCallee, Delegation, DelegationEvidence, DelegationScope, RefusedDelegation,
 };
 use serde_json::{Map, Value};
 use sqlx::PgPool;
@@ -2634,7 +2634,19 @@ async fn admit_saved_pipeline_child(
     )? {
         return Ok(Err(refused));
     }
-    let bound = bind_admitted_saved_pipeline(admitted.as_ref(), runtime, String::new()).await?;
+    // FU-335: a saved agent one of its graph nodes runs is refused while
+    // binding; as a tool, the refusal stays scoped to this tool, whose call
+    // answers it, so an uncalled tool never fails its caller's turn.
+    let bound = match bind_admitted_saved_pipeline(admitted.as_ref(), runtime, String::new()).await
+    {
+        Ok(bound) => bound,
+        Err(error) => {
+            return match error.delegation_refusal() {
+                Some((_, refused)) => Ok(Err(refused.clone())),
+                None => Err(error),
+            };
+        }
+    };
     Ok(Ok((
         admitted.profile.definition().clone(),
         bound,
@@ -2698,7 +2710,8 @@ fn bind_admitted_saved_pipeline<'a>(
             Ok(delegated) => delegated,
             Err(refused) => {
                 return Err(super::application_tools::delegation_refused_error(
-                    &refused.refusal,
+                    DelegatedCallee::Pipeline,
+                    &refused,
                 ));
             }
         };
@@ -2899,6 +2912,15 @@ async fn bind_scoped_agent(
         .iter()
         .find(|entry| entry.alias == alias && entry.agent_type == "agent")
         .ok_or_else(invalid_pipeline_tool_scope)?;
+    // FU-335: a node calls its saved Agent directly, so no model can read a
+    // refusal answered as a tool result: a refused delegation ends the run at
+    // start, typed and readable, before any effect.
+    if let Some(refused) = entry.enforced_refusal() {
+        return Err(super::application_tools::delegation_refused_error(
+            DelegatedCallee::Agent,
+            &refused,
+        ));
+    }
     let (fingerprint, member) = (entry.saved_agent_fingerprint, entry.member.clone());
     let (mut participants, projection) = application_participants(materialized)?;
     if participants.len() != 1 {

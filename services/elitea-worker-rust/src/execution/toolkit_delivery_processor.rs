@@ -2272,6 +2272,9 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::ToolkitRunAuthorizationFailed => {
             "runtime.toolkit_run_authorization_failed"
         }
+        RuntimeFailureKind::DelegationGrantMissing => {
+            elitea_faults::codes::RUNTIME_DELEGATION_GRANT_MISSING.as_str()
+        }
         RuntimeFailureKind::Cancelled => "runtime.cancelled",
         RuntimeFailureKind::ResultRefused => "runtime.result_refused",
         RuntimeFailureKind::RecoveryRefused => "runtime.recovery_refused",

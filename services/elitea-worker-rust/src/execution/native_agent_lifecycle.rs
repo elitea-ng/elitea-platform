@@ -294,6 +294,26 @@ where
                 )
                 .await;
             }
+            // FU-335: a delegation refused at start ends with its registered
+            // terminal; the notice before it names the node kind and the
+            // toolkit, so the author knows what to attach. A notice that cannot
+            // be published leaves the terminal alone.
+            if failure == RuntimeFailureKind::DelegationGrantMissing
+                && let Some((callee, refused)) = error.delegation_refusal()
+            {
+                let published = Box::pin(publish_assembly_delegation_notice(
+                    &mut run,
+                    callee,
+                    &refused.refusal,
+                    clock.as_ref(),
+                ))
+                .await;
+                tracing::info!(
+                    event = "agent_delegation_refusal_notice",
+                    published,
+                    "a delegation refused at start; the run ends with its registered terminal"
+                );
+            }
             tracing::error!(
                 event = "agent_native_assembly_failed",
                 error_code = error.code().as_str(),
@@ -1890,6 +1910,35 @@ where
     }
 }
 
+/// Publish the notice of a delegation refused at start (FU-335) ahead of the
+/// run's failure terminal. `true` only when it was durably acknowledged.
+async fn publish_assembly_delegation_notice<C, K>(
+    run: &mut CursorBoundAuthorizedAgentRun<C>,
+    callee: elitea_agent_runtime::delegation::DelegatedCallee,
+    refusal: &elitea_agent_runtime::delegation::DelegationRefusal,
+    clock: &K,
+) -> bool
+where
+    C: AgentProgressConnector,
+    K: UnixMillisClock,
+{
+    let occurred_at_unix_millis = clock.now_unix_millis();
+    let Some(occurred_at) = (occurred_at_unix_millis > 0)
+        .then(|| DateTime::<Utc>::from_timestamp_millis(occurred_at_unix_millis))
+        .flatten()
+    else {
+        return false;
+    };
+    let Some(event) = run.assembly_delegation_notice(callee, refusal, occurred_at) else {
+        return false;
+    };
+    matches!(
+        run.publish_full_message(event, occurred_at_unix_millis)
+            .await,
+        Ok(AgentProgressPublishOutcome::Acknowledged { .. })
+    )
+}
+
 /// The terminal of a failed event stream: a fixed Parallel resource-bound
 /// refusal keeps its typed limit (PM-3); anything else maps its upstream code.
 /// ADR-0041 decision 3: a run whose meter tripped ends as that cap, whatever
@@ -1920,6 +1969,16 @@ fn stream_failure(error: &crate::agents::runtime::NativeAgentRuntimeError) -> Ru
 }
 
 pub(crate) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailureKind {
+    // FU-335: a missing delegation grant keeps its own readable terminal; a
+    // depth refusal stays the coarse authorization failure.
+    if error.delegation_refusal().is_some_and(|(_, refused)| {
+        matches!(
+            refused.refusal,
+            elitea_agent_runtime::delegation::DelegationRefusal::GrantMissing { .. }
+        )
+    }) {
+        return RuntimeFailureKind::DelegationGrantMissing;
+    }
     // FU-244: a composition bound violation keeps its own readable terminal whatever coarse
     // code the bound reported (a cycle is InvalidConfiguration, a depth ResourceExhausted).
     if crate::agents::application_tools::is_composition_bound(error) {

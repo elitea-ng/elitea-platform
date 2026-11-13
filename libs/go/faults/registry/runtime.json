@@ -152,6 +152,16 @@
       "wire_code": "RUNTIME_ERROR_CODE_V1_DEADLINE_EXCEEDED"
     },
     {
+      "code": "runtime.delegation_grant_missing",
+      "sentence": "This run did not start because a saved agent or pipeline it runs needs a toolkit, tool or other grant that its caller does not hold; attach it to the caller, as the notice above says, or remove it from that agent or pipeline.",
+      "action": "Attach the toolkit named in the run's notice to the pipeline or agent that runs the refused node, or remove it from the delegated agent or pipeline; the Worker's delegation_refused line names the grant kind.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust",
+      "runtime_kind": "DelegationGrantMissing",
+      "wire_code": "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED"
+    },
+    {
       "code": "runtime.dependency_unavailable",
       "sentence": "A required runtime dependency is unavailable.",
       "action": "Check the Worker's dependencies (database, NATS, Main); the run can be retried.",

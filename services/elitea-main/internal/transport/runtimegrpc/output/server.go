@@ -1182,6 +1182,13 @@ const fanoutAgentCallsPipelineSafeMessage = "A Map item or Parallel branch runs 
 // stays admitted for frames an older Worker spooled.
 const fanoutAgentToolPipelineUnsupportedSafeMessage = "A Map item or Parallel branch calls a saved pipeline tool it cannot run yet: one with a Code or Agent node, or called via another Agent or a saved pipeline's Agent node; remove that node or call the pipeline from the member's own Agent."
 
+// FU-335: a graph node delegates to a saved agent or pipeline that needs a
+// grant its caller does not hold, refused at start (ADR-0044 decision 3): the
+// Worker's registered text (protocol/output.rs DELEGATION_GRANT_MISSING_MESSAGE,
+// registry runtime.delegation_grant_missing) under AUTHORIZATION_FAILED.
+// Data-free: the run's notice names the toolkit.
+const delegationGrantMissingSafeMessage = "This run did not start because a saved agent or pipeline it runs needs a toolkit, tool or other grant that its caller does not hold; attach it to the caller, as the notice above says, or remove it from that agent or pipeline."
+
 // A checkpoint reclaim met a root Agent node running a saved Agent, which is
 // not a recovery frontier (FU-323 makes it one): the Worker's registered text
 // (protocol/output.rs RECOVERY_FRONTIER_AGENT_STEP_MESSAGE, registry
@@ -1260,6 +1267,9 @@ func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFai
 	}
 	// The run's own credentials or context refused on the tool-run path: a
 	// fixed sentence of its own, so a caller can tell it from a refused tool.
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED && payload.GetSafeMessage() == delegationGrantMissingSafeMessage {
+		return runtimeFailurePolicy{Code: "AUTHORIZATION_FAILED", SafeMessage: delegationGrantMissingSafeMessage}, true
+	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED && payload.GetSafeMessage() == executiondomain.ToolkitRunCredentialsRefusedMessage {
 		return runtimeFailurePolicy{Code: "AUTHORIZATION_FAILED", SafeMessage: executiondomain.ToolkitRunCredentialsRefusedMessage}, true
 	}

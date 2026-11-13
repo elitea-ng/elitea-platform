@@ -1273,6 +1273,42 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
         requirement: &crate::toolkits::DelegatedAuthorizationRequirement,
         occurred_at: chrono::DateTime<chrono::Utc>,
     ) -> Option<crate::protocol::elitea::runtime::v1::NodeEventV1> {
+        self.assembly_notice(|identity| {
+            crate::agents::events::delegated_authorization_assembly_notice(
+                identity,
+                requirement,
+                occurred_at,
+            )
+        })
+    }
+
+    /// The notice a run refused at start for a delegation grant shows before
+    /// its terminal (FU-335). `None` as for [`Self::assembly_authorization_notice`].
+    pub(crate) fn assembly_delegation_notice(
+        &self,
+        callee: elitea_agent_runtime::delegation::DelegatedCallee,
+        refusal: &elitea_agent_runtime::delegation::DelegationRefusal,
+        occurred_at: chrono::DateTime<chrono::Utc>,
+    ) -> Option<crate::protocol::elitea::runtime::v1::NodeEventV1> {
+        self.assembly_notice(|identity| {
+            crate::agents::events::delegation_refused_assembly_notice(
+                identity,
+                callee,
+                refusal,
+                occurred_at,
+            )
+        })
+    }
+
+    fn assembly_notice(
+        &self,
+        build: impl FnOnce(
+            &crate::agents::events::AssemblyNoticeIdentity<'_>,
+        ) -> Result<
+            crate::protocol::elitea::runtime::v1::NodeEventV1,
+            crate::agents::events::AgentEventProjectionError,
+        >,
+    ) -> Option<crate::protocol::elitea::runtime::v1::NodeEventV1> {
         let command = self.verified.command();
         let crate::protocol::elitea::runtime::v1::worker_command_v1::CapabilityCommand::AgentExecution(
             agent,
@@ -1287,17 +1323,13 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             .execution_generation
             .clone()
             .unwrap_or_else(|| command.generation.to_string());
-        crate::agents::events::delegated_authorization_assembly_notice(
-            &crate::agents::events::AssemblyNoticeIdentity {
-                stream_id: &agent.client_stream_id,
-                message_id: &agent.client_message_id,
-                sio_event: &agent.sio_event,
-                execution_generation: &execution_generation,
-                thread_id,
-            },
-            requirement,
-            occurred_at,
-        )
+        build(&crate::agents::events::AssemblyNoticeIdentity {
+            stream_id: &agent.client_stream_id,
+            message_id: &agent.client_message_id,
+            sio_event: &agent.sio_event,
+            execution_generation: &execution_generation,
+            thread_id,
+        })
         .ok()
     }
 

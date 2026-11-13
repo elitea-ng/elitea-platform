@@ -77,7 +77,8 @@ use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 use crate::transport::runtime_context::SavedAgentFingerprint;
 use elitea_agent_runtime::delegation::{
-    Delegation, DelegationEvidence, DelegationRefusal, DelegationScope, GrantSet, RefusedDelegation,
+    DelegatedCallee, Delegation, DelegationEvidence, DelegationRefusal, DelegationScope, GrantSet,
+    RefusedDelegation,
 };
 #[cfg(test)]
 pub(in crate::agents) use materialization::MAX_MATERIALIZATION_VERSION_BYTES;
@@ -3078,6 +3079,19 @@ pub(crate) struct MaterializedApplicationTool {
 }
 
 impl MaterializedApplicationTool {
+    /// The enforced refusal this tool answers, when its delegation was
+    /// refused (FU-335): a graph node cannot answer it as a tool result.
+    pub(crate) fn enforced_refusal(&self) -> Option<RefusedDelegation> {
+        let evidence = self
+            .delegation
+            .as_ref()
+            .filter(|evidence| evidence.enforced)?;
+        Some(RefusedDelegation {
+            refusal: evidence.refusal.clone()?,
+            evidence: evidence.clone(),
+        })
+    }
+
     /// The guard catalogs the presentation catalog joins to this tool.
     fn guards(&self) -> ApplicationToolGuardCatalogs {
         ApplicationToolGuardCatalogs::new(
@@ -4014,17 +4028,22 @@ pub(in crate::agents) fn narrow_version(
         .map_err(|refused| *refused))
 }
 
-/// A refused delegation where no tool result can carry it: a pipeline node
-/// that runs a saved pipeline inside the graph. The run ends with the
+/// A refused delegation where no tool result can carry it: a graph node (a
+/// pipeline node running a saved pipeline, or an Agent node, Map item or
+/// Parallel branch running a saved agent). The run ends at start with the
 /// authorization terminal; the cause names the refusal code and the grant
-/// kind, and the log names the grant.
+/// kind, the log names the grant, and the error carries the refusal for the
+/// lifecycle's readable notice (FU-335).
 pub(in crate::agents) fn delegation_refused_error(
-    refusal: &DelegationRefusal,
+    callee: DelegatedCallee,
+    refused: &RefusedDelegation,
 ) -> NativeAgentAssemblyError {
+    let refusal = &refused.refusal;
     tracing::warn!(
         event = "delegation_refused",
+        callee = ?callee,
         refusal = %refusal.to_value(),
-        "a pipeline node delegates to a saved pipeline its caller may not run"
+        "a graph node delegates to a saved agent or pipeline its caller may not run"
     );
     let detail = match refusal {
         DelegationRefusal::GrantMissing { kind, .. } => kind.as_str(),
@@ -4032,9 +4051,10 @@ pub(in crate::agents) fn delegation_refused_error(
     };
     NativeAgentAssemblyError::new(
         NativeAgentAssemblyErrorCode::AuthorizationFailed,
-        "a pipeline node delegates to a saved pipeline that needs a grant its caller does not hold, or is past the delegation depth",
+        "a graph node delegates to a saved agent or pipeline that needs a grant its caller does not hold, or is past the delegation depth",
     )
     .with_cause(refusal.code(), Some(detail))
+    .with_delegation_refusal(callee, refused.clone())
 }
 
 /// A saved agent its caller may not delegate to, offered with its refusal.

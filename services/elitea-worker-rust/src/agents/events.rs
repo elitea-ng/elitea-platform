@@ -46,7 +46,7 @@ use crate::toolkits::{
     DELEGATED_AUTHORIZATION_METADATA_KEY, DelegatedAuthorizationCatalog,
     DelegatedAuthorizationRequirement, decode_delegated_authorization_requirement,
 };
-use elitea_agent_runtime::delegation::DelegationEvidence;
+use elitea_agent_runtime::delegation::{DelegatedCallee, DelegationEvidence, DelegationRefusal};
 
 const MAX_TOOL_CALLS_PER_MODEL_TURN: usize = 16;
 const MAX_TOOL_RESULT_BYTES: usize = 1024 * 1024;
@@ -4232,6 +4232,75 @@ pub(crate) fn delegated_authorization_assembly_notice(
     requirement: &DelegatedAuthorizationRequirement,
     occurred_at: DateTime<Utc>,
 ) -> Result<NodeEventV1, AgentEventProjectionError> {
+    let metadata = json!({
+        "thread_id": identity.thread_id,
+        "invoked_skills": [],
+        "mcp_authorization_required": {
+            "toolkit_name": requirement.toolkit_name(),
+            "toolkit_type": requirement.toolkit_type(),
+            "server_url": requirement.server_url(),
+            "resource_metadata_url": requirement.resource_metadata_url(),
+            "raised_during": "assembly",
+        },
+    });
+    assembly_notice(
+        identity,
+        requirement.assembly_notice_message(),
+        &metadata,
+        occurred_at,
+    )
+}
+
+/// The `full_message` a run refused at start for a delegation grant shows
+/// before its `DelegationGrantMissing` terminal (FU-335): which node kind ran
+/// the refused saved agent or pipeline, and the display name of the toolkit
+/// the missing grant belongs to. It names nothing else: never a tool, a
+/// credential or its reference, a data class, a host or a URL.
+pub(crate) fn delegation_refused_assembly_notice(
+    identity: &AssemblyNoticeIdentity<'_>,
+    callee: DelegatedCallee,
+    refusal: &DelegationRefusal,
+    occurred_at: DateTime<Utc>,
+) -> Result<NodeEventV1, AgentEventProjectionError> {
+    let (node, saved) = match callee {
+        DelegatedCallee::Agent => ("Agent node", "saved agent"),
+        DelegatedCallee::Pipeline => ("pipeline node", "saved pipeline"),
+    };
+    let toolkit = refusal
+        .toolkit_display_name()
+        .map(crate::toolkits::bounded_label)
+        .filter(|name| !name.is_empty());
+    let message = match toolkit.as_deref() {
+        Some(name) => format!(
+            "This run did not start: the {saved} that one of its {node}s runs needs the toolkit '{name}', which its caller does not hold. Attach '{name}' to the caller, or remove it from the {saved}."
+        ),
+        None => format!(
+            "This run did not start: the {saved} that one of its {node}s runs needs a grant its caller does not hold. Grant it to the caller, or remove it from the {saved}."
+        ),
+    };
+    let metadata = json!({
+        "thread_id": identity.thread_id,
+        "invoked_skills": [],
+        "delegation_refused": {
+            "code": refusal.code(),
+            "node": match callee {
+                DelegatedCallee::Agent => "agent",
+                DelegatedCallee::Pipeline => "pipeline",
+            },
+            "toolkit": toolkit,
+            "raised_during": "assembly",
+        },
+    });
+    assembly_notice(identity, message, &metadata, occurred_at)
+}
+
+/// One assembly-time `full_message` on a validated identity.
+fn assembly_notice(
+    identity: &AssemblyNoticeIdentity<'_>,
+    message: String,
+    metadata: &Value,
+    occurred_at: DateTime<Utc>,
+) -> Result<NodeEventV1, AgentEventProjectionError> {
     let fields = [
         identity.stream_id,
         identity.message_id,
@@ -4248,18 +4317,6 @@ pub(crate) fn delegated_authorization_assembly_notice(
     }) {
         return Err(AgentEventProjectionError::invalid_state());
     }
-    let message = requirement.assembly_notice_message();
-    let metadata = json!({
-        "thread_id": identity.thread_id,
-        "invoked_skills": [],
-        "mcp_authorization_required": {
-            "toolkit_name": requirement.toolkit_name(),
-            "toolkit_type": requirement.toolkit_type(),
-            "server_url": requirement.server_url(),
-            "resource_metadata_url": requirement.resource_metadata_url(),
-            "raised_during": "assembly",
-        },
-    });
     let event = NodeEventV1 {
         r#type: "full_message".to_owned(),
         stream_id: Some(identity.stream_id.to_owned()),
@@ -4267,13 +4324,13 @@ pub(crate) fn delegated_authorization_assembly_notice(
         question_id: None,
         content: serde_json::to_vec(&Value::String(message)).map_err(|_| {
             AgentEventProjectionError::output(ProtocolError::InvalidInput(
-                "the authorization notice content is malformed",
+                "the assembly notice content is malformed",
             ))
         })?,
         thinking: None,
-        response_metadata: serde_json::to_vec(&metadata).map_err(|_| {
+        response_metadata: serde_json::to_vec(metadata).map_err(|_| {
             AgentEventProjectionError::output(ProtocolError::InvalidInput(
-                "the authorization notice metadata is malformed",
+                "the assembly notice metadata is malformed",
             ))
         })?,
         references: b"[]".to_vec(),

@@ -148,6 +148,11 @@ pub enum RuntimeFailureKind {
     /// own, so Main can tell it from an older worker's refusal of a tool
     /// (which sent the generic sentence for both).
     ToolkitRunAuthorizationFailed,
+    /// FU-335: a graph node delegates to a saved agent or pipeline that needs
+    /// a grant its caller does not hold (ADR-0044 decision 3), refused at
+    /// start: `AUTHORIZATION_FAILED` with a data-free sentence of its own; the
+    /// run's notice names the toolkit. Never retryable.
+    DelegationGrantMissing,
     Cancelled,
     /// The output plane refused a typed terminal result on its content
     /// (`RESULT_REFUSED`, ADR-0030 I1): the worker answers with this FAILED
@@ -966,6 +971,7 @@ impl RuntimeFailureKind {
             Self::FanoutDeadlineInsufficient => Some(Self::PipelineToolFailed),
             Self::FanoutAgentToolPipelineUnsupported => Some(Self::FanoutAgentCallsPipeline),
             Self::RecoveryFrontierAgentStep => Some(Self::RecoveryFrontierUnsupported),
+            Self::DelegationGrantMissing => Some(Self::AuthorizationFailed),
             // ---- the FU-299 baseline. FanoutAgentCallsPipeline belongs here:
             // Main has admitted its text since FU-291; W3-1 (D5) only added it
             // to the Worker's table.
@@ -1075,6 +1081,11 @@ pub(crate) const RECOVERY_REFUSED_DETAIL: &str =
 /// Registered text of [`RuntimeFailureKind::RecoveryFrontierUnsupported`]; Main holds the
 /// same text. Data-free: the walk's distinct cause stays in the Worker's logs.
 pub(crate) const RECOVERY_FRONTIER_UNSUPPORTED_MESSAGE: &str = "This run stopped at a point where it cannot be safely continued. Nothing was repeated. Start it again, and share the support reference with your administrator if it happens again.";
+
+/// Registered text of [`RuntimeFailureKind::DelegationGrantMissing`]; Main holds the same text.
+/// Data-free: the grant is named by the run's notice and on the Worker's `delegation_refused`
+/// line, never here.
+pub(crate) const DELEGATION_GRANT_MISSING_MESSAGE: &str = "This run did not start because a saved agent or pipeline it runs needs a toolkit, tool or other grant that its caller does not hold; attach it to the caller, as the notice above says, or remove it from that agent or pipeline.";
 
 /// Registered text of [`RuntimeFailureKind::RecoveryFrontierAgentStep`]; Main holds the same
 /// text. Data-free: the node is named on the Worker's fault line only.
@@ -1264,6 +1275,11 @@ pub(crate) fn runtime_error_policy(
             TOOLKIT_RUN_AUTHORIZATION_FAILED_MESSAGE,
             false,
         ),
+        RuntimeFailureKind::DelegationGrantMissing => (
+            RuntimeErrorCodeV1::AuthorizationFailed,
+            DELEGATION_GRANT_MISSING_MESSAGE,
+            false,
+        ),
         RuntimeFailureKind::Cancelled => (
             RuntimeErrorCodeV1::Cancelled,
             "Execution was cancelled.",
@@ -1426,6 +1442,7 @@ const REGISTERED_RUNTIME_FAILURES: &[RuntimeFailureKind] = &[
     RuntimeFailureKind::DeadlineExceeded,
     RuntimeFailureKind::AuthorizationFailed,
     RuntimeFailureKind::ToolkitRunAuthorizationFailed,
+    RuntimeFailureKind::DelegationGrantMissing,
     RuntimeFailureKind::Cancelled,
     RuntimeFailureKind::ResultRefused,
     RuntimeFailureKind::RecoveryRefused,
@@ -2667,6 +2684,10 @@ mod deadline_admission_failure_tests {
                 RuntimeFailureKind::RecoveryFrontierAgentStep,
                 RuntimeFailureKind::RecoveryFrontierUnsupported,
             ),
+            (
+                RuntimeFailureKind::DelegationGrantMissing,
+                RuntimeFailureKind::AuthorizationFailed,
+            ),
         ] {
             assert_eq!(refused_terminal_replacement(&terminal(kind)), Some(older));
             assert_eq!(
@@ -2683,6 +2704,7 @@ mod deadline_admission_failure_tests {
                     | RuntimeFailureKind::FanoutDeadlineInsufficient
                     | RuntimeFailureKind::FanoutAgentToolPipelineUnsupported
                     | RuntimeFailureKind::RecoveryFrontierAgentStep
+                    | RuntimeFailureKind::DelegationGrantMissing
             ) {
                 assert_eq!(
                     refused_terminal_replacement(&terminal(*kind)),
