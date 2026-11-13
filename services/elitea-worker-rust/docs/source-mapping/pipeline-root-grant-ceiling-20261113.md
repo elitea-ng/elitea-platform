@@ -40,10 +40,16 @@
     terminal (`:297-316`, `:1913-1942`). The notice is a dedicated node event, `agent_delegation_refused`, carrying
     data only: the node kind and the toolkit's bounded display name (`W/agents/events.rs:4259-4295`,
     `L/delegation.rs:273-291`).
-  - **Main shows that notice only beside a FAILED terminal (option a).** The replay query holds an
-    `agent_delegation_refused` row until the execution has a projected `RUNTIME_FAILURE` terminal
-    (`M/infra/db/repos/replay_events.go:120-133`); every other `full_message` on a failed run stays hidden as before,
-    and a succeeded run is unchanged. Its ingest wakes no stream (`M/runtimecomposition/execution_replay_wake.go:290-292`):
+  - **Main shows that notice only beside a FAILED terminal (option a).** The replay query serves an
+    `agent_delegation_refused` row only once the execution has a projected `RUNTIME_FAILURE` terminal at or after the
+    notice's generation, and otherwise SKIPS it, never a barrier: a run that ends any other way (lost claim, deadline,
+    stop) still delivers what follows (`M/infra/db/repos/replay_events.go:154-168`, review 1 item 2). A node event's
+    JSON is decoded once per row (`:138-145`, review 1 item 5). Every other `full_message` on a failed run stays
+    hidden as before, and a succeeded run is unchanged.
+  - **Can a refused run be reclaimed under a new generation? No.** A reclaim takes a new claim attempt under the
+    SAME generation (`M/infra/db/repos/claims.go:384-389,410-430`); it re-assembles, refuses again and ends with its
+    own `RUNTIME_FAILURE` in that generation, which releases the earlier notice too. The gate is still written so it
+    cannot stall: `terminal.generation >= replay.generation`, and a hidden notice is skipped. Its ingest wakes no stream (`M/runtimecomposition/execution_replay_wake.go:290-292`):
     a wake for a still-hidden row would make every waiter re-read the same barrier, so it is delivered with the
     failure, at the replay poll, like every failure today. For a reload, the failure projection copies the newest
     notice's node kind and toolkit name into the message group's `meta.delegation_refused`, only for
@@ -52,8 +58,9 @@
   - **Web renders it above the failure text** from a registered template (four i18n keys
     `features.chatMessages.delegationRefusal.*`), with the toolkit name ONLY as data
     (`apps/elitea-web/src/features/chat-messages/ui/chat-box/DelegationRefusalNotice.tsx`,
-    `ApplicationAnswer.tsx:330`). The name is bounded (`MAX_DELEGATION_TOOLKIT_NAME_CHARS` = 128), passed through
-    the chat's sanitizer (`sanitizeMarkdownHtml`) and shown as plain text, never markup
+    `ApplicationAnswer.tsx:330`). The name is bounded (`MAX_DELEGATION_TOOLKIT_NAME_CHARS` = 128) and rendered as a
+    plain React text node, never parsed as HTML or markdown, so it is inert and `Jira <prod>` shows as written
+    (review 1 item 4: sanitize-then-text dropped tag-like parts)
     (`apps/elitea-web/src/features/chat-messages/lib/delegationRefusal.ts`); the live frame
     (`chatStreamReducer.ts:130`) and the persisted meta (`convertMessagesToChatHistory.ts:338`) feed the same notice.
   - The terminal is `AUTHORIZATION_FAILED` with a data-free registered sentence (`W/protocol/output.rs:1088,1278-1282`,
@@ -187,8 +194,11 @@ Counts on the branch head:
   redeemed; the dial count is tested (`an_attached_toolkit_nothing_uses_is_never_dialled`), the redemption is by
   construction (no governed seam in the test).
 - Rendering: the toolkit name is author-written and shown in chat. Main persists it only within
-  `MaxDelegationNoticeToolkitChars`; Web bounds it again, sanitizes it with the chat's `sanitizeMarkdownHtml` and
-  renders text only (Web tests with `<script>`, `<img onerror>`, a `javascript:` link and a markdown link).
+  `MaxDelegationNoticeToolkitChars`; Web bounds it again and renders it as a React text node only, never HTML or
+  markdown (Web tests: `<script>`, `<img onerror>`, a `javascript:` link and a markdown link render as literal,
+  element-free text; `Jira <prod>` shows as written).
+- The terminal sentence stands alone (review 1 item 3): it no longer points at the notice, which a failed publish,
+  a client without the renderer (mobile) or a depth refusal does not show.
 - Redaction: the notice shows only the node kind and a bounded, control-free toolkit display name
   (`L/delegation.rs:273-291`, `W/agents/events.rs:4259-4295`); never a credential reference, tool, data class, host
   or URL. The terminal is data-free; Main admits only the exact sentence under `AUTHORIZATION_FAILED`.
