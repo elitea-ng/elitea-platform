@@ -595,6 +595,12 @@ fn a_missing_grant_ends_with_its_registered_terminal_and_depth_stays_generic() {
     );
     assert!(!error.retryable);
     assert!(!error.safe_message.contains("batch"), "data-free terminal");
+    // Review 1 item 3: it stands alone; no client or path promises a notice.
+    assert!(
+        !error.safe_message.contains("notice"),
+        "{}",
+        error.safe_message
+    );
     assert_eq!(
         kind.older_main_fallback(),
         Some(RuntimeFailureKind::AuthorizationFailed)

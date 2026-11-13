@@ -1085,7 +1085,7 @@ pub(crate) const RECOVERY_FRONTIER_UNSUPPORTED_MESSAGE: &str = "This run stopped
 /// Registered text of [`RuntimeFailureKind::DelegationGrantMissing`]; Main holds the same text.
 /// Data-free: the grant is named by the run's notice and on the Worker's `delegation_refused`
 /// line, never here.
-pub(crate) const DELEGATION_GRANT_MISSING_MESSAGE: &str = "This run did not start because a saved agent or pipeline it runs needs a toolkit, tool or other grant that its caller does not hold; attach it to the caller, as the notice above says, or remove it from that agent or pipeline.";
+pub(crate) const DELEGATION_GRANT_MISSING_MESSAGE: &str = "This run did not start because a saved agent or pipeline it runs needs a toolkit, tool or other grant that its caller does not hold; attach it to the caller or remove it from that agent or pipeline.";
 
 /// Registered text of [`RuntimeFailureKind::RecoveryFrontierAgentStep`]; Main holds the same
 /// text. Data-free: the node is named on the Worker's fault line only.

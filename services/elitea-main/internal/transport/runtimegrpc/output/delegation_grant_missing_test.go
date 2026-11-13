@@ -2,6 +2,7 @@ package output
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -19,6 +20,11 @@ func TestDelegationGrantMissingShowsItsReadableText(t *testing.T) {
 	message := delegationGrantMissingSafeMessage
 	if len(message) > outputapp.MaxRuntimeFailureSafeMessageBytes {
 		t.Fatalf("text is %d bytes, over the frame bound", len(message))
+	}
+	// Review 1 item 3: the sentence stands alone; a client or a path without
+	// the notice must not be pointed at one.
+	if strings.Contains(message, "notice") {
+		t.Fatalf("the sentence points at a notice: %q", message)
 	}
 	code := runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED
 	payload := &runtimev1.RuntimeErrorV1{Code: code, SafeMessage: message}

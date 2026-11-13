@@ -1187,7 +1187,7 @@ const fanoutAgentToolPipelineUnsupportedSafeMessage = "A Map item or Parallel br
 // Worker's registered text (protocol/output.rs DELEGATION_GRANT_MISSING_MESSAGE,
 // registry runtime.delegation_grant_missing) under AUTHORIZATION_FAILED.
 // Data-free: the run's notice names the toolkit.
-const delegationGrantMissingSafeMessage = "This run did not start because a saved agent or pipeline it runs needs a toolkit, tool or other grant that its caller does not hold; attach it to the caller, as the notice above says, or remove it from that agent or pipeline."
+const delegationGrantMissingSafeMessage = "This run did not start because a saved agent or pipeline it runs needs a toolkit, tool or other grant that its caller does not hold; attach it to the caller or remove it from that agent or pipeline."
 
 // A checkpoint reclaim met a root Agent node running a saved Agent, which is
 // not a recovery frontier (FU-323 makes it one): the Worker's registered text
