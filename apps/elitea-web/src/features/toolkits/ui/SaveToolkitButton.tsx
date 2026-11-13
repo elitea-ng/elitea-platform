@@ -34,8 +34,6 @@ export interface SaveToolkitButtonProps {
   readonly onBeforeSave?: ((performSave: () => void) => boolean) | undefined;
   readonly onToolkitSaved?: ((result: ToolkitWriteResult, toolkitData: ToolkitFormValues) => void) | undefined;
   readonly onError?: ((error: unknown) => void) | undefined;
-  /** Called when a click is refused because the form still has errors (#2016): the click must say so. */
-  readonly onBlocked?: (() => void) | undefined;
   /** No generated `PUT /elitea_core/tool/prompt_lib/{projectId}/{toolId}` endpoint exists yet — see `../api/toolkits.ts`'s module doc comment. Injected so a future caller can wire the real mutation once one exists; this button owns only the click/loading/validation orchestration around it. */
   readonly saveToolkit: UseToolkitEditMutation;
   readonly isSaving?: boolean | undefined;
@@ -72,7 +70,6 @@ export function SaveToolkitButton({
   onBeforeSave,
   onToolkitSaved,
   onError,
-  onBlocked,
   saveToolkit,
   isSaving = false,
   sx,
@@ -94,8 +91,8 @@ export function SaveToolkitButton({
 
   const onSaveToolkit = useCallback(() => {
     if (hasErrors) {
+      // The caller's triggerValidation also says why the click did nothing (#2016).
       triggerValidation?.();
-      onBlocked?.();
       return;
     }
     if (onBeforeSave) {
@@ -107,7 +104,7 @@ export function SaveToolkitButton({
     } else {
       void performSave();
     }
-  }, [hasErrors, triggerValidation, onBlocked, onBeforeSave, performSave]);
+  }, [hasErrors, triggerValidation, onBeforeSave, performSave]);
 
   const shouldDisableSave = useMemo(() => isSaving || !isDirty, [isSaving, isDirty]);
 
