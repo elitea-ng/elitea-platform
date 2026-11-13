@@ -112,7 +112,9 @@ describe('CreateBucket', () => {
     const user = userEvent.setup();
     renderArtifactsRoute(<CreateBucket />, '/artifacts/create-bucket');
     expect(await screen.findByText("Leave empty to use the project's default retention.")).toBeInTheDocument();
-    mocks.createBucket.mockRejectedValueOnce(new Error("retention_days exceeds the project's policy ceiling"));
+    mocks.createBucket.mockRejectedValueOnce(
+      Object.assign(new Error("retention_days exceeds the project's policy ceiling"), { name: 'ServerRefusal' }),
+    );
     await user.type(screen.getByLabelText('Retention (days)'), '999');
     await user.click(screen.getByRole('button', { name: 'Create bucket' }));
     expect(await screen.findByRole('alert')).toHaveTextContent("retention_days exceeds the project's policy ceiling");

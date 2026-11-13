@@ -198,7 +198,8 @@ export function CreateBucket(): ReactNode {
       .mutateAsync({ name: name.trim(), retentionDays: parseRetentionDays(retention) })
       .then(() => goToBucket(name.trim()))
       .catch((cause: unknown) => {
-        setError(cause instanceof Error && cause.message !== '' ? cause.message : 'Failed to create the bucket.');
+        // Only the server's own 4xx explanation is shown as written; anything else stays generic.
+        setError(cause instanceof Error && cause.name === 'ServerRefusal' ? cause.message : 'Failed to create the bucket.');
       });
   };
 

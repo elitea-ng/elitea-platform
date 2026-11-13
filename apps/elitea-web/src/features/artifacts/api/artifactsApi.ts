@@ -109,6 +109,17 @@ function toProjectID(projectId: string): number {
   return parsed;
 }
 
+/**
+ * An error whose message is the server's own explanation of a 4xx refusal, so a page may show it as
+ * written. Marked by `name` rather than a class so the slice's public API does not grow; any other
+ * thrown error must be shown as a generic sentence.
+ */
+function serverRefusal(message: string): Error {
+  const error = new Error(message);
+  error.name = 'ServerRefusal';
+  return error;
+}
+
 export async function createArtifactBucket(
   projectId: string,
   name: string,
@@ -126,7 +137,7 @@ export async function createArtifactBucket(
     // storage quota, a name that is taken) is shown as the server wrote it.
     if (cause instanceof EliteaApiError && cause.failure.kind === 'http' && cause.failure.status < 500) {
       const message = envelopeMessage(cause.failure.body);
-      if (message !== undefined) throw new Error(message);
+      if (message !== undefined) throw serverRefusal(message);
     }
     throw new Error('Failed to create the bucket.');
   }
