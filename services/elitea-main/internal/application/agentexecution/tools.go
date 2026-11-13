@@ -775,7 +775,7 @@ func (service *CurrentApplicationToolSnapshotService) resolveCurrentAgentModel(
 	if !found {
 		if catalog.DefaultModelName == nil || catalog.DefaultModelProjectID == nil ||
 			*catalog.DefaultModelName == "" || *catalog.DefaultModelProjectID <= 0 {
-			return unsupportedStart("the requested model is not in the project's catalog and the catalog names no default")
+			return UnsupportedStartRefused(RefusalModelUnavailable)
 		}
 		modelName = *catalog.DefaultModelName
 		modelProjectID = int64(*catalog.DefaultModelProjectID)

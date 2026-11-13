@@ -5,6 +5,7 @@
  * indicator, "To:" and `NewChatInput` with its props. `ChatBox` renders it in
  * place of a read-only notice; its hook wiring is `useChatBoxComposer`.
  */
+import { useCallback, useEffect, useRef } from 'react';
 import type { ComponentRef, ReactNode, RefObject } from 'react';
 
 import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonHandle } from '@/widgets/chat';
@@ -17,6 +18,7 @@ import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxFloorTarget } from './ChatBoxFloorTarget';
 import { buildChatBoxAttachmentProps, buildChatBoxInputSlots } from './ChatBoxInputSlots';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
+import { startSkillMention } from './ChatBoxSkillPick';
 import { ChatBoxSteeringNotice, ChatBoxSteeringOffer } from './ChatBoxQueuedMessages';
 import type { ChatBoxVoiceFeedback } from './ChatBoxVoiceFeedback';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
@@ -87,6 +89,13 @@ export function ChatBoxComposer(props: ChatBoxComposerProps): ReactNode {
   const { isStreaming, areAttachmentsDisabled, isInputLoading } = inputState;
   const { projectId, conversationId, isAgentsPage } = conversation;
   const { participantForEditor, entityActions } = participant;
+  const cancelSkillPick = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => cancelSkillPick.current?.(), []);
+  const onInputChange = mentions.onInputChange;
+  const onPickSkill = useCallback(() => {
+    cancelSkillPick.current?.();
+    cancelSkillPick.current = startSkillMention(chatInputRef.current, onInputChange);
+  }, [chatInputRef, onInputChange]);
   return (
     <>
       <ChatBoxVoicePlayer showPlayer={readAloud.showPlayer} voicePlayerProps={readAloud.voicePlayerProps} />
@@ -148,6 +157,7 @@ export function ChatBoxComposer(props: ChatBoxComposerProps): ReactNode {
           runToCompletion: { unattended: tools.unattended, disabled: isInputLoading },
           entitySubmenus: { ...extensions.entitySubmenus, onSelectParticipant: entityActions.onSelectParticipant, getParticipantMenuState: entityActions.getParticipantMenuState },
           ...buildCreateHandlerProps(extensions.editorCallbacks),
+          ...(state.skill.hasMentionableSkills ? { onPickSkill } : {}),
         })}
         refs={refs}
       />

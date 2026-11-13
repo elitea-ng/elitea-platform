@@ -208,6 +208,8 @@ const (
 	RuntimeToolkitRunAuthorizationFailed Code = "runtime.toolkit_run_authorization_failed"
 	// Configuration type is not supported.
 	RuntimeUnsupportedCapability Code = "runtime.unsupported_capability"
+	// The OAuth discovery endpoint could not be read, so the connection check could not find the identity provider.
+	ToolkitOauthDiscoveryFailed Code = "toolkit.oauth_discovery_failed"
 	// The toolkit's settings could not be resolved, so the request could not run.
 	ToolkitSettingsUnresolved Code = "toolkit.settings_unresolved"
 	// A runtime server cannot read workload sessions, so Workers are answered retry until the database is back.

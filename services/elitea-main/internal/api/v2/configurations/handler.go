@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 )
 
 const (
@@ -85,6 +86,10 @@ type Handler struct {
 	// this build carries a probe for is never refused for want of composition;
 	// WithToolkitConnectionChecker replaces it in a test.
 	toolkitChecker ToolkitConnectionChecker
+	// oauthDiscovery reads the authorization-server metadata of a delegated
+	// credential through the MCP authorization egress guard
+	// (check_connection_oauth.go). nil refuses the read.
+	oauthDiscovery *mcpoauth.Fetcher
 	// modelProbes bounds the rate and the concurrency of the llm_model test
 	// per project and user (model_probe_limiter.go). NewHandler always
 	// supplies one.
