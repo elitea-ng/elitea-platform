@@ -36,9 +36,26 @@
     into the tool's refusal (`W/agents/pipeline.rs:2637-2650`), so an uncalled tool fails nothing and a called one
     answers the refusal by name.
   - The lifecycle maps a missing grant to `RuntimeFailureKind::DelegationGrantMissing`
-    (`W/execution/native_agent_lifecycle.rs:1971-1981`) and publishes a notice before the terminal (`:297-316`,
-    `:1913-1940`). The notice names the node kind and the toolkit's display name only
-    (`W/agents/events.rs:4259-4295`, `L/delegation.rs:273-291`).
+    (`W/execution/native_agent_lifecycle.rs:1971-1981`) and publishes a notice as a progress event before the
+    terminal (`:297-316`, `:1913-1942`). The notice is a dedicated node event, `agent_delegation_refused`, carrying
+    data only: the node kind and the toolkit's bounded display name (`W/agents/events.rs:4259-4295`,
+    `L/delegation.rs:273-291`).
+  - **Main shows that notice only beside a FAILED terminal (option a).** The replay query holds an
+    `agent_delegation_refused` row until the execution has a projected `RUNTIME_FAILURE` terminal
+    (`M/infra/db/repos/replay_events.go:120-133`); every other `full_message` on a failed run stays hidden as before,
+    and a succeeded run is unchanged. Its ingest wakes no stream (`M/runtimecomposition/execution_replay_wake.go:290-292`):
+    a wake for a still-hidden row would make every waiter re-read the same barrier, so it is delivered with the
+    failure, at the replay poll, like every failure today. For a reload, the failure projection copies the newest
+    notice's node kind and toolkit name into the message group's `meta.delegation_refused`, only for
+    `AUTHORIZATION_FAILED` and only when the name is within `MaxDelegationNoticeToolkitChars` (128)
+    (`M/infra/db/repos/configuration_validation_results.go:515-588`).
+  - **Web renders it above the failure text** from a registered template (four i18n keys
+    `features.chatMessages.delegationRefusal.*`), with the toolkit name ONLY as data
+    (`apps/elitea-web/src/features/chat-messages/ui/chat-box/DelegationRefusalNotice.tsx`,
+    `ApplicationAnswer.tsx:330`). The name is bounded (`MAX_DELEGATION_TOOLKIT_NAME_CHARS` = 128), passed through
+    the chat's sanitizer (`sanitizeMarkdownHtml`) and shown as plain text, never markup
+    (`apps/elitea-web/src/features/chat-messages/lib/delegationRefusal.ts`); the live frame
+    (`chatStreamReducer.ts:130`) and the persisted meta (`convertMessagesToChatHistory.ts:338`) feed the same notice.
   - The terminal is `AUTHORIZATION_FAILED` with a data-free registered sentence (`W/protocol/output.rs:1088,1278-1282`,
     registry `runtime.delegation_grant_missing`); an older Main gets the generic authorization text once
     (`W/protocol/output.rs:974`). Main admits the exact sentence under that code only
@@ -56,8 +73,16 @@
 - Shared runtime: `L/delegation.rs` (`DelegatedCallee`, `toolkit_display_name`), `L/assembly_error.rs` (the refusal
   carried with the error).
 - Registry: `libs/go/faults/registry/runtime.json`; generated `libs/go/faults/codes_gen.go`, `docs/errors/README.md`.
-- Main: `M/transport/runtimegrpc/output/server.go`.
-- Tests: `W/agents/pipeline_root_grant_tests.rs` (new, wired in `W/agents/pipeline_tests.rs`),
+- Main: `M/transport/runtimegrpc/output/server.go` (the sentence), `M/infra/db/repos/replay_events.go` and
+  `M/runtimecomposition/execution_replay_wake.go` (the notice beside a failed terminal),
+  `M/infra/db/repos/configuration_validation_results.go` (the notice persisted for a reload).
+- Web: `apps/elitea-web/src/features/chat-messages/lib/delegationRefusal.ts` (new),
+  `ui/chat-box/DelegationRefusalNotice.tsx` (new), `ui/chat-box/ApplicationAnswer.tsx`, `lib/chatStreamReducer.ts`,
+  `lib/convertMessagesToChatHistory.ts`, `lib/convertMessagesToChatHistory.types.ts`, `entities/message/lib/wire.ts`,
+  `src/shared/i18n/en.json` (backfilled).
+- Tests: `M/infra/db/repos/delegation_notice_postgres_integration_test.go` (new),
+  `M/runtimecomposition/execution_replay_wake_test.go` (one test), `apps/elitea-web/src/features/chat-messages/lib/delegationRefusal.test.ts`
+  and `ui/chat-box/DelegationRefusalNotice.test.tsx` (new), `W/agents/pipeline_root_grant_tests.rs` (new, wired in `W/agents/pipeline_tests.rs`),
   `W/agents/application_tools/materialization_tests.rs` (one test rewritten for C2),
   `W/protocol/output.rs` (fallback table test extended), `M/transport/runtimegrpc/output/delegation_grant_missing_test.go`
   (new).
@@ -79,7 +104,13 @@ which is why no earlier test met this); the Map cases run on the production Post
 | `postgres_control_a_map_member_agent_without_toolkits_runs` | the Map fixture itself is valid | control, passed on base |
 | `a_root_agent_node_refused_a_toolkit_ends_typed_naming_it` | root lacking 92 → typed refusal naming `batch`, `DelegationGrantMissing`, 0 model calls, 0 dials | failed first (`agent.legacy`) |
 | `postgres_a_map_member_refused_a_toolkit_ends_typed_naming_it` | the same in a Map member, 0 model calls | failed first (`UnsupportedCapability`) |
-| `the_delegation_notice_names_only_the_node_kind_and_the_toolkit` | every grant kind × node kind: toolkit display name only; no tool, credential reference, data class, host, URL; control characters and size bounded | new code |
+| `the_delegation_notice_names_only_the_node_kind_and_the_toolkit` | every grant kind × node kind: a dedicated `agent_delegation_refused` event, data only, toolkit display name only; no tool, credential reference, data class, host, URL; the name bounded at `MAX_NOTICE_LABEL_BYTES` (limit kept, limit+1 cut) and control characters removed | new code |
+| `TestPostgresDelegationNoticeIsShownBesideAFailedTerminal` (Main, real PostgreSQL) | (i) hidden before the terminal, shown beside a `RUNTIME_FAILURE` one, through the real replay query the live stream and a resume both read | failed on the previous head (shown before the terminal) |
+| `TestPostgresAnOrdinaryFinalMessageStaysHiddenOnAFailedRun` | (ii) a partial `full_message` on a failed run stays hidden | guard (passes on both) |
+| `TestPostgresASucceededRunIsUnchangedAndHidesTheNotice` | (iii) a succeeded run shows its final message, and no notice | failed on the previous head (notice shown) |
+| `TestPostgresAFailedTurnPersistsItsDelegationNoticeForAReload` | reload: node and toolkit persisted at the bound; nothing past it (limit+1) or for another failure | failed on the previous head (nothing persisted) |
+| `TestADelegationNoticeDoesNotWakeTheStreamItIsHiddenFrom` | the notice's ingest wakes no stream; progress still does | new |
+| Web `delegationRefusal.test.ts` (6) and `DelegationRefusalNotice.test.tsx` (4) | parse; 128 kept / 129 cut; `<script>`, `<img onerror>`, `javascript:` link and a markdown link render inert; live frame then failure; reload from meta; notice above the failure text | the render tests failed with the notice line removed |
 | `a_missing_grant_ends_with_its_registered_terminal_and_depth_stays_generic` | wire code, not retryable, data-free, older-Main fallback, depth stays generic | new code |
 | `a_toolkit_held_only_by_a_descendant_is_refused_at_its_own_hop` | descendant-only toolkit refused at S → P1, S reads it by name, 0 dials | passed on base (guard) |
 | `the_root_ceiling_never_passes_through_a_caller_that_lacks_the_toolkit` | never transitive: root holds 92, S not, P1 refused | passed on base (guard) |
@@ -100,7 +131,12 @@ Counts on the branch head:
   disposable), `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1`, `ELITEA_TEST_DATABASE_GUARD=disposable-pg18`:
   3357 passed, 0 failed, 147 ignored (unchanged), no SKIP line.
 - `libs/rust`: `elitea-agent-runtime` lib 1864 passed, 1 ignored; `elitea-faults` 10 passed.
-- `libs/go/faults`: every package `ok`. Main `internal/transport/runtimegrpc/output`: `ok`.
+- `libs/go/faults`: every package `ok`.
+- Main, `go vet` and `go test -race -count=1` with `ELITEA_TEST_DATABASE_URL` (PostgreSQL 18): `internal/infra/db/repos`
+  ok (272 s), `internal/runtimecomposition` ok, `internal/transport/runtimegrpc/output` ok; `go build ./...` ok.
+- Web: `tsc --noEmit` clean, `oxlint` clean, `i18n-backfill --check` OK (4 keys added), `check-dead-code` (knip) OK,
+  vitest 7 affected files 182 passed (the 10 new among them).
+- Production size of the notice change: Main +41 / -3 lines, Web +101 / -3 lines (5 of them `en.json`).
 - C3: the FU-323a / FU-338 proofs pass unmodified, among them
   `root_saved_agent_frontier::postgres_a_root_saved_agent_node_lost_mid_model_resumes_from_its_model_checkpoint`,
   `postgres_a_root_agent_step_changed_after_its_grant_is_refused`,
@@ -132,7 +168,9 @@ Counts on the branch head:
   authorization text once (`W/protocol/output.rs:974`). A refusal inside a pipeline tool stays a tool result.
 - Proof: `a_missing_grant_ends_with_its_registered_terminal_and_depth_stays_generic`,
   `a_refused_new_kind_is_replaced_by_the_kind_an_older_main_admits` (extended), the C2 pair.
-- Result: no generic `Internal` or `UnsupportedCapability` ending for this refusal. The notice is published but is not yet shown by Main (see Follow-ups).
+- Result: no generic `Internal` or `UnsupportedCapability` ending for this refusal; the notice is shown above the
+  failure text, live and after a reload. An older Main serves the unknown notice type as plain progress, which an
+  older Web ignores, so a Worker ahead of Main never blocks the failure.
 
 ## Security
 
@@ -140,8 +178,17 @@ Counts on the branch head:
   never transitive (`W/agents/pipeline.rs:673-683`). Proofs: descendant-only, never-transitive, policy-removed,
   foreign-project, ordinary/pipeline equivalence.
 - Fail closed: a refused bound Agent ends assembly before any effect; Report mode is unchanged.
-- Credentials: materialized only for the alias-reduced snapshot, as before (`W/agents/pipeline.rs:784-812`); proof
-  `an_attached_toolkit_nothing_uses_is_never_dialled`.
+- Credentials (C1, "0 redemptions" by construction): every credential redemption and connection of a pipeline root
+  runs over `selected_snapshot`, the alias-reduced snapshot: configured toolkits through
+  `materialize_configured_toolsets_with_authorities_governed(&selected_snapshot, ..)` and MCP through
+  `materialize_governed_mcp_toolsets(&selected_snapshot, ..)` or `materialize_mcp_toolsets_with_tokens_and_authorization(&selected_snapshot, ..)`
+  (`W/agents/pipeline.rs:784-812`). The ceiling change does not reach that code: `delegation_root` is only handed
+  to the delegation path (`:845`). An attached toolkit no node and no delegated descendant uses is therefore never
+  redeemed; the dial count is tested (`an_attached_toolkit_nothing_uses_is_never_dialled`), the redemption is by
+  construction (no governed seam in the test).
+- Rendering: the toolkit name is author-written and shown in chat. Main persists it only within
+  `MaxDelegationNoticeToolkitChars`; Web bounds it again, sanitizes it with the chat's `sanitizeMarkdownHtml` and
+  renders text only (Web tests with `<script>`, `<img onerror>`, a `javascript:` link and a markdown link).
 - Redaction: the notice shows only the node kind and a bounded, control-free toolkit display name
   (`L/delegation.rs:273-291`, `W/agents/events.rs:4259-4295`); never a credential reference, tool, data class, host
   or URL. The terminal is data-free; Main admits only the exact sentence under `AUTHORIZATION_FAILED`.
@@ -170,18 +217,8 @@ PostgreSQL 18 database created per test. No database fixture was written by hand
 
 ## Follow-ups
 
-- **Open, needs a decision before the browser pass: the notice is not shown by today's Main.** Main treats a
-  `full_message` node event as a turn's terminal: it is not woken live
-  (`services/elitea-main/internal/runtimecomposition/execution_replay_wake.go:282-296`) and replay shows it only when
-  the execution has an `AGENT_EXECUTION_RESULT` terminal (`services/elitea-main/internal/infra/db/repos/replay_events.go:118-133`).
-  A run refused at start ends with a runtime-error terminal, so the notice is stored but hidden, live and after a
-  reload; the user sees only the data-free sentence, whose "as the notice above says" then points at nothing. Options:
-  (a) Main shows a `full_message` with a `delegation_refused` block beside a failed terminal (a Main change, plus a
-  Web check); (b) end such a run COMPLETED with the notice as its result, as the #982 authorization notice does
-  (an automation would read a refused run as success); (c) drop "as the notice above says" from the sentence and leave
-  the name to the run's details.
 - FU-353: a nested saved agent's Attachments and Agent memory tools (separate cause, decision needed).
-- A depth refusal at a graph node keeps the generic authorization text; a registered depth text and notice would make
-  it as readable as the grant refusal.
-- The refusal evidence of a pipeline tool refused for an inner Agent node is that inner delegation's (depth and
-  digest of the inner step), recorded on the tool's step.
+- FU-354: a depth refusal at a graph node keeps the generic authorization text and gets no notice.
+- FU-355: the refused-pipeline-tool step records the inner Agent's delegation evidence, not P1's.
+- Live latency: the notice and the failure reach an open chat at the replay poll, as every failure does today
+  (the runtime-failure projection wakes no stream); waking on failure projection would serve both at once.
