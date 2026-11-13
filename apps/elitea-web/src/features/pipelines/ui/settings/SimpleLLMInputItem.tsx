@@ -288,6 +288,8 @@ export function SimpleLLMInputItem(props: SimpleLLMInputItemProps): ReactNode {
   const isStringType = type === 'string' || type === 'fstring' || type === 'fixed';
 
   const codeFieldLanguage = resolveCodeFieldLanguage(type, variableName, codeLanguage);
+  // Same rule the value field uses to grow to several rows (chat history or a code language).
+  const isMultiline = variable === 'chat_history' || codeFieldLanguage !== undefined;
 
   return (
     <Box sx={containerSx}>
