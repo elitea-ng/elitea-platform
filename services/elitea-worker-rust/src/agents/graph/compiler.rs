@@ -8,6 +8,9 @@
 
 #[path = "node_recovery_definition.rs"]
 mod recovery_definition;
+#[path = "node_settings_definition.rs"]
+mod settings_definition;
+pub(crate) use settings_definition::AdmittedNodeSettings;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
@@ -272,6 +275,8 @@ where
 #[derive(Clone)]
 pub(crate) struct PipelineDefinition {
     recovery: recovery_definition::RecoveryCatalog,
+    /// Admitted non-default node `settings:` (5b-1); empty for most documents.
+    settings: settings_definition::SettingsCatalog,
     entry_point: String,
     state: BTreeMap<String, String>,
     state_defaults: BTreeMap<String, serde_json::Value>,
@@ -330,9 +335,19 @@ pub(crate) struct PipelineNodeRuntimes {
     /// invocation only. A saved child pipeline has none: its parent maps
     /// what it reads.
     context_view: Option<Arc<Vec<serde_json::Value>>>,
+    /// The Main execution this graph runs for (5b-1): a settled node
+    /// failure's support reference and operator line name it.
+    // A thin pointer: the runtimes ride inside participant enums.
+    execution_id: Option<Arc<String>>,
 }
 
 impl PipelineNodeRuntimes {
+    /// 5b-1: bind the run's Main execution id for node settings.
+    pub(crate) fn with_execution_id(mut self, execution_id: &str) -> Self {
+        self.execution_id = Some(Arc::new(execution_id.to_owned()));
+        self
+    }
+
     /// FU-250: the servers of the run's tokens, never the tokens themselves.
     pub(crate) fn with_delegated_servers(
         mut self,
@@ -583,6 +598,7 @@ impl PipelineNodeRuntimes {
             parallel_authority_bound: false,
             application_scope_path: String::new(),
             context_view: None,
+            execution_id: None,
         }
     }
 
@@ -969,6 +985,9 @@ impl PipelineDefinition {
             .filter(|(key, _)| {
                 !reserved_user_state_key(key) && !matches!(key.as_str(), "input" | "messages")
             })
+            // C4: a child that owns `node_errors` keeps its entries; a parent
+            // can neither map into it nor read it back.
+            .filter(|(key, _)| !self.settings.owns_key(key))
             .map(|(key, kind)| (key.clone(), kind.clone()))
             .collect()
     }
@@ -1052,9 +1071,11 @@ impl PipelineDefinition {
                 "the pipeline entry point is malformed",
             ));
         }
+        // Settings first: they see `recovery:`, which the next extract strips.
+        let raw_settings = settings_definition::RawSettingsCatalog::extract(&mut raw.nodes)?;
         let raw_recovery = recovery_definition::RawRecoveryCatalog::extract(&mut raw.nodes)?;
         let (state, state_defaults, state_declaration_order, state_reducers) =
-            validate_state(raw.state)?;
+            raw_settings.declare_node_errors(validate_state(raw.state)?)?;
         let (nodes, node_ids) = parse_pipeline_nodes(raw.nodes, &state)?;
         if !node_ids.contains(&raw.entry_point) {
             return Err(PipelineConfigurationError::Invalid(
@@ -1100,30 +1121,24 @@ impl PipelineDefinition {
         validate_overwrite_channels(&nodes, &state_reducers, &recovery_owned)?;
         validate_fanout_joins(&nodes, &state_reducers)?;
         let recovery = raw_recovery.admit(&nodes, &state, &raw.entry_point, &recovery_owned)?;
+        let settings = raw_settings.admit(&nodes, &state, &state_reducers, &recovery_owned)?;
         let interrupt_before = validate_static_interrupts(raw.interrupt_before, &node_ids)?;
         let interrupt_after = validate_static_interrupts(raw.interrupt_after, &node_ids)?;
-        let mut definition_digest = definition_digest(
-            &raw.entry_point,
-            &state,
-            &state_defaults,
-            &state_declaration_order,
-            &nodes,
+        let definition_digest = fold_policy_digests(
+            definition_digest(
+                &raw.entry_point,
+                &state,
+                &state_defaults,
+                &state_declaration_order,
+                &nodes,
+            ),
+            &state_reducers,
+            (&interrupt_before, &interrupt_after),
+            (&recovery, &settings),
         );
-        // Overwrite-only definitions keep existing definition bytes and checkpoint lineage.
-        if !state_reducers.is_empty() {
-            definition_digest = reducers_digest(definition_digest, &state_reducers);
-        }
-        // Empty policies keep existing definition bytes and checkpoint lineage.
-        if !interrupt_before.is_empty() || !interrupt_after.is_empty() {
-            definition_digest = super::static_pause::policy_digest(
-                definition_digest,
-                &interrupt_before,
-                &interrupt_after,
-            );
-        }
-        definition_digest = recovery.bind_digest(definition_digest);
         Ok(Self {
             recovery,
+            settings,
             entry_point: raw.entry_point,
             state,
             state_defaults,
@@ -1398,7 +1413,7 @@ impl PipelineDefinition {
             &self.interrupt_before,
             &self.interrupt_after,
             self.nodes.iter().map(|node| {
-                let targets = match node {
+                let mut targets: Vec<String> = match node {
                     PipelineNodeDefinition::Printer(printer) => vec![printer.reset_node_id()],
                     _ => node
                         .route_targets()
@@ -1406,6 +1421,12 @@ impl PipelineDefinition {
                         .map(str::to_owned)
                         .collect(),
                 };
+                // 5b-1: a routed failure resumes into its error route (or END).
+                if let Some(target) = self.settings.error_transition(node.id())
+                    && !targets.iter().any(|known| known == target)
+                {
+                    targets.push(target.to_owned());
+                }
                 (
                     node.id().to_owned(),
                     node.config_digest(),
@@ -1811,7 +1832,13 @@ impl PipelineDefinition {
     ) -> Result<CompiledGraph, PipelineConfigurationError> {
         // A child restore re-merges its parent-mapped input through each
         // channel reducer, so typed channels would reduce twice (v1).
-        if !self.state_reducers.is_empty() {
+        // D3: the settings-owned `node_errors` channel is exempt. It is never
+        // mapped in from (or out to) the parent (C4), so it never reduces twice.
+        if self
+            .state_reducers
+            .keys()
+            .any(|key| !self.settings.owns_key(key))
+        {
             return Err(PipelineConfigurationError::Unsupported(
                 "typed state reducers are not supported in a nested pipeline",
             ));
@@ -1906,6 +1933,10 @@ impl PipelineDefinition {
             PIPELINE_RESULT_TRACE_STATE_KEY.to_owned(),
         ]);
         channels.extend(self.state.keys().cloned());
+        if self.settings.uses_execute_once() {
+            channels
+                .insert(elitea_agent_runtime::graph::node_settings::EXECUTED_ONCE_KEY.to_owned());
+        }
         for node in self
             .nodes
             .iter()
@@ -2014,20 +2045,46 @@ impl PipelineDefinition {
                         },
                     )
             }
-            PipelineNodeDefinition::Router(node) => builder.node(RouterNode::new(node.clone())),
+            // 5b-1: a node with non-default settings is wrapped; every other
+            // node binds exactly as before, at zero cost.
+            PipelineNodeDefinition::Router(node) => {
+                self.bind_settled(builder, RouterNode::new(node.clone()), runtimes)
+            }
             PipelineNodeDefinition::StateModifier(node) => {
-                let next = builder.node(StateModifierNode::new(node.clone()));
+                let next =
+                    self.bind_settled(builder, StateModifierNode::new(node.clone()), runtimes);
                 bind_transition(next, node.id(), node.transition())
             }
             PipelineNodeDefinition::SplitOut(node) => {
-                let next = builder.node(SplitOutNode::new(node.clone()));
+                let next = self.bind_settled(builder, SplitOutNode::new(node.clone()), runtimes);
                 bind_transition(next, node.id(), node.transition())
             }
             PipelineNodeDefinition::Aggregate(node) => {
-                let next = builder.node(AggregateNode::new(node.clone()));
+                let next = self.bind_settled(builder, AggregateNode::new(node.clone()), runtimes);
                 bind_transition(next, node.id(), node.transition())
             }
         })
+    }
+
+    /// Bind a deterministic node, wrapped in its settings layer when it has
+    /// non-default settings.
+    fn bind_settled<N>(
+        &self,
+        builder: PipelineGraphBuilder,
+        node: N,
+        runtimes: &PipelineNodeRuntimes,
+    ) -> PipelineGraphBuilder
+    where
+        N: Node + 'static,
+    {
+        match self.settings.get(node.name()) {
+            Some(admitted) => builder.node(super::node_settings_runtime::SettingsNode::new(
+                node,
+                admitted.clone(),
+                runtimes.execution_id.clone(),
+            )),
+            None => builder.node(node),
+        }
     }
 
     fn bind_code_node(
@@ -2250,7 +2307,7 @@ impl PipelineDefinition {
     ///
     /// `END` is only the ADK graph sink. The candidate belongs to the
     /// value-producing node whose explicit route targets that sink.
-    fn result_policy(&self) -> PipelineResultPolicy {
+    pub(super) fn result_policy(&self) -> PipelineResultPolicy {
         let mut keys = Vec::new();
         for node in &self.nodes {
             let (transition, output_keys) = match node {
@@ -2272,10 +2329,14 @@ impl PipelineDefinition {
                 | PipelineNodeDefinition::Printer(_)
                 | PipelineNodeDefinition::Router(_) => continue,
             };
-            if transition != Some("END") {
+            // 5b-1: a routed failure that ends the run ends it at this node.
+            if transition != Some("END") && self.settings.error_transition(node.id()) != Some("END")
+            {
                 continue;
             }
-            if let Some(key) = output_keys.iter().find(|key| key.as_str() != "messages")
+            if let Some(key) = output_keys
+                .iter()
+                .find(|key| key.as_str() != "messages" && !self.settings.owns_key(key))
                 && !internal_result_key(key)
                 && !keys.contains(key)
             {
@@ -2286,6 +2347,8 @@ impl PipelineDefinition {
             .state_declaration_order
             .iter()
             .filter(|key| !internal_result_key(key))
+            // 5b-1: the settings-owned failure list is never the final answer.
+            .filter(|key| !self.settings.owns_key(key))
             .cloned()
             .collect();
         PipelineResultPolicy {
@@ -2384,6 +2447,7 @@ fn normalize_graph_identifiers(
             &mut counts,
         )?;
         normalize_recovery_route(node, &mut counts)?;
+        normalize_settings_route(node, &mut counts)?;
         normalize_family_identifiers(node, &mut counts)?;
     }
     Ok(counts)
@@ -2482,6 +2546,29 @@ fn normalize_recovery_route(
         normalize_graph_identifier(route, PipelineIdentifierField::RecoveryRoute, false, counts)?;
     }
     Ok(())
+}
+
+/// 5b-1: `settings.error_transition` is a route target like `transition`,
+/// normalized the same way (Main and the Web normalize numeric ids too).
+fn normalize_settings_route(
+    node: &mut serde_yaml_ng::Mapping,
+    counts: &mut IdentifierNormalization,
+) -> Result<(), PipelineConfigurationError> {
+    let Some(serde_yaml_ng::Value::Mapping(settings)) = node.get_mut("settings") else {
+        return Ok(());
+    };
+    // Any other shape is left to the strict settings parser (malformed).
+    let normalizable = match settings.get("error_transition") {
+        Some(serde_yaml_ng::Value::String(_)) => true,
+        Some(serde_yaml_ng::Value::Number(number)) => safe_integer_identifier(number).is_some(),
+        _ => false,
+    };
+    match settings.get_mut("error_transition") {
+        Some(value) if normalizable => {
+            normalize_graph_identifier(value, PipelineIdentifierField::Transition, true, counts)
+        }
+        _ => Ok(()),
+    }
 }
 
 fn normalize_mapping_graph_identifier(
@@ -2812,6 +2899,7 @@ fn runtime_channel_default(channel: &str) -> serde_json::Value {
             json!({})
         }
         APPLICATION_MESSAGES_STATE_KEY => json!([]),
+        elitea_agent_runtime::graph::node_settings::EXECUTED_ONCE_KEY => json!({}),
         PIPELINE_NODE_EVENT_SCOPE_STATE_KEY
         | "context_info"
         | "hitl_interrupt"
@@ -3537,6 +3625,7 @@ pub(super) fn reserved_user_state_key(key: &str) -> bool {
         || key == PARALLEL_LLM_INPUTS_STATE_KEY
         || key == PIPELINE_NODE_EVENT_SCOPE_STATE_KEY
         || key == PIPELINE_RESULT_TRACE_STATE_KEY
+        || key == elitea_agent_runtime::graph::node_settings::EXECUTED_ONCE_KEY
         || matches!(
             key,
             APPLICATION_TASK_STATE_KEY
@@ -3593,6 +3682,27 @@ fn validate_static_interrupts(
         }
     }
     Ok(unique.into_iter().collect())
+}
+
+/// Folds the optional policies into a definition digest. Each one is folded
+/// only when present, so a document without it keeps its existing definition
+/// bytes and checkpoint lineage.
+fn fold_policy_digests(
+    mut definition: [u8; 32],
+    reducers: &BTreeMap<String, StateReducer>,
+    (before, after): (&[String], &[String]),
+    (recovery, settings): (
+        &recovery_definition::RecoveryCatalog,
+        &settings_definition::SettingsCatalog,
+    ),
+) -> [u8; 32] {
+    if !reducers.is_empty() {
+        definition = reducers_digest(definition, reducers);
+    }
+    if !before.is_empty() || !after.is_empty() {
+        definition = super::static_pause::policy_digest(definition, before, after);
+    }
+    settings.bind_digest(recovery.bind_digest(definition))
 }
 
 fn definition_digest(
@@ -3796,6 +3906,13 @@ pub(crate) enum PipelineConfigurationError {
         node: String,
         refusal: FanoutChildRefusal,
     },
+    /// A node's `settings:` block is refused (5b-1). Names the node (a
+    /// validated identifier) and the contract refusal, never data.
+    #[error("{}", refusal.message(node))]
+    NodeSettings {
+        node: String,
+        refusal: elitea_agent_runtime::graph::node_settings::NodeSettingsRefusal,
+    },
 }
 
 /// Why a fan-out child is refused before Wave 3.
@@ -3905,6 +4022,9 @@ impl PipelineConfigurationError {
             Self::Unsupported(_) => "graph.pipeline.unsupported_capability",
             Self::Graph(_) => "graph.pipeline.compile_failed",
             Self::FanoutChildUnsupported { refusal, .. } => refusal.code(),
+            Self::NodeSettings { .. } => {
+                elitea_faults::codes::PIPELINE_NODE_SETTINGS_INVALID.as_str()
+            }
         }
     }
 
@@ -3937,6 +4057,7 @@ impl PipelineConfigurationError {
                     "fanout_agent_tool_pipeline_in_saved_pipeline"
                 }
             }),
+            Self::NodeSettings { refusal, .. } => Some(refusal.key()),
         }
     }
 }

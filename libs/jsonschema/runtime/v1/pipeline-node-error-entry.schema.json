@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.pipeline-node-error-entry.v1",
+  "title": "Pipeline node error entry",
+  "description": "One entry of the `node_errors` state list (5b-1, contract pipeline-node-settings-v1). A node whose settings say on_error continue or error_output appends exactly one entry per failure it settles. The error object is the fan-out join grammar (at most 512 bytes); the whole entry is at most 1024 bytes. No field holds state, template, model, tool or code text: the code and message come from the faults registry, input_step references the checkpoint step whose state was the node's input.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "attempts",
+    "error",
+    "handled",
+    "input_step",
+    "node",
+    "node_type",
+    "retryable",
+    "status"
+  ],
+  "properties": {
+    "attempts": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message_safe",
+        "support_ref"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$"
+        },
+        "message_safe": {
+          "description": "Fixed catalog text for the code. Printable ASCII without quote or backslash.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 370,
+          "pattern": "^[\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]+$"
+        },
+        "support_ref": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 32,
+          "pattern": "^[0-9a-f]{32}$"
+        }
+      }
+    },
+    "handled": {
+      "enum": [
+        "continue",
+        "error_output"
+      ]
+    },
+    "input_step": {
+      "description": "The checkpoint step whose state was the node's input; a reference, never a copy.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "node": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+    },
+    "node_type": {
+      "enum": [
+        "aggregate",
+        "router",
+        "split_out",
+        "state_modifier"
+      ]
+    },
+    "retryable": {
+      "type": "boolean"
+    },
+    "status": {
+      "const": "failed"
+    }
+  }
+}

@@ -20,6 +20,11 @@ use super::PIPELINE_YAML_BUDGET;
 use super::yaml::{valid_graph_id, valid_output_key};
 use crate::bounded_yaml;
 
+/// The State Modifier body's own failures (template evaluation, output bound). A
+/// node's settings may settle exactly these (D6); every other error propagates.
+pub const TEMPLATE_FAILED: &str = "state modifier template evaluation failed";
+pub const OUTPUT_BOUND_EXCEEDED: &str = "state modifier output exceeds its resource bound";
+
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
 const MAX_TEMPLATE_BYTES: usize = 64 * 1024;
 // The rendered value becomes a browser-facing `NodeEventV1`; 8 KiB leaves
@@ -215,16 +220,14 @@ impl Node for StateModifierNode {
                 input.insert(key.clone(), value.clone());
             }
         }
-        let rendered = render_template(&self.definition.template, &input).map_err(|_| {
-            GraphError::Other("state modifier template evaluation failed".to_owned())
-        })?;
+        let rendered = render_template(&self.definition.template, &input)
+            .map_err(|_| GraphError::Other(TEMPLATE_FAILED.to_owned()))?;
 
         let mut output = NodeOutput::new();
         if let Some(key) = self.definition.output_keys().first() {
             let projected = project_rendered(context.get(key), rendered);
-            ensure_bounded_value(&projected).map_err(|_| {
-                GraphError::Other("state modifier output exceeds its resource bound".to_owned())
-            })?;
+            ensure_bounded_value(&projected)
+                .map_err(|_| GraphError::Other(OUTPUT_BOUND_EXCEEDED.to_owned()))?;
             output = output.with_update(key, projected);
         }
         for key in self.definition.variables_to_clean() {

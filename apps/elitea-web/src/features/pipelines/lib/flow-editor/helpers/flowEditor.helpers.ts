@@ -136,6 +136,8 @@ const NODE_DELETION_FIELDS: readonly string[] = [
   'variables_mapping',
   // #1500 — an LLM node with no output contract has no key (None, or structured output on).
   'output_contract',
+  // 5b-1 — a node whose settings are all default carries no block.
+  'settings',
 ];
 
 export const batchUpdateYamlNode = <TDoc extends YamlDocLike>(

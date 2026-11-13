@@ -46,6 +46,8 @@ const (
 	InternalPanic Code = "internal.panic"
 	// An unexpected error stopped this request.
 	InternalUnexpected Code = "internal.unexpected"
+	// The Aggregate node could not aggregate this input.
+	PipelineAggregateFailed Code = "pipeline.aggregate.failed"
 	// A Code attempt was refused before it started because the run's remaining time is shorter than the Code timeout plus the observation margin.
 	PipelineCodeDeadlineInsufficient Code = "pipeline.code.deadline_insufficient"
 	// Main answered a Code visit or intent call with a retryable failure, so the Worker sends the same idempotent call again until the attempt's deadline.
@@ -56,8 +58,14 @@ const (
 	PipelineCodeSlotWaited Code = "pipeline.code.slot_waited"
 	// The sandbox Supervisor answered busy to a Code attempt, so the attempt keeps its slot and retries with backoff until the Supervisor has room.
 	PipelineCodeSupervisorBusy Code = "pipeline.code.supervisor_busy"
+	// A pipeline node failed and its settings recorded the failure in node_errors, so the run went on.
+	PipelineNodeFailedContinued Code = "pipeline.node.failed_continued"
+	// This run already recorded the most node failures one run may hold, so the next failure stopped the run instead of continuing.
+	PipelineNodeErrorsExhausted Code = "pipeline.node_errors.exhausted"
 	// A Code item of a Map or Parallel was interrupted after it may have started and no owner proof showed its effect, so it ended typed and was not run again.
 	PipelineNodeRecoveryChildEffectUnknown Code = "pipeline.node_recovery.child_effect_unknown"
+	// A node's settings block in this pipeline is invalid, so the Worker refused to compile the pipeline.
+	PipelineNodeSettingsInvalid Code = "pipeline.node_settings.invalid"
 	// A checkpoint reclaim found that the saved Agent a root Agent node runs is no longer the definition its stopped step started with, so the run ended typed and the changed Agent did not run.
 	PipelineRecoveryAgentDefinitionChanged Code = "pipeline.recovery.agent_definition_changed"
 	// A checkpoint reclaim could not prove which saved Agent version a root Agent node's stopped step started with, so the run ended typed and nothing was repeated.
@@ -82,10 +90,16 @@ const (
 	PipelineRecoveryToolPipelineDefinitionChanged Code = "pipeline.recovery.tool_pipeline_definition_changed"
 	// A saved pipeline called by an Agent in a Map item or Parallel branch had no recorded version digest, so it could not be proven unchanged and was not run.
 	PipelineRecoveryToolPipelineDefinitionUnproven Code = "pipeline.recovery.tool_pipeline_definition_unproven"
+	// The Router node could not evaluate its condition on this input.
+	PipelineRouterFailed Code = "pipeline.router.failed"
 	// A Code node sits in a saved pipeline that another saved pipeline runs, so the pipeline was refused before it started: Code runs only in a saved pipeline the started pipeline runs directly, for now.
 	PipelineSavedCodeNested Code = "pipeline.saved_code.nested"
 	// A conversation an older Worker paused continues on the unscoped resolver, where a saved pipeline's Code run as a Map worker or Parallel branch has no owner scope, so the pipeline was refused before it started.
 	PipelineSavedCodeUnscoped Code = "pipeline.saved_code.unscoped"
+	// The Split Out node could not split this input.
+	PipelineSplitOutFailed Code = "pipeline.split_out.failed"
+	// The State Modifier node could not produce its output from this input.
+	PipelineStateModifierFailed Code = "pipeline.state_modifier.failed"
 	// A background runner failed its pass and will try again.
 	RunnerCycleFailed Code = "runner.cycle_failed"
 	// A background runner stopped on a dependency failure and is being restarted.
