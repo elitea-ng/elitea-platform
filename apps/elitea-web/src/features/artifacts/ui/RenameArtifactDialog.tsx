@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import Button from '@mui/material/Button';
 import Dialog from '@mui/material/Dialog';
@@ -26,6 +26,7 @@ interface RenameArtifactDialogProps {
 
 export function RenameArtifactDialog({ item, pending, error, onClose, onSubmit }: RenameArtifactDialogProps): ReactNode {
   const [name, setName] = useState('');
+  const nameRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     setName(item?.name ?? '');
   }, [item]);
@@ -42,11 +43,13 @@ export function RenameArtifactDialog({ item, pending, error, onClose, onSubmit }
       onClose={onClose}
       fullWidth
       maxWidth="sm"
+      // Focus the name field once the dialog has opened (instead of `autoFocus`, which jsx-a11y refuses).
+      slotProps={{ transition: { onEntered: () => nameRef.current?.focus() } }}
     >
       <DialogTitle>{t('artifacts.rename.title', 'Rename file')}</DialogTitle>
       <DialogContent>
         <TextField
-          autoFocus
+          inputRef={nameRef}
           fullWidth
           margin="dense"
           label={t('artifacts.rename.label', 'File name')}
