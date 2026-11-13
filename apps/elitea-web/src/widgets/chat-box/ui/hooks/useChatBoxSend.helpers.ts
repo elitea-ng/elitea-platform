@@ -204,18 +204,43 @@ function projectSkillsField(isApplicationTurn: boolean, ids: readonly number[]):
   return isApplicationTurn && ids.length > 0 ? { skills: ids.map((id) => ({ source: 'project' as const, id })) } : {};
 }
 
-export function buildStartBody(params: {
+interface StartBodyBaseParams {
   readonly mcpTokens?: Readonly<Record<string, unknown>>;
   readonly conversationUuid: string;
   readonly projectId: string | undefined;
   readonly payload: Record<string, unknown>;
-  readonly llmSettings: Readonly<Record<string, unknown>> | undefined;
-  readonly modelName: string | undefined;
   readonly isApplicationTurn: boolean;
-  readonly participantId: number | undefined;
   /** The "Run to completion" grant (ADR-0045, `ChatUnattendedRequest`); absent while the control is off. */
   readonly unattended?: Readonly<Record<string, unknown>> | undefined;
+}
+
+/** The start body of a message for people alone: the text, its mentions and attachments; no participant, no model settings (Main starts no turn). */
+export function buildPeopleMessageBody(params: Pick<StartBodyBaseParams, 'conversationUuid' | 'projectId' | 'payload'>): Record<string, unknown> {
+  return startBodyBase({ ...params, isApplicationTurn: false });
+}
+
+export function buildStartBody(params: StartBodyBaseParams & {
+  readonly llmSettings: Readonly<Record<string, unknown>> | undefined;
+  readonly modelName: string | undefined;
+  readonly participantId: number | undefined;
 }): Record<string, unknown> | undefined {
+  const base = startBodyBase(params);
+  if (params.isApplicationTurn) {
+    if (params.participantId === undefined) return undefined;
+    return { ...base, participant_id: params.participantId };
+  }
+  return {
+    ...base,
+    participant_id: params.participantId ?? 0,
+    llm_settings: {
+      ...modelRequestSettings(params.llmSettings),
+      ...(params.modelName !== undefined ? { model_name: params.modelName } : {}),
+      stream: true,
+    },
+  };
+}
+
+function startBodyBase(params: StartBodyBaseParams): Record<string, unknown> {
   const { payload } = params;
   const question = typeof payload['question'] === 'string' ? payload['question'] : '';
   const numericProjectID = Number(params.projectId);
@@ -255,19 +280,7 @@ export function buildStartBody(params: {
       ...projectSkillsField(params.isApplicationTurn, projectSkills),
     },
   };
-  if (params.isApplicationTurn) {
-    if (params.participantId === undefined) return undefined;
-    return { ...base, participant_id: params.participantId };
-  }
-  return {
-    ...base,
-    participant_id: params.participantId ?? 0,
-    llm_settings: {
-      ...modelRequestSettings(params.llmSettings),
-      ...(params.modelName !== undefined ? { model_name: params.modelName } : {}),
-      stream: true,
-    },
-  };
+  return base;
 }
 
 export function buildRegenerateBody(params: {

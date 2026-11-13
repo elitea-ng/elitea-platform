@@ -20,6 +20,7 @@ import {
   uploadPendingAttachments,
   UPLOAD_FAILED,
 } from "./useChatBoxHandlers.helpers";
+import { addressedWithPick, isPeopleOnlyPayload } from "./useChatBoxSend.floor";
 import type {
   ChatBoxHandlerDeps,
   SendQuestionParams,
@@ -74,18 +75,27 @@ export const undeliveredText = (): string =>
     "The message was not sent: no chat connection is available. Reload the page and try again.",
   );
 
+/** A failure text, or a non-blocking notice for a message that was delivered (to people only, with run inputs no agent read). */
+type Delivery = { readonly failure?: string; readonly notice?: string };
+
 async function deliverTurn(
   deps: ChatBoxHandlerDeps,
   params: {
     readonly conversationUuid: string;
     readonly payload: Record<string, unknown>;
   },
-): Promise<string | undefined> {
+): Promise<Delivery> {
   const outcome = deps.startStreamedExecution
     ? await deps.startStreamedExecution(params)
     : NO_STREAM_TRANSPORT;
-  if (outcome.started) return undefined;
-  if (outcome.reason === "rejected") return outcome.message;
+  if (outcome.started) return {};
+  // A message for people alone is stored with no turn: delivered, and never a socket turn.
+  if (outcome.reason === "posted") {
+    return outcome.ignored?.length ? { notice: t("widgets.chatBox.peopleOnlyNotice", "Sent to people only: no agent was asked.") } : {};
+  }
+  if (outcome.reason === "rejected") return { failure: outcome.message };
+  // A message for people alone must never become a turn: no socket fallback, whatever the REST start answered.
+  if (isPeopleOnlyPayload(params.payload)) return { failure: undeliveredText() };
   const emitted = tryEmit(
     () =>
       deps.emitSocket("chat_predict", {
@@ -95,7 +105,12 @@ async function deliverTurn(
       }),
     "chat_predict",
   );
-  return emitted ? undefined : undeliveredText();
+  return emitted ? {} : { failure: undeliveredText() };
+}
+
+/** Shows the turn as pending, unless the message is for people alone: nobody answers it. */
+function markPendingAnswer(deps: ChatBoxHandlerDeps, questionId: string, payload: Record<string, unknown>): void {
+  if (!deps.isStreamingNow && !isPeopleOnlyPayload(payload)) deps.setStreamingInfo(questionId);
 }
 
 export function createSendQuestion(
@@ -144,7 +159,7 @@ export function createSendQuestion(
       userIds,
       isMentioningEveryone,
       projectSkillIds,
-      addressedTo,
+      addressedTo: addressedWithPick(addressedTo, participant, { userIds, everyone: isMentioningEveryone }, deps.participants),
     });
     deps.setChatHistory((prev) => [
       ...prev,
@@ -155,16 +170,19 @@ export function createSendQuestion(
         participantId,
       ),
     ]);
-    if (!deps.isStreamingNow) deps.setStreamingInfo(questionId);
-    const failure = resolvedConversationUuid
+    markPendingAnswer(deps, questionId, payload);
+    const delivery: Delivery = resolvedConversationUuid
       ? await deliverTurn(deps, {
           conversationUuid: resolvedConversationUuid,
           payload,
         })
-      : t(
-          "widgets.chatBox.conversationNotCreated",
-          "The message was not sent: this chat could not be created.",
-        );
+      : {
+          failure: t(
+            "widgets.chatBox.conversationNotCreated",
+            "The message was not sent: this chat could not be created.",
+          ),
+        };
+    const { failure } = delivery;
     if (failure !== undefined) {
       deps.setChatHistory((prev) =>
         historyAfterFailedTurn(prev, questionId, question, failure),
@@ -187,7 +205,7 @@ export function createSendQuestion(
        */
       return buildSendResult(createdConversation, false, questionId);
     }
-    return buildSendResult(createdConversation, true, questionId);
+    return { ...buildSendResult(createdConversation, true, questionId), ...(delivery.notice !== undefined ? { notice: delivery.notice } : {}) };
   };
 }
 

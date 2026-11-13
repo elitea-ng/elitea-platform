@@ -43,6 +43,23 @@ func (s activityAdmissionStore) AdmitAgentExecution(ctx context.Context, admissi
 	return outcome, err
 }
 
+// activityHumanMessages notifies after a people-only message commits: the same
+// conversation frame an admitted turn's question sends, so an open client of the
+// conversation list sees the new message (the group insert already bumped the
+// conversation's sync_at, which orders the list and feeds the delta and unread).
+type activityHumanMessages struct {
+	next     agentexecutionapp.HumanMessageStore
+	activity *conversationactivity.Notifier
+}
+
+func (s activityHumanMessages) PostHumanMessage(ctx context.Context, message agentexecutionapp.HumanMessage) (bool, error) {
+	created, err := s.next.PostHumanMessage(ctx, message)
+	if err == nil && created {
+		s.activity.ConversationChanged(ctx, message.ProjectID, message.ConversationUUID)
+	}
+	return created, err
+}
+
 // activityCancellationStore notifies after a stop of a turn commits.
 type activityCancellationStore struct {
 	next     agentexecutionapp.CurrentAgentCancellationStore

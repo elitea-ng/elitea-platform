@@ -9,7 +9,7 @@ import { matchingAgents } from '../ChatBoxPopups';
 import { floorTarget } from '../ChatBoxFloorTarget';
 import { resolveTargetParticipant } from './useChatBoxSend.helpers';
 import { resolvedTarget } from './useChatBoxSend.floor';
-import { agentCandidates, agentMentionRanges, agentOfCandidate, conversationAgents, isMultiAgent } from './useChatBoxAgentMentions';
+import { agentCandidates, agentMentionRanges, agentOfCandidate, canAddressAgents, conversationAgents } from './useChatBoxAgentMentions';
 
 const PARTICIPANTS = [
   { id: 1, entity_name: 'user', meta: { user_name: 'Reader' } },
@@ -24,8 +24,14 @@ describe('conversationAgents', () => {
       { participantId: 12, name: 'Mira' },
       { participantId: 13, name: 'CI Doctor' },
     ]);
-    expect(isMultiAgent(conversationAgents(PARTICIPANTS))).toBe(true);
-    expect(isMultiAgent(conversationAgents(PARTICIPANTS.slice(0, 2)))).toBe(false);
+    expect(canAddressAgents(conversationAgents(PARTICIPANTS), PARTICIPANTS)).toBe(true);
+  });
+
+  it('can address the one agent of a mixed conversation, but not of a one-person chat', () => {
+    const mixed = [{ id: 1, entity_name: 'user' }, { id: 2, entity_name: 'user' }, { id: 12, entity_name: 'application', entity_meta: { name: 'Clarifier' } }];
+    expect(canAddressAgents(conversationAgents(mixed), mixed)).toBe(true);
+    expect(canAddressAgents(conversationAgents(mixed.slice(1)), mixed.slice(1))).toBe(false);
+    expect(canAddressAgents([], mixed)).toBe(false);
   });
 
   it('marks agent rows of the "@" list so a pick is not taken for a person', () => {
@@ -85,5 +91,21 @@ describe('queuedSend', () => {
       { question: 'please #CI Doctor', attachments: [], addressedTo: [13] },
       { question: 'no one', attachments: [], addressedTo: [] },
     ]);
+  });
+
+  it('addresses the one agent of a mixed conversation by name (3 people and "Clarifier")', async () => {
+    const { renderHook } = await import('@testing-library/react');
+    const { useChatBoxMentions } = await import('./useChatBoxMentions');
+    const sent: { addressedTo?: number[] }[] = [];
+    const sendQuestion = (params: { addressedTo?: number[] }) => { sent.push(params); return Promise.resolve({ success: true }); };
+    const state = { onInputChange: () => undefined, combinedHighlightRanges: [], skill: {}, keyDown: {} } as never;
+    const mixed = [
+      { id: 1, entity_name: 'user' }, { id: 2, entity_name: 'user' }, { id: 3, entity_name: 'user' },
+      { id: 12, entity_name: 'application', entity_meta: { name: 'Clarifier' } },
+    ];
+    const { result } = renderHook(() => useChatBoxMentions({ state, onChangeParticipant: undefined, participants: mixed, sendQuestion: sendQuestion as never }));
+    await result.current.queuedSend({ question: '@Clarifier @Aksana check this', attachments: [] });
+    await result.current.queuedSend({ question: '@Aksana check this', attachments: [] });
+    expect(sent.map((s) => s.addressedTo)).toEqual([[12], []]);
   });
 });

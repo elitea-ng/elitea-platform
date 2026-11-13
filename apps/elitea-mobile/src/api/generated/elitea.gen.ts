@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.52
+ * client contract:    1.53
  * operations sha256:  90f7ce0d441261594219777baafedfb6c11c64e23476f55952ced30a49d7d69e
  */
 export interface paths {
@@ -1283,6 +1283,23 @@ export interface paths {
          *     run answers 422 `unsupported_agent_execution`. While the previous
          *     answer of this conversation is still settling, the server waits up to
          *     about 3 s before it decides.
+         *
+         *     PEOPLE-ONLY MESSAGES (client contract 1.53). A message that mentions
+         *     people (`user_ids`, or `is_mentioning_everyone`) and names no agent
+         *     in `addressed_to` is a message to those people. It is stored in the
+         *     conversation as the sender's message and notifies the people it
+         *     names, and it starts NO turn: not the conversation's model, not the
+         *     agent the history last addressed, and not a lead agent. The answer
+         *     is 201 with `turn_started` false and no `events_url`; there is
+         *     nothing to stream. The decision is the server's and is made before
+         *     `participant_id`, `llm_settings` and `execution_contract` are read
+         *     (`participant_id` is what a client sends for any unaddressed message,
+         *     so it does not say that an agent was addressed); the `execution_contract`
+         *     query value only has to be one of the two. A message that addresses
+         *     an agent (`addressed_to`) still goes to that agent whether or not it
+         *     also mentions people, and its people are notified. A message with no
+         *     mention is unchanged. `question_id` is the idempotency key here too:
+         *     a replay answers 201 with `created` false and notifies nobody again.
          */
         post: operations["sendChatMessage"];
         delete?: never;
@@ -2841,6 +2858,20 @@ export interface components {
             /** @description Equal to `execution_id` (legacy name). */
             task_id: string;
         };
+        /** @description Client contract 1.53. A people-only message that was stored with no turn behind it (sendChatMessage). There is no execution, no `response_message_id` and no `events_url`: a client renders the message and waits for nothing. */
+        ChatMessagePosted: {
+            /** @description False when the same `question_id` was already stored (a replay); nobody is notified again. */
+            created: boolean;
+            /** @description The run inputs the message carried that no turn will read, because nobody was asked to run: `llm_settings`, `mcp_tokens` (when not empty), `skills`, `unattended`, `release_id`. Absent when there were none. A client may say that no agent was asked. */
+            ignored?: ("llm_settings" | "mcp_tokens" | "skills" | "unattended" | "release_id")[];
+            /**
+             * Format: uuid
+             * @description The stored message group's UUID, equal to the request's `question_id`.
+             */
+            message_id: string;
+            /** @description Always false; the field lets a client tell this answer from ChatExecutionStarted without reading the status. */
+            turn_started: boolean;
+        };
         /** @description A project skill picked for one turn, by id. */
         ChatProjectSkillPick: {
             /**
@@ -2898,7 +2929,7 @@ export interface components {
         };
         /** @description The body of a chat send. NOTE(W2): internal/api/v2/agentexecution/route.go:143 (`currentApplicationStartBody`). The body must be ONE JSON value of at most 512 KiB. */
         ChatSendRequest: {
-            /** @description ADR-0050 decision 7c — the agents this message is for, by participant id (positive, unique). In a conversation with several agents the first answers now and the others answer after it, in order. Empty or absent: the floor decides. An id that is not an agent of the conversation answers 422 `addressee_not_in_conversation`. */
+            /** @description ADR-0050 decision 7c — the agents this message is for, by participant id (positive, unique). In a conversation with several agents the first answers now and the others answer after it, in order. Empty or absent: the floor decides, except that a message that mentions people (`user_ids`, `is_mentioning_everyone`) and addresses no agent is for those people alone and starts no turn (client contract 1.53). An id that is not an agent of the conversation answers 422 `addressee_not_in_conversation`. */
             addressed_to?: number[];
             /**
              * Format: uuid
@@ -2943,7 +2974,7 @@ export interface components {
              */
             release_id?: number;
             unattended?: components["schemas"]["ChatUnattendedRequest"];
-            /** @description USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again. */
+            /** @description USER ids this message mentions (at most 64; `entity_meta.id` of a user participant, never a participant row id). `userIds` is accepted as an alias. Each project member named, except the sender, gets one `chat_user_mentioned` notification once the turn is admitted — on both execution contracts (an ad-hoc model chat notifies since client contract 1.1). An id that is not a project member is dropped silently; a replay of the same `question_id` notifies nobody again. With no `addressed_to` the message is for these people alone: it is stored and notifies them, and starts no turn (client contract 1.53). */
             user_ids?: number[];
         };
         ChatStartAttachment: {
@@ -7176,6 +7207,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChatExecutionStarted"];
+                };
+            };
+            /** @description Client contract 1.53. The message was for people alone: it is stored (`created` true) or was already stored (`created` false) and no turn was started. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatMessagePosted"];
                 };
             };
             /** @description A malformed request, path/body mismatch, an invalid UUID, a bad mention or attachment list. */

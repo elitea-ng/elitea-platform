@@ -65,6 +65,7 @@ import type {
   ChatContinueRequest,
   ChatExecutionError,
   ChatExecutionStarted,
+  ChatMessagePosted,
   ChatRegenerateRequest,
   ChatSendRequest,
   ClearMemories200,
@@ -7017,6 +7018,11 @@ export type sendChatMessageResponse200 = {
   status: 200;
 };
 
+export type sendChatMessageResponse201 = {
+  data: ChatMessagePosted;
+  status: 201;
+};
+
 export type sendChatMessageResponse400 = {
   data: ChatExecutionError;
   status: 400;
@@ -7072,7 +7078,9 @@ export type sendChatMessageResponse503 = {
   status: 503;
 };
 
-export type sendChatMessageResponseSuccess = sendChatMessageResponse200 & {
+export type sendChatMessageResponseSuccess = (
+  sendChatMessageResponse200 | sendChatMessageResponse201
+) & {
   headers: Headers;
 };
 export type sendChatMessageResponseError = (
@@ -7137,6 +7145,23 @@ export const getSendChatMessageUrl = (
  * run answers 422 `unsupported_agent_execution`. While the previous
  * answer of this conversation is still settling, the server waits up to
  * about 3 s before it decides.
+ *
+ * PEOPLE-ONLY MESSAGES (client contract 1.53). A message that mentions
+ * people (`user_ids`, or `is_mentioning_everyone`) and names no agent
+ * in `addressed_to` is a message to those people. It is stored in the
+ * conversation as the sender's message and notifies the people it
+ * names, and it starts NO turn: not the conversation's model, not the
+ * agent the history last addressed, and not a lead agent. The answer
+ * is 201 with `turn_started` false and no `events_url`; there is
+ * nothing to stream. The decision is the server's and is made before
+ * `participant_id`, `llm_settings` and `execution_contract` are read
+ * (`participant_id` is what a client sends for any unaddressed message,
+ * so it does not say that an agent was addressed); the `execution_contract`
+ * query value only has to be one of the two. A message that addresses
+ * an agent (`addressed_to`) still goes to that agent whether or not it
+ * also mentions people, and its people are notified. A message with no
+ * mention is unchanged. `question_id` is the idempotency key here too:
+ * a replay answers 201 with `created` false and notifies nobody again.
  * @summary Send a chat message and start the answering turn
  */
 export const sendChatMessage = async (

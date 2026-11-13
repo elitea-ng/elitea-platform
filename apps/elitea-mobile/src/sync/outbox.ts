@@ -3,6 +3,7 @@ import {
   TurnStartError,
   restorePreparedTurn,
   startTurn,
+  type PostedMessage,
   type PreparedTurn,
   type StartedTurn,
 } from '@/api/queries/sendMessage';
@@ -161,7 +162,7 @@ export function outboxBackoffMs(attempts: number, retryAfterMs?: number): number
 }
 
 type Classified =
-  | { kind: 'sent'; started: StartedTurn }
+  | { kind: 'sent'; started: StartedTurn | PostedMessage }
   | { kind: 'retry'; retryAfterMs?: number }
   | { kind: 'failed'; reason: OutboxFailure }
   /** Not this item's fault (signed out, upgrade required): leave it, stop draining. */
@@ -199,10 +200,10 @@ function classify(error: unknown): Exclude<Classified, { kind: 'sent' }> {
 
 export interface OutboxDrainerDeps {
   getDb: () => Db | null;
-  start?: (prepared: PreparedTurn) => Promise<StartedTurn>;
+  start?: (prepared: PreparedTurn) => Promise<StartedTurn | PostedMessage>;
   now?: () => number;
   /** An item was admitted (the thread refetches, the transcript syncs). */
-  onSent?: (item: OutboxItem, started: StartedTurn) => void;
+  onSent?: (item: OutboxItem, started: StartedTurn | PostedMessage) => void;
   /** Stored items changed (screens re-read). */
   onChanged?: () => void;
   /** Wakes the drain again when the earliest backoff ends. */

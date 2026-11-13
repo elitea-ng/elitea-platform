@@ -21,12 +21,13 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
 
-import { useListConversations } from '@/shared/api/generated/chat/chat';
 import type { ConversationSummary } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 
+import { useRunHistoryRows } from '../lib/useRunHistoryRows';
 import { EditorTestRunHistoryPanel } from './EditorTestRunHistoryPanel';
+import { RunHistoryExchange } from './RunHistoryExchange';
 import { RunHistoryList } from './RunHistoryList';
 import { RunHistoryTrace } from './RunHistoryTrace';
 
@@ -83,6 +84,7 @@ function RunHistoryPanelBody({
     <Box sx={bodySx}>
       <Box sx={listPaneSx}>
         <RunHistoryList
+          projectId={projectId}
           rows={rows}
           selectedId={selected?.id}
           onSelect={onSelect}
@@ -92,7 +94,10 @@ function RunHistoryPanelBody({
       </Box>
       <Box sx={tracePaneSx}>
         {selected !== undefined && projectId !== undefined ? (
-          <RunHistoryTrace projectId={projectId} conversationId={String(selected.id)} />
+          <>
+            <RunHistoryExchange projectId={projectId} conversationId={String(selected.id)} />
+            <RunHistoryTrace projectId={projectId} conversationId={String(selected.id)} />
+          </>
         ) : (
           <Typography variant="bodyMedium" color="text.secondary" data-testid="run-history-no-selection">
             {t('entities.runHistory.selectPrompt', 'Select a run to see its trace.')}
@@ -118,18 +123,7 @@ function ConversationRunHistoryPanel({
     return new Map(versions.map((version) => [String(version.id), version.name]));
   }, [versions]);
 
-  const enabled = projectId !== undefined && entityId !== undefined;
-  const listQuery = useListConversations(
-    projectId ?? '',
-    { entity_name: entityName, entity_meta_id: String(entityId ?? ''), limit: 50 },
-    { query: { enabled } },
-  );
-  // `.data.data`'s declared type includes the error-envelope variant — never
-  // actually reachable here since `eliteaFetch` throws instead of resolving
-  // with it (mutator.ts's §3.6 unwrap contract) — same cast PrivateAgentsList
-  // already establishes for a generated list hook.
-  const listing = listQuery.data?.data as { readonly rows: readonly ConversationSummary[] } | undefined;
-  const rows = listing?.rows ?? [];
+  const { rows, isPending } = useRunHistoryRows(projectId, entityName, entityId);
 
   return (
     <Box sx={rootSx} data-testid="run-history-panel">
@@ -145,7 +139,7 @@ function ConversationRunHistoryPanel({
       </Box>
 
       <RunHistoryPanelBody
-        isLoading={!enabled || listQuery.isPending}
+        isLoading={isPending}
         rows={rows}
         selected={selected}
         onSelect={setSelected}

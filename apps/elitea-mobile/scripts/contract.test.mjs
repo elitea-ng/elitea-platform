@@ -333,3 +333,14 @@ describe('client contract 1.52', () => {
     assert.equal(error.max_length.type, 'integer');
   });
 });
+
+describe('client contract 1.53', () => {
+  it('answers a message for people alone without a turn (issue 1970)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 53), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.53`);
+    const posted = doc.components.schemas.ChatMessagePosted;
+    assert.ok(posted.required.includes('turn_started'));
+    assert.equal(posted.properties.turn_started.type, 'boolean');
+  });
+});

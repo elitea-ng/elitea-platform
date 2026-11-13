@@ -65,6 +65,7 @@ export {
   firstAnswerer,
   floorOf,
   foldSideTalk,
+  isPeopleOnly,
   metaWithLead,
   sideTalkLabel,
   type AddressableAgent,

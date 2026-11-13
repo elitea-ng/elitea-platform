@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.53
+
+| Area | What |
+|---|---|
+| Messages for people alone (issue 1970) | A message that mentions people (`user_ids`, `is_mentioning_everyone`) and addresses no agent is stored and notifies them, and starts no turn: `sendChatMessage` answers 201 `ChatMessagePosted` with `turn_started` false and no `events_url`. The app renders the message and streams nothing (`src/features/chat/peopleMessage.ts`, `src/api/queries/sendMessage.ts`). A server before 1.53 started an agent turn for such a message. |
+
 ## Client contract 1.52
 
 | Area | What |

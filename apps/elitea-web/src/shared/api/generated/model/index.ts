@@ -236,6 +236,7 @@ export * from "./chatConfig.zod";
 export * from "./chatContinueRequest.zod";
 export * from "./chatExecutionError.zod";
 export * from "./chatExecutionStarted.zod";
+export * from "./chatMessagePosted.zod";
 export * from "./chatProjectSkillPick.zod";
 export * from "./chatRegenerateRequest.zod";
 export * from "./chatSendRequest.zod";
