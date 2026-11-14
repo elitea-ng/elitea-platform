@@ -667,7 +667,11 @@ describe('EditApplication', () => {
     // `features/agents/ui/AgentVersionControls.test.tsx`.
     await userEvent.click(screen.getByTestId('version-selector-trigger'));
     expect(screen.getByTestId('agent-version-delete')).toBeVisible();
-  });
+  }, 60_000);
+  // ^ A scoped budget (see the rename test): under coverage this page's first
+  // render alone took most of the file's 30s default on a loaded runner (PR 2066
+  // CI, shard 5/5: the whole file ran 306s), so the 15s query plus the menu click
+  // ran past it while correct.
 
   it('hides the export, delete and version-delete controls from a read-only viewer of a public agent', async () => {
     setPublicProjectId('42');

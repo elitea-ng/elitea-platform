@@ -5,7 +5,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import type { GuardrailNotice } from '@/api/queries/guardrailNotices';
 import { restorePreparedTurn, TurnInputError } from '@/api/queries/sendMessage';
 import { AttachmentStrip } from '@/features/chat/attachments/AttachmentStrip';
-import { MessageBubble } from '@/features/chat/MessageBubble';
+import { MessageBubble, OWN_LABEL } from '@/features/chat/MessageBubble';
 import type { ChatAttachment, ChatMessage } from '@/features/chat/messageModel';
 import { MESSAGE_CLASS, sideTalkLabel, type MessageClass } from '@elitea/client-core/conversation';
 import { useDesign } from '@/design/DesignProvider';
@@ -96,7 +96,7 @@ export function PersistedMessage({
       role={message.role}
       mine={message.mine}
       author={message.author}
-      meta={answer || !message.mine ? messageMeta(answer ? answerAuthorLine(message.author, message.authorRole, message.messageClass) : message.author, message.createdAt) : null}
+      meta={messageMeta(answer ? answerAuthorLine(message.author, message.authorRole, message.messageClass) : (message.author ?? OWN_LABEL), message.createdAt)}
       avatar={answer ? avatar : undefined}
       status={status}
       error={message.error}

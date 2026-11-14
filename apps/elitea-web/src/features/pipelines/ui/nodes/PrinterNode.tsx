@@ -162,6 +162,7 @@ export const PrinterNode = memo(function PrinterNode({ id, data, selected, llmSe
       <AIAssistantInput
         disabled={Boolean(isRunningPipeline || disabled)}
         label={finalMessageLabel}
+        placeholder={t('pipelines.flowEditor.printerNode.finalMessagePlaceholder', 'The message shown when the flow reaches this node')}
         fieldName={finalMessageLabel}
         value={finalMessageValue ?? ''}
         fieldBinding={{ name: 'final_message', onInput: handleFinalMessageChange }}
