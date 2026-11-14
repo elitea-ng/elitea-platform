@@ -931,7 +931,7 @@ fn written_by(state: &State) -> Vec<(String, String)> {
 /// leaves one frame of them, the newest.
 #[tokio::test]
 async fn document_updates_coalesce_and_never_wait_for_the_output_plane() {
-    let state = State::scripted(vec![Live::Acknowledge; 4], vec![]);
+    let state = State::scripted(vec![Live::Acknowledge; 8], vec![]);
     let mut run = run(Arc::clone(&state), 2, 0).await;
     let clock = ticking_clock();
     let channel = ProgressChannel::new("exec-1", &clock);
