@@ -46,6 +46,12 @@ export const evalRunStartRequestDimensionIdsMax = 5;
 
 export const EvalRunStartRequest = zod
   .object({
+    suite_id: zod
+      .string()
+      .nullish()
+      .describe(
+        "A suite of this project. Its limits are frozen into the run at start.",
+      ),
     dataset_id: zod.string(),
     application_id: zod.int().nullish(),
     application_version_id: zod
@@ -60,7 +66,7 @@ export const EvalRunStartRequest = zod
     trigger_type: zod.enum(["on_demand", "offline_batch"]).optional(),
   })
   .describe(
-    "No `suite_id`: there is no suite table in this release, so the dimensions are named directly and the server freezes their own defaults into the run's snapshot.\n",
+    "The dimensions are named directly and the server freezes their own defaults into the run's snapshot. `suite_id` optionally names a suite whose limits are frozen into the run too.\n",
   );
 
 export type EvalRunStartRequest = zod.input<typeof EvalRunStartRequest>;

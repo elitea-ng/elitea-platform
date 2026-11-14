@@ -9020,6 +9020,12 @@ components:
         created_by: { type: integer, format: int64, nullable: true }
         created_at: { type: string, format: date-time }
         evaluated_at: { type: string, format: date-time, nullable: true }
+        pending_reason:
+          type: string
+          description: >
+            Why a pending gate has not decided, for example "waiting for 3
+            human scores". Absent when the gate is decided or only waits for
+            its runs.
         override:
           allOf: [{ $ref: '#/components/schemas/ReleaseGateOverride' }]
           nullable: true
@@ -20681,9 +20687,11 @@ components:
           type: string
           enum: [ai, human, code]
           description: >
-            Always `ai` in this release. Stored rather than implied, so a later
-            `code` or `human` binding is distinguishable from these instead of
-            every historical row claiming the newest default.
+            `ai` for a dimension the AI judge scores, `human` for one only a
+            reviewer can score (its results wait as `pending_human`). Stored
+            rather than implied, so a binding is distinguishable from the ones
+            before it instead of every historical row claiming the newest
+            default.
         weight: { type: number }
         target: { type: number, nullable: true }
         target_operator: { type: string }
@@ -20705,6 +20713,29 @@ components:
         bindings:
           type: array
           items: { $ref: '#/components/schemas/EvalRunSnapshotBinding' }
+        limits:
+          $ref: '#/components/schemas/EvalRunLimits'
+        suite_id:
+          type: string
+          description: The suite the limits came from. The run never reads the suite again.
+
+    EvalRunLimits:
+      type: object
+      description: >
+        The run settings frozen at start from the suite. A null limit is no
+        limit. Tokens are prompt plus completion tokens; costs are estimated USD
+        from the gateway price catalogue.
+      properties:
+        token_limit_per_case: { type: integer, format: int64, nullable: true }
+        cost_limit_per_case: { type: number, nullable: true }
+        token_limit_per_run: { type: integer, format: int64, nullable: true }
+        cost_limit_per_run: { type: number, nullable: true }
+        on_run_limit:
+          type: string
+          description: >
+            What the run does when its run limit is reached. `stop` ends the
+            run as errored with the reason, and `report` lets it finish and only
+            records the limit.
 
     EvalRun:
       type: object
@@ -20743,6 +20774,11 @@ components:
             The mean of the run's `ok` normalised scores, or `null` when
             nothing was scored. NOT zero — zero is a real and very bad score.
         error: { type: string }
+        limit_reached:
+          type: string
+          description: >
+            `tokens` or `cost` once the run reached its run limit, whether it
+            stopped or only reported it. Absent when it did not.
         created_at: { type: string }
         started_at: { type: string }
         finished_at: { type: string }
@@ -20760,10 +20796,14 @@ components:
     EvalRunStartRequest:
       type: object
       description: >
-        No `suite_id`: there is no suite table in this release, so the
-        dimensions are named directly and the server freezes their own defaults
-        into the run's snapshot.
+        The dimensions are named directly and the server freezes their own
+        defaults into the run's snapshot. `suite_id` optionally names a suite
+        whose limits are frozen into the run too.
       properties:
+        suite_id:
+          type: string
+          nullable: true
+          description: A suite of this project. Its limits are frozen into the run at start.
         dataset_id: { type: string }
         application_id: { type: integer, nullable: true }
         application_version_id:
@@ -20821,14 +20861,117 @@ components:
         created_at: { type: string }
       required: [id, run_id, dataset_case_id, dimension_id, status, native_score, normalized_score]
 
+    EvalSuite:
+      type: object
+      description: >
+        A suite holds the run settings: token and cost limits per case and per
+        run, and what a run does when its run limit is reached. A run copies
+        them at start, so editing or deleting a suite changes no run that
+        already started.
+      properties:
+        id: { type: string }
+        uuid: { type: string }
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+        token_limit_per_case: { type: integer, format: int64, nullable: true }
+        cost_limit_per_case: { type: number, nullable: true }
+        token_limit_per_run: { type: integer, format: int64, nullable: true }
+        cost_limit_per_run: { type: number, nullable: true }
+        on_run_limit:
+          type: string
+          description: '`stop` or `report`.'
+        created_at: { type: string }
+        updated_at: { type: string }
+      required: [id, name, on_run_limit]
+
+    EvalSuiteList:
+      type: object
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/EvalSuite' }
+        total: { type: integer }
+      required: [rows, total]
+
+    EvalSuiteWriteRequest:
+      type: object
+      description: >
+        Unknown fields are refused. A null or absent limit is no limit. Token
+        limits are whole numbers from 1 to 2000000000; cost limits are USD from
+        above 0 to 1000000. `on_run_limit` defaults to `stop`.
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+        token_limit_per_case: { type: integer, format: int64, nullable: true }
+        cost_limit_per_case: { type: number, nullable: true }
+        token_limit_per_run: { type: integer, format: int64, nullable: true }
+        cost_limit_per_run: { type: number, nullable: true }
+        on_run_limit:
+          type: string
+          description: '`stop` ends the run as errored when its run limit is reached; `report` only records it.'
+      required: [name]
+      additionalProperties: false
+
+    EvalHumanScore:
+      type: object
+      description: >
+        One human score of one case on one dimension of a run. Scores are
+        append-only: a re-score is a new row and the newest row is the score in
+        force.
+      properties:
+        id: { type: string }
+        run_id: { type: string }
+        dataset_case_id: { type: string }
+        dimension_id: { type: string }
+        native_score: { type: number }
+        normalized_score: { type: number }
+        note: { type: string }
+        reviewer_id: { type: integer, nullable: true }
+        created_at: { type: string }
+      required: [id, run_id, dataset_case_id, dimension_id, native_score, normalized_score, reviewer_id]
+
+    EvalHumanScoreList:
+      type: object
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/EvalHumanScore' }
+        total: { type: integer }
+      required: [rows, total]
+
+    EvalHumanScoreWriteRequest:
+      type: object
+      description: >
+        The score is on the dimension's own scale as frozen in the run: 0 or 1
+        for a binary dimension, otherwise between its minimum and maximum. A
+        score outside the scale is refused, not clamped.
+      properties:
+        dataset_case_id: { type: string }
+        dimension_id: { type: string }
+        score: { type: number }
+        note: { type: string, maxLength: 2000 }
+      required: [dataset_case_id, dimension_id, score]
+      additionalProperties: false
+
+    EvalHumanScoreRecorded:
+      type: object
+      properties:
+        human_score: { $ref: '#/components/schemas/EvalHumanScore' }
+        result: { $ref: '#/components/schemas/EvalRunResult' }
+        headline_score:
+          type: number
+          nullable: true
+          description: The run's headline after this score.
+      required: [human_score, result, headline_score]
+
     EvalScorecard:
       type: object
       description: >
-        The READ-ONLY scorecard. `human_scores` is DELIBERATELY ABSENT: this
-        release has no human-score surface, and answering `[]` would tell a
-        client "there are none" where the truth is "this deployment cannot have
-        any". `unavailable` names each omission with its reason — the shape
-        internal/api/v2/budgets/usage_dimensions.go established.
+        The scorecard. A result a reviewer has not scored yet is `pending_human`
+        and has no score; the human scores are read through their own route.
+        `unavailable` names each part this release cannot serve, with its
+        reason — the shape internal/api/v2/budgets/usage_dimensions.go
+        established.
       properties:
         run: { $ref: '#/components/schemas/EvalRun' }
         results:
@@ -27181,10 +27324,16 @@ paths:
         scorecard that re-read the live library would silently re-scale a
         finished run.
 
-        ENGINES ARE RESTRICTED TO `ai`. A dimension that allows only `code` or
-        `human` is refused with 501 and a named reason: there is no code sandbox
-        in elitea-main, and a code validation that silently passed would be the
-        most dangerous fallback in the feature.
+        A dimension the AI judge can score is scored by it. A dimension that
+        allows only the `human` engine is scored by a reviewer: its results wait
+        as `pending_human`. A dimension that allows only `code` is refused with
+        501 and a named reason: there is no code sandbox in elitea-main, and a
+        code validation that silently passed would be the most dangerous
+        fallback in the feature.
+
+        `suite_id` freezes that suite's token and cost limits into the run. The
+        orchestrator enforces them from the usage the gateway attributed to the
+        run.
 
         NOTE(#617): gated on `models.applications.evaluation.run.create`. There
         is no `run.cancel` string in the product's vocabulary, so the cancel
@@ -27217,8 +27366,9 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '501':
           description: >
-            A named dimension cannot be scored by this release. The body says
-            which engine it needs and why this release does not serve it.
+            A named dimension cannot be scored by this release (a code-only
+            dimension). The body says which engine it needs and why this release
+            does not serve it.
           content:
             application/json:
               schema:
@@ -27308,10 +27458,10 @@ paths:
       operationId: getEvalScorecard
       summary: Read a run's scorecard
       description: |
-        READ-ONLY. There is no human-score write in this release, and the
-        response OMITS `human_scores` rather than answering `[]` — an empty
-        array tells a client "there are none" where the truth is "this
-        deployment cannot have any". `unavailable` names each omission with its
+        A result that waits for a human score is `pending_human`, with no
+        score, and the run's headline counts only scored results. A reviewer
+        scores it through the human score route.
+        `unavailable` names each part this release cannot serve, with its
         reason.
 
         `total` is a separate count and never `results.length`. The reference's
@@ -27339,6 +27489,164 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/eval_suites/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    get:
+      operationId: listEvalSuites
+      summary: List the project's evaluation suites
+      description: |
+        A suite holds the run settings: token and cost limits per case and per
+        run, and what a run does when its run limit is reached. Gated on
+        `models.applications.evaluation.run.read`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The suites, by name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalSuiteList'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+    post:
+      operationId: createEvalSuite
+      summary: Create an evaluation suite
+      description: |
+        Gated on `models.applications.evaluation.run.create`. A name is unique
+        in the project, whatever its case: a second one is a 409.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvalSuiteWriteRequest'
+      responses:
+        '201':
+          description: The created suite
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalSuite'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409': { $ref: '#/components/responses/409' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/eval_suite/prompt_lib/{project_id}/{suite_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: suite_id
+        in: path
+        required: true
+        schema: { type: string }
+
+    put:
+      operationId: updateEvalSuite
+      summary: Replace an evaluation suite's settings
+      description: |
+        A full replace: a limit left out is cleared. Runs that already started
+        keep the settings they were started with. Gated on
+        `models.applications.evaluation.run.create`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvalSuiteWriteRequest'
+      responses:
+        '200':
+          description: The updated suite
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalSuite'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+        '500': { $ref: '#/components/responses/500' }
+
+    delete:
+      operationId: deleteEvalSuite
+      summary: Delete an evaluation suite
+      description: |
+        Runs started from it keep their frozen settings. Gated on
+        `models.applications.evaluation.run.create`.
+      tags: [applications]
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/eval_human_scores/prompt_lib/{project_id}/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: run_id
+        in: path
+        required: true
+        schema: { type: string }
+
+    get:
+      operationId: listEvalHumanScores
+      summary: List a run's human scores
+      description: |
+        Every score of the run, oldest first, so a re-scored case reads in order
+        and the last row of a (case, dimension) is the score in force. Gated on
+        `models.applications.evaluation.human_score.read`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The human scores
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalHumanScoreList'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+    post:
+      operationId: recordEvalHumanScore
+      summary: Record a human score for one case of a run
+      description: |
+        Appends the score with the reviewer and a note, turns the case's
+        `pending_human` result into an `ok` result carrying it, and recomputes
+        the run's headline, in one transaction. The dimension must be bound with
+        the human engine in the run. A result the AI judge scored is not
+        overwritten (409), nor is a case the run has not answered yet (409).
+        Gated on `models.applications.evaluation.human_score.create`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvalHumanScoreWriteRequest'
+      responses:
+        '201':
+          description: The recorded score, the updated result and the run's headline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalHumanScoreRecorded'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
         '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}:

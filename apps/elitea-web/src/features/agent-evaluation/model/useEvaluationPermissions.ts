@@ -32,6 +32,8 @@ export interface EvaluationPermissions {
   readonly canDeleteDatasets: boolean;
   readonly canReadRuns: boolean;
   readonly canStartRuns: boolean;
+  readonly canReadHumanScores: boolean;
+  readonly canScoreHuman: boolean;
 }
 
 export function useEvaluationPermissions(projectId: string | undefined): EvaluationPermissions {
@@ -53,6 +55,8 @@ export function useEvaluationPermissions(projectId: string | undefined): Evaluat
       canDeleteDatasets: granted.has(PERMISSIONS.evaluation.datasetDelete),
       canReadRuns: granted.has(PERMISSIONS.evaluation.runRead),
       canStartRuns: granted.has(PERMISSIONS.evaluation.runCreate),
+      canReadHumanScores: granted.has(PERMISSIONS.evaluation.humanScoreRead),
+      canScoreHuman: granted.has(PERMISSIONS.evaluation.humanScoreCreate),
     };
   }, [permissionQuery.data]);
 }

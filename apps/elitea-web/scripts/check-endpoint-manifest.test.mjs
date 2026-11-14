@@ -933,9 +933,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 518 -> 520 (issue 1963): getCurrentAuthorLanguage and updateCurrentAuthorLanguage, the account's
 // language preference.
 // 520 -> 521 (issue 2015): moveObject, the artifact file rename.
-// 521 -> 522 (issue 2012): listRunGuardrailNotices, the chat notice of a
+// 521 -> 527 (issues 2008 and 2013): list/create/update/deleteEvalSuite (run limits) and
+// list/recordEvalHumanScore.
+// 527 -> 528 (issue 2012): listRunGuardrailNotices, the chat notice of a
 // blocked, redacted or warned message (see MANIFEST_ENTRY_COUNT).
-const GENERATED_OPERATION_COUNT = 522;
+const GENERATED_OPERATION_COUNT = 528;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1242,11 +1244,14 @@ const GENERATED_OPERATION_COUNT = 522;
  *
  * 361 -> 362 (issue 2015): the artifact file rename (moveObject). Generated.
  *
- * 362 -> 363 (issue 2012): chat.listRunGuardrailNotices, the guardrail notice
+ * 362 -> 368 (issues 2008 and 2013): the run limits editor (list, create, update and
+ * delete a suite) and the human score list and record on the scorecard. Generated.
+ *
+ * 368 -> 369 (issue 2012): chat.listRunGuardrailNotices, the guardrail notice
  * under a chat answer (features/chat-messages/api/guardrailNoticesApi.ts).
  * Generated.
  */
-const MANIFEST_ENTRY_COUNT = 363;
+const MANIFEST_ENTRY_COUNT = 369;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

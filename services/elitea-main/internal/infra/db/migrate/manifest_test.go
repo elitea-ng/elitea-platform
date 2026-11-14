@@ -1124,6 +1124,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// image_quality and pricing_source columns of gateway.llm_request_logs
 	// (issue 1969). No backfill, no permission.
 	//
+	// 245: shared/0245_evaluation_human_score_permissions.sql, the
+	// evaluation.human_score.read and .create grants (issue 2008).
+	//
 	// 247: shared/0247_guardrail_warn_action.sql, the `warn` action and the
 	// `warned` outcome in the CHECK constraints of
 	// gateway.guardrail_verdicts (issue 2012). No data, no permission.
@@ -1422,7 +1425,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 172: tenant/0172_entity_name_description_limits.sql, entity
 	// descriptions truncated to 2000 characters and names to 128, with CHECK
 	// constraints where only the handlers write (issue 1968). No permission.
-	require.EqualValues(t, 172, Head(tenant))
+	//
+	// 244: tenant/0244_eval_suites_human_scores.sql, eval_suites (run
+	// settings and limits), the append-only eval_human_scores and the
+	// eval_runs.limit_reached column (issues 2008, 2013). The
+	// tenant history is numbered with the shared one at merge. No permission.
+	require.EqualValues(t, 244, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

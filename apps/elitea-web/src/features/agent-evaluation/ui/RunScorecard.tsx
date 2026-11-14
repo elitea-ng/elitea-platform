@@ -1,11 +1,10 @@
 /**
- * One run's scorecard. READ-ONLY.
+ * One run's scorecard.
  *
- * There is no human-score input in this release, and the response OMITS
- * `human_scores` rather than answering `[]`. That omission is rendered, not
- * swallowed: `unavailable` names each missing capability with its reason, and a
- * reader who cannot see human scores is told the deployment cannot have any
- * rather than being left to conclude nobody has entered one.
+ * A result bound to a human dimension waits as `pending_human`; a reviewer with
+ * the right scores it here (HumanScoreCell), which turns it into a score and
+ * moves the headline. `unavailable` still names each capability this release
+ * does not serve, with its reason.
  *
  * A CASE THAT COULD NOT BE SCORED shows its status and its verdict, never a
  * zero. Zero is a real and very bad score; printing it for an unscorable case
@@ -23,6 +22,7 @@ import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { isRunTerminal, useEvalRun, useEvalScorecard } from '../model/useEvalRuns';
+import { HumanScoreCell } from './HumanScoreCell';
 
 const rowSx: SxProps<Theme> = {
   display: 'flex',
@@ -47,6 +47,9 @@ function resultReason(result: EvalRunResult): string | undefined {
 
 /** The score cell: the normalised number, or the reason there is none. */
 function resultScoreText(result: EvalRunResult): string {
+  if (result.status === 'pending_human') {
+    return t('features.agentEvaluation.scorecard.pendingHuman', 'Waiting for a human score');
+  }
   if (result.status !== 'ok' || result.normalized_score === null || result.normalized_score === undefined) {
     return t('features.agentEvaluation.scorecard.unscored', 'Not scored ({{status}})', {
       status: result.status,
@@ -57,7 +60,13 @@ function resultScoreText(result: EvalRunResult): string {
   });
 }
 
+/** A result a person scores: waiting for one, or already carrying one. */
+function isHumanResult(result: EvalRunResult): boolean {
+  return result.status === 'pending_human' || result.verdict?.['scored_by'] === 'human';
+}
+
 interface ScorecardBodyProps {
+  readonly projectId: string | undefined;
   readonly scorecard: EvalScorecard;
   /** The LIVE run, from the progress poll — not the snapshot inside `scorecard`. */
   readonly liveRun: EvalRun | undefined;
@@ -68,7 +77,7 @@ interface ScorecardBodyProps {
  * function inside the §3.5 cyclomatic-complexity budget of 12, and because it
  * has no queries of its own: it is a pure function of the two values above.
  */
-function ScorecardBody({ scorecard, liveRun }: ScorecardBodyProps): ReactNode {
+function ScorecardBody({ projectId, scorecard, liveRun }: ScorecardBodyProps): ReactNode {
   return (
     <>
       <Typography variant="bodySmall" color="text.secondary" data-testid="scorecard-progress">
@@ -122,6 +131,7 @@ function ScorecardBody({ scorecard, liveRun }: ScorecardBodyProps): ReactNode {
               {resultReason(result)}
             </Typography>
           )}
+          {isHumanResult(result) && <HumanScoreCell projectId={projectId} run={scorecard.run} result={result} />}
         </Box>
       ))}
 
@@ -191,7 +201,7 @@ export function RunScorecard(props: RunScorecardProps): ReactNode {
             </Typography>
           )}
 
-          {scorecard !== undefined && <ScorecardBody scorecard={scorecard} liveRun={liveRun} />}
+          {scorecard !== undefined && <ScorecardBody projectId={projectId} scorecard={scorecard} liveRun={liveRun} />}
         </Box>
       }
     />
