@@ -26,11 +26,11 @@
   4. Make sure each project has a default embedding model. A project without one cannot copy its notes; the rows wait.
 - **Backfill.** The migrations enqueue the active notes of each project once. A reconciler copies them in the
   background, 64 notes at a time.
-- **Changing the default embedding model.** A note is copied into the vector space of the model that was the default
-  when it was saved. After a change of the default model, notes saved earlier stay in the old space and are ranked after
-  the notes of the new space until they are copied again. To copy them again, enqueue them:
-  `INSERT INTO centry.agent_memory_vector_journal AS journal (project_id, entry_id, application_id) SELECT <project id>, id, application_id FROM p_<project id>.agent_memory_entries WHERE status = 'active' AND kind <> 'cursor' ON CONFLICT (project_id, entry_id) DO UPDATE SET generation = journal.generation + 1, next_attempt_at = now();`
-  The old points leave when the note leaves.
+- **Changing the default embedding model.** A note is copied into the vector space of the model that is the default
+  when it is saved. Main records the model of each project (`centry.agent_memory_vector_models`). When the default model
+  changes, Main sees the new model at the next embedding and queues every active note of the project again, so the
+  notes move to the new space. The old points leave when their note leaves. Until then, recall ranks the notes in the
+  new space first.
 - **Cost.** One embedding call for each note saved or edited, and one for each turn of an agent with memory on whose notes do not all fit the recall budget, with a
   non-empty message. The calls go through the gateway, so the budget and the audit of the project apply.
 - **Turn it off.** Set `ELITEA_AGENT_MEMORY_VECTORS_ENABLED=false` on Main. Recall then ranks by words and recency. The

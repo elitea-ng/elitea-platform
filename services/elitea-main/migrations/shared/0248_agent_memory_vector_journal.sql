@@ -50,6 +50,17 @@ CREATE TABLE IF NOT EXISTS centry.agent_memory_vector_journal (
 CREATE INDEX IF NOT EXISTS agent_memory_vector_journal_due_idx
     ON centry.agent_memory_vector_journal (next_attempt_at);
 
+-- The embedding model each project's entries were last embedded with, by
+-- slug. When the project's default model changes, the reconciler sees a slug
+-- that differs from this row and enqueues every active entry of the project
+-- again, so the entries move to the new embedding space (the old points leave
+-- when their entry does). The first write of a project only records its slug.
+CREATE TABLE IF NOT EXISTS centry.agent_memory_vector_models (
+    project_id BIGINT      PRIMARY KEY CHECK (project_id > 0),
+    model_slug TEXT        NOT NULL CHECK (model_slug <> ''),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Enqueue the active entries every existing tenant already holds, once. The
 -- tenant migration does the same for its own schema, but only when this table
 -- exists, and the two histories apply independently: whichever runs second

@@ -15,6 +15,8 @@ type fakeJournal struct {
 	failed    []Job
 	class     string
 	backoff   time.Duration
+	models    map[int64]string
+	requeued  []int64
 }
 
 func (j *fakeJournal) Claim(context.Context, int, time.Duration) ([]Job, error) {
@@ -35,6 +37,20 @@ func (j *fakeJournal) Entries(_ context.Context, _ int64, ids []int64) (map[int6
 
 func (j *fakeJournal) Complete(_ context.Context, jobs []Job) error {
 	j.completed = append(j.completed, jobs...)
+	return nil
+}
+
+func (j *fakeJournal) NoteModel(_ context.Context, projectID int64, slug string) (bool, error) {
+	if j.models == nil {
+		j.models = map[int64]string{}
+	}
+	previous, seen := j.models[projectID]
+	j.models[projectID] = slug
+	return seen && previous != slug, nil
+}
+
+func (j *fakeJournal) Requeue(_ context.Context, projectID int64) error {
+	j.requeued = append(j.requeued, projectID)
 	return nil
 }
 
@@ -351,5 +367,42 @@ func TestACallersEndedContextNeverOpensTheBreaker(t *testing.T) {
 	embedder.err = nil
 	if _, err := service.Rank(context.Background(), 7, 10, "x"); err != nil {
 		t.Fatalf("the breaker opened for a cancelled caller: %v", err)
+	}
+}
+
+// A model whose name the test changes between calls.
+type switchingEmbedder struct{ model string }
+
+func (e *switchingEmbedder) Embed(_ context.Context, _ int64, inputs []string) (Embedding, error) {
+	vectors := make([][]float32, len(inputs))
+	for i := range inputs {
+		vectors[i] = []float32{1, 2, 3}
+	}
+	return Embedding{Model: e.model, Vectors: vectors}, nil
+}
+
+func TestAChangeOfTheDefaultModelQueuesTheProjectsEntriesAgain(t *testing.T) {
+	journal := &fakeJournal{}
+	embedder := &switchingEmbedder{model: "model-a"}
+	service, _ := newService(t, journal, embedder, &fakeStore{})
+	ctx := context.Background()
+	// The first use only records the model.
+	if _, err := service.Rank(ctx, 7, 10, "x"); err != nil || len(journal.requeued) != 0 {
+		t.Fatalf("first use: %v %v", err, journal.requeued)
+	}
+	if _, err := service.Rank(ctx, 7, 10, "y"); err != nil || len(journal.requeued) != 0 {
+		t.Fatalf("same model: %v %v", err, journal.requeued)
+	}
+	// The default model changes: the next use queues the project once.
+	embedder.model = "model-b"
+	if _, err := service.Rank(ctx, 7, 10, "x"); err != nil || len(journal.requeued) != 1 || journal.requeued[0] != 7 {
+		t.Fatalf("changed model: %v %v", err, journal.requeued)
+	}
+	if _, err := service.Rank(ctx, 7, 10, "x"); err != nil || len(journal.requeued) != 1 {
+		t.Fatalf("a second use must not queue again: %v %v", err, journal.requeued)
+	}
+	// Another project is its own record.
+	if _, err := service.Rank(ctx, 8, 10, "x"); err != nil || len(journal.requeued) != 1 {
+		t.Fatalf("another project: %v %v", err, journal.requeued)
 	}
 }

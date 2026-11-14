@@ -145,6 +145,49 @@ WHERE journal.project_id = failed.project_id AND journal.entry_id = failed.entry
 	return nil
 }
 
+// NoteModel records the model slug a project embeds with. It answers true only
+// when it replaced a different slug: the first record is not a change.
+func (j *AgentMemoryVectorJournal) NoteModel(ctx context.Context, projectID int64, modelSlug string) (bool, error) {
+	var inserted bool
+	err := j.pool.QueryRow(ctx, `
+INSERT INTO centry.agent_memory_vector_models AS models (project_id, model_slug)
+VALUES ($1, $2)
+ON CONFLICT (project_id) DO UPDATE
+SET model_slug = EXCLUDED.model_slug, updated_at = now()
+WHERE models.model_slug <> EXCLUDED.model_slug
+RETURNING (xmax = 0)`, projectID, modelSlug).Scan(&inserted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil // the same slug: nothing changed
+	}
+	if err != nil {
+		return false, fmt.Errorf("agent memory vector journal: note the model: %w", err)
+	}
+	return !inserted, nil
+}
+
+// Requeue enqueues every active, non-cursor entry of the project again, at a
+// higher generation, due at once.
+func (j *AgentMemoryVectorJournal) Requeue(ctx context.Context, projectID int64) error {
+	schema, err := tenantschema.QuoteInt(projectID)
+	if err != nil {
+		return err
+	}
+	_, err = j.pool.Exec(ctx, fmt.Sprintf(`
+INSERT INTO centry.agent_memory_vector_journal AS journal (project_id, entry_id, application_id)
+SELECT $1, id, application_id FROM %s.agent_memory_entries
+WHERE status = 'active' AND kind <> 'cursor'
+ON CONFLICT (project_id, entry_id) DO UPDATE
+SET generation = journal.generation + 1, attempts = 0, last_error = NULL,
+    next_attempt_at = now(), claimed_until = NULL`, schema), projectID)
+	if err != nil {
+		if isUndefinedSchemaObject(err) {
+			return nil
+		}
+		return fmt.Errorf("agent memory vector journal: requeue: %w", err)
+	}
+	return nil
+}
+
 func splitJobs(jobs []agentmemoryvector.Job) (projects, entries, generations []int64) {
 	projects = make([]int64, len(jobs))
 	entries = make([]int64, len(jobs))

@@ -43,6 +43,10 @@ const TOKEN_A_WIKI: &str = "token-a-wiki";
 /// Inventory callback tokens of projects A and B (source `inventory` only).
 const TOKEN_A_INV: &str = "token-a-inv";
 const TOKEN_B_INV: &str = "token-b-inv";
+/// elitea-main's own platform tokens of projects A and B (source `agent_memory`
+/// only, an engine-callback kind with a service principal).
+const TOKEN_A_AGENT: &str = "token-a-agent";
+const TOKEN_B_AGENT: &str = "token-b-agent";
 /// Memory callers (worker claim tokens with the `memory` source): two users of
 /// project A, the first again in a shared conversation, a claim naming no
 /// user, and the first user's id in project B.
@@ -240,6 +244,17 @@ fn inventory_grant(project_id: i64, expires_at_unix: i64) -> TokenGrant {
     }
 }
 
+/// elitea-main's platform token for an agent's memory: one project, the
+/// `agent_memory` source, no user.
+fn agent_memory_grant(project_id: i64, expires_at_unix: i64) -> TokenGrant {
+    TokenGrant {
+        kind: pb::TokenKind::EngineCallback,
+        principal: "service:elitea-main".to_owned(),
+        sources: vec![pb::Source::AgentMemory],
+        ..grant(project_id, expires_at_unix)
+    }
+}
+
 fn oracle() -> Arc<dyn Introspector> {
     oracle_with_clock(Arc::new(unix_now))
 }
@@ -262,6 +277,14 @@ fn oracle_with_clock(clock: Arc<dyn Fn() -> i64 + Send + Sync>) -> Arc<dyn Intro
         (
             TOKEN_B_INV.to_owned(),
             inventory_grant(PROJECT_B, now + 3600),
+        ),
+        (
+            TOKEN_A_AGENT.to_owned(),
+            agent_memory_grant(PROJECT_A, now + 3600),
+        ),
+        (
+            TOKEN_B_AGENT.to_owned(),
+            agent_memory_grant(PROJECT_B, now + 3600),
         ),
         (
             TOKEN_ALICE.to_owned(),
@@ -2192,6 +2215,160 @@ async fn a_callback_token_cannot_touch_toolkit_index_points() {
         h.listed_sources(TOKEN_A_WIKI).await,
         vec![pb::Source::Deepwiki as i32]
     );
+}
+
+fn agent_memory_namespace(namespace_id: &str) -> pb::Namespace {
+    pb::Namespace {
+        source: pb::Source::AgentMemory as i32,
+        ..Harness::namespace(namespace_id)
+    }
+}
+
+fn agent_memory_scope(namespaces: &[&str]) -> pb::Scope {
+    pb::Scope {
+        source: pb::Source::AgentMemory as i32,
+        ..Harness::scope(namespaces)
+    }
+}
+
+/// Issue 1657: an agent's memory is an ordinary shared-family source. A token
+/// for project A and `agent_memory` writes and reads only that, never project
+/// B's points and never another source's; no other token reaches it; and it
+/// is not an index, so listing never shows it.
+#[tokio::test]
+async fn an_agent_memory_token_reaches_only_its_own_project_and_source() {
+    let _ = require_qdrant!();
+    let mut h = harness().await.expect("harness");
+    h.seed_both_sources().await;
+
+    let points = |prefix: &str| {
+        vec![
+            Harness::point(
+                &format!("{prefix}1"),
+                "the deploy runs on friday",
+                [1.0, 0.0, 0.0, 0.0],
+            ),
+            Harness::point(
+                &format!("{prefix}2"),
+                "release day is the last weekday",
+                [0.0, 1.0, 0.0, 0.0],
+            ),
+        ]
+    };
+    let written = h
+        .upsert(
+            TOKEN_A_AGENT,
+            0,
+            agent_memory_namespace(NAMESPACE_A),
+            points("a-"),
+        )
+        .await
+        .expect("agent memory upsert (project A)");
+    assert_eq!(written.upserted, 2);
+    assert_eq!(written.collection, h.shared_collection());
+    h.upsert(
+        TOKEN_B_AGENT,
+        0,
+        agent_memory_namespace(NAMESPACE_A),
+        points("b-"),
+    )
+    .await
+    .expect("agent memory upsert (project B, same namespace id)");
+    assert_eq!(h.truth_of(PROJECT_A, "agent_memory").await, 2);
+    assert_eq!(h.truth_of(PROJECT_B, "agent_memory").await, 2);
+
+    // Project A's token reads project A's points only, in its own source.
+    let found = h
+        .search(TOKEN_A_AGENT, agent_memory_scope(&[NAMESPACE_A]), None)
+        .await
+        .expect("own source and project");
+    assert_eq!(found.len(), 2);
+    only_project(&found, PROJECT_A);
+    assert!(
+        found
+            .iter()
+            .all(|point| point.source == pb::Source::AgentMemory as i32)
+    );
+
+    // A forged project is refused, as for every token.
+    let forged = h
+        .upsert(
+            TOKEN_A_AGENT,
+            PROJECT_B,
+            agent_memory_namespace(NAMESPACE_A),
+            points("x-"),
+        )
+        .await
+        .expect_err("a forged project");
+    assert_eq!(forged.code(), tonic::Code::PermissionDenied);
+    assert_eq!(h.truth_of(PROJECT_B, "agent_memory").await, 2);
+
+    // The token cannot name another source: the toolkit index and DeepWiki
+    // points of the same project and namespace stay untouched.
+    h.assert_source_refused(
+        TOKEN_A_AGENT,
+        Harness::namespace(NAMESPACE_A),
+        Harness::scope(&[NAMESPACE_A]),
+    )
+    .await;
+    h.assert_source_refused(
+        TOKEN_A_AGENT,
+        wiki_namespace(NAMESPACE_A),
+        wiki_scope(&[NAMESPACE_A]),
+    )
+    .await;
+    assert_eq!(h.truth_of(PROJECT_A, "toolkit_index").await, 2);
+    assert_eq!(h.truth_of(PROJECT_A, "deepwiki").await, 2);
+
+    // No other token reaches the source: a worker claim, a wiki callback and an
+    // Inventory callback of the same project are all refused.
+    for token in [TOKEN_A, TOKEN_A_WIKI, TOKEN_A_INV] {
+        h.assert_source_refused(
+            token,
+            agent_memory_namespace(NAMESPACE_A),
+            agent_memory_scope(&[NAMESPACE_A]),
+        )
+        .await;
+    }
+    assert_eq!(h.truth_of(PROJECT_A, "agent_memory").await, 2);
+
+    // It is not an index: the token's listing shows nothing of it, and a
+    // listing that names it is refused for a token that lacks it.
+    assert!(h.listed_sources(TOKEN_A_AGENT).await.is_empty());
+    assert!(
+        !h.listed_sources(TOKEN_A)
+            .await
+            .contains(&(pb::Source::AgentMemory as i32))
+    );
+
+    // The administrator removes one entry's document, then the namespace, in
+    // every collection (removal needs no token).
+    h.admin
+        .delete(pb::DeleteRequest {
+            project_id: PROJECT_A,
+            namespace: Some(agent_memory_namespace(NAMESPACE_A)),
+            selector: Some(pb::delete_request::Selector::Documents(pb::DocumentKeys {
+                document_keys: vec!["a-1".to_owned()],
+            })),
+            ..pb::DeleteRequest::default()
+        })
+        .await
+        .expect("administrator deletes a document");
+    assert_eq!(h.truth_of(PROJECT_A, "agent_memory").await, 1);
+    assert_eq!(h.truth_of(PROJECT_B, "agent_memory").await, 2);
+    h.admin
+        .delete(pb::DeleteRequest {
+            project_id: PROJECT_A,
+            namespace: Some(agent_memory_namespace(NAMESPACE_A)),
+            selector: Some(pb::delete_request::Selector::WholeNamespace(
+                pb::WholeNamespace {},
+            )),
+            ..pb::DeleteRequest::default()
+        })
+        .await
+        .expect("administrator deletes the namespace");
+    assert_eq!(h.truth_of(PROJECT_A, "agent_memory").await, 0);
+    assert_eq!(h.truth_of(PROJECT_A, "toolkit_index").await, 2);
 }
 
 // ── revocation ──────────────────────────────────────────────────────────────

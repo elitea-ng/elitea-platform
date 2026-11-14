@@ -99,6 +99,11 @@ type Journal interface {
 	Entries(ctx context.Context, projectID int64, ids []int64) (map[int64]Entry, error)
 	Complete(ctx context.Context, jobs []Job) error
 	Fail(ctx context.Context, jobs []Job, class string, backoff time.Duration) error
+	// NoteModel records the model slug a project embeds with and answers
+	// whether it replaced a different one (the default model changed).
+	NoteModel(ctx context.Context, projectID int64, modelSlug string) (changed bool, err error)
+	// Requeue enqueues every active entry of the project again.
+	Requeue(ctx context.Context, projectID int64) error
 }
 
 // Embedder embeds texts for a project through the LLM gateway.
@@ -203,6 +208,7 @@ type Service struct {
 
 	mutex      sync.Mutex
 	cached     map[int64]cachedToken
+	noted      map[int64]string
 	offUntil   time.Time
 	lastReport time.Time
 }
@@ -224,7 +230,7 @@ func New(journal Journal, embedder Embedder, store Store, tokens Tokens, config 
 	return &Service{
 		journal: journal, embedder: embedder, store: store, tokens: tokens,
 		config: config.withDefaults(), logger: logger, now: time.Now,
-		cached: map[int64]cachedToken{},
+		cached: map[int64]cachedToken{}, noted: map[int64]string{},
 	}, nil
 }
 
@@ -254,6 +260,39 @@ func (s *Service) spaceOf(embedding Embedding) (Space, error) {
 		}
 	}
 	return Space{ModelSlug: slug, Dimension: uint32(dimension)}, nil //nolint:gosec // a vector length, bounded by the model
+}
+
+// noteModel watches the project's embedding model. The first write only records
+// it; a different slug than the recorded one (an administrator changed the
+// default model) enqueues every active entry of the project, so the entries
+// move to the new space instead of ranking after the newer ones for ever. A
+// failure is logged and retried on the next call (the in-process memo is set
+// only after the journal took the note).
+func (s *Service) noteModel(ctx context.Context, projectID int64, slug string) {
+	s.mutex.Lock()
+	known := s.noted[projectID] == slug
+	s.mutex.Unlock()
+	if known {
+		return
+	}
+	changed, err := s.journal.NoteModel(ctx, projectID, slug)
+	if err == nil && changed {
+		err = s.journal.Requeue(ctx, projectID)
+	}
+	if err != nil {
+		s.logger.Warn("agent memory: the embedding model of a project could not be noted", "project_id", projectID, "error", err)
+		return
+	}
+	if changed {
+		s.logger.Info("agent memory: the default embedding model changed; every active entry of the project is queued again",
+			"project_id", projectID, "model", slug)
+	}
+	s.mutex.Lock()
+	if len(s.noted) > 4096 {
+		clear(s.noted)
+	}
+	s.noted[projectID] = slug
+	s.mutex.Unlock()
 }
 
 // token returns a platform token for the project, minted once and reused.
@@ -311,6 +350,7 @@ func (s *Service) rank(ctx context.Context, projectID, applicationID int64, quer
 	if err != nil || len(embedding.Vectors) != 1 {
 		return nil, errors.New("the embedding of the turn's input is unusable")
 	}
+	s.noteModel(ctx, projectID, space.ModelSlug)
 	token, err := s.token(projectID)
 	if err != nil {
 		return nil, fmt.Errorf("mint the vector token: %w", err)
@@ -489,6 +529,7 @@ func (s *Service) embedAndWrite(ctx context.Context, projectID int64, upserts []
 			errs = append(errs, fmt.Errorf("embed entries (project %d): %w", projectID, err))
 			continue
 		}
+		s.noteModel(ctx, projectID, space.ModelSlug)
 		token, err := s.token(projectID)
 		if err != nil {
 			s.fail(ctx, batch, "vector token unavailable; retry", err)

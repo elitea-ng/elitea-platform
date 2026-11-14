@@ -24,7 +24,7 @@ The platform keeps a searchable copy of each active note, so a note can be found
 - **Saving a note never waits for the copy.** The copy is made a moment later, in the background. A note that is not copied yet is still recalled, by words and by recency.
 - **If the embedding model or the vector store is down,** recall uses the ranking by words and recency, as it did before this feature. Nothing is skipped and no turn fails. The platform tries the copy again later, with growing pauses.
 - **Notes saved before this release** are copied once, in the background, after the upgrade.
-- **If an administrator changes the default embedding model,** notes saved earlier stay in the old copy and are ranked after the newer ones until they are copied again (see the upgrade notes).
+- **If an administrator changes the default embedding model,** the platform copies every active note again with the new model, in the background. Until a note is copied again, it is ranked after the notes that are.
 - **A turn pays for the ranking only when it matters.** If the agent has few enough notes that all of them fit the entry and token budget, the platform does not embed your message.
 
 The platform needs the vector service, the LLM gateway and a model of the embedding kind in the project. An administrator can turn the feature off with `ELITEA_AGENT_MEMORY_VECTORS_ENABLED=false`; recall then ranks by words and recency. The text of an active note is stored in the vector service in plain form, like the text of an index, and is removed when the note is.

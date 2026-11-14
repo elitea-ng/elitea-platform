@@ -150,3 +150,42 @@ func filterAgent(jobs []agentmemoryvector.Job, application int64) []agentmemoryv
 	}
 	return out
 }
+
+func TestAgentMemoryVectorJournal_ANewModelQueuesTheProjectsEntriesAgain(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const project, application int64 = 1, 990658
+	cleanup := func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM p_1.agent_memory_entries WHERE application_id = $1`, application)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM centry.agent_memory_vector_journal WHERE application_id = $1`, application)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM centry.agent_memory_vector_models WHERE project_id = $1`, project)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+	journal, err := NewAgentMemoryVectorJournal(pool)
+	require.NoError(t, err)
+
+	var id int64
+	require.NoError(t, pool.QueryRow(ctx, `
+INSERT INTO p_1.agent_memory_entries (application_id, kind, content, status, written_by_kind)
+VALUES ($1, 'fact', 'one', 'active', 'agent') RETURNING id`, application).Scan(&id))
+	_, err = pool.Exec(ctx, `DELETE FROM centry.agent_memory_vector_journal WHERE entry_id = $1`, id)
+	require.NoError(t, err)
+
+	changed, err := journal.NoteModel(ctx, project, "model-a")
+	require.NoError(t, err)
+	require.False(t, changed, "the first record is not a change")
+	changed, err = journal.NoteModel(ctx, project, "model-a")
+	require.NoError(t, err)
+	require.False(t, changed)
+	changed, err = journal.NoteModel(ctx, project, "model-b")
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	require.NoError(t, journal.Requeue(ctx, project))
+	var generation int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT generation FROM centry.agent_memory_vector_journal WHERE project_id = $1 AND entry_id = $2`,
+		project, id).Scan(&generation))
+	require.Equal(t, int64(1), generation)
+}
