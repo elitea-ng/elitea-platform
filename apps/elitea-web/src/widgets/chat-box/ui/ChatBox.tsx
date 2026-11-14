@@ -313,7 +313,7 @@ const ChatBoxInner = memo(function ChatBox({
     <Box sx={chatShellSx(isEmptyConversation)}>
       <Box sx={chatColumnSx(isEmptyConversation)}>
         <ChatMessageList
-          assistant={{ name: assistantName, conversationUuid }}
+          assistant={{ name: assistantName, conversationUuid, readerName: userName }}
           emptyState={<ChatEmptyGreeting userName={userName} welcomeMessage={welcomeMessage} />}
           chatHistory={composer.queued.decorate(messages)}
           isStreaming={isStreaming}

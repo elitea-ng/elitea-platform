@@ -159,6 +159,19 @@ function renderLabel(label: ReactNode, tooltipDescription: ReactNode | undefined
  *    `maxRows` drive MUI's own `multiline`/`maxRows` row-limiting instead —
  *    a real row cap, not a CSS clamp hack.
  */
+/**
+ * The caller's `slotProps` with the outlined label link merged INTO
+ * `htmlInput`. A caller passing its own `slotProps` (for `inputLabel`, a
+ * `maxLength`, …) used to replace the whole object and drop `aria-labelledby`,
+ * leaving the field with no accessible name.
+ */
+function mergeSlotProps(slotProps: TextFieldProps['slotProps'], labelledBy: string | undefined): TextFieldProps['slotProps'] {
+  if (labelledBy === undefined) return slotProps;
+  const htmlInput = slotProps?.htmlInput;
+  const own = typeof htmlInput === 'function' || htmlInput === undefined ? {} : htmlInput;
+  return { ...slotProps, htmlInput: { 'aria-labelledby': labelledBy, ...own } };
+}
+
 export function InputBase({
   label,
   tooltipDescription,
@@ -234,10 +247,8 @@ export function InputBase({
         minRows={minRows}
         maxRows={rows}
         sx={sx}
-        {...(hasOutlinedLabelRow(outlined, labelNode)
-          ? { slotProps: { htmlInput: { 'aria-labelledby': outlinedLabelId } } }
-          : {})}
         {...rest}
+        slotProps={mergeSlotProps(rest.slotProps, hasOutlinedLabelRow(outlined, labelNode) ? outlinedLabelId : undefined)}
       />
     </Box>
   );
