@@ -178,4 +178,17 @@ describe('AIAssistantInput', () => {
     expect(ui.getByLabelText('Close')).toBeInTheDocument();
     expect(ui.queryByPlaceholderText('Describe your idea to generate or rewrite the value.')).toBeNull();
   });
+
+  it('a standalone field (Printer Final message) keeps its brand padding; only the Type/Value row aligns (issue 2001)', () => {
+    const alone = renderInput({ value: 'x', label: 'Final message', fieldName: 'final', placeholder: 'hint', fieldBinding: { name: 'final_message', onInput: vi.fn() } });
+    const area = alone.getByLabelText('Final message');
+    const root = area.parentElement as HTMLElement;
+    expect(getComputedStyle(root.parentElement as HTMLElement).paddingTop).not.toBe('0px');
+    expect(getComputedStyle(root).paddingLeft).not.toBe('0px');
+    expect(root.className).not.toContain('sizeSmall');
+    alone.unmount();
+    const aligned = renderInput({ value: 'x', label: 'Value', fieldName: 'final', placeholder: 'hint', alignWithSelect: true, fieldBinding: { name: 'value', onInput: vi.fn() } });
+    const alignedRoot = aligned.getByLabelText('Value').parentElement as HTMLElement;
+    expect(getComputedStyle(alignedRoot).paddingLeft).toBe('0px');
+  });
 });

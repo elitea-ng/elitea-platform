@@ -89,6 +89,19 @@ describe('InputBase', () => {
     expect(getByRole('button', { name: 'Copy to clipboard' })).toBeInTheDocument();
   });
 
+  it('actions.offsetY moves the toolbar up for a field whose label row sits higher (issue 2001)', () => {
+    const top = (offsetY?: number): string => {
+      const view = renderWithTheme(
+        <InputBase label="Name" value="x" onChange={() => {}} actions={{ enabled: true, forceShow: true, ...(offsetY !== undefined ? { offsetY } : {}) }} />,
+      );
+      const toolbar = view.getByRole('button', { name: 'Copy to clipboard' }).parentElement as HTMLElement;
+      const result = getComputedStyle(toolbar).top;
+      view.unmount();
+      return result;
+    };
+    expect(top(-1)).not.toBe(top());
+  });
+
   it('shows the actions toolbar on real mouse hover', async () => {
     const user = userEvent.setup();
     const { getByRole, queryByRole, container } = renderWithTheme(
