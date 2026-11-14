@@ -1,5 +1,6 @@
 import type { ReactNode, SyntheticEvent } from 'react';
 
+import { PipelineReadOnlyNotice } from './PipelineReadOnlyNotice';
 import Box from '@mui/material/Box';
 import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
@@ -322,6 +323,7 @@ export function PipelineEditorBody({
       */}
       {!isCreateMode && activeTab === 1 && (
         <PipelineTriggerScopeContext.Provider value={triggerScope}>
+          <PipelineReadOnlyNotice disabled={viewMode !== 'Owner'} isPublished={isPublic} />
           <EditorPanel
             ref={editorPanelRef}
             setYamlDirty={setIsYamlDirty}

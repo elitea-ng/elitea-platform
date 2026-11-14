@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 
+import { t } from '@/shared/i18n';
 import { fromUnixTime } from 'date-fns';
 
 import { ROLES, WELCOME_MESSAGE_ID } from '@/shared/lib/enums';
@@ -60,6 +61,31 @@ export interface UseIndexHistoryResult {
   readonly setProgressingIndexHistoryRecovered: (value: boolean) => void;
 }
 
+// The permanent first entry of an index and a stopped run carry no "reindexed"
+// pair: a "Successfully reindexed" line with zeros there contradicts the failed
+// run recorded right after it. A stopped run that wrote documents says how many.
+function countlessHistoryText(state: unknown, indexed: unknown): string | undefined {
+  if (state === IndexStatuses.created) return t('features.toolkits.indexHistory.created', 'The index was created. No indexing run has finished yet.');
+  if (state !== IndexStatuses.cancelled) return undefined;
+  return typeof indexed === 'number' && indexed > 0
+    ? t('features.toolkits.indexHistory.stoppedWithCount', 'Indexing was stopped before it finished. Documents indexed: {{count}}.', { count: indexed })
+    : t('features.toolkits.indexHistory.stopped', 'Indexing was stopped before it finished.');
+}
+
+function getCountlessHistoryMessage(item: Record<string, unknown>, isFailed: boolean): Message[] | undefined {
+  const content = countlessHistoryText(item['state'], item['indexed']);
+  const updatedOn = item['updated_on'];
+  if (content === undefined || isFailed) return undefined;
+  return [
+    {
+      id: WELCOME_MESSAGE_ID,
+      role: ROLES.Assistant,
+      content,
+      ...(typeof updatedOn === 'number' ? { createdAt: new Date(fromUnixTime(updatedOn)).toISOString() } : {}),
+    },
+  ];
+}
+
 function getHistoryMockMessage(
   showMockMessage: boolean,
   indexHistoryItem: Record<string, unknown> | null,
@@ -72,6 +98,9 @@ function getHistoryMockMessage(
 
   const getFailedTrace = (): unknown =>
     indexHistoryItem['error'] ?? 'The system encountered an issue and was unable to complete the scheduled reindexing operation';
+
+  const countless = getCountlessHistoryMessage(indexHistoryItem, isFailed);
+  if (countless) return countless;
 
   const executionSummary = isFailed
     ? 'The system encountered an issue and was unable to complete the scheduled reindexing operation'
