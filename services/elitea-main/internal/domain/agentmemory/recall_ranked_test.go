@@ -73,3 +73,35 @@ func TestSelectRankedOrdersBySimilarityAndKeepsTheRowsRules(t *testing.T) {
 		t.Fatalf("an index-only entry appeared: %v", got)
 	}
 }
+
+func TestRankingMattersOnlyWhenABudgetLeavesSomeoneOut(t *testing.T) {
+	settings := Settings{Enabled: true, Write: WriteAuto, MaxEntries: 2, MaxTokens: 1000}
+	fit := []Candidate{
+		{ID: 1, Kind: KindFact, Content: "a"},
+		{ID: 2, Kind: KindFact, Content: "b"},
+		{ID: 3, Kind: KindCursor, Content: "cursor"},
+		{ID: 4, Kind: KindFact, Content: "about bob", SubjectUserID: 9},
+	}
+	// Two candidates are left (the cursor and the absent person's entry do
+	// not count), and the entry budget is 2: every one is recalled.
+	if RankingMatters(fit, map[int64]bool{}, settings) {
+		t.Fatal("the order cannot change a recall that takes every candidate")
+	}
+	// With the person present there are three candidates for two places.
+	if !RankingMatters(fit, map[int64]bool{9: true}, settings) {
+		t.Fatal("the entry budget leaves one out")
+	}
+	// The byte budget leaves one out.
+	tight := settings
+	tight.MaxTokens = MinRecallTokens
+	big := []Candidate{
+		{ID: 1, Kind: KindFact, Content: string(make([]byte, 300))},
+		{ID: 2, Kind: KindFact, Content: string(make([]byte, 300))},
+	}
+	if !RankingMatters(big, map[int64]bool{}, tight) {
+		t.Fatal("the byte budget leaves one out")
+	}
+	if RankingMatters(fit, map[int64]bool{9: true}, Settings{}) {
+		t.Fatal("memory off recalls nothing")
+	}
+}

@@ -13,6 +13,7 @@ package vectorclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -71,13 +72,20 @@ func (c *Client) UpsertAgentMemory(ctx context.Context, token string, projectID,
 	}
 	batch := make([]*vectorv1.Point, len(points))
 	for i, point := range points {
+		metadata, err := json.Marshal(struct {
+			EntryID int64  `json:"entry_id"`
+			Kind    string `json:"kind"`
+		}{point.EntryID, point.Kind})
+		if err != nil {
+			return fmt.Errorf("encode the metadata of entry %d: %w", point.EntryID, err)
+		}
 		batch[i] = &vectorv1.Point{
 			DocumentKey:     strconv.FormatInt(point.EntryID, 10),
 			DocumentVersion: strconv.Itoa(point.Version),
 			ChunkId:         "0",
 			ChunkType:       "memory",
 			Text:            point.Text,
-			MetadataJson:    fmt.Sprintf(`{"entry_id":%d,"kind":%q}`, point.EntryID, point.Kind),
+			MetadataJson:    string(metadata),
 			Vector:          point.Vector,
 		}
 	}

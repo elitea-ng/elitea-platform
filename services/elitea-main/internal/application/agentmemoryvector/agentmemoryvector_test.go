@@ -106,7 +106,7 @@ func (t *fakeTokens) Mint(projectID int64, source string, _ time.Duration) (stri
 	return "tok-" + source, time.Now().Add(time.Hour), nil
 }
 
-func newService(t *testing.T, journal *fakeJournal, embedder *fakeEmbedder, store *fakeStore) (*Service, *fakeTokens) {
+func newService(t *testing.T, journal *fakeJournal, embedder Embedder, store *fakeStore) (*Service, *fakeTokens) {
 	t.Helper()
 	tokens := &fakeTokens{}
 	service, err := New(journal, embedder, store, tokens, Config{}, nil)
@@ -269,5 +269,87 @@ func TestNewRefusesAMissingDependency(t *testing.T) {
 	}
 	if _, err := New(&fakeJournal{}, nil, &fakeStore{}, &fakeTokens{}, Config{}, nil); err == nil {
 		t.Fatal("a nil embedder was accepted")
+	}
+}
+
+// A fake embedder that refuses one text, as a model refuses an input it cannot
+// take.
+type pickyEmbedder struct{ refuse string }
+
+func (e *pickyEmbedder) Embed(_ context.Context, _ int64, inputs []string) (Embedding, error) {
+	vectors := make([][]float32, len(inputs))
+	for i, input := range inputs {
+		if input == e.refuse {
+			return Embedding{}, errors.New("the gateway answered 400")
+		}
+		vectors[i] = []float32{1, 2, 3}
+	}
+	return Embedding{Model: "m", Vectors: vectors}, nil
+}
+
+func TestOneRefusedEntryDoesNotHoldBackItsNeighbours(t *testing.T) {
+	journal := &fakeJournal{
+		jobs: []Job{
+			{ProjectID: 7, EntryID: 1, ApplicationID: 10, Generation: 1, Attempts: 1},
+			{ProjectID: 7, EntryID: 2, ApplicationID: 10, Generation: 1, Attempts: 1},
+			{ProjectID: 7, EntryID: 3, ApplicationID: 10, Generation: 1, Attempts: 1},
+		},
+		entries: map[int64]Entry{
+			1: {ID: 1, ApplicationID: 10, Kind: "fact", Content: "good one", Version: 1},
+			2: {ID: 2, ApplicationID: 10, Kind: "fact", Content: "poison", Version: 1},
+			3: {ID: 3, ApplicationID: 10, Kind: "fact", Content: "good two", Version: 1},
+		},
+	}
+	store := &fakeStore{}
+	service, _ := newService(t, journal, &pickyEmbedder{refuse: "poison"}, store)
+	closed, err := service.RunOnce(context.Background())
+	if err == nil || closed != 2 {
+		t.Fatalf("closed %d err %v", closed, err)
+	}
+	if len(store.upserts[10]) != 2 {
+		t.Fatalf("the neighbours were not written: %+v", store.upserts[10])
+	}
+	if len(journal.failed) != 1 || journal.failed[0].EntryID != 2 {
+		t.Fatalf("only the refused entry should wait: %v", journal.failed)
+	}
+}
+
+func TestAProjectScopedFailureNeverOpensTheBreakerAndParksItsRows(t *testing.T) {
+	embedder := &fakeEmbedder{err: ErrNoEmbeddingModel}
+	journal := &fakeJournal{
+		jobs:    []Job{{ProjectID: 7, EntryID: 1, ApplicationID: 10, Generation: 1, Attempts: 1}},
+		entries: map[int64]Entry{1: {ID: 1, ApplicationID: 10, Kind: "fact", Content: "one", Version: 1}},
+	}
+	service, _ := newService(t, journal, embedder, &fakeStore{})
+	// Project 7 has no model: its own recall fails, but another project's recall
+	// is not switched off for it.
+	if _, err := service.Rank(context.Background(), 7, 10, "x"); !errors.Is(err, ErrNoEmbeddingModel) {
+		t.Fatalf("rank: %v", err)
+	}
+	embedder.err = nil
+	if _, err := service.Rank(context.Background(), 8, 10, "x"); err != nil {
+		t.Fatalf("another project's recall was switched off: %v", err)
+	}
+	// Its journal rows wait out the longest backoff at once.
+	embedder.err = ErrNoEmbeddingModel
+	if _, err := service.RunOnce(context.Background()); err == nil {
+		t.Fatal("the failure was not reported")
+	}
+	if journal.backoff != time.Hour {
+		t.Fatalf("backoff %v", journal.backoff)
+	}
+}
+
+func TestACallersEndedContextNeverOpensTheBreaker(t *testing.T) {
+	embedder := &fakeEmbedder{err: context.DeadlineExceeded}
+	service, _ := newService(t, &fakeJournal{}, embedder, &fakeStore{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.Rank(ctx, 7, 10, "x"); err == nil {
+		t.Fatal("a cancelled caller got a ranking")
+	}
+	embedder.err = nil
+	if _, err := service.Rank(context.Background(), 7, 10, "x"); err != nil {
+		t.Fatalf("the breaker opened for a cancelled caller: %v", err)
 	}
 }

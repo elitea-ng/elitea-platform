@@ -480,7 +480,7 @@ func (s *AgentMemory) ResolveAgentMemoryRecall(ctx context.Context, request agen
 	// and the budgets below are the rows'. An embedding or vector outage is
 	// the keyword ranking, never no recall.
 	var similarity map[int64]float32
-	if s.ranker != nil && request.Settings.Enabled {
+	if s.ranker != nil && agentmemory.RankingMatters(candidates, present, request.Settings) {
 		ranked, rankErr := s.ranker.Rank(ctx, request.ProjectID, request.ApplicationID, request.UserInput)
 		if rankErr != nil {
 			slog.DebugContext(ctx, "agent memory: vector ranking unavailable; recalling by keyword", "error", rankErr)

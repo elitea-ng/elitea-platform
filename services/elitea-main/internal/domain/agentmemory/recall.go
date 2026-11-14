@@ -47,6 +47,29 @@ func Select(candidates []Candidate, present map[int64]bool, input string, settin
 	return SelectRanked(candidates, present, input, settings, nil)
 }
 
+// RankingMatters reports whether the order of the candidates can change what
+// Select picks: some candidate (after the cursor and presence rules) does not
+// fit the entry or byte budget. When every candidate fits, all of them are
+// recalled whatever the order, so a similarity ranking would cost an embedding
+// and a search for nothing. Pinned entries come first either way.
+func RankingMatters(candidates []Candidate, present map[int64]bool, settings Settings) bool {
+	if !settings.Enabled || settings.MaxEntries <= 0 {
+		return false
+	}
+	count, bytes := 0, 0
+	for _, candidate := range candidates {
+		if candidate.Kind == KindCursor || (candidate.SubjectUserID > 0 && !present[candidate.SubjectUserID]) {
+			continue
+		}
+		count++
+		bytes += len(candidate.Content)
+		if count > settings.MaxEntries || bytes > settings.RecallBytes() {
+			return true
+		}
+	}
+	return false
+}
+
 // SelectRanked is Select with the vector index's answer. similarity holds
 // the entries the index ranked (Ranker.Rank). The presence filter, the
 // cursor rule and the budgets are Select's, and the platform's rows are still

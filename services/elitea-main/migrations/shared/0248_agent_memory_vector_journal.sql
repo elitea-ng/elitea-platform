@@ -50,5 +50,29 @@ CREATE TABLE IF NOT EXISTS centry.agent_memory_vector_journal (
 CREATE INDEX IF NOT EXISTS agent_memory_vector_journal_due_idx
     ON centry.agent_memory_vector_journal (next_attempt_at);
 
+-- Enqueue the active entries every existing tenant already holds, once. The
+-- tenant migration does the same for its own schema, but only when this table
+-- exists, and the two histories apply independently: whichever runs second
+-- finds the other's rows (ON CONFLICT DO NOTHING), so no order loses an entry.
+DO $migration$
+DECLARE
+    tenant text;
+BEGIN
+    FOR tenant IN
+        SELECT nspname FROM pg_namespace WHERE nspname ~ '^p_[1-9][0-9]{0,8}$'
+    LOOP
+        IF to_regclass(format('%I.agent_memory_entries', tenant)) IS NOT NULL THEN
+            EXECUTE format($backfill$
+                INSERT INTO centry.agent_memory_vector_journal (project_id, entry_id, application_id)
+                SELECT %2$L::bigint, id, application_id
+                FROM %1$I.agent_memory_entries
+                WHERE status = 'active' AND kind <> 'cursor'
+                ON CONFLICT (project_id, entry_id) DO NOTHING
+            $backfill$, tenant, substr(tenant, 3));
+        END IF;
+    END LOOP;
+END
+$migration$;
+
 COMMENT ON TABLE centry.agent_memory_vector_journal IS
     'Journal of agent memory vectors (issue 1657, shared/0248). A trigger on each tenant agent_memory_entries writes a row when an entry changes; a reconciler in elitea-main embeds or removes the entry''s point from the entry row''s current state and closes the row.';

@@ -1132,8 +1132,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// gateway.guardrail_verdicts (issue 2012). No data, no permission.
 	//
 	// 248: shared/0248_agent_memory_vector_journal.sql, the journal of an
-	// agent's memory vectors (centry.agent_memory_vector_journal, issue 1657).
-	// No data, no permission.
+	// agent's memory vectors (centry.agent_memory_vector_journal, issue 1657),
+	// and the one-time enqueue of the entries the tenants already hold. No
+	// permission.
 	require.EqualValues(t, 248, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)

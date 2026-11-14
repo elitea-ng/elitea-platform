@@ -13,13 +13,15 @@
 -- `active` and is not a cursor (a cursor is the heartbeat's state, never
 -- embedded), and an UPDATE that changed the content, the status or the kind.
 -- A pin, a version bump or a touch of updated_at changes nothing the index
--- holds.
+-- holds. An entry that becomes a cursor is journalled (its point goes).
 --
 -- The shared table may not exist yet when a tenant migrates first (the shared
 -- and tenant histories apply independently), so the function looks for it each
 -- time and does nothing without it: a memory write never fails because of the
 -- journal. The existing active entries are enqueued once below, when the table
--- exists, so they are embedded without a write.
+-- exists, so they are embedded without a write. When this tenant migrates
+-- before the shared journal exists, shared/0248 enqueues them instead (it
+-- visits every tenant schema that holds the table).
 --
 -- Idempotent. No BEGIN/COMMIT: the ledgered runner wraps the file.
 
@@ -56,7 +58,7 @@ BEGIN
                 v_entry := NEW.id;
                 v_agent := NEW.application_id;
             ELSE
-                IF NEW.kind = 'cursor'
+                IF (NEW.kind = 'cursor' AND OLD.kind = 'cursor')
                    OR (NEW.status <> 'active' AND OLD.status <> 'active')
                    OR (NEW.status = OLD.status AND NEW.content = OLD.content AND NEW.kind = OLD.kind) THEN
                     RETURN NULL;

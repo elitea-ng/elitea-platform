@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentmemoryvector"
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
 )
@@ -127,5 +128,25 @@ func TestNewRefusesMissingDependencies(t *testing.T) {
 	}
 	if _, err := New(&fakeGateway{}, &fakeCatalog{}, 0); err == nil {
 		t.Fatal("no public project")
+	}
+}
+
+func TestTheGatewaysRefusalIsProjectScopedButItsOutageIsNot(t *testing.T) {
+	for status, scoped := range map[int]bool{400: true, 402: true, 403: true, 404: true, 429: false, 500: false, 503: false} {
+		embedder, err := New(&fakeGateway{status: status}, &fakeCatalog{name: ptr("m")}, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = embedder.Embed(context.Background(), 7, []string{"a"})
+		if err == nil || errors.Is(err, agentmemoryvector.ErrProjectScoped) != scoped {
+			t.Errorf("status %d: scoped=%v err=%v", status, scoped, err)
+		}
+	}
+	embedder, err := New(&fakeGateway{}, &fakeCatalog{}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := embedder.Embed(context.Background(), 7, []string{"a"}); !errors.Is(err, agentmemoryvector.ErrProjectScoped) {
+		t.Fatalf("no model: %v", err)
 	}
 }

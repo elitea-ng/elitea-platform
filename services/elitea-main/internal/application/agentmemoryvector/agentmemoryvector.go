@@ -118,6 +118,16 @@ type Tokens interface {
 	Mint(projectID int64, source string, lifetime time.Duration) (string, time.Time, error)
 }
 
+// ErrProjectScoped marks a failure that belongs to one project, not to the
+// dependency: the project has no embedding model, or the gateway refused its
+// request (a budget, a policy, a model it may not use). It never opens the
+// recall breaker, which would switch every other project off, and a journal
+// row that fails with it waits out the longest backoff at once.
+var ErrProjectScoped = errors.New("the failure belongs to this project")
+
+// ErrNoEmbeddingModel reports a project with no embedding model to call.
+var ErrNoEmbeddingModel = fmt.Errorf("agent memory: the project has no embedding model: %w", ErrProjectScoped)
+
 // ErrUnavailable is Rank's answer while a dependency is down (the breaker is
 // open): recall uses the keyword ranking.
 var ErrUnavailable = errors.New("agent memory vectors are unavailable")
@@ -275,11 +285,15 @@ func (s *Service) Rank(ctx context.Context, projectID, applicationID int64, quer
 	if s.breakerOpen() {
 		return nil, ErrUnavailable
 	}
-	ctx, cancel := context.WithTimeout(ctx, s.config.RankTimeout)
+	parent := ctx
+	ctx, cancel := context.WithTimeout(parent, s.config.RankTimeout)
 	defer cancel()
 	ranked, err := s.rank(ctx, projectID, applicationID, query)
 	if err != nil {
-		if ctx.Err() == nil || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		// The breaker is for a dependency that is down or slow for everyone:
+		// not for this caller's own ended context (a short deadline on the
+		// turn, a cancel), and not for a failure of this project alone.
+		if parent.Err() == nil && !errors.Is(err, ErrProjectScoped) {
 			s.openBreaker(err)
 		}
 		return nil, err
@@ -345,6 +359,14 @@ func (s *Service) openBreaker(cause error) {
 // there was none. It never returns an error: a failed pass is logged and the
 // rows keep their backoff.
 func (s *Service) Run(ctx context.Context) {
+	// The first pass waits one idle pause: the composition starts this before
+	// the rest of the boot is done, and a pass before the migrations ran would
+	// only log an error.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(s.config.IdlePause):
+	}
 	for {
 		worked, err := s.RunOnce(ctx)
 		if err != nil && ctx.Err() == nil {
@@ -394,7 +416,7 @@ func (s *Service) workProject(ctx context.Context, projectID int64, jobs []Job) 
 	}
 	entries, err := s.journal.Entries(ctx, projectID, ids)
 	if err != nil {
-		s.fail(ctx, jobs, "entries unavailable; retry")
+		s.fail(ctx, jobs, "entries unavailable; retry", err)
 		return 0, err
 	}
 	removalsByAgent := map[int64][]Job{}
@@ -414,7 +436,7 @@ func (s *Service) workProject(ctx context.Context, projectID int64, jobs []Job) 
 			entryIDs[i] = job.EntryID
 		}
 		if err := s.store.DeleteAgentMemoryEntries(ctx, projectID, applicationID, entryIDs); err != nil {
-			s.fail(ctx, agentJobs, "vector removal failed; retry")
+			s.fail(ctx, agentJobs, "vector removal failed; retry", err)
 			errs = append(errs, fmt.Errorf("remove the vectors of agent %d (project %d): %w", applicationID, projectID, err))
 			continue
 		}
@@ -444,20 +466,32 @@ func (s *Service) embedAndWrite(ctx context.Context, projectID int64, upserts []
 			texts[i] = entries[job.EntryID].Content
 		}
 		embedding, err := s.embedder.Embed(ctx, projectID, texts)
+		if (err != nil || len(embedding.Vectors) != len(batch)) && len(batch) > 1 && !errors.Is(err, ErrProjectScoped) {
+			// One entry the model refuses (a gateway 400) must not hold back
+			// its neighbours: work the batch entry by entry.
+			for _, job := range batch {
+				done, oneErr := s.embedAndWrite(ctx, projectID, []Job{job}, entries)
+				closed += done
+				if oneErr != nil {
+					errs = append(errs, oneErr)
+				}
+			}
+			continue
+		}
 		if err != nil || len(embedding.Vectors) != len(batch) {
-			s.fail(ctx, batch, "embedding unavailable; retry")
+			s.fail(ctx, batch, "embedding unavailable; retry", err)
 			errs = append(errs, fmt.Errorf("embed %d entries (project %d): %w", len(batch), projectID, embeddingError(err)))
 			continue
 		}
 		space, err := s.spaceOf(embedding)
 		if err != nil {
-			s.fail(ctx, batch, "embedding unusable; retry")
+			s.fail(ctx, batch, "embedding unusable; retry", err)
 			errs = append(errs, fmt.Errorf("embed entries (project %d): %w", projectID, err))
 			continue
 		}
 		token, err := s.token(projectID)
 		if err != nil {
-			s.fail(ctx, batch, "vector token unavailable; retry")
+			s.fail(ctx, batch, "vector token unavailable; retry", err)
 			errs = append(errs, fmt.Errorf("vector token (project %d): %w", projectID, err))
 			continue
 		}
@@ -472,7 +506,7 @@ func (s *Service) embedAndWrite(ctx context.Context, projectID int64, upserts []
 		}
 		for applicationID, points := range pointsByAgent {
 			if err := s.store.UpsertAgentMemory(ctx, token, projectID, applicationID, space, points); err != nil {
-				s.fail(ctx, jobsByAgent[applicationID], "vector write failed; retry")
+				s.fail(ctx, jobsByAgent[applicationID], "vector write failed; retry", err)
 				errs = append(errs, fmt.Errorf("write the vectors of agent %d (project %d): %w", applicationID, projectID, err))
 				continue
 			}
@@ -496,13 +530,18 @@ func embeddingError(err error) error {
 // fail releases rows for another run after a backoff that grows with the
 // attempts. It uses a context that outlives a shutdown for one short write, so
 // the row is not left leased.
-func (s *Service) fail(ctx context.Context, jobs []Job, class string) {
+func (s *Service) fail(ctx context.Context, jobs []Job, class string, cause error) {
 	if len(jobs) == 0 {
 		return
 	}
 	attempts := 1
 	for _, job := range jobs {
 		attempts = max(attempts, job.Attempts)
+	}
+	if errors.Is(cause, ErrProjectScoped) {
+		// Retrying sooner cannot help: the project has to get a model, or the
+		// gateway to accept its calls. Park the rows at the longest backoff.
+		attempts = 1 << 10
 	}
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()

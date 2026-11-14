@@ -28,7 +28,7 @@ import (
 )
 
 // ErrNoEmbeddingModel reports a project with no embedding model to call.
-var ErrNoEmbeddingModel = errors.New("agent memory: the project has no embedding model")
+var ErrNoEmbeddingModel = agentmemoryvector.ErrNoEmbeddingModel
 
 // modelCacheTTL is how long a project's default model is kept.
 const modelCacheTTL = 5 * time.Minute
@@ -136,7 +136,13 @@ func (e *Embedder) Embed(ctx context.Context, projectID int64, inputs []string) 
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		// The gateway's body is not echoed: it can carry provider text.
+		// The gateway's body is not echoed: it can carry provider text. A 4xx
+		// (a budget, a policy, a model the project may not use, an input the
+		// model refuses) is this project's or this input's, not a dependency
+		// outage; 429 is the gateway asking everyone to slow down.
+		if response.StatusCode >= 400 && response.StatusCode < 500 && response.StatusCode != http.StatusTooManyRequests {
+			return agentmemoryvector.Embedding{}, fmt.Errorf("the gateway answered %d: %w", response.StatusCode, agentmemoryvector.ErrProjectScoped)
+		}
 		return agentmemoryvector.Embedding{}, fmt.Errorf("the gateway answered %d", response.StatusCode)
 	}
 	var decoded embeddingsResponse
