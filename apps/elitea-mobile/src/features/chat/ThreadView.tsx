@@ -28,7 +28,7 @@ import { PackAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
 import { AVATAR_PACK_CONTRACT, avatarPacksById } from '@/features/chat/avatarPackMedia';
 import { ChatEmptyState, MODEL_CHAT_SUGGESTIONS } from '@/features/chat/ChatEmptyState';
 import { ThreadLayout, Toast, useToast } from '@/features/chat/ThreadLayout';
-import { LiveReply, PersistedMessage, QueuedMessage, SideTalkRow, SystemLine } from '@/features/chat/ThreadRows';
+import { GuardrailNoticeRows, LiveReply, PersistedMessage, QueuedMessage, SideTalkRow, SystemLine } from '@/features/chat/ThreadRows';
 import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { SteeringMessage, steeringRows } from '@/features/chat/SteeringRows';
 import { SteeringOfferNote } from '@/features/chat/SteeringOfferNote';
@@ -110,6 +110,9 @@ import { useSteeringWaitText } from '@/features/chat/useSteeringWaitText';
 import { CloudExecutorNotice } from '@/features/localWork/CloudExecutorNotice';
 import { lastAnswerRanOnDesktop } from '@/features/localWork/model';
 import { useLocalWork } from '@/features/localWork/useLocalWork';
+import { explainsFailure } from '@/features/chat/guardrailNotice';
+import { useGuardrailNotices } from '@/features/chat/useGuardrailNotices';
+import type { GuardrailNotice } from '@/api/queries/guardrailNotices';
 import { useSelfUserId } from '@/state/selfIdentity';
 import { useSession } from '@/state/session';
 import { useOutboxItems } from '@/sync/appOutbox';
@@ -123,6 +126,8 @@ type Row =
   | { kind: 'outbox'; key: string; item: OutboxItem }
   | { kind: 'live_user'; key: string; text: string; files: string[] }
   | { kind: 'live_reply'; key: string; live: LiveTurn }
+  /** What the content guardrails did to the turn just watched (issue 2012). */
+  | { kind: 'guardrail'; key: string; notices: readonly GuardrailNotice[] }
   /** A message sent while the live answer runs (client contract 1.27). */
   | { kind: 'steer'; key: string; item: SteeringItem; own: boolean };
 
@@ -241,6 +246,7 @@ export function ThreadView({
     steering: contract127,
   });
   const { live, dismiss } = turn;
+  const guardrail = useGuardrailNotices(projectId, live);
   const steeringWait = useSteeringWaitText(live?.steeringRetryAt);
   // VoiceOver hears when the answer is done, stopped, failed or waits for the user.
   useTurnAnnouncements(live, target.ok ? target.name : null, inFront);
@@ -783,6 +789,8 @@ export function ThreadView({
   const rows: Row[] = [];
   // Inverted list: the first rows are the newest, at the bottom.
   for (const item of [...outbox].reverse()) rows.push({ kind: 'outbox', key: `outbox-${item.questionId}`, item });
+  // Under the answer it is about (the list is inverted: pushed before the live rows is drawn below them).
+  if (guardrail !== null) rows.push({ kind: 'guardrail', key: `guardrail-${guardrail.runId}`, notices: guardrail.notices });
   if (live && !live.settled) {
     // Steering messages go under the live answer (the list is inverted: pushed first is drawn lowest).
     const transcriptIds = new Set(messages.map((m) => m.uuid).filter((id): id is string => id !== null));
@@ -1006,8 +1014,11 @@ export function ThreadView({
                           onDismiss={turn.dismiss}
                           onOpenTool={setOpenStep}
                           usageAvailable={contract13}
+                          guardrailStopped={guardrail?.notices.some(explainsFailure) ?? false}
                         />
                       );
+                    case 'guardrail':
+                      return <GuardrailNoticeRows notices={item.notices} />;
                   }
                 }}
               />

@@ -2,12 +2,14 @@ import { router } from 'expo-router';
 import { useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
+import type { GuardrailNotice } from '@/api/queries/guardrailNotices';
 import { restorePreparedTurn, TurnInputError } from '@/api/queries/sendMessage';
 import { AttachmentStrip } from '@/features/chat/attachments/AttachmentStrip';
 import { MessageBubble } from '@/features/chat/MessageBubble';
 import type { ChatAttachment, ChatMessage } from '@/features/chat/messageModel';
 import { MESSAGE_CLASS, sideTalkLabel, type MessageClass } from '@elitea/client-core/conversation';
 import { useDesign } from '@/design/DesignProvider';
+import { explainsFailure, GUARDRAIL_STOPPED, noticeText } from '@/features/chat/guardrailNotice';
 import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { ThinkingDots } from '@/features/chat/ThinkingDots';
 import { ToolActivity } from '@/features/chat/ToolCalls';
@@ -141,6 +143,24 @@ export function SystemLine({ message }: { message: ChatMessage }) {
 }
 
 /**
+ * What the content guardrails did to the turn just watched (issue 2012): one muted line per
+ * notice, under the answer. A block is in the danger tone, a warning in the warning tone.
+ */
+export function GuardrailNoticeRows({ notices }: { notices: readonly GuardrailNotice[] }) {
+  return (
+    <View style={styles.notices} testID="guardrail-notices">
+      {notices.map((notice) => (
+        <View key={`${notice.stage}:${notice.guardrail}:${notice.detector}:${notice.kind}`} style={styles.notice} accessible accessibilityRole="alert" testID={`guardrail-notice-${notice.kind}`}>
+          <Text variant="footnote" tone={explainsFailure(notice) ? 'danger' : 'secondary'}>
+            {noticeText(notice)}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
  * A run of agent-to-agent messages (decision 7e) folded into one "Side conversation (n)" row; a
  * tap opens it into compact "A → B" rows, each with its text.
  */
@@ -226,6 +246,7 @@ export function LiveReply({
   onDismiss,
   onOpenTool,
   usageAvailable,
+  guardrailStopped = false,
 }: {
   live: LiveTurn;
   author: string | null;
@@ -237,6 +258,8 @@ export function LiveReply({
   onOpenTool: (step: ToolStep) => void;
   /** Settings has a usage card (client contract 1.3). Older servers refuse on budget too, but have no usage to show. */
   usageAvailable: boolean;
+  /** A content guardrail stopped the turn: its notice row says which, so the failure line is short. */
+  guardrailStopped?: boolean;
 }) {
   const { turn } = live;
   const waiting = turn.phase === 'sending' || (turn.phase === 'streaming' && turn.content === '');
@@ -269,7 +292,7 @@ export function LiveReply({
       meta={author}
       avatar={avatar}
       status={status}
-      error={turn.phase === 'failed' ? (turn.error?.message ?? null) : null}
+      error={turn.phase === 'failed' ? (guardrailStopped ? GUARDRAIL_STOPPED : (turn.error?.message ?? null)) : null}
       actions={<RowActions actions={actions} />}
       footer={<ToolActivity steps={[...turn.tools, ...subAgentSteps(turn.subAgents, turn.phase !== 'streaming' && turn.phase !== 'sending')]} streaming={turn.phase === 'streaming'} onOpen={onOpenTool} />}>
       {turn.content !== '' ? <Markdown value={turn.content} streaming={turn.phase === 'streaming'} caret={streaming} /> : waiting && !turn.stopped ? <ThinkingDots /> : ''}
@@ -279,6 +302,8 @@ export function LiveReply({
 
 const styles = StyleSheet.create({
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  notices: { alignSelf: 'stretch', gap: 4, paddingStart: 40, paddingEnd: 12, paddingVertical: 4 },
+  notice: { paddingVertical: 2 },
   system: { alignSelf: 'center', maxWidth: '85%', paddingVertical: 6, paddingHorizontal: 12 },
   systemText: { textAlign: 'center' },
   side: { alignSelf: 'stretch', gap: 6, paddingStart: 40, paddingVertical: 4 },

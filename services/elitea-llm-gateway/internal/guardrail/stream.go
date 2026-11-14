@@ -89,7 +89,7 @@ type StreamFilter struct {
 }
 
 func liveDetector(d *Detector) bool { return d.Action == ActionBlock || d.Action == ActionMask }
-func flagDetector(d *Detector) bool { return d.Action == ActionFlag }
+func flagDetector(d *Detector) bool { return d.Action == ActionFlag || d.Action == ActionWarn }
 
 // NewStream returns a filter for one text channel of the answer.
 func (p *Pipeline) NewStream() *StreamFilter {

@@ -936,9 +936,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 521 -> 527 (issues 2008 and 2013): list/create/update/deleteEvalSuite (run limits) and
 // list/recordEvalHumanScore.
 // 527 -> 528 (issue 2009): enhanceEvalRun, Enhance with AI on a finished evaluation run.
-// 528 -> 533 (issue 2048): list/create/update/deleteEntityFolder and moveEntityToFolder, the project
+// 528 -> 529 (issue 2012): listRunGuardrailNotices, the chat notice of a
+// blocked, redacted or warned message (see MANIFEST_ENTRY_COUNT).
+// 529 -> 534 (issue 2048): list/create/update/deleteEntityFolder and moveEntityToFolder, the project
 // folders of the agents, pipelines, skills, toolkits and MCPs lists.
-const GENERATED_OPERATION_COUNT = 533;
+const GENERATED_OPERATION_COUNT = 534;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1252,10 +1254,14 @@ const GENERATED_OPERATION_COUNT = 533;
  * wizard) and analytics.getEvaluationRunAnalytics (a run's consumption card).
  * Both generated.
  *
- * 370 -> 375 (issue 2048): the five project-folder operations of the entity lists
+ * 370 -> 371 (issue 2012): chat.listRunGuardrailNotices, the guardrail notice
+ * under a chat answer (features/chat-messages/api/guardrailNoticesApi.ts).
+ * Generated.
+ *
+ * 371 -> 376 (issue 2048): the five project-folder operations of the entity lists
  * (entityFolder.list, create, update, delete, move). All generated.
  */
-const MANIFEST_ENTRY_COUNT = 375;
+const MANIFEST_ENTRY_COUNT = 376;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

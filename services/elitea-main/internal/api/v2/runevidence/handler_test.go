@@ -24,6 +24,7 @@ type fakeStore struct {
 	auditErr error
 	audited  []string
 	verdicts []repos.GuardrailVerdict
+	notices  []repos.GuardrailNoticeVerdict
 }
 
 func (f *fakeStore) GuardrailVerdicts(_ context.Context, projectID int64, runID string, _ int) ([]repos.GuardrailVerdict, error) {
@@ -31,6 +32,14 @@ func (f *fakeStore) GuardrailVerdicts(_ context.Context, projectID int64, runID 
 		return nil, nil
 	}
 	return f.verdicts, nil
+}
+
+func (f *fakeStore) GuardrailNoticeVerdicts(_ context.Context, projectID, userID int64, runID string, _ int) ([]repos.GuardrailNoticeVerdict, error) {
+	// The real store filters on the caller's user id; the fake's rows belong to user 8.
+	if projectID != f.head.ProjectID || runID != f.head.RunID || userID != 8 {
+		return nil, nil
+	}
+	return f.notices, nil
 }
 
 func (f *fakeStore) Head(_ context.Context, projectID int64, runID string) (repos.RunHead, error) {

@@ -2100,6 +2100,12 @@ mod taxonomy_tests {
                 "anthropic_gateway.sampling_unsupported",
                 RuntimeFailureKind::ModelRequestRejected,
             ),
+            // A content guardrail's block (ADR-0043, issue 2012) is a typed
+            // refusal, not the opaque internal failure an unknown code gets.
+            (
+                "model_gateway.guardrail_blocked",
+                RuntimeFailureKind::ModelRequestRejected,
+            ),
             (
                 "model_gateway.transport",
                 RuntimeFailureKind::ModelUnavailable,
