@@ -225,6 +225,10 @@ type RunStartInput struct {
 	TriggerType          string   `json:"trigger_type"`
 	// SuiteID, when set, starts the run with that suite's limits.
 	SuiteID *string `json:"suite_id"`
+	// ExecutionMode, when set, overrides the suite's execution mode for this
+	// run. Empty keeps the suite's, and a run with no suite is
+	// predict_blocking, so nothing changes silently.
+	ExecutionMode string `json:"execution_mode,omitempty"`
 }
 
 // MaxDimensionsPerRun bounds the fan-out. A run performs one agent call per
@@ -266,6 +270,10 @@ func (input RunStartInput) Validate() error {
 	}
 	if input.TriggerType != RunTriggerOnDemand && input.TriggerType != RunTriggerOfflineBatch {
 		return apierr.BadRequest("trigger_type must be on_demand or offline_batch")
+	}
+	if input.ExecutionMode != "" && input.ExecutionMode != ExecutionModePredictBlocking &&
+		input.ExecutionMode != ExecutionModeRuntimePlane {
+		return apierr.BadRequest("execution_mode must be predict_blocking or runtime_plane")
 	}
 	if input.ApplicationVersionID == nil {
 		// The version carries the instructions the agent turn is built from.

@@ -127,7 +127,7 @@ Scores are never overwritten. **Re-score** adds a new one, the newest is the sco
 
 **Run limits** (a button on the Runs tab) saves a named set of limits you pick when you start a run: tokens and cost (an estimate in USD from the price list) **per case** and **per run**, and what the run does when the **run** limit is reached: **Stop the run** (the run ends as errored, says which limit it reached, and keeps the cases it scored) or **Only report it** (the run finishes and shows a **Token limit reached** or **Cost limit reached** note). Leave a field empty for no limit.
 
-The limits are checked from the usage already recorded for the run, between model calls, so a run can pass a limit by the call that crosses it. A case that reaches its own limit is not judged further (its remaining judge results are skipped, with the reason), and the run goes on. Changing or deleting saved limits does not change runs that already started. Anyone who can read runs sees the limits; changing them needs the permission to start runs. Limits on steps, time and tool output are not offered: a case is a single model call with no tools today, so they would change nothing.
+The limits are checked from the usage already recorded for the run, between model calls, so a run can pass a limit by the call that crosses it. A case that reaches its own limit is not judged further (its remaining judge results are skipped, with the reason), and the run goes on. Changing or deleting saved limits does not change runs that already started. Anyone who can read runs sees the limits; changing them needs the permission to start runs. The steps, time and tool output controls below appear only when the saved limits run cases as agent runs.
 
 ### Insights on a finished run
 
@@ -137,7 +137,25 @@ Open a finished run's scorecard to see three cards above the scores:
 - **Efficiency** shows the latency of the agent's answer at p50 and p95, how many answers timed out, and tokens and cost per case. Latency is recorded from now on; a run scored before that reads "not recorded".
 - **Compared with the previous run** shows the change in the overall score, in each dimension's average, in p50 latency and in cost per case against the nearest earlier scored run of the same dataset.
 
-These measure one model turn per case: the run does not use tools or toolkits, so there are no tool or trajectory metrics yet.
+A run of one model call per case has no tools or steps to measure, so it shows no trajectory or tool metrics. A run of agent runs adds the **Trajectory** card and tool metrics, described next.
+
+### Agent runs
+
+By default a case is one blocking model call built from the agent version's instructions and the case input: no tools, no toolkits, no memory. The score then measures the instructions and the model, and the run says so (its execution mode is `predict_blocking`).
+
+Choose **Agent run** in **How a case runs** (in **Run limits**, or for one run in the start form, which overrides the saved limits) to run each case as a real agent run of the pinned agent version on the worker (`runtime_plane`). The case goes through the same start path as a chat message, so the agent uses its toolkits, and the admission checks, governed tools, guardrails, kill switch and run evidence apply as they do in a chat. The agent's final answer is what the judges score. Each case leaves a conversation named for the run and case, in the project's chat list, which you can open to read the transcript. Nothing changes unless you choose the mode: runs and saved limits stay one model call.
+
+An evaluation run is unattended and holds no grant. A step that needs a person (an approval, a tool authorization) pauses the run; the case is cancelled and stored as an error that names the pause, and it is not scored. Agent runs need the agent runtime; without it the run ends as errored and says so. A release gate run always uses one model call, because it measures a frozen agent definition.
+
+Three controls apply only to agent runs and appear only when **Agent run** is chosen:
+
+- **Steps per case** (1 to 1000, empty for no limit) counts model calls and tool calls. The agent run is cancelled when it passes the limit, and the case stores an error that names the step limit. The count is checked while the run is going, so a few extra steps can complete before it stops.
+- **Time per case** (1 to 3600 seconds) cancels the agent run at the deadline and stores a timeout result for the case (not scored, flagged as timed out, counted under **Timeouts**). Empty means 15 minutes.
+- **Store tool outputs in the results** keeps the output of each tool step in the case's stored evidence (up to 1000 characters per step, for the first 60 steps), so a reviewer can see what a tool returned. Switch it off to keep tool outputs out of the results; the counts stay. Anyone who can read the run can read the kept outputs, and each output read is recorded in the run evidence audit as the run's author.
+
+The model calls of an agent run count toward the run's token and cost limits and its consumption, under the agent role.
+
+The **Trajectory** card (agent runs only) is built from the per-step run evidence: **Steps per case** at p50 and p95, the total **Tool calls**, **Tool errors** and **Retries** (a tool call repeated with the same arguments after one that failed), and for each case its steps, tool calls, errors and retries with the list of its steps. The **Efficiency** card adds tool calls per case, tool errors and retries. A case that recorded no steps (for example it never started) is left out of the figures, and the card says how many cases it measured; it is never counted as zero steps.
 
 ### Enhance with AI
 

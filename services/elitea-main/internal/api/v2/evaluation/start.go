@@ -2,6 +2,7 @@ package evaluation
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -74,6 +75,14 @@ func (s *RunStarter) Start(
 	if err := s.freezeSuite(ctx, projectID, input, &snapshot); err != nil {
 		return Run{}, err
 	}
+	mode, err := resolveExecutionMode(input, snapshot, agent)
+	if err != nil {
+		return Run{}, err
+	}
+	if mode == ExecutionModeRuntimePlane && input.ApplicationID == nil {
+		return Run{}, apierr.BadRequest("application_id is required: a runtime_plane run executes the agent")
+	}
+	freezeExecutionMode(&snapshot, mode)
 
 	created, err := s.runs.CreateRun(ctx, projectID, Run{
 		DatasetID:            input.DatasetID,
@@ -82,7 +91,7 @@ func (s *RunStarter) Start(
 		TriggerType:          input.TriggerType,
 		CreatedBy:            createdBy,
 		Status:               RunStatusCreated,
-		ExecutionMode:        ExecutionModePredictBlocking,
+		ExecutionMode:        mode,
 		Snapshot:             snapshot,
 		Progress:             RunProgress{Done: 0, Total: len(cases)},
 	})
@@ -130,4 +139,50 @@ func (s *RunStarter) freezeSuite(ctx context.Context, projectID string, input Ru
 	snapshot.Limits = &limits
 	snapshot.SuiteID = suite.ID
 	return nil
+}
+
+// errRuntimePlaneFrozenAgent is the 422 for a runtime_plane run that carries a
+// frozen agent definition. A release gate freezes the instructions and model it
+// measures, and a real agent run executes the version as the chat start path
+// freezes it, so the two cannot both be honoured.
+var errRuntimePlaneFrozenAgent error = &apierr.APIError{
+	Status:  http.StatusUnprocessableEntity,
+	Code:    "unprocessable_entity",
+	Message: "a release gate run measures a frozen agent definition and is executed as predict_blocking; the runtime_plane execution mode is not available for it",
+}
+
+// resolveExecutionMode picks how the run executes its cases: the start's own
+// choice, else the suite's, else predict_blocking.
+func resolveExecutionMode(input RunStartInput, snapshot RunSnapshot, agent *SnapshotAgent) (string, error) {
+	mode := ExecutionModePredictBlocking
+	switch {
+	case input.ExecutionMode != "":
+		mode = input.ExecutionMode
+	case snapshot.Limits != nil && snapshot.Limits.ExecutionMode != "":
+		mode = snapshot.Limits.ExecutionMode
+	}
+	if mode == ExecutionModeRuntimePlane && agent != nil {
+		return "", errRuntimePlaneFrozenAgent
+	}
+	return mode, nil
+}
+
+// freezeExecutionMode makes the snapshot say what the run does: the mode, and
+// the runtime_plane controls only for a runtime_plane run (a start that
+// overrides a runtime_plane suite to predict_blocking must not carry limits
+// that the run cannot enforce). A runtime_plane run with no suite gets a
+// limits block with the defaults, so the orchestrator reads one shape.
+func freezeExecutionMode(snapshot *RunSnapshot, mode string) {
+	if snapshot.Limits == nil {
+		if mode != ExecutionModeRuntimePlane {
+			return
+		}
+		keep := true
+		snapshot.Limits = &RunLimits{OnRunLimit: RunLimitActionStop, StoreToolOutputs: &keep}
+	}
+	snapshot.Limits.ExecutionMode = mode
+	if mode != ExecutionModeRuntimePlane {
+		snapshot.Limits.StepLimitPerCase = nil
+		snapshot.Limits.TimeLimitPerCaseSeconds = nil
+	}
 }

@@ -63,6 +63,30 @@ export const EvalSuiteWriteRequest = zod
       .describe(
         "`stop` ends the run as errored when its run limit is reached; `report` only records it.",
       ),
+    execution_mode: zod
+      .string()
+      .optional()
+      .describe(
+        "How the run executes a case: `predict_blocking` (the default, one blocking LLM call) or `runtime_plane` (each case is a real agent run of the pinned version on the worker). The three settings below apply only to `runtime_plane`.\n",
+      ),
+    step_limit_per_case: zod
+      .int()
+      .nullish()
+      .describe(
+        "Most agent steps (model calls and tool calls) one case may take, 1 to 1000. The case's run is cancelled when it is exceeded. Refused on a `predict_blocking` suite.\n",
+      ),
+    time_limit_per_case_seconds: zod
+      .int()
+      .nullish()
+      .describe(
+        "Wall time one case may take, 1 to 3600 seconds. The case's run is cancelled at the deadline and a timeout result is stored. Without one a case is bounded at 15 minutes. Refused on a `predict_blocking` suite.\n",
+      ),
+    store_tool_outputs: zod
+      .boolean()
+      .nullish()
+      .describe(
+        "Whether a case's stored evidence keeps the tool outputs of its steps. Absent or null reads as true.\n",
+      ),
   })
   .describe(
     "Unknown fields are refused. A null or absent limit is no limit. Token limits are whole numbers from 1 to 2000000000; cost limits are USD from above 0 to 1000000. `on_run_limit` defaults to `stop`.\n",

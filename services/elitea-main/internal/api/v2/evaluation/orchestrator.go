@@ -104,6 +104,9 @@ type Orchestrator struct {
 	logger    *slog.Logger
 	// usage reads the spend attributed to a run, for its limits (limits.go).
 	usage UsageReader
+	// runner runs a case as an agent run in the runtime_plane execution mode
+	// (runtime_plane.go). Nil on a deployment with no runtime plane.
+	runner AgentRunner
 
 	queue chan RunRef
 	// inFlight lets Cancel reach a running goroutine. A cancel writes the
@@ -551,6 +554,17 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 	settled := o.settledCells(ctx, ref)
 	completed := completedCases(settled, run.Snapshot.Bindings)
 
+	runtime := run.ExecutionMode == ExecutionModeRuntimePlane
+	settings := settingsOf(run)
+	if runtime {
+		if o.runner == nil {
+			return ErrRuntimePlaneNotConfigured
+		}
+		if run.ApplicationID == nil || run.ApplicationVersionID == nil {
+			return errors.New("a runtime_plane run needs the agent and its version")
+		}
+	}
+
 	guard := o.newLimitGuard(ref, run)
 	done := 0
 	for _, testCase := range cases {
@@ -566,9 +580,17 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 			return err
 		}
 
-		turnStarted := time.Now()
-		output, agentErr := o.agentTurn(ctx, ref, actor(run), version, testCase)
-		turnEvidence := agentTurnEvidence(time.Since(turnStarted), agentErr)
+		var output string
+		var agentErr error
+		var turnEvidence map[string]any
+		if runtime {
+			turn := o.runtimeCase(ctx, ref, run, testCase, settings)
+			output, agentErr, turnEvidence = turn.output, turn.err, turn.evidence
+		} else {
+			turnStarted := time.Now()
+			output, agentErr = o.agentTurn(ctx, ref, actor(run), version, testCase)
+			turnEvidence = agentTurnEvidence(time.Since(turnStarted), agentErr)
+		}
 		for _, binding := range run.Snapshot.Bindings {
 			if ctx.Err() != nil {
 				return nil
