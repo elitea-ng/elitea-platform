@@ -935,7 +935,10 @@ async fn document_updates_coalesce_and_never_wait_for_the_output_plane() {
     let mut run = run(Arc::clone(&state), 2, 0).await;
     let clock = ticking_clock();
     let channel = ProgressChannel::new("exec-1", &clock);
-    assert!(channel.note(ProgressNote::Started(ProgressStage::Plan)) == ProgressSignal::Continue);
+    assert_eq!(
+        channel.note(ProgressNote::Started(ProgressStage::Plan)),
+        ProgressSignal::Continue
+    );
     channel.note(ProgressNote::Planned {
         to_write: 100,
         unchanged: 0,
@@ -980,9 +983,9 @@ async fn a_rejection_reaches_the_run_at_its_next_note() {
         channel.note(ProgressNote::Started(ProgressStage::Plan));
         channel.finish_run("stopped");
         channel.drain(&mut run.publisher, &run.verified).await;
-        assert!(
-            channel.note(ProgressNote::Started(ProgressStage::Write)) == expected,
-            "{expected:?}"
+        assert_eq!(
+            channel.note(ProgressNote::Started(ProgressStage::Write)),
+            expected
         );
     }
 }
