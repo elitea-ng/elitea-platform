@@ -18,6 +18,7 @@ import Typography from '@mui/material/Typography';
 
 import { AttachPublicSkillDialog, publishedVersionIdOf, type PublicSkillSummary } from '@/features/skills';
 import type { PublicSkillDetail } from '@/shared/api/generated/model';
+import { unwrapBody } from '@/shared/api/unwrap';
 import { useGetPublicSkill } from '@/shared/api/generated/skills/skills';
 import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
@@ -78,7 +79,7 @@ function SkillListingView({ skill }: { readonly skill: PublicSkillDetail }): Rea
 export function SkillListing({ listingId }: { readonly listingId: string }): ReactNode {
   const skillId = Number(listingId);
   const query = useGetPublicSkill(skillId, { query: { enabled: Number.isInteger(skillId) && skillId > 0 } });
-  const skill = query.data?.status === 200 ? query.data.data : undefined;
+  const skill = query.data?.status === 200 ? (unwrapBody(query.data) as PublicSkillDetail) : undefined;
   usePageCrumbs(skill?.name === undefined ? [] : [{ label: skill.name }]);
 
   if (query.isPending && query.fetchStatus !== 'idle') return <LinearProgress />;

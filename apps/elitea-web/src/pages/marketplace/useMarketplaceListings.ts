@@ -20,6 +20,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import { useGetAgentCategories } from '@/shared/api/generated/applications/applications';
 import type { PublicApplicationList } from '@/shared/api/generated/model';
+import { unwrapBody } from '@/shared/api/unwrap';
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { getConfig } from '@/shared/config';
 import { useAllPublicSkills, useSkillCategories, type PublicSkillSummary } from '@/features/skills';
@@ -120,12 +121,16 @@ export interface MarketplaceRequest {
   readonly projectId: string | undefined;
 }
 
+interface AgentCategoryBody {
+  readonly categories?: readonly { readonly name: string }[];
+}
+
 /** The agent side of the page: the rows as cards, and the deployment's category names. */
 function useAgentListings(query: string, sortKey: string, enabled: boolean): MarketplaceListings {
   const rows = useAgentRows(query, sortKey, enabled);
   const newest = useAgentRows('', 'newest', enabled);
   const categories = useGetAgentCategories(resolvePublicProjectId(), { query: { enabled } });
-  const body = categories.data?.status === 200 ? categories.data.data : undefined;
+  const body = categories.data?.status === 200 ? (unwrapBody(categories.data) as AgentCategoryBody) : undefined;
   return useMemo(() => {
     const cards = (rows.data?.rows ?? []).map(agentCard);
     return {

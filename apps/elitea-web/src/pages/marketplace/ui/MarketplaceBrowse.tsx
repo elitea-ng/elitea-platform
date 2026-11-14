@@ -13,7 +13,6 @@ import type { ChangeEvent, ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
 import FormControl from '@mui/material/FormControl';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import FormGroup from '@mui/material/FormGroup';
@@ -25,6 +24,7 @@ import TextField from '@mui/material/TextField';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { filtersPanelSx } from '@/shared/ui/EntityRail';
 import { SidePanelTab } from '@/shared/ui/side-panel';
 
@@ -98,7 +98,7 @@ export function MarketplaceBrowse({
               {categories.map((category) => (
                 <FormControlLabel
                   key={category}
-                  control={<Checkbox size="small" checked={selectedCategories.includes(category)} onChange={() => onToggleCategory(category)} />}
+                  control={<BaseCheckbox size="small" checked={selectedCategories.includes(category)} onChange={() => onToggleCategory(category)} />}
                   label={category}
                 />
               ))}

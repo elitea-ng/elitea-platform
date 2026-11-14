@@ -35,6 +35,9 @@ interface MarketplaceSearch {
   kind?: string;
 }
 
+/** A stable empty pick, so the memos below do not see a new array every render. */
+const NO_CATEGORIES: readonly string[] = [];
+
 interface PickedCategories {
   readonly kind: MarketplaceKind;
   readonly names: readonly string[];
@@ -53,7 +56,7 @@ export function Marketplace(): ReactNode {
   const [sortKey, setSortKey] = useState('newest');
   // Remembered with its kind, so a switch to the other kind starts with no category (switching back restores the earlier pick).
   const [picked, setPicked] = useState<PickedCategories>({ kind, names: [] });
-  const selectedCategories = picked.kind === kind ? picked.names : [];
+  const selectedCategories = picked.kind === kind ? picked.names : NO_CATEGORIES;
 
   useEffect(() => {
     const timer = setTimeout(() => setSubmittedQuery(query), SEARCH_DEBOUNCE_MS);
