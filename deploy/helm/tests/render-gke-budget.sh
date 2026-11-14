@@ -173,4 +173,49 @@ else
   echo "FAIL: gcs with GCS_ENDPOINT set was refused" >&2; exit 1
 fi
 
+echo "== no container requests below the GKE Autopilot minimum"
+# Autopilot raises a request under 50m CPU / 52Mi memory, and Argo CD then
+# shows the workload OutOfSync for ever (#1460). Two checks:
+#   1. the rendered values-gke.yaml: every container of every workload (init
+#      containers, hook Jobs and CronJobs included);
+#   2. the templates the GKE render does not reach (the sandbox supervisor and
+#      image warm-up, which need their own values): any LITERAL request in a
+#      template under the floor.
+python3 - "$work/gke.yaml" "$chart/templates" <<'PY'
+import pathlib, re, sys, yaml
+
+def cpu_m(v):
+    v = str(v)
+    return float(v[:-1]) if v.endswith("m") else float(v) * 1000
+
+def mem_mi(v):
+    v = str(v)
+    for unit, f in (("Ki", 1 / 1024), ("Mi", 1), ("Gi", 1024), ("Ti", 1024 * 1024)):
+        if v.endswith(unit):
+            return float(v[: -len(unit)]) * f
+    return float(v) / (1024 * 1024)
+
+bad = []
+for d in yaml.safe_load_all(open(sys.argv[1])):
+    if not d: continue
+    k = d.get("kind")
+    if k in ("Deployment", "StatefulSet", "DaemonSet", "Job"): spec = d["spec"]["template"]["spec"]
+    elif k == "CronJob": spec = d["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    else: continue
+    for c in (spec.get("containers") or []) + (spec.get("initContainers") or []):
+        r = (c.get("resources") or {}).get("requests") or {}
+        if "cpu" not in r or "memory" not in r or cpu_m(r["cpu"]) < 50 or mem_mi(r["memory"]) < 52:
+            bad.append("%s/%s container %s: requests %s" % (k, d["metadata"]["name"], c["name"], r or "none"))
+
+lit = re.compile(r"requests:\s*\{?\s*(?:\n\s*)?cpu:\s*\"?([0-9.]+m?)\"?[,\s]+(?:\n\s*)?memory:\s*\"?([0-9.]+[KMGT]i?)\"?")
+for f in sorted(pathlib.Path(sys.argv[2]).rglob("*.yaml")):
+    for m in lit.finditer(f.read_text()):
+        if cpu_m(m.group(1)) < 50 or mem_mi(m.group(2)) < 52:
+            bad.append("%s: literal requests cpu %s memory %s" % (f, m.group(1), m.group(2)))
+if bad:
+    print("FAIL: below the Autopilot minimum (50m CPU, 52Mi memory):\n  " + "\n  ".join(bad), file=sys.stderr)
+    sys.exit(1)
+print("  every rendered container and every literal template request is at least 50m / 52Mi")
+PY
+
 echo "render-gke-budget: OK"
