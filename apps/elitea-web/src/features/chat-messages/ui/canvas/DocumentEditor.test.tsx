@@ -107,4 +107,11 @@ describe('DocumentEditor (issue #879)', () => {
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     expect(onChange.mock.calls.at(-1)?.[0]).toContain('start plus more');
   });
+
+  it('draws toolbar icons from the surface text colour, not the tab-button tokens that matched the hover fill (issue 2030)', async () => {
+    const { findByTestId } = renderDocumentEditor('Hello');
+    const bold = await findByTestId('canvas-document-bold');
+    expect(getComputedStyle(bold).color).toContain('text-secondary');
+    expect(getComputedStyle(bold).color).not.toContain('tabButton');
+  });
 });

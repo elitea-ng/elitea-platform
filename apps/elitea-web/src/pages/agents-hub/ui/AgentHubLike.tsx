@@ -29,7 +29,7 @@ interface AgentHubLikeProps {
 }
 
 const AgentHubLike = memo(({ data }: AgentHubLikeProps) => {
-  const { isLiked, likeCount, toggleLike } = useCardLike({
+  const { isLiked, likeCount, isToggling, toggleLike } = useCardLike({
     applicationId: data.id,
     // `project_id` is always the public project on every agents-hub card
     // (see `useCardLike`'s own `projectId` doc comment) — read straight off
@@ -41,8 +41,13 @@ const AgentHubLike = memo(({ data }: AgentHubLikeProps) => {
 
   return (
     <Box
-      onClick={() => { void toggleLike(); }}
-      sx={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 0.5 }}
+      component="button"
+      type="button"
+      aria-pressed={isLiked}
+      disabled={isToggling}
+      // The card is a button that opens the agent; a like must not open it (issue 2028).
+      onClick={(event) => { event.stopPropagation(); void toggleLike(); }}
+      sx={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 0.5, background: 'none', border: 0, padding: 0, color: 'inherit', font: 'inherit' }}
     >
       {isLiked ? <HeartActiveIcon /> : <HeartIcon />}
       <Typography variant="bodySmall">{likeCount}</Typography>
