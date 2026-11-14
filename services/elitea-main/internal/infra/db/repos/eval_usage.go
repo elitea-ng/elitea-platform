@@ -18,6 +18,15 @@ import (
 // `eval:1:case:3` would also match case 31.
 const caseEvaluationScope = `l.execution_id IN ($2, $5)` + lifetimeOnLog + inferenceRouteOnLog
 
+// caseEvaluationScopeWithCaseRuns adds the executions the case ran as when it
+// was an agent run (tenant/0246), and the executions linked to its root run:
+// the worker signs those calls with the execution id.
+func caseEvaluationScopeWithCaseRuns(schema string, run int64, caseID int, links bool) string {
+	return `(l.execution_id IN ($2, $5) OR l.execution_id IN (SELECT m.execution_id FROM (` +
+		analytics.EvalCaseExecutionsSQL(schema, run, links) + `) AS m WHERE m.dataset_case_id = ` +
+		strconv.Itoa(caseID) + `))` + lifetimeOnLog + inferenceRouteOnLog
+}
+
 // EvaluationUsage is the spend attributed to an evaluation run (caseID empty)
 // or to one case of it, read from the gateway request log the way the run
 // analytics read it (GetEvaluationRunAnalytics). The orchestrator calls it
@@ -51,13 +60,22 @@ func (r *AnalyticsRepo) EvaluationUsage(ctx context.Context, projectIDRaw, runID
 	createdAt, finishedAt := meta.createdAt, (*time.Time)(nil)
 	sources := figuresSources{prices: meta.prices}
 
+	schema := pgx.Identifier{"p_" + strconv.FormatInt(id, 10)}.Sanitize()
+	runScope, caseRunSources, err := evaluationScopeFor(ctx, tx, schema, run)
+	if err != nil {
+		return evaluation.Usage{}, err
+	}
 	var figures analytics.UsageFigures
 	if caseID == "" {
 		prefix := "eval:" + strconv.FormatInt(run, 10) + ":"
-		figures, err = scopeTotals(ctx, tx, sources, evaluationScope, id, likePrefix(prefix), createdAt, finishedAt)
+		figures, err = scopeTotals(ctx, tx, sources, runScope, id, likePrefix(prefix), createdAt, finishedAt)
 	} else {
+		caseScope := caseEvaluationScope
+		if numeric, parseErr := strconv.Atoi(caseID); caseRunSources.caseRuns && parseErr == nil && numeric > 0 {
+			caseScope = caseEvaluationScopeWithCaseRuns(schema, run, numeric, caseRunSources.links)
+		}
 		base := "eval:" + strconv.FormatInt(run, 10)
-		figures, err = scopeTotals(ctx, tx, sources, caseEvaluationScope, id,
+		figures, err = scopeTotals(ctx, tx, sources, caseScope, id,
 			base+":"+evaluation.AttributionRoleAgent+":"+caseID, createdAt, finishedAt,
 			base+":"+evaluation.AttributionRoleJudge+":"+caseID)
 	}

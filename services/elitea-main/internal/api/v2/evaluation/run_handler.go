@@ -29,6 +29,15 @@ type RunHandler struct {
 	dimensions   Repository
 	orchestrator Enqueuer
 	suites       SuiteReader
+	evidence     EvidenceReadCheck
+}
+
+// WithEvidenceReadCheck lets the scorecard return the tool outputs a
+// runtime_plane case kept to callers who hold runs.evidence.read. Without it
+// they are always withheld.
+func (h *RunHandler) WithEvidenceReadCheck(check EvidenceReadCheck) *RunHandler {
+	h.evidence = check
+	return h
 }
 
 // WithSuites lets a run start name a suite (RunStartInput.SuiteID).
@@ -354,6 +363,11 @@ func (h *RunHandler) Results(w http.ResponseWriter, r *http.Request) {
 	}
 	if results == nil {
 		results = []RunResult{}
+	}
+	if !h.evidence.holds(r) {
+		for index := range results {
+			stripToolOutputs(&results[index])
+		}
 	}
 	writeJSON(w, http.StatusOK, scorecardResponse{
 		Run:           withoutFrozenAgent(run),

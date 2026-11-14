@@ -2,13 +2,16 @@
  * A run's insights (issue 2011, step A): consumption, efficiency and the
  * comparison with the previous run on the same dataset.
  *
- * STEP A MEASURES ONE MODEL TURN PER CASE. There is no trajectory or tool
- * metric here, because a case is not an agent run yet (see the scorecard's own
- * note on `predict_blocking`); those arrive with runtime-plane execution.
+ * A run of one model call per case (`predict_blocking`) has no trajectory or
+ * tool metric to show. A run that executed its cases as agent runs
+ * (`runtime_plane`, step B) adds the Trajectory card and the tool metrics of the
+ * Efficiency card, both read from the per-step run evidence stored with each
+ * case.
  */
 import { useMemo, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { EliteaApiError } from '@/shared/api/generated/mutator';
@@ -19,9 +22,11 @@ import {
   compareRuns,
   summarizeEfficiency,
 } from '../lib/runInsights';
+import { summarizeTrajectory } from '../lib/trajectory';
 import { isRunTerminal } from '../model/useEvalRuns';
 import { usePreviousRun, useRunAnalytics } from '../model/useRunInsights';
 import { ComparisonCard, ConsumptionCard, EfficiencyStrip } from './RunInsightCards';
+import { TrajectoryCard } from './TrajectoryCard';
 
 const rootSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.75rem' };
 
@@ -50,6 +55,13 @@ export function RunInsights({ projectId, scorecard, dimensionNames }: RunInsight
     () => summarizeEfficiency(caseTurns(scorecard.results), analyticsQuery.data),
     [scorecard.results, analyticsQuery.data],
   );
+  // Why the run did not get the execution mode its saved limits asked for.
+  const executionNote = run.snapshot?.execution_note === '' ? undefined : run.snapshot?.execution_note;
+  const isAgentRun = run.execution_mode === 'runtime_plane';
+  const trajectory = useMemo(
+    () => (isAgentRun ? summarizeTrajectory(scorecard.results) : undefined),
+    [isAgentRun, scorecard.results],
+  );
   const comparison = useMemo(() => {
     if (previous === undefined || previousScorecard.data === undefined) return undefined;
     const previousEfficiency = summarizeEfficiency(caseTurns(previousScorecard.data.results), previousAnalytics.data);
@@ -62,8 +74,14 @@ export function RunInsights({ projectId, scorecard, dimensionNames }: RunInsight
   if (!settled) return null;
   return (
     <Box sx={rootSx} data-testid="run-insights">
+      {executionNote !== undefined && (
+        <Typography variant="bodySmall" color="text.secondary" data-testid="run-execution-note">
+          {executionNote}
+        </Typography>
+      )}
       <ConsumptionCard analytics={analyticsQuery.data} gap={gapOf(analyticsQuery.error)} />
-      <EfficiencyStrip efficiency={efficiency} />
+      <EfficiencyStrip efficiency={efficiency} trajectory={trajectory} />
+      {isAgentRun && <TrajectoryCard summary={trajectory} />}
       <ComparisonCard comparison={comparison} noPrevious={previous === undefined && !loading} dimensionNames={dimensionNames} />
     </Box>
   );
