@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"log/slog"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -563,7 +566,9 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 			return err
 		}
 
+		turnStarted := time.Now()
 		output, agentErr := o.agentTurn(ctx, ref, actor(run), version, testCase)
+		turnEvidence := agentTurnEvidence(time.Since(turnStarted), agentErr)
 		for _, binding := range run.Snapshot.Bindings {
 			if ctx.Err() != nil {
 				return nil
@@ -589,11 +594,19 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 			}
 			if binding.Engine == EngineAI && agentErr == nil {
 				if reason := guard.caseBlocked(ctx, testCase.ID); reason != "" {
-					o.store(ctx, ref, caseLimitResult(ref, testCase, binding, output, reason))
+					limited := caseLimitResult(ref, testCase, binding, output, reason)
+					for key, value := range turnEvidence {
+						limited.Evidence[key] = value
+					}
+					o.store(ctx, ref, limited)
 					continue
 				}
 			}
-			o.store(ctx, ref, o.scoreOne(ctx, ref, actor(run), version.ModelName, testCase, binding, dimension, output, agentErr))
+			scored := o.scoreOne(ctx, ref, actor(run), version.ModelName, testCase, binding, dimension, output, agentErr)
+			for key, value := range turnEvidence {
+				scored.Evidence[key] = value
+			}
+			o.store(ctx, ref, scored)
 		}
 
 		done++
@@ -609,6 +622,37 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 		guard.afterLastCase(ctx)
 	}
 	return nil
+}
+
+// agentTurnEvidence is what a case's evidence records about the agent turn's
+// speed (issue 2011, step A): the wall time of the one blocking completion in
+// milliseconds, and whether it ended on a deadline. It is stored on every
+// result row of the case, so a reader gets one latency per case without a
+// column or a migration. The judge's calls are not part of it.
+func agentTurnEvidence(elapsed time.Duration, agentErr error) map[string]any {
+	evidence := map[string]any{"agent_latency_ms": elapsed.Milliseconds()}
+	if isTimeoutError(agentErr) {
+		evidence["agent_timed_out"] = true
+	}
+	return evidence
+}
+
+// isTimeoutError reads typed signals only: the caller's deadline, a gRPC
+// DeadlineExceeded from the gateway hop, a gateway 504 or 408 answer
+// (predict.GatewayStatusError), or a network timeout. No message matching.
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+		return true
+	}
+	var gateway *predict.GatewayStatusError
+	if errors.As(err, &gateway) {
+		return gateway.Status == http.StatusGatewayTimeout || gateway.Status == http.StatusRequestTimeout
+	}
+	var timeout interface{ Timeout() bool }
+	return errors.As(err, &timeout) && timeout.Timeout()
 }
 
 // scoreOne produces exactly one result row and never panics on a nil judge.

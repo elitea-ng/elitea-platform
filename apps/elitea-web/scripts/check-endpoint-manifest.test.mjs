@@ -935,7 +935,8 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 520 -> 521 (issue 2015): moveObject, the artifact file rename.
 // 521 -> 527 (issues 2008 and 2013): list/create/update/deleteEvalSuite (run limits) and
 // list/recordEvalHumanScore.
-const GENERATED_OPERATION_COUNT = 527;
+// 527 -> 528 (issue 2009): enhanceEvalRun, Enhance with AI on a finished evaluation run.
+const GENERATED_OPERATION_COUNT = 528;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1244,8 +1245,12 @@ const GENERATED_OPERATION_COUNT = 527;
  *
  * 362 -> 368 (issues 2008 and 2013): the run limits editor (list, create, update and
  * delete a suite) and the human score list and record on the scorecard. Generated.
+ *
+ * 368 -> 370 (issues 2009 and 2011): evaluation.enhanceRun (the Enhance with AI
+ * wizard) and analytics.getEvaluationRunAnalytics (a run's consumption card).
+ * Both generated.
  */
-const MANIFEST_ENTRY_COUNT = 368;
+const MANIFEST_ENTRY_COUNT = 370;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

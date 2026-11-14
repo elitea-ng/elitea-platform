@@ -22,6 +22,9 @@ import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { isRunTerminal, useEvalRun, useEvalScorecard } from '../model/useEvalRuns';
+import { useEvaluationPermissions } from '../model/useEvaluationPermissions';
+import { EnhanceWithAi } from './EnhanceWizard';
+import { RunInsights } from './RunInsights';
 import { HumanScoreCell } from './HumanScoreCell';
 
 const rowSx: SxProps<Theme> = {
@@ -72,12 +75,27 @@ interface ScorecardBodyProps {
   readonly liveRun: EvalRun | undefined;
 }
 
+function dimensionNamesOf(run: EvalRun): ReadonlyMap<string, string> {
+  return new Map(Object.entries(run.snapshot?.dimensions ?? {}).map(([id, dimension]) => [id, dimension.name ?? id]));
+}
+
+/** Enhance reads a finished run that missed a target, spends tokens and quotes the instructions. */
+function canEnhanceRun(
+  permissions: { readonly canStartRuns: boolean; readonly canReadVersions: boolean },
+  run: EvalRun | undefined,
+  scorecard: EvalScorecard | undefined,
+): boolean {
+  if (!permissions.canStartRuns || !permissions.canReadVersions || run?.status !== 'finished') return false;
+  return scorecard?.results.some((result) => result.target_met === false) === true;
+}
+
 /**
  * Everything inside the dialog. Split out of `RunScorecard` to keep that
  * function inside the §3.5 cyclomatic-complexity budget of 12, and because it
  * has no queries of its own: it is a pure function of the two values above.
  */
 function ScorecardBody({ projectId, scorecard, liveRun }: ScorecardBodyProps): ReactNode {
+  const dimensionNames = dimensionNamesOf(scorecard.run);
   return (
     <>
       <Typography variant="bodySmall" color="text.secondary" data-testid="scorecard-progress">
@@ -111,6 +129,8 @@ function ScorecardBody({ projectId, scorecard, liveRun }: ScorecardBodyProps): R
             )
           : t('features.agentEvaluation.scorecard.runtimePlane', 'Scored by running the agent.')}
       </Typography>
+
+      <RunInsights projectId={projectId} scorecard={scorecard} dimensionNames={dimensionNames} />
 
       {scorecard.results.length === 0 && (
         <Typography component="output" variant="bodyMedium">
@@ -178,6 +198,8 @@ export function RunScorecard(props: RunScorecardProps): ReactNode {
   const scorecardQuery = useEvalScorecard(projectId, runId);
   const scorecard = scorecardQuery.data;
   const liveRun = runQuery.data ?? scorecard?.run;
+  const permissions = useEvaluationPermissions(projectId);
+  const canEnhance = canEnhanceRun(permissions, liveRun, scorecard);
 
   return (
     <BaseModal
@@ -202,6 +224,7 @@ export function RunScorecard(props: RunScorecardProps): ReactNode {
           )}
 
           {scorecard !== undefined && <ScorecardBody projectId={projectId} scorecard={scorecard} liveRun={liveRun} />}
+          {canEnhance && runId !== undefined && <EnhanceWithAi projectId={projectId} runId={runId} />}
         </Box>
       }
     />

@@ -95,6 +95,7 @@ import type {
   EvalDatasetCase,
   EvalDatasetDetail,
   EvalDatasetList,
+  EvalEnhanceProposal,
   EvalHumanScoreList,
   EvalHumanScoreRecorded,
   EvalRun,
@@ -1589,6 +1590,80 @@ export const getRecordEvalHumanScoreResponseMock = (
     faker.number.float({ fractionDigits: 2 }),
     null,
   ]),
+  ...overrideResponse,
+});
+
+export const getEnhanceEvalRunResponseMock = (
+  overrideResponse: Partial<Extract<EvalEnhanceProposal, object>> = {},
+): EvalEnhanceProposal => ({
+  run_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  application_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  application_version_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  summary: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  analysed_rows: faker.number.int(),
+  missed_rows: faker.number.int(),
+  instruction_patch: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        instructions: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      },
+      null,
+    ]),
+    null,
+  ]),
+  instruction_patch_unavailable: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  dimension_changes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    dimension_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    dimension_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    description: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    default_target: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      undefined,
+    ]),
+    default_target_operator: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    run_target: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      undefined,
+    ]),
+    run_target_operator: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+  })),
+  dataset_changes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    case_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    dataset_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    input: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    current_expected_output: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    expected_output: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
   ...overrideResponse,
 });
 
@@ -15217,6 +15292,32 @@ export const getRecordEvalHumanScoreMockHandler = (
   );
 };
 
+export const getEnhanceEvalRunMockHandler = (
+  overrideResponse?:
+    | EvalEnhanceProposal
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<EvalEnhanceProposal> | EvalEnhanceProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/eval_run_enhance/prompt_lib/:projectId/:runId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getEnhanceEvalRunResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListApplicationReleasesMockHandler = (
   overrideResponse?:
     | ApplicationReleaseList
@@ -18675,6 +18776,7 @@ export const getApplicationsMock = () => [
   getDeleteEvalSuiteMockHandler(),
   getListEvalHumanScoresMockHandler(),
   getRecordEvalHumanScoreMockHandler(),
+  getEnhanceEvalRunMockHandler(),
   getListApplicationReleasesMockHandler(),
   getGetApplicationReleaseMockHandler(),
   getRollbackApplicationReleaseMockHandler(),

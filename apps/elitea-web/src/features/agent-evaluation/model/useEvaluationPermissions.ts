@@ -21,6 +21,8 @@ import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
+const VERSIONS_GET = 'models.applications.versions.get';
+
 export interface EvaluationPermissions {
   readonly canRead: boolean;
   readonly canCreate: boolean;
@@ -34,6 +36,8 @@ export interface EvaluationPermissions {
   readonly canStartRuns: boolean;
   readonly canReadHumanScores: boolean;
   readonly canScoreHuman: boolean;
+  /** Enhance with AI quotes the pinned version's instructions, which the version read grants. */
+  readonly canReadVersions: boolean;
 }
 
 export function useEvaluationPermissions(projectId: string | undefined): EvaluationPermissions {
@@ -57,6 +61,7 @@ export function useEvaluationPermissions(projectId: string | undefined): Evaluat
       canStartRuns: granted.has(PERMISSIONS.evaluation.runCreate),
       canReadHumanScores: granted.has(PERMISSIONS.evaluation.humanScoreRead),
       canScoreHuman: granted.has(PERMISSIONS.evaluation.humanScoreCreate),
+      canReadVersions: granted.has(VERSIONS_GET),
     };
   }, [permissionQuery.data]);
 }

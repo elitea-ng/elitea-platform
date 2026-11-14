@@ -1319,6 +1319,7 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.CopySkillsFromVersionID = optionalSkillSourceVersionID(body["copy_skills_from_version_id"])
+	input.CopyToolsFromVersionID = optionalSkillSourceVersionID(body["copy_tools_from_version_id"])
 	ver, err := h.repo.CreateVersion(r.Context(), projectID, applicationID, *input)
 	if err != nil {
 		apierr.Write(w, err)

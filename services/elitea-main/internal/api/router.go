@@ -4291,6 +4291,19 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Delete("/eval_suite/prompt_lib/{projectID}/{suiteID}", suiteHandler.Delete)
 				}
 
+				// Enhance with AI: one proposal from a finished run, written
+				// nowhere. It spends model tokens (run create) and it quotes
+				// the pinned version's instructions, which the run read does
+				// not grant (version read). Accepted fixes are saved by the
+				// existing routes, so the ADR-0040 change request path is
+				// not touched.
+				if cfg.EvalRunsRepo != nil {
+					enhanceHandler := v2evaluation.NewEnhanceHandler(cfg.EvalRunsRepo, cfg.PredictCompleter)
+					r.With(evaluationGate(v2evaluation.PermissionRunCreate),
+						projectPermission("models.applications.versions.get")).
+						Post("/eval_run_enhance/prompt_lib/{projectID}/{runID}", enhanceHandler.Enhance)
+				}
+
 				// The evaluation release gate (ADR-0040 decision 4). Marking
 				// a dataset as a gate suite changes what a release must pass,
 				// so the write takes the publish permission as well as the

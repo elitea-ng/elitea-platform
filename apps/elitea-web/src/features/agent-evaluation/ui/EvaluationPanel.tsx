@@ -25,6 +25,8 @@ import { t } from '@/shared/i18n';
 import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
 
+import { RequestPublishSlot, type RenderRequestPublish } from '../model/requestPublishSlot';
+
 import { EvaluationDatasetsView } from './EvaluationDatasetsView';
 import { EvaluationLibraryView } from './EvaluationLibraryView';
 import { EvaluationRunsView } from './EvaluationRunsView';
@@ -43,52 +45,56 @@ export interface EvaluationPanelProps {
   readonly applicationId: number | undefined;
   /** The version a run scores. `undefined` disables the start control with a stated reason. */
   readonly applicationVersionId: number | undefined;
+  /** Renders the change-request dialog for a draft Enhance with AI created; see `requestPublishSlot`. */
+  readonly renderRequestPublish?: RenderRequestPublish;
 }
 
 export function EvaluationPanel(props: EvaluationPanelProps): ReactNode {
-  const { projectId, applicationId, applicationVersionId } = props;
+  const { projectId, applicationId, applicationVersionId, renderRequestPublish } = props;
   const [view, setView] = useState<EvaluationView>(EVALUATION_VIEWS.library);
 
   const handleChange = (_event: SyntheticEvent, value: EvaluationView): void => setView(value);
 
   return (
-    <Box data-testid="evaluation-panel">
-      <BaseTabs
-        sx={stripSx}
-        value={view}
-        onChange={handleChange}
-        aria-label={t('features.agentEvaluation.views.label', 'Evaluation sections')}
-      >
-        <BaseTab
-          value={EVALUATION_VIEWS.library}
-          label={t('features.agentEvaluation.views.library', 'Library')}
-          data-testid="evaluation-view-library"
-        />
-        <BaseTab
-          value={EVALUATION_VIEWS.datasets}
-          label={t('features.agentEvaluation.views.datasets', 'Datasets')}
-          data-testid="evaluation-view-datasets"
-        />
-        <BaseTab
-          value={EVALUATION_VIEWS.runs}
-          label={t('features.agentEvaluation.views.runs', 'Runs')}
-          data-testid="evaluation-view-runs"
-        />
-      </BaseTabs>
+    <RequestPublishSlot.Provider value={renderRequestPublish}>
+      <Box data-testid="evaluation-panel">
+        <BaseTabs
+          sx={stripSx}
+          value={view}
+          onChange={handleChange}
+          aria-label={t('features.agentEvaluation.views.label', 'Evaluation sections')}
+        >
+          <BaseTab
+            value={EVALUATION_VIEWS.library}
+            label={t('features.agentEvaluation.views.library', 'Library')}
+            data-testid="evaluation-view-library"
+          />
+          <BaseTab
+            value={EVALUATION_VIEWS.datasets}
+            label={t('features.agentEvaluation.views.datasets', 'Datasets')}
+            data-testid="evaluation-view-datasets"
+          />
+          <BaseTab
+            value={EVALUATION_VIEWS.runs}
+            label={t('features.agentEvaluation.views.runs', 'Runs')}
+            data-testid="evaluation-view-runs"
+          />
+        </BaseTabs>
 
-      {view === EVALUATION_VIEWS.library && (
-        <EvaluationLibraryView projectId={projectId} applicationId={applicationId} />
-      )}
-      {view === EVALUATION_VIEWS.datasets && (
-        <EvaluationDatasetsView projectId={projectId} applicationId={applicationId} />
-      )}
-      {view === EVALUATION_VIEWS.runs && (
-        <EvaluationRunsView
-          projectId={projectId}
-          applicationId={applicationId}
-          applicationVersionId={applicationVersionId}
-        />
-      )}
-    </Box>
+        {view === EVALUATION_VIEWS.library && (
+          <EvaluationLibraryView projectId={projectId} applicationId={applicationId} />
+        )}
+        {view === EVALUATION_VIEWS.datasets && (
+          <EvaluationDatasetsView projectId={projectId} applicationId={applicationId} />
+        )}
+        {view === EVALUATION_VIEWS.runs && (
+          <EvaluationRunsView
+            projectId={projectId}
+            applicationId={applicationId}
+            applicationVersionId={applicationVersionId}
+          />
+        )}
+      </Box>
+    </RequestPublishSlot.Provider>
   );
 }
