@@ -38,7 +38,7 @@
  * (revert the optimistic UI) — it cannot make the backend table shape
  * correct.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import { create } from 'zustand';
 
@@ -101,9 +101,12 @@ export function useCardLike({
   const isLiked = likedStates[applicationId] ?? initialLiked;
   const likeCount = likeCounts[applicationId] ?? initialCount;
   const [isToggling, setIsToggling] = useState(false);
+  // A ref as well as the state: two clicks in one tick both read the state as false.
+  const inFlight = useRef(false);
 
   const toggleLike = useCallback(async () => {
-    if (isToggling) return;
+    if (inFlight.current) return;
+    inFlight.current = true;
     setIsToggling(true);
 
     const wasLiked = isLiked;
@@ -137,9 +140,10 @@ export function useCardLike({
       // (a programmer error, e.g. the NaN guard above) still surfaces.
       if (!(error instanceof EliteaApiError)) throw error;
     } finally {
+      inFlight.current = false;
       setIsToggling(false);
     }
-  }, [isToggling, isLiked, likeCount, applicationId, projectId, setLikeState, setLikeCount, onLikeSuccess]);
+  }, [isLiked, likeCount, applicationId, projectId, setLikeState, setLikeCount, onLikeSuccess]);
 
   return { isLiked, likeCount, isToggling, toggleLike };
 }
