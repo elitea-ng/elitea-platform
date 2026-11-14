@@ -102,6 +102,19 @@ describe('useIndexHistory', () => {
     await waitFor(() => expect(screen.getByTestId('index-history-message-count')).toHaveTextContent('1'));
   });
 
+  it('does not report a created or stopped entry as a successful reindex with zero counts', async () => {
+    useIndexesStore.getState().selectHistoryItem({ conversation_id: null, state: 'created', updated_on: 1_700_000_000 });
+    renderProbe();
+    await waitFor(() => expect(screen.getByTestId('index-history-first-message')).toHaveTextContent('The index was created'));
+    expect(screen.getByTestId('index-history-first-message')).not.toHaveTextContent('Successfully');
+  });
+
+  it('says how many documents a stopped run had indexed', async () => {
+    useIndexesStore.getState().selectHistoryItem({ conversation_id: null, state: 'cancelled', indexed: 7, updated_on: 1_700_000_000 });
+    renderProbe();
+    await waitFor(() => expect(screen.getByTestId('index-history-first-message')).toHaveTextContent('Documents indexed: 7'));
+  });
+
   it('shows no messages when a history item is selected with conversation_id simply absent (not null) and no error', async () => {
     useIndexesStore.getState().selectHistoryItem({ state: 'completed' });
     renderProbe();

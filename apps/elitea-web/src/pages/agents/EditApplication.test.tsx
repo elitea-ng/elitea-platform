@@ -656,8 +656,11 @@ describe('EditApplication', () => {
     // 5s query timeout used to equal vitest's 5s default test budget — see
     // the rename test's comment for why that pairing flakes on a
     // slow-but-correct CI run. Scoped 15s budget below fixes it here too.
-    expect(await screen.findByRole('button', { name: /export agent/i }, { timeout: 15_000 })).toBeVisible();
-    expect(screen.getByRole('button', { name: /delete entity/i })).toBeVisible();
+    // A label query, not `findByRole`: role queries walk the whole accessible
+    // tree on every poll, and on this page under coverage that alone ran past
+    // the 30s test budget (PR 2057 CI). The aria-label names the same button.
+    expect(await screen.findByLabelText(/export agent/i, { selector: 'button' }, { timeout: 15_000 })).toBeVisible();
+    expect(screen.getByLabelText(/delete entity/i, { selector: 'button' })).toBeVisible();
     // #147 moved version-delete INTO the version menu, where the baseline
     // puts it, so the menu has to be opened to see it. That the page still
     // reaches it is the assertion; the item's own rules are covered by
