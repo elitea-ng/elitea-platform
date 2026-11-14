@@ -162,6 +162,17 @@ func encodeJSONArray(v []any) (string, error) {
 // splitTagFilter reads the `tags` query parameter, which is a comma-separated
 // list. It removes the empty and blank entries, so `tags=` and `tags=,,` mean
 // "no tag filter" and do not produce a condition that matches nothing.
+// applicationHasPipelineVersionSQL is `(SELECT 1 ...)` for use after EXISTS or
+// NOT EXISTS: the application `alias` has a pipeline version. The agents,
+// pipelines and project-folder lists all classify by it, so they cannot drift.
+func applicationHasPipelineVersionSQL(s, alias string) string {
+	return fmt.Sprintf("(SELECT 1 FROM %s.application_versions pv WHERE pv.application_id=%s.id AND pv.agent_type='pipeline')", s, alias)
+}
+
+func applicationIsPipelineSQL(s, alias string) string {
+	return "EXISTS " + applicationHasPipelineVersionSQL(s, alias)
+}
+
 func splitTagFilter(raw string) []string {
 	out := []string{}
 	for _, part := range strings.Split(raw, ",") {
@@ -198,7 +209,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		if req.AgentsType == "classic" {
 			operator = "NOT EXISTS"
 		}
-		conditions = append(conditions, fmt.Sprintf("%s (SELECT 1 FROM %s.application_versions pv WHERE pv.application_id=a.id AND pv.agent_type='pipeline')", operator, s))
+		conditions = append(conditions, operator+" "+applicationHasPipelineVersionSQL(s, "a"))
 	}
 	if len(req.IDs) > 0 {
 		conditions = append(conditions, "a.id=ANY("+bind(req.IDs)+"::integer[])")
@@ -218,6 +229,14 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		kinds = []string{"agent"}
 	case "pipeline":
 		kinds = []string{"pipeline"}
+	}
+	// `folder_id` narrows the list to ONE project folder (migration 0245). The
+	// item rows carry the kind, so a folder id of the other list matches nothing.
+	if req.FolderID != "" {
+		if !isNumericRowID(req.FolderID) {
+			return empty, apierr.BadRequest("folder_id must be a folder id")
+		}
+		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.project_folder_items pfi WHERE pfi.entity_id=a.id AND pfi.entity_kind=ANY(%s::text[]) AND pfi.folder_id=%s::integer)", s, bind(kinds), bind(req.FolderID)))
 	}
 	if access.FolderRestrictions {
 		conditions = append(conditions, foldervisibility.ExclusionSQL(s, "a.id", bind(kinds), bind(access.ActorID)))

@@ -42,6 +42,7 @@ import (
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
+	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -3236,6 +3237,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SharedChatTranscript: sharedChatTranscriptRepository(pool),
 		SkillsRepo:           skillsRepository(pool),
 		FoldersRepo:          foldersRepository(pool),
+		EntityFoldersRepo:    entityFoldersRepository(pool),
 		MemoriesRepo:         memoriesRepository(pool),
 		TagsRepo:             tagsRepository(pool),
 		AnalyticsRepo:        analyticsRepository(pool),
@@ -3412,6 +3414,13 @@ func skillsRepository(pool *pgxpool.Pool) v2skills.Repository {
 		return nil
 	}
 	return dbrepos.NewSkillsRepo(pool)
+}
+
+func entityFoldersRepository(pool *pgxpool.Pool) v2entityfolders.Repository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewEntityFoldersRepo(pool)
 }
 
 func foldersRepository(pool *pgxpool.Pool) v2folders.Repository {

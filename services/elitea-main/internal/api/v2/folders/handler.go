@@ -1010,3 +1010,10 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+// PositionBetween is positionBetween for the other folder models (the project
+// folders of the entity lists), which sort the same way: DESCENDING, a gap of
+// PositionGap, neighbour ids authoritative.
+func PositionBetween(f []Folder, aboveID, belowID string) (position int, needsRebalance bool) {
+	return positionBetween(f, aboveID, belowID)
+}

@@ -261,6 +261,8 @@ export const paramSchemas = {
   save_toolkit: flag(),
   statuses: list(),
   'tags[]': list(),
+  /** The open project folder of an entity list (issue 2048): agents, pipelines, skills, toolkits, MCPs. */
+  entity_folder: text(),
   toolkit_type: text(),
   tour: text(),
   page_size: z.coerce.number().int().positive().max(1000).catch(20).prefault(20),

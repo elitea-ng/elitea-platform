@@ -14,6 +14,7 @@ import (
 
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	v2pipelinetriggers "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
@@ -144,6 +145,32 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodPost, "/api/v2/elitea_core/folder/prompt_lib/7", "/api/v2/elitea_core/folder/prompt_lib/8", "models.chat.folders.create"},
 	{http.MethodPut, "/api/v2/elitea_core/folder/prompt_lib/7/1", "/api/v2/elitea_core/folder/prompt_lib/8/1", "models.chat.folders.update"},
 	{http.MethodDelete, "/api/v2/elitea_core/folder/prompt_lib/7/1", "/api/v2/elitea_core/folder/prompt_lib/8/1", "models.chat.folders.delete"},
+	// Project folders of the entity lists: each kind is gated by ITS list's permissions.
+	{http.MethodGet, "/api/v2/elitea_core/entity_folders/prompt_lib/7/agent", "/api/v2/elitea_core/entity_folders/prompt_lib/8/agent", "models.applications.applications.list"},
+	{http.MethodPost, "/api/v2/elitea_core/entity_folders/prompt_lib/7/agent", "/api/v2/elitea_core/entity_folders/prompt_lib/8/agent", "models.applications.applications.create"},
+	{http.MethodPut, "/api/v2/elitea_core/entity_folders/prompt_lib/7/agent/1", "/api/v2/elitea_core/entity_folders/prompt_lib/8/agent/1", "models.applications.application.update"},
+	{http.MethodDelete, "/api/v2/elitea_core/entity_folders/prompt_lib/7/agent/1", "/api/v2/elitea_core/entity_folders/prompt_lib/8/agent/1", "models.applications.application.update"},
+	{http.MethodPut, "/api/v2/elitea_core/entity_folders/prompt_lib/7/agent/items/5", "/api/v2/elitea_core/entity_folders/prompt_lib/8/agent/items/5", "models.applications.application.update"},
+	{http.MethodGet, "/api/v2/elitea_core/entity_folders/prompt_lib/7/pipeline", "/api/v2/elitea_core/entity_folders/prompt_lib/8/pipeline", "models.applications.applications.list"},
+	{http.MethodPost, "/api/v2/elitea_core/entity_folders/prompt_lib/7/pipeline", "/api/v2/elitea_core/entity_folders/prompt_lib/8/pipeline", "models.applications.applications.create"},
+	{http.MethodPut, "/api/v2/elitea_core/entity_folders/prompt_lib/7/pipeline/1", "/api/v2/elitea_core/entity_folders/prompt_lib/8/pipeline/1", "models.applications.application.update"},
+	{http.MethodDelete, "/api/v2/elitea_core/entity_folders/prompt_lib/7/pipeline/1", "/api/v2/elitea_core/entity_folders/prompt_lib/8/pipeline/1", "models.applications.application.update"},
+	{http.MethodPut, "/api/v2/elitea_core/entity_folders/prompt_lib/7/pipeline/items/5", "/api/v2/elitea_core/entity_folders/prompt_lib/8/pipeline/items/5", "models.applications.application.update"},
+	{http.MethodGet, "/api/v2/elitea_core/entity_folders/prompt_lib/7/skill", "/api/v2/elitea_core/entity_folders/prompt_lib/8/skill", "models.applications.skills.list"},
+	{http.MethodPost, "/api/v2/elitea_core/entity_folders/prompt_lib/7/skill", "/api/v2/elitea_core/entity_folders/prompt_lib/8/skill", "models.applications.skills.create"},
+	{http.MethodPut, "/api/v2/elitea_core/entity_folders/prompt_lib/7/skill/1", "/api/v2/elitea_core/entity_folders/prompt_lib/8/skill/1", "models.applications.skills.update"},
+	{http.MethodDelete, "/api/v2/elitea_core/entity_folders/prompt_lib/7/skill/1", "/api/v2/elitea_core/entity_folders/prompt_lib/8/skill/1", "models.applications.skills.update"},
+	{http.MethodPut, "/api/v2/elitea_core/entity_folders/prompt_lib/7/skill/items/5", "/api/v2/elitea_core/entity_folders/prompt_lib/8/skill/items/5", "models.applications.skills.update"},
+	{http.MethodGet, "/api/v2/elitea_core/entity_folders/prompt_lib/7/toolkit", "/api/v2/elitea_core/entity_folders/prompt_lib/8/toolkit", "models.applications.tools.list"},
+	{http.MethodPost, "/api/v2/elitea_core/entity_folders/prompt_lib/7/toolkit", "/api/v2/elitea_core/entity_folders/prompt_lib/8/toolkit", "models.applications.tools.create"},
+	{http.MethodPut, "/api/v2/elitea_core/entity_folders/prompt_lib/7/toolkit/1", "/api/v2/elitea_core/entity_folders/prompt_lib/8/toolkit/1", "models.applications.tool.update"},
+	{http.MethodDelete, "/api/v2/elitea_core/entity_folders/prompt_lib/7/toolkit/1", "/api/v2/elitea_core/entity_folders/prompt_lib/8/toolkit/1", "models.applications.tool.update"},
+	{http.MethodPut, "/api/v2/elitea_core/entity_folders/prompt_lib/7/toolkit/items/5", "/api/v2/elitea_core/entity_folders/prompt_lib/8/toolkit/items/5", "models.applications.tool.update"},
+	{http.MethodGet, "/api/v2/elitea_core/entity_folders/prompt_lib/7/mcp", "/api/v2/elitea_core/entity_folders/prompt_lib/8/mcp", "models.applications.tools.list"},
+	{http.MethodPost, "/api/v2/elitea_core/entity_folders/prompt_lib/7/mcp", "/api/v2/elitea_core/entity_folders/prompt_lib/8/mcp", "models.applications.tools.create"},
+	{http.MethodPut, "/api/v2/elitea_core/entity_folders/prompt_lib/7/mcp/1", "/api/v2/elitea_core/entity_folders/prompt_lib/8/mcp/1", "models.applications.tool.update"},
+	{http.MethodDelete, "/api/v2/elitea_core/entity_folders/prompt_lib/7/mcp/1", "/api/v2/elitea_core/entity_folders/prompt_lib/8/mcp/1", "models.applications.tool.update"},
+	{http.MethodPut, "/api/v2/elitea_core/entity_folders/prompt_lib/7/mcp/items/5", "/api/v2/elitea_core/entity_folders/prompt_lib/8/mcp/items/5", "models.applications.tool.update"},
 	// Tags — the READ only. The two writes have no legacy permission and are
 	// covered by TestEliteaCoreTagWritesStayAtTheMembershipTier below.
 	{http.MethodGet, "/api/v2/elitea_core/tags/prompt_lib/7", "/api/v2/elitea_core/tags/prompt_lib/8", "models.promptlib_shared.tags.list"},
@@ -368,6 +395,7 @@ func newEliteaCoreProjectScopeRouter(
 		AppsRepo:                  struct{ applications.Repository }{},
 		SkillsRepo:                struct{ v2skills.Repository }{},
 		FoldersRepo:               struct{ v2folders.Repository }{},
+		EntityFoldersRepo:         struct{ v2entityfolders.Repository }{},
 		TagsRepo:                  struct{ v2tags.Repository }{},
 		ConvsRepo:                 struct{ v2convs.Repository }{},
 		AnalyticsRepo:             struct{ v2analytics.Repository }{},

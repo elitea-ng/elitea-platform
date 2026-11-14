@@ -1724,15 +1724,16 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 	// reverse proxy, static icon file servers) versus real API surface.
 	pool := &pgxpool.Pool{}
 	cfg := RouterConfig{
-		Pool:          pool,
-		AppsRepo:      dbrepos.NewApplicationsRepo(pool),
-		ConvsRepo:     dbrepos.NewConversationsRepo(pool),
-		SkillsRepo:    dbrepos.NewSkillsRepo(pool),
-		FoldersRepo:   dbrepos.NewFoldersRepo(pool),
-		MemoriesRepo:  dbrepos.NewMemoriesRepo(pool),
-		TagsRepo:      dbrepos.NewTagsRepo(pool),
-		AnalyticsRepo: dbrepos.NewAnalyticsRepo(pool),
-		WebhookRepo:   dbrepos.NewWebhooksRepo(pool),
+		Pool:              pool,
+		AppsRepo:          dbrepos.NewApplicationsRepo(pool),
+		ConvsRepo:         dbrepos.NewConversationsRepo(pool),
+		SkillsRepo:        dbrepos.NewSkillsRepo(pool),
+		FoldersRepo:       dbrepos.NewFoldersRepo(pool),
+		EntityFoldersRepo: dbrepos.NewEntityFoldersRepo(pool),
+		MemoriesRepo:      dbrepos.NewMemoriesRepo(pool),
+		TagsRepo:          dbrepos.NewTagsRepo(pool),
+		AnalyticsRepo:     dbrepos.NewAnalyticsRepo(pool),
+		WebhookRepo:       dbrepos.NewWebhooksRepo(pool),
 		// main.go sets both of these too (share a conversation by link). They
 		// contribute five patterns: three owner-facing ones inside
 		// /api/v2/elitea_core, and TWO ANONYMOUS ones that appear in this list
@@ -1789,6 +1790,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/elitea_core/attachments/prompt_lib/{projectID}/{conversationID}/{name}",
 		"DELETE /api/v2/elitea_core/conversation/prompt_lib/{projectID}/{conversationID}",
 		"DELETE /api/v2/elitea_core/conversation_archive/prompt_lib/{projectID}/{conversationID}",
+		"DELETE /api/v2/elitea_core/entity_folders/prompt_lib/{projectID}/{kind}/{folderID}",
 		"DELETE /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",
 		"DELETE /api/v2/elitea_core/index_cancel/prompt_lib/{projectID}/{toolkitID}/{indexName}/{taskID}",
 		"DELETE /api/v2/elitea_core/index_meta/prompt_lib/{projectID}/{toolkitID}/{indexMetaID}",
@@ -1972,6 +1974,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/conversations/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/default_icons/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/default_version/prompt_lib/{projectID}/{applicationID}",
+		"GET /api/v2/elitea_core/entity_folders/prompt_lib/{projectID}/{kind}",
 		"GET /api/v2/elitea_core/eval_run_analytics/prompt_lib/{projectID}/{runID}",
 		"GET /api/v2/elitea_core/execution_suspensions/prompt_lib/{projectID}",
 		"GET /api/v2/elitea_core/export_import/prompt_lib/{projectID}/{entityID}",
@@ -2242,6 +2245,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/elitea_core/conversation_fork/prompt_lib/{projectID}/{conversationID}",
 		"POST /api/v2/elitea_core/conversation_name/prompt_lib/{projectID}/{conversationID}",
 		"POST /api/v2/elitea_core/conversations/prompt_lib/{projectID}",
+		"POST /api/v2/elitea_core/entity_folders/prompt_lib/{projectID}/{kind}",
 		"POST /api/v2/elitea_core/execution_suspensions/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/execution_suspensions/prompt_lib/{projectID}/{suspension_id}:resume",
 		"POST /api/v2/elitea_core/export_converter/prompt_lib",
@@ -2370,6 +2374,8 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/elitea_core/conversation/prompt_lib/{projectID}/{conversationID}",
 		"PUT /api/v2/elitea_core/conversation_archive/prompt_lib/{projectID}/{conversationID}",
 		"PUT /api/v2/elitea_core/conversation_read/prompt_lib/{projectID}/{conversationID}",
+		"PUT /api/v2/elitea_core/entity_folders/prompt_lib/{projectID}/{kind}/items/{entityID}",
+		"PUT /api/v2/elitea_core/entity_folders/prompt_lib/{projectID}/{kind}/{folderID}",
 		"PUT /api/v2/elitea_core/entity_settings/prompt_lib/{projectID}/{conversationID}/{participantID}",
 		"PUT /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",
 		"PUT /api/v2/elitea_core/memory/prompt_lib/{projectID}/{memoryID}",

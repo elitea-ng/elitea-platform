@@ -37,7 +37,7 @@ func TestApplicationListHTTPForwardsValidatedFiltersAndExactOffset(t *testing.T)
 }
 
 func TestApplicationListRejectsUnboundedOrInvalidFilters(t *testing.T) {
-	for _, query := range []string{"ids=0", "ids=3.5", "ids=" + strings.Repeat("1,", 100) + "2", "limit=101", "offset=100001", "offset=-1", "author_id=2147483648", "statuses=,draft", "my_liked=maybe", "agents_type=wrong", "sort_by=name;DROP", "sort_order=DESC;DROP", "trend_end_period=2026-01-01T00:00:00", "trend_start_period=bad", "trend_start_period=2026-02-01T00:00:00&trend_end_period=2026-01-01T00:00:00", "query=" + strings.Repeat("x", 1025), "folder_id=4"} {
+	for _, query := range []string{"ids=0", "ids=3.5", "ids=" + strings.Repeat("1,", 100) + "2", "limit=101", "offset=100001", "offset=-1", "author_id=2147483648", "statuses=,draft", "my_liked=maybe", "agents_type=wrong", "sort_by=name;DROP", "sort_order=DESC;DROP", "trend_end_period=2026-01-01T00:00:00", "trend_start_period=bad", "trend_start_period=2026-02-01T00:00:00&trend_end_period=2026-01-01T00:00:00", "query=" + strings.Repeat("x", 1025), "folder_id=abc", "folder_id=1;DROP", "folder_id=-4", "folder_id=1234567890"} {
 		t.Run(query[:min(len(query), 40)], func(t *testing.T) {
 			repo := &applicationListRecorder{}
 			router := chi.NewRouter()
@@ -55,5 +55,16 @@ func TestApplicationListAcceptsArrayTagAndStatusQueryParameters(t *testing.T) {
 	req, err := parseApplicationList(url.Values{"tags[]": {"red", "blue"}, "statuses[]": {"published", "draft"}})
 	if err != nil || req.Tags != "red,blue" || len(req.Statuses) != 2 {
 		t.Fatalf("request=%+v err=%v", req, err)
+	}
+}
+
+func TestApplicationListForwardsAProjectFolderID(t *testing.T) {
+	repo := &applicationListRecorder{}
+	router := chi.NewRouter()
+	router.Get("/apps/{projectID}", NewHandler(repo).List)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest("GET", "/apps/7?folder_id=4&agents_type=classic", nil))
+	if response.Code != 200 || repo.calls != 1 || repo.request.FolderID != "4" {
+		t.Fatalf("status=%d calls=%d folder=%q", response.Code, repo.calls, repo.request.FolderID)
 	}
 }

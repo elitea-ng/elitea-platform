@@ -10,8 +10,11 @@ import { useListApplications } from '@/shared/api/generated/applications/applica
 import type { Application, ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { useRailTagSelection } from '@/shared/ui/EntityRail';
+import { EntityFolderScope, folderIdParam, useFolderFilter } from '@/widgets/entity-folders';
 import { useListSearchQuery } from '@/widgets/page-header';
+import { usePermissionSet } from '@/widgets/sidebar';
 
+import { isPublicPipelinesProject } from './lib/isPublicPipelinesProject';
 import { sortPipelinesByField, type SortOrder } from './lib/sortPipelinesByField';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { PipelineListPanel, type PipelineListRow } from './ui/PipelineListPanel';
@@ -132,10 +135,13 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
   const query = useListSearchQuery();
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const { selectedTags } = useRailTagSelection();
+  const folderId = useFolderFilter(isPublicPipelinesProject(projectId) ? undefined : projectId, 'pipeline').folderId;
+  const permissions = usePermissionSet(projectId);
 
+  // A new query or another folder restarts the "load more" window.
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [query]);
+  }, [query, folderId]);
 
   // See `pages/agents/PrivateAgentsList.tsx` — the same server-side tag
   // filter, over the same list endpoint with `agents_type: 'pipeline'`.
@@ -152,6 +158,8 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
       // client-side filter alone would narrow one page instead of the project.
       ...(trimmedQuery === '' ? {} : { query: trimmedQuery }),
       ...(tagFilter === '' ? {} : { tags: tagFilter }),
+      // The open project folder (issue 2048), narrowed by the server.
+      ...folderIdParam(folderId),
     },
     { query: { enabled: projectId !== undefined } },
   );
@@ -176,40 +184,46 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
       key={cardContentType}
       sx={containerSx}
     >
-      <PipelineListPanel
-        rows={visibleRows.map((application) =>
-          toRow(application, (id) => {
-            void navigate({ to: '/pipelines/$tab/$agentId', params: { tab: 'all', agentId: id } });
-          }),
-        )}
-        isLoading={listQuery.isFetching && wire === undefined}
-        isError={listQuery.isError}
-        errorMessage={t('pages.pipelines.privateList.error', 'Failed to load pipelines.')}
-        emptyTitle={
-          query
-            ? t('pages.pipelines.privateList.emptyFound.title', 'Nothing found.')
-            : t('pages.pipelines.privateList.empty.title', 'No pipelines yet')
-        }
-        emptyDescription={
-          query
-            ? t('pages.pipelines.privateList.emptyFound.description', 'Create yours now!')
-            : t(
-                'pages.pipelines.privateList.empty.description',
-                'Create your first pipeline to get started. Pipelines chain agents, skills and toolkits into one repeatable flow.',
-              )
-        }
-        onCreate={() => {
-          void navigate({ to: '/pipelines/create' });
-        }}
-        onSelect={(id) => {
-          void navigate({ to: '/pipelines/$tab/$agentId', params: { tab: params.tab ?? 'all', agentId: id } });
-        }}
-        hasMore={hasMore}
-        isLoadingMore={false}
-        onLoadMore={() => {
-          setVisibleCount((count) => count + PAGE_SIZE);
-        }}
-      />
+      <EntityFolderScope
+        projectId={isPublicPipelinesProject(projectId) ? undefined : projectId}
+        kind="pipeline"
+        permissions={permissions}
+      >
+        <PipelineListPanel
+          rows={visibleRows.map((application) =>
+            toRow(application, (id) => {
+              void navigate({ to: '/pipelines/$tab/$agentId', params: { tab: 'all', agentId: id } });
+            }),
+          )}
+          isLoading={listQuery.isFetching && wire === undefined}
+          isError={listQuery.isError}
+          errorMessage={t('pages.pipelines.privateList.error', 'Failed to load pipelines.')}
+          emptyTitle={
+            query
+              ? t('pages.pipelines.privateList.emptyFound.title', 'Nothing found.')
+              : t('pages.pipelines.privateList.empty.title', 'No pipelines yet')
+          }
+          emptyDescription={
+            query
+              ? t('pages.pipelines.privateList.emptyFound.description', 'Create yours now!')
+              : t(
+                  'pages.pipelines.privateList.empty.description',
+                  'Create your first pipeline to get started. Pipelines chain agents, skills and toolkits into one repeatable flow.',
+                )
+          }
+          onCreate={() => {
+            void navigate({ to: '/pipelines/create' });
+          }}
+          onSelect={(id) => {
+            void navigate({ to: '/pipelines/$tab/$agentId', params: { tab: params.tab ?? 'all', agentId: id } });
+          }}
+          hasMore={hasMore}
+          isLoadingMore={false}
+          onLoadMore={() => {
+            setVisibleCount((count) => count + PAGE_SIZE);
+          }}
+        />
+      </EntityFolderScope>
     </Box>
   );
 }

@@ -14,12 +14,15 @@ import { unwrapListPage } from '@/shared/api/unwrap';
 import { getConfig } from '@/shared/config';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { EntityCard, entityTypeIcon } from '@/shared/ui/EntityCardList';
+import { EntityFolderPanel, EntityFolderScope, useFolderFilter } from '@/widgets/entity-folders';
 import { PageToolbar, pageBodySx, pageSx, useListSearchQuery } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
 import { matchesQuery, toListItem, toTagList } from './lib/toolkitListRows';
+import { useFolderRows } from './lib/useFolderRows';
 import { toolkitsCopy } from './lib/toolkitsCopy';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
+import { EmptyFolderNote } from './ui/EmptyFolderNote';
 import { ToolkitsFilters } from './ui/ToolkitsFilters';
 
 const PAGE_SIZE = 20;
@@ -290,10 +293,14 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
   const navigate = useNavigate();
   const projectId = useSelectedProjectId();
   const isPublic = isPublicToolkitsProject(projectId);
-  const canCreate = usePermissionSet(projectId).has(PERMISSIONS.toolkits.create) && !isPublic;
+  const permissions = usePermissionSet(projectId);
+  const canCreate = permissions.has(PERMISSIONS.toolkits.create) && !isPublic;
+  const kind = isMCP ? 'mcp' : 'toolkit';
+  const folderFilter = useFolderFilter(isPublic ? undefined : projectId, kind);
   const query = useListSearchQuery();
 
   const list = useToolkitsListData(projectId, isMCP, isPublic, query);
+  const rows = useFolderRows(list.data, folderFilter, list);
 
   const handleOpen = useCallback(
     (toolkitId: string) => {
@@ -327,29 +334,37 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
       />
       <Box sx={pageBodySx}>
         <Box data-testid={copy.listTestId}>
-          <ToolkitsList
-            sx={listSx}
-            data={list.data}
-            renderCard={(item) => (
-              <ToolkitCard
-                key={item.id}
-                item={item}
-                isMCP={isMCP}
-                onOpen={() => handleOpen(item.id)}
-              />
-            )}
-            listState={{
-              isLoading: list.isLoading,
-              isFetchingMore: list.isFetchingMore,
-              isError: list.isError,
-              hasMore: list.hasMore,
-              onLoadMore: list.onLoadMore,
-              totalCount: list.totalCount,
-            }}
-            query={query}
-            isMCP={isMCP}
-            emptyStateConfig={{ title: copy.emptyTitle, description: copy.emptyDescription, onCreateClick: handleCreateClick }}
-          />
+          <EntityFolderScope
+            projectId={isPublic ? undefined : projectId}
+            kind={kind}
+            permissions={permissions}
+          >
+            <ToolkitsList
+              sx={listSx}
+              data={rows}
+              renderCard={(item) => (
+                <ToolkitCard
+                  key={item.id}
+                  item={item}
+                  isMCP={isMCP}
+                  onOpen={() => handleOpen(item.id)}
+                />
+              )}
+              listState={{
+                isLoading: list.isLoading,
+                isFetchingMore: list.isFetchingMore,
+                isError: list.isError,
+                hasMore: list.hasMore,
+                onLoadMore: list.onLoadMore,
+                totalCount: folderFilter.active ? rows.length : list.totalCount,
+              }}
+              query={query}
+              isMCP={isMCP}
+              {...(folderFilter.active
+                ? { emptyListPlaceHolder: <EmptyFolderNote /> }
+                : { emptyStateConfig: { title: copy.emptyTitle, description: copy.emptyDescription, onCreateClick: handleCreateClick } })}
+            />
+          </EntityFolderScope>
         </Box>
       </Box>
       <ToolkitsFilters
@@ -361,6 +376,14 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
         onSelectType={list.onSelectType}
         onClearTypes={list.onClearTypes}
         isLoading={list.isLoading}
+        foldersSlot={
+          <EntityFolderPanel
+            enabled={!isPublic}
+            projectId={projectId}
+            kind={kind}
+            permissions={permissions}
+          />
+        }
       />
     </Box>
   );
