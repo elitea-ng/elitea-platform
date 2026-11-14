@@ -44,16 +44,13 @@ func TestMigrationCorpusRenamesTheHRAgentProposalSource(t *testing.T) {
 		for _, stmt := range []string{
 			`ALTER TABLE elitea_lifecycle.agent_workforce_proposals DROP CONSTRAINT agent_workforce_proposals_source_known`,
 			`ALTER TABLE elitea_lifecycle.agent_workforce_proposals DROP CONSTRAINT agent_workforce_proposals_proposer_v2`,
+			`UPDATE elitea_lifecycle.agent_workforce_proposals SET source = 'hr_agent' WHERE application_id = 101`,
 			`ALTER TABLE elitea_lifecycle.agent_workforce_proposals ADD CONSTRAINT agent_workforce_proposals_source_known
 				CHECK (source IN ('person', 'hr_agent', 'policy'))`,
 		} {
 			if _, err := pool.Exec(ctx, stmt); err != nil {
 				t.Fatalf("restore the 0237 shape: %v", err)
 			}
-		}
-		if _, err := pool.Exec(ctx, `UPDATE elitea_lifecycle.agent_workforce_proposals SET source = 'hr_agent'
-			WHERE application_id = 101`); err != nil {
-			t.Fatalf("store an old-value row: %v", err)
 		}
 
 		body, err := platformmigrations.Files.ReadFile("shared/0249_agent_workforce_manager_source.sql")
