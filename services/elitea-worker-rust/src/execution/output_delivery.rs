@@ -439,7 +439,7 @@ pub(crate) struct AgentProgressPublisherConfig {
 #[allow(dead_code)] // Consumed by the capability-disabled progress publisher.
 impl AgentProgressPublisherConfig {
     #[must_use]
-    pub(super) const fn max_output_sessions(&self) -> usize {
+    pub(super) const fn max_output_sessions(self) -> usize {
         self.max_output_sessions
     }
 

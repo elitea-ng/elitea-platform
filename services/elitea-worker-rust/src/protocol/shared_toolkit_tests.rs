@@ -1395,6 +1395,7 @@ fn index_command_message(command: &WorkerCommandV1) -> &IndexIngestCommandV1 {
 }
 
 type Mutation = Box<dyn Fn(&mut IndexIngestResultV1)>;
+type FrameMutation = Box<dyn Fn(&mut ExecutionOutputFrameV1)>;
 
 fn index_summary() -> IndexIngestSummaryV1 {
     IndexIngestSummaryV1 {
@@ -2168,7 +2169,7 @@ fn a_restored_index_progress_frame_is_validated_field_by_field() {
         .unwrap()
         .into_frame();
     validate_restored_toolkit_execute_read_output_frame(&verified, &frame).unwrap();
-    let mutations: Vec<Box<dyn Fn(&mut ExecutionOutputFrameV1)>> = vec![
+    let mutations: Vec<FrameMutation> = vec![
         Box::new(|frame| frame.terminal = true),
         Box::new(|frame| frame.logical_output_id.push('x')),
         Box::new(|frame| {

@@ -595,6 +595,8 @@ async fn a_superseded_progress_frame_is_retired_and_the_claim_proceeds() {
         .await
         .expect("a superseded frame does not block the claim");
     assert!(matches!(outcome, ToolkitOutputPreflightOutcome::Empty(_)));
+    // The empty outcome owns the spool; release it before looking.
+    drop(outcome);
     assert!(spool_is_empty(&factory).await);
 }
 
@@ -617,6 +619,7 @@ async fn a_progress_frame_the_watermark_covers_is_reconciled() {
             .await
             .expect("a covered frame does not block the claim");
         assert!(matches!(outcome, ToolkitOutputPreflightOutcome::Empty(_)));
+        drop(outcome);
         assert!(spool_is_empty(&factory).await);
     }
 }
@@ -640,6 +643,10 @@ async fn an_unaccounted_progress_frame_fails_closed_and_stays() {
             .pending_replay_frame(),
         Some(frame)
     );
+}
+
+fn assert_silent(events: &[NodeEventV1]) {
+    assert_eq!(events.len(), 0, "{events:?}");
 }
 
 // --- what the run says ------------------------------------------------------
@@ -723,34 +730,22 @@ fn a_run_with_nothing_to_write_reports_no_write_stage() {
         },
         NOW,
     );
-    assert!(
-        narrator
-            .events(ProgressNote::Started(ProgressStage::Write), NOW)
-            .is_empty()
-    );
-    assert!(
-        narrator
-            .events(
-                ProgressNote::Documents {
-                    processed: 50,
-                    total: 100,
-                    chunks: 1,
-                },
-                NOW + 60_000,
-            )
-            .is_empty()
-    );
-    assert!(
-        narrator
-            .events(
-                ProgressNote::Written {
-                    documents: 0,
-                    chunks: 0,
-                },
-                NOW,
-            )
-            .is_empty()
-    );
+    assert_silent(&narrator.events(ProgressNote::Started(ProgressStage::Write), NOW));
+    assert_silent(&narrator.events(
+        ProgressNote::Documents {
+            processed: 50,
+            total: 100,
+            chunks: 1,
+        },
+        NOW + 60_000,
+    ));
+    assert_silent(&narrator.events(
+        ProgressNote::Written {
+            documents: 0,
+            chunks: 0,
+        },
+        NOW,
+    ));
 }
 
 /// A large index does not flood the stream: document updates are spaced by
@@ -829,16 +824,12 @@ fn document_updates_are_throttled_by_count_time_and_cap() {
         NOW,
     );
     narrator.events(ProgressNote::Started(ProgressStage::Write), NOW);
-    assert!(
-        narrator
-            .events(
-                ProgressNote::Documents {
-                    processed: 50,
-                    total: 100,
-                    chunks: 1,
-                },
-                NOW + 10,
-            )
-            .is_empty()
-    );
+    assert_silent(&narrator.events(
+        ProgressNote::Documents {
+            processed: 50,
+            total: 100,
+            chunks: 1,
+        },
+        NOW + 10,
+    ));
 }

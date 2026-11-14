@@ -300,20 +300,19 @@ impl<C: AgentProgressConnector> ToolkitProgressPublisher<C> {
                 let terminal_sequence = cursor
                     .terminal_sequence()
                     .map_err(ToolkitProgressError::Protocol)?;
-                let prepared = match first {
-                    Some(prepared) => prepared,
-                    None => {
-                        let prepared = factory
-                            .reopen()
-                            .await
-                            .map_err(ToolkitProgressError::Preflight)?;
-                        if prepared.pending_frame_count() != 0 {
-                            return Err(ToolkitProgressError::RecoveryRequired(
-                                "the output spool is not empty after progress",
-                            ));
-                        }
-                        prepared
+                let prepared = if let Some(prepared) = first {
+                    prepared
+                } else {
+                    let prepared = factory
+                        .reopen()
+                        .await
+                        .map_err(ToolkitProgressError::Preflight)?;
+                    if prepared.pending_frame_count() != 0 {
+                        return Err(ToolkitProgressError::RecoveryRequired(
+                            "the output spool is not empty after progress",
+                        ));
                     }
+                    prepared
                 };
                 Ok(ToolkitProgressSettled {
                     output: PreparedAgentOutput::new(prepared, factory),
