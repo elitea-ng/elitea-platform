@@ -136,6 +136,15 @@ type Completer interface {
 	Complete(ctx context.Context, req CompletionRequest) (string, error)
 }
 
+// GatewayStatusError is a non-200 answer from the gateway. It is typed so a
+// caller can tell a gateway timeout (504, 408) from other failures without
+// matching the message. The message is the same text as before.
+type GatewayStatusError struct{ Status int }
+
+func (e *GatewayStatusError) Error() string {
+	return fmt.Sprintf("predict: gateway responded with status %d", e.Status)
+}
+
 // GatewayCompleter is the only production implementation: a chat completion
 // through elitea-llm-gateway (llmproxy.Gateway, gRPC over mutual TLS).
 type GatewayCompleter struct {
@@ -225,7 +234,7 @@ func (c *GatewayCompleter) Complete(ctx context.Context, req CompletionRequest) 
 		// The upstream body is not echoed: it can carry provider error text,
 		// which is the repository's typed/safe API error boundary. The status
 		// is enough for an operator reading the log line the handler writes.
-		return "", fmt.Errorf("predict: gateway responded with status %d", resp.StatusCode)
+		return "", &GatewayStatusError{Status: resp.StatusCode}
 	}
 
 	var out chatCompletionsResponse

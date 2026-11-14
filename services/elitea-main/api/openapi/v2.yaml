@@ -20990,6 +20990,80 @@ components:
             required: [key, reason]
       required: [run, results, headline_score, total, offset, unavailable]
 
+    EvalEnhanceProposal:
+      type: object
+      description: >
+        The Enhance with AI proposal for one finished run. It is data only:
+        the client saves each accepted fix through the normal routes.
+      properties:
+        run_id: { type: string }
+        application_id: { type: integer, nullable: true }
+        application_version_id: { type: integer, nullable: true }
+        summary: { type: string }
+        analysed_rows:
+          type: integer
+          description: The missed (case, dimension) results sent to the model.
+        missed_rows:
+          type: integer
+          description: >
+            All missed results. Larger than `analysed_rows` when the evidence
+            was cut to its cap, worst scores kept.
+        instruction_patch:
+          type: object
+          nullable: true
+          properties:
+            rationale: { type: string }
+            instructions:
+              type: string
+              description: The complete new instructions, not a diff.
+          required: [rationale, instructions]
+        instruction_patch_unavailable:
+          type: string
+          description: >
+            Present when no instruction patch was requested or accepted because
+            the instructions are longer than one proposal can rewrite whole.
+        dimension_changes:
+          type: array
+          items: { $ref: '#/components/schemas/EvalEnhanceDimensionChange' }
+        dataset_changes:
+          type: array
+          items: { $ref: '#/components/schemas/EvalEnhanceDatasetChange' }
+      required: [run_id, summary, analysed_rows, missed_rows, instruction_patch, dimension_changes, dataset_changes]
+
+    EvalEnhanceDimensionChange:
+      type: object
+      description: A rubric and/or target change. A field left out is a field to keep.
+      properties:
+        dimension_id: { type: string }
+        dimension_name: { type: string }
+        description: { type: string }
+        default_target: { type: number }
+        default_target_operator:
+          type: string
+          description: One of the comparison operators >=, >, <=, <, ==. Present with default_target.
+        rationale: { type: string }
+        run_target:
+          type: number
+          description: >
+            The target the run's results were judged against, as frozen in the
+            run. A target change writes the library default and applies to new
+            runs.
+        run_target_operator: { type: string }
+      required: [dimension_id, dimension_name, rationale]
+
+    EvalEnhanceDatasetChange:
+      type: object
+      properties:
+        case_id: { type: string }
+        dataset_id: { type: string }
+        input:
+          type: string
+          description: The case input, cut to its display cap.
+        current_expected_output: { type: string, nullable: true }
+        expected_output: { type: string }
+        rationale: { type: string }
+      required: [case_id, dataset_id, input, current_expected_output, expected_output, rationale]
+
     # ── Pipeline triggers and schedules (issues 192, 193) ──────────────────
     #
     # NOTE(W2): every field below is marshalled by
@@ -27297,6 +27371,16 @@ paths:
           in: query
           required: false
           schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: before_run_id
+          in: query
+          required: false
+          schema: { type: string }
+          description: Only runs started before this run (a smaller id).
+        - name: scored_only
+          in: query
+          required: false
+          schema: { type: boolean }
+          description: Only runs that finished with a headline score.
       responses:
         '200':
           description: The run listing
@@ -27648,6 +27732,75 @@ paths:
         '404': { $ref: '#/components/responses/404' }
         '409': { $ref: '#/components/responses/409' }
         '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/eval_run_enhance/prompt_lib/{project_id}/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: run_id
+        in: path
+        required: true
+        schema: { type: string }
+
+    post:
+      operationId: enhanceEvalRun
+      summary: Propose fixes for the cases a finished run missed (Enhance with AI)
+      description: |
+        One model call, through the same gateway hop the judge and the AI-draft
+        routes use, reads the run's PINNED agent definition (the frozen agent
+        of a gate run, else the version row the run names) and the scored
+        results that missed their targets with their outputs, scores and judge
+        rationale. It answers up to three kinds of fix: an instruction patch,
+        dimension rubric or target changes, and dataset expected-output
+        changes.
+
+        NOTHING IS WRITTEN. Each accepted fix is saved by the route that owns
+        that write: a new agent version (which an agent above the low risk tier
+        can publish only through a change request and its release gate), a
+        dimension update, a dataset case update. A fix that names a dimension
+        or case outside the evidence, an operator outside the set, an empty
+        text or a no-op is dropped before it is answered. The call carries no
+        run attribution, so it is not counted in the run's own analytics.
+
+        Needs the run create permission (it spends model tokens) and the
+        version read permission (the answer quotes the instructions).
+      tags: [applications]
+      responses:
+        '200':
+          description: The proposal. Each list may be empty and the patch may be null.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalEnhanceProposal'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: The run has not finished.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: >
+            No scored case missed its target, the run is not pinned to a
+            version, or the model did not answer with a usable proposal.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500': { $ref: '#/components/responses/500' }
+        '502':
+          description: The LLM gateway is configured and did not complete the request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: No completion backend is composed because LLM_GATEWAY_URL is empty.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /elitea_core/conversation_archive/prompt_lib/{project_id}/{conversation_id}:
     parameters:
@@ -38567,6 +38720,16 @@ paths:
                       minimum: 1
                       maximum: 2147483647
                       description: Optional source version in the same application and project.
+                    copy_tools_from_version_id:
+                      type: integer
+                      minimum: 1
+                      maximum: 2147483647
+                      description: >
+                        Optional source version in the same application and
+                        project. Copies its toolkit and tool bindings, with
+                        their selected tools, onto the new version in the same
+                        transaction. A missing, invalid or foreign source copies
+                        nothing.
       responses:
         '201':
           description: Created version

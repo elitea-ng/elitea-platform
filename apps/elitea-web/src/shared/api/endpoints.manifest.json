@@ -2812,6 +2812,32 @@
       ]
     },
     {
+      "$comment": "One model call proposes fixes for the cases a finished run missed (Enhance with AI). Writes nothing: each accepted fix is saved by its own route.",
+      "id": "evaluation.enhanceRun",
+      "method": "POST",
+      "path": "/elitea_core/eval_run_enhance/prompt_lib/{projectId}/{runId}",
+      "operationId": "enhanceEvalRun",
+      "source": "generated",
+      "responseSchema": "EvalEnhanceProposal",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
+    },
+    {
+      "$comment": "READ. One evaluation run's tokens and estimated cost, agent and judge apart. Gated on the analytics permission as well as the run read.",
+      "id": "analytics.getEvaluationRunAnalytics",
+      "method": "GET",
+      "path": "/elitea_core/eval_run_analytics/prompt_lib/{projectId}/{runId}",
+      "operationId": "getEvaluationRunAnalytics",
+      "source": "generated",
+      "responseSchema": "AnalyticsEvaluationRun",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
+    },
+    {
       "$comment": "READ. Reports that a trigger exists and when it was last used. The URL it returns carries NO credential; revealing one is a separate operation with the write permission on it.",
       "id": "pipelines.getTrigger",
       "method": "GET",

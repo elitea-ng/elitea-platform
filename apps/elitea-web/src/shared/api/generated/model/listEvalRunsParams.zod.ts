@@ -53,6 +53,8 @@ export const ListEvalRunsParams = zod.object({
     .min(1)
     .max(listEvalRunsParamsLimitMax)
     .default(listEvalRunsParamsLimitDefault),
+  before_run_id: zod.string().optional(),
+  scored_only: zod.boolean().optional(),
 });
 
 export type ListEvalRunsParams = zod.input<typeof ListEvalRunsParams>;
