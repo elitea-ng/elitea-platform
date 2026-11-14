@@ -47,6 +47,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
@@ -192,6 +193,14 @@ type Dependencies struct {
 	// Config.VectorIntrospectionClients is set; ProjectTokenValidator then
 	// checks the signature.
 	CallbackTokenFacts vectorintrospection.CallbackFacts
+	// VectorPlatformTokens verifies elitea-main's own vector tokens for the
+	// introspection service (issue 1657). Optional; nil answers every platform
+	// token inactive.
+	VectorPlatformTokens *vectorintrospection.PlatformTokens
+	// AgentMemoryRanker ranks an agent's memory entries by vector similarity
+	// for recall (issue 1657). Optional: nil, or an error from it, is the
+	// keyword ranking.
+	AgentMemoryRanker agentmemory.Ranker
 	// IndexVectorDeleter deletes a toolkit index's vectors in elitea-vector
 	// (ADR-0031 decision 4): infra/vectorclient.Client, composed from
 	// ELITEA_VECTOR_GRPC_TARGET. Optional; nil installs
@@ -1085,6 +1094,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		var memoryErr error
 		if agentMemoryStore, memoryErr = repos.ComposeAgentMemory(dependencies.AdmissionPool); memoryErr != nil {
 			return nil, fmt.Errorf("construct agent memory: %w", memoryErr)
+		}
+		if dependencies.AgentMemoryRanker != nil {
+			agentMemoryStore.WithRanker(dependencies.AgentMemoryRanker)
 		}
 		agentStart = agentStart.WithAgentMemory(agentMemoryStore)
 		// The approval policy's pipeline hitl rule (ADR-0041 decision 5).

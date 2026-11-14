@@ -34,6 +34,16 @@ type AgentMemory struct {
 	pool        *pgxpool.Pool
 	audit       securityaudit.Appender
 	activeLimit int
+	// ranker orders a turn's recall candidates by vector similarity (issue
+	// 1657). Nil, or an error from it, is the keyword ranking.
+	ranker agentmemory.Ranker
+}
+
+// WithRanker sets the vector ranker recall consults (issue 1657). nil keeps
+// the keyword ranking.
+func (s *AgentMemory) WithRanker(ranker agentmemory.Ranker) *AgentMemory {
+	s.ranker = ranker
+	return s
 }
 
 var _ storage.AgentMemorySink = (*AgentMemory)(nil)
@@ -465,7 +475,20 @@ func (s *AgentMemory) ResolveAgentMemoryRecall(ctx context.Context, request agen
 	}
 	// #1826: an entry about a person is selected only while that person is
 	// present, so the ids the run input carries pass the same rule.
-	selected := agentmemory.Select(candidates, present, request.UserInput, request.Settings)
+	// Issue 1657: the vector index orders these same rows by similarity to the
+	// turn's input. It never adds or removes one, so the presence rule above
+	// and the budgets below are the rows'. An embedding or vector outage is
+	// the keyword ranking, never no recall.
+	var similarity map[int64]float32
+	if s.ranker != nil && agentmemory.RankingMatters(candidates, present, request.Settings) {
+		ranked, rankErr := s.ranker.Rank(ctx, request.ProjectID, request.ApplicationID, request.UserInput)
+		if rankErr != nil {
+			slog.DebugContext(ctx, "agent memory: vector ranking unavailable; recalling by keyword", "error", rankErr)
+		} else {
+			similarity = ranked
+		}
+	}
+	selected := agentmemory.SelectRanked(candidates, present, request.UserInput, request.Settings, similarity)
 	return agentexecutionapp.AgentMemoryRecall{
 		Text:    agentmemory.Render(selected, people, request.MarkTag),
 		Entries: agentmemory.RecalledEntries(selected),

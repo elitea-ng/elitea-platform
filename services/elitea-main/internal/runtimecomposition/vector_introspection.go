@@ -55,6 +55,8 @@ func newVectorIntrospection(config Config, dependencies Dependencies) (*vectorin
 	if err != nil {
 		return nil, fmt.Errorf("construct vector token introspection: %w", err)
 	}
+	// elitea-main's own platform tokens (issue 1657); nil answers them inactive.
+	server.WithPlatformTokens(dependencies.VectorPlatformTokens)
 	return server, nil
 }
 
@@ -75,6 +77,8 @@ type PlatformVectorIntrospection struct {
 	// CallbackFacts reads the callback grants the facades record. Required.
 	CallbackFacts vectorintrospection.CallbackFacts
 	Logger        *slog.Logger
+	// PlatformTokens verifies elitea-main's own tokens (issue 1657). Optional.
+	PlatformTokens *vectorintrospection.PlatformTokens
 }
 
 // NewPlatformVectorIntrospection is the platform listener's
@@ -110,6 +114,7 @@ func NewPlatformVectorIntrospection(config Config, runtime *Runtime, dependencie
 	if err != nil {
 		return runtimegrpc.PlatformService{}, false, fmt.Errorf("construct vector token introspection: %w", err)
 	}
+	server.WithPlatformTokens(dependencies.PlatformTokens)
 	return server.PlatformService(), true, nil
 }
 

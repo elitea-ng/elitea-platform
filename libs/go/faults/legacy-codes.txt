@@ -400,6 +400,10 @@ toolkit_delivery.output_rejected
 toolkit_delivery.output_unavailable
 toolkit_delivery.resource_exhausted
 toolkit_not_governable
+toolkit_progress.invalid_state
+toolkit_progress.output_rejected
+toolkit_progress.output_unavailable
+toolkit_progress.recovery_required
 toolkit_terminal.invalid_state
 toolkit_terminal.output_rejected
 toolkit_terminal.output_unavailable

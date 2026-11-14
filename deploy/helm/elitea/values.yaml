@@ -3594,6 +3594,13 @@ main:
     # reconciler's ELITEA_PROJECT_DELETION_RECONCILER_ENABLED (same default).
     ELITEA_TOOLKIT_DELETION_RECONCILER_ENABLED: "true"
 
+    # Semantic recall for an agent's own memory (issue 1657): the reconciler on
+    # every elitea-main replica that embeds memory entries into elitea-vector
+    # (source agent_memory) and ranks recall by similarity. ON by default; it
+    # is off by itself when the vector client, the LLM gateway or
+    # APPLICATION_SECRET_KEY is missing. "false" keeps the keyword recall.
+    ELITEA_AGENT_MEMORY_VECTORS_ENABLED: "true"
+
     # --- elitea-vector gRPC client (ADR-0031 decision 4) ---------------------
     #
     # Where elitea-main deletes a toolkit index's vectors (the index delete and
