@@ -23,8 +23,7 @@ func enhanceRouter(repo RunRepository, completer Completer) http.Handler {
 	return r
 }
 
-func boolPtr(value bool) *bool        { return &value }
-func floatPtr(value float64) *float64 { return &value }
+func boolPtr(value bool) *bool { return &value }
 
 // finishedRunWithMisses seeds a finished run whose case 11 missed its target on
 // dimension 3 and whose case 12 met it.
