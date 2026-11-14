@@ -19,6 +19,11 @@ import type { Permission } from '@/shared/api/generated/model';
  * rather than reaching sideways for it.
  */
 export function useHasPermission(projectId: string | undefined, permission: string): boolean {
+  return usePermissionState(projectId, permission).allowed;
+}
+
+/** `settled` is false until the permission list answered (or failed), so a caller can tell "not yet known" from "no". */
+export function usePermissionState(projectId: string | undefined, permission: string): { readonly allowed: boolean; readonly settled: boolean } {
   const query = usePermissionList(projectId ?? '', { query: { enabled: projectId !== undefined } });
 
   const permissions = useMemo(() => {
@@ -31,5 +36,5 @@ export function useHasPermission(projectId: string | undefined, permission: stri
     return new Set(list.filter((entry) => entry.enabled).map((entry) => entry.name));
   }, [query.data]);
 
-  return permissions.has(permission);
+  return { allowed: permissions.has(permission), settled: projectId !== undefined && !query.isPending };
 }
