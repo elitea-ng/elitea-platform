@@ -8,6 +8,9 @@ import type { ChatRole } from '@/features/chat/messageModel';
 import { useShareOut } from '@/security/policy';
 import { Avatar, Icon, ramp, Text } from '@/ui';
 
+/** The label over a message the signed-in user wrote: one source for the visible name line and the spoken label, in every state (sent, queued, live). */
+export const OWN_LABEL = 'You';
+
 export interface MessageBubbleProps {
   role: ChatRole;
   /**
@@ -84,7 +87,7 @@ export function MessageBubble({
   ) : role === 'assistant' ? (
     avatar
   ) : null;
-  const metaLine = meta ?? (otherPerson || (role === 'assistant' && !avatar) ? author : null);
+  const metaLine = meta ?? (role === 'user' ? (author ?? OWN_LABEL) : otherPerson || (role === 'assistant' && !avatar) ? author : null);
   const plain = typeof children === 'string';
   const body =
     plain && highlight ? (
@@ -104,7 +107,7 @@ export function MessageBubble({
   // file buttons must stay reachable. The status and the error are read as part of the label.
   const speakable = plain && role === 'user' && !footer;
   const spoken = speakable
-    ? [`${mine ? 'You' : (author ?? 'Someone')}: ${children as string}`, status, error].filter((part) => part).join('. ')
+    ? [`${author ?? (mine ? OWN_LABEL : 'Someone')}: ${children as string}`, status, error].filter((part) => part).join('. ')
     : undefined;
   return (
     <View style={[styles.row, { paddingHorizontal: space.screenGutterCompact }, mine ? styles.mine : styles.theirs]}>

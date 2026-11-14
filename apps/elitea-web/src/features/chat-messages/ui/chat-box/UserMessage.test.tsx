@@ -168,13 +168,13 @@ describe('UserMessage chat layout', () => {
     );
   }
 
-  it("draws the reader's own question on the right, labelled 'You', with no avatar or recipient", () => {
+  it("draws the reader's own question on the right, with no avatar or recipient and no invented 'You'", () => {
     stubCurrentAuthor();
     renderOne(true, { name: '', userId: 'me', sentTo: { entity_name: 'dummy', entity_meta: {}, meta: {} } });
 
     expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-end' });
     expect(screen.getByTestId('chat-message-body').textContent).toBe('hello');
-    expect(screen.getByTestId('chat-message-author')).toHaveTextContent('You');
+    expect(screen.queryByTestId('chat-message-author')).toBeNull();
     expect(screen.queryByTestId('chat-message-avatar')).toBeNull();
     expect(screen.queryByText('Elitea')).toBeNull();
   });

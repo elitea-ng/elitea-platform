@@ -127,7 +127,7 @@ export interface UserMessageProps {
    * download a silent no-op.
    */
   readonly projectId?: string | undefined;
-  /** The label over the reader's own bubble: the reader's display name, when the list can state that this question is theirs. */
+  /** The label over the reader's own bubble: set only when the list can state that this question is the reader's (never guessed). */
   readonly ownCaption?: string | undefined;
 }
 
@@ -187,7 +187,7 @@ export function UserMessage({
   projectId,
   ownCaption,
 }: UserMessageProps): ReactNode {
-  const authorCaption = isOwn ? ownCaption || resolveAuthorCaption(message) || t('features.chatMessages.ownAuthorFallback', 'You') : resolveAuthorCaption(message);
+  const authorCaption = isOwn ? ownCaption || resolveAuthorCaption(message) : resolveAuthorCaption(message);
   const questionItem = useMemo(() => findQuestionItem(message.messageItems), [message.messageItems]);
   const attachmentItems = useMemo(() => findAttachmentItems(message.messageItems), [message.messageItems]);
   const resolvedContent = useMemo(

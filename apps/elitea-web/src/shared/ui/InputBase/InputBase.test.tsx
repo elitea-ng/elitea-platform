@@ -260,4 +260,19 @@ describe('InputBase', () => {
     );
     expect(queryByRole('button', { name: 'Expand field' })).toBeNull();
   });
+
+  it('keeps the outlined label link when the caller passes its own slotProps', () => {
+    const { getByLabelText } = renderWithTheme(
+      <InputBase
+        outlined
+        label="Instructions"
+        value=""
+        onChange={() => {}}
+        slotProps={{ inputLabel: { shrink: true }, htmlInput: { maxLength: 40 } }}
+      />,
+    );
+    const field = getByLabelText('Instructions');
+    expect(field).toHaveAttribute('aria-labelledby');
+    expect(field).toHaveAttribute('maxlength', '40');
+  });
 });

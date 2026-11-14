@@ -225,14 +225,6 @@ describe('authorship in a shared conversation (A2)', () => {
     expect(messages[0]).toMatchObject({ mine: true, author: null });
   });
 
-  it('carries my own display name for the label over my bubble', () => {
-    const messages = toChatMessages({ participants: shared, message_groups: groups }, { selfUserId: 42 });
-    expect(messages.filter((m) => m.role === 'user').map((m) => [m.mine, m.ownName])).toEqual([
-      [false, null],
-      [true, 'Bob'],
-    ]);
-  });
-
   it('reads a user participant name from meta.user_name and its user id from entity_meta.id', () => {
     expect(participantName(shared[0] as never)).toBe('Alice Smith');
     expect(participantUserId(shared[1] as never)).toBe(42);

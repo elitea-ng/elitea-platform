@@ -4,12 +4,11 @@ import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
 
 /**
- * The ONE rule for "may this caller edit an agent or a pipeline", read by the
- * agent editor and the pipeline editor alike. Both are applications; a pipeline
- * is editable by exactly the callers who can edit an agent's configuration
- * (project admin/editor roles, which carry `application.update`), and a
- * published one is read-only for everyone. Two private copies of this rule used
- * to exist, one per feature, and could drift apart.
+ * Whether the caller may edit an agent or a pipeline in the editors that read
+ * this module (the agent editor and the pipeline editor): not when it is
+ * published, otherwise when they hold `application.update`. It replaces two
+ * private copies of the same rule. A pure refactor: no behaviour changed.
+ * Other surfaces (`features/chat-input`) still carry their own permission check.
  */
 export function canEditApplication(isPublished: boolean, hasEditPermission: boolean): boolean {
   return !isPublished && hasEditPermission;

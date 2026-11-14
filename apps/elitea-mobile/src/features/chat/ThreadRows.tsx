@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { restorePreparedTurn, TurnInputError } from '@/api/queries/sendMessage';
 import { AttachmentStrip } from '@/features/chat/attachments/AttachmentStrip';
-import { MessageBubble } from '@/features/chat/MessageBubble';
+import { MessageBubble, OWN_LABEL } from '@/features/chat/MessageBubble';
 import type { ChatAttachment, ChatMessage } from '@/features/chat/messageModel';
 import { MESSAGE_CLASS, sideTalkLabel, type MessageClass } from '@elitea/client-core/conversation';
 import { useDesign } from '@/design/DesignProvider';
@@ -24,9 +24,6 @@ import { Button, Icon, Text } from '@/ui';
  * The rows of a conversation (docs/design-system.md §4.6, screens.md §4), shared by the thread
  * (`/c/[id]`) and its development preview (`/design-chat`), so the preview draws what users see.
  */
-
-/** The label over the reader's own message when the conversation does not name them. */
-export const OWN_LABEL = 'You';
 
 /** "Research · 9:41": who answered and when (the time in the device's own format). */
 export function messageMeta(author: string | null, createdAt: number | null, now: number = Date.now()): string | null {
@@ -97,7 +94,7 @@ export function PersistedMessage({
       role={message.role}
       mine={message.mine}
       author={message.author}
-      meta={messageMeta(answer ? answerAuthorLine(message.author, message.authorRole, message.messageClass) : message.mine ? (message.ownName ?? OWN_LABEL) : message.author, message.createdAt)}
+      meta={messageMeta(answer ? answerAuthorLine(message.author, message.authorRole, message.messageClass) : (message.author ?? OWN_LABEL), message.createdAt)}
       avatar={answer ? avatar : undefined}
       status={status}
       error={message.error}
@@ -211,7 +208,6 @@ export function QueuedMessage({
   return (
     <MessageBubble
       role="user"
-      meta={OWN_LABEL}
       status={status.error ? null : status.text}
       error={status.error ? status.text : null}
       actions={<RowActions actions={actions} />}>

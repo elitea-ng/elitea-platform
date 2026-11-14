@@ -6376,5 +6376,6 @@
   "pipelines.valuePlaceholder.default": "Enter a value",
   "pipelines.valuePlaceholder.system": "Describe how the assistant should behave",
   "pipelines.valuePlaceholder.task": "Describe what the assistant should do",
-  "pipelines.valuePlaceholder.userMessage": "The message the user will see"
+  "pipelines.valuePlaceholder.userMessage": "The message the user will see",
+  "features.chatMessages.assistantFallbackName": "Assistant"
 }

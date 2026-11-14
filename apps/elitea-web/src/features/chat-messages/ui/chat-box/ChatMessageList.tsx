@@ -120,11 +120,12 @@ function isOtherAuthor(readerId: string | undefined, authorId: string | undefine
  * ids present and equal. A reloaded row names no author at all, and the reader's
  * name must not stand in for it (a shared conversation's other people would be
  * labelled with the reader), so that case yields nothing and the bubble falls
- * back to "You", which is what its right-hand side already claims.
+ * gets no label from here ("You" is only said when the author is known to be the reader).
  */
 function statedOwnerCaption(readerId: string | undefined, authorId: string | undefined, readerName: string | undefined): string | undefined {
   const reader = statedAuthorId(readerId);
-  return reader !== undefined && reader === statedAuthorId(authorId) ? readerName : undefined;
+  if (reader === undefined || reader !== statedAuthorId(authorId)) return undefined;
+  return readerName || t('features.chatMessages.ownAuthorFallback', 'You');
 }
 
 /** Baseline `ChatMessageWrapper.jsx`'s `canDeleteThisAIMessage` — whether `userId` authored the question this AI answer replies to. */
@@ -352,7 +353,6 @@ export function ChatMessageList({
                   isSpeakingMode={autoSpeak}
                   author={{
                     participantName: message.authorName ?? assistantName,
-                    showCaption: true,
                     motion: motionOf({ participantId: message.authorParticipantId, newest: newestAnswerIds.has(message.id) }),
                   }}
                   toolActions={message.toolActions}

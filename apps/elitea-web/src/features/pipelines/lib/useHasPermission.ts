@@ -1,10 +1,6 @@
 import { useApplicationPermissionState } from '@/shared/lib/applicationEditAccess';
 
-/**
- * Same permission source as the agent editor (`features/agents/lib/useHasPermission.ts`):
- * both read `shared/lib/applicationEditAccess.ts`, because a pipeline is editable
- * by exactly the callers who can edit an agent.
- */
+/** Reads the permission list through `shared/lib/applicationEditAccess.ts`, shared with the agent editor. */
 export function useHasPermission(projectId: string | undefined, permission: string): boolean {
   return useApplicationPermissionState(projectId, permission).allowed;
 }

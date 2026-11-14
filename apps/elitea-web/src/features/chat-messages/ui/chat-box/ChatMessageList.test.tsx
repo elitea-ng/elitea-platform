@@ -248,12 +248,18 @@ describe('ChatMessageList question side', () => {
     expect(answer).toHaveTextContent('agent');
   });
 
-  it("labels a question that states no author 'You', never with the reader's name", () => {
+  it("never says 'You' for a question whose author is not stated, and never uses the reader's name for it (issue 2029)", () => {
     const history = buildPersistedTranscript(undefined).map((message) => (message.role === 'user' ? { ...message, name: '' } : message));
     renderList(history, '6', { readerName: 'Alice Reader' });
-    expect(screen.getAllByTestId('chat-message-author')[0]).toHaveTextContent('You');
+    expect(screen.queryByText('You')).toBeNull();
     expect(screen.queryByText('Alice Reader')).toBeNull();
   });
+
+  it("falls back to 'You' for a stated-own question when the reader's name is unknown", () => {
+    renderList(buildPersistedTranscript(6), '6', {});
+    expect(screen.getAllByTestId('chat-message-author')[0]).toHaveTextContent('You');
+  });
+
 
   it("draws someone else's question on the left under their name", () => {
     renderList(buildPersistedTranscript(7), '6');

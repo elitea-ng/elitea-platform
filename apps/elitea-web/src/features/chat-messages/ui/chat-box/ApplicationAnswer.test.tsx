@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen } from '@testing-library/react';
+import { cleanup, fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
@@ -298,7 +298,7 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
     ],
   } as unknown as ChatMessage;
 
-  it('draws the reply as plain text with no caption line, the thinking first and the time in the action row', () => {
+  it('draws the reply as plain text under a name caption, the thinking first and the time in the action row', () => {
     renderWithTheme(
       <ApplicationAnswer
         answer={withActions}
@@ -308,10 +308,8 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
       />,
     );
 
-    // No `<mark> Elitea to Message` line: one assistant needs no name.
-    expect(screen.queryByTestId('chat-message-author')).toBeNull();
-    expect(screen.queryByTestId('chat-message-avatar')).toBeNull();
-    expect(screen.queryByText('Elitea')).toBeNull();
+    // The caption is the participant's mark and name, not the old `<mark> Elitea to Message` line.
+    expect(screen.getByTestId('chat-message-author')).toHaveTextContent('Elitea');
     // Thinking, then the text, then the row that ends in the time.
     const thinking = screen.getByRole('button', { name: /Thought for/ });
     const text = screen.getByText('Hello! How can I help you today?');
@@ -321,9 +319,17 @@ describe('ApplicationAnswer caption line and reasoning summary', () => {
     expect(text.compareDocumentPosition(time) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('captions the reply with the participant only when the list says several assistants answer here', () => {
+  it('captions every reply: the participant, else the answer author, else a generic label (issue 2029)', () => {
+    const plain = { ...withActions, authorName: undefined } as unknown as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={plain} messageId={plain.id} />);
+    expect(screen.getByTestId('chat-message-author')).toHaveTextContent('Assistant');
+    cleanup();
+    const named = { ...withActions, authorName: 'gpt-x' } as unknown as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={named} messageId={named.id} />);
+    expect(screen.getByTestId('chat-message-author')).toHaveTextContent('gpt-x');
+    cleanup();
     renderWithTheme(
-      <ApplicationAnswer answer={withActions} messageId={withActions.id} author={{ participantName: 'Pipeline Alpha', showCaption: true }} />,
+      <ApplicationAnswer answer={withActions} messageId={withActions.id} author={{ participantName: 'Pipeline Alpha' }} />,
     );
 
     expect(screen.getByTestId('chat-message-author')).toHaveTextContent('Pipeline Alpha');

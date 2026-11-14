@@ -77,6 +77,9 @@ interface DocumentEditorProps {
 /** Matches `CodeMirrorEditor`'s own debounce — one write-back per typing pause, not one per keystroke. */
 const CHANGE_DEBOUNCE_MS = 30;
 
+/** A bound on the remembered local revisions, so a long session cannot grow the set without limit. */
+const MAX_LOCAL_REVISIONS = 500;
+
 const DocumentEditorImpl = forwardRef<DocumentEditorHandle, DocumentEditorProps>(
   function DocumentEditor({ content, history, readOnly = false, 'aria-label': ariaLabel }, ref) {
     // Only the FIRST markdown matters, same rationale as `MarkdownTableEditor`'s
@@ -97,6 +100,10 @@ const DocumentEditorImpl = forwardRef<DocumentEditorHandle, DocumentEditorProps>
     const onChangeRef = useRef(content.onChange);
     onChangeRef.current = content.onChange;
     const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+    // Every revision this editor produced since the last accepted remote change. The
+    // canvas broadcast is debounced, so its echo can arrive after newer typing; an
+    // incoming write equal to any of these is stale and must not replace the text.
+    const localRevisions = useRef<Set<string>>(new Set());
 
     // Same bail-out-when-unchanged rule `CanvasEditor`'s own history callbacks
     // use, and for the identical reason: a setter that always returns a new
@@ -111,6 +118,8 @@ const DocumentEditorImpl = forwardRef<DocumentEditorHandle, DocumentEditorProps>
       editable: !readOnly,
       immediatelyRender: false,
       onUpdate: ({ editor: current }: EditorEvents['update']) => {
+        if (localRevisions.current.size >= MAX_LOCAL_REVISIONS) localRevisions.current.clear();
+        localRevisions.current.add(current.storage.markdown.getMarkdown().trimEnd());
         if (debounceRef.current !== undefined) clearTimeout(debounceRef.current);
         debounceRef.current = setTimeout(() => {
           onChangeRef.current?.(current.storage.markdown.getMarkdown());
@@ -154,7 +163,11 @@ const DocumentEditorImpl = forwardRef<DocumentEditorHandle, DocumentEditorProps>
           // document: `setContent` rebuilds it and parks the caret at the end,
           // so every echo threw the reader out of the line they were typing in
           // (issue 2034).
-          if (editor.storage.markdown.getMarkdown().trimEnd() === markdown.trimEnd()) return;
+          const incoming = markdown.trimEnd();
+          if (editor.storage.markdown.getMarkdown().trimEnd() === incoming) return;
+          // A stale echo of an earlier local revision (the debounced broadcast arriving late) must not undo newer typing.
+          if (localRevisions.current.has(incoming)) return;
+          localRevisions.current.clear();
           const { from, to } = editor.state.selection;
           editor.commands.setContent(markdown);
           // A real external change replaces the text but keeps the caret where it was (clamped to the new document).

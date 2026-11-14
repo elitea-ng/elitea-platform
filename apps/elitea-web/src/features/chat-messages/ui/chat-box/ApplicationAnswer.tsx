@@ -63,6 +63,7 @@ import { AnswerContent } from './AnswerContent';
 import { readAnswerItems } from './AnswerMessageItems';
 
 import { GoalCheckNotice, RunBriefCard } from '@/entities/run-brief';
+import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { Markdown } from '@/shared/ui/Markdown';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
@@ -99,9 +100,9 @@ export type {
  * Drawn as a chat reply: plain text on the page background, the full width
  * of the column, on the left — no card, no shadow, no `<mark> Elitea to
  * Message` caption line. The thinking / execution-details line comes first,
- * then the text, then the action row with the time at its end. A name shows
- * over the reply only when the list says the conversation has more than one
- * assistant (`author.showCaption`).
+ * then the text, then the action row with the time at its end. Every reply carries a
+ * caption with the answering participant's mark and name (the model's name, or
+ * a generic "Assistant", when the list supplies none).
  */
 // eslint-disable-next-line eslint/complexity, eslint/max-lines-per-function -- integrates markdown/tool-actions/error-trace/HITL/continue/buttons; oxlint's complexity+max-lines are already disabled repo-wide for this directory (.oxlintrc.json)
 export function ApplicationAnswer({
@@ -110,7 +111,7 @@ export function ApplicationAnswer({
   toolActions = [],
   isSpeakingMode = false,
   isLastMessage = false,
-  author: { participantName, showCaption = false, isSwarmChild = false, swarmAgentName = '', motion } = {},
+  author: { participantName, isSwarmChild = false, swarmAgentName = '', motion } = {},
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
   actions: { onCopy, onDelete, onRegenerate, onFork, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
@@ -267,16 +268,16 @@ export function ApplicationAnswer({
         <Typography variant="bodySmall" sx={{ color: 'text.secondary' }}>
           {swarmAgentName}
         </Typography>
-      ) : showCaption && participantName ? (
+      ) : (
         <AssistantCaption
-          name={participantName}
+          name={participantName || answer.authorName || t('features.chatMessages.assistantFallbackName', 'Assistant')}
           personaRole={answer.authorRole}
           iconUrl={answer.authorIconUrl}
           pack={answer.authorAvatarPack}
           messageClass={answer.messageClass}
           motion={motion}
         />
-      ) : null}
+      )}
       {answer.continuedAutomatically === true && <ContinuedAutomaticallyLabel index={answer.continuationIndex} />}
       <RunBriefCard value={answer.runBrief} />
 

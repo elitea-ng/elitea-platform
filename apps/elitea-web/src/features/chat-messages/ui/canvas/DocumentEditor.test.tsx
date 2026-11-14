@@ -157,4 +157,16 @@ describe('DocumentEditor keeps the caret through a canvas sync (issue 2034)', ()
     expect(ref.current?.getCode()).toContain('body changed elsewhere');
     expect(caretBlock()).toBe('H2');
   });
+
+  it('a stale echo of an earlier revision does not overwrite newer typing', async () => {
+    const { ref, pm } = await typeIntoSecondHeading();
+    const older = ref.current?.getCode() ?? '';
+    const text = (pm.querySelector('h2') as HTMLElement).firstChild as Text;
+    text.data = 'SecXondY';
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)); });
+    expect(ref.current?.getCode()).toContain('SecXondY');
+    await act(async () => { ref.current?.setCode(older); await new Promise((r) => setTimeout(r, 50)); });
+    expect(ref.current?.getCode()).toContain('SecXondY');
+    expect(caretBlock()).toBe('H2');
+  });
 });
