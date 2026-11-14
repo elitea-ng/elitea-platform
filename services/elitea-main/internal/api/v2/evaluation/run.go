@@ -153,6 +153,9 @@ type RunSnapshot struct {
 	// Limits are the suite's run settings, frozen at start (RunLimits), or nil
 	// when the run was started without a suite: it then has no limit.
 	Limits *RunLimits `json:"limits,omitempty"`
+	// ExecutionNote explains a mode the run did not get (a release gate run
+	// whose suite asked for runtime_plane ran as predict_blocking).
+	ExecutionNote string `json:"execution_note,omitempty"`
 	// SuiteID names the suite the limits came from. Informational: the run
 	// never reads the suite again.
 	SuiteID string `json:"suite_id,omitempty"`

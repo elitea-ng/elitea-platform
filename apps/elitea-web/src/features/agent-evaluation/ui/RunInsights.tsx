@@ -11,6 +11,7 @@
 import { useMemo, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { EliteaApiError } from '@/shared/api/generated/mutator';
@@ -54,6 +55,8 @@ export function RunInsights({ projectId, scorecard, dimensionNames }: RunInsight
     () => summarizeEfficiency(caseTurns(scorecard.results), analyticsQuery.data),
     [scorecard.results, analyticsQuery.data],
   );
+  // Why the run did not get the execution mode its saved limits asked for.
+  const executionNote = run.snapshot?.execution_note === '' ? undefined : run.snapshot?.execution_note;
   const isAgentRun = run.execution_mode === 'runtime_plane';
   const trajectory = useMemo(
     () => (isAgentRun ? summarizeTrajectory(scorecard.results) : undefined),
@@ -71,6 +74,11 @@ export function RunInsights({ projectId, scorecard, dimensionNames }: RunInsight
   if (!settled) return null;
   return (
     <Box sx={rootSx} data-testid="run-insights">
+      {executionNote !== undefined && (
+        <Typography variant="bodySmall" color="text.secondary" data-testid="run-execution-note">
+          {executionNote}
+        </Typography>
+      )}
       <ConsumptionCard analytics={analyticsQuery.data} gap={gapOf(analyticsQuery.error)} />
       <EfficiencyStrip efficiency={efficiency} trajectory={trajectory} />
       {isAgentRun && <TrajectoryCard summary={trajectory} />}

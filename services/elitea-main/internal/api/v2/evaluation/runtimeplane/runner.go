@@ -23,7 +23,10 @@
 package runtimeplane
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -31,6 +34,7 @@ import (
 	"log/slog"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -53,6 +57,15 @@ type Store interface {
 	// StepCount counts the steps the run has recorded so far, by the rule of
 	// evaluation.AgentStep.CountsAsStep.
 	StepCount(ctx context.Context, projectID int64, executionID string) (int, error)
+	// StepsSettled reports whether the run's step record is final: the run's
+	// settlement was prepared, so no step is still to arrive.
+	StepsSettled(ctx context.Context, projectID int64, executionID string) (bool, error)
+}
+
+// Authorizer answers whether a person may read the run evidence of a project
+// (the runs.evidence.read permission).
+type Authorizer interface {
+	MayReadRunEvidence(ctx context.Context, userID, projectID int64) (bool, error)
 }
 
 // Starter is the chat start use case.
@@ -86,6 +99,9 @@ type Runner struct {
 	evidence  Evidence
 	content   Content
 	logger    *slog.Logger
+	// usage and authorizer are optional (WithUsage, WithAuthorizer).
+	usage      evaluation.UsageReader
+	authorizer Authorizer
 
 	// pollInitial, pollMax and settleWait are the waits, shortened in tests.
 	pollInitial, pollMax, settleWait time.Duration
@@ -103,6 +119,20 @@ func New(store Store, starter Starter, canceller Canceller, evidence Evidence, c
 		store: store, starter: starter, canceller: canceller, evidence: evidence, content: content, logger: logger,
 		pollInitial: 250 * time.Millisecond, pollMax: 2 * time.Second, settleWait: 300 * time.Millisecond,
 	}
+}
+
+// WithUsage lets the runner stop a case that crosses a token or cost limit.
+func (r *Runner) WithUsage(usage evaluation.UsageReader) *Runner {
+	r.usage = usage
+	return r
+}
+
+// WithAuthorizer lets the runner copy tool outputs into the evaluation result:
+// only when the run's author may read the run evidence. Without one no output
+// is copied.
+func (r *Runner) WithAuthorizer(authorizer Authorizer) *Runner {
+	r.authorizer = authorizer
+	return r
 }
 
 // ErrNotComposed is returned when the runner was built without a starter.
@@ -127,7 +157,7 @@ func (r *Runner) RunCase(ctx context.Context, request evaluation.AgentRunRequest
 		request.Admitted(ctx, result.ExecutionID, result.ConversationUUID)
 	}
 
-	turn, outcome, waitErr := r.await(ctx, project, started.outcome, request)
+	turn, outcome, reason, waitErr := r.await(ctx, project, started.outcome, request)
 	if waitErr != nil {
 		// The caller's context ended (a cancelled run, a shutdown): the agent
 		// run must not outlive the evaluation that wanted it.
@@ -138,7 +168,7 @@ func (r *Runner) RunCase(ctx context.Context, request evaluation.AgentRunRequest
 		r.stop(ctx, project, int64(request.ActorUserID), started.outcome.ResponseMessageID)
 	}
 	result.Steps = r.collectSteps(ctx, project, request, result.ExecutionID)
-	r.finish(&result, turn, outcome, request)
+	r.finish(&result, turn, outcome, reason, request)
 	return result, nil
 }
 
@@ -186,10 +216,11 @@ func startError(err error) error {
 }
 
 // await waits for the turn to settle. It returns the last turn read, and a
-// non-empty outcome when a limit ended the wait instead of the run.
+// non-empty outcome (with a reason for a limit) when a limit ended the wait
+// instead of the run.
 func (r *Runner) await(
 	ctx context.Context, project int64, started agentexecutionapp.CurrentApplicationStartOutcome, request evaluation.AgentRunRequest,
-) (Turn, string, error) {
+) (Turn, string, string, error) {
 	deadline := time.NewTimer(request.TimeLimit)
 	defer deadline.Stop()
 	poll := time.NewTimer(0)
@@ -199,38 +230,63 @@ func (r *Runner) await(
 	for {
 		select {
 		case <-ctx.Done():
-			return turn, "", ctx.Err()
+			return turn, "", "", ctx.Err()
 		case <-deadline.C:
-			return turn, evaluation.AgentOutcomeTimedOut, nil
+			return turn, evaluation.AgentOutcomeTimedOut, "", nil
 		case <-poll.C:
 		}
 		read, err := r.store.ReadTurn(ctx, project, started.ResponseMessageID)
 		if err != nil {
 			if ctx.Err() != nil {
-				return turn, "", ctx.Err()
+				return turn, "", "", ctx.Err()
 			}
-			return turn, "", fmt.Errorf("the case's answer could not be read back: %w", err)
+			return turn, "", "", fmt.Errorf("the case's answer could not be read back: %w", err)
 		}
 		turn = read
 		// A pause is a settled row too (the projection clears is_streaming),
 		// so it is read BEFORE settlement: nobody is coming to answer it.
 		if turn.Paused != "" {
-			return turn, evaluation.AgentOutcomePaused, nil
+			return turn, evaluation.AgentOutcomePaused, "", nil
 		}
 		if turn.Settled {
-			return turn, "", nil
+			return turn, "", "", nil
 		}
-		if request.StepLimit > 0 {
-			count, err := r.store.StepCount(ctx, project, started.ExecutionID)
-			if err == nil && count > request.StepLimit {
-				return turn, evaluation.AgentOutcomeStepLimit, nil
-			}
+		if outcome, reason := r.overLimit(ctx, project, started, request); outcome != "" {
+			return turn, outcome, reason, nil
 		}
 		if interval *= 2; interval > r.pollMax {
 			interval = r.pollMax
 		}
 		poll.Reset(interval)
 	}
+}
+
+// overLimit checks the case's step, token and cost limits while it runs, at the
+// cadence of the poll. A read that fails is not a limit: the next poll asks
+// again, and the run's own checks (before each case) still hold.
+func (r *Runner) overLimit(
+	ctx context.Context, project int64, started agentexecutionapp.CurrentApplicationStartOutcome, request evaluation.AgentRunRequest,
+) (string, string) {
+	if request.StepLimit > 0 {
+		if count, err := r.store.StepCount(ctx, project, started.ExecutionID); err == nil && count > request.StepLimit {
+			return evaluation.AgentOutcomeStepLimit, ""
+		}
+	}
+	if request.Limits == nil || r.usage == nil || !request.Limits.HasAny() {
+		return "", ""
+	}
+	// The usage is the gateway's attribution to the run and the case: the case's
+	// own execution, the executions linked to it, and every judge call so far.
+	readCtx := context.WithoutCancel(ctx)
+	runUsage, runErr := r.usage.EvaluationUsage(readCtx, request.ProjectID, request.RunID, "")
+	caseUsage, caseErr := r.usage.EvaluationUsage(readCtx, request.ProjectID, request.RunID, request.CaseID)
+	if runErr != nil || caseErr != nil {
+		return "", ""
+	}
+	if reason := evaluation.RuntimeLimitReason(*request.Limits, runUsage, caseUsage); reason != "" {
+		return evaluation.AgentOutcomeLimit, reason
+	}
+	return "", ""
 }
 
 // stop cancels the agent run by the chat stop use case. The context that asked
@@ -252,7 +308,7 @@ func (r *Runner) stop(ctx context.Context, project, actor int64, responseMessage
 }
 
 // finish decides the outcome of a case that was not ended by the caller.
-func (r *Runner) finish(result *evaluation.AgentRunResult, turn Turn, outcome string, request evaluation.AgentRunRequest) {
+func (r *Runner) finish(result *evaluation.AgentRunResult, turn Turn, outcome, reason string, request evaluation.AgentRunRequest) {
 	steps := 0
 	for _, step := range result.Steps {
 		if step.CountsAsStep() {
@@ -262,6 +318,8 @@ func (r *Runner) finish(result *evaluation.AgentRunResult, turn Turn, outcome st
 	switch {
 	case outcome == evaluation.AgentOutcomeTimedOut:
 		result.Outcome = evaluation.AgentOutcomeTimedOut
+	case outcome == evaluation.AgentOutcomeLimit:
+		result.Outcome, result.Failure = evaluation.AgentOutcomeLimit, reason
 	case outcome == evaluation.AgentOutcomeStepLimit, request.StepLimit > 0 && steps > request.StepLimit:
 		result.Outcome = evaluation.AgentOutcomeStepLimit
 	case outcome == evaluation.AgentOutcomePaused:
@@ -286,37 +344,61 @@ func pauseReason(kind string) string {
 	return "the agent run paused for " + kind + ", and an evaluation run answers no questions; it was cancelled"
 }
 
-// collectSteps reads the run's steps from the evidence. The worker reports
-// steps in batches, so the last ones may land a moment after the run settles:
-// the read repeats until two reads agree (a few times at most).
+// maxSettleWaits bounds how long collectSteps waits for the step record to be
+// final. The worker reports steps in batches, so the last ones may land a
+// moment after the run settles; once the run's settlement is prepared
+// (StepsSettled) nothing more arrives and the wait ends at once. A run that
+// never reports a settlement (a cancelled one) costs at most this many waits.
+const maxSettleWaits = 4
+
 func (r *Runner) collectSteps(ctx context.Context, project int64, request evaluation.AgentRunRequest, executionID string) []evaluation.AgentStep {
 	if r.evidence == nil {
 		return nil
 	}
-	var records []runevidence.Record
-	for attempt := 0; attempt < 4; attempt++ {
-		read, err := r.evidence.Steps(context.WithoutCancel(ctx), project, executionID)
-		if err != nil {
-			r.logger.Warn("evaluation: could not read a case's run steps",
-				"project_id", project, "execution_id", executionID, "error", err)
-			break
-		}
-		stable := attempt > 0 && len(read) == len(records)
-		records = read
-		if stable {
+	for wait := 0; wait < maxSettleWaits; wait++ {
+		settled, err := r.store.StepsSettled(context.WithoutCancel(ctx), project, executionID)
+		if err != nil || settled {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			attempt = 4
+			wait = maxSettleWaits
 		case <-time.After(r.settleWait):
 		}
 	}
+	records, err := r.evidence.Steps(context.WithoutCancel(ctx), project, executionID)
+	if err != nil {
+		r.logger.Warn("evaluation: could not read a case's run steps",
+			"project_id", project, "execution_id", executionID, "error", err)
+		return nil
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	mayRead := r.mayCopyOutputs(ctx, project, request)
 	steps := make([]evaluation.AgentStep, 0, len(records))
 	for _, record := range records {
-		steps = append(steps, r.step(ctx, project, request, record))
+		steps = append(steps, r.step(ctx, project, request, record, mayRead))
 	}
 	return steps
+}
+
+// mayCopyOutputs decides once per case whether tool outputs may be copied into
+// the evaluation result: the suite keeps them, and the run's AUTHOR holds
+// runs.evidence.read in the project. A copy outlives the run evidence's own
+// retention and is readable by whoever reads the result, so it is made only
+// from what the author could read.
+func (r *Runner) mayCopyOutputs(ctx context.Context, project int64, request evaluation.AgentRunRequest) bool {
+	if !request.KeepToolOutputs || r.authorizer == nil || r.content == nil {
+		return false
+	}
+	allowed, err := r.authorizer.MayReadRunEvidence(context.WithoutCancel(ctx), int64(request.ActorUserID), project)
+	if err != nil {
+		r.logger.Warn("evaluation: could not check the author's evidence permission; tool outputs are not copied",
+			"project_id", project, "error", err)
+		return false
+	}
+	return allowed
 }
 
 // maxKeptOutputs bounds how many tool outputs one case reads from storage: the
@@ -324,7 +406,7 @@ func (r *Runner) collectSteps(ctx context.Context, project int64, request evalua
 // output beyond it would be read and dropped.
 const maxKeptOutputs = 60
 
-func (r *Runner) step(ctx context.Context, project int64, request evaluation.AgentRunRequest, record runevidence.Record) evaluation.AgentStep {
+func (r *Runner) step(ctx context.Context, project int64, request evaluation.AgentRunRequest, record runevidence.Record, mayRead bool) evaluation.AgentStep {
 	step := evaluation.AgentStep{
 		Seq: int(record.Seq), Kind: string(record.Kind), Name: record.Name, ToolkitID: record.ToolkitID,
 		DurationMs: record.EndedAt.Sub(record.StartedAt).Milliseconds(), Error: summaryError(record.Summary),
@@ -332,28 +414,71 @@ func (r *Runner) step(ctx context.Context, project int64, request evaluation.Age
 	if len(record.Inputs.Digest) > 0 {
 		step.InputsDigest = hex.EncodeToString(record.Inputs.Digest)
 	}
-	if request.KeepToolOutputs && step.IsToolStep() && int(record.Seq) <= maxKeptOutputs {
+	if mayRead && step.IsToolStep() && int(record.Seq) <= maxKeptOutputs {
 		step.Output = r.toolOutput(ctx, project, request, record)
 	}
 	return step
 }
 
-// toolOutput reads a tool step's stored output. The read is a content read of
-// the run evidence, so it is recorded the way a person's read is, under the
-// run's author. Expired or filtered content is simply absent.
+// maxVerifiedOutputBytes is the largest stored output the runner reads. The
+// digest covers the whole stored object, so a copy is verified over all of it
+// and a partial read could not be; a larger output is not copied (it stays in
+// the run evidence). maxOutputExcerptBytes is how much of a verified output is
+// kept.
+const (
+	maxVerifiedOutputBytes = 32 * 1024
+	maxOutputExcerptBytes  = 4 * 1024
+)
+
+// toolOutput reads a tool step's stored output for the result's evidence,
+// under the rules of the run evidence itself:
+//
+//   - the read is audited FIRST, as the run's author, and refused when the audit
+//     write fails;
+//   - the bytes are checked against the step's stored SHA-256 and dropped when
+//     they differ;
+//   - expired, filtered-away or oversized content is simply absent.
+//
+// The audit rows are written one per step, sequentially: the evidence store has
+// no batch insert for them.
 func (r *Runner) toolOutput(ctx context.Context, project int64, request evaluation.AgentRunRequest, record runevidence.Record) string {
-	if r.content == nil || record.Outputs.ObjectKey == "" || record.ContentExpiredAt != nil {
+	if r.evidence == nil || record.Outputs.ObjectKey == "" || record.ContentExpiredAt != nil ||
+		len(record.Outputs.Digest) == 0 || record.Outputs.Size > maxVerifiedOutputBytes {
+		return ""
+	}
+	if err := r.evidence.RecordContentRead(context.WithoutCancel(ctx), int64(request.ActorUserID), project,
+		record.RunID, record.StepID, runevidence.SideOutputs, "evaluation"); err != nil {
+		r.logger.Warn("evaluation: the tool output read could not be audited, so it was not copied",
+			"run_id", record.RunID, "step_id", record.StepID, "error", err)
 		return ""
 	}
 	body, err := r.content.Get(context.WithoutCancel(ctx), record.Outputs.ObjectKey)
 	if err != nil {
 		return ""
 	}
-	if r.evidence != nil {
-		if err := r.evidence.RecordContentRead(context.WithoutCancel(ctx), int64(request.ActorUserID), project,
-			record.RunID, record.StepID, runevidence.SideOutputs, "evaluation"); err != nil {
-			r.logger.Warn("evaluation: could not record a tool output read", "run_id", record.RunID, "error", err)
+	if sum := sha256.Sum256(body); !bytes.Equal(sum[:], record.Outputs.Digest) {
+		r.logger.Warn("evaluation: a stored tool output does not match its digest, so it was not copied",
+			"run_id", record.RunID, "step_id", record.StepID)
+		return ""
+	}
+	return outputExcerpt(body)
+}
+
+// outputExcerpt makes a verified output storable in a jsonb value: at most
+// maxOutputExcerptBytes (cut on a character boundary), NUL bytes removed, and
+// binary or invalid UTF-8 content kept as base64, as the evidence content route
+// serves it.
+func outputExcerpt(body []byte) string {
+	if len(body) > maxOutputExcerptBytes {
+		cut := maxOutputExcerptBytes
+		for cut > 0 && !utf8.RuneStart(body[cut]) {
+			cut--
 		}
+		body = body[:cut]
+	}
+	body = bytes.ReplaceAll(body, []byte{0}, nil)
+	if !utf8.Valid(body) {
+		return "base64:" + base64.StdEncoding.EncodeToString(body)
 	}
 	return string(body)
 }

@@ -137,7 +137,7 @@ func TestEvalRuntimeStoreCountsTheStepsTheLimitCounts(t *testing.T) {
 	ctx := context.Background()
 
 	exec(`INSERT INTO elitea_runtime.run_step_heads (run_id, project_id) VALUES ('exec-steps', 1), ('exec-other', 1)`)
-	hash := fmt.Sprintf(`decode(repeat('00', 32), 'hex')`)
+	hash := `decode(repeat('00', 32), 'hex')`
 	for index, kind := range []string{"model_call", "tool_call", "retrieval", "delegation", "approval", "output", "error", "cap"} {
 		exec(fmt.Sprintf(`
 INSERT INTO elitea_runtime.run_steps (run_id, seq, step_id, generation, project_id, kind, actor, started_at, ended_at, prev_hash, hash)
@@ -154,4 +154,21 @@ VALUES ('exec-other', 1, gen_random_uuid(), 1, 1, 'model_call', 'user:7', now(),
 	none, err := store.StepCount(ctx, 1, "exec-missing")
 	require.NoError(t, err)
 	require.Zero(t, none)
+}
+
+func TestEvalRuntimeStoreStepsSettledOnceTheSettlementIsPrepared(t *testing.T) {
+	store, exec := newCaseStore(t)
+	ctx := context.Background()
+	exec(`INSERT INTO elitea_runtime.run_step_heads (run_id, project_id) VALUES ('exec-open', 1)`)
+	exec(`INSERT INTO elitea_runtime.run_step_heads (run_id, project_id, anchor_requested_at) VALUES ('exec-done', 1, now())`)
+
+	open, err := store.StepsSettled(ctx, 1, "exec-open")
+	require.NoError(t, err)
+	require.False(t, open)
+	done, err := store.StepsSettled(ctx, 1, "exec-done")
+	require.NoError(t, err)
+	require.True(t, done)
+	none, err := store.StepsSettled(ctx, 1, "exec-none")
+	require.NoError(t, err)
+	require.False(t, none, "a run with no step record is not settled")
 }

@@ -33,4 +33,17 @@ describe('summarizeTrajectory', () => {
   it('ignores a malformed trajectory instead of reading it as zero', () => {
     expect(summarizeTrajectory([result('a', { trajectory: { steps: 'many' } }), result('b', { trajectory: 7 })])).toBeUndefined();
   });
+
+  // A trajectory is stored once per case; its other rows only point at it, and
+  // the case is read from whichever row holds it.
+  it('reads a case whose trajectory is on one row and referenced from the others', () => {
+    const trajectory = { steps: 3, model_calls: 1, tool_calls: 2, tool_errors: 0, retries: 0, tools: [], items: [] };
+    const summary = summarizeTrajectory([
+      result('a', { trajectory_ref: '1' }, '2'),
+      result('a', { trajectory }, '1'),
+    ]);
+    expect(summary?.cases).toHaveLength(1);
+    expect(summary?.totalCases).toBe(1);
+    expect(summary?.cases[0]?.steps).toBe(3);
+  });
 });

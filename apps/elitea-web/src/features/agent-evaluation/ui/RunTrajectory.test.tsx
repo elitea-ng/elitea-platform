@@ -108,4 +108,12 @@ describe('the Trajectory card (issue 2011, step B)', () => {
     expect(await screen.findByTestId('run-trajectory-none')).toBeInTheDocument();
     expect(screen.queryByTestId('run-efficiency-tool-calls')).not.toBeInTheDocument();
   });
+
+  it('shows the note of a run that did not get the mode its limits asked for', async () => {
+    const card = scorecard('predict_blocking', [row('a', {})]);
+    card.run = { ...card.run, snapshot: { execution_note: 'a release gate run ran as one model call' } };
+    renderWithEvaluationProviders(<RunInsights projectId="1" dimensionNames={names} scorecard={card} />);
+
+    expect(await screen.findByTestId('run-execution-note')).toHaveTextContent('release gate');
+  });
 });

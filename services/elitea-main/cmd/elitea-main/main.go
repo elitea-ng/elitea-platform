@@ -2767,7 +2767,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// runtime_plane runs execute each case as an agent run through the
 		// chat start use case (issue 2011 step B). Without a runtime plane the
 		// runner stays unset, and such a run errors with the reason.
-		if runner := composeEvalAgentRunner(pool, objectStore, evalAgentStart, evalAgentCancel, logger); runner != nil {
+		if runner := composeEvalAgentRunner(pool, objectStore, evalAgentStart, evalAgentCancel,
+			dbrepos.NewAnalyticsRepo(pool), legacyrbac.NewPostgresResolver(pool), logger); runner != nil {
 			orchestrator.WithAgentRunner(runner)
 		}
 		// Started with the PROCESS context, so the workers and the recovery

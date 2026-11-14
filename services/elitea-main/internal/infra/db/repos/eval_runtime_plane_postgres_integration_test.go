@@ -159,3 +159,65 @@ func TestEvaluationUsageAttributesTheCaseRunsExecution(t *testing.T) {
 	require.Equal(t, "22", analytics.ByCase[1].CaseID)
 	require.EqualValues(t, 1, analytics.ByCase[1].Agent.LLMCalls)
 }
+
+// Executions linked to a case's root run (run chain continuations) are the
+// case's too: their calls count toward the case, the run and its limits.
+func TestEvaluationUsageAttributesLinkedExecutionsOfTheCase(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewAnalyticsRepo(pool)
+	runs := &EvalRunsRepo{pool: pool}
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	plantModelPrice(t, pool, "openai", "gpt-4o", "1.00000000", "1.00000000")
+	seedEvalRun(t, pool, 1, 4001, now.Add(-time.Minute))
+	const root, child = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	require.NoError(t, runs.RecordCaseRun(ctx, "1", "1", "21", root, ""))
+	_, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.run_chains (root_execution_id, project_id, owner_user_id, conversation_uuid, origin,
+  grant_id, grant_json, max_continuations, deadline, last_execution_id)
+VALUES ($1, 1, 7, gen_random_uuid(), 'cloud', gen_random_uuid(), '{}', 1, now() + interval '1 hour', $2)`, root, child)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+INSERT INTO elitea_runtime.run_chain_links (execution_id, root_execution_id, continuation_index, kind)
+VALUES ($1, $1, 0, 'root'), ($2, $1, 1, 'step_limit')`, root, child)
+	require.NoError(t, err)
+
+	plantRunCall(t, pool, 1, 7, root, now, "gpt-4o", 200, 100, 0)
+	plantRunCall(t, pool, 1, 7, child, now, "gpt-4o", 200, 300, 0)
+
+	one, err := repo.EvaluationUsage(ctx, "1", "1", "21")
+	require.NoError(t, err)
+	require.EqualValues(t, 400, one.Tokens, "the root run and its continuation")
+	whole, err := repo.EvaluationUsage(ctx, "1", "1", "")
+	require.NoError(t, err)
+	require.EqualValues(t, 400, whole.Tokens)
+
+	analytics, err := repo.GetEvaluationRunAnalytics(ctx, "1", "1")
+	require.NoError(t, err)
+	require.EqualValues(t, 2, analytics.Agent.LLMCalls)
+	require.Len(t, analytics.ByCase, 1)
+	require.EqualValues(t, 2, analytics.ByCase[0].Agent.LLMCalls)
+}
+
+// The cross-project cost estimate names an agent run's calls `eval:<run>:case:`
+// through eval_case_runs, so it no longer misses agent-run spend.
+func TestCostEstimateIncludesAgentRunEvaluationSpend(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	now := time.Now().UTC()
+	router := costAttributionRouter(pool, now)
+	runs := &EvalRunsRepo{pool: pool}
+
+	plantModelPrice(t, pool, "openai", "gpt-4o", "1.00000000", "1.00000000")
+	seedEvalRun(t, pool, 1, 4001, now.Add(-time.Minute))
+	require.NoError(t, runs.RecordCaseRun(context.Background(), "1", "1", "21", "exec-agent", ""))
+	plantRunCall(t, pool, 1, 7, "exec-agent", now, "gpt-4o", 200, 100, 50)
+	plantRunCall(t, pool, 1, 7, "eval:1:judge:21", now, "gpt-4o", 200, 30, 5)
+
+	evaluation, ok := costAttributionEstimate(t, router, now)["evaluation"].(map[string]any)
+	require.True(t, ok)
+	wantCostAttributionNumber(t, evaluation["totals"].(map[string]any), "calls", "2")
+	wantCostAttributionNumber(t, evaluation["agent"].(map[string]any), "calls", "1")
+	wantCostAttributionNumber(t, evaluation["judge"].(map[string]any), "calls", "1")
+	wantCostAttributionNumber(t, evaluation, "runs", "1")
+}

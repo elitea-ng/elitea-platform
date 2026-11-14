@@ -2,6 +2,7 @@ package runtimeplane
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -51,6 +53,8 @@ func (f *fakeStore) ReadTurn(context.Context, int64, string) (Turn, error) {
 	return f.turns[index], nil
 }
 
+func (f *fakeStore) StepsSettled(context.Context, int64, string) (bool, error) { return true, nil }
+
 func (f *fakeStore) StepCount(context.Context, int64, string) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -87,8 +91,24 @@ func (f *fakeCanceller) Cancel(
 }
 
 type fakeEvidence struct {
-	records []runevidence.Record
-	reads   []string
+	records  []runevidence.Record
+	reads    []string
+	auditErr error
+}
+
+type allowEvidence bool
+
+func (a allowEvidence) MayReadRunEvidence(context.Context, int64, int64) (bool, error) {
+	return bool(a), nil
+}
+
+type fakeUsage struct{ run, perCase evaluation.Usage }
+
+func (f fakeUsage) EvaluationUsage(_ context.Context, _, _, caseID string) (evaluation.Usage, error) {
+	if caseID == "" {
+		return f.run, nil
+	}
+	return f.perCase, nil
 }
 
 func (f *fakeEvidence) Steps(context.Context, int64, string) ([]runevidence.Record, error) {
@@ -96,6 +116,9 @@ func (f *fakeEvidence) Steps(context.Context, int64, string) ([]runevidence.Reco
 }
 
 func (f *fakeEvidence) RecordContentRead(_ context.Context, _, _ int64, _, stepID string, _ runevidence.Side, _ string) error {
+	if f.auditErr != nil {
+		return f.auditErr
+	}
 	f.reads = append(f.reads, stepID)
 	return nil
 }
@@ -311,21 +334,37 @@ func TestRunCaseCallerCancellationStopsTheAgentRun(t *testing.T) {
 	}
 }
 
+func digestOf(body string) []byte {
+	sum := sha256.Sum256([]byte(body))
+	return sum[:]
+}
+
+func toolRecord(seq int64, body string) runevidence.Record {
+	tool := record(seq, runevidence.KindToolCall, "fetch", `{"error": null}`)
+	tool.Outputs = runevidence.ContentMeta{ObjectKey: "k/out", Digest: digestOf(body), Size: int64(len(body))}
+	return tool
+}
+
+func copyRunner(evidence *fakeEvidence, content fakeContent, allowed bool) *Runner {
+	return newRunner(&fakeStore{turns: []Turn{{Settled: true, Text: "answer"}}}, &fakeStarter{}, &fakeCanceller{}, evidence, content).
+		WithAuthorizer(allowEvidence(allowed))
+}
+
+func keepRequest() evaluation.AgentRunRequest {
+	request := caseRequest()
+	request.KeepToolOutputs = true
+	return request
+}
+
 func TestRunCaseReadsStepsErrorsAndKeptToolOutputs(t *testing.T) {
 	t.Parallel()
 
-	tool := record(2, runevidence.KindToolCall, "fetch", `{"error": null}`)
-	tool.Outputs = runevidence.ContentMeta{ObjectKey: "k/out"}
 	failing := record(3, runevidence.KindToolCall, "fetch", `{"error": "503 upstream"}`)
 	evidence := &fakeEvidence{records: []runevidence.Record{
-		record(1, runevidence.KindModelCall, "m", `{"tool_calls": 1}`), tool, failing,
+		record(1, runevidence.KindModelCall, "m", `{"tool_calls": 1}`), toolRecord(2, "page body"), failing,
 	}}
-	store := &fakeStore{turns: []Turn{{Settled: true, Text: "answer"}}}
-	request := caseRequest()
-	request.KeepToolOutputs = true
 
-	result, err := newRunner(store, &fakeStarter{}, &fakeCanceller{}, evidence, fakeContent{"k/out": "page body"}).
-		RunCase(context.Background(), request)
+	result, err := copyRunner(evidence, fakeContent{"k/out": "page body"}, true).RunCase(context.Background(), keepRequest())
 
 	if err != nil || len(result.Steps) != 3 {
 		t.Fatalf("steps %d, err %v", len(result.Steps), err)
@@ -340,11 +379,104 @@ func TestRunCaseReadsStepsErrorsAndKeptToolOutputs(t *testing.T) {
 		t.Errorf("the tool output read was audited %d times, want once", len(evidence.reads))
 	}
 
+	request := keepRequest()
 	request.KeepToolOutputs = false
-	store2 := &fakeStore{turns: []Turn{{Settled: true, Text: "answer"}}}
-	dropped, _ := newRunner(store2, &fakeStarter{}, &fakeCanceller{}, evidence, fakeContent{"k/out": "page body"}).
-		RunCase(context.Background(), request)
+	dropped, _ := copyRunner(evidence, fakeContent{"k/out": "page body"}, true).RunCase(context.Background(), request)
 	if dropped.Steps[1].Output != "" {
 		t.Errorf("a tool output was read although the suite drops them: %q", dropped.Steps[1].Output)
+	}
+}
+
+func outputOf(t *testing.T, evidence *fakeEvidence, content fakeContent, allowed bool) string {
+	t.Helper()
+	result, err := copyRunner(evidence, content, allowed).RunCase(context.Background(), keepRequest())
+	if err != nil || len(result.Steps) != 1 {
+		t.Fatalf("steps %d, err %v", len(result.Steps), err)
+	}
+	return result.Steps[0].Output
+}
+
+// A copy follows the evidence rules: refused when the author may not read
+// evidence, when the audit write fails, and when the bytes do not match the
+// stored digest.
+func TestToolOutputCopyFollowsTheEvidenceRules(t *testing.T) {
+	t.Parallel()
+
+	rows := func() *fakeEvidence { return &fakeEvidence{records: []runevidence.Record{toolRecord(1, "body")}} }
+	if got := outputOf(t, rows(), fakeContent{"k/out": "body"}, true); got != "body" {
+		t.Fatalf("a permitted, audited, verified output = %q", got)
+	}
+	if got := outputOf(t, rows(), fakeContent{"k/out": "body"}, false); got != "" {
+		t.Errorf("an author without runs.evidence.read had an output copied: %q", got)
+	}
+	failedAudit := rows()
+	failedAudit.auditErr = errors.New("audit down")
+	if got := outputOf(t, failedAudit, fakeContent{"k/out": "body"}, true); got != "" {
+		t.Errorf("an output was copied although its audit write failed: %q", got)
+	}
+	if got := outputOf(t, rows(), fakeContent{"k/out": "tampered"}, true); got != "" {
+		t.Errorf("an output that does not match its digest was copied: %q", got)
+	}
+	big := &fakeEvidence{records: []runevidence.Record{toolRecord(1, "x")}}
+	big.records[0].Outputs.Size = maxVerifiedOutputBytes + 1
+	if got := outputOf(t, big, fakeContent{"k/out": "x"}, true); got != "" {
+		t.Errorf("an oversized output was read: %q", got)
+	}
+}
+
+func TestOutputExcerptIsStorableInJSONB(t *testing.T) {
+	t.Parallel()
+
+	if got := outputExcerpt([]byte("a\x00b")); got != "ab" {
+		t.Errorf("NUL not stripped: %q", got)
+	}
+	if got := outputExcerpt([]byte{0xff, 0xfe, 'a'}); !strings.HasPrefix(got, "base64:") {
+		t.Errorf("invalid UTF-8 kept as text: %q", got)
+	}
+	long := strings.Repeat("é", maxOutputExcerptBytes) // two bytes each
+	got := outputExcerpt([]byte(long))
+	if len(got) > maxOutputExcerptBytes || !utf8.ValidString(got) {
+		t.Errorf("excerpt len %d valid=%v: a cut must not split a character", len(got), utf8.ValidString(got))
+	}
+}
+
+// While a case runs the runner polls the attributed usage and cancels the turn
+// when a per-case or a stopping per-run limit is crossed.
+func TestRunCaseCancelsAtATokenOrCostLimit(t *testing.T) {
+	t.Parallel()
+
+	tokens, cost := int64(1000), 2.0
+	cases := []struct {
+		name   string
+		limits evaluation.RunLimits
+		usage  fakeUsage
+		stops  bool
+	}{
+		{"case tokens", evaluation.RunLimits{TokenLimitPerCase: &tokens}, fakeUsage{perCase: evaluation.Usage{Tokens: 1500}}, true},
+		{"run cost, stopping", evaluation.RunLimits{CostLimitPerRun: &cost, OnRunLimit: evaluation.RunLimitActionStop}, fakeUsage{run: evaluation.Usage{CostUSD: 3}}, true},
+		{"run cost, report only", evaluation.RunLimits{CostLimitPerRun: &cost, OnRunLimit: evaluation.RunLimitActionReport}, fakeUsage{run: evaluation.Usage{CostUSD: 3}}, false},
+		{"under the limits", evaluation.RunLimits{TokenLimitPerCase: &tokens}, fakeUsage{perCase: evaluation.Usage{Tokens: 10}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			canceller := &fakeCanceller{}
+			turns := []Turn{{}, {}, {Settled: true, Text: "done"}}
+			request := caseRequest()
+			request.Limits = &tc.limits
+			result, err := newRunner(&fakeStore{turns: turns}, &fakeStarter{}, canceller, nil, nil).
+				WithUsage(tc.usage).RunCase(context.Background(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.stops {
+				if result.Outcome != evaluation.AgentOutcomeLimit || len(canceller.requests) != 1 || result.Failure == "" {
+					t.Fatalf("outcome %q failure %q cancels %d", result.Outcome, result.Failure, len(canceller.requests))
+				}
+				return
+			}
+			if result.Outcome != evaluation.AgentOutcomeCompleted || len(canceller.requests) != 0 {
+				t.Fatalf("outcome %q cancels %d, want a completed run", result.Outcome, len(canceller.requests))
+			}
+		})
 	}
 }

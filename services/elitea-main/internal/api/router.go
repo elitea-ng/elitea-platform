@@ -4252,6 +4252,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					if cfg.EvalSuitesRepo != nil {
 						runHandler.WithSuites(cfg.EvalSuitesRepo)
 					}
+					// Tool outputs a runtime_plane case kept are returned only
+					// to callers who hold runs.evidence.read in the project.
+					evidenceRead := v2evaluation.EvidenceReadCheck(apimw.HoldsResolvedPermission(
+						coreResolver, platformauth.PermissionModeDefault, v2runevidence.Permission))
+					runHandler.WithEvidenceReadCheck(evidenceRead)
 					requireRunRead := evaluationGate(v2evaluation.PermissionRunRead)
 					requireRunWrite := evaluationGate(v2evaluation.PermissionRunCreate)
 
@@ -4268,7 +4273,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 					// Human scores (issue 2008).
 					if cfg.EvalHumanScoresRepo != nil {
-						humanHandler := v2evaluation.NewHumanScoreHandler(cfg.EvalRunsRepo, cfg.EvalHumanScoresRepo)
+						humanHandler := v2evaluation.NewHumanScoreHandler(cfg.EvalRunsRepo, cfg.EvalHumanScoresRepo).
+							WithEvidenceReadCheck(evidenceRead)
 						r.With(evaluationGate(v2evaluation.PermissionHumanScoreRead)).
 							Get("/eval_human_scores/prompt_lib/{projectID}/{runID}", humanHandler.List)
 						r.With(evaluationGate(v2evaluation.PermissionHumanScoreCreate)).

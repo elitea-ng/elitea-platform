@@ -395,19 +395,22 @@ func TestResolveExecutionMode(t *testing.T) {
 		agent    *SnapshotAgent
 		want     string
 		refused  bool
+		note     bool
 	}{
 		{name: "nothing set keeps predict_blocking", want: ExecutionModePredictBlocking},
 		{name: "suite mode", snapshot: suiteMode(ExecutionModeRuntimePlane), want: ExecutionModeRuntimePlane},
 		{name: "the start overrides the suite", input: RunStartInput{ExecutionMode: ExecutionModePredictBlocking},
 			snapshot: suiteMode(ExecutionModeRuntimePlane), want: ExecutionModePredictBlocking},
-		{name: "a frozen agent refuses runtime_plane", input: RunStartInput{ExecutionMode: ExecutionModeRuntimePlane},
+		{name: "a frozen agent refuses an explicit runtime_plane", input: RunStartInput{ExecutionMode: ExecutionModeRuntimePlane},
 			agent: &SnapshotAgent{}, refused: true},
+		{name: "a frozen agent falls back from the suite's runtime_plane", snapshot: suiteMode(ExecutionModeRuntimePlane),
+			agent: &SnapshotAgent{}, want: ExecutionModePredictBlocking, note: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveExecutionMode(tc.input, tc.snapshot, tc.agent)
-			if (err != nil) != tc.refused || got != tc.want {
-				t.Fatalf("mode %q err %v, want %q refused=%v", got, err, tc.want, tc.refused)
+			got, note, err := resolveExecutionMode(tc.input, tc.snapshot, tc.agent)
+			if (err != nil) != tc.refused || got != tc.want || (note != "") != tc.note {
+				t.Fatalf("mode %q note %q err %v, want %q note=%v refused=%v", got, note, err, tc.want, tc.note, tc.refused)
 			}
 		})
 	}
@@ -433,5 +436,121 @@ func TestFreezeExecutionModeDropsRuntimeLimitsOfAnOverriddenSuite(t *testing.T) 
 	freezeExecutionMode(&bare, ExecutionModeRuntimePlane)
 	if bare.Limits == nil || !bare.Limits.IsRuntimePlane() || !bare.Limits.KeepsToolOutputs() {
 		t.Fatalf("a runtime_plane run without a suite has limits %+v", bare.Limits)
+	}
+}
+
+// failingRepo refuses the results whose evidence names the marker, as a jsonb
+// column refuses a NUL byte.
+type failingRepo struct {
+	*recordingRepo
+	badOutput string
+	failAll   bool
+}
+
+func (f *failingRepo) SaveResult(ctx context.Context, project string, result RunResult) error {
+	if f.failAll || (f.badOutput != "" && result.Evidence["output"] == f.badOutput) {
+		return errors.New("invalid byte sequence")
+	}
+	return f.recordingRepo.SaveResult(ctx, project, result)
+}
+
+func twoBindings(repo *recordingRepo) {
+	run := repo.run("1")
+	run.Snapshot.Dimensions["4"] = run.Snapshot.Dimensions["3"]
+	run.Snapshot.Bindings = append(run.Snapshot.Bindings, SnapshotBinding{DimensionID: "4", Engine: EngineAI, Weight: 1, OrderIndex: 1})
+	repo.seedRun(run)
+}
+
+// A case's trajectory is stored once, and the other rows of the case point at
+// it instead of repeating it per dimension.
+func TestRuntimePlaneStoresTheTrajectoryOncePerCase(t *testing.T) {
+	t.Parallel()
+
+	repo, ref := runtimeRun(nil)
+	twoBindings(repo)
+	runner := &fakeAgentRunner{results: map[string]AgentRunResult{
+		"11": {Outcome: AgentOutcomeCompleted, Output: "a", Steps: []AgentStep{{Seq: 1, Kind: StepKindModelCall}}},
+	}}
+
+	executeRun(repo, &scriptedJudge{}, &stubCompleter{}, runner, ref)
+
+	var holders, refs int
+	for _, result := range repo.storedResults() {
+		if result.DatasetCaseID != "11" {
+			continue
+		}
+		if _, ok := result.Evidence["trajectory"]; ok {
+			holders++
+		}
+		if result.Evidence["trajectory_ref"] != nil {
+			refs++
+		}
+	}
+	if holders != 1 || refs != 1 {
+		t.Fatalf("case 11 has %d trajectories and %d references, want 1 and 1", holders, refs)
+	}
+	// Case 12 recorded no steps: no trajectory at all, not an empty one.
+	for _, result := range repo.storedResults() {
+		if result.DatasetCaseID == "12" && (result.Evidence["trajectory"] != nil || result.Evidence["trajectory_ref"] != nil) {
+			t.Fatalf("a case with no step evidence carries a trajectory: %v", result.Evidence)
+		}
+	}
+}
+
+// A result the store refuses is replaced by a visible error row for the same
+// cell; when even that is refused the run is errored with a count. Never only a
+// log line.
+func TestRuntimePlaneStoreFailureIsVisible(t *testing.T) {
+	t.Parallel()
+
+	repo, ref := runtimeRun(nil)
+	failing := &failingRepo{recordingRepo: repo, failAll: true}
+
+	executeRun(failing, &scriptedJudge{}, &stubCompleter{}, &fakeAgentRunner{}, ref)
+
+	if run := repo.run("1"); run.Status != RunStatusErrored || !strings.Contains(run.Error, "could not be stored") {
+		t.Fatalf("status %q error %q, want errored naming the lost results", run.Status, run.Error)
+	}
+
+	// One bad cell: the fallback error row is stored and the run finishes.
+	repo2, ref2 := runtimeRun(nil)
+	partial := &failingRepo{recordingRepo: repo2, badOutput: "bad"}
+	runner := &fakeAgentRunner{results: map[string]AgentRunResult{"11": {Outcome: AgentOutcomeCompleted, Output: "bad"}}}
+	executeRun(partial, &scriptedJudge{}, &stubCompleter{}, runner, ref2)
+	var fallback bool
+	for _, result := range repo2.storedResults() {
+		if result.DatasetCaseID == "11" && result.Status == ResultStatusError && result.Evidence["store_failed"] == true {
+			fallback = true
+		}
+	}
+	if !fallback {
+		t.Fatalf("the refused result left no error row: %v", repo2.storedResults())
+	}
+}
+
+func TestCleanTextMakesAnAnswerStorable(t *testing.T) {
+	t.Parallel()
+
+	if got := cleanText("a\x00b\xffc"); got != "abc"+"" && got != "ab�c" {
+		t.Fatalf("cleanText = %q", got)
+	}
+}
+
+func TestRuntimePlaneWithoutAnAuthorErrorsTheRunOnce(t *testing.T) {
+	t.Parallel()
+
+	repo, ref := runtimeRun(nil)
+	run := repo.run("1")
+	run.CreatedBy = nil
+	repo.seedRun(run)
+	runner := &fakeAgentRunner{}
+
+	executeRun(repo, &scriptedJudge{}, &stubCompleter{}, runner, ref)
+
+	if got := repo.run("1"); got.Status != RunStatusErrored || !strings.Contains(got.Error, "author") {
+		t.Fatalf("status %q error %q", got.Status, got.Error)
+	}
+	if len(runner.requests) != 0 {
+		t.Fatalf("the runner was called %d times for a run with no author", len(runner.requests))
 	}
 }

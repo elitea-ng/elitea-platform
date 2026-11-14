@@ -23,7 +23,7 @@ export interface TrajectoryItem {
   readonly output: string | undefined;
 }
 
-export interface ToolFigures {
+interface ToolFigures {
   readonly name: string;
   readonly toolkitId: string | undefined;
   readonly calls: number;

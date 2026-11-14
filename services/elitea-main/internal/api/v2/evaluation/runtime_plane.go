@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 )
 
@@ -35,6 +37,8 @@ const (
 	AgentOutcomeTimedOut  = "timed_out"
 	AgentOutcomeStepLimit = "step_limit"
 	AgentOutcomePaused    = "paused"
+	// AgentOutcomeLimit: a token or cost limit was crossed while the case ran.
+	AgentOutcomeLimit = "limit"
 )
 
 // ErrRuntimePlaneNotConfigured is what a runtime_plane run reports on a
@@ -67,6 +71,9 @@ type AgentRunRequest struct {
 	// TimeLimit is never zero (DefaultCaseTimeLimit).
 	StepLimit int
 	TimeLimit time.Duration
+	// Limits are the run's frozen limits; the runner enforces the token and
+	// cost ones while the case runs. Nil is none.
+	Limits *RunLimits
 	// KeepToolOutputs asks the runner to read the output of every tool step.
 	KeepToolOutputs bool
 	// Admitted is called once the agent run is admitted, before it settles, so
@@ -164,6 +171,9 @@ type agentCase struct {
 	err    error
 	// evidence is merged into every result row of the case.
 	evidence map[string]any
+	// trajectory is the case's steps, stored once (attachTrajectory); nil when
+	// the run recorded none.
+	trajectory map[string]any
 }
 
 // runtimeCase executes one case as an agent run and shapes the outcome the way
@@ -179,6 +189,9 @@ func (o *Orchestrator) runtimeCase(
 		Admitted: func(admitCtx context.Context, executionID, conversationUUID string) {
 			o.recordCaseRun(admitCtx, ref, testCase.ID, executionID, conversationUUID)
 		},
+	}
+	if limits := run.Snapshot.Limits; limits != nil && limits.HasAny() {
+		request.Limits = limits
 	}
 	if run.CreatedBy != nil {
 		request.ActorUserID = *run.CreatedBy
@@ -200,26 +213,47 @@ func (o *Orchestrator) runtimeCase(
 	if result.ConversationUUID != "" {
 		evidence["conversation_uuid"] = result.ConversationUUID
 	}
-	evidence["trajectory"] = BuildTrajectory(result.Steps, settings.keepToolOutputs)
+	// ABSENCE IS NOT ZERO: a run that recorded no steps (it never started, or
+	// the step record is not composed) has no trajectory, not an empty one.
+	var trajectory map[string]any
+	if len(result.Steps) > 0 {
+		trajectory = BuildTrajectory(result.Steps, settings.keepToolOutputs)
+	}
+	done := agentCase{evidence: evidence, trajectory: trajectory}
 
 	switch {
 	case err != nil:
-		return agentCase{err: err, evidence: evidence}
+		done.err = err
 	case result.Outcome == AgentOutcomeTimedOut:
 		evidence["agent_timed_out"] = true
-		return agentCase{err: fmt.Errorf("%w: the case's agent run did not finish within %s and was cancelled",
-			context.DeadlineExceeded, settings.timeLimit), evidence: evidence}
+		done.err = fmt.Errorf("%w: the case's agent run did not finish within %s and was cancelled",
+			context.DeadlineExceeded, settings.timeLimit)
 	case result.Outcome == AgentOutcomeStepLimit:
 		evidence["agent_step_limit"] = true
-		return agentCase{err: fmt.Errorf("%w (%d steps); the run was cancelled", ErrStepLimit, settings.stepLimit), evidence: evidence}
+		done.err = fmt.Errorf("%w (%d steps); the run was cancelled", ErrStepLimit, settings.stepLimit)
+	case result.Outcome == AgentOutcomeLimit:
+		evidence["agent_limit_reached"] = true
+		done.err = errors.New(cleanText(result.Failure) + "; the run was cancelled")
 	case result.Outcome != AgentOutcomeCompleted:
-		reason := result.Failure
+		reason := cleanText(result.Failure)
 		if reason == "" {
 			reason = "the agent run did not complete"
 		}
-		return agentCase{err: errors.New(reason), evidence: evidence}
+		done.err = errors.New(reason)
+	default:
+		done.output = cleanText(result.Output)
 	}
-	return agentCase{output: result.Output, evidence: evidence}
+	return done
+}
+
+// cleanText makes text storable in a jsonb value: NUL bytes are removed and
+// invalid UTF-8 is replaced, so one odd byte of a tool or model answer cannot
+// make the whole result row fail to store.
+func cleanText(text string) string {
+	if strings.IndexByte(text, 0) >= 0 {
+		text = strings.ReplaceAll(text, "\x00", "")
+	}
+	return strings.ToValidUTF8(text, "\uFFFD")
 }
 
 // recordCaseRun stores the execution a case ran as. A failure is logged and
@@ -274,7 +308,7 @@ func BuildTrajectory(steps []AgentStep, keepToolOutputs bool) map[string]any {
 			key := step.Kind + "\x00" + step.ToolkitID + "\x00" + step.Name
 			figures := tools[key]
 			if figures == nil {
-				figures = &toolFigures{name: step.Name, toolkit: step.ToolkitID}
+				figures = &toolFigures{name: cleanText(step.Name), toolkit: cleanText(step.ToolkitID)}
 				tools[key] = figures
 				toolOrder = append(toolOrder, key)
 			}
@@ -314,16 +348,58 @@ func BuildTrajectory(steps []AgentStep, keepToolOutputs bool) map[string]any {
 
 func trajectoryItem(step AgentStep, keepToolOutputs bool) map[string]any {
 	item := map[string]any{
-		"seq": step.Seq, "kind": step.Kind, "name": step.Name, "duration_ms": step.DurationMs,
+		"seq": step.Seq, "kind": cleanText(step.Kind), "name": cleanText(step.Name), "duration_ms": step.DurationMs,
 	}
 	if step.ToolkitID != "" {
-		item["toolkit_id"] = step.ToolkitID
+		item["toolkit_id"] = cleanText(step.ToolkitID)
 	}
 	if step.Error != "" {
-		item["error"] = step.Error
+		item["error"] = cleanText(step.Error)
 	}
 	if keepToolOutputs && step.IsToolStep() && step.Output != "" {
-		item["output"] = truncateRunes(step.Output, maxToolOutputRunes)
+		item["output"] = truncateRunes(cleanText(step.Output), maxToolOutputRunes)
 	}
 	return item
+}
+
+// EvidenceReadCheck answers whether the caller holds runs.evidence.read in the
+// route's project. A nil check, an error and false all answer no: tool outputs
+// are withheld unless the permission is known to be held.
+type EvidenceReadCheck func(*http.Request) (bool, error)
+
+func (check EvidenceReadCheck) holds(r *http.Request) bool {
+	if check == nil {
+		return false
+	}
+	held, err := check(r)
+	return err == nil && held
+}
+
+// stripToolOutputs removes the tool outputs a runtime_plane case copied into
+// its result's evidence. A copy is made for people who may read the run
+// evidence, and a scorecard reader without runs.evidence.read must not get them
+// through the result instead.
+func stripToolOutputs(result *RunResult) {
+	trajectory, ok := result.Evidence["trajectory"].(map[string]any)
+	if !ok {
+		return
+	}
+	items, ok := trajectory["items"].([]any)
+	if !ok {
+		// Rows read back from jsonb hold []any; rows built in process hold
+		// []map[string]any.
+		typed, typedOK := trajectory["items"].([]map[string]any)
+		if !typedOK {
+			return
+		}
+		for _, item := range typed {
+			delete(item, "output")
+		}
+		return
+	}
+	for _, raw := range items {
+		if item, isMap := raw.(map[string]any); isMap {
+			delete(item, "output")
+		}
+	}
 }

@@ -233,3 +233,17 @@ WHERE run_id = $1 AND project_id = $2
 	}
 	return count, nil
 }
+
+// StepsSettled reports whether the run's step record is final: its settlement
+// was prepared (anchor_requested_at, shared 0205), so no step is still to
+// arrive.
+func (s *EvalRuntimeStore) StepsSettled(ctx context.Context, projectID int64, executionID string) (bool, error) {
+	var settled bool
+	err := s.pool.QueryRow(ctx, `
+SELECT COALESCE(bool_or(anchor_requested_at IS NOT NULL OR anchored_seq > 0), false)
+FROM elitea_runtime.run_step_heads WHERE run_id = $1 AND project_id = $2`, executionID, projectID).Scan(&settled)
+	if err != nil {
+		return false, fmt.Errorf("read run step settlement: %w", err)
+	}
+	return settled, nil
+}

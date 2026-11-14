@@ -75,10 +75,11 @@ func (s *RunStarter) Start(
 	if err := s.freezeSuite(ctx, projectID, input, &snapshot); err != nil {
 		return Run{}, err
 	}
-	mode, err := resolveExecutionMode(input, snapshot, agent)
+	mode, note, err := resolveExecutionMode(input, snapshot, agent)
 	if err != nil {
 		return Run{}, err
 	}
+	snapshot.ExecutionNote = note
 	if mode == ExecutionModeRuntimePlane && input.ApplicationID == nil {
 		return Run{}, apierr.BadRequest("application_id is required: a runtime_plane run executes the agent")
 	}
@@ -151,20 +152,28 @@ var errRuntimePlaneFrozenAgent error = &apierr.APIError{
 	Message: "a release gate run measures a frozen agent definition and is executed as predict_blocking; the runtime_plane execution mode is not available for it",
 }
 
+// ExecutionNoteGateFallback is the note a release gate run carries when its
+// suite asked for runtime_plane and the gate ran it as predict_blocking.
+const ExecutionNoteGateFallback = "The saved limits ask for agent runs, but a release gate run measures a frozen agent definition, so its cases ran as one model call each."
+
 // resolveExecutionMode picks how the run executes its cases: the start's own
-// choice, else the suite's, else predict_blocking.
-func resolveExecutionMode(input RunStartInput, snapshot RunSnapshot, agent *SnapshotAgent) (string, error) {
-	mode := ExecutionModePredictBlocking
-	switch {
-	case input.ExecutionMode != "":
-		mode = input.ExecutionMode
-	case snapshot.Limits != nil && snapshot.Limits.ExecutionMode != "":
-		mode = snapshot.Limits.ExecutionMode
+// choice, else the suite's, else predict_blocking. A mode the SUITE asked for
+// that a gate run cannot honour falls back to predict_blocking with a note on
+// the run; an explicit override of the start is refused (422) instead.
+func resolveExecutionMode(input RunStartInput, snapshot RunSnapshot, agent *SnapshotAgent) (string, string, error) {
+	if input.ExecutionMode != "" {
+		if input.ExecutionMode == ExecutionModeRuntimePlane && agent != nil {
+			return "", "", errRuntimePlaneFrozenAgent
+		}
+		return input.ExecutionMode, "", nil
 	}
-	if mode == ExecutionModeRuntimePlane && agent != nil {
-		return "", errRuntimePlaneFrozenAgent
+	if snapshot.Limits != nil && snapshot.Limits.ExecutionMode == ExecutionModeRuntimePlane {
+		if agent != nil {
+			return ExecutionModePredictBlocking, ExecutionNoteGateFallback, nil
+		}
+		return ExecutionModeRuntimePlane, "", nil
 	}
-	return mode, nil
+	return ExecutionModePredictBlocking, "", nil
 }
 
 // freezeExecutionMode makes the snapshot say what the run does: the mode, and

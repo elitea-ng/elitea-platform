@@ -59,6 +59,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -707,28 +708,56 @@ func validAttributionID(value string) bool {
 // add up to the total.
 const evaluationScope = `l.execution_id LIKE $2 ESCAPE '\'` + lifetimeOnLog + inferenceRouteOnLog
 
+// evalCaseRunSources says which agent-run sources a project database has: the
+// case-run table (tenant/0246) and the run chain links of continuations. A
+// positive answer is cached per project schema, because the tables never go
+// away and a limit check asks for it before every case and every poll; a
+// negative answer is not, so a project migrated later is picked up.
+type evalCaseRunSources struct{ caseRuns, links bool }
+
+var evalCaseRunSourceCache sync.Map // quoted schema -> evalCaseRunSources
+
+func evalCaseRunSourcesOf(ctx context.Context, q analyticsQuerier, schema string) (evalCaseRunSources, error) {
+	if cached, ok := evalCaseRunSourceCache.Load(schema); ok {
+		return cached.(evalCaseRunSources), nil
+	}
+	var found evalCaseRunSources
+	var err error
+	if found.caseRuns, err = checkRelations(ctx, q, schema+".eval_case_runs"); err != nil {
+		return evalCaseRunSources{}, err
+	}
+	if found.caseRuns {
+		if found.links, err = checkRelations(ctx, q, "elitea_runtime.run_chain_links"); err != nil {
+			return evalCaseRunSources{}, err
+		}
+		if found.links {
+			evalCaseRunSourceCache.Store(schema, found)
+		}
+	}
+	return found, nil
+}
+
 // evaluationScopeWithCaseRuns is evaluationScope for a run that may have
-// executed its cases as agent runs (tenant/0246). The worker signs its model
-// calls with the runtime execution id and not with `eval:<run>:case:<case>`,
-// so the calls of the executions recorded in eval_case_runs are the run's
-// agent calls too. Use it for the whole run and for the agent role, never for
-// the judge role: a judge call is always signed `eval:<run>:judge:<case>`.
-func evaluationScopeWithCaseRuns(schema string, run int64) string {
-	return `(l.execution_id LIKE $2 ESCAPE '\' OR l.execution_id IN (SELECT execution_id FROM ` +
-		schema + `.eval_case_runs WHERE run_id = ` + strconv.FormatInt(run, 10) + `))` +
+// executed its cases as agent runs (tenant/0246), including the executions
+// linked to a case's root run. Use it for the whole run and for the agent role,
+// never for the judge role: a judge call is always signed
+// `eval:<run>:judge:<case>`.
+func evaluationScopeWithCaseRuns(schema string, run int64, links bool) string {
+	return `(l.execution_id LIKE $2 ESCAPE '\' OR l.execution_id IN (SELECT m.execution_id FROM (` +
+		analytics.EvalCaseExecutionsSQL(schema, run, links) + `) AS m))` +
 		lifetimeOnLog + inferenceRouteOnLog
 }
 
-// evaluationScopeFor picks the scope by whether the project has the table.
-func evaluationScopeFor(ctx context.Context, q analyticsQuerier, schema string, run int64) (string, bool, error) {
-	present, err := checkRelations(ctx, q, schema+".eval_case_runs")
+// evaluationScopeFor picks the scope by what the project database has.
+func evaluationScopeFor(ctx context.Context, q analyticsQuerier, schema string, run int64) (string, evalCaseRunSources, error) {
+	found, err := evalCaseRunSourcesOf(ctx, q, schema)
 	if err != nil {
-		return "", false, err
+		return "", evalCaseRunSources{}, err
 	}
-	if !present {
-		return evaluationScope, false, nil
+	if !found.caseRuns {
+		return evaluationScope, found, nil
 	}
-	return evaluationScopeWithCaseRuns(schema, run), true, nil
+	return evaluationScopeWithCaseRuns(schema, run, found.links), found, nil
 }
 
 // GetEvaluationRunAnalytics is one evaluation run's spend.
@@ -806,7 +835,7 @@ WHERE id = $1`, run).Scan(&result.ApplicationID, &result.ApplicationVersionID, &
 	sources := figuresSources{prices: prices}
 	prefix := "eval:" + result.RunID + ":"
 	args := []any{id, likePrefix(prefix), result.CreatedAt, result.FinishedAt}
-	scope, withCaseRuns, err := evaluationScopeFor(ctx, tx, schema, run)
+	scope, caseRunSources, err := evaluationScopeFor(ctx, tx, schema, run)
 	if err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
@@ -839,7 +868,7 @@ WHERE id = $1`, run).Scan(&result.ApplicationID, &result.ApplicationVersionID, &
 	}
 	result.Agent, result.Judge = &agent, &judge
 
-	if result.ByCase, result.ByCaseTruncated, err = evaluationByCase(ctx, tx, sources, scope, caseRunsJoin(schema, run, withCaseRuns), args...); err != nil {
+	if result.ByCase, result.ByCaseTruncated, err = evaluationByCase(ctx, tx, sources, scope, caseRunsJoin(schema, run, caseRunSources), args...); err != nil {
 		return analytics.EvaluationRunAnalytics{}, err
 	}
 	if result.ByModel, err = scopeByModel(ctx, tx, sources, scope, args...); err != nil {
@@ -877,8 +906,8 @@ SELECT EXISTS (SELECT 1 FROM `+schema+`.eval_results WHERE run_id = $1 AND statu
 // `eval:<run>:<role>:<case>` id as before.
 type caseRunsSQL struct{ caseID, role, from, filter string }
 
-func caseRunsJoin(schema string, run int64, enabled bool) caseRunsSQL {
-	if !enabled {
+func caseRunsJoin(schema string, run int64, sources evalCaseRunSources) caseRunsSQL {
+	if !sources.caseRuns {
 		return caseRunsSQL{
 			caseID: `split_part(calls.execution_id, ':', 4)`, role: `split_part(calls.execution_id, ':', 3)`,
 		}
@@ -887,8 +916,8 @@ func caseRunsJoin(schema string, run int64, enabled bool) caseRunsSQL {
 		caseID: `COALESCE(case_run.dataset_case_id::text, split_part(calls.execution_id, ':', 4))`,
 		role:   `CASE WHEN case_run.execution_id IS NOT NULL THEN 'case' ELSE split_part(calls.execution_id, ':', 3) END`,
 		from: `
-    LEFT JOIN ` + schema + `.eval_case_runs AS case_run
-      ON case_run.run_id = ` + strconv.FormatInt(run, 10) + ` AND case_run.execution_id = calls.execution_id`,
+    LEFT JOIN (` + analytics.EvalCaseExecutionsSQL(schema, run, sources.links) + `) AS case_run
+      ON case_run.execution_id = calls.execution_id`,
 		filter: `case_run.execution_id IS NOT NULL OR `,
 	}
 }
