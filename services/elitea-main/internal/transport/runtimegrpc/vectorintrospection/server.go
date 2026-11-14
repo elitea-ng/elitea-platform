@@ -14,6 +14,7 @@
 //     only while its claim is live and its execution is CLAIMED or RUNNING
 //     with desired state RUNNING; it may use the sources recorded with it
 //     (toolkit_index).
+//
 //   - A provider callback token (TOKEN_KIND_ENGINE_CALLBACK): a valid
 //     signature, an active owner, a binding to an active project, an expiry
 //     in the future, and a callback grant recorded for that project by the
@@ -23,6 +24,12 @@
 //     the token may use (ProviderSource); a provider with no source is
 //     inactive. The DeepWiki and Inventory facades record a grant for every
 //     bearer they mint (material.GrantingMinter).
+//
+//   - A platform token ("elvp_…", TOKEN_KIND_ENGINE_CALLBACK), minted by
+//     elitea-main itself for its own agent-memory embedding and recall
+//     (PlatformTokens, issue 1657). It is verified by its MAC and expiry
+//     alone, names one project and the one source agent_memory, and has no
+//     user identity.
 //
 // A server built with NewCallbackServer verifies callback tokens only: it is
 // what the platform listener serves when the runtime plane is off, and there
@@ -123,6 +130,15 @@ type Server struct {
 	claimTokens ClaimTokenFacts
 	clients     grpcauth.Allowlist
 	logger      *slog.Logger
+	platform    *PlatformTokens
+}
+
+// WithPlatformTokens makes the server answer elitea-main's own platform
+// tokens (PlatformTokens). Without it every platform token is inactive. It
+// returns the server for chaining.
+func (s *Server) WithPlatformTokens(tokens *PlatformTokens) *Server {
+	s.platform = tokens
+	return s
 }
 
 // NewServer builds a server that answers only the client identities in
@@ -177,6 +193,10 @@ func (s *Server) IntrospectToken(ctx context.Context, request *vectorv1.Introspe
 	token := request.GetToken()
 	if token == "" || len(token) > maxTokenBytes {
 		return &vectorv1.IntrospectTokenResponse{}, nil
+	}
+	// A platform token is verified by its MAC alone: no PAT validator, no row.
+	if strings.HasPrefix(token, PlatformTokenPrefix) {
+		return s.platform.verify(token), nil
 	}
 	// A claim token never reaches the PAT validator, and a PAT never reaches
 	// the claim token store.

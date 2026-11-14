@@ -26,7 +26,7 @@ syntax = "proto3";
 //
 // LAYOUT (ADR-0031 decision 2). One Qdrant collection per embedding space
 // and collection family. The shared family (toolkit indexes, DeepWiki,
-// memory) is `emb_<model_slug>_<dimension>`: float16 dense vectors with an
+// memory, agent memory) is `emb_<model_slug>_<dimension>`: float16 dense vectors with an
 // int8 quantized copy, plus a BM25 sparse vector. The Inventory family is
 // `inv_<model_slug>_<dimension>`: float32 dense vectors, no quantization, no
 // BM25 (HybridSearch is refused for it), searched by an exact scan, so its
@@ -105,6 +105,14 @@ enum Source {
   // namespace string. Every point carries an `owner` the SERVICE stamps from
   // the token and every read, count, update and delete is narrowed by it.
   SOURCE_MEMORY = 4;
+  // An agent's own memory (ADR-0050 decision 1b, issue 1657): one namespace
+  // per (project, agent), namespace_id the UUIDv5 elitea-main derives from the
+  // agent id, one document per memory entry (document_key is the entry id).
+  // It is an ordinary shared-family source: no memory_scope, no toolkit_id,
+  // no owner. It is not an index, so ListIndexes never lists it. Only
+  // elitea-main uses it: it embeds an entry on write and searches the agent's
+  // entries to rank a turn's recall; the platform's rows stay the authority.
+  SOURCE_AGENT_MEMORY = 5;
 }
 
 // MemoryScope names whose memory a request works on. It is REQUIRED for

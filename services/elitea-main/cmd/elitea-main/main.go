@@ -2117,6 +2117,39 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// guard, so an absent agent plane leaves a NIL interface and the route
 	// answers 501.
 	var remoteToolAuthorizer desktopopsapi.RemoteToolAuthorizer
+	// #1359 H8: ONE client of elitea-llm-gateway, gRPC over mutual TLS
+	// (elitea.gateway.v1.GatewayService). Every consumer below — the /llm
+	// surface, the configuration checks, predict_llm and the governance status —
+	// shares it, so an operator configures the gateway hop once. It is nil when
+	// LLM_GATEWAY_URL is empty, and each consumer reports that posture.
+	var llmGateway *llmproxy.GatewayClient
+	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
+		client, clientErr := llmproxy.NewGatewayClient(llmproxy.GatewayClientConfig{
+			Target:         gwURL,
+			IdentitySecret: os.Getenv("GATEWAY_IDENTITY_SECRET"),
+			ClientCertFile: os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
+			ClientKeyFile:  os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
+			CAFile:         os.Getenv("LLM_GATEWAY_CA_FILE"),
+		})
+		if clientErr != nil {
+			return fmt.Errorf("compose llm gateway client: %w", clientErr)
+		}
+		defer func() { _ = client.Close() }()
+		llmGateway = client
+	}
+
+	// Semantic recall for an agent's own memory (issue 1657): the embedding,
+	// the vector copy and the reconciler. Zero when a requirement is missing.
+	// A nil gateway is passed as a nil INTERFACE, never a typed nil.
+	var memoryGateway llmproxy.Gateway
+	if llmGateway != nil {
+		memoryGateway = llmGateway
+	}
+	agentMemoryVectorsRoot, err := composeAgentMemoryVectors(ctx, logger, os.LookupEnv, pool,
+		vectorClient, memoryGateway, currentConfigurationsRoot, currentConfigurationsConfig.PublicProjectID)
+	if err != nil {
+		return fmt.Errorf("compose agent memory vectors: %w", err)
+	}
 	// The cloud child turns of a local turn (issue 1239): the chat start use
 	// case and the same version service, under the same guards and for the
 	// same typed-nil reason.
@@ -2248,6 +2281,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// elitea-vector's token introspection (ADR-0031) reads callback
 			// grants over the main pool, where the minting facades write them.
 			CallbackTokenFacts: dbrepos.NewCallbackTokenGrants(pool),
+			// elitea-main's own vector token and the vector ranker of an
+			// agent's memory recall (issue 1657); both nil when off.
+			VectorPlatformTokens: agentMemoryVectorsRoot.Tokens,
+			AgentMemoryRanker:    agentMemoryVectorsRoot.Ranker,
 			// elitea-vector's Delete for the registry (ADR-0031 decision 4);
 			// nil keeps the deferred hook and an idle sweeper.
 			IndexVectorDeleter:      indexVectorDeleter,
@@ -2644,27 +2681,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			pipelineRunsRepo,
 			v2pipelinetriggers.WithGovernedRuns(governedTriggers.Runs),
 		)
-	}
-
-	// #1359 H8: ONE client of elitea-llm-gateway, gRPC over mutual TLS
-	// (elitea.gateway.v1.GatewayService). Every consumer below — the /llm
-	// surface, the configuration checks, predict_llm and the governance status —
-	// shares it, so an operator configures the gateway hop once. It is nil when
-	// LLM_GATEWAY_URL is empty, and each consumer reports that posture.
-	var llmGateway *llmproxy.GatewayClient
-	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
-		client, clientErr := llmproxy.NewGatewayClient(llmproxy.GatewayClientConfig{
-			Target:         gwURL,
-			IdentitySecret: os.Getenv("GATEWAY_IDENTITY_SECRET"),
-			ClientCertFile: os.Getenv("LLM_GATEWAY_CLIENT_CERT"),
-			ClientKeyFile:  os.Getenv("LLM_GATEWAY_CLIENT_KEY"),
-			CAFile:         os.Getenv("LLM_GATEWAY_CA_FILE"),
-		})
-		if clientErr != nil {
-			return fmt.Errorf("compose llm gateway client: %w", clientErr)
-		}
-		defer func() { _ = client.Close() }()
-		llmGateway = client
 	}
 
 	// BF0.9c: the browser /llm surface over that client.
@@ -3338,6 +3354,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				Validator:     introspectionValidator,
 				CallbackFacts: dbrepos.NewCallbackTokenGrants(pool),
 				Logger:        logger,
+				// elitea-main's own platform token (issue 1657).
+				PlatformTokens: agentMemoryVectorsRoot.Tokens,
 			})
 	})
 	if err != nil {
