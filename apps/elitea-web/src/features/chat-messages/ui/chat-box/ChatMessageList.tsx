@@ -28,7 +28,8 @@ import { useStickToBottom } from './useStickToBottom';
 
 import { useChatSessionStore } from '@/entities/conversation';
 import { useAgentAvatarMotion } from '../../model/agentAvatar.store';
-import { answerHasIdentity, newestAnswerByParticipant } from './answerAvatars';
+import { newestAnswerByParticipant } from './answerAvatars';
+import { captionedForReader, isOtherAuthor, isOwnMessage } from './messageAuthorship';
 import { WELCOME_MESSAGE_ID } from '@/shared/lib/enums';
 import { ScrollableContainer } from '@/shared/ui/ScrollableContainer';
 import type { SimpleBarInstance } from '@/shared/ui/ScrollableContainer';
@@ -58,62 +59,6 @@ export type {
 
 /** How close to the top (px) a scroll position must be to fire `onScrollToTop` — baseline: `ChatMessageList.jsx`'s own `scrollTop <= 20`. */
 const SCROLL_TOP_THRESHOLD = 20;
-
-/**
- * The author id a value actually STATES, or `undefined` when it states none.
- *
- * `''` is not an identity: `entities/message/lib/normalise.ts` uses the empty
- * string as "the attribution STOPS here" for a row with no author, and
- * `ChatBox.tsx` passes `userId={userId ?? ''}` while `useGetCurrentAuthor` is
- * still in flight (or forever, if it fails). Both spellings of "unstated"
- * therefore have to collapse to one before any comparison.
- *
- * `String()`-normalised for the same reason `normaliseUserMessage` documents:
- * `message.userId` is always a string, but the reader's id comes from the
- * unvalidated `GET /social/author` envelope, whose `id` the transcript and
- * participants payloads state as a NUMBER.
- */
-function statedAuthorId(value: string | undefined): string | undefined {
-  if (value === undefined || value === '') return undefined;
-  return String(value);
-}
-
-/**
- * Whether the reader may act on a message authored by `authorId`.
- *
- * The two unstated sides are deliberately NOT symmetric:
- *
- * - reader unstated ⇒ PERMIT. This is the documented pre-identity escape
- *   hatch — no reader has been stated, so the surface keeps the behaviour it
- *   had before author identity existed rather than refusing everything. It was
- *   unreachable until `statedAuthorId` above, because `ChatBox` renders `''`
- *   rather than `undefined`, so a reader whose author query was merely PENDING
- *   was refused edit and delete on their own messages with no explanation.
- * - author unstated ⇒ REFUSE. An unattributed row must not become editable
- *   and deletable by everyone in a shared conversation; absent attribution is
- *   the one case where refusing is the safe answer.
- */
-function isOwnMessage(readerId: string | undefined, authorId: string | undefined): boolean {
-  const reader = statedAuthorId(readerId);
-  if (reader === undefined) return true;
-  const author = statedAuthorId(authorId);
-  if (author === undefined) return false;
-  return reader === author;
-}
-
-/**
- * Which side a question sits on: someone else's (left) only when BOTH the
- * reader and the author are stated and differ. Layout is not a permission, so
- * an unstated side does not refuse the way `isOwnMessage` must — a reloaded
- * row the server attributed to nobody is far more likely the reader's own
- * question in their own chat than a stranger's, and drawing it on the left
- * would make every such conversation look like someone else's.
- */
-function isOtherAuthor(readerId: string | undefined, authorId: string | undefined): boolean {
-  const reader = statedAuthorId(readerId);
-  const author = statedAuthorId(authorId);
-  return reader !== undefined && author !== undefined && reader !== author;
-}
 
 /** Baseline `ChatMessageWrapper.jsx`'s `canDeleteThisAIMessage` — whether `userId` authored the question this AI answer replies to. */
 function canDeleteAiMessage(
@@ -152,7 +97,7 @@ export function ChatMessageList({
   } = {},
   pagination: { isLoadingMore = false, onScrollToTop } = {},
   emptyState,
-  assistant: { name: assistantName, conversationUuid } = {},
+  assistant: { name: assistantName, conversationUuid, readerName } = {},
   steering,
 }: ChatMessageListProps): ReactNode {
   const scrollRef = useRef<SimpleBarInstance | null>(null);
@@ -176,12 +121,6 @@ export function ChatMessageList({
   // than invented.
   // Steering (contract 1.27): an injected message that the transcript already holds is not shown two times.
   const transcriptIds = useMemo(() => new Set(chatHistory.map((message) => message.id)), [chatHistory]);
-  // A name over each reply only when more than one assistant answers here.
-  const isMultiAssistant = useMemo(() => {
-    const names = new Set(chatHistory.filter((msg) => msg.role !== 'user').map((msg) => msg.authorName ?? assistantName ?? ''));
-    names.delete('');
-    return names.size > 1;
-  }, [chatHistory, assistantName]);
   // One avatar per list moves: the active participant's newest answer (ADR-0050 decision 6).
   const motionOf = useAgentAvatarMotion(conversationUuid);
   const newestAnswerIds = useMemo(() => newestAnswerByParticipant(chatHistory), [chatHistory]);
@@ -322,7 +261,7 @@ export function ChatMessageList({
             >
               {isUser ? (
                 <UserMessage
-                  message={message}
+                  message={captionedForReader(message, userId, readerName)}
                   messageId={messageId}
                   isOwn={!isOtherAuthor(userId, message.userId)}
                   projectId={projectId}
@@ -345,7 +284,6 @@ export function ChatMessageList({
                   isSpeakingMode={autoSpeak}
                   author={{
                     participantName: message.authorName ?? assistantName,
-                    showCaption: isMultiAssistant || answerHasIdentity(message),
                     motion: motionOf({ participantId: message.authorParticipantId, newest: newestAnswerIds.has(message.id) }),
                   }}
                   toolActions={message.toolActions}

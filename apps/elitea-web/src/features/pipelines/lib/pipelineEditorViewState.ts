@@ -8,6 +8,8 @@
  * precedent, adapted for the pipeline shape's extra `meta.id` fallback.
  */
 
+import { canEditApplication } from '@/shared/lib/applicationEditAccess';
+
 export const PUBLIC_PROJECT_ID = 'public';
 
 export interface PipelineEditorPipelineLike {
@@ -36,7 +38,7 @@ export function isPublicPipeline(pipeline: PipelineEditorPipelineLike | null | u
 
 /** `!isPublic && hasEditPermission` — `PipelineEditor.jsx:153`. */
 export function canEditPipeline(isPublic: boolean, hasEditPermission: boolean): boolean {
-  return !isPublic && hasEditPermission;
+  return canEditApplication(isPublic, hasEditPermission);
 }
 
 /** The baseline's `ViewMode.Owner`/`ViewMode.Public` string literals (`common/constants.js`) — `PipelineEditor.jsx:154`. */

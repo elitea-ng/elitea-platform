@@ -5,6 +5,8 @@
  * directly unit-testable without mounting the whole editor.
  */
 
+import { canEditApplication } from '@/shared/lib/applicationEditAccess';
+
 export const PUBLIC_PROJECT_ID = 'public';
 
 export interface AgentEditorAgentLike {
@@ -27,7 +29,7 @@ export function isPublicAgent(agent: AgentEditorAgentLike | null | undefined): b
 
 /** `!isPublic && hasEditPermission` — `AgentEditor.jsx:133`. */
 export function canEditAgent(isPublic: boolean, hasEditPermission: boolean): boolean {
-  return !isPublic && hasEditPermission;
+  return canEditApplication(isPublic, hasEditPermission);
 }
 
 /** The baseline's `ViewMode.Owner`/`ViewMode.Public` string literals (`common/constants.js`) — `AgentEditor.jsx:134`. */
