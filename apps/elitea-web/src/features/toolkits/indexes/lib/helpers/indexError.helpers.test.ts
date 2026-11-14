@@ -10,11 +10,16 @@ describe('describeIndexError', () => {
     expect(text).toContain('nothing further was embedded');
   });
 
-  it('leaves a message that already explains itself, and one with an unknown code, as written', () => {
+  it('reads an unknown code exactly as the worker does for one', () => {
+    const unknown = 'the embedding gateway refused the run (model_gateway.brand_new); nothing further was embedded';
+    expect(describeIndexError(unknown)).toBe(
+      'the embedding gateway refused the run (model_gateway.brand_new): the gateway did not accept the request; nothing further was embedded',
+    );
+  });
+
+  it('leaves a message that already explains itself as written', () => {
     const current = "Index 'x' failed: the embedding gateway refused the run (model_gateway.forbidden): this project is not allowed to use that model; nothing further was embedded";
     expect(describeIndexError(current)).toBe(current);
-    const unknown = 'the embedding gateway refused the run (model_gateway.brand_new); nothing further was embedded';
-    expect(describeIndexError(unknown)).toBe(unknown);
   });
 
   it('is undefined when the index carries no failure text, and bounds a very long one', () => {

@@ -6382,5 +6382,8 @@
   "features.toolkits.indexRun.skipped": "Skipped",
   "features.toolkits.indexRun.started": "Indexing in progress. The steps and the result appear here.",
   "features.toolkits.indexRun.unchanged": "already indexed (unchanged)",
-  "features.toolkits.indexRun.working": "Indexing…"
+  "features.toolkits.indexRun.working": "Indexing…",
+  "features.toolkits.indexError.unknown": "the gateway did not accept the request",
+  "features.toolkits.indexNameWrapper.failed": "Failed",
+  "features.toolkits.indexRun.unfollowed": "The live view of this run could not be opened. The run may still be going; its result appears in History."
 }

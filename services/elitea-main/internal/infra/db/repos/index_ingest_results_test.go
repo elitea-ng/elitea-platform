@@ -527,7 +527,7 @@ func TestIndexReplayDataCarriesTheTypedRunSummaryOnlyWhenTheWorkerStatedIt(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"status":"partly_indexed","message":"Indexed 4 documents.","indexed_documents":4,"indexed_chunks":19,"failed_chunks":1,"unchanged_documents":0,"total_documents":23,"total_chunks":90,"skipped":{"too_large":2,"unsupported_type":1},"embedding_model":"text-embedding-3-small"}`
+	want := `{"status":"partly_indexed","message":"Indexed 4 documents.","indexed_documents":4,"indexed_chunks":19,"failed_chunks":1,"unchanged_documents":0,"total_documents":23,"skipped":{"too_large":2,"unsupported_type":1}}`
 	if string(rust) != want {
 		t.Fatalf("rust replay data:\n got=%s\nwant=%s", rust, want)
 	}
@@ -540,5 +540,17 @@ func TestIndexReplayDataCarriesTheTypedRunSummaryOnlyWhenTheWorkerStatedIt(t *te
 	}
 	if string(sdk) != `{"status":"ok","message":"No new documents to index."}` {
 		t.Fatalf("a summary with no typed fields must stay {status,message}: %s", sdk)
+	}
+}
+
+func TestIndexReplayDataDropsAnInvalidSkipBreakdownInsteadOfFailingTheFrame(t *testing.T) {
+	data, err := indexReplayData(outputapp.IndexIngestResult{ResultSummary: outputapp.IndexIngestSummary{
+		Status: outputapp.IndexIngestStatusOK, Message: "done", IndexedDocuments: 1, SkippedJSON: "{not json",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"status":"ok","message":"done","indexed_documents":1}` {
+		t.Fatalf("got %s", data)
 	}
 }

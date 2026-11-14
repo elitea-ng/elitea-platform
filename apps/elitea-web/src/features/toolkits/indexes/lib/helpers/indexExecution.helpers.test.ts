@@ -167,11 +167,12 @@ describe('parseIndexStartRefusalMessage (#2042)', () => {
     return new EliteaApiError({ kind: 'http', status, url: '/elitea_core/test_toolkit_tool/prompt_lib/7', body });
   }
 
-  it('returns the sentence of a 422 or 503 refusal', () => {
+  it('returns the sentence of a 422 refusal', () => {
     expect(parseIndexStartRefusalMessage(refusal({ error: 'No embedding model is available to this project.' }, 422))).toBe(
       'No embedding model is available to this project.',
     );
-    expect(parseIndexStartRefusalMessage(refusal({ error: 'Embedding model is unavailable' }, 503))).toBe('Embedding model is unavailable');
+    // A transient catalogue error is not a definitive refusal.
+    expect(parseIndexStartRefusalMessage(refusal({ error: 'Embedding model is unavailable' }, 503))).toBeUndefined();
   });
 
   it('is not fooled by the validation error list, the busy 503 or other statuses', () => {

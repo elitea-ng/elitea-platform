@@ -39,6 +39,8 @@ type currentModelCatalogStub struct {
 	calls    int
 	query    configurationapp.CurrentModelCatalogQuery
 	get      func(configurationapp.CurrentModelCatalogQuery) (configurationapp.CurrentModelCatalogResponse, error)
+	// emptyCatalogue makes the stub answer an empty catalogue as such.
+	emptyCatalogue bool
 }
 
 type currentToolkitSettingsValidatorStub struct {
@@ -113,10 +115,18 @@ func (s *currentModelCatalogStub) Get(
 ) (configurationapp.CurrentModelCatalogResponse, error) {
 	s.calls++
 	s.query = query
+	response, err := s.response, s.err
 	if s.get != nil {
-		return s.get(query)
+		response, err = s.get(query)
 	}
-	return s.response, s.err
+	if err == nil && query.Section == configurationapp.CurrentModelSectionEmbedding && !s.emptyCatalogue &&
+		response.DefaultModelName == nil {
+		// An index start needs a model to embed with, so a fixture that is not
+		// about that gives the project one default embedding model (#2042).
+		name, project := "fixture-embedding", int32(7)
+		return configurationapp.CurrentModelCatalogResponse{DefaultModelName: &name, DefaultModelProjectID: &project}, nil
+	}
+	return response, err
 }
 
 func TestCurrentAuthoritativeInputResolverLoadsSavedToolkitAndConfigurationModelMetadata(t *testing.T) {
@@ -463,22 +473,22 @@ func TestCurrentAuthoritativeInputResolverFreezesConfigurationsEmbeddingDefaultF
 	}
 }
 
-func TestCurrentAuthoritativeInputResolverKeepsOmittedEmbeddingOptionalWhenCatalogHasNoDefault(t *testing.T) {
+func TestCurrentAuthoritativeInputResolverRefusesOmittedEmbeddingWhenCatalogHasNoModel(t *testing.T) {
 	embeddings := &currentEmbeddingBindingSelectorStub{}
 	resolver := newCurrentAuthoritativeResolverWithSettingsAndEmbeddingsForTest(
 		t,
 		validCurrentToolkitReader(),
-		&currentModelCatalogStub{},
+		&currentModelCatalogStub{emptyCatalogue: true},
 		&currentToolkitSettingsValidatorStub{},
 		embeddings,
 	)
 
-	inputs, err := resolver.Resolve(context.Background(), validCurrentStartRequest(nil, `{}`))
-	if err != nil {
-		t.Fatal(err)
+	_, err := resolver.Resolve(context.Background(), validCurrentStartRequest(nil, `{}`))
+	if !errors.Is(err, ErrNoEmbeddingModelAvailable) || !errors.Is(err, ErrCurrentEmbeddingBindingUnavailable) {
+		t.Fatalf("error=%v, want ErrNoEmbeddingModelAvailable", err)
 	}
-	if inputs.EmbeddingBinding != nil || len(embeddings.calls) != 0 {
-		t.Fatalf("binding=%+v calls=%+v", inputs.EmbeddingBinding, embeddings.calls)
+	if len(embeddings.calls) != 0 {
+		t.Fatalf("calls=%+v", embeddings.calls)
 	}
 }
 
@@ -490,10 +500,11 @@ func TestCurrentAuthoritativeInputResolverFailsClosedForRequiredEmbeddingWithout
 	){
 		"empty without catalog default": func(
 			toolkits *currentToolkitReaderStub,
-			_ *currentModelCatalogStub,
+			models *currentModelCatalogStub,
 			_ *currentEmbeddingBindingSelectorStub,
 		) {
 			toolkits.toolkit.Settings["embedding_model"] = ""
+			models.emptyCatalogue = true
 		},
 		"runtime mismatch": func(
 			toolkits *currentToolkitReaderStub,
@@ -844,7 +855,7 @@ func TestCurrentAuthoritativeInputResolverRefusesBlankEmbeddingWhenCatalogHasNoM
 	resolver := newCurrentAuthoritativeResolverWithSettingsAndEmbeddingsForTest(
 		t,
 		toolkits,
-		&currentModelCatalogStub{},
+		&currentModelCatalogStub{emptyCatalogue: true},
 		&currentToolkitSettingsValidatorStub{},
 		embeddings,
 	)

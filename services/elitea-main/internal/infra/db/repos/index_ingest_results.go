@@ -789,9 +789,7 @@ type indexReplayCounts struct {
 	FailedChunks     uint64          `json:"failed_chunks,omitempty"`
 	UnchangedDocs    *uint64         `json:"unchanged_documents,omitempty"`
 	TotalDocuments   *uint64         `json:"total_documents,omitempty"`
-	TotalChunks      *uint64         `json:"total_chunks,omitempty"`
 	Skipped          json.RawMessage `json:"skipped,omitempty"`
-	EmbeddingModel   string          `json:"embedding_model,omitempty"`
 }
 
 type indexReplaySummaryBody struct {
@@ -805,8 +803,10 @@ func indexReplaySummary(summary outputapp.IndexIngestSummary) indexReplaySummary
 	body.IndexedDocuments = summary.IndexedDocuments
 	body.IndexedChunks = summary.IndexedChunks
 	body.FailedChunks = summary.FailedChunks
-	body.EmbeddingModel = summary.EmbeddingModel
-	if summary.SkippedJSON != "" {
+	// A skip breakdown that is not valid JSON is left out: the rest of the
+	// summary must still reach the browser, which would otherwise get no
+	// terminal frame at all.
+	if summary.SkippedJSON != "" && json.Valid([]byte(summary.SkippedJSON)) {
 		body.Skipped = json.RawMessage(summary.SkippedJSON)
 	}
 	if summary.UnchangedPresent {
@@ -814,8 +814,8 @@ func indexReplaySummary(summary outputapp.IndexIngestSummary) indexReplaySummary
 		body.UnchangedDocs = &unchanged
 	}
 	if summary.TotalsPresent {
-		documents, chunks := summary.TotalDocuments, summary.TotalChunks
-		body.TotalDocuments, body.TotalChunks = &documents, &chunks
+		documents := summary.TotalDocuments
+		body.TotalDocuments = &documents
 	}
 	return body
 }

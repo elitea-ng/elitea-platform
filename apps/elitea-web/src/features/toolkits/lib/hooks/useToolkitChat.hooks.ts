@@ -97,7 +97,7 @@ import { ToolkitChatModesEnum } from '../constants/toolkitChat.constants';
 import { buildTestToolChatMessage, describeTestToolRefusal } from '../helpers/testToolOutcome.helpers';
 import type { CreatedConversation } from '../helpers/toolkitConversation.helpers';
 import { createToolkitConversationWithParticipant, generateLlmSettings } from '../helpers/toolkitConversation.helpers';
-import { addIndexRunProgress } from '../helpers/indexRunNotices.helpers';
+import { addIndexRunProgress, buildIndexRunStoppedMessage, settleIndexRunProgress } from '../helpers/indexRunNotices.helpers';
 import { buildRunToolErrorMessage } from '../helpers/toolRunError.helpers';
 import { useSelectedProjectId } from './useSelectedProjectId';
 import { useToolkitRunDispatch } from './useToolkitChatDispatch.hooks';
@@ -200,9 +200,12 @@ export function useToolkitChat(params: UseToolkitChatParams): UseToolkitChatResu
     [index?.id, isTestToolsMode, traceNewIndex],
   );
   /** The REST start admitted the run: show it running at once (#2041), where the socket path shows its own `start_task` frame. */
-  const onRunAdmitted = useCallback(() => {
-    if (!isTestToolsMode) setChatHistory((prev) => addIndexRunProgress(prev, Date.now()));
-  }, [isTestToolsMode]);
+  const onRunAdmitted = useCallback(
+    (startedHere: boolean) => {
+      if (!isTestToolsMode) setChatHistory((prev) => addIndexRunProgress(prev, startedHere ? Date.now() : undefined));
+    },
+    [isTestToolsMode],
+  );
   /** The dispatch hook's "fifth case" (REST test-tool, every tool but `index_data`) reports here: a settled run becomes a transcript message, a refusal becomes a Snackbar — see `../helpers/testToolOutcome.helpers.ts`. */
   const onTestToolOutcome = useCallback(
     (outcome: TestToolkitToolOutcome) => {
@@ -340,6 +343,8 @@ export function useToolkitChat(params: UseToolkitChatParams): UseToolkitChatResu
     try {
       await stopIndexing({ projectId, toolkitId, indexName: index.metadata.collection, taskId: index.metadata.task_id });
       onSuccess?.('Indexing stopped successfully');
+      setExecutionId(undefined);
+      setChatHistory((prev) => settleIndexRunProgress(prev, buildIndexRunStoppedMessage(Date.now())));
       setIsRunning(false);
       cancelIndexingCallback?.(EditViewTabsEnum.configuration);
     } catch {

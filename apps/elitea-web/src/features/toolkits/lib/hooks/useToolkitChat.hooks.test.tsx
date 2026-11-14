@@ -476,6 +476,24 @@ describe('useToolkitChat', () => {
     expect(cancelIndexingCallback).toHaveBeenCalledWith('configuration');
   });
 
+  it('a Stop settles the running panel as "stopped", not failed (#2041)', async () => {
+    server.use(http.post(START_PATH, () => HttpResponse.json({ task_id: 'exec-1' })));
+    const stopIndexing = vi.fn().mockResolvedValue(undefined);
+    const index = { id: 'idx-1', metadata: { collection: 'my-index', task_id: 't1', state: 'created' } };
+    const { box } = renderToolkitChat(baseParams({ modes: [], stopIndexing, index }));
+    await waitFor(() => expect(box.current).toBeDefined());
+    act(() => box.current?.handleIndexData());
+    await waitFor(() => expect(box.current?.chatHistory[0]?.id).toBe('index-run-progress'));
+
+    await act(async () => {
+      box.current?.onCancelIndexing();
+    });
+
+    await waitFor(() => expect(stopIndexing).toHaveBeenCalled());
+    await waitFor(() => expect(box.current?.chatHistory.map((message) => message.id)).not.toContain('index-run-progress'));
+    expect(box.current?.chatHistory.at(-1)?.content).toContain('Indexing was stopped before it finished.');
+  });
+
   it('onCancelIndexing reports the error instead when stopIndexing rejects', async () => {
     const stopIndexing = vi.fn().mockRejectedValue(new Error('stop failed'));
     const onError = vi.fn();

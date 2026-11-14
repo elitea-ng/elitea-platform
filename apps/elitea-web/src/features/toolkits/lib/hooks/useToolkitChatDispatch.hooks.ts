@@ -114,8 +114,8 @@ export interface UseToolkitRunDispatchParams {
   /** Every settled or refused REST test-tool run (any tool but `index_data` — see this file's "fifth case"). `useToolkitChat.hooks.ts` owns turning it into a transcript message or a Snackbar. */
   readonly onTestToolOutcome: (outcome: TestToolkitToolOutcome) => void;
   readonly onMcpAuthRequired?: ((message: Readonly<Record<string, unknown>>) => void) | undefined;
-  /** The REST start admitted (or adopted) an `index_data` run: the panel shows its running state now, not at the first frame (#2041). The socket path has its own `start_task` frame for this. */
-  readonly onRunAdmitted?: (() => void) | undefined;
+  /** The REST start admitted (`startedHere`) or adopted (a 409 naming a run begun elsewhere) an `index_data` run: the panel shows its running state now, not at the first frame (#2041). The socket path has its own `start_task` frame for this. */
+  readonly onRunAdmitted?: ((startedHere: boolean) => void) | undefined;
 }
 
 export interface UseToolkitRunDispatchResult {
@@ -147,6 +147,44 @@ function reportMissingTransport(socket: SocketClient, onError: ((message: string
       'This run needs a live connection to the toolkit runtime, and none is configured for this deployment. Only indexing (“Index data”) can run here.',
     ),
   );
+}
+
+interface AdmitIndexRun {
+  readonly start: () => Promise<{ readonly task_id?: unknown }>;
+  readonly parkFallback: () => void;
+  readonly adopt: (taskId: string, startedHere: boolean) => void;
+  readonly refused: () => void;
+}
+
+/**
+ * POST the `index_data` start and adopt the run it names. `true` = on the SSE
+ * stream, nothing more to do; `false` = fall through to the socket path.
+ *
+ * Decision 3 (issue #310): a 409 names a run already admitted, so its task id
+ * is adopted instead of retrying; the parked fallback stays unset, so a later
+ * stream failure can never re-dispatch this run over socket.io. A REFUSED
+ * start (#2042, a 422 with a sentence) is thrown, so the run ends with that
+ * reason instead of a "no live connection" notice. Every other failure falls
+ * through to the socket path.
+ */
+async function admitIndexRun(step: AdmitIndexRun): Promise<boolean> {
+  try {
+    const started = await step.start();
+    if (!isBoundedIndexExecutionTaskId(started.task_id)) return false;
+    step.parkFallback();
+    step.adopt(started.task_id, true);
+    return true;
+  } catch (error) {
+    const conflictTaskId = parseIndexStartConflictTaskId(error);
+    if (conflictTaskId !== undefined) {
+      step.adopt(conflictTaskId, false);
+      return true;
+    }
+    const refusal = parseIndexStartRefusalMessage(error);
+    if (refusal === undefined) return false;
+    step.refused();
+    throw new Error(refusal);
+  }
 }
 
 export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseToolkitRunDispatchResult {
@@ -250,44 +288,27 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
       // header), and only with a toolkit id — `toolkit_config.toolkit_id` is
       // required and the handler 422s without a positive one.
       if (toolkitId !== undefined && toolkitId !== '') {
-        try {
-          const started = await startIndexExecution({
-            projectId,
-            toolkitId,
-            toolParams: relevantInputVariables,
-            ...(selectedModel?.name !== undefined ? { llmModel: selectedModel.name } : {}),
-            llmSettings,
-          });
-          if (isBoundedIndexExecutionTaskId(started.task_id)) {
-            // Decision 2: park the emit until the stream proves it connected.
+        const admitted = await admitIndexRun({
+          start: () =>
+            startIndexExecution({
+              projectId,
+              toolkitId,
+              toolParams: relevantInputVariables,
+              ...(selectedModel?.name !== undefined ? { llmModel: selectedModel.name } : {}),
+              llmSettings,
+            }),
+          // Decision 2: park the emit until the stream proves it connected.
+          parkFallback: () => {
             pendingFallbackRef.current = emitOverSocket;
-            setExecutionId(started.task_id);
-            onStartTask(started.task_id);
-            onRunAdmittedRef.current?.();
-            return;
-          }
-        } catch (error) {
-          // Decision 3 (issue #310): a 409 names a run already admitted —
-          // adopt its task id instead of retrying. `pendingFallbackRef`
-          // stays unset (cleared above, at the top of `startToolRun`), so a
-          // later stream failure can never re-dispatch this run over
-          // socket.io — see this file's header.
-          const conflictTaskId = parseIndexStartConflictTaskId(error);
-          if (conflictTaskId !== undefined) {
-            setExecutionId(conflictTaskId);
-            onStartTask(conflictTaskId);
-            onRunAdmittedRef.current?.();
-            return;
-          }
-          // A REFUSED start (#2042) has a reason for the user: raise it, so the
-          // run ends with that sentence instead of a "no live connection" notice.
-          const refusal = parseIndexStartRefusalMessage(error);
-          if (refusal !== undefined) {
-            setExecutionId(undefined);
-            throw new Error(refusal);
-          }
-          // Every other failure: fall through to the socket path below.
-        }
+          },
+          adopt: (taskId, startedHere) => {
+            setExecutionId(taskId);
+            onStartTask(taskId);
+            onRunAdmittedRef.current?.(startedHere);
+          },
+          refused: () => setExecutionId(undefined),
+        });
+        if (admitted) return;
       }
 
       setExecutionId(undefined);

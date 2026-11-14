@@ -4,14 +4,16 @@ import {
   addIndexRunProgress,
   buildIndexRunSummaryMessage,
   ensureRunMessage,
+  buildIndexRunStoppedMessage,
   settleIndexRunProgress,
+  settleIndexRunWithSummary,
 } from './indexRunNotices.helpers';
 
 const NOW = 1_700_000_060_000;
 
 describe('addIndexRunProgress / settleIndexRunProgress', () => {
   it('shows a running placeholder once, and never stacks a second one', () => {
-    const once = addIndexRunProgress([], NOW);
+    const once = addIndexRunProgress([], NOW - 5_000);
     expect(once).toHaveLength(1);
     expect(once[0]).toMatchObject({ id: 'index-run-progress', isLoading: true });
     expect(addIndexRunProgress(once, NOW)).toHaveLength(1);
@@ -19,7 +21,7 @@ describe('addIndexRunProgress / settleIndexRunProgress', () => {
 
   it('replaces exactly the placeholder with the summary and keeps every other message', () => {
     const keep = { id: 'keep', role: 'assistant', content: 'x', created_at: 1, participant_id: 'p' };
-    const history = addIndexRunProgress([keep], NOW);
+    const history = addIndexRunProgress([keep], NOW - 5_000);
     const summary = buildIndexRunSummaryMessage({ status: 'ok', message: 'done' }, NOW - 5_000, NOW);
     const settled = settleIndexRunProgress(history, summary);
     expect(settled.map((message) => message.id)).toEqual(['keep', summary.id]);
@@ -79,19 +81,42 @@ describe('buildIndexRunSummaryMessage', () => {
 
 describe('ensureRunMessage', () => {
   it('creates the run message for a step frame that names one this panel has not seen, replacing the placeholder', () => {
-    const history = addIndexRunProgress([], NOW);
-    const next = ensureRunMessage(history, 'agent_thinking_step', 'run-1', NOW);
+    const history = addIndexRunProgress([], NOW - 5_000);
+    const next = ensureRunMessage(history, 'agent_thinking_step', 'run-1');
     expect(next.map((message) => message.id)).toEqual(['run-1']);
     expect(next[0]).toMatchObject({ isLoading: true, isStreaming: true });
   });
 
   it('leaves history alone for a known message, an unrelated frame type or a frame with no message id', () => {
-    const known = ensureRunMessage([], 'agent_tool_start', 'run-1', NOW);
-    expect(ensureRunMessage(known, 'agent_tool_end', 'run-1', NOW)).toHaveLength(1);
-    expect(ensureRunMessage([], 'start_task', 'run-1', NOW)).toHaveLength(0);
+    const known = ensureRunMessage([], 'agent_tool_start', 'run-1');
+    expect(ensureRunMessage(known, 'agent_tool_end', 'run-1')).toHaveLength(1);
+    expect(ensureRunMessage([], 'start_task', 'run-1')).toHaveLength(0);
     // `start_task` brings its own running message: only the placeholder goes.
-    expect(ensureRunMessage(addIndexRunProgress([], NOW), 'start_task', 'run-1', NOW)).toHaveLength(0);
-    expect(ensureRunMessage([], 'agent_tool_start', undefined, NOW)).toHaveLength(0);
-    expect(ensureRunMessage([], 'agent_tool_start', '', NOW)).toHaveLength(0);
+    expect(ensureRunMessage(addIndexRunProgress([], NOW - 5_000), 'start_task', 'run-1')).toHaveLength(0);
+    expect(ensureRunMessage([], 'agent_tool_start', undefined)).toHaveLength(0);
+    expect(ensureRunMessage([], 'agent_tool_start', '')).toHaveLength(0);
+  });
+});
+
+describe('settling a run', () => {
+  it('finishes every message the run created, not only the placeholder, and keeps the duration', () => {
+    const started = addIndexRunProgress([], NOW - 7_000);
+    const withStep = ensureRunMessage(started, 'agent_tool_start', 'run-1');
+    const settled = settleIndexRunWithSummary(withStep, { status: 'ok', message: 'done' }, NOW);
+    expect(settled).toHaveLength(2);
+    expect(settled[0]).toMatchObject({ id: 'run-1', isLoading: false, isStreaming: false });
+    expect(settled[1]?.content).toContain('(7 s)');
+  });
+
+  it('shows no duration for a run this client only joined', () => {
+    const joined = addIndexRunProgress([], undefined);
+    const settled = settleIndexRunWithSummary(joined, { status: 'ok', message: 'done' }, NOW);
+    expect(settled[0]?.content).toBe('✅ Indexing finished\n\ndone');
+  });
+
+  it('reads a stop as stopped, not failed', () => {
+    const message = buildIndexRunStoppedMessage(NOW);
+    expect(message.content).toContain('Indexing was stopped before it finished.');
+    expect(message.content).not.toMatch(/fail/i);
   });
 });

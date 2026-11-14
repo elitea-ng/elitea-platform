@@ -21,7 +21,7 @@ import type { ExecutionEventData } from '@/shared/api/sse';
 import { t } from '@/shared/i18n';
 import { ROLES } from '@/shared/lib/enums';
 
-import { SocketMessageType } from '../../indexes/lib/constants/indexDetails.constants';
+import { IndexStatuses, SocketMessageType } from '../../indexes/lib/constants/indexDetails.constants';
 import type { IndexChatMessage } from '../../indexes/lib/helpers/indexChatMessage.types';
 import type { ToolkitChatMessage } from '../hooks/useToolkitChat.types';
 
@@ -30,14 +30,21 @@ const INDEX_RUN_PROGRESS_ID = 'index-run-progress';
 
 const SYSTEM_PARTICIPANT = 'system';
 
-function buildIndexRunProgressMessage(nowMs: number): IndexChatMessage {
+/**
+ * `startedAtMs` is the moment THIS client started the run, or `undefined` for
+ * a run it only joined (a start answered 409 names a run begun elsewhere, at a
+ * time this client was never told). The placeholder keeps it in `created_at`,
+ * with 0 for "unknown", and the summary measures its duration from it: no
+ * duration is better than a wrong one.
+ */
+function buildIndexRunProgressMessage(startedAtMs: number | undefined): IndexChatMessage {
   return {
     id: INDEX_RUN_PROGRESS_ID,
     role: ROLES.Assistant,
     content: `🔄 ${t('features.toolkits.indexRun.started', 'Indexing in progress. The steps and the result appear here.')}`,
     isLoading: true,
     isStreaming: true,
-    created_at: nowMs,
+    created_at: startedAtMs ?? 0,
     participant_id: SYSTEM_PARTICIPANT,
   };
 }
@@ -132,15 +139,59 @@ export function buildIndexRunSummaryMessage(frame: ExecutionEventData, startedAt
   };
 }
 
-/** `history` with the progress placeholder removed and `next` appended; the placeholder is the only message dropped. */
+/** The run's recorded start: carried by the placeholder, and from it by the first run message that replaced it. 0 means unknown. */
+function placeholderStart(history: readonly ToolkitChatMessage[]): number | undefined {
+  const running = history.find((message) => {
+    const flags = message as { isLoading?: boolean; isStreaming?: boolean };
+    return message.id === INDEX_RUN_PROGRESS_ID || flags.isLoading === true || flags.isStreaming === true;
+  }) as IndexChatMessage | undefined;
+  return running !== undefined && running.created_at > 0 ? running.created_at : undefined;
+}
+
+/** Every message the run left running is finished: its spinner and streaming flag go, whatever the outcome. */
+function finished(message: ToolkitChatMessage): ToolkitChatMessage {
+  const running = message as { isLoading?: boolean; isStreaming?: boolean };
+  return running.isLoading === true || running.isStreaming === true ? { ...message, isLoading: false, isStreaming: false } : message;
+}
+
+/** `history` with the run settled: the placeholder gone, every message it created finished, and `next` appended. */
 export function settleIndexRunProgress(history: readonly ToolkitChatMessage[], next: ToolkitChatMessage): ToolkitChatMessage[] {
-  return [...history.filter((message) => message.id !== INDEX_RUN_PROGRESS_ID), next];
+  return [...history.filter((message) => message.id !== INDEX_RUN_PROGRESS_ID).map(finished), next];
+}
+
+/** `settleIndexRunProgress` with the summary of a completed run, its duration measured from the recorded start. */
+export function settleIndexRunWithSummary(history: readonly ToolkitChatMessage[], frame: ExecutionEventData, nowMs: number): ToolkitChatMessage[] {
+  return settleIndexRunProgress(history, buildIndexRunSummaryMessage(frame, placeholderStart(history), nowMs));
+}
+
+/** The notice for a run the user stopped: "stopped", never "failed". The wording is the History tab's. */
+export function buildIndexRunStoppedMessage(nowMs: number): IndexChatMessage {
+  return {
+    id: crypto.randomUUID(),
+    role: ROLES.Assistant,
+    content: `⏹️ ${t('features.toolkits.indexHistory.stopped', 'Indexing was stopped before it finished.')}`,
+    isStreaming: false,
+    created_at: nowMs,
+    participant_id: SYSTEM_PARTICIPANT,
+  };
+}
+
+/** The notice for a run this client can no longer follow (no live connection to the runtime): the run may still be going. */
+export function buildIndexRunUnfollowedMessage(nowMs: number): IndexChatMessage {
+  return {
+    id: crypto.randomUUID(),
+    role: ROLES.Assistant,
+    content: `⚠️ ${t('features.toolkits.indexRun.unfollowed', 'The live view of this run could not be opened. The run may still be going; its result appears in History.')}`,
+    isStreaming: false,
+    created_at: nowMs,
+    participant_id: SYSTEM_PARTICIPANT,
+  };
 }
 
 /** `history` plus the placeholder, unless one is already there (a replayed start must not stack them). */
-export function addIndexRunProgress(history: readonly ToolkitChatMessage[], nowMs: number): ToolkitChatMessage[] {
+export function addIndexRunProgress(history: readonly ToolkitChatMessage[], startedAtMs: number | undefined): ToolkitChatMessage[] {
   if (history.some((message) => message.id === INDEX_RUN_PROGRESS_ID)) return [...history];
-  return [...history, buildIndexRunProgressMessage(nowMs)];
+  return [...history, buildIndexRunProgressMessage(startedAtMs)];
 }
 
 /** The frame types the index reducer applies to an EXISTING message of the run (a step, a tool call, streamed text). */
@@ -162,7 +213,7 @@ const FRAMES_ON_A_RUN_MESSAGE: ReadonlySet<string> = new Set([
  * this every step frame found nothing to attach to and was dropped (#2041).
  * The placeholder gives way to the first real message.
  */
-export function ensureRunMessage(history: readonly ToolkitChatMessage[], frameType: string, messageId: string | undefined, nowMs: number): ToolkitChatMessage[] {
+export function ensureRunMessage(history: readonly ToolkitChatMessage[], frameType: string, messageId: string | undefined): ToolkitChatMessage[] {
   // A `start_task` frame brings its own running message, so the placeholder gives way to it.
   if (frameType === SocketMessageType.StartTask) return history.filter((message) => message.id !== INDEX_RUN_PROGRESS_ID);
   if (!FRAMES_ON_A_RUN_MESSAGE.has(frameType) || messageId === undefined || messageId === '') return [...history];
@@ -174,8 +225,24 @@ export function ensureRunMessage(history: readonly ToolkitChatMessage[], frameTy
     isLoading: true,
     isStreaming: true,
     toolActions: [],
-    created_at: nowMs,
+    created_at: placeholderStart(history) ?? 0,
     participant_id: SYSTEM_PARTICIPANT,
   };
   return [...history.filter((message) => message.id !== INDEX_RUN_PROGRESS_ID), created];
+}
+
+/**
+ * The index state a `chat_predict` frame ends a run with on the socket.io
+ * transport, or `undefined` for a frame that does not end it. It mirrors the
+ * reducer's own `onFinish` calls (a tool error or a general error fails the
+ * run, a streamed frame carrying a `finish_reason` completes it) so the finish
+ * can be reported OUTSIDE the state updater, where side effects do not belong.
+ */
+export function socketFrameFinishState(frame: { readonly type: string; readonly response_metadata?: unknown }): string | undefined {
+  if (frame.type === SocketMessageType.AgentToolError || frame.type === SocketMessageType.Error || frame.type === SocketMessageType.AgentException) {
+    return IndexStatuses.fail;
+  }
+  const finishReason = (frame.response_metadata as { finish_reason?: unknown } | undefined)?.finish_reason;
+  const streamed: readonly string[] = [SocketMessageType.AgentThinkingStep, SocketMessageType.AgentThinkingStepUpdate, SocketMessageType.AgentResponse, SocketMessageType.Chunk, SocketMessageType.AIMessageChunk];
+  return streamed.includes(frame.type) && typeof finishReason === 'string' && finishReason !== '' ? IndexStatuses.success : undefined;
 }

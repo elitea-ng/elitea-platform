@@ -325,14 +325,10 @@ func (r *CurrentAuthoritativeInputResolver) applyCurrentEmbeddingModelDefault(
 	if catalog.DefaultModelName == nil {
 		// The default is the project's own, else the platform's, else the first
 		// catalogue model, so none means the catalogue is empty: there is no
-		// model this index could embed with. A toolkit that names no
-		// embedding model at all (the key is absent) stays optional, as before:
-		// not every start needs one. One that carries the field blank does,
-		// and fails here instead of in its run (#2042).
-		if present {
-			return nil, ErrNoEmbeddingModelAvailable
-		}
-		return nil, nil
+		// model this index could embed with, whether the toolkit left the field
+		// blank or never carried it. This resolver admits index_data only, and
+		// every index run embeds, so the run could only fail (#2042).
+		return nil, ErrNoEmbeddingModelAvailable
 	}
 	if *catalog.DefaultModelName == "" || catalog.DefaultModelProjectID == nil ||
 		(*catalog.DefaultModelProjectID != projectID &&
