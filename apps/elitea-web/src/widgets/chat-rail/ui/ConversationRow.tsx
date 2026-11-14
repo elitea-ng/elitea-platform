@@ -36,6 +36,7 @@ import { conversationActions, type ConversationRowActions, type RowAsks } from '
 import type { ContextAction } from '../model/contextAction';
 import { MoveToFolderDialog } from './MoveToFolderDialog';
 import { RowMenu } from './RowMenu';
+import { PinnedStatus } from './folderIcons';
 import { ShellRow } from './rows';
 
 /** The desktop's native context menu for a row; absent on the web, where the browser's own menu stays. */
@@ -214,7 +215,7 @@ export function ConversationRow({ conversation, selected, indent, actions, proje
             onClick={() => actions.open(conversation)}
             {...(onNativeContextMenu !== undefined ? { onContextMenu: (event: MouseEvent) => onNativeContextMenu(event, items) } : {})}
             bold={activityTitleBold(activity)}
-            status={<ConversationActivityGlyph kind={activityGlyph(activity)} />}
+            status={<PinnedStatus pinned={conversation.isPinned === true}><ConversationActivityGlyph kind={activityGlyph(activity)} /></PinnedStatus>}
             trailingOnHover
             trailing={<RowMenu items={items} label={t('desktop.chats.more', 'More for {{name}}', { name: label })} />}
           />

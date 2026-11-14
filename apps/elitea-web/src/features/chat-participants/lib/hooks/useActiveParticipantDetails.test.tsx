@@ -30,9 +30,9 @@ let switchToB: () => void = () => {};
 function Probe(): ReactElement {
   const [participant, setParticipant] = useState<Record<string, unknown>>(AGENT_A);
   switchToB = () => setParticipant(AGENT_B);
-  const { activeParticipantDetails, isLoadingDetails } = useActiveParticipantDetails({ activeParticipant: participant });
+  const { activeParticipantDetails, isLoadingDetails, isDetailsFailed } = useActiveParticipantDetails({ activeParticipant: participant });
   const id = activeParticipantDetails['id'];
-  return <output data-testid="details" data-loading={String(isLoadingDetails)}>{typeof id === 'number' ? String(id) : ''}</output>;
+  return <output data-testid="details" data-loading={String(isLoadingDetails)} data-failed={String(isDetailsFailed)}>{typeof id === 'number' ? String(id) : ''}</output>;
 }
 
 function renderProbe(): void {
@@ -105,4 +105,33 @@ it('reads the bound version, not the default one, when the participant carries a
   });
   render(<RouterProvider router={router} />);
   await waitFor(() => expect(screen.getByTestId('bound')).toHaveTextContent('bound welcome'));
+});
+
+it('never hands the previous agent\'s details to the next participant while its read is in flight (issue 2053)', async () => {
+  server.use(
+    http.get('*/elitea_core/application/prompt_lib/2/:id', async ({ params }) => {
+      if (params['id'] === '144') await delay(200);
+      return HttpResponse.json(params['id'] === '143' ? application(143, '164') : application(144, '165'));
+    }),
+  );
+  renderProbe();
+  await waitFor(() => expect(screen.getByTestId('details')).toHaveTextContent('143'));
+  act(() => { switchToB(); });
+  // B's read is still pending: A's version list must not be offered as B's.
+  expect(screen.getByTestId('details')).toHaveTextContent('');
+  await waitFor(() => expect(screen.getByTestId('details')).toHaveTextContent('144'));
+});
+
+it('shows nothing for participant B, and says the read failed, when its fetch fails (issue 2053)', async () => {
+  server.use(
+    http.get('*/elitea_core/application/prompt_lib/2/:id', ({ params }) =>
+      params['id'] === '143' ? HttpResponse.json(application(143, '164')) : HttpResponse.json({ error: 'boom' }, { status: 500 }),
+    ),
+  );
+  renderProbe();
+  await waitFor(() => expect(screen.getByTestId('details')).toHaveTextContent('143'));
+  act(() => { switchToB(); });
+  await waitFor(() => expect(screen.getByTestId('details')).toHaveAttribute('data-failed', 'true'));
+  // A's details never stand in for B's, and the guard has no version list to act on.
+  expect(screen.getByTestId('details')).toHaveTextContent('');
 });

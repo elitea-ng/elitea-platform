@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Conversation } from '@/entities/conversation';
 
-import { redistributeConversationsIntoGroups, sortConversations } from './conversationList.helpers';
+import { pinnedFoldersFirst, redistributeConversationsIntoGroups, sortConversations } from './conversationList.helpers';
 import type { ConversationGroup } from './conversationList.helpers';
 
 function mkConv(overrides: Partial<Conversation> & { readonly id: string }): Conversation {
@@ -88,5 +88,12 @@ describe('sortConversations', () => {
     const b = mkConv({ id: 'b' });
     expect(() => sortConversations([a, b])).not.toThrow();
     expect(sortConversations([a, b]).map((c) => c.id).sort()).toEqual(['a', 'b']);
+  });
+});
+
+describe('pinnedFoldersFirst', () => {
+  it('puts pinned folders first and keeps each side in its order', () => {
+    const folders = [{ id: 'a' }, { id: 'b', isPinned: true }, { id: 'c' }, { id: 'd', isPinned: true }];
+    expect(pinnedFoldersFirst(folders).map((folder) => folder.id)).toEqual(['b', 'd', 'a', 'c']);
   });
 });
