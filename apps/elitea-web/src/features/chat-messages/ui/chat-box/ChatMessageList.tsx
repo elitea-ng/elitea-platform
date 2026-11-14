@@ -28,7 +28,7 @@ import { useStickToBottom } from './useStickToBottom';
 
 import { useChatSessionStore } from '@/entities/conversation';
 import { useAgentAvatarMotion } from '../../model/agentAvatar.store';
-import { answerHasIdentity, newestAnswerByParticipant } from './answerAvatars';
+import { newestAnswerByParticipant } from './answerAvatars';
 import { WELCOME_MESSAGE_ID } from '@/shared/lib/enums';
 import { ScrollableContainer } from '@/shared/ui/ScrollableContainer';
 import type { SimpleBarInstance } from '@/shared/ui/ScrollableContainer';
@@ -115,6 +115,18 @@ function isOtherAuthor(readerId: string | undefined, authorId: string | undefine
   return reader !== undefined && author !== undefined && reader !== author;
 }
 
+/**
+ * The reader's display name for a question that is STATED to be theirs: both
+ * ids present and equal. A reloaded row names no author at all, and the reader's
+ * name must not stand in for it (a shared conversation's other people would be
+ * labelled with the reader), so that case yields nothing and the bubble falls
+ * back to "You", which is what its right-hand side already claims.
+ */
+function statedOwnerCaption(readerId: string | undefined, authorId: string | undefined, readerName: string | undefined): string | undefined {
+  const reader = statedAuthorId(readerId);
+  return reader !== undefined && reader === statedAuthorId(authorId) ? readerName : undefined;
+}
+
 /** Baseline `ChatMessageWrapper.jsx`'s `canDeleteThisAIMessage` — whether `userId` authored the question this AI answer replies to. */
 function canDeleteAiMessage(
   chatHistory: readonly ChatMessage[],
@@ -152,7 +164,7 @@ export function ChatMessageList({
   } = {},
   pagination: { isLoadingMore = false, onScrollToTop } = {},
   emptyState,
-  assistant: { name: assistantName, conversationUuid } = {},
+  assistant: { name: assistantName, conversationUuid, readerName } = {},
   steering,
 }: ChatMessageListProps): ReactNode {
   const scrollRef = useRef<SimpleBarInstance | null>(null);
@@ -176,12 +188,6 @@ export function ChatMessageList({
   // than invented.
   // Steering (contract 1.27): an injected message that the transcript already holds is not shown two times.
   const transcriptIds = useMemo(() => new Set(chatHistory.map((message) => message.id)), [chatHistory]);
-  // A name over each reply only when more than one assistant answers here.
-  const isMultiAssistant = useMemo(() => {
-    const names = new Set(chatHistory.filter((msg) => msg.role !== 'user').map((msg) => msg.authorName ?? assistantName ?? ''));
-    names.delete('');
-    return names.size > 1;
-  }, [chatHistory, assistantName]);
   // One avatar per list moves: the active participant's newest answer (ADR-0050 decision 6).
   const motionOf = useAgentAvatarMotion(conversationUuid);
   const newestAnswerIds = useMemo(() => newestAnswerByParticipant(chatHistory), [chatHistory]);
@@ -325,6 +331,7 @@ export function ChatMessageList({
                   message={message}
                   messageId={messageId}
                   isOwn={!isOtherAuthor(userId, message.userId)}
+                  ownCaption={statedOwnerCaption(userId, message.userId, readerName)}
                   projectId={projectId}
                   onOpenFileInCanvas={onOpenFileInCanvas}
                   onCopy={handleCopy}
@@ -345,7 +352,7 @@ export function ChatMessageList({
                   isSpeakingMode={autoSpeak}
                   author={{
                     participantName: message.authorName ?? assistantName,
-                    showCaption: isMultiAssistant || answerHasIdentity(message),
+                    showCaption: true,
                     motion: motionOf({ participantId: message.authorParticipantId, newest: newestAnswerIds.has(message.id) }),
                   }}
                   toolActions={message.toolActions}

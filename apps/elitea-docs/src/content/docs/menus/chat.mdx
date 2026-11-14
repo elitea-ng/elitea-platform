@@ -131,6 +131,10 @@ Each category (Agents, Pipelines, Toolkits, and the MCPs category's own view) al
 
 Type `/` to search toolkits and MCPs already added to the conversation, then `/` again after a toolkit name to filter its individual tools. The result is inserted as `/ToolkitName/ToolName`, directing the AI to use that specific tool.
 
+## Who wrote a message
+
+Each message has a name line: yours shows your display name (or **You** when the conversation does not name the author), and an answer shows the agent, pipeline or model that wrote it, with its avatar. In a conversation with several people or agents the lines tell the messages apart.
+
 ## Modules
 
 Chat supports several built-in modules — image creation, data analysis, planner, smart tools selection, swarm mode, and the platform's own MCP tools — turned on from **+** → **Modules**. Image creation, swarm mode and the platform's MCP tools show disabled with a reason: the platform's worker does not run them. See [Internal tools](/menus/internal-tools) for what each one does.
@@ -181,7 +185,7 @@ When an agent or pipeline is about to call a tool your administrator has marked 
 
 ## Canvas
 
-When a response contains code, a table, a Mermaid diagram, or prose, a pencil icon (or, for a whole prose reply, the **Open as document** icon in the answer's action row) opens it in Canvas for direct, real-time collaborative editing — prose opens in a rich-text document editor with headings, lists, bold/italic/code, links, and basic tables, backed by Markdown. Canvas can also open a previously stored text-like file — from a message attachment's own toolbar, or from a bucket file in Artifacts — and save its document back to the artifact store under a bucket and filename you choose. See [How to use Canvas](/how-tos/chat-conversations/how-to-canvas).
+When a response contains code, a table, a Mermaid diagram, or prose, a pencil icon (or, for a whole prose reply, the **Open as document** icon in the answer's action row) opens it in Canvas for direct, real-time collaborative editing — prose opens in a rich-text document editor with headings, lists, bold/italic/code, links, and basic tables, backed by Markdown. You can type on any line without choosing its heading level first, and an update that arrives while you type does not move your cursor. Canvas can also open a previously stored text-like file — from a message attachment's own toolbar, or from a bucket file in Artifacts — and save its document back to the artifact store under a bucket and filename you choose. See [How to use Canvas](/how-tos/chat-conversations/how-to-canvas).
 
 ## Troubleshooting
 

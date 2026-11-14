@@ -6368,5 +6368,13 @@
   "features.agentEvaluation.insights.unavailable": "This deployment does not record consumption.",
   "features.agentEvaluation.insights.unpriced": "not priced",
   "features.agentEvaluation.enhance.instructionsUnavailable": "No instruction change was requested: {{reason}}.",
-  "features.agentEvaluation.enhance.runTarget": "This run was judged against {{operator}} {{target}}. Accepting changes the dimension’s default target, which new runs use."
+  "features.agentEvaluation.enhance.runTarget": "This run was judged against {{operator}} {{target}}. Accepting changes the dimension’s default target, which new runs use.",
+  "features.chatMessages.ownAuthorFallback": "You",
+  "pipelines.flowEditor.printerNode.finalMessagePlaceholder": "The message shown when the flow reaches this node",
+  "pipelines.valuePlaceholder.chatHistory": "Earlier messages as a JSON list, or leave empty",
+  "pipelines.valuePlaceholder.code": "Write the code to run",
+  "pipelines.valuePlaceholder.default": "Enter a value",
+  "pipelines.valuePlaceholder.system": "Describe how the assistant should behave",
+  "pipelines.valuePlaceholder.task": "Describe what the assistant should do",
+  "pipelines.valuePlaceholder.userMessage": "The message the user will see"
 }

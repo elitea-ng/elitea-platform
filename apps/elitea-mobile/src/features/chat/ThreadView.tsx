@@ -28,7 +28,7 @@ import { PackAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
 import { AVATAR_PACK_CONTRACT, avatarPacksById } from '@/features/chat/avatarPackMedia';
 import { ChatEmptyState, MODEL_CHAT_SUGGESTIONS } from '@/features/chat/ChatEmptyState';
 import { ThreadLayout, Toast, useToast } from '@/features/chat/ThreadLayout';
-import { LiveReply, PersistedMessage, QueuedMessage, SideTalkRow, SystemLine } from '@/features/chat/ThreadRows';
+import { LiveReply, OWN_LABEL, PersistedMessage, QueuedMessage, SideTalkRow, SystemLine } from '@/features/chat/ThreadRows';
 import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { SteeringMessage, steeringRows } from '@/features/chat/SteeringRows';
 import { SteeringOfferNote } from '@/features/chat/SteeringOfferNote';
@@ -979,7 +979,7 @@ export function ThreadView({
                     }
                     case 'live_user':
                       return (
-                        <MessageBubble role="user" highlight={highlight} status={item.files.length > 0 ? `Attached: ${item.files.join(', ')}` : null}>
+                        <MessageBubble role="user" meta={OWN_LABEL} highlight={highlight} status={item.files.length > 0 ? `Attached: ${item.files.join(', ')}` : null}>
                           {item.text}
                         </MessageBubble>
                       );

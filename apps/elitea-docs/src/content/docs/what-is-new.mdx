@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Chat names, the canvas caret, pipeline permissions and node hints
+
+Every message in a chat now has a name line: your own messages show your display name (or **You** when the conversation does not name the author), and every answer shows the agent, pipeline or model that wrote it, with its avatar. This applies in the web app, the desktop app and the mobile app. In the canvas document editor, a live update of the same text no longer throws the cursor to the end of the document, so you can keep typing in the heading you are on without selecting its heading level first. A pipeline can be edited, YAML view included, by exactly the people who can edit an agent in the same project (the project's admin and editor roles); a published pipeline stays read-only, as an agent does. Empty **Value** fields in the LLM, HITL, Code and Printer nodes now show a hint (for example "Describe how the assistant should behave"), with the label kept above the field.
+
 ## Edit with AI fills the agent's fields, plus list and skill fixes
 
 **Edit with AI** on an agent now shows the generated draft as a form (name, description, instructions, welcome message, conversation starters) that you can edit, and **Apply** writes each value to its own field instead of pasting JSON into **Instructions**. Resources already attached to the agent are left as they are. In the agents, pipelines and skills lists, unselected tags in the Filters panel now stand out from the panel, and the table view shows a sort icon on the **Name & Description** and **Created** columns. In the agent's **Skills** section, the **+ Skill** menu has **Create new** (opens the New Skill page), and an attached skill is a card with open-in-new-tab and delete icons, like an attached toolkit. Folders exist only for chats; folders for agents, pipelines, skills, toolkits and MCPs are not part of the platform yet.

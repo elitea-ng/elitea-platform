@@ -35,6 +35,8 @@ export interface ChatMessage {
   mine: boolean;
   /** Display name of the author: the agent, or another person; null for "me". */
   author: string | null;
+  /** The signed-in user's own display name on their own message, when the conversation names it. */
+  ownName?: string | null;
   text: string;
   /** Epoch ms, or null if the server sent nothing parsable. */
   createdAt: number | null;
@@ -268,6 +270,7 @@ export function toChatMessages(
       authorParticipantId: asInt(group.author_participant_id),
       mine: who.mine,
       author: who.named ? participantName(author) : null,
+      ownName: who.mine && !who.named ? participantName(author) : null,
       text,
       createdAt: parseServerTime(group.created_at),
       isStreaming: group.is_streaming === true,

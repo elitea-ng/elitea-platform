@@ -98,6 +98,8 @@ export interface ChatMessageListAssistant {
    * A persisted authorName takes precedence over the composer selection.
    */
   readonly name?: string | undefined;
+  /** The signed-in reader's display name, shown over their own questions. */
+  readonly readerName?: string | undefined;
   /**
    * The conversation whose `agent_state` frames drive the answer avatars
    * (ADR-0050 decision 6). Omitted, every avatar shows its still.

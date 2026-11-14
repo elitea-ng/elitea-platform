@@ -152,7 +152,7 @@ describe('UserMessage author caption', () => {
 /**
  * The row is drawn as a chat, not as the baseline's caption line
  * (`<avatar> <author> to <recipient>` over every bubble, the time hard right):
- * the reader's own question is a right-hand bubble with no name at all,
+ * the reader's own question is a right-hand bubble under their name,
  * anyone else's a left-hand bubble under only their name, and the time rides
  * at the end of the action row. Asserted structurally — a style-only check
  * would keep passing if the caption line came back.
@@ -168,14 +168,13 @@ describe('UserMessage chat layout', () => {
     );
   }
 
-  it("draws the reader's own question on the right, with no name, avatar or recipient", () => {
+  it("draws the reader's own question on the right, labelled 'You', with no avatar or recipient", () => {
     stubCurrentAuthor();
-    renderOne(true, { name: READER, userId: 'me', sentTo: { entity_name: 'dummy', entity_meta: {}, meta: {} } });
+    renderOne(true, { name: '', userId: 'me', sentTo: { entity_name: 'dummy', entity_meta: {}, meta: {} } });
 
     expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-end' });
     expect(screen.getByTestId('chat-message-body').textContent).toBe('hello');
-    expect(screen.queryByText(READER)).toBeNull();
-    expect(screen.queryByTestId('chat-message-author')).toBeNull();
+    expect(screen.getByTestId('chat-message-author')).toHaveTextContent('You');
     expect(screen.queryByTestId('chat-message-avatar')).toBeNull();
     expect(screen.queryByText('Elitea')).toBeNull();
   });

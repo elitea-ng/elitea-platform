@@ -25,6 +25,9 @@ import { Button, Icon, Text } from '@/ui';
  * (`/c/[id]`) and its development preview (`/design-chat`), so the preview draws what users see.
  */
 
+/** The label over the reader's own message when the conversation does not name them. */
+export const OWN_LABEL = 'You';
+
 /** "Research · 9:41": who answered and when (the time in the device's own format). */
 export function messageMeta(author: string | null, createdAt: number | null, now: number = Date.now()): string | null {
   if (author === null && createdAt === null) return null;
@@ -94,7 +97,7 @@ export function PersistedMessage({
       role={message.role}
       mine={message.mine}
       author={message.author}
-      meta={answer || !message.mine ? messageMeta(answer ? answerAuthorLine(message.author, message.authorRole, message.messageClass) : message.author, message.createdAt) : null}
+      meta={messageMeta(answer ? answerAuthorLine(message.author, message.authorRole, message.messageClass) : message.mine ? (message.ownName ?? OWN_LABEL) : message.author, message.createdAt)}
       avatar={answer ? avatar : undefined}
       status={status}
       error={message.error}
@@ -208,6 +211,7 @@ export function QueuedMessage({
   return (
     <MessageBubble
       role="user"
+      meta={OWN_LABEL}
       status={status.error ? null : status.text}
       error={status.error ? status.text : null}
       actions={<RowActions actions={actions} />}>

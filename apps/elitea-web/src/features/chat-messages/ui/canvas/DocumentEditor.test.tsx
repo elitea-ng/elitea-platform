@@ -12,7 +12,7 @@
  */
 import { createRef } from 'react';
 
-import { waitFor } from '@testing-library/react';
+import { act, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
@@ -113,5 +113,48 @@ describe('DocumentEditor (issue #879)', () => {
     const bold = await findByTestId('canvas-document-bold');
     expect(getComputedStyle(bold).color).toContain('text-secondary');
     expect(getComputedStyle(bold).color).not.toContain('tabButton');
+  });
+});
+
+/**
+ * Issue 2034: editing was only possible on the line whose heading level was
+ * selected. The cause was `setCode` (the canvas-sync write) rebuilding the
+ * document through `setContent` even for an echo of the reader's own text,
+ * which parks the caret at the end of the document: the next keystrokes landed
+ * in the last block, not in the heading being edited.
+ */
+describe('DocumentEditor keeps the caret through a canvas sync (issue 2034)', () => {
+  async function typeIntoSecondHeading() {
+    const { ref, container } = renderDocumentEditor('# Title\n\n## Second\n\nbody\n');
+    await waitFor(() => expect(container.querySelector('.ProseMirror h2')).not.toBeNull());
+    const pm = container.querySelector('.ProseMirror') as HTMLElement;
+    const text = (pm.querySelector('h2') as HTMLElement).firstChild as Text;
+    pm.focus();
+    document.getSelection()?.collapse(text, 3);
+    document.dispatchEvent(new Event('selectionchange'));
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    text.data = 'SecXond';
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)); });
+    return { ref, pm };
+  }
+  const caretBlock = () => document.getSelection()?.anchorNode?.parentElement?.nodeName;
+
+  it('applies a keystroke inside a heading', async () => {
+    const { ref } = await typeIntoSecondHeading();
+    expect(ref.current?.getCode()).toContain('## SecXond');
+    expect(caretBlock()).toBe('H2');
+  });
+
+  it('an echo of the same markdown leaves the caret in the heading', async () => {
+    const { ref } = await typeIntoSecondHeading();
+    await act(async () => { ref.current?.setCode(`${ref.current.getCode()}\n`); await new Promise((r) => setTimeout(r, 50)); });
+    expect(caretBlock()).toBe('H2');
+  });
+
+  it('a real external change keeps the caret where it was', async () => {
+    const { ref } = await typeIntoSecondHeading();
+    await act(async () => { ref.current?.setCode('# Title\n\n## SecXond\n\nbody changed elsewhere\n'); await new Promise((r) => setTimeout(r, 50)); });
+    expect(ref.current?.getCode()).toContain('body changed elsewhere');
+    expect(caretBlock()).toBe('H2');
   });
 });

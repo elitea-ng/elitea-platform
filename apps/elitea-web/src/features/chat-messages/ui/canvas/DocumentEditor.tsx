@@ -149,7 +149,16 @@ const DocumentEditorImpl = forwardRef<DocumentEditorHandle, DocumentEditorProps>
         redo: () => editor?.chain().focus().redo().run(),
         getCode: () => editor?.storage.markdown.getMarkdown() ?? initialMarkdown,
         setCode: (markdown: string) => {
-          editor?.commands.setContent(markdown);
+          if (!editor) return;
+          // A canvas-sync echo of what the reader already has must not touch the
+          // document: `setContent` rebuilds it and parks the caret at the end,
+          // so every echo threw the reader out of the line they were typing in
+          // (issue 2034).
+          if (editor.storage.markdown.getMarkdown().trimEnd() === markdown.trimEnd()) return;
+          const { from, to } = editor.state.selection;
+          editor.commands.setContent(markdown);
+          // A real external change replaces the text but keeps the caret where it was (clamped to the new document).
+          editor.commands.setTextSelection({ from, to });
         },
       }),
       [editor, initialMarkdown],

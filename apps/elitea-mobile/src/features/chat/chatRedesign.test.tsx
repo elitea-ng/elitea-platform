@@ -94,6 +94,16 @@ describe('answers and the live reply', () => {
     expect(screen.getByRole('button', { name: 'Like' })).toBeTruthy();
   });
 
+  it("my own message carries a name line: my name, else 'You'", async () => {
+    const mine = { ...answer, role: 'user' as const, mine: true, author: null, text: 'hi', authorRole: null };
+    const props = { highlight: { people: [], agents: [] }, opening: null, onOpenFile: null, tools: [], onOpenTool: jest.fn(), onActions: jest.fn() };
+    const view = await withQueries(<PersistedMessage message={{ ...mine, ownName: 'Alice' }} {...props} />);
+    expect(screen.getByText(/^Alice/)).toBeTruthy();
+    await view.unmount();
+    await withQueries(<PersistedMessage message={mine} {...props} />);
+    expect(screen.getByText(/^You/)).toBeTruthy();
+  });
+
   it('thinking: the typing dots and "Thinking…" for screen readers; streaming: the caret', async () => {
     const view = await render(
       <LiveReply live={sampleLive('thinking')} author="Research" onRetry={jest.fn()} onReconnect={jest.fn()} onDismiss={jest.fn()} onOpenTool={jest.fn()} usageAvailable />,
