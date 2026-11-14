@@ -35,6 +35,7 @@ import (
 	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
@@ -243,6 +244,7 @@ func fullSurfaceRouterConfig(t *testing.T) RouterConfig {
 		AppsRepo:            struct{ applications.Repository }{},
 		SkillsRepo:          struct{ v2skills.Repository }{},
 		FoldersRepo:         struct{ v2folders.Repository }{},
+		EntityFoldersRepo:   struct{ v2entityfolders.Repository }{},
 		TagsRepo:            struct{ v2tags.Repository }{},
 		AnalyticsRepo:       struct{ v2analytics.Repository }{},
 		ConvsRepo:           struct{ v2convs.Repository }{},
