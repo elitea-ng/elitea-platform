@@ -28,7 +28,7 @@ final class DataSaver: Module {
       let next = path.isConstrained || path.isExpensive
       let changed = next != self.lowData
       self.lowData = next
-      if changed && self.observing {
+      if changed {
         self.sendEvent("onChange", ["lowData": next])
       }
     }

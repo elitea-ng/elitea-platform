@@ -109,7 +109,7 @@ func applyAvatarPack(w http.ResponseWriter, body map[string]any, projectID strin
 			v.Meta = map[string]any{}
 		}
 		v.Meta["icon_meta"] = map[string]any{"url": still, "name": strings.TrimPrefix(still, agentmedia.URLPrefix)}
-	case pack == nil && stored.replacedStill != "":
+	case (pack == nil || agentmedia.IsDefaultAvatarKey(still)) && stored.replacedStill != "":
 		// The icon the body sends, else the stored one: clear it only when
 		// it is the still being removed.
 		icon := stored.replacedIcon

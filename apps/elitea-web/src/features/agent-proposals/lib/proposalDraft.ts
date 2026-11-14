@@ -90,6 +90,7 @@ export function createRequestOf(review: ReviewDraft): ApplicationCreateRequest {
           ...(review.soul.trim() !== '' ? { body: review.soul.trim() } : {}),
         }
       : undefined;
+  const avatarKey = knownAvatarKey(review.avatarKey);
   return {
     name: review.name.trim(),
     description: review.description,
@@ -105,9 +106,9 @@ export function createRequestOf(review: ReviewDraft): ApplicationCreateRequest {
         // A fresh agent: the create route's own step limit, nothing toggled.
         meta: { step_limit: 25, internal_tools: [] },
         ...(soul === undefined ? {} : { soul }),
-        ...(knownAvatarKey(review.avatarKey) === ''
+        ...(avatarKey === ''
           ? {}
-          : { avatar_pack: { schema: 'elitea.avatar_pack/v1' as const, slots: { still: { url: review.avatarKey } } } }),
+          : { avatar_pack: { schema: 'elitea.avatar_pack/v1' as const, slots: { still: { url: avatarKey } } } }),
       },
     ],
   };

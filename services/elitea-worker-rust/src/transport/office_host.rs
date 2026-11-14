@@ -522,7 +522,7 @@ async fn document_text(
 ) -> Result<String, TextExtractionFailure> {
     readable_kind(extractor.is_some(), name)?;
     let mime = elitea_content_source::mime_of(name);
-    if let (true, Some(extractor)) = (elitea_doc_extract::is_document_type(mime), extractor) {
+    if let Some(extractor) = extractor.filter(|_| elitea_doc_extract::is_document_type(mime)) {
         return match extractor
             .extract(
                 name,

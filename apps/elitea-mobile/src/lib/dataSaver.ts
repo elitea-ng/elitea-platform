@@ -81,5 +81,5 @@ function subscribe(listener: () => void): () => void {
 
 /** The low-data state, following changes while the component is mounted. */
 export function useDataSaver(): boolean {
-  return useSyncExternalStore(subscribe, isDataSaverOn, () => false);
+  return useSyncExternalStore(subscribe, () => current, () => false);
 }

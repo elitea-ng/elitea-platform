@@ -2561,6 +2561,14 @@ async fn prepare(
     } else {
         false
     };
+    // No sidecar: this process reads the document, so the run's per-document
+    // byte cap applies here too (the sidecar path lowers it the same way).
+    if elitea_doc_extract::is_document_type(&mime)
+        && !is_document
+        && bytes.len() as u64 > limits.max_document_bytes as u64
+    {
+        return Preparation::Skipped(SKIP_TOO_LARGE, plan).into();
+    }
     let sidecar_text = if is_document {
         let sent = std::mem::take(&mut bytes);
         let asked = embedded_plan
