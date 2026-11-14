@@ -23,6 +23,8 @@ describe('suiteForm', () => {
     expect(suiteFormError({ ...named, tokenLimitPerRun: '3000000000' })).toMatch(/token limit/);
     expect(suiteFormError({ ...named, costLimitPerCase: '-1' })).toMatch(/cost limit/);
     expect(suiteFormError({ ...named, costLimitPerRun: 'abc' })).toMatch(/cost limit/);
+    expect(suiteFormError({ ...named, costLimitPerRun: '0.00001' })).toMatch(/cost limit/);
+    expect(suiteFormError({ ...named, costLimitPerRun: '0.0001' })).toBeUndefined();
     expect(suiteFormError({ ...named, tokenLimitPerRun: '1', costLimitPerRun: '0.5' })).toBeUndefined();
   });
 

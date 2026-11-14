@@ -158,6 +158,15 @@ func (r *EvalRunsRepo) RecordHumanScore(
 		return evaluation.HumanScoreRecorded{}, wrapEvalWrite("human score result", err)
 	}
 
+	// The run row is locked BEFORE the headline is computed, the way FinishRun
+	// locks it: a score that lands while the run finishes is then either seen
+	// by FinishRun's recompute or applied to the finished run here, and the
+	// stored headline cannot be left stale.
+	var runStatus string
+	if err := tx.QueryRow(ctx, fmt.Sprintf(
+		`SELECT status FROM %s.eval_runs WHERE id = $1 FOR UPDATE`, schema), runID).Scan(&runStatus); err != nil {
+		return evaluation.HumanScoreRecorded{}, fmt.Errorf("eval human scores: lock run: %w", err)
+	}
 	rows, err := tx.Query(ctx, fmt.Sprintf(`
 		SELECT normalized_score FROM %s.eval_results
 		WHERE run_id = $1 AND status = 'ok' AND normalized_score IS NOT NULL`, schema), runID)

@@ -293,3 +293,34 @@ func TestHeadlineFromScores(t *testing.T) {
 		t.Errorf("headline = %v, want 87.5", got)
 	}
 }
+
+// A case that was partly finished when its worker stopped keeps the bindings it
+// settled. A reviewer's score on one must survive the resume; before, every
+// binding was re-run and the pending status was stored over it.
+func TestResumedPartlyFinishedCaseKeepsAReviewersScore(t *testing.T) {
+	t.Parallel()
+
+	repo, run := humanRun()
+	run.Snapshot.Dimensions["3"] = SnapshotDimension{Name: "Helpfulness", ScaleType: ScaleOrdinal, ScaleMin: 1, ScaleMax: 5, Polarity: PolarityHigherBetter}
+	run.Snapshot.Bindings = append(run.Snapshot.Bindings, SnapshotBinding{DimensionID: "3", Engine: EngineAI, Weight: 1})
+	repo.seedRun(run)
+	native, normalized := 4.0, 75.0
+	repo.results = map[string]RunResult{
+		// Case 11: the human dimension was scored by a reviewer; the AI one is not stored yet.
+		"1/11/7": {RunID: "1", DatasetCaseID: "11", DimensionID: "7", Status: ResultStatusOK, NativeScore: &native, NormalizedScore: &normalized,
+			Verdict: map[string]any{"scored_by": "human"}},
+	}
+	judge := &scriptedJudge{}
+	NewOrchestrator(repo, judge, &stubCompleter{answer: "an answer"}, quietLogger()).
+		Execute(context.Background(), RunRef{ProjectID: "1", RunID: "1"})
+
+	for _, result := range repo.storedResults() {
+		if result.DatasetCaseID == "11" && result.DimensionID == "7" &&
+			(result.Status != ResultStatusOK || result.NativeScore == nil || *result.NativeScore != 4) {
+			t.Fatalf("the reviewer's score was overwritten: %+v", result)
+		}
+	}
+	if judge.calls != 2 {
+		t.Errorf("judge called %d times, want 2 (the AI binding of each case; the settled human cell is skipped)", judge.calls)
+	}
+}

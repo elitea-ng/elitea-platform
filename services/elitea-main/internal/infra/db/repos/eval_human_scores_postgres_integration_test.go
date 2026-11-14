@@ -290,3 +290,72 @@ func TestEvaluationUsageReadsRunAndCaseSpendFromTheRequestLog(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 0, none.Tokens)
 }
+
+// A resumed run re-saves its results. Saving `pending_human` over a score a
+// reviewer recorded is refused by the upsert itself.
+func TestEvalSaveResultNeverMovesAHumanScoreBackToPending(t *testing.T) {
+	fixture := newEvalRunFixture(t)
+	router := humanScoreRouter(fixture)
+	dimensionID := fixture.seedHumanDimension(t)
+	run := fixture.startHumanRun(t, router, dimensionID)
+	ctx := context.Background()
+
+	if response := callEvalRoute(t, router, http.MethodPost, "/eval_human_scores/prompt_lib/1/"+run.ID,
+		scoreBody(fixture.caseIDs[0], dimensionID, 4, "")); response.Code != http.StatusCreated {
+		t.Fatalf("score: %d %s", response.Code, response.Body.String())
+	}
+	if err := fixture.repo.SaveResult(ctx, "1", evaluation.RunResult{
+		RunID: run.ID, DatasetCaseID: fixture.caseIDs[0], DimensionID: dimensionID,
+		Status: evaluation.ResultStatusPendingHuman,
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	results, _, err := fixture.repo.ListResults(ctx, "1", run.ID, evaluation.ResultPage{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range results {
+		if result.DatasetCaseID == fixture.caseIDs[0] && (result.Status != evaluation.ResultStatusOK || result.NativeScore == nil) {
+			t.Fatalf("the score was moved back: %+v", result)
+		}
+	}
+}
+
+// FinishRun computes the headline from the stored results, not from the number
+// the caller read earlier: a score that landed in between is counted.
+func TestEvalFinishRunRecomputesTheHeadlineFromStoredResults(t *testing.T) {
+	fixture := newEvalRunFixture(t)
+	router := humanScoreRouter(fixture)
+	dimensionID := fixture.seedHumanDimension(t)
+	body := fmt.Sprintf(`{"dataset_id":%q,"application_id":900,"application_version_id":%d,"dimension_ids":[%q]}`,
+		fixture.dataset, fixture.version, dimensionID)
+	started := callEvalRoute(t, router, http.MethodPost, "/eval_runs/prompt_lib/1", body)
+	var run evaluation.Run
+	if err := json.Unmarshal(started.Body.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, caseID := range fixture.caseIDs {
+		if err := fixture.repo.SaveResult(ctx, "1", evaluation.RunResult{
+			RunID: run.ID, DatasetCaseID: caseID, DimensionID: dimensionID, Status: evaluation.ResultStatusPendingHuman,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := fixture.repo.ClaimRun(ctx, "1", run.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A reviewer scores while the run is still running; the run's own headline
+	// read (nil) is stale by the time it finishes.
+	if response := callEvalRoute(t, router, http.MethodPost, "/eval_human_scores/prompt_lib/1/"+run.ID,
+		scoreBody(fixture.caseIDs[0], dimensionID, 5, "")); response.Code != http.StatusCreated {
+		t.Fatalf("score: %d %s", response.Code, response.Body.String())
+	}
+	stale := 10.0
+	if err := fixture.repo.FinishRun(ctx, "1", run.ID, evaluation.RunStatusFinished, &stale, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.readRun(t, run.ID); got.HeadlineScore == nil || *got.HeadlineScore != 100 {
+		t.Fatalf("headline = %v, want 100 from the stored score and not the stale 10", got.HeadlineScore)
+	}
+}

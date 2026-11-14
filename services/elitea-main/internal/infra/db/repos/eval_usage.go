@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -43,25 +44,12 @@ func (r *AnalyticsRepo) EvaluationUsage(ctx context.Context, projectIDRaw, runID
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	schema := pgx.Identifier{"p_" + strconv.FormatInt(id, 10)}.Sanitize()
-	present, err := checkRelations(ctx, tx, "gateway.llm_request_logs", schema+".eval_runs")
+	meta, err := r.evalUsage.get(ctx, tx, id, run)
 	if err != nil {
 		return evaluation.Usage{}, err
 	}
-	if !present {
-		return evaluation.Usage{}, fmt.Errorf("evaluation usage: gateway.llm_request_logs or the project's eval_runs is absent")
-	}
-	var createdAt time.Time
-	var finishedAt *time.Time
-	if err := tx.QueryRow(ctx, `SELECT created_at, finished_at FROM `+schema+`.eval_runs WHERE id = $1`, run).
-		Scan(&createdAt, &finishedAt); err != nil {
-		return evaluation.Usage{}, fmt.Errorf("evaluation usage: run lookup: %w", err)
-	}
-	prices, err := checkRelations(ctx, tx, "gateway.gateway_models")
-	if err != nil {
-		return evaluation.Usage{}, err
-	}
-	sources := figuresSources{prices: prices}
+	createdAt, finishedAt := meta.createdAt, (*time.Time)(nil)
+	sources := figuresSources{prices: meta.prices}
 
 	var figures analytics.UsageFigures
 	if caseID == "" {
@@ -83,4 +71,53 @@ func (r *AnalyticsRepo) EvaluationUsage(ctx context.Context, projectIDRaw, runID
 		}
 	}
 	return usage, nil
+}
+
+// evalUsageMeta is what one run's usage reads need besides the log itself.
+type evalUsageMeta struct {
+	createdAt time.Time
+	prices    bool
+}
+
+// evalUsageMetaCache keeps evalUsageMeta per run, so the relation checks and
+// the run lookup run once per run and not once per read: a limit check reads
+// usage up to once per case and per judge call. Both facts are fixed for the
+// life of a run (the window stays open-ended while the run executes). The map
+// is cleared when it grows past evalUsageMetaCap, which only costs a lookup.
+type evalUsageMetaCache struct {
+	mu      sync.Mutex
+	entries map[string]evalUsageMeta
+}
+
+const evalUsageMetaCap = 1024
+
+func (c *evalUsageMetaCache) get(ctx context.Context, q analyticsQuerier, project, run int64) (evalUsageMeta, error) {
+	key := strconv.FormatInt(project, 10) + "/" + strconv.FormatInt(run, 10)
+	c.mu.Lock()
+	meta, ok := c.entries[key]
+	c.mu.Unlock()
+	if ok {
+		return meta, nil
+	}
+	schema := pgx.Identifier{"p_" + strconv.FormatInt(project, 10)}.Sanitize()
+	present, err := checkRelations(ctx, q, "gateway.llm_request_logs", schema+".eval_runs")
+	if err != nil {
+		return evalUsageMeta{}, err
+	}
+	if !present {
+		return evalUsageMeta{}, fmt.Errorf("evaluation usage: gateway.llm_request_logs or the project's eval_runs is absent")
+	}
+	if err := q.QueryRow(ctx, `SELECT created_at FROM `+schema+`.eval_runs WHERE id = $1`, run).Scan(&meta.createdAt); err != nil {
+		return evalUsageMeta{}, fmt.Errorf("evaluation usage: run lookup: %w", err)
+	}
+	if meta.prices, err = checkRelations(ctx, q, "gateway.gateway_models"); err != nil {
+		return evalUsageMeta{}, err
+	}
+	c.mu.Lock()
+	if c.entries == nil || len(c.entries) >= evalUsageMetaCap {
+		c.entries = map[string]evalUsageMeta{}
+	}
+	c.entries[key] = meta
+	c.mu.Unlock()
+	return meta, nil
 }

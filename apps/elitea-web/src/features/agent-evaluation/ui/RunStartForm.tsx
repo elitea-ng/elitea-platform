@@ -7,8 +7,8 @@
  * limits (RunSuitesPanel); the chosen suite's limits are frozen into the run.
  *
  * THE START BUTTON IS DISABLED WITH A STATED REASON, never silently. A run
- * needs a version, a dataset with at least one case, and at least one `ai`
- * dimension; a button that does nothing when pressed is how each of those
+ * needs a version, a dataset with at least one case, and at least one
+ * dimension the run can score (`ai` or `human`); a button that does nothing when pressed is how each of those
  * reads as a broken feature.
  */
 import { useState, type ReactNode } from 'react';
@@ -109,7 +109,10 @@ export function RunStartForm(props: RunStartFormProps): ReactNode {
   const { datasets, dimensions, suites, applicationId, applicationVersionId, isStarting, error, onStart } = props;
   const [datasetId, setDatasetId] = useState('');
   const [dimensionIds, setDimensionIds] = useState<string[]>([]);
-  const [suiteId, setSuiteId] = useState('');
+  const [chosenSuiteId, setChosenSuiteId] = useState('');
+  // A suite deleted while chosen is no longer a choice: the select would show
+  // blank and the start would send an id the server answers 404 to.
+  const suiteId = suites.some((suite) => suite.id === chosenSuiteId) ? chosenSuiteId : '';
 
   const blockedReason = runStartBlockedReason({ datasetId, dimensionIds, datasets, applicationVersionId });
   // The SERVER's own refusal wins. A 501 names which engine a dimension needs
@@ -147,7 +150,7 @@ export function RunStartForm(props: RunStartFormProps): ReactNode {
           label={t('features.agentEvaluation.runs.limitsLabel', 'Run limits')}
           value={suiteId}
           slotProps={{ htmlInput: { 'data-testid': 'run-suite-select' } }}
-          onChange={(event) => setSuiteId(event.target.value)}
+          onChange={(event) => setChosenSuiteId(event.target.value)}
         >
           <MenuItem value="">{t('features.agentEvaluation.runs.noLimits', 'No limits')}</MenuItem>
           {suites.map((suite) => (

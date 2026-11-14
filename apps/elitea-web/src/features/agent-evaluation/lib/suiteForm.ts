@@ -13,6 +13,8 @@ import { t } from '@/shared/i18n';
 /** The server's own bounds (evaluation.MaxTokenLimit and MaxCostLimit). */
 const MAX_TOKEN_LIMIT = 2_000_000_000;
 const MAX_COST_LIMIT = 1_000_000;
+/** The smallest cost the server's column holds. */
+const MIN_COST_LIMIT = 0.0001;
 
 export type RunLimitAction = 'stop' | 'report';
 
@@ -60,7 +62,7 @@ function parseCost(raw: string): number | null | 'invalid' {
   const text = raw.trim();
   if (text === '') return null;
   const value = Number(text);
-  return Number.isFinite(value) && value > 0 && value <= MAX_COST_LIMIT ? value : 'invalid';
+  return Number.isFinite(value) && value >= MIN_COST_LIMIT && value <= MAX_COST_LIMIT ? value : 'invalid';
 }
 
 /** The first thing wrong with the form, as a sentence, or `undefined`. */
@@ -77,7 +79,7 @@ export function suiteFormError(form: SuiteForm): string | undefined {
   if (parseCost(form.costLimitPerCase) === 'invalid' || parseCost(form.costLimitPerRun) === 'invalid') {
     return t(
       'features.agentEvaluation.suites.badCost',
-      'A cost limit is an amount in USD above 0, or empty for no limit.',
+      'A cost limit is an amount in USD of at least 0.0001, or empty for no limit.',
     );
   }
   return undefined;

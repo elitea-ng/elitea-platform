@@ -43,6 +43,9 @@ const (
 const (
 	MaxTokenLimit = 2_000_000_000
 	MaxCostLimit  = 1_000_000.0
+	// MinCostLimit is the smallest cost the column holds (numeric(14,4)): a
+	// smaller value would be stored as 0 and the table refuses it.
+	MinCostLimit = 0.0001
 )
 
 // RunLimits is the settings part of a suite. A nil limit is "no limit". Tokens
@@ -84,8 +87,8 @@ func (l RunLimits) Validate() error {
 		"cost_limit_per_case": l.CostLimitPerCase,
 		"cost_limit_per_run":  l.CostLimitPerRun,
 	} {
-		if value != nil && (math.IsNaN(*value) || math.IsInf(*value, 0) || *value <= 0 || *value > MaxCostLimit) {
-			return apierr.BadRequest(fmt.Sprintf("%s must be a positive amount of at most %.0f USD", name, MaxCostLimit))
+		if value != nil && (math.IsNaN(*value) || math.IsInf(*value, 0) || *value < MinCostLimit || *value > MaxCostLimit) {
+			return apierr.BadRequest(fmt.Sprintf("%s must be an amount of at least %g and at most %.0f USD", name, MinCostLimit, MaxCostLimit))
 		}
 	}
 	if l.OnRunLimit != RunLimitActionStop && l.OnRunLimit != RunLimitActionReport {

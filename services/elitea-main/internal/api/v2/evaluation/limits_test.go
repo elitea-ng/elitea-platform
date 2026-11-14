@@ -200,3 +200,26 @@ func TestRunLimitReachedNamesTheLimit(t *testing.T) {
 		t.Errorf("at the cost limit reported %q", which)
 	}
 }
+
+// The last case can cross the run limit. It is checked once more when every
+// case is done, so the limit is recorded; nothing is left to stop, so a "stop"
+// run finishes.
+func TestRunLimitCrossedByTheLastCaseIsRecordedAndTheRunFinishes(t *testing.T) {
+	t.Parallel()
+
+	repo, _ := limitedRun(RunLimits{TokenLimitPerRun: intPtr(100), OnRunLimit: RunLimitActionStop})
+	// 60 tokens per stored result: 0 before case 1, 60 before case 2 (under
+	// 100), 120 after the last one.
+	execute(repo, spend(repo.fakeRunRepo, 0), &scriptedJudge{})
+
+	run := repo.run("1")
+	if run.Status != RunStatusFinished {
+		t.Fatalf("status = %q (%s), want finished", run.Status, run.Error)
+	}
+	if got := len(repo.storedResults()); got != 2 {
+		t.Fatalf("stored %d results, want both cases", got)
+	}
+	if len(repo.marked) != 1 || repo.marked[0] != LimitReachedTokens {
+		t.Errorf("marked = %v, want [tokens] from the final check", repo.marked)
+	}
+}

@@ -166,6 +166,19 @@ describe('human scores on the scorecard', () => {
     expect(screen.getByTestId('human-score-save-11-7')).toHaveTextContent('Re-score');
   });
 
+  it('says a human-scored result is scored even without the right to read the score history', async () => {
+    mockPermissions([PERMISSIONS.evaluation.runRead]);
+    mockReads({
+      results: [{ ...pendingResult(), status: 'ok', native_score: 4, normalized_score: 75, verdict: { score: 4, scored_by: 'human' } }],
+    });
+    renderView();
+
+    await userEvent.click(await screen.findByTestId('evaluation-run-open-9'));
+
+    expect(await screen.findByTestId('human-score-latest')).toHaveTextContent('Scored by a reviewer.');
+    expect(screen.getByTestId('human-score-11-7')).not.toHaveTextContent('Waiting');
+  });
+
   it('shows the score but no control to someone who may only read', async () => {
     mockPermissions(READ);
     mockReads({
@@ -310,6 +323,65 @@ describe('run limits', () => {
     await waitFor(() =>
       expect(sent).toMatchObject({ dataset_id: '5', dimension_ids: ['3'], suite_id: '4' }),
     );
+  });
+
+  it('forgets a chosen suite that was deleted and starts without it', async () => {
+    mockPermissions(WRITE);
+    let suites: unknown[] = [suite];
+    mockReads({ runs: [] });
+    server.use(
+      http.get(`${BASE}/elitea_core/eval_suites/prompt_lib/:projectId`, () =>
+        HttpResponse.json({ rows: suites, total: suites.length }),
+      ),
+      http.get(`${BASE}/elitea_core/eval_datasets/prompt_lib/:projectId`, () =>
+        HttpResponse.json({
+          rows: [{ id: '5', name: 'Support', description: '', application_id: null, is_shared: false, case_count: 2, active_case_count: 2 }],
+          total: 1,
+        }),
+      ),
+      http.get(`${BASE}/elitea_core/eval_dimensions/prompt_lib/:projectId`, () =>
+        HttpResponse.json({
+          rows: [
+            {
+              id: '3', name: 'Helpfulness', description: '', tier: 'project', application_id: null,
+              allowed_engines: ['ai'], scale_type: 'ordinal', scale_min: 1, scale_max: 5, polarity: 'higher_better',
+              default_weight: 1, default_target: null, default_target_operator: '', code: '', return_contract: '',
+            },
+          ],
+          total: 1,
+        }),
+      ),
+      http.delete(`${BASE}/elitea_core/eval_suite/prompt_lib/:projectId/:suiteId`, () => {
+        suites = [];
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    let sent: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/elitea_core/eval_runs/prompt_lib/:projectId`, async ({ request }) => {
+        sent = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(run({ status: 'created' }), { status: 201 });
+      }),
+    );
+    renderView();
+
+    await userEvent.click(await screen.findByTestId('run-dimension-3'));
+    await userEvent.click(screen.getAllByRole('combobox')[0] as HTMLElement);
+    await userEvent.click(await screen.findByRole('option', { name: 'Support' }));
+    await userEvent.click(screen.getAllByRole('combobox')[1] as HTMLElement);
+    await userEvent.click(await screen.findByRole('option', { name: 'Cheap' }));
+
+    // Delete the chosen suite in the limits editor.
+    await userEvent.click(screen.getByTestId('run-limits-toggle'));
+    const panel = screen.getByTestId('run-suites-panel');
+    await userEvent.click(within(panel).getAllByRole('combobox')[0] as HTMLElement);
+    await userEvent.click(await screen.findByRole('option', { name: 'Cheap' }));
+    await userEvent.click(screen.getByTestId('suite-delete'));
+    await waitFor(() => expect(screen.queryByTestId('run-suite-select')).not.toBeInTheDocument());
+
+    await userEvent.click(screen.getByTestId('run-start'));
+    await waitFor(() => expect(sent['dataset_id']).toBe('5'));
+    expect(sent).not.toHaveProperty('suite_id');
   });
 
   it('says which limit a run reached', async () => {

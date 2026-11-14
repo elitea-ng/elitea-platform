@@ -134,15 +134,7 @@ func (g *limitGuard) beforeCase(ctx context.Context, done, total int) error {
 	if which == "" {
 		return nil
 	}
-	if g.reached == "" {
-		g.reached = which
-		if marker, ok := g.o.repo.(LimitMarker); ok {
-			if err := marker.MarkLimitReached(context.WithoutCancel(ctx), g.ref.ProjectID, g.ref.RunID, which); err != nil {
-				g.o.logger.Error("evaluation: could not record the reached limit",
-					"project_id", g.ref.ProjectID, "run_id", g.ref.RunID, "error", err)
-			}
-		}
-	}
+	g.record(ctx, which)
 	if g.limits.OnRunLimit == RunLimitActionReport {
 		return nil
 	}
@@ -159,4 +151,35 @@ func (g *limitGuard) caseBlocked(ctx context.Context, caseID string) string {
 		return ""
 	}
 	return caseLimitReason(g.limits, usage)
+}
+
+// afterLastCase checks the run limit once more when every case is done, so a
+// limit crossed by the last case is recorded. All the work is finished, so even
+// with on_run_limit=stop there is nothing left to stop: the run finishes and
+// carries the limit it reached.
+func (g *limitGuard) afterLastCase(ctx context.Context) {
+	if !g.enabled || !g.limits.hasRunLimit() {
+		return
+	}
+	usage, ok := g.read(ctx, "")
+	if !ok {
+		return
+	}
+	if which, _ := runLimitReached(g.limits, usage); which != "" {
+		g.record(ctx, which)
+	}
+}
+
+// record stores the reached limit once.
+func (g *limitGuard) record(ctx context.Context, which string) {
+	if g.reached != "" {
+		return
+	}
+	g.reached = which
+	if marker, ok := g.o.repo.(LimitMarker); ok {
+		if err := marker.MarkLimitReached(context.WithoutCancel(ctx), g.ref.ProjectID, g.ref.RunID, which); err != nil {
+			g.o.logger.Error("evaluation: could not record the reached limit",
+				"project_id", g.ref.ProjectID, "run_id", g.ref.RunID, "error", err)
+		}
+	}
 }

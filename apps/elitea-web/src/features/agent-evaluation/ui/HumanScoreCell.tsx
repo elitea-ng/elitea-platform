@@ -42,8 +42,20 @@ function scoreProblem(raw: string, dimension: EvalRunSnapshotDimension | undefin
     : t('features.agentEvaluation.humanScore.range', 'Score between {{min}} and {{max}}.', { min, max });
 }
 
-function LatestHumanScore(props: { readonly latest: EvalHumanScore | undefined }): ReactNode {
-  const { latest } = props;
+function LatestHumanScore(props: {
+  readonly latest: EvalHumanScore | undefined;
+  /** The result already carries a human score (status ok, scored_by human). */
+  readonly scored: boolean;
+}): ReactNode {
+  const { latest, scored } = props;
+  if (latest === undefined && scored) {
+    // The caller may not read the score history: the result still says it was scored.
+    return (
+      <Typography variant="bodySmall" color="text.secondary" data-testid="human-score-latest">
+        {t('features.agentEvaluation.humanScore.scoredNoHistory', 'Scored by a reviewer.')}
+      </Typography>
+    );
+  }
   if (latest === undefined) {
     return (
       <Typography variant="bodySmall" color="text.secondary">
@@ -148,13 +160,14 @@ export function HumanScoreCell(props: HumanScoreCellProps): ReactNode {
     useEvalHumanScores(permissions.canReadHumanScores ? projectId : undefined, run.id).data ?? []
   ).filter((entry) => entry.dataset_case_id === caseId && entry.dimension_id === dimensionId);
   const latest = history.at(-1);
+  const isScored = latest !== undefined || (result.status === 'ok' && result.verdict?.['scored_by'] === 'human');
 
   return (
     <Box
       sx={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}
       data-testid={`human-score-${caseId}-${dimensionId}`}
     >
-      <LatestHumanScore latest={latest} />
+      <LatestHumanScore latest={latest} scored={isScored} />
       {permissions.canScoreHuman && (
         <HumanScoreForm
           projectId={projectId}
@@ -162,7 +175,7 @@ export function HumanScoreCell(props: HumanScoreCellProps): ReactNode {
           caseId={caseId}
           dimensionId={dimensionId}
           dimension={run.snapshot?.dimensions?.[dimensionId]}
-          isRescore={latest !== undefined}
+          isRescore={isScored}
         />
       )}
     </Box>

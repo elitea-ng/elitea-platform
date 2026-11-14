@@ -9020,6 +9020,12 @@ components:
         created_by: { type: integer, format: int64, nullable: true }
         created_at: { type: string, format: date-time }
         evaluated_at: { type: string, format: date-time, nullable: true }
+        pending_reason:
+          type: string
+          description: >
+            Why a pending gate has not decided, for example "waiting for 3
+            human scores". Absent when the gate is decided or only waits for
+            its runs.
         override:
           allOf: [{ $ref: '#/components/schemas/ReleaseGateOverride' }]
           nullable: true

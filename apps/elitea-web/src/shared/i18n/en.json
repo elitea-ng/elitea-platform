@@ -6283,5 +6283,6 @@
   "features.agentEvaluation.suites.stop": "Stop the run",
   "features.agentEvaluation.suites.tokensPerCase": "Tokens per case",
   "features.agentEvaluation.suites.tokensPerRun": "Tokens per run",
-  "features.agentEvaluation.suites.whenReached": "When the run limit is reached"
+  "features.agentEvaluation.suites.whenReached": "When the run limit is reached",
+  "features.agentEvaluation.humanScore.scoredNoHistory": "Scored by a reviewer."
 }
