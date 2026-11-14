@@ -100,9 +100,8 @@ export type {
  * Drawn as a chat reply: plain text on the page background, the full width
  * of the column, on the left — no card, no shadow, no `<mark> Elitea to
  * Message` caption line. The thinking / execution-details line comes first,
- * then the text, then the action row with the time at its end. Every reply carries a
- * caption with the answering participant's mark and name (the model's name, or
- * a generic "Assistant", when the list supplies none).
+ * then the text, then the action row with the time at its end. Every reply is captioned
+ * with its participant's mark and name (the model's, or a generic "Assistant").
  */
 // eslint-disable-next-line eslint/complexity, eslint/max-lines-per-function -- integrates markdown/tool-actions/error-trace/HITL/continue/buttons; oxlint's complexity+max-lines are already disabled repo-wide for this directory (.oxlintrc.json)
 export function ApplicationAnswer({
