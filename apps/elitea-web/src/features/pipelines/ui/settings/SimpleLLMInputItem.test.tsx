@@ -74,7 +74,7 @@ describe('SimpleLLMInputItem', () => {
       const field = view.container.querySelector<HTMLInputElement | HTMLTextAreaElement>('input[name="value"], textarea[name="value"]');
       expect(field?.getAttribute('placeholder')).toBe(hint);
       // The label sits above the field, so the hint is not drawn over it.
-      expect(view.container.querySelector('label.MuiInputLabel-shrink')).not.toBeNull();
+      expect(view.container.querySelector('label[data-shrink="true"]')).not.toBeNull();
       view.unmount();
     }
   });
