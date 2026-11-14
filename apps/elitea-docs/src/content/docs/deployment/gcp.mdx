@@ -5,7 +5,7 @@ description: "The Google Cloud choices for a from-scratch install: a GKE cluster
 
 This page is the Google Cloud companion to [Deploy from scratch](/deployment/from-scratch), for chart **4.60.0 or newer**. Follow that guide step by step. Where a step has a GCP-specific answer, this page gives it. The goal is an install where **no static cloud credential exists anywhere**: object storage and the model providers authenticate as Google service accounts through GKE Workload Identity.
 
-The chart ships these answers as one example values file, `values-gke.yaml`: Cloud SQL, keyless GCS, the GKE Ingress, Google's load-balancer ranges in the NetworkPolicy, and secrets from Google Secret Manager through External Secrets, sized for about 4 vCPU and 10 GiB. [Deploy on GKE with Argo CD](/deployment/gke-argocd) installs it as one Argo CD Application, with every precondition and its command.
+The chart ships these answers as one example values file, `values-gke.yaml`: Cloud SQL, keyless GCS, the GKE Ingress, Google's load-balancer ranges in the NetworkPolicy, and secrets from Google Secret Manager through External Secrets, sized for about 4 vCPU and 10 GiB. [Deploy on GKE with Argo CD](/deployment/gke-argocd) installs it as one Argo CD Application, with every precondition and its command. Autopilot raises a container request below 50m CPU or 52Mi memory, and Argo CD then shows the drift for ever; every container the chart renders asks for at least that, so none appears. If you set your own `resources`, keep that floor.
 
 | From-scratch step | On GCP |
 |---|---|

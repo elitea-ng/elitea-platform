@@ -173,4 +173,34 @@ else
   echo "FAIL: gcs with GCS_ENDPOINT set was refused" >&2; exit 1
 fi
 
+echo "== no container requests below the GKE Autopilot minimum"
+# Autopilot raises a request under 50m CPU / 52Mi memory, and Argo CD then
+# shows the workload OutOfSync for ever (#1460). Every container of every
+# workload (init containers, hook Jobs and CronJobs included) must ask for at
+# least the minimum, so the rendered spec is what Autopilot admits.
+python3 - "$work/gke.yaml" <<'PY'
+import sys, yaml
+def cpu(v): v = str(v); return float(v[:-1]) if v.endswith("m") else float(v) * 1000
+def mem(v):
+    v = str(v)
+    for u, f in (("Gi", 1024), ("Mi", 1), ("Ki", 1 / 1024)):
+        if v.endswith(u): return float(v[:-2]) * f
+    return 0
+bad = []
+for d in yaml.safe_load_all(open(sys.argv[1])):
+    if not d: continue
+    k = d.get("kind")
+    if k in ("Deployment", "StatefulSet", "DaemonSet", "Job"): spec = d["spec"]["template"]["spec"]
+    elif k == "CronJob": spec = d["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    else: continue
+    for c in (spec.get("containers") or []) + (spec.get("initContainers") or []):
+        r = (c.get("resources") or {}).get("requests") or {}
+        if "cpu" not in r or "memory" not in r or cpu(r["cpu"]) < 50 or mem(r["memory"]) < 52:
+            bad.append("%s/%s container %s: requests %s" % (k, d["metadata"]["name"], c["name"], r or "none"))
+if bad:
+    print("FAIL: below the Autopilot minimum (50m CPU, 52Mi memory):\n  " + "\n  ".join(bad), file=sys.stderr)
+    sys.exit(1)
+print("  every container requests at least 50m / 52Mi")
+PY
+
 echo "render-gke-budget: OK"

@@ -573,7 +573,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("create object store: %w", err)
 		}
 		if err := objectStoreReadinessProbe(ctx, objectStore); err != nil {
-			return fmt.Errorf("object store readiness probe: %w", err)
+			return objectStoreProbeError(storageCfg, err)
 		}
 		if err := configureObjectStoreRetentionLifecycle(ctx, objectStore); err != nil {
 			return fmt.Errorf("configure object store retention lifecycle: %w", err)

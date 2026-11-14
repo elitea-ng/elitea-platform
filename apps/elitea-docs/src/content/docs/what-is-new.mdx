@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## GKE and Argo CD: no Autopilot drift, clearer storage error
+
+Every container the Helm chart renders now requests at least 50m CPU and 52Mi memory, the GKE Autopilot minimum, so Argo CD no longer shows the NATS sidecars, the worker's material init container, the web pod and the cleanup Job as permanently out of sync. When elitea-main cannot reach a GCS bucket with Workload Identity, the startup error now names the service-account annotation and the `roles/iam.workloadIdentityUser` binding to check. The GKE guide adds a wrapper-chart and hand-written-Ingress section and four more troubleshooting rows.
+
 ## Edit with AI fills the agent's fields, plus list and skill fixes
 
 **Edit with AI** on an agent now shows the generated draft as a form (name, description, instructions, welcome message, conversation starters) that you can edit, and **Apply** writes each value to its own field instead of pasting JSON into **Instructions**. Resources already attached to the agent are left as they are. In the agents, pipelines and skills lists, unselected tags in the Filters panel now stand out from the panel, and the table view shows a sort icon on the **Name & Description** and **Created** columns. In the agent's **Skills** section, the **+ Skill** menu has **Create new** (opens the New Skill page), and an attached skill is a card with open-in-new-tab and delete icons, like an attached toolkit. Folders exist only for chats; folders for agents, pipelines, skills, toolkits and MCPs are not part of the platform yet.

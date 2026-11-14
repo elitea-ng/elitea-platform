@@ -965,6 +965,8 @@ The test that matters. If it hangs or fails, use the table below.
 | The gateway gets timeouts from elitea-main | `networkPolicies.main.ingressFrom` does not select the gateway's data-plane pods | fix the selector |
 | Login loops back to the sign-in page | `COOKIE_SECURE` on behind plain HTTP, or a redirect URI mismatch | serve HTTPS end to end; match the URI exactly |
 | Streams stop after 15 to 60 seconds | an edge request or idle timeout | Step 7, item 2 |
+| Argo CD shows a workload `OutOfSync` for ever on GKE Autopilot | Autopilot raised a request below 50m CPU / 52Mi memory | raise your own `resources` to that floor; the chart's defaults already are |
+| A hand-written Ingress on GKE stays `UNHEALTHY` | Google's default health check is `/` (302) | health check HTTP `/healthz` on 8080, or use `main.ingress.gke` ([Deploy on GKE](/deployment/gke-argocd#edge-ip-dns-tls-and-an-optional-proxy)) |
 
 ## Keeping it running
 
