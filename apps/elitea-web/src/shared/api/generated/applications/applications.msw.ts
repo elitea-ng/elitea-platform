@@ -504,10 +504,30 @@ export const getListEvalRunsResponseMock = (
               faker.string.alpha({ length: { min: 10, max: 20 } }),
               undefined,
             ]),
+            execution_mode: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            step_limit_per_case: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([faker.number.int(), null]),
+              undefined,
+            ]),
+            time_limit_per_case_seconds: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([faker.number.int(), null]),
+              undefined,
+            ]),
+            store_tool_outputs: faker.helpers.arrayElement([
+              faker.datatype.boolean(),
+              undefined,
+            ]),
           },
           undefined,
         ]),
         suite_id: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        execution_note: faker.helpers.arrayElement([
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
         ]),
@@ -699,10 +719,30 @@ export const getStartEvalRunResponseMock = (
             faker.string.alpha({ length: { min: 10, max: 20 } }),
             undefined,
           ]),
+          execution_mode: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          step_limit_per_case: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([faker.number.int(), null]),
+            undefined,
+          ]),
+          time_limit_per_case_seconds: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([faker.number.int(), null]),
+            undefined,
+          ]),
+          store_tool_outputs: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
         },
         undefined,
       ]),
       suite_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      execution_note: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -892,10 +932,30 @@ export const getGetEvalRunResponseMock = (
             faker.string.alpha({ length: { min: 10, max: 20 } }),
             undefined,
           ]),
+          execution_mode: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          step_limit_per_case: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([faker.number.int(), null]),
+            undefined,
+          ]),
+          time_limit_per_case_seconds: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([faker.number.int(), null]),
+            undefined,
+          ]),
+          store_tool_outputs: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
         },
         undefined,
       ]),
       suite_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      execution_note: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -1085,10 +1145,30 @@ export const getCancelEvalRunResponseMock = (
             faker.string.alpha({ length: { min: 10, max: 20 } }),
             undefined,
           ]),
+          execution_mode: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          step_limit_per_case: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([faker.number.int(), null]),
+            undefined,
+          ]),
+          time_limit_per_case_seconds: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([faker.number.int(), null]),
+            undefined,
+          ]),
+          store_tool_outputs: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
         },
         undefined,
       ]),
       suite_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      execution_note: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -1279,10 +1359,30 @@ export const getGetEvalScorecardResponseMock = (
               faker.string.alpha({ length: { min: 10, max: 20 } }),
               undefined,
             ]),
+            execution_mode: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            step_limit_per_case: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([faker.number.int(), null]),
+              undefined,
+            ]),
+            time_limit_per_case_seconds: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([faker.number.int(), null]),
+              undefined,
+            ]),
+            store_tool_outputs: faker.helpers.arrayElement([
+              faker.datatype.boolean(),
+              undefined,
+            ]),
           },
           undefined,
         ]),
         suite_id: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        execution_note: faker.helpers.arrayElement([
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
         ]),
@@ -1404,6 +1504,22 @@ export const getListEvalSuitesResponseMock = (
       undefined,
     ]),
     on_run_limit: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    execution_mode: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    step_limit_per_case: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    time_limit_per_case_seconds: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([faker.number.int(), null]),
+      undefined,
+    ]),
+    store_tool_outputs: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
     created_at: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
@@ -1453,6 +1569,22 @@ export const getCreateEvalSuiteResponseMock = (
     undefined,
   ]),
   on_run_limit: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  execution_mode: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  step_limit_per_case: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  time_limit_per_case_seconds: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  store_tool_outputs: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
   created_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -1500,6 +1632,22 @@ export const getUpdateEvalSuiteResponseMock = (
     undefined,
   ]),
   on_run_limit: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  execution_mode: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  step_limit_per_case: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  time_limit_per_case_seconds: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([faker.number.int(), null]),
+    undefined,
+  ]),
+  store_tool_outputs: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
   created_at: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,

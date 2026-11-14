@@ -26,6 +26,7 @@ import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 
 import { runErrorMessage } from '../lib/evaluationError';
+import type { ExecutionMode } from '../lib/suiteForm';
 import type { EvalDimension } from '../model/types';
 
 const formSx: SxProps<Theme> = {
@@ -110,6 +111,8 @@ export function RunStartForm(props: RunStartFormProps): ReactNode {
   const [datasetId, setDatasetId] = useState('');
   const [dimensionIds, setDimensionIds] = useState<string[]>([]);
   const [chosenSuiteId, setChosenSuiteId] = useState('');
+  // '' keeps what the saved limits say, and one model call without any.
+  const [mode, setMode] = useState<ExecutionMode | ''>('');
   // A suite deleted while chosen is no longer a choice: the select would show
   // blank and the start would send an id the server answers 404 to.
   const suiteId = suites.some((suite) => suite.id === chosenSuiteId) ? chosenSuiteId : '';
@@ -161,6 +164,19 @@ export function RunStartForm(props: RunStartFormProps): ReactNode {
         </TextField>
       )}
 
+      <TextField
+        select
+        fullWidth
+        label={t('features.agentEvaluation.runs.modeLabel', 'How a case runs')}
+        value={mode}
+        slotProps={{ htmlInput: { 'data-testid': 'run-mode-select' } }}
+        onChange={(event) => setMode(event.target.value as ExecutionMode | '')}
+      >
+        <MenuItem value="">{t('features.agentEvaluation.runs.modeDefault', 'As the saved limits set')}</MenuItem>
+        <MenuItem value="predict_blocking">{t('features.agentEvaluation.runs.modeModelCall', 'One model call')}</MenuItem>
+        <MenuItem value="runtime_plane">{t('features.agentEvaluation.runs.modeAgentRun', 'Agent run')}</MenuItem>
+      </TextField>
+
       <Typography variant="bodySmall" color="text.secondary">
         {t('features.agentEvaluation.runs.dimensionsLabel', 'Score against')}
       </Typography>
@@ -191,6 +207,7 @@ export function RunStartForm(props: RunStartFormProps): ReactNode {
             dimension_ids: dimensionIds,
             trigger_type: 'on_demand',
             ...(suiteId === '' ? {} : { suite_id: suiteId }),
+            ...(mode === '' ? {} : { execution_mode: mode }),
           });
         }}
       >

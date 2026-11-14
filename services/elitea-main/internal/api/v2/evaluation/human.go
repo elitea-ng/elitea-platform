@@ -91,8 +91,16 @@ type HumanScoreRepository interface {
 
 // HumanScoreHandler serves the human score routes.
 type HumanScoreHandler struct {
-	runs   RunRepository
-	scores HumanScoreRepository
+	runs     RunRepository
+	scores   HumanScoreRepository
+	evidence EvidenceReadCheck
+}
+
+// WithEvidenceReadCheck is RunHandler's: the result a score returns is
+// stripped of copied tool outputs unless the caller holds runs.evidence.read.
+func (h *HumanScoreHandler) WithEvidenceReadCheck(check EvidenceReadCheck) *HumanScoreHandler {
+	h.evidence = check
+	return h
 }
 
 func NewHumanScoreHandler(runs RunRepository, scores HumanScoreRepository) *HumanScoreHandler {
@@ -143,6 +151,9 @@ func (h *HumanScoreHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		apierr.Write(w, err)
 		return
+	}
+	if !h.evidence.holds(r) {
+		stripToolOutputs(&recorded.Result)
 	}
 	writeJSON(w, http.StatusCreated, recorded)
 }

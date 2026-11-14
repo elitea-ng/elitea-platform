@@ -1434,7 +1434,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 245: tenant/0245_project_entity_folders.sql, project_folders and
 	// project_folder_items, the shared per-kind folders of the Agents,
 	// Pipelines, Skills, Toolkits and MCPs lists (issue 2048). No permission.
-	require.EqualValues(t, 245, Head(tenant))
+	//
+	// 246: tenant/0246_eval_runtime_plane.sql, the runtime_plane execution
+	// mode and its per-case limits on eval_suites, and eval_case_runs, the
+	// execution each case ran as (issues 2011 step B, 2013 step 2). No
+	// permission.
+	require.EqualValues(t, 246, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
