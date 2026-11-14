@@ -22,9 +22,26 @@ describe('IndexNameWrapper', () => {
     expect(getByText('In Progress')).toBeInTheDocument();
   });
 
-  it('shows "Index processing error" for a failed index', () => {
+  it('shows a short "Failed" chip for a failed index', () => {
     const { getByText } = renderWithTheme(<IndexNameWrapper index={makeIndex('failed')} />);
-    expect(getByText('Index processing error')).toBeInTheDocument();
+    expect(getByText('Failed')).toBeInTheDocument();
+  });
+
+  it('shows the failure reason, with the gateway code turned into a sentence, instead of the generic label (#2042)', () => {
+    const index: IndexRow = {
+      id: '1',
+      metadata: {
+        collection: 'test 3',
+        state: 'failed',
+        error: "Index 'test 3' failed: the embedding gateway refused the run (model_gateway.forbidden); nothing further was embedded",
+      },
+    };
+    const { getByText, queryByText, getByRole } = renderWithTheme(<IndexNameWrapper index={index} />);
+    // The chip is short; the reason lives in the tooltip, and the button's
+    // accessible name is the generic one, not a second copy of the reason.
+    expect(getByText('Failed')).toBeInTheDocument();
+    expect(queryByText(/this project is not allowed/)).not.toBeInTheDocument();
+    expect(getByRole('button', { name: 'More information' })).toBeInTheDocument();
   });
 
   it('shows "Partially indexed" for a partly-ok index', () => {

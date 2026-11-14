@@ -476,6 +476,24 @@ describe('useToolkitChat', () => {
     expect(cancelIndexingCallback).toHaveBeenCalledWith('configuration');
   });
 
+  it('a Stop settles the running panel as "stopped", not failed (#2041)', async () => {
+    server.use(http.post(START_PATH, () => HttpResponse.json({ task_id: 'exec-1' })));
+    const stopIndexing = vi.fn().mockResolvedValue(undefined);
+    const index = { id: 'idx-1', metadata: { collection: 'my-index', task_id: 't1', state: 'created' } };
+    const { box } = renderToolkitChat(baseParams({ modes: [], stopIndexing, index }));
+    await waitFor(() => expect(box.current).toBeDefined());
+    act(() => box.current?.handleIndexData());
+    await waitFor(() => expect(box.current?.chatHistory[0]?.id).toBe('index-run-progress'));
+
+    act(() => {
+      box.current?.onCancelIndexing();
+    });
+
+    await waitFor(() => expect(stopIndexing).toHaveBeenCalled());
+    await waitFor(() => expect(box.current?.chatHistory.map((message) => message.id)).not.toContain('index-run-progress'));
+    expect(box.current?.chatHistory.at(-1)?.content).toContain('Indexing was stopped before it finished.');
+  });
+
   it('onCancelIndexing reports the error instead when stopIndexing rejects', async () => {
     const stopIndexing = vi.fn().mockRejectedValue(new Error('stop failed'));
     const onError = vi.fn();
@@ -980,9 +998,11 @@ describe('useToolkitChat', () => {
 
       act(() => box.current?.handleIndexData());
       await waitFor(() => expect(sse.getOpen()).toHaveLength(1));
-      // `startNewToolkitConversation` clears the welcome message, so the
-      // history is empty until a frame actually lands.
-      await waitFor(() => expect(box.current?.chatHistory).toHaveLength(0));
+      // `startNewToolkitConversation` clears the welcome message; the running
+      // placeholder fills the panel until the first frame lands (#2041), so it
+      // never reads "No messages yet" while the index is in progress.
+      await waitFor(() => expect(box.current?.chatHistory).toHaveLength(1));
+      expect(box.current?.chatHistory[0]?.id).toBe('index-run-progress');
 
       act(() => {
         // The same frame the socket-path test uses, delivered over SSE.
@@ -990,6 +1010,38 @@ describe('useToolkitChat', () => {
       });
 
       await waitFor(() => expect(box.current?.chatHistory.length).toBeGreaterThan(0));
+      expect(box.current?.chatHistory.map((message) => message.id)).not.toContain('index-run-progress');
+    });
+
+    it('shows the run summary where the run was, the moment index.ingest.completed arrives, with no reload (#2041)', async () => {
+      server.use(http.post(START_PATH, () => HttpResponse.json({ task_id: 'exec-1' })));
+      const { box } = renderToolkitChat(baseParams({ modes: [] }));
+      await waitFor(() => expect(box.current).toBeDefined());
+
+      act(() => box.current?.handleIndexData());
+      await waitFor(() => expect(sse.getOpen()).toHaveLength(1));
+      await waitFor(() => expect(box.current?.chatHistory[0]?.id).toBe('index-run-progress'));
+
+      act(() => {
+        sse.emit('index.ingest.completed', JSON.stringify({ status: 'ok', message: 'Indexed 3 documents.', indexed_documents: 3, indexed_chunks: 12 }));
+      });
+
+      await waitFor(() => expect(box.current?.chatHistory).toHaveLength(1));
+      expect(box.current?.chatHistory[0]?.id).not.toBe('index-run-progress');
+      expect(box.current?.chatHistory[0]?.content).toContain('3 documents indexed (12 chunks)');
+    });
+
+    it('ends the run with the refusal sentence when the start is refused, instead of a "no live connection" notice (#2042)', async () => {
+      server.use(http.post(START_PATH, () => HttpResponse.json({ error: 'No embedding model is available to this project.' }, { status: 422 })));
+      const client = createTestSocketClient();
+      const { box } = renderToolkitChat(baseParams({ modes: [] }), client);
+      await waitFor(() => expect(box.current).toBeDefined());
+
+      act(() => box.current?.handleIndexData());
+
+      await waitFor(() => expect(box.current?.isRunning).toBe(false));
+      expect(box.current?.chatHistory.at(-1)?.content).toContain('No embedding model is available to this project.');
+      expect(client.getEmitted('chat_predict')).toHaveLength(0);
     });
 
     it('finishes the run on index.ingest.completed, mapping the server status onto the index state', async () => {

@@ -32,6 +32,7 @@ pub(crate) mod image_fit;
 pub(crate) mod inputs;
 pub(crate) mod model_steps;
 pub(crate) mod pipeline;
+mod refusal;
 pub(crate) mod slug;
 pub(crate) mod source;
 pub(crate) mod tools;
