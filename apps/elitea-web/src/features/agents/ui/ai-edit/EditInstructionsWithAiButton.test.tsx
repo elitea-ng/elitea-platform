@@ -25,6 +25,14 @@ const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 
 const llmSettings = { model_name: 'qwen3.5', model_project_id: 1 } as AgentLlmSettings;
 
+const current = (instructions: string) => ({
+  name: 'Helper',
+  description: 'Helps',
+  instructions,
+  welcome_message: '',
+  conversation_starters: [] as string[],
+});
+
 function renderButton(node: ReactNode): void {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   render(
@@ -114,7 +122,7 @@ describe('EditInstructionsWithAiButton — the gate', () => {
     renderButton(
       <EditInstructionsWithAiButton
         projectId="7"
-        instructions="be helpful"
+        current={current("be helpful")}
         llmSettings={llmSettings}
         onApply={vi.fn()}
       />,
@@ -130,7 +138,7 @@ describe('EditInstructionsWithAiButton — the gate', () => {
     renderButton(
       <EditInstructionsWithAiButton
         projectId="7"
-        instructions="be helpful"
+        current={current("be helpful")}
         llmSettings={llmSettings}
         onApply={vi.fn()}
       />,
@@ -143,7 +151,7 @@ describe('EditInstructionsWithAiButton — the gate', () => {
     renderButton(
       <EditInstructionsWithAiButton
         projectId="7"
-        instructions="be helpful"
+        current={current("be helpful")}
         llmSettings={null}
         onApply={vi.fn()}
       />,
@@ -156,7 +164,7 @@ describe('EditInstructionsWithAiButton — the gate', () => {
     renderButton(
       <EditInstructionsWithAiButton
         projectId="7"
-        instructions="be helpful"
+        current={current("be helpful")}
         llmSettings={llmSettings}
         onApply={vi.fn()}
       />,
@@ -181,7 +189,7 @@ describe('EditInstructionsWithAiButton — generate and apply', () => {
     renderButton(
       <EditInstructionsWithAiButton
         projectId="7"
-        instructions="Be helpful."
+        current={current("Be helpful.")}
         llmSettings={llmSettings}
         onApply={onApply}
       />,
@@ -198,7 +206,128 @@ describe('EditInstructionsWithAiButton — generate and apply', () => {
     expect(body['llm_settings']).toMatchObject({ model_name: 'qwen3.5' });
 
     await user.click(screen.getByRole('button', { name: 'Apply' }));
-    expect(onApply).toHaveBeenCalledWith('Be friendly and concise.');
+    expect(onApply).toHaveBeenCalledWith({ instructions: 'Be friendly and concise.' });
+  });
+
+  // Issues 2045 and 2046: the prompt asks for a JSON agent configuration; it was
+  // shown raw and applied whole into Instructions.
+  it('parses a JSON draft into a pre-filled form and applies each field to its own key', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    serveConfigurations({ fallback: 'FALLBACK PROMPT' });
+    const draft = {
+      name: 'Text Helper',
+      description: 'Writes text.',
+      instructions: 'Write clearly.',
+      welcome_message: 'Hi!',
+      conversation_starters: ['Draft an email', 'Rewrite this'],
+      suggested_toolkits: [],
+    };
+    server.use(
+      http.post(`${BASE}/elitea_core/predict_llm/prompt_lib/7`, () =>
+        HttpResponse.json({ content: '```json\n' + JSON.stringify(draft) + '\n```' }),
+      ),
+    );
+    renderButton(
+      <EditInstructionsWithAiButton projectId="7" current={current('Be helpful.')} llmSettings={llmSettings} onApply={onApply} />,
+    );
+    await user.click(await screen.findByTestId('ai-edit-instructions-button'));
+    await user.type(screen.getByLabelText('What should change?'), 'friendlier');
+    await user.click(screen.getByRole('button', { name: 'Generate draft' }));
+
+    expect(await screen.findByLabelText(/^Name/)).toHaveValue('Text Helper');
+    expect(screen.getByLabelText('Instructions')).toHaveValue('Write clearly.');
+    expect(screen.getByLabelText('Welcome message')).toHaveValue('Hi!');
+    expect(screen.getByLabelText('Conversation starters (one per line)')).toHaveValue('Draft an email\nRewrite this');
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApply).toHaveBeenCalledWith({
+      name: 'Text Helper',
+      description: 'Writes text.',
+      instructions: 'Write clearly.',
+      welcome_message: 'Hi!',
+      conversation_starters: ['Draft an email', 'Rewrite this'],
+    });
+  });
+
+  /** An `instructions` value holding its own code fences made the first-fence extraction truncate. */
+  async function generateRaw(content: string, onApply = vi.fn()) {
+    const user = userEvent.setup();
+    serveConfigurations({ fallback: 'FALLBACK PROMPT' });
+    server.use(http.post(`${BASE}/elitea_core/predict_llm/prompt_lib/7`, () => HttpResponse.json({ content })));
+    renderButton(
+      <EditInstructionsWithAiButton projectId="7" current={current('Be helpful.')} llmSettings={llmSettings} onApply={onApply} />,
+    );
+    await user.click(await screen.findByTestId('ai-edit-instructions-button'));
+    await user.type(screen.getByLabelText('What should change?'), 'x');
+    await user.click(screen.getByRole('button', { name: 'Generate draft' }));
+    await waitFor(() => expect(screen.getByTestId('text-diff-modified')).toBeInTheDocument());
+    return { user, onApply };
+  }
+
+  it('parses a fenced JSON draft whose instructions contain code fences', async () => {
+    const inner = 'Use:\n```python\nprint(1)\n```\nDone.';
+    const { user, onApply } = await generateRaw('```json\n' + JSON.stringify({ name: 'N', instructions: inner }) + '\n```');
+    expect(screen.getByLabelText('Instructions')).toHaveValue(inner);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApply).toHaveBeenCalledWith({ name: 'N', instructions: inner });
+  });
+
+  it('treats a malformed JSON draft (instructions not a string) as plain text', async () => {
+    const raw = JSON.stringify({ name: 'N', instructions: { a: 1 } });
+    await generateRaw(raw);
+    expect(screen.getByLabelText('Instructions')).toHaveValue(raw);
+  });
+
+  it('never applies a blank name and drops blank starters', async () => {
+    const { user, onApply } = await generateRaw(
+      JSON.stringify({ name: '  ', instructions: 'New.', conversation_starters: ['a', '', ' '] }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApply).toHaveBeenCalledWith({ instructions: 'New.', conversation_starters: ['a'] });
+  });
+
+  it('keeps an escaped {{skills}} literal while filling the real placeholders', async () => {
+    const user = userEvent.setup();
+    serveConfigurations({ authored: 'A {{skills}} B {skills} C {current_config}' });
+    let body: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/elitea_core/predict_llm/prompt_lib/7`, async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ content: 'ok' });
+      }),
+    );
+    renderButton(
+      <EditInstructionsWithAiButton projectId="7" current={current('x')} llmSettings={llmSettings} onApply={vi.fn()} />,
+    );
+    await user.click(await screen.findByTestId('ai-edit-instructions-button'));
+    await user.type(screen.getByLabelText('What should change?'), 'y');
+    await user.click(screen.getByRole('button', { name: 'Generate draft' }));
+    await waitFor(() => expect(screen.getByTestId('text-diff-modified')).toBeInTheDocument());
+    expect(String(body['user_input'])).toContain('A {skills} B (not provided) C {');
+  });
+
+  it('fills the Service Prompt placeholders with the current configuration', async () => {
+    const user = userEvent.setup();
+    serveConfigurations({ authored: 'Config: {current_config} Schema: {{"name": "x"}}' });
+    let body: Record<string, unknown> = {};
+    server.use(
+      http.post(`${BASE}/elitea_core/predict_llm/prompt_lib/7`, async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ content: 'ok' });
+      }),
+    );
+    renderButton(
+      <EditInstructionsWithAiButton projectId="7" current={current('Be {{x}} helpful.')} llmSettings={llmSettings} onApply={vi.fn()} />,
+    );
+    await user.click(await screen.findByTestId('ai-edit-instructions-button'));
+    await user.type(screen.getByLabelText('What should change?'), 'shorter');
+    await user.click(screen.getByRole('button', { name: 'Generate draft' }));
+    await waitFor(() => expect(screen.getByTestId('text-diff-modified')).toBeInTheDocument());
+    const input = String(body['user_input']);
+    expect(input).not.toContain('{current_config}');
+    expect(input).toContain('Schema: {"name": "x"}');
+    expect(input).toContain('Be {{x}} helpful.');
   });
 
   it('reports a generation failure inline and stays on the prompt step', async () => {
@@ -211,7 +340,7 @@ describe('EditInstructionsWithAiButton — generate and apply', () => {
     renderButton(
       <EditInstructionsWithAiButton
         projectId="7"
-        instructions="Be helpful."
+        current={current("Be helpful.")}
         llmSettings={llmSettings}
         onApply={vi.fn()}
       />,
@@ -235,7 +364,7 @@ describe('EditInstructionsWithAiButton — generate and apply', () => {
     renderButton(
       <EditInstructionsWithAiButton
         projectId="7"
-        instructions="Be helpful."
+        current={current("Be helpful.")}
         llmSettings={llmSettings}
         onApply={vi.fn()}
       />,
@@ -272,7 +401,7 @@ describe('EditInstructionsWithAiButton — the model', () => {
     renderButton(
       <EditInstructionsWithAiButton
         projectId="7"
-        instructions="Be helpful."
+        current={current("Be helpful.")}
         llmSettings={settings}
         onApply={vi.fn()}
       />,

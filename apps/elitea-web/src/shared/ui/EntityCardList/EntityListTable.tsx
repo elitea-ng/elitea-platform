@@ -8,6 +8,7 @@ import { t } from '@/shared/i18n';
 import { CalendarIcon } from '@/shared/ui/icons/calendar-icon';
 
 import { EntityCardAuthors } from './EntityCardAuthors';
+import { HeaderCell } from './EntityListHeaderCell';
 import type { EntityListItem } from './model';
 
 /**
@@ -71,6 +72,7 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
           <HeaderCell
             label={t('shared.entityList.table.name', 'Name & Description')}
             active={sortField === 'name'}
+            descending={descending}
             onClick={() => {
               toggleSort('name');
             }}
@@ -80,6 +82,7 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
           <HeaderCell
             label={t('shared.entityList.table.created', 'Created')}
             active={sortField === 'createdAt'}
+            descending={descending}
             onClick={() => {
               toggleSort('createdAt');
             }}
@@ -196,30 +199,6 @@ function formatCreated(iso: string): string {
   return date.toLocaleDateString(undefined, { month: 'short', day: '2-digit' });
 }
 
-interface HeaderCellProps {
-  readonly label: string;
-  readonly active?: boolean;
-  readonly onClick?: () => void;
-}
-
-function HeaderCell({ label, active = false, onClick }: HeaderCellProps): ReactNode {
-  return (
-    <Box
-      component="th"
-      scope="col"
-      sx={headerCellSx(onClick !== undefined)}
-      onClick={onClick}
-    >
-      <Typography
-        variant="labelMedium"
-        sx={headerTextSx(active)}
-      >
-        {label}
-      </Typography>
-    </Box>
-  );
-}
-
 /** `DataTable.jsx`'s `gridTemplateColumns` — `minmax(<minWidth>, 1fr)` for the name column, fixed rem widths for the rest. */
 function gridTemplateColumns(showType: boolean): string {
   return ['minmax(12.5rem, 1fr)', ...(showType ? ['9.375rem'] : []), '15rem', '8.75rem'].join(' ');
@@ -244,37 +223,6 @@ function headerSx(columns: string): SxProps<Theme> {
     border: `0.0625rem solid ${theme.vars.palette.border.lines}`,
     borderRadius: theme.vars.shape.radiusMd,
     overflow: 'hidden',
-  });
-}
-
-function headerCellSx(sortable: boolean): SxProps<Theme> {
-  return (theme: Theme) => ({
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(0.5),
-    padding: `${theme.spacing(0.5)} ${theme.spacing(1.5)}`,
-    minWidth: 0,
-    overflow: 'hidden',
-    cursor: sortable ? 'pointer' : 'default',
-  });
-}
-
-/**
- * A table header is `labelMedium` in the dim `text.primary` token (spec §2,
- * the same as MuiTableCell.head and the DataGrid header). The active sort
- * column, and a header under the pointer, read in the strong
- * `text.secondary` token instead. That colour step replaces the legacy
- * `opacity: 0.7` fade, which on top of the dim token would drop the header
- * under 4.5:1 in the light scheme.
- */
-function headerTextSx(active: boolean): SxProps<Theme> {
-  return (theme: Theme) => ({
-    color: active ? theme.vars.palette.text.secondary : theme.vars.palette.text.primary,
-    transition: 'color 0.2s ease',
-    'th:hover > &': { color: theme.vars.palette.text.secondary },
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
   });
 }
 
