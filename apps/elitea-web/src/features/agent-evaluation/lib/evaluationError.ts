@@ -51,3 +51,17 @@ export function runErrorMessage(error: unknown): string | undefined {
     t('features.agentEvaluation.runs.startFailed', 'Failed to start the run.'),
   );
 }
+
+export function suiteErrorMessage(error: unknown): string | undefined {
+  return evaluationErrorMessage(
+    error,
+    t('features.agentEvaluation.suites.saveFailed', 'Failed to save the run limits.'),
+  );
+}
+
+export function humanScoreErrorMessage(error: unknown): string | undefined {
+  return evaluationErrorMessage(
+    error,
+    t('features.agentEvaluation.humanScore.saveFailed', 'Failed to save the score.'),
+  );
+}

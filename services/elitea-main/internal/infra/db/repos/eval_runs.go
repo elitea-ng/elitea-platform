@@ -40,6 +40,7 @@ const runColumns = `
 	progress_total,
 	headline_score,
 	COALESCE(error, ''),
+	COALESCE(limit_reached, ''),
 	created_at,
 	started_at,
 	finished_at`
@@ -64,6 +65,7 @@ func scanRun(row pgx.Row) (evaluation.Run, error) {
 		&run.Progress.Total,
 		&run.HeadlineScore,
 		&run.Error,
+		&run.LimitReached,
 		&createdAt,
 		&startedAt,
 		&finishedAt,

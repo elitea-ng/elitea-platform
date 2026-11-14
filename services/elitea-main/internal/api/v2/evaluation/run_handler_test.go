@@ -149,7 +149,7 @@ func TestRunStartRefusesANonAIDimensionWithAReason(t *testing.T) {
 		t.Fatalf("code = %d, want 501: %s", response.Code, response.Body.String())
 	}
 	body := response.Body.String()
-	for _, phrase := range []string{"sandbox", "ai engine"} {
+	for _, phrase := range []string{"sandbox", "code engine"} {
 		if !strings.Contains(body, phrase) {
 			t.Errorf("the refusal does not mention %q: %s", phrase, body)
 		}
@@ -186,7 +186,7 @@ func TestRunStartValidatesTheBody(t *testing.T) {
 		"no dimensions": `{"dataset_id":"5","application_version_id":9,"dimension_ids":[]}`,
 		"no version":    `{"dataset_id":"5","dimension_ids":["3"]}`,
 		"bad trigger":   `{"dataset_id":"5","application_version_id":9,"dimension_ids":["3"],"trigger_type":"whenever"}`,
-		"unknown field": `{"dataset_id":"5","application_version_id":9,"dimension_ids":["3"],"suite_id":"1"}`,
+		"unknown field": `{"dataset_id":"5","application_version_id":9,"dimension_ids":["3"],"suite":"1"}`,
 		"too many dims": `{"dataset_id":"5","application_version_id":9,"dimension_ids":["1","2","3","4","5","6"]}`,
 	}
 	for name, body := range cases {
@@ -217,9 +217,8 @@ func TestRunStartRefusesAnEmptyDataset(t *testing.T) {
 	}
 }
 
-// The scorecard OMITS `human_scores` and says why, rather than answering `[]`.
-// An empty array tells a client "there are none"; the truth is "this deployment
-// cannot have any".
+// The scorecard still names what this release cannot serve, and human scores
+// are no longer among it: they have their own route (issue 2008).
 func TestScorecardNamesWhatItCannotServeInsteadOfAnsweringEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -237,9 +236,6 @@ func TestScorecardNamesWhatItCannotServeInsteadOfAnsweringEmpty(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if _, present := body["human_scores"]; present {
-		t.Error("the scorecard answers `human_scores`, which this release cannot produce")
-	}
 	for _, key := range []string{"run", "results", "headline_score", "total", "offset", "unavailable"} {
 		if _, present := body[key]; !present {
 			t.Errorf("the scorecard has no %q key", key)
@@ -251,12 +247,15 @@ func TestScorecardNamesWhatItCannotServeInsteadOfAnsweringEmpty(t *testing.T) {
 	}
 	found := false
 	for _, gap := range gaps {
-		if gap.Key == "human_scores" && gap.Reason != "" {
+		if gap.Key == "human_scores" {
+			t.Errorf("human scores are served now but the scorecard still lists them as unavailable: %+v", gap)
+		}
+		if gap.Key == "platform_validations" && gap.Reason != "" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("the omission of human_scores is not explained: %+v", gaps)
+		t.Errorf("the omission of platform_validations is not explained: %+v", gaps)
 	}
 }
 

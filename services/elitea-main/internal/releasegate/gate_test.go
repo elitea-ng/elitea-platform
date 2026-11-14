@@ -486,3 +486,37 @@ func TestStartingGateIsNotEvaluatedUntilStarted(t *testing.T) {
 		t.Fatalf("a stale starting gate = %s %+v, %v", result.State, result.Failures, err)
 	}
 }
+
+// A result that waits for a human score is undecided: the gate stays pending
+// while any is left, and settles once the reviewer has scored it (issue 2008).
+func TestStartGateStaysPendingWhileAResultAwaitsAHumanScore(t *testing.T) {
+	gate, store, runs, _ := newTestGate(t)
+	store.suites = []SuiteConfig{{ApplicationID: 3, DatasetID: 4, Criteria: []Criterion{threshold("1", 50)}}}
+
+	id, err := gate.StartGate(context.Background(), 1, 3, 30, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := gate.Result(context.Background(), 1, id)
+	runID := strconv.FormatInt(result.Runs[0].EvalRunID, 10)
+
+	pending := evaluation.RunResult{DatasetCaseID: "8", DimensionID: "1", Status: evaluation.ResultStatusPendingHuman}
+	runs.finish(runID, evaluation.RunStatusFinished, ok("7", "1", 100, met(true)), pending)
+
+	result, err = gate.Result(context.Background(), 1, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != StatePending {
+		t.Fatalf("a result awaiting a human score must leave the gate pending, got %s %+v", result.State, result.Failures)
+	}
+
+	runs.finish(runID, evaluation.RunStatusFinished, ok("7", "1", 100, met(true)), ok("8", "1", 90, met(true)))
+	result, err = gate.Result(context.Background(), 1, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != StatePassed {
+		t.Fatalf("after the human score the gate must decide, got %s %+v", result.State, result.Failures)
+	}
+}

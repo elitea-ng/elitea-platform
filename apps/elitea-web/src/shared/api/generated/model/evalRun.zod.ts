@@ -69,6 +69,12 @@ export const EvalRun = zod.object({
       "The mean of the run's `ok` normalised scores, or `null` when nothing was scored. NOT zero — zero is a real and very bad score.\n",
     ),
   error: zod.string().optional(),
+  limit_reached: zod
+    .string()
+    .optional()
+    .describe(
+      "`tokens` or `cost` once the run reached its run limit, whether it stopped or only reported it. Absent when it did not.\n",
+    ),
   created_at: zod.string().optional(),
   started_at: zod.string().optional(),
   finished_at: zod.string().optional(),

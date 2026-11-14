@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Agent Evaluation: human scores and run limits
+
+A dimension that only a person can score can now be used in a run: the run answers each case and waits, the scorecard shows **Waiting for a human score**, and a reviewer scores each case with a note. Scores are kept as a history (a re-score adds one), the run's overall score is recalculated after each score, and a release gate with a human dimension stays pending until every case is scored. New permissions: evaluation human-score read (admins, editors, viewers) and create (admins, editors). A **Run limits** button on the Runs tab saves token and cost limits per case and per run, and whether a run **stops** or only **reports** when its run limit is reached; the run list shows which limit a run reached. **Run the migrations** (a tenant and a shared one), and upgrade Main and the web app together. See [Evaluation](/menus/agents#evaluation).
+
 ## Pipeline editor fixes
 
 In the pipeline editor, the Agent, Toolkit and MCP node pickers and the LLM node's **Output contract** now open inside the node, and an LLM node's **Toolkits** list shows the tools a toolkit has enabled instead of **None (0/0)**. Removing a route from a Router node with the chip's **X** also removes its connection line. Router **Condition**, State Modifier **Jinja Template** and Decision **Description** fields get a copy and full-screen button on hover, and the plain **Value** full-screen editor now fills the whole window. The Type and Value rows of node inputs line up on one underline.

@@ -585,6 +585,12 @@ func (g *Gate) settle(ctx context.Context, gate GateResult) (bool, error) {
 			if !terminal {
 				return false, nil
 			}
+			// A result that waits for a human score is undecided, not
+			// failed: the gate stays pending, and the next pass decides it
+			// once a reviewer has scored every case.
+			if hasPendingHuman(read.Results) {
+				return false, nil
+			}
 			if run.Role == RoleBaseline {
 				item.Baseline = &read
 			} else {
@@ -841,4 +847,15 @@ func clientRefusal(err error) (string, bool) {
 		return apiErr.Message, true
 	}
 	return "", false
+}
+
+// hasPendingHuman reports whether any result still waits for a human score
+// (issue 2008). The gate does not decide on a score nobody has given.
+func hasPendingHuman(results []evaluation.RunResult) bool {
+	for _, result := range results {
+		if result.Status == evaluation.ResultStatusPendingHuman {
+			return true
+		}
+	}
+	return false
 }

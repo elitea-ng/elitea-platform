@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { EvalRunLimits } from "./evalRunLimits.zod";
 import { EvalRunSnapshotBinding } from "./evalRunSnapshotBinding.zod";
 import { EvalRunSnapshotDimension } from "./evalRunSnapshotDimension.zod";
 
@@ -55,6 +56,13 @@ export const EvalRunSnapshot = zod.object({
     .optional(),
   dimensions: zod.record(zod.string(), EvalRunSnapshotDimension).optional(),
   bindings: zod.array(EvalRunSnapshotBinding).optional(),
+  limits: EvalRunLimits.optional(),
+  suite_id: zod
+    .string()
+    .optional()
+    .describe(
+      "The suite the limits came from. The run never reads the suite again.",
+    ),
 });
 
 export type EvalRunSnapshot = zod.input<typeof EvalRunSnapshot>;

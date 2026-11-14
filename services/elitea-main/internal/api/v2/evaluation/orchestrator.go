@@ -99,6 +99,8 @@ type Orchestrator struct {
 	judge     Judge
 	completer Completer
 	logger    *slog.Logger
+	// usage reads the spend attributed to a run, for its limits (limits.go).
+	usage UsageReader
 
 	queue chan RunRef
 	// inFlight lets Cancel reach a running goroutine. A cancel writes the
@@ -449,7 +451,10 @@ func (o *Orchestrator) completedCases(ctx context.Context, ref RunRef, bindings 
 	}
 	settled := map[string]map[string]bool{}
 	for _, result := range results {
-		if result.Status != ResultStatusOK && result.Status != ResultStatusSkipped {
+		// pending_human is settled: re-scoring it would store the pending
+		// status over a score a reviewer may have recorded since.
+		if result.Status != ResultStatusOK && result.Status != ResultStatusSkipped &&
+			result.Status != ResultStatusPendingHuman {
 			continue
 		}
 		if settled[result.DatasetCaseID] == nil {
@@ -537,6 +542,7 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 	// them twice. A fresh run has no results, and this skips nothing.
 	completed := o.completedCases(ctx, ref, run.Snapshot.Bindings)
 
+	guard := o.newLimitGuard(ref, run)
 	done := 0
 	for _, testCase := range cases {
 		if ctx.Err() != nil {
@@ -546,6 +552,9 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 			done++
 			progress.set(done, false)
 			continue
+		}
+		if err := guard.beforeCase(ctx, done, len(cases)); err != nil {
+			return err
 		}
 
 		output, agentErr := o.agentTurn(ctx, ref, actor(run), version, testCase)
@@ -565,6 +574,12 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 					Verdict: map[string]any{"error": "this run's snapshot has no dimension for the binding"},
 				})
 				continue
+			}
+			if binding.Engine == EngineAI && agentErr == nil {
+				if reason := guard.caseBlocked(ctx, testCase.ID); reason != "" {
+					o.store(ctx, ref, caseLimitResult(ref, testCase, binding, output, reason))
+					continue
+				}
 			}
 			o.store(ctx, ref, o.scoreOne(ctx, ref, actor(run), version.ModelName, testCase, binding, dimension, output, agentErr))
 		}
@@ -616,7 +631,14 @@ func (o *Orchestrator) scoreOne(
 		return result
 	}
 
-	// Only the `ai` engine exists in this slice. A `code` binding is REFUSED
+	// A `human` binding waits for a reviewer: no judge call, no score.
+	if binding.Engine == EngineHuman {
+		result.Status = ResultStatusPendingHuman
+		result.Verdict = map[string]any{"pending": "waiting for a human score"}
+		return result
+	}
+
+	// A `code` binding is REFUSED
 	// with a named reason rather than scored: there is no sandbox in this
 	// service, and a code validation that silently returned "passed" would be
 	// the most dangerous fallback in the whole feature.
@@ -770,7 +792,8 @@ func (o *Orchestrator) store(ctx context.Context, ref RunRef, result RunResult) 
 // headline averages the NORMALISED scores of the run's `ok` results, weighted
 // by each binding's weight.
 //
-// Only `ok` rows count. An `error` row is not a zero — that is the whole
+// Only `ok` rows count (a `pending_human` row has no score yet, and the
+// headline is recomputed when a reviewer scores it). An `error` row is not a zero — that is the whole
 // reason the status exists — so a run where the judge failed on half the
 // cases reports the average of the half it could score, and the scorecard
 // shows the other half as unscored. Averaging errors as zeros would report a
@@ -786,22 +809,17 @@ func (o *Orchestrator) headline(ctx context.Context, ref RunRef) (*float64, bool
 			"project_id", ref.ProjectID, "run_id", ref.RunID, "error", err)
 		return nil, false
 	}
-	sum, count := 0.0, 0
+	scores := make([]float64, 0, len(results))
 	for _, result := range results {
 		if result.Status != ResultStatusOK || result.NormalizedScore == nil {
 			continue
 		}
-		sum += *result.NormalizedScore
-		count++
+		scores = append(scores, *result.NormalizedScore)
 	}
-	if count == 0 {
-		return nil, false
-	}
-	average := sum / float64(count)
 	// The same 2dp rounding NormalizeScore applies, so the headline and the
 	// cells it averages are printed on one scale.
-	rounded := roundTo2(average)
-	return &rounded, true
+	headline := HeadlineFromScores(scores)
+	return headline, headline != nil
 }
 
 // actor is the run's stored `created_by`, as the identity headers want it.
@@ -819,4 +837,19 @@ func actor(run Run) string {
 
 func roundTo2(value float64) float64 {
 	return math.Round(value*100) / 100
+}
+
+// caseLimitResult is the `skipped` result of a judge binding a case limit
+// kept from running. The answer stays in the evidence.
+func caseLimitResult(ref RunRef, testCase DatasetCase, binding SnapshotBinding, output, reason string) RunResult {
+	evidence := map[string]any{"input": testCase.Input, "output": output}
+	if testCase.ExpectedOutput != nil {
+		evidence["expected_output"] = *testCase.ExpectedOutput
+	}
+	return RunResult{
+		RunID: ref.RunID, DatasetCaseID: testCase.ID, DimensionID: binding.DimensionID,
+		Status:   ResultStatusSkipped,
+		Verdict:  map[string]any{"error": reason + "; the case was not judged on this dimension", "limit": "case"},
+		Evidence: evidence,
+	}
 }
