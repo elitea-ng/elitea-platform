@@ -492,8 +492,10 @@ impl ModelSteps {
                 }
                 Err(error) => self.failed_document(&error.to_string()),
             },
-            Err(CallFailure::Fatal(code)) => StepEnd::Stop(format!(
-                "the chunking model refused the run ({code}); nothing further was sent to it"
+            Err(CallFailure::Fatal(code)) => StepEnd::Stop(super::refusal::refused_run(
+                "chunking model",
+                &code,
+                "sent to it",
             )),
             Err(CallFailure::Stop(reason) | CallFailure::Cap(reason)) => StepEnd::Stop(reason),
             Err(CallFailure::Liveness(failure)) => StepEnd::Liveness(failure),
@@ -613,8 +615,10 @@ impl ModelSteps {
                     .put(key, description.clone());
                 Ok(description)
             }
-            Err(CallFailure::Fatal(code)) => Err(StepEnd::Stop(format!(
-                "the vision model refused the run ({code}); nothing further was sent to it"
+            Err(CallFailure::Fatal(code)) => Err(StepEnd::Stop(super::refusal::refused_run(
+                "vision model",
+                &code,
+                "sent to it",
             ))),
             Err(CallFailure::Liveness(failure)) => Err(StepEnd::Liveness(failure)),
             Err(CallFailure::ImageSkip(reason)) => {

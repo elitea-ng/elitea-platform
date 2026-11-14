@@ -2752,16 +2752,22 @@ mod tests {
     /// another thread for a while) leaves a current-thread runtime free:
     /// a timer started beside it fires first. Inline, the call held the
     /// runtime's one thread and the timer fired only after it.
+    ///
+    /// The holder lets go when the timer has fired (or after a 10 s
+    /// fallback), not after a fixed sleep: on a loaded Windows runner the
+    /// runtime took longer to start than the old 300 ms hold, the lock was
+    /// already free, and the store call won the race while correct.
     #[test]
     fn a_slow_store_call_does_not_hold_the_runtime() {
         let dir = tempfile::tempdir().unwrap();
         let store = SqliteGraphStore::open(&dir.path().join("index")).unwrap();
         let (held, holding) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
         let conn = Arc::clone(&store.conn);
         let holder = std::thread::spawn(move || {
             let _guard = conn.lock().unwrap_or_else(PoisonError::into_inner);
             held.send(()).unwrap();
-            std::thread::sleep(Duration::from_millis(300));
+            let _ = released.recv_timeout(Duration::from_secs(10));
         });
         holding.recv().unwrap();
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -2775,7 +2781,9 @@ mod tests {
             };
             let timer = async {
                 tokio::time::sleep(Duration::from_millis(10)).await;
-                std::time::Instant::now()
+                let fired = std::time::Instant::now();
+                let _ = release.send(());
+                fired
             };
             let ((revision, store_done), timer_done) = tokio::join!(call, timer);
             (revision, store_done, timer_done)

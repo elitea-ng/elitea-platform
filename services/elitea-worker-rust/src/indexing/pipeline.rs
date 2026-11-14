@@ -2198,8 +2198,10 @@ pub(super) fn classify_embedding_error(error: EmbeddingsError) -> EmbedOutcome {
         EmbeddingsError::Refused {
             code,
             retryable: false,
-        } => EmbedOutcome::Fatal(format!(
-            "the embedding gateway refused the run ({code}); nothing further was embedded"
+        } => EmbedOutcome::Fatal(super::refusal::refused_run(
+            "embedding gateway",
+            code,
+            "embedded",
         )),
         EmbeddingsError::TooLarge => EmbedOutcome::TooLarge,
         retryable @ (EmbeddingsError::Refused { .. }

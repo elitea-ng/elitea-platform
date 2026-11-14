@@ -777,13 +777,53 @@ func currentIndexTerminalNotificationUUID(logicalOutputID string) string {
 	)
 }
 
+// indexReplayCounts is the typed run summary the browser shows the moment a
+// run finishes (#2041), so the index view needs no reload and no History visit
+// to say what happened. Every field is absent unless the worker stated it: the
+// Python SDK path carries none of them, and its replay frame stays
+// {status, message} byte for byte. Counts are the worker's own words, never
+// parsed from the message. Duration is the client's: it saw the run start.
+type indexReplayCounts struct {
+	IndexedDocuments uint64          `json:"indexed_documents,omitempty"`
+	IndexedChunks    uint64          `json:"indexed_chunks,omitempty"`
+	FailedChunks     uint64          `json:"failed_chunks,omitempty"`
+	UnchangedDocs    *uint64         `json:"unchanged_documents,omitempty"`
+	TotalDocuments   *uint64         `json:"total_documents,omitempty"`
+	Skipped          json.RawMessage `json:"skipped,omitempty"`
+}
+
+type indexReplaySummaryBody struct {
+	Status  outputapp.IndexIngestStatus `json:"status"`
+	Message string                      `json:"message"`
+	indexReplayCounts
+}
+
+func indexReplaySummary(summary outputapp.IndexIngestSummary) indexReplaySummaryBody {
+	body := indexReplaySummaryBody{Status: summary.Status, Message: summary.Message}
+	body.IndexedDocuments = summary.IndexedDocuments
+	body.IndexedChunks = summary.IndexedChunks
+	body.FailedChunks = summary.FailedChunks
+	// A skip breakdown that is not valid JSON is left out: the rest of the
+	// summary must still reach the browser, which would otherwise get no
+	// terminal frame at all.
+	if summary.SkippedJSON != "" && json.Valid([]byte(summary.SkippedJSON)) {
+		body.Skipped = json.RawMessage(summary.SkippedJSON)
+	}
+	if summary.UnchangedPresent {
+		unchanged := summary.UnchangedDocuments
+		body.UnchangedDocs = &unchanged
+	}
+	if summary.TotalsPresent {
+		documents := summary.TotalDocuments
+		body.TotalDocuments = &documents
+	}
+	return body
+}
+
 func indexReplayData(result outputapp.IndexIngestResult) ([]byte, error) {
 	var value any
 	if result.ResultSummary != (outputapp.IndexIngestSummary{}) {
-		value = struct {
-			Status  outputapp.IndexIngestStatus `json:"status"`
-			Message string                      `json:"message"`
-		}{Status: result.ResultSummary.Status, Message: result.ResultSummary.Message}
+		value = indexReplaySummary(result.ResultSummary)
 	} else {
 		artifact := result.ResultArtifact
 		value = struct {
