@@ -659,7 +659,7 @@ fn types(events: &[NodeEventV1]) -> Vec<(String, String)> {
 }
 
 /// The stages read as steps in the shape Main projects and the index view
-/// renders; every event is valid under the NodeEvent contract.
+/// renders; every event is valid under the `NodeEvent` contract.
 #[test]
 fn stages_become_tool_steps_main_and_the_view_understand() {
     let mut narrator = Narrator::new("exec-1");
