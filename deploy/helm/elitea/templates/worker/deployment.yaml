@@ -88,7 +88,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
           resources:
-            {{- toYaml .Values.worker.materialInit.resources | nindent 12 }}
+            {{- toYaml (.Values.worker.materialInit.resources | default (dict "requests" (dict "cpu" "50m" "memory" "64Mi") "limits" (dict "memory" "128Mi"))) | nindent 12 }}
           command:
             - /bin/sh
             - -ec

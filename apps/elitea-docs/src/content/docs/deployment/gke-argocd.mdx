@@ -228,7 +228,7 @@ Argo CD renders the chart with the Helm 3 it bundles, and the chart supports tha
   ```
 
 - **KEDA in this release.** Set `keda.enabled: true` and `scaling.keda.clusterInstalled: false`, only in a cluster with no KEDA: it is one per cluster. Add KEDA's three pods to the resource budget. On the first sync the ScaledObjects come after the CRDs (each carries `SkipDryRunOnMissingResource=true`).
-- **No KEDA.** Set `scaling.keda.clusterInstalled: false`. The worker (`worker.autoscaling.source: auto`) then scales on CPU with a HorizontalPodAutoscaler, and the release notes (`helm get notes elitea -n elitea`) say so. A component that has no CPU fallback keeps its fixed replica count.
+- **No KEDA.** Set `scaling.keda.clusterInstalled: false`. The worker (`worker.autoscaling.source: auto`) then scales on CPU with a HorizontalPodAutoscaler, and the release notes (`helm template ... --show-only templates/NOTES.txt` under Argo CD) say so. A component that has no CPU fallback keeps its fixed replica count.
 
 With a Prometheus in the cluster, set `scaling.prometheus.serverAddress` and both the gateway and DeepWiki move to their Prometheus triggers, on concurrent `/llm` streams and on running invocations. [Scaling](/deployment/scaling) has what each component scales on, the disruption budgets and the grace periods.
 
@@ -238,10 +238,11 @@ With a Prometheus in the cluster, set `scaling.prometheus.serverAddress` and bot
 
 | State | CPU requests | Memory requests |
 |---|---|---|
-| Steady state | 3700m | 8768Mi |
-| Peak during a rollout (the largest single surge) | 3950m | 9920Mi |
+| Steady state | 3550m | 7680Mi |
+| Peak during a rollout (the largest single surge) | 3800m | 8192Mi |
+| Steady state with elitea-main at its autoscaler maximum of 3 | 3950m | 8448Mi |
 
-The worker is the largest pod (1.4 vCPU, 3 GiB). It does not surge: `values-gke.yaml` sets `worker.rollingUpdate` and `main.rollingUpdate` to `maxSurge: 0, maxUnavailable: 1`. The old pod stops before the new one starts. Commands wait in JetStream for the minute the new worker takes to start, and one of the two elitea-main replicas keeps serving. With a surging worker the peak would be 5.1 vCPU / 11.5 GiB. Hook Jobs run for seconds and are not counted. At elitea-main's autoscaler maximum of 3, the steady state is 4200m / 9664Mi; scaling out under load uses the cluster's headroom above the reservation. To win back 450m / 1.5 GiB, leave DeepWiki or Inventory off (`enabled: false`). Qdrant also needs a 50Gi PersistentVolumeClaim (`standard-rwo`). Every container requests at least 50m CPU, the GKE Autopilot minimum, so Autopilot does not raise a request behind the budget.
+The worker is the largest pod (1.4 vCPU, 3 GiB). It does not surge: `values-gke.yaml` sets `worker.rollingUpdate` and `main.rollingUpdate` to `maxSurge: 0, maxUnavailable: 1`. The old pod stops before the new one starts. Commands wait in JetStream for the minute the new worker takes to start, and one of the two elitea-main replicas keeps serving. With a surging worker the peak would be 4.95 vCPU / 10.5 GiB. Hook Jobs run for seconds and are not counted. At elitea-main's autoscaler maximum of 3, the steady state is 3950m / 8448Mi; scaling out under load uses the cluster's headroom above the reservation. To win back 450m / 1.5 GiB, leave DeepWiki or Inventory off (`enabled: false`). Qdrant also needs a 50Gi PersistentVolumeClaim (`standard-rwo`). Every container requests at least 50m CPU, the GKE Autopilot minimum, so Autopilot does not raise a request behind the budget.
 
 ## Steps
 
@@ -301,7 +302,7 @@ helm template elitea ./elitea -n elitea -f elitea/values-gke.yaml \
 
 For three NATS nodes, add the chart's `values-nats-ha.yaml` after `values-gke.yaml`; it raises the bootstrap's replica count with it.
 
-The release notes (`helm get notes elitea -n elitea`, or the output of `helm install`) print the `gcloud` Workload Identity bindings for the Google service accounts your values name.
+The release notes (`helm install`'s output, or, under Argo CD where there is no Helm release, `helm template elitea deploy/helm/elitea -n elitea -f values-gke.yaml -f <your overrides> --show-only templates/NOTES.txt`) print the `gcloud` Workload Identity bindings for the Google service accounts your values name.
 </Step>
 <Step title="Apply the root Application">
 Copy `deploy/argocd/examples/gke/` into your GitOps repository, point `root.yaml` at it, and apply the root once:
@@ -357,7 +358,7 @@ Argo CD deletes the bootstrap Job when it succeeds, so `argocd app get` is where
 | The worker and its ScaledObject show `OutOfSync` with `Resource not found in cluster: keda.sh/v1alpha1/ScaledObject:elitea-worker` | the worker is in wave `1`, and Argo CD does not start a wave until the one before is Healthy: an Ingress with no address (a missing TLS Secret, a wrong Service name) holds it back | fix what keeps the Ingress unhealthy; the worker is created by itself afterwards |
 | A sync hangs, and a corrected revision does not apply | the running operation still holds the Application | terminate the operation (`argocd app terminate-op <app>`, or Terminate in the UI), then sync the new revision |
 | A Certificate stays `READY=False` for `elitea-deepwiki-*` or `elitea-inventory-*`, and elitea-main waits in `Init:0/2` | an `issuerRef` names a `ClusterIssuer` that does not exist: DeepWiki and Inventory follow `certManager.issuers.internal` and `.runtime` unless their own `mtls.issuerRef.name` is set | set `certManager.issuers.create: true` (the file does), or clear the block's own `issuerRef` |
-| elitea-main exits with `object store readiness probe` and a credentials error | the Workload Identity binding is missing or names another namespace or service account (the error now says so) | run the `gcloud` commands that `helm get notes <release> -n <ns>` prints for this release's names |
+| elitea-main exits with `object store readiness probe` and a credentials error | the Workload Identity binding is missing or names another namespace or service account (the error now says so) | run the `gcloud` commands that `templates/NOTES.txt` prints for this release's names (`helm template ... --show-only templates/NOTES.txt`; there is no Helm release under Argo CD) |
 | Adding an LLM provider answers `The LLM gateway refused the host <host>` (regional Vertex hosts, for example) | the host is on neither egress list | add it on the **Gateway governance** admin page (no restart), or to `GATEWAY_EGRESS_ALLOWLIST` |
 | The sync waits on an ExternalSecret that never turns Ready | the store, or ESO's identity, cannot read the secret, or a property is missing | `kubectl -n elitea describe externalsecret <name>`; check the store's READY, ESO's `roles/secretmanager.secretAccessor` and its Workload Identity link; compare the properties with the render |
 | elitea-main CrashLoopBackOff right after a green sync, naming the bucket | the service account cannot update the bucket's lifecycle rule | grant `roles/storage.admin` on the bucket (not only `objectAdmin`) |

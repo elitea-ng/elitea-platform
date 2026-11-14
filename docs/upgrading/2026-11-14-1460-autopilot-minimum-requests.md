@@ -14,7 +14,9 @@ permanently out of sync.
     container had no resources.
   - memory request 32Mi -> 64Mi for `web`, `pgbouncer`, `objectInit` and
     `kedaCleanup`; the `kedaCleanup` template fallback CPU 10m -> 50m.
-  - `values-gke.yaml` budget: steady state about +100m / +192Mi; the header
+  - sandbox supervisor containers and the image warm-up DaemonSet: 50m / 64Mi
+    (they were 50m / 32Mi and 1m / 8Mi).
+  - `values-gke.yaml` budget: steady state about +100m / +192Mi from these defaults; the header
     table and the guide's figures are updated.
 - **What to do:** nothing. If you set your own `resources` for any of these,
   keep at least 50m / 52Mi. `deploy/helm/tests/render-gke-budget.sh` now fails

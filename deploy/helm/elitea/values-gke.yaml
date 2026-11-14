@@ -46,21 +46,21 @@
 #   agent worker                        1    1400m        3Gi      1400m   3072Mi
 #   elitea-vector                       2     100m      128Mi       200m    256Mi
 #   Qdrant                              1     250m        1Gi       250m   1024Mi
-#   DeepWiki (host + engine)            1     200m     1152Mi       200m   1152Mi
-#   Inventory (host + engine)           1     150m      384Mi       150m    384Mi
+#   DeepWiki                            1      50m       128Mi        50m    128Mi
+#   Inventory                           1      50m       128Mi        50m    128Mi
 #   OTel collector                      1      50m      128Mi        50m    128Mi
 #   NATS (server + 2 sidecars)          1     300m      640Mi       300m    640Mi
 #   ─────────────────────────────────────────────────────────────────────────
-#   STEADY STATE                                                   3800m   8960Mi
-#                                                               (3.80 vCPU, 8.75 GiB)
+#   STEADY STATE                                                   3550m   7680Mi
+#                                                               (3.55 vCPU, 7.5 GiB)
 #
 #   + the largest rollout surge. elitea-main and the worker do NOT surge
 #     here (rollingUpdate maxSurge 0 / maxUnavailable 1): a surge worker
-#     alone (+1400m/+3Gi) would take the peak to 5.1 vCPU / 11.5 GiB.
-#     The largest remaining surges are the gateway (+250m) and DeepWiki
-#     (+1152Mi), one Deployment at a time:
-#   = PEAK DURING A ROLLOUT, at most                               4050m  10112Mi
-#                                                               (4.05 vCPU, 9.9 GiB)
+#     alone (+1400m/+3Gi) would take the peak to 4.95 vCPU / 10.5 GiB.
+#     The largest remaining surge is the gateway (+250m / +512Mi), one
+#     Deployment at a time:
+#   = PEAK DURING A ROLLOUT, at most                               3800m   8192Mi
+#                                                               (3.80 vCPU, 8.0 GiB)
 #
 # Not counted, and why:
 #   * the hook Jobs (migrations, workload-session, nats-bootstrap at 50m/64Mi)
@@ -70,7 +70,7 @@
 #     the app containers, never the sum, and every init here is at or below
 #     its pod's app request;
 #   * elitea-main's autoscaler above minReplicas: at its maxReplicas of 3 the
-#     steady state is 4200m / 9664Mi, just past the CPU budget: scaling out
+#     steady state is 3950m / 8448Mi, just past the CPU budget: scaling out
 #     under load is what the headroom above the reservation is for;
 #   * PgBouncer (off: three main replicas fit Cloud SQL's connections, see
 #     postgresql below) — on, it adds 50m/64Mi;

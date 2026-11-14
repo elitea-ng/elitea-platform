@@ -573,10 +573,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("create object store: %w", err)
 		}
 		if err := objectStoreReadinessProbe(ctx, objectStore); err != nil {
-			return objectStoreProbeError(storageCfg, err)
+			return objectStoreStartupError(storageCfg, "object store readiness probe", err)
 		}
 		if err := configureObjectStoreRetentionLifecycle(ctx, objectStore); err != nil {
-			return fmt.Errorf("configure object store retention lifecycle: %w", err)
+			return objectStoreStartupError(storageCfg, "configure object store retention lifecycle", err)
 		}
 	} else {
 		logger.Info("Go artifacts capability disabled; current Centry artifacts routes remain authoritative")
