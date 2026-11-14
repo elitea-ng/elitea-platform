@@ -184,7 +184,7 @@ export function UserMessage({
   onOpenFileInCanvas,
   projectId,
 }: UserMessageProps): ReactNode {
-  const authorCaption = isOwn ? '' : resolveAuthorCaption(message);
+  const authorCaption = resolveAuthorCaption(message);
   const questionItem = useMemo(() => findQuestionItem(message.messageItems), [message.messageItems]);
   const attachmentItems = useMemo(() => findAttachmentItems(message.messageItems), [message.messageItems]);
   const resolvedContent = useMemo(

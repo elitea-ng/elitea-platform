@@ -15,6 +15,7 @@ import { t } from '@/shared/i18n';
 
 import { AIAssistantModal } from './AIAssistantModal';
 import type { AIAssistantModalProps, AiAssistantFieldBinding, AiAssistantFStringAutocomplete, AiAssistantPipelineContext } from './AIAssistantModal';
+import { visiblePlaceholderProps } from './settings/valuePlaceholder';
 import { detectContentType } from '../lib/aiAssistantLanguage';
 import type { AiAssistantLlmSettings } from '../api/aiAssistantPredict';
 
@@ -69,6 +70,8 @@ export interface AIAssistantInputProps {
   readonly fieldBinding?: AiAssistantFieldBinding;
   readonly fStringAutocomplete?: AiAssistantFStringAutocomplete;
   readonly pipelineContext?: AiAssistantPipelineContext;
+  /** The hint an empty field shows; the label then stays above the field. */
+  readonly placeholder?: string;
 }
 
 const triggerButtonSx: SxProps<Theme> = (theme) => ({
@@ -119,9 +122,11 @@ function buildInputBaseProps(
   label: ReactNode,
   disabled: boolean | undefined,
   fieldBinding: AiAssistantFieldBinding | undefined,
+  placeholder: string | undefined,
 ): InputBaseProps {
   return {
     value,
+    ...(placeholder !== undefined ? visiblePlaceholderProps(placeholder) : {}),
     ...(label !== undefined ? { label } : {}),
     ...(disabled !== undefined ? { disabled } : {}),
     ...(fieldBinding?.name !== undefined ? { name: fieldBinding.name } : {}),
@@ -165,6 +170,7 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
     fieldBinding,
     fStringAutocomplete,
     pipelineContext,
+    placeholder,
   } = props;
 
   const [showAIAssistantModal, setShowAIAssistantModal] = useState(false);
@@ -185,7 +191,7 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
   const detectedLanguage = useMemo(() => language ?? detectContentType(value), [language, value]);
 
   const triggerLabel = t('pipelines.aiAssistant.input.openTrigger', 'AI Assistant');
-  const inputBaseProps = buildInputBaseProps(value, label, disabled, fieldBinding);
+  const inputBaseProps = buildInputBaseProps(value, label, disabled, fieldBinding, placeholder);
   const modalProps = buildAiAssistantModalProps(
     { value, title: fieldName, fieldName, open: showAIAssistantModal, onClose: handleCloseAIAssistant, specifiedLanguage: detectedLanguage, modelConfig },
     { disabled, projectId, fieldBinding, fStringAutocomplete, pipelineContext },

@@ -62,6 +62,23 @@ describe('SimpleLLMInputItem', () => {
     expect(getByText('User message')).toBeInTheDocument();
   });
 
+  it.each([
+    ['system', 'Describe how the assistant should behave'],
+    ['task', 'Describe what the assistant should do'],
+    ['chat_history', 'Earlier messages as a JSON list, or leave empty'],
+    ['code', 'Write the code to run'],
+    ['anything_else', 'Enter a value'],
+  ])('an empty %s value shows a visible hint, in the AI-assistant field and in the plain one (issue 2001)', (variable, hint) => {
+    for (const assistant of [true, false]) {
+      const view = renderItem({ variableName: variable, variable, type: 'fixed', value: '', defaultValue: '', onChangeMapping: vi.fn(), enableAIAssistant: assistant });
+      const field = view.container.querySelector<HTMLInputElement | HTMLTextAreaElement>('input[name="value"], textarea[name="value"]');
+      expect(field?.getAttribute('placeholder')).toBe(hint);
+      // The label sits above the field, so the hint is not drawn over it.
+      expect(view.container.querySelector('label[data-shrink="true"]')).not.toBeNull();
+      view.unmount();
+    }
+  });
+
   it('renders a plain text field for a fixed/fstring/string type', () => {
     const { getByLabelText } = renderItem({
       variableName: 'system',

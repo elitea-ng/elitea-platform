@@ -161,7 +161,7 @@ function buildPersistedTranscript(authorUserId: number | undefined): readonly Ch
   return convertMessagesToChatHistory(messageGroups, participants);
 }
 
-function renderList(chatHistory: readonly ChatMessage[], userId: string): ReturnType<typeof render> {
+function renderList(chatHistory: readonly ChatMessage[], userId: string, assistant: { name?: string; readerName?: string } = {}): ReturnType<typeof render> {
   // jsdom implements neither smooth scrolling nor layout; the list's
   // bottom-anchor effect calls this unconditionally on mount.
   Element.prototype.scrollIntoView = vi.fn();
@@ -173,6 +173,7 @@ function renderList(chatHistory: readonly ChatMessage[], userId: string): Return
           chatHistory={chatHistory}
           projectId="90106"
           userId={userId}
+          assistant={assistant}
           messageActions={{ onSubmitEditedMessage: () => undefined, onDeleteAnswer: () => undefined }}
         />
       </ThemeProvider>
@@ -239,16 +240,31 @@ describe('ChatMessageList question-edit eligibility', () => {
  * reader's own rather than as a stranger's.
  */
 describe('ChatMessageList question side', () => {
-  it("draws the reader's own question on the right with no name", () => {
-    renderList(buildPersistedTranscript(6), '6');
+  it("draws the reader's own question on the right under the reader's name, and the answer under the assistant's", () => {
+    renderList(buildPersistedTranscript(6), '6', { name: 'Support agent', readerName: 'Alice Reader' });
     expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-end' });
-    expect(screen.queryByTestId('chat-message-author')).toBeNull();
+    const [own, answer] = screen.getAllByTestId('chat-message-author');
+    expect(own).toHaveTextContent('Alice Reader');
+    expect(answer).toHaveTextContent('agent');
   });
+
+  it("never says 'You' for a question whose author is not stated, and never uses the reader's name for it (issue 2029)", () => {
+    const history = buildPersistedTranscript(undefined).map((message) => (message.role === 'user' ? { ...message, name: '' } : message));
+    renderList(history, '6', { readerName: 'Alice Reader' });
+    expect(screen.queryByText('You')).toBeNull();
+    expect(screen.queryByText('Alice Reader')).toBeNull();
+  });
+
+  it("falls back to 'You' for a stated-own question when the reader's name is unknown", () => {
+    renderList(buildPersistedTranscript(6), '6', {});
+    expect(screen.getAllByTestId('chat-message-author')[0]).toHaveTextContent('You');
+  });
+
 
   it("draws someone else's question on the left under their name", () => {
     renderList(buildPersistedTranscript(7), '6');
     expect(screen.getByTestId('user-message')).toHaveStyle({ alignItems: 'flex-start' });
-    expect(screen.getByTestId('chat-message-author')).toHaveTextContent('Reader');
+    expect(screen.getAllByTestId('chat-message-author')[0]).toHaveTextContent('Reader');
   });
 
   it('draws an unattributed question, or one read before the reader resolves, as the reader\'s own', () => {

@@ -94,6 +94,24 @@ describe('answers and the live reply', () => {
     expect(screen.getByRole('button', { name: 'Like' })).toBeTruthy();
   });
 
+  it("a confirmed-own message says 'You'; one whose author is only presumed own keeps its name (never 'You')", async () => {
+    const mine = { ...answer, role: 'user' as const, mine: true, author: null, text: 'hi', authorRole: null };
+    const props = { highlight: { people: [], agents: [] }, opening: null, onOpenFile: null, tools: [], onOpenTool: jest.fn(), onActions: jest.fn() };
+    const view = await withQueries(<PersistedMessage message={mine} {...props} />);
+    expect(screen.getByText(/^You/)).toBeTruthy();
+    await view.unmount();
+    // Shared conversation, "who am I" not answered yet: drawn on my side but named.
+    await withQueries(<PersistedMessage message={{ ...mine, author: 'Alice' }} {...props} />);
+    expect(screen.getByText(/^Alice/)).toBeTruthy();
+    expect(screen.queryByText(/^You/)).toBeNull();
+  });
+
+  it('the spoken label of a message is the visible one', async () => {
+    const { MessageBubble } = require('@/features/chat/MessageBubble');
+    await render(<MessageBubble role="user">Hello</MessageBubble>);
+    expect(screen.getByLabelText('You: Hello')).toBeTruthy();
+  });
+
   it('thinking: the typing dots and "Thinking…" for screen readers; streaming: the caret', async () => {
     const view = await render(
       <LiveReply live={sampleLive('thinking')} author="Research" onRetry={jest.fn()} onReconnect={jest.fn()} onDismiss={jest.fn()} onOpenTool={jest.fn()} usageAvailable />,
