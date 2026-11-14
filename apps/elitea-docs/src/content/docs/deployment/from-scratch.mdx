@@ -84,14 +84,14 @@ The worker dominates. The figures below are requests for the install on this pag
 | Component | Replicas | CPU request | Memory request | Storage |
 |---|---|---|---|---|
 | elitea-main | 2 (HPA to 3) | 100m | 256Mi | — |
-| elitea-web | 2 | 10m | 32Mi | — |
+| elitea-web | 2 | 50m | 64Mi | — |
 | elitea-scheduler | 1 | 50m | 64Mi | — |
 | elitea-llm-gateway | 1 | 250m | 1Gi | — |
 | elitea-worker | 1 | 2 | 4Gi | — |
 | elitea-vector | 2 | 250m | 128Mi | — |
-| Qdrant | 1 (3 for HA) | 500m | 2Gi | 50Gi PVC |
+| Qdrant | 1 (3 for HA) | 250m | 1Gi | 50Gi PVC |
 | OTel collector | 1 | 50m | 128Mi | — |
-| NATS (bundled, one node) | 1 (3 for HA) | 100m | 256Mi | 10Gi PVC |
+| NATS (bundled, one node: server plus two sidecars) | 1 (3 for HA) | 200m | 384Mi | 10Gi PVC |
 
 Plan for about 4 CPU and 10Gi of memory in requests, and at least one node with 2 free CPUs for the worker during a rolling update.
 
@@ -965,6 +965,8 @@ The test that matters. If it hangs or fails, use the table below.
 | The gateway gets timeouts from elitea-main | `networkPolicies.main.ingressFrom` does not select the gateway's data-plane pods | fix the selector |
 | Login loops back to the sign-in page | `COOKIE_SECURE` on behind plain HTTP, or a redirect URI mismatch | serve HTTPS end to end; match the URI exactly |
 | Streams stop after 15 to 60 seconds | an edge request or idle timeout | Step 7, item 2 |
+| Argo CD shows a workload `OutOfSync` for ever on GKE Autopilot | Autopilot raised a request below 50m CPU / 52Mi memory | raise your own `resources` to that floor; the chart's defaults already are |
+| A hand-written Ingress on GKE stays `UNHEALTHY` | Google's default health check is `/` (302) | health check HTTP `/healthz` on 8080, or use `main.ingress.gke` ([Deploy on GKE](/deployment/gke-argocd#edge-ip-dns-tls-and-an-optional-proxy)) |
 
 ## Keeping it running
 

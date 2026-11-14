@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -505,10 +506,11 @@ func TestVerifierTellsAnUnreachableJWKSFromABadSignature(t *testing.T) {
 	r := newRing(t, issuerOrigin, &now)
 	other := newRing(t, issuerOrigin, &now)
 	issuer := issuerOrigin + eliteanative.IssuerPath
-	status := http.StatusServiceUnavailable
+	var status atomic.Int64 // read by the server goroutine
+	status.Store(http.StatusServiceUnavailable)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if status != http.StatusOK {
-			w.WriteHeader(status)
+		if code := int(status.Load()); code != http.StatusOK {
+			w.WriteHeader(code)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -530,8 +532,19 @@ func TestVerifierTellsAnUnreachableJWKSFromABadSignature(t *testing.T) {
 	if !errors.Is(err, remoteagent.ErrKeysUnavailable) || remoteagent.RefusalCode(err) != remoteagent.CodeUnavailable {
 		t.Fatalf("5xx: %v", err)
 	}
-	status = http.StatusOK
-	_, err = verifier.Verify(context.Background(), signed(t, r, endpoint), endpoint, "token:1")
+	status.Store(http.StatusOK)
+	// go-oidc's remote key set wakes the waiters of a failed fetch before its
+	// goroutine clears the in-flight marker, so a call made right away can join
+	// that finished, failed fetch and read "unavailable" once more. Poll (bounded)
+	// until a fresh fetch answers; the assertion is what that fetch decides.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, err = verifier.Verify(context.Background(), signed(t, r, endpoint), endpoint, "token:1")
+		if !errors.Is(err, remoteagent.ErrKeysUnavailable) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if remoteagent.RefusalCode(err) != remoteagent.CodeSignatureInvalid {
 		t.Fatalf("other key: %v", err)
 	}
