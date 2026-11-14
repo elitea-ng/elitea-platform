@@ -48,6 +48,13 @@ func TestPersonalDataHits(t *testing.T) {
 		{"iban DE", "pay DE89 3704 0044 0532 0130 00 by friday", "iban=DE89 3704 0044 0532 0130 00"},
 		{"iban GB compact", "GB82WEST12345698765432", "iban=GB82WEST12345698765432"},
 		{"iban FR", "FR14 2004 1010 0505 0001 3M02 606", "iban=FR14 2004 1010 0505 0001 3M02 606"},
+		{"card after another digit group", "Qty 2 4111 1111 1111 1111", "payment-card=4111 1111 1111 1111"},
+		{"card after two digit groups", "ids 7 42 5555555555554444 end", "payment-card=5555555555554444"},
+		{"email on a real TLD that looks like a file type", "jane@company.rs", "email=jane@company.rs"},
+		{"email on .sh", "mail b@y.sh", "email=b@y.sh"},
+		{"email on .zip", "mail b@y.zip", "email=b@y.zip"},
+		{"email after leading dots", "Write to...john@corp.com", "email=john@corp.com"},
+		{"email after a double dot", "see x..john.doe@corp.com", "email=john.doe@corp.com"},
 		{"iban followed by word", "DE89 3704 0044 0532 0130 00 ABC", "iban=DE89 3704 0044 0532 0130 00"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -64,11 +71,11 @@ func TestPersonalDataHits(t *testing.T) {
 func TestPersonalDataNearMisses(t *testing.T) {
 	for _, tc := range []struct{ name, text string }{
 		{"asset name", "see icon@2x.png and logo@3x.webp"},
+		{"retina asset 3x", "logo@3x.jpg and a@2x.svg"},
 		{"documentation address", "mail someone@example.com"},
 		{"no domain dot", "user@localhost"},
 		{"at mention", "thanks @alice and @bob_smith for the review"},
 		{"git ref", "pkg@1.2.3 and v2@latest"},
-		{"consecutive dots", "a..b@acme.io"},
 		{"ISO date", "released 2024-11-13 and 2024-01-15"},
 		{"timestamp", "1731456000 1731456000123"},
 		{"version", "version 10.4.2.1 build 20241113"},

@@ -105,4 +105,27 @@ describe('GovernanceGuardrailPresetDialog', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByTestId('governance-preset-create')).toBeEnabled();
   });
+
+  it('on a retry after a partial failure, skips the entries already created', async () => {
+    const onClose = vi.fn();
+    const names: string[] = [];
+    let failOutput = true;
+    server.use(http.post(URL, async ({ request }) => {
+      const body = (await request.json()) as { name: string };
+      if (body.name.endsWith('output') && failOutput) {
+        return HttpResponse.json({ error: 'temporarily unavailable' }, { status: 500 });
+      }
+      names.push(body.name);
+      return HttpResponse.json({ id: String(names.length) }, { status: 201 });
+    }));
+    renderWithQueryAndTheme(<GovernanceGuardrailPresetDialog onClose={onClose} />);
+    await userEvent.click(screen.getByTestId('governance-preset-create'));
+    await screen.findByTestId('governance-preset-error');
+    expect(names).toEqual(['Credentials and personal data - input']);
+    failOutput = false;
+    await userEvent.click(screen.getByTestId('governance-preset-create'));
+    await waitFor(() => { expect(onClose).toHaveBeenCalled(); });
+    // The input entry is not created a second time (it would be a 409 duplicate).
+    expect(names).toEqual(['Credentials and personal data - input', 'Credentials and personal data - output']);
+  });
 });

@@ -63,11 +63,39 @@ VALUES (3, 8, 'exec-gn-1', '/llm/v1/chat/completions', 'input', 'heads-up', 'pii
        (4, 8, 'exec-gn-1', '/llm/v1/chat/completions', 'input', 'other', 'pii', 'personal_data', 'warn', 'warned', 'open', '{email}')`); err != nil {
 		t.Fatalf("seed verdicts (the warn action and warned outcome need migration 0247): %v", err)
 	}
-	got, err := store.GuardrailNoticeVerdicts(ctx, 3, "exec-gn-1", 10)
+	got, err := store.GuardrailNoticeVerdicts(ctx, 3, 8, "exec-gn-1", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0].Outcome != "warned" || got[0].Row != "heads-up" || got[1].Outcome != "error_closed" {
 		t.Fatalf("notices = %+v", got)
+	}
+	// Another user of the same project reads nothing of this run.
+	if other, err := store.GuardrailNoticeVerdicts(ctx, 3, 9, "exec-gn-1", 10); err != nil || len(other) != 0 {
+		t.Fatalf("another user's notices = %+v, %v", other, err)
+	}
+	// Many requests aggregate into one group per entry, with the distinct labels,
+	// and a late blocking outcome is not cut off by a small limit.
+	for i := 0; i < 30; i++ {
+		if _, err := pool.Exec(ctx, `INSERT INTO gateway.guardrail_verdicts
+(project_id, user_id, execution_id, route, stage, row_name, detector, detector_type, action, outcome, fail_mode, labels)
+VALUES (3, 8, 'exec-gn-2', '/llm', 'input', 'pii', 'pii', 'personal_data', 'mask', 'masked', 'closed', $1)`, []string{"email", "iban"}[i%2:i%2+1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO gateway.guardrail_verdicts
+(project_id, user_id, execution_id, route, stage, row_name, detector, detector_type, action, outcome, fail_mode, labels)
+VALUES (3, 8, 'exec-gn-2', '/llm', 'input', 'keys', 'secrets', 'secrets', 'block', 'blocked', 'closed', '{jwt}')`); err != nil {
+		t.Fatal(err)
+	}
+	grouped, err := store.GuardrailNoticeVerdicts(ctx, 3, 8, "exec-gn-2", 5)
+	if err != nil || len(grouped) != 2 {
+		t.Fatalf("grouped = %+v, %v", grouped, err)
+	}
+	if g := grouped[0]; g.Row != "pii" || g.Requests != 30 || len(g.Labels) != 2 || g.Labels[0] != "email" || g.Labels[1] != "iban" {
+		t.Fatalf("pii group = %+v", g)
+	}
+	if grouped[1].Outcome != "blocked" {
+		t.Fatalf("blocked group = %+v", grouped[1])
 	}
 }

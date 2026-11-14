@@ -27,7 +27,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // NoticesPermission gates the notices route.
@@ -36,8 +38,8 @@ const NoticesPermission = "models.chat.messages.create"
 // NoticesPath is the route pattern, relative to the /api/v2/elitea_core group.
 const NoticesPath = "/guardrail_notices/prompt_lib/{projectID}/{runID}"
 
-// maxNoticeVerdicts bounds the verdicts read for one run.
-const maxNoticeVerdicts = 500
+// maxNoticeVerdicts bounds the aggregated groups read for one run.
+const maxNoticeVerdicts = 200
 
 // Notice kinds.
 const (
@@ -109,7 +111,7 @@ func mergeNotices(verdicts []repos.GuardrailNoticeVerdict) []Notice {
 			})
 		}
 		n := &notices[i]
-		n.Requests++
+		n.Requests += max(v.Requests, 1)
 		for _, label := range v.Labels {
 			if !strings.HasPrefix(label, "slot:") && !containsLabel(n.Labels, label) {
 				n.Labels = append(n.Labels, label)
@@ -138,7 +140,15 @@ func (h *Handler) GuardrailNotices(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	verdicts, err := h.store.GuardrailNoticeVerdicts(r.Context(), projectID, runID, maxNoticeVerdicts)
+	// A member reads the notices of their own runs only: the verdict rows carry
+	// the user of the request, and the read is scoped to the caller.
+	principal, _ := auth.UserFromContext(r.Context())
+	userID, ok := principal.OwningUserID()
+	if !ok || userID <= 0 {
+		apierr.WriteStatus(w, http.StatusUnauthorized, "reading guardrail notices needs a signed-in user")
+		return
+	}
+	verdicts, err := h.store.GuardrailNoticeVerdicts(r.Context(), projectID, userID, runID, maxNoticeVerdicts)
 	if err != nil {
 		writeError(r.Context(), w, err)
 		return

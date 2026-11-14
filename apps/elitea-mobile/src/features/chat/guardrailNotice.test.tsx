@@ -26,6 +26,12 @@ describe('noticeText (issue 2012)', () => {
     );
   });
 
+  it('names no data when there are no labels, with no empty parentheses', () => {
+    const text = noticeText(notice({ kind: 'warned', action: 'warn', labels: [] }));
+    expect(text).toBe('The guardrail "pii" warns that your message holds sensitive content. It was sent unchanged.');
+    expect(text).not.toContain('()');
+  });
+
   it('only a block or an unavailable guardrail explains a failed turn', () => {
     expect(['blocked', 'unavailable', 'redacted', 'warned'].map((kind) => explainsFailure(notice({ kind })))).toEqual([true, true, false, false]);
   });

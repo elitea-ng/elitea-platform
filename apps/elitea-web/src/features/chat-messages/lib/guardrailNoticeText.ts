@@ -25,6 +25,8 @@ function guardrailLabelList(notice: RunGuardrailNotice): string {
 export function guardrailNoticeText(notice: RunGuardrailNotice): string {
   const name = notice.guardrail;
   const found = guardrailLabelList(notice);
+  // No labels, no "()": the sentence names what was found only when it knows.
+  const what = found === '' ? '' : ` (${found})`;
   const output = notice.stage === 'output';
   switch (notice.kind) {
     case 'blocked':
@@ -37,8 +39,8 @@ export function guardrailNoticeText(notice: RunGuardrailNotice): string {
         : t('chatMessages.guardrail.redactedInput', 'Parts of your message were redacted by the guardrail "{{name}}" before they reached the model.', { name });
     case 'warned':
       return output
-        ? t('chatMessages.guardrail.warnedOutput', 'The guardrail "{{name}}" warns that the answer holds sensitive content ({{found}}). It is shown unchanged.', { name, found })
-        : t('chatMessages.guardrail.warnedInput', 'The guardrail "{{name}}" warns that your message holds sensitive content ({{found}}). It was sent unchanged.', { name, found });
+        ? t('chatMessages.guardrail.warnedOutput', 'The guardrail "{{name}}" warns that the answer holds sensitive content{{what}}. It is shown unchanged.', { name, what })
+        : t('chatMessages.guardrail.warnedInput', 'The guardrail "{{name}}" warns that your message holds sensitive content{{what}}. It was sent unchanged.', { name, what });
     default:
       return t('chatMessages.guardrail.unavailable', 'The guardrail "{{name}}" could not run, so the request was stopped. Try again, or ask an administrator.', { name });
   }

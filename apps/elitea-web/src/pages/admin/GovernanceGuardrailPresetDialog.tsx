@@ -80,23 +80,27 @@ export function GovernanceGuardrailPresetDialog({ onClose }: GovernanceGuardrail
   const [choice, setChoice] = useState<GuardrailPresetChoice>(DEFAULT_PRESET);
   const [error, setError] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);
+  // The entries made so far: a retry after a partial failure skips them.
+  const [made, setMade] = useState<readonly string[]>([]);
   const patch = (change: Partial<GuardrailPresetChoice>): void => setChoice((current) => ({ ...current, ...change }));
 
   const onCreate = async (): Promise<void> => {
     setSaving(true);
     setError(undefined);
-    const made: string[] = [];
+    const done = [...made];
     try {
       for (const entry of presetEntries(choice)) {
+        if (done.includes(entry.name)) continue;
         await create.mutateAsync(entry);
-        made.push(entry.name);
+        done.push(entry.name);
+        setMade(done.slice());
       }
       onClose();
     } catch (failure) {
       const reason = governanceFailureReason(failure) ?? (failure instanceof Error ? failure.message : String(failure));
-      setError(made.length === 0
+      setError(done.length === 0
         ? reason
-        : t('pages.admin.governance.preset.partial', 'Created {{made}}, then failed: {{reason}}', { made: made.join(', '), reason }));
+        : t('pages.admin.governance.preset.partial', 'Created {{made}}, then failed: {{reason}}', { made: done.join(', '), reason }));
       setSaving(false);
     }
   };

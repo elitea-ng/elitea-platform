@@ -2,7 +2,10 @@ package runevidence
 
 import (
 	"encoding/json"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/go-chi/chi/v5"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -78,5 +81,48 @@ func TestGuardrailNoticesWithoutStoreAre503(t *testing.T) {
 	recorder := serve(t, NoticesPath, "/guardrail_notices/prompt_lib/3/run-1", NewHandler(nil, nil).GuardrailNotices)
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status %d", recorder.Code)
+	}
+}
+
+// TestGuardrailNoticesAreScopedToTheCaller: another member of the project reads
+// nothing of a run that is not theirs, and a caller without a user is refused.
+func TestGuardrailNoticesAreScopedToTheCaller(t *testing.T) {
+	store := chain(t, []byte(`{"q":1}`))
+	store.notices = []repos.GuardrailNoticeVerdict{{Stage: "input", Row: "keys", Detector: "secrets", Action: "block", Outcome: "blocked", Labels: []string{"jwt"}}}
+	handler := NewHandler(store, nil)
+
+	router := chi.NewRouter()
+	router.Get(NoticesPath, handler.GuardrailNotices)
+	as := func(user auth.User) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, "/guardrail_notices/prompt_lib/3/run-1", nil)
+		request = request.WithContext(auth.ContextWithUser(request.Context(), user))
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		return recorder
+	}
+	owner := decode[NoticesResponse](t, as(auth.User{ID: "8", UserID: "8"}))
+	if len(owner.Notices) != 1 {
+		t.Fatalf("the owner's notices = %+v", owner)
+	}
+	other := as(auth.User{ID: "9", UserID: "9"})
+	if got := decode[NoticesResponse](t, other); other.Code != http.StatusOK || len(got.Notices) != 0 {
+		t.Fatalf("another member read %d %s", other.Code, other.Body)
+	}
+	if anonymous := as(auth.User{}); anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("no user = %d", anonymous.Code)
+	}
+}
+
+// TestGuardrailNoticesSumTheGroupsRequests: SQL aggregation hands one row per
+// group with its request count; the merge sums them.
+func TestGuardrailNoticesSumTheGroupsRequests(t *testing.T) {
+	store := chain(t, []byte(`{"q":1}`))
+	store.notices = []repos.GuardrailNoticeVerdict{
+		{Stage: "input", Row: "pii", Detector: "p", Action: "mask", Outcome: "masked", Labels: []string{"email"}, Requests: 40},
+		{Stage: "input", Row: "pii", Detector: "p", Action: "mask", Outcome: "masked", Labels: []string{"iban"}, Requests: 2},
+	}
+	got := decode[NoticesResponse](t, serve(t, NoticesPath, "/guardrail_notices/prompt_lib/3/run-1", NewHandler(store, nil).GuardrailNotices))
+	if len(got.Notices) != 1 || got.Notices[0].Requests != 42 || strings.Join(got.Notices[0].Labels, ",") != "email,iban" {
+		t.Fatalf("notices = %+v", got.Notices)
 	}
 }

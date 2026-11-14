@@ -153,13 +153,27 @@ func digitsOf(s string) string {
 // ---------------------------------------------------------------------------
 // e-mail
 
-// fileTLDs are endings that make `name@2x.png` an asset name, not an address.
-var fileTLDs = map[string]bool{
-	"png": true, "jpg": true, "jpeg": true, "gif": true, "svg": true, "webp": true, "ico": true, "bmp": true,
-	"css": true, "js": true, "ts": true, "map": true, "json": true, "html": true, "htm": true, "xml": true,
-	"pdf": true, "txt": true, "md": true, "zip": true, "gz": true, "tar": true, "woff": true, "woff2": true,
-	"ttf": true, "mp3": true, "mp4": true, "mov": true, "webm": true, "yml": true, "yaml": true, "go": true,
-	"py": true, "rs": true, "sh": true, "jsx": true, "tsx": true, "lock": true,
+// assetExtensions are the image endings of a retina asset name such as
+// `icon@2x.png`. Only that shape is an asset: `company.rs` or `team.md` are
+// real top-level domains and stay addresses.
+var assetExtensions = map[string]bool{
+	"png": true, "jpg": true, "jpeg": true, "gif": true, "svg": true, "webp": true,
+	"avif": true, "heic": true, "bmp": true, "ico": true,
+}
+
+// assetLike reports whether the domain is `<n>x.<image extension>`, the tail
+// of `name@2x.png`.
+func assetLike(domain string) bool {
+	dot := strings.IndexByte(domain, '.')
+	if dot < 2 || strings.Count(domain, ".") != 1 || domain[dot-1] != 'x' {
+		return false
+	}
+	for i := 0; i < dot-1; i++ {
+		if !isDigit(domain[i]) {
+			return false
+		}
+	}
+	return assetExtensions[domain[dot+1:]]
 }
 
 // reservedMailDomains are documentation domains (RFC 2606, RFC 6761): a
@@ -173,16 +187,22 @@ func verifyEmail(content string, start, end int) (int, int, bool) {
 	addr := content[start:end]
 	at := strings.LastIndexByte(addr, '@')
 	local, domain := addr[:at], strings.ToLower(addr[at+1:])
-	if strings.HasPrefix(local, ".") || strings.HasSuffix(local, ".") || strings.Contains(local, "..") {
+	// Sentence punctuation before the address ("Write to...john@corp.com")
+	// is not part of it: keep the part after the last "..", without leading
+	// dots. What is left must still be a valid local part.
+	skip := 0
+	if i := strings.LastIndex(local, ".."); i >= 0 {
+		skip = i + 2
+	}
+	for skip < len(local) && local[skip] == '.' {
+		skip++
+	}
+	local = local[skip:]
+	if local == "" || strings.HasSuffix(local, ".") {
 		return 0, 0, false
 	}
-	// A trailing dot of the sentence is not part of the domain: the regexp
-	// ends on a letter, so it never takes one.
 	dot := strings.LastIndexByte(domain, '.')
-	if dot < 0 {
-		return 0, 0, false
-	}
-	if fileTLDs[domain[dot+1:]] || reservedMailDomains[domain] {
+	if dot < 0 || assetLike(domain) || reservedMailDomains[domain] {
 		return 0, 0, false
 	}
 	for _, label := range strings.Split(domain, ".") {
@@ -190,7 +210,7 @@ func verifyEmail(content string, start, end int) (int, int, bool) {
 			return 0, 0, false
 		}
 	}
-	return start, end, true
+	return start + skip, end, true
 }
 
 // ---------------------------------------------------------------------------
@@ -302,8 +322,11 @@ func allSameDigit(d string) bool {
 	return true
 }
 
-// verifyCard takes the longest prefix of the candidate that is a card number:
-// the regexp is greedy, so "4111 1111 1111 1111 12" must still find the card.
+// verifyCard finds a card number in the candidate. The regexp is greedy and
+// starts at the first digit, so a card can follow another digit group
+// ("Qty 2 4111 1111 1111 1111"): every digit-group boundary (a digit after a
+// space) is tried as a start, and for each start the longest prefix that is a
+// card wins ("4111 1111 1111 1111 12" still finds the card).
 func verifyCard(content string, start, end int) (int, int, bool) {
 	if start > 0 {
 		b := content[start-1]
@@ -312,6 +335,19 @@ func verifyCard(content string, start, end int) (int, int, bool) {
 		}
 	}
 	text := content[start:end]
+	for from := 0; from < len(text); from++ {
+		if !isDigit(text[from]) || (from > 0 && text[from-1] != ' ') {
+			continue
+		}
+		if s, e, ok := cardPrefix(text[from:]); ok {
+			return start + from + s, start + from + e, true
+		}
+	}
+	return 0, 0, false
+}
+
+// cardPrefix returns the longest prefix of text that is a card number.
+func cardPrefix(text string) (int, int, bool) {
 	for stop := len(text); stop >= 13; stop-- {
 		if !isDigit(text[stop-1]) {
 			continue
@@ -327,7 +363,7 @@ func verifyCard(content string, start, end int) (int, int, bool) {
 		if !cardSeparators(part) || allSameDigit(d) || !cardIssuer(d) || !luhnValid(d) {
 			continue
 		}
-		return start, start + stop, true
+		return 0, stop, true
 	}
 	return 0, 0, false
 }

@@ -58,6 +58,40 @@ describe('AnswerGuardrails', () => {
     expect(screen.getByText('kept')).toBeInTheDocument();
   });
 
+  it('says nothing of what was found when it has no labels, and prints no empty parentheses', async () => {
+    serve([notice({ kind: 'warned', action: 'warn', guardrail: 'heads-up', labels: [] })]);
+    renderWithTheme(<AnswerGuardrails answer={live} projectId="3" settled />);
+    const el = await screen.findByTestId('guardrail-notice-warned', {}, SETTLE);
+    expect(el).toHaveTextContent('The guardrail "heads-up" warns that your message holds sensitive content. It was sent unchanged.');
+    expect(el.textContent).not.toContain('()');
+  });
+
+  it('asks once more when the first read is empty (the verdict was not written yet)', async () => {
+    server.use(http.get(URL, () => {
+      asked += 1;
+      return HttpResponse.json({ run_id: 'run-1', notices: asked === 1 ? [] : [notice({ kind: 'warned', action: 'warn' })] });
+    }));
+    renderWithTheme(<AnswerGuardrails answer={live} projectId="3" settled />);
+    expect(await screen.findByTestId('guardrail-notice-warned', {}, { timeout: 8000 })).toBeInTheDocument();
+    expect(asked).toBe(2);
+  }, 12000);
+
+  it('asks again after a failed read, and does not keep the failure for good', async () => {
+    server.use(http.get(URL, () => {
+      asked += 1;
+      return asked === 1
+        ? HttpResponse.json({ error: 'boom' }, { status: 500 })
+        : HttpResponse.json({ run_id: 'run-1', notices: [notice({})] });
+    }));
+    const first = renderWithTheme(<AnswerGuardrails answer={live} projectId="3" settled />);
+    expect(await screen.findByTestId('guardrail-notice-redacted', {}, { timeout: 8000 })).toBeInTheDocument();
+    first.unmount();
+    // Found notices are remembered: a remount does not ask a third time.
+    renderWithTheme(<AnswerGuardrails answer={live} projectId="3" settled />);
+    expect(screen.getByTestId('guardrail-notice-redacted')).toBeInTheDocument();
+    expect(asked).toBe(2);
+  }, 12000);
+
   it('replaces the generic runtime error of a blocked message', async () => {
     serve([notice({ kind: 'blocked', action: 'block', guardrail: 'keys', labels: ['github-token'] })]);
     renderWithTheme(<AnswerGuardrails answer={failedBlock} projectId="3" settled><p>generic runtime error</p></AnswerGuardrails>);

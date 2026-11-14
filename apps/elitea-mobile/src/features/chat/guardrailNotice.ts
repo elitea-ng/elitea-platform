@@ -13,7 +13,8 @@ export function explainsFailure(notice: GuardrailNotice): boolean {
 
 export function noticeText(notice: GuardrailNotice): string {
   const name = notice.guardrail;
-  const found = notice.labels.join(', ');
+  // No labels, no "()": the sentence names what was found only when it knows.
+  const found = notice.labels.length === 0 ? '' : ` (${notice.labels.join(', ')})`;
   const output = notice.stage === 'output';
   switch (notice.kind) {
     case 'blocked':
@@ -26,8 +27,8 @@ export function noticeText(notice: GuardrailNotice): string {
         : `Parts of your message were redacted by the guardrail "${name}" before they reached the model.`;
     case 'warned':
       return output
-        ? `The guardrail "${name}" warns that the answer holds sensitive content (${found}). It is shown unchanged.`
-        : `The guardrail "${name}" warns that your message holds sensitive content (${found}). It was sent unchanged.`;
+        ? `The guardrail "${name}" warns that the answer holds sensitive content${found}. It is shown unchanged.`
+        : `The guardrail "${name}" warns that your message holds sensitive content${found}. It was sent unchanged.`;
     default:
       return `The guardrail "${name}" could not run, so the request was stopped. Try again, or ask an administrator.`;
   }

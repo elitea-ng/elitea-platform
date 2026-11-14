@@ -74,7 +74,7 @@ type Store interface {
 	GuardrailVerdicts(ctx context.Context, projectID int64, runID string, limit int) ([]repos.GuardrailVerdict, error)
 	// GuardrailNoticeVerdicts reads the verdicts of the run that a chat notice
 	// reports (notices.go), oldest first.
-	GuardrailNoticeVerdicts(ctx context.Context, projectID int64, runID string, limit int) ([]repos.GuardrailNoticeVerdict, error)
+	GuardrailNoticeVerdicts(ctx context.Context, projectID, userID int64, runID string, limit int) ([]repos.GuardrailNoticeVerdict, error)
 	RecordContentRead(ctx context.Context, userID, projectID int64, runID, stepID string, side runevidence.Side, route string) error
 }
 

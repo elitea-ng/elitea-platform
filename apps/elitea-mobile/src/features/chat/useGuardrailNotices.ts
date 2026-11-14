@@ -9,6 +9,23 @@ export interface TurnGuardrailNotices {
   readonly notices: readonly GuardrailNotice[];
 }
 
+/** One read after the settle delay, and one more when it came back empty or failed (a verdict not written yet). Nothing is kept across turns, so a failure is never remembered. */
+const ATTEMPTS = 2;
+
+/** Reads the notices of a run, asking once more when the first read finds none. */
+export async function readGuardrailNotices(
+  projectId: number,
+  runId: string,
+  signal: AbortSignal,
+  fetcher: typeof fetchGuardrailNotices = fetchGuardrailNotices,
+): Promise<GuardrailNotice[]> {
+  let notices: GuardrailNotice[] = [];
+  for (let attempt = 0; attempt < ATTEMPTS && notices.length === 0 && !signal.aborted; attempt += 1) {
+    notices = await fetcher(projectId, runId, undefined, signal);
+  }
+  return notices;
+}
+
 /**
  * Reads the guardrail notices of the live turn when it ends (an answer, a
  * failure), once per run. A thread has no stored link from an answer to its
@@ -24,7 +41,7 @@ export function useGuardrailNotices(projectId: number | null, live: LiveTurn | n
   useEffect(() => {
     if (projectId === null || runId === null || !ended) return undefined;
     const controller = new AbortController();
-    void fetchGuardrailNotices(projectId, runId, undefined, controller.signal).then((notices) => {
+    void readGuardrailNotices(projectId, runId, controller.signal).then((notices) => {
       if (!controller.signal.aborted) setFound({ runId, notices });
     });
     return () => controller.abort();
