@@ -1,6 +1,6 @@
-import { StrictMode } from 'react';
+import { StrictMode, type ReactNode } from 'react';
 
-import { screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { renderWithEvaluationProviders } from '../__tests__/testUtils';
+import { RequestPublishSlot, type RequestPublishArgs } from '../model/requestPublishSlot';
 import { EnhanceWithAi } from './EnhanceWizard';
 
 const BASE = '/api/v2';
@@ -23,10 +24,24 @@ const proposal = {
   missed_rows: 2,
   instruction_patch: { rationale: 'Be concrete.', instructions: 'be helpful\nand concrete' },
   dimension_changes: [
-    { dimension_id: '3', dimension_name: 'Helpfulness', description: 'Does it give a concrete answer?', default_target: 3, default_target_operator: '>=', rationale: 'Rubric was loose.' },
+    {
+      dimension_id: '3',
+      dimension_name: 'Helpfulness',
+      description: 'Does it give a concrete answer?',
+      default_target: 3,
+      default_target_operator: '>=',
+      rationale: 'Rubric was loose.',
+    },
   ],
   dataset_changes: [
-    { case_id: '11', dataset_id: '5', input: 'what is Go?', current_expected_output: 'old', expected_output: 'Go is a compiled language', rationale: 'Too narrow.' },
+    {
+      case_id: '11',
+      dataset_id: '5',
+      input: 'what is Go?',
+      current_expected_output: 'old',
+      expected_output: 'Go is a compiled language',
+      rationale: 'Too narrow.',
+    },
   ],
 };
 
@@ -38,7 +53,13 @@ interface Recorded {
   enhanceCalls: number;
 }
 
-function mockServer(options: { readonly versionStatus?: number; readonly proposal?: Record<string, unknown>; readonly failFirstVersion?: boolean } = {}): Recorded {
+function mockServer(
+  options: {
+    readonly versionStatus?: number;
+    readonly proposal?: Record<string, unknown>;
+    readonly failFirstVersion?: boolean;
+  } = {},
+): Recorded {
   const recorded: Recorded = { versions: [], dimensions: [], cases: [], publishCalls: [], enhanceCalls: 0 };
   server.use(
     http.post(`${LIFECYCLE}/eval_run_enhance/prompt_lib/:projectId/:runId`, () => {
@@ -46,22 +67,65 @@ function mockServer(options: { readonly versionStatus?: number; readonly proposa
       return HttpResponse.json(options.proposal ?? proposal);
     }),
     http.get(`${LIFECYCLE}/version/prompt_lib/:projectId/:applicationId/:versionId`, () =>
-      HttpResponse.json({ id: '7', application_id: '42', name: 'base', status: 'draft', instructions: 'be helpful', agent_type: 'openai', llm_settings: { model_name: 'qwen' } }),
+      HttpResponse.json({
+        id: '7',
+        application_id: '42',
+        name: 'base',
+        status: 'draft',
+        instructions: 'be helpful',
+        agent_type: 'openai',
+        llm_settings: { model_name: 'qwen' },
+      }),
     ),
-    http.get(`${LIFECYCLE}/agent_registry/prompt_lib/:projectId/:applicationId`, () => HttpResponse.json({ risk_tier: 'medium' })),
+    http.get(`${LIFECYCLE}/agent_registry/prompt_lib/:projectId/:applicationId`, () =>
+      HttpResponse.json({ risk_tier: 'medium' }),
+    ),
     http.get(`${LIFECYCLE}/eval_dimensions/prompt_lib/:projectId`, () =>
       HttpResponse.json({
-        rows: [{ id: '3', name: 'Helpfulness', description: 'old rubric', tier: 'project', application_id: null, allowed_engines: ['ai'], scale_type: 'ordinal', scale_min: 1, scale_max: 5, polarity: 'higher_better', default_weight: 2, default_target: 4, default_target_operator: '>=', code: '', return_contract: '' }],
+        rows: [
+          {
+            id: '3',
+            name: 'Helpfulness',
+            description: 'old rubric',
+            tier: 'project',
+            application_id: null,
+            allowed_engines: ['ai'],
+            scale_type: 'ordinal',
+            scale_min: 1,
+            scale_max: 5,
+            polarity: 'higher_better',
+            default_weight: 2,
+            default_target: 4,
+            default_target_operator: '>=',
+            code: '',
+            return_contract: '',
+          },
+        ],
         total: 1,
       }),
     ),
     http.get(`${LIFECYCLE}/eval_dataset/prompt_lib/:projectId/:datasetId`, () =>
-      HttpResponse.json({ id: '5', name: 'ds', cases: [{ id: '11', dataset_id: '5', input: 'what is {{x}}?', variables: { x: 'Go' }, expected_output: 'old', excluded: false }] }),
+      HttpResponse.json({
+        id: '5',
+        name: 'ds',
+        cases: [
+          {
+            id: '11',
+            dataset_id: '5',
+            input: 'what is {{x}}?',
+            variables: { x: 'Go' },
+            expected_output: 'old',
+            excluded: false,
+          },
+        ],
+      }),
     ),
     http.post(`${LIFECYCLE}/versions/prompt_lib/:projectId/:applicationId`, async ({ request }) => {
       recorded.versions.push((await request.json()) as Record<string, unknown>);
-      if (options.failFirstVersion === true && recorded.versions.length === 1) return HttpResponse.json({ error: 'try again later' }, { status: 503 });
-      if (options.versionStatus !== undefined) return HttpResponse.json({ error: 'version create is not permitted' }, { status: options.versionStatus });
+      if (options.failFirstVersion === true && recorded.versions.length === 1)
+        return HttpResponse.json({ error: 'try again later' }, { status: 503 });
+      if (options.versionStatus !== undefined)
+        return HttpResponse.json({ error: 'version create is not permitted' }, { status: options.versionStatus });
       return HttpResponse.json({ id: '8', application_id: '42', name: 'eval-fix-9', status: 'draft' }, { status: 201 });
     }),
     http.put(`${LIFECYCLE}/eval_dimension/prompt_lib/:projectId/:dimensionId`, async ({ request }) => {
@@ -109,7 +173,9 @@ describe('EnhanceWizard', () => {
     await user.click(screen.getByTestId('enhance-next'));
     expect(screen.getByTestId('enhance-case-11')).toHaveTextContent('Too narrow.');
     await user.click(screen.getByTestId('enhance-next'));
-    expect(screen.getByTestId('enhance-review-summary')).toHaveTextContent('1 instruction draft, 1 dimension change(s), 1 expected-output change(s)');
+    expect(screen.getByTestId('enhance-review-summary')).toHaveTextContent(
+      '1 instruction draft, 1 dimension change(s), 1 expected-output change(s)',
+    );
 
     await user.click(screen.getByTestId('enhance-save'));
     expect(await screen.findByTestId('enhance-draft-created')).toHaveTextContent('It is not published.');
@@ -117,14 +183,27 @@ describe('EnhanceWizard', () => {
     // A NEW VERSION built from the pinned one, as a draft with copied skills.
     expect(recorded.versions).toHaveLength(1);
     expect(recorded.versions[0]).toMatchObject({
-      instructions: 'be helpful\nand concrete', agent_type: 'openai',
-      llm_settings: { model_name: 'qwen' }, copy_skills_from_version_id: 7, copy_tools_from_version_id: 7,
+      instructions: 'be helpful\nand concrete',
+      agent_type: 'openai',
+      llm_settings: { model_name: 'qwen' },
+      copy_skills_from_version_id: 7,
+      copy_tools_from_version_id: 7,
     });
     expect(recorded.versions[0]?.['name']).toMatch(/^eval-fix-9-[a-z0-9]+$/);
     // The dimension keeps its stored weight and scale; only rubric and target move.
-    expect(recorded.dimensions[0]).toMatchObject({ description: 'Does it give a concrete answer?', default_target: 3, default_target_operator: '>=', default_weight: 2, scale_max: 5 });
+    expect(recorded.dimensions[0]).toMatchObject({
+      description: 'Does it give a concrete answer?',
+      default_target: 3,
+      default_target_operator: '>=',
+      default_weight: 2,
+      scale_max: 5,
+    });
     // The case keeps its stored input and variables.
-    expect(recorded.cases[0]).toEqual({ input: 'what is {{x}}?', variables: { x: 'Go' }, expected_output: 'Go is a compiled language' });
+    expect(recorded.cases[0]).toEqual({
+      input: 'what is {{x}}?',
+      variables: { x: 'Go' },
+      expected_output: 'Go is a compiled language',
+    });
     // Nothing was published.
     expect(recorded.publishCalls).toEqual([]);
   });
@@ -156,17 +235,28 @@ describe('EnhanceWizard', () => {
     await toReview(user);
     await user.click(screen.getByTestId('enhance-save'));
 
-    expect(await screen.findByTestId('enhance-applied-instructions-instructions')).toHaveTextContent('was not saved: version create is not permitted');
+    expect(await screen.findByTestId('enhance-applied-instructions-instructions')).toHaveTextContent(
+      'was not saved: version create is not permitted',
+    );
     expect(screen.getByTestId('enhance-applied-dimension-3')).toHaveTextContent('saved');
     expect(recorded.dimensions).toHaveLength(1);
     expect(recorded.cases).toHaveLength(1);
     expect(screen.queryByTestId('enhance-request-publish')).toBeNull();
   });
 
-  it('sends the new draft to the change request dialog, not to publish', async () => {
+  it('sends the new draft to the change request dialog the page supplies, not to publish', async () => {
     const recorded = mockServer();
     const user = userEvent.setup();
-    renderWithEvaluationProviders(<EnhanceWithAi projectId="1" runId="9" />);
+    const asked: RequestPublishArgs[] = [];
+    const renderRequestPublish = (args: RequestPublishArgs): ReactNode => {
+      asked.push(args);
+      return <div data-testid="request-publish-dialog">{args.versionId}</div>;
+    };
+    renderWithEvaluationProviders(
+      <RequestPublishSlot.Provider value={renderRequestPublish}>
+        <EnhanceWithAi projectId="1" runId="9" />
+      </RequestPublishSlot.Provider>,
+    );
     await openWizard(user);
     await screen.findByTestId('enhance-summary');
     await toReview(user);
@@ -174,14 +264,32 @@ describe('EnhanceWizard', () => {
     await user.click(await screen.findByTestId('enhance-request-publish'));
 
     const dialog = await screen.findByTestId('request-publish-dialog');
-    expect(within(dialog).getByTestId('request-publish-submit')).toBeInTheDocument();
+    expect(Number(dialog.textContent)).toBeGreaterThan(0);
+    expect(asked.at(-1)?.versionId).toBe(Number(dialog.textContent));
+    expect(recorded.publishCalls).toEqual([]);
+  });
+
+  it('offers no publish step when the page supplies no change request dialog', async () => {
+    const recorded = mockServer();
+    const user = userEvent.setup();
+    renderWithEvaluationProviders(<EnhanceWithAi projectId="1" runId="9" />);
+    await openWizard(user);
+    await screen.findByTestId('enhance-summary');
+    await toReview(user);
+    await user.click(screen.getByTestId('enhance-save'));
+
+    expect(await screen.findByTestId('enhance-draft-created')).toBeInTheDocument();
+    expect(screen.queryByTestId('enhance-request-publish')).toBeNull();
     expect(recorded.publishCalls).toEqual([]);
   });
 
   it('names why the model could not propose', async () => {
     server.use(
       http.post(`${LIFECYCLE}/eval_run_enhance/prompt_lib/:projectId/:runId`, () =>
-        HttpResponse.json({ error: 'no scored case missed its target, so there is nothing to enhance' }, { status: 422 }),
+        HttpResponse.json(
+          { error: 'no scored case missed its target, so there is nothing to enhance' },
+          { status: 422 },
+        ),
       ),
     );
     const user = userEvent.setup();
@@ -205,7 +313,9 @@ describe('EnhanceWizard', () => {
 
     // Save is still available: only the instruction patch is left to save.
     await waitFor(() => expect(screen.getByTestId('enhance-save')).toBeEnabled());
-    expect(screen.getByTestId('enhance-review-summary')).toHaveTextContent('1 instruction draft, 0 dimension change(s), 0 expected-output change(s)');
+    expect(screen.getByTestId('enhance-review-summary')).toHaveTextContent(
+      '1 instruction draft, 0 dimension change(s), 0 expected-output change(s)',
+    );
     await user.click(screen.getByTestId('enhance-save'));
     expect(await screen.findByTestId('enhance-draft-created')).toBeInTheDocument();
     expect(recorded.versions).toHaveLength(2);
@@ -231,7 +341,13 @@ describe('EnhanceWizard', () => {
   });
 
   it('says why no instruction patch was requested', async () => {
-    mockServer({ proposal: { ...proposal, instruction_patch: null, instruction_patch_unavailable: 'the instructions are longer than 24000 characters' } });
+    mockServer({
+      proposal: {
+        ...proposal,
+        instruction_patch: null,
+        instruction_patch_unavailable: 'the instructions are longer than 24000 characters',
+      },
+    });
     const user = userEvent.setup();
     renderWithEvaluationProviders(<EnhanceWithAi projectId="1" runId="9" />);
     await openWizard(user);

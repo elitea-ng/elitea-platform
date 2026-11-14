@@ -25,7 +25,8 @@ export interface EnhanceReviewProps {
   readonly applying: boolean;
   /** A failure of the apply call itself, not of one fix. */
   readonly error: unknown;
-  readonly onRequestPublish: (versionId: number) => void;
+  /** Absent when the page supplied no change-request dialog: no publish step is offered. */
+  readonly onRequestPublish: ((versionId: number) => void) | undefined;
 }
 
 function kindLabel(fix: AppliedFix): string {
@@ -39,7 +40,13 @@ function kindLabel(fix: AppliedFix): string {
   }
 }
 
-function AppliedRow({ fix, onRequestPublish }: { readonly fix: AppliedFix; readonly onRequestPublish: (versionId: number) => void }): ReactNode {
+function AppliedRow({
+  fix,
+  onRequestPublish,
+}: {
+  readonly fix: AppliedFix;
+  readonly onRequestPublish: ((versionId: number) => void) | undefined;
+}): ReactNode {
   const failed = fix.error !== undefined;
   return (
     <Box data-testid={`enhance-applied-${fix.kind}-${fix.id}`}>
@@ -54,13 +61,23 @@ function AppliedRow({ fix, onRequestPublish }: { readonly fix: AppliedFix; reado
       {fix.version !== undefined && (
         <>
           <Typography variant="bodySmall" color="text.secondary" data-testid="enhance-draft-created">
-            {t('features.agentEvaluation.enhance.draftCreated', 'Draft version {{name}} created. It is not published.', {
-              name: fix.version.name,
-            })}
+            {t(
+              'features.agentEvaluation.enhance.draftCreated',
+              'Draft version {{name}} created. It is not published.',
+              {
+                name: fix.version.name,
+              },
+            )}
           </Typography>
-          <BaseBtn variant="text" data-testid="enhance-request-publish" onClick={() => onRequestPublish(Number(fix.version?.id))}>
-            {t('features.agentEvaluation.enhance.requestPublish', 'Request publish')}
-          </BaseBtn>
+          {onRequestPublish !== undefined && (
+            <BaseBtn
+              variant="text"
+              data-testid="enhance-request-publish"
+              onClick={() => onRequestPublish(Number(fix.version?.id))}
+            >
+              {t('features.agentEvaluation.enhance.requestPublish', 'Request publish')}
+            </BaseBtn>
+          )}
         </>
       )}
     </Box>
@@ -71,11 +88,17 @@ export function EnhanceReview({ counts, applied, applying, error, onRequestPubli
   const total = counts.instructions + counts.dimensions + counts.cases;
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }} data-testid="enhance-review">
-      {applied !== undefined && applied.map((fix) => <AppliedRow key={`${fix.kind}-${fix.id}`} fix={fix} onRequestPublish={onRequestPublish} />)}
+      {applied !== undefined &&
+        applied.map((fix) => (
+          <AppliedRow key={`${fix.kind}-${fix.id}`} fix={fix} onRequestPublish={onRequestPublish} />
+        ))}
       {(applied === undefined || total > 0) && (
         <Typography variant="bodyMedium" data-testid="enhance-review-summary">
           {total === 0
-            ? t('features.agentEvaluation.enhance.reviewNone', 'Nothing is accepted. Go back and accept at least one change.')
+            ? t(
+                'features.agentEvaluation.enhance.reviewNone',
+                'Nothing is accepted. Go back and accept at least one change.',
+              )
             : t(
                 'features.agentEvaluation.enhance.reviewSummary',
                 'Will save: {{instructions}} instruction draft, {{dimensions}} dimension change(s), {{cases}} expected-output change(s).',
@@ -88,9 +111,7 @@ export function EnhanceReview({ counts, applied, applying, error, onRequestPubli
           {t('features.agentEvaluation.enhance.applying', 'Saving…')}
         </Typography>
       )}
-      {error !== undefined && error !== null && (
-        <Alert severity="error">{evaluationErrorSentence(error)}</Alert>
-      )}
+      {error !== undefined && error !== null && <Alert severity="error">{evaluationErrorSentence(error)}</Alert>}
     </Box>
   );
 }

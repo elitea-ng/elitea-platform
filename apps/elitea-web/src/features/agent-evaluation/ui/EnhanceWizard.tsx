@@ -19,7 +19,6 @@ import StepLabel from '@mui/material/StepLabel';
 import Stepper from '@mui/material/Stepper';
 import Typography from '@mui/material/Typography';
 
-import { RequestPublishDialog, useAgentRegistry } from '@/features/agent-lifecycle';
 import type { EvalEnhanceProposal } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
@@ -27,6 +26,7 @@ import { BaseModal } from '@/shared/ui/BaseModal';
 
 import type { AppliedFix } from '../api/evaluationInsightsApi';
 import { evaluationErrorSentence } from '../lib/evaluationError';
+import { useRequestPublishSlot } from '../model/requestPublishSlot';
 import { useEvalDimensions } from '../model/useEvalDimensions';
 import { useApplyEnhancement, useEnhanceRun, useVersionInstructions } from '../model/useEnhance';
 import { EnhanceReview, type EnhanceReviewProps } from './EnhanceReview';
@@ -103,7 +103,9 @@ export function EnhanceWithAi({ projectId, runId }: EnhanceWithAiProps): ReactNo
       <BaseBtn variant="secondary" data-testid="run-enhance" onClick={start}>
         {t('features.agentEvaluation.enhance.open', 'Enhance with AI')}
       </BaseBtn>
-      {open && <EnhanceWizardBody key={opening} projectId={projectId} enhance={enhance} onClose={() => setOpen(false)} />}
+      {open && (
+        <EnhanceWizardBody key={opening} projectId={projectId} enhance={enhance} onClose={() => setOpen(false)} />
+      )}
     </>
   );
 }
@@ -129,14 +131,16 @@ function EnhanceWizardBody({ projectId, enhance, onClose }: EnhanceWizardBodyPro
   const accepted = useAcceptance(proposal);
   const current = useVersionInstructions(projectId, proposal);
   const library = useEvalDimensions(projectId, proposal?.application_id ?? undefined);
-  const registry = useAgentRegistry(projectId, proposal?.application_id ?? undefined);
+  const renderRequestPublish = useRequestPublishSlot();
 
   // What is still to save: the accepted fixes minus those already saved. A failed one stays,
   // so Save is a retry of exactly the failures and never creates a second draft.
   const pending = useMemo(() => {
-    const saved = (fix: Pick<AppliedFix, 'kind' | 'id'>): boolean => outcomes.get(fixKey(fix)) !== undefined && outcomes.get(fixKey(fix))?.error === undefined;
+    const saved = (fix: Pick<AppliedFix, 'kind' | 'id'>): boolean =>
+      outcomes.get(fixKey(fix)) !== undefined && outcomes.get(fixKey(fix))?.error === undefined;
     return {
-      instructions: accepted.instructions && !!proposal?.instruction_patch && !saved({ kind: 'instructions', id: 'instructions' }),
+      instructions:
+        accepted.instructions && !!proposal?.instruction_patch && !saved({ kind: 'instructions', id: 'instructions' }),
       dimensionIds: new Set([...accepted.dimensionIds].filter((id) => !saved({ kind: 'dimension', id }))),
       caseIds: new Set([...accepted.caseIds].filter((id) => !saved({ kind: 'case', id }))),
     };
@@ -154,7 +158,10 @@ function EnhanceWizardBody({ projectId, enhance, onClose }: EnhanceWizardBodyPro
     if (proposal === undefined || total === 0) return;
     apply.mutate(
       { proposal, accepted: pending, library: library.data ?? [] },
-      { onSuccess: (fixes) => setOutcomes((previous) => new Map([...previous, ...fixes.map((fix) => [fixKey(fix), fix] as const)])) },
+      {
+        onSuccess: (fixes) =>
+          setOutcomes((previous) => new Map([...previous, ...fixes.map((fix) => [fixKey(fix), fix] as const)])),
+      },
     );
   };
 
@@ -187,18 +194,22 @@ function EnhanceWizardBody({ projectId, enhance, onClose }: EnhanceWizardBodyPro
             step={step}
             accepted={accepted}
             currentInstructions={current.data}
-            review={{ counts, applied, applying: apply.isPending, error: apply.error, onRequestPublish: setPublishVersionId }}
+            review={{
+              counts,
+              applied,
+              applying: apply.isPending,
+              error: apply.error,
+              onRequestPublish: renderRequestPublish === undefined ? undefined : setPublishVersionId,
+            }}
           />
         }
       />
-      <RequestPublishDialog
-        open={publishVersionId !== undefined}
-        projectId={projectId}
-        applicationId={proposal?.application_id ?? undefined}
-        versionId={publishVersionId}
-        riskTier={registry.data?.risk_tier}
-        onClose={() => setPublishVersionId(undefined)}
-      />
+      {publishVersionId !== undefined &&
+        renderRequestPublish?.({
+          applicationId: proposal?.application_id ?? undefined,
+          versionId: publishVersionId,
+          onClose: () => setPublishVersionId(undefined),
+        })}
     </>
   );
 }
@@ -249,14 +260,25 @@ interface WizardContentProps {
   readonly review: EnhanceReviewProps;
 }
 
-function WizardContent({ pending, error, proposal, step, accepted, currentInstructions, review }: WizardContentProps): ReactNode {
+function WizardContent({
+  pending,
+  error,
+  proposal,
+  step,
+  accepted,
+  currentInstructions,
+  review,
+}: WizardContentProps): ReactNode {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
       {pending && (
         <Box data-testid="enhance-loading">
           <CircularProgress aria-label={t('features.agentEvaluation.enhance.analysing', 'Analysing the run')} />
           <Typography variant="bodySmall" color="text.secondary">
-            {t('features.agentEvaluation.enhance.analysingNote', 'Reading the agent version and the cases that missed their targets…')}
+            {t(
+              'features.agentEvaluation.enhance.analysingNote',
+              'Reading the agent version and the cases that missed their targets…',
+            )}
           </Typography>
         </Box>
       )}
@@ -283,7 +305,13 @@ function WizardContent({ pending, error, proposal, step, accepted, currentInstru
               </Step>
             ))}
           </Stepper>
-          <StepBody step={step} proposal={proposal} accepted={accepted} currentInstructions={currentInstructions} review={review} />
+          <StepBody
+            step={step}
+            proposal={proposal}
+            accepted={accepted}
+            currentInstructions={currentInstructions}
+            review={review}
+          />
         </>
       )}
     </Box>
@@ -301,9 +329,22 @@ interface StepBodyProps {
 function StepBody({ step, proposal, accepted, currentInstructions, review }: StepBodyProps): ReactNode {
   switch (step) {
     case 'instructions':
-      return <InstructionStep proposal={proposal} current={currentInstructions} accepted={accepted.instructions} onChange={accepted.setInstructions} />;
+      return (
+        <InstructionStep
+          proposal={proposal}
+          current={currentInstructions}
+          accepted={accepted.instructions}
+          onChange={accepted.setInstructions}
+        />
+      );
     case 'dimensions':
-      return <DimensionStep changes={proposal.dimension_changes} accepted={accepted.dimensionIds} onToggle={accepted.toggleDimension} />;
+      return (
+        <DimensionStep
+          changes={proposal.dimension_changes}
+          accepted={accepted.dimensionIds}
+          onToggle={accepted.toggleDimension}
+        />
+      );
     case 'cases':
       return <CaseStep changes={proposal.dataset_changes} accepted={accepted.caseIds} onToggle={accepted.toggleCase} />;
     case 'review':
