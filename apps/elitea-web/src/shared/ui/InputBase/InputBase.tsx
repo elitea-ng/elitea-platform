@@ -82,7 +82,8 @@ const outlinedLabelRowSx = {
   paddingLeft: '0.75rem',
 };
 
-function toolbarPositionSx(hasLabel: boolean, offsetY: number) {
+function toolbarPositionSx(hasLabel: boolean, actions: InputBaseActionsOptions | undefined) {
+  const offsetY = actions?.offsetY ?? 0;
   return (theme: Theme) => ({
     position: 'absolute' as const,
     display: 'flex',
@@ -237,7 +238,7 @@ export function InputBase({
           onCopy={handleCopy}
           onToggleExpand={toggleExpand}
           onFullScreen={onFullScreen}
-          sx={toolbarPositionSx(Boolean(label), actions?.offsetY ?? 0)}
+          sx={toolbarPositionSx(Boolean(label), actions)}
         />
       )}
       <MuiTextField
