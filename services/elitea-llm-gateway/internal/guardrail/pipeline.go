@@ -175,6 +175,8 @@ func (p *Pipeline) runRow(ctx context.Context, row *Row, parts []string, tool []
 			for _, s := range found {
 				spans[s.part] = append(spans[s.part], s.span)
 			}
+		case d.Action == ActionWarn:
+			v.Outcome = OutcomeWarned
 		default:
 			v.Outcome = OutcomeFlagged
 		}

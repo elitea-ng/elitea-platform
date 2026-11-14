@@ -5,7 +5,7 @@ package gateway
 //
 // A guardrail entry is a content control the LLM gateway runs on the /llm
 // path: a stage (input or output), an ordered list of detectors with an
-// action each (block, mask, flag), a timeout and a fail mode. The gateway
+// action each (block, mask, flag, warn), a timeout and a fail mode. The gateway
 // compiles the entry on load (elitea-llm-gateway internal/guardrail ParseRow)
 // and rejects one it cannot use. This file refuses the same entries on write,
 // so the operator sees the reason at once.
@@ -158,9 +158,9 @@ func validateGuardrailDetector(obj map[string]any) (string, error) {
 		return "", fmt.Errorf("name %q must match %s", name, guardrailLabelPattern.String())
 	}
 	switch action {
-	case "block", "mask", "flag":
+	case "block", "mask", "flag", "warn":
 	default:
-		return "", errors.New(`action must be "block", "mask" or "flag"`)
+		return "", errors.New(`action must be "block", "mask", "flag" or "warn"`)
 	}
 	switch typ {
 	case "regex":
@@ -176,6 +176,8 @@ func validateGuardrailDetector(obj map[string]any) (string, error) {
 			}
 		}
 		return name, nil
+	case "personal_data":
+		return name, validateGuardrailPersonalData(obj)
 	case "http":
 		return name, validateGuardrailHTTP(obj)
 	case "llama_guard":
@@ -186,7 +188,24 @@ func validateGuardrailDetector(obj map[string]any) (string, error) {
 	if handled, err := validateGuardrailCloudDetector(typ, obj); handled {
 		return name, err
 	}
-	return "", errors.New(`type must be one of regex, secrets, http, azure_content_safety, bedrock_guardrails, model_armor, llama_guard, presidio`)
+	return "", errors.New(`type must be one of regex, secrets, personal_data, http, azure_content_safety, bedrock_guardrails, model_armor, llama_guard, presidio`)
+}
+
+// guardrailPersonalDataRuleIDs are the rule ids of the gateway's personal_data
+// detector (elitea-llm-gateway internal/guardrail/personal_data.go).
+var guardrailPersonalDataRuleIDs = []string{"email", "phone", "payment-card", "iban"}
+
+func validateGuardrailPersonalData(obj map[string]any) error {
+	rules, err := guardrailStrings(obj, "rules")
+	if err != nil {
+		return err
+	}
+	for _, id := range rules {
+		if !containsString(guardrailPersonalDataRuleIDs, id) {
+			return fmt.Errorf("rules names %q, which is not a personal data rule id (%s)", id, strings.Join(guardrailPersonalDataRuleIDs, ", "))
+		}
+	}
+	return nil
 }
 
 func validateGuardrailRegex(obj map[string]any) error {

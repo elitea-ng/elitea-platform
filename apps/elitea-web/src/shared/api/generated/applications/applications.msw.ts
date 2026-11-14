@@ -525,6 +525,10 @@ export const getListEvalRunsResponseMock = (
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
         ]),
+        execution_note: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
       },
       undefined,
     ]),
@@ -733,6 +737,10 @@ export const getStartEvalRunResponseMock = (
         undefined,
       ]),
       suite_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      execution_note: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -945,6 +953,10 @@ export const getGetEvalRunResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      execution_note: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
     },
     undefined,
   ]),
@@ -1151,6 +1163,10 @@ export const getCancelEvalRunResponseMock = (
         undefined,
       ]),
       suite_id: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      execution_note: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
@@ -1361,6 +1377,10 @@ export const getGetEvalScorecardResponseMock = (
           undefined,
         ]),
         suite_id: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        execution_note: faker.helpers.arrayElement([
           faker.string.alpha({ length: { min: 10, max: 20 } }),
           undefined,
         ]),
@@ -4702,6 +4722,7 @@ export const getListRunStepsResponseMock = (
       detector_type: faker.helpers.arrayElement([
         "regex",
         "secrets",
+        "personal_data",
         "http",
         "azure_content_safety",
         "bedrock_guardrails",
@@ -4709,10 +4730,16 @@ export const getListRunStepsResponseMock = (
         "llama_guard",
         "presidio",
       ] as const),
-      action: faker.helpers.arrayElement(["block", "mask", "flag"] as const),
+      action: faker.helpers.arrayElement([
+        "block",
+        "mask",
+        "flag",
+        "warn",
+      ] as const),
       outcome: faker.helpers.arrayElement([
         "pass",
         "flagged",
+        "warned",
         "masked",
         "blocked",
         "error_open",

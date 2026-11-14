@@ -63,6 +63,12 @@ export const EvalRunSnapshot = zod.object({
     .describe(
       "The suite the limits came from. The run never reads the suite again.",
     ),
+  execution_note: zod
+    .string()
+    .optional()
+    .describe(
+      "Why the run did not get the execution mode its saved limits asked for (a release gate run measures a frozen agent definition and ran as `predict_blocking`). Absent when the mode is as asked.\n",
+    ),
 });
 
 export type EvalRunSnapshot = zod.input<typeof EvalRunSnapshot>;
