@@ -124,10 +124,9 @@ pub struct RuntimeDeployConfig {
     pub memory_embedding_model: Option<String>,
     /// The Unix socket of `elitea-doc-extractor`, the document extraction
     /// sidecar (ADR-0030 I1): where an index run sends a PDF or Office
-    /// document to be read, over `elitea.extract.v1`, with process isolation for
-    /// the untrusted parsers. Absent, the worker reads such documents itself
-    /// (doc-extract's `documents` feature, #1651). An absolute path in a
-    /// directory the two containers share.
+    /// document to be read, over `elitea.extract.v1`. Absent, such documents
+    /// are reported skipped `unsupported_type`, as before the sidecar
+    /// existed. An absolute path in a directory the two containers share.
     #[serde(default)]
     pub extractor_socket: Option<PathBuf>,
     /// The model calls one index run may make in its model steps (a chat

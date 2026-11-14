@@ -493,20 +493,14 @@ pub(crate) fn text_failure(reason: SkipReason) -> TextExtractionFailure {
 }
 
 /// Whether a file of this name can be read as text here: a kind the readers
-/// handle (by its extension), and, for a PDF or Office file, a sidecar or an
-/// in-process reader. Answered
+/// handle (by its extension), and, for a PDF or Office file, a sidecar. Answered
 /// from the name alone, so a tool refuses before it downloads.
 pub(crate) fn readable_kind(has_extractor: bool, name: &str) -> Result<(), TextExtractionFailure> {
     let mime = elitea_content_source::mime_of(name);
     if mime == "application/octet-stream" || mime.starts_with("image/") {
         return Err(TextExtractionFailure::Unsupported);
     }
-    // Without a sidecar the worker reads such a file itself (`documents` is
-    // compiled in, #1651); only a build that cannot has no way to read it.
-    if elitea_doc_extract::is_document_type(mime)
-        && !has_extractor
-        && !elitea_doc_extract::can_extract(mime)
-    {
+    if elitea_doc_extract::is_document_type(mime) && !has_extractor {
         return Err(TextExtractionFailure::NoExtractor);
     }
     Ok(())
@@ -522,7 +516,8 @@ async fn document_text(
 ) -> Result<String, TextExtractionFailure> {
     readable_kind(extractor.is_some(), name)?;
     let mime = elitea_content_source::mime_of(name);
-    if let Some(extractor) = extractor.filter(|_| elitea_doc_extract::is_document_type(mime)) {
+    if elitea_doc_extract::is_document_type(mime) {
+        let extractor = extractor.ok_or(TextExtractionFailure::NoExtractor)?;
         return match extractor
             .extract(
                 name,

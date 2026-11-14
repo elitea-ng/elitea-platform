@@ -65,15 +65,20 @@ elitea-office-core = { path = "../../libs/rust/office-core" }
 # serde_json `preserve_order`, which this crate's canonical digests forbid
 # (see elitea-agent-runtime above).
 #
-# doc-extract is taken WITH `documents` (xberg: PDF, Office, e-mail), #1651.
-# It was without while `kube-client` 4.2.0 pinned `serde-saphyr ^0.0.29`, which
-# capped `smallvec < 1.16` below what `xberg-native-pdf` 1.3.10 needs; kube 5
-# moved to serde-saphyr 2 and the cap is gone. The in-process reader is used
-# ONLY when no `extractor_socket` is configured. When the runtime document names
-# the socket, PDF, Office and e-mail files still go to
-# services/elitea-doc-extractor (src/transport/extractor_client.rs), a separate
-# process with its own lock: the untrusted-parser isolation stays the default
-# deployment. Text, markdown, HTML, JSON and code are always read here.
+# doc-extract is taken WITHOUT `documents` (xberg: PDF, Office, e-mail). Its
+# `xberg-native-pdf` 1.3.10 requires `smallvec ^1.16`, which `kube-client`
+# 4.2.0 blocked through `serde-saphyr ^0.0.29` (smallvec `< 1.16`). kube 5
+# moved to serde-saphyr 2, which lifts that cap, but `documents` still cannot
+# come back in-process (#1651): xberg depends on `serde_toon_format`, which
+# turns on serde_json `preserve_order` for the whole graph. This crate's
+# canonical digests forbid that feature (see vector-index above), and it
+# grows `serde_json::Value`, so `StoreError` trips clippy `result_large_err`.
+# Those formats are read by services/elitea-doc-extractor,
+# a separate process with its own lock, which an index run reaches over a
+# Unix socket (`extractor_socket` in the runtime document,
+# src/transport/extractor_client.rs); without one such a document is
+# reported skipped `unsupported_type`. Text, markdown, HTML, JSON and code
+# are extracted and chunked here.
 elitea-connectors = { path = "../../libs/rust/connectors", default-features = false, features = ["providers", "content-source", "reqwest-012"] }
 elitea-content-source = { path = "../../libs/rust/content-source" }
 # ADR-0030 I4 part B: fit a large picture under the gateway's inline image
@@ -82,7 +87,7 @@ elitea-content-source = { path = "../../libs/rust/content-source" }
 # (no rayon, no avif/exr/tiff codecs).
 image = { version = "=0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 elitea-doc-chunk = { path = "../../libs/rust/doc-chunk" }
-elitea-doc-extract = { path = "../../libs/rust/doc-extract", features = ["html", "documents"] }
+elitea-doc-extract = { path = "../../libs/rust/doc-extract", features = ["html"] }
 elitea-vector-index = { path = "../../libs/rust/vector-index" }
 # ADR-0034: the cloud executor's bundle codec. Without `rest`: the worker
 # reaches the store over its gRPC runtime plane, never the desktop routes.
@@ -206,10 +211,8 @@ zavora-slide-pdf = { path = "../../libs/rust/vendor/zavora-slide-pdf" }
 # Zip 9 security fixes (../../libs/rust/vendor/README.md), as in the libs/rust
 # workspace. zip 2.6.1 and zip 8.6.0 carry CVE-2026-115905, CVE-2026-115907,
 # CVE-2026-115908 and CVE-2026-115909. Each copy moves to zip 9.1.3.
-# `calamine` (xberg's spreadsheet reader) is linked here through doc-extract's
-# `documents`, so it is patched to the zip 9 copy as in the libs/rust
-# workspace; scripts/ci/check-zip-pin.sh holds this lock to it.
-calamine = { path = "../../libs/rust/vendor/calamine" }
+# `calamine` is absent here. This crate takes doc-extract without
+# `documents`, so no xberg spreadsheet reader links into this lock.
 zavora-xlsx = { path = "../../libs/rust/vendor/zavora-xlsx" }
 zavora-docx-opc = { path = "../../libs/rust/vendor/zavora-docx-opc" }
 zavora-slide-opc = { path = "../../libs/rust/vendor/zavora-slide-opc" }

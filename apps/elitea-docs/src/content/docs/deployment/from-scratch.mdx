@@ -720,7 +720,7 @@ The chart refuses to render until you choose. With `allowlist`, the gateway call
 Toolkit connection checks, MCP servers, MCP OAuth and webhooks have their own allowlists on elitea-main (`ELITEA_TOOLKIT_CHECK_ALLOWLIST`, `ELITEA_MCP_EGRESS_ALLOWLIST`, `ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST`, `ELITEA_WEBHOOK_EGRESS_ALLOWLIST`). Their defaults refuse every private address. To reach a self-hosted GitLab, Jira or MCP server on a private network, list both its name and its range, for example `gitlab.corp.example,10.20.0.0/16`. When a toolkit's **Test connection** is refused, its message names the refused host and `ELITEA_TOOLKIT_CHECK_ALLOWLIST`. The message is the same whether the host is not on the list, does not resolve, or resolves to a refused address, so that it tells a credential author nothing about internal names. The warning `toolkit_check: egress refused the destination` in the elitea-main log gives the reason, the resolved addresses and their class, and the remedy. A private address (`private`) is reachable when the list names its address or range. Cloud metadata, link-local, multicast, reserved and unspecified addresses (`forbidden`) are never reachable, whatever the list says.
 </Accordion>
 <Accordion title="Indexing sources and the document extractor">
-The worker's index runs reach a default set of public SaaS hosts (GitHub, GitLab, Bitbucket, Azure DevOps, Figma, Zephyr and Xray cloud). Self-hosted sources need `worker.runtime.indexEgressAllowlist`. PDF and Office extraction is isolated in a sidecar of about 2.5Gi when `worker.extractor.enabled: true`. Without it, the worker reads those files in its own process, with no isolation from the parser, more memory per index run, and no description of embedded pictures.
+The worker's index runs reach a default set of public SaaS hosts (GitHub, GitLab, Bitbucket, Azure DevOps, Figma, Zephyr and Xray cloud). Self-hosted sources need `worker.runtime.indexEgressAllowlist`. PDF and Office extraction needs `worker.extractor.enabled: true`, which adds a sidecar of about 2.5Gi to the worker pod. Without it, those files are skipped as unsupported.
 </Accordion>
 </AccordionGroup>
 
@@ -730,7 +730,7 @@ The values above install the platform with every default on: the runtime plane, 
 
 | Component | What it adds | Turn it on when |
 |---|---|---|
-| Document extractor (`worker.extractor`) | PDF and Office text extraction, as a sidecar of about 2.5Gi in the worker pod | users index or attach PDF, Word, Excel or PowerPoint files and you want the parsers isolated from the worker. Without it, the worker reads those files itself |
+| Document extractor (`worker.extractor`) | PDF and Office text extraction, as a sidecar of about 2.5Gi in the worker pod | users index or attach PDF, Word, Excel or PowerPoint files. Without it, those files are skipped as unsupported |
 | Cloud executor (`sandboxKubernetes`) | agent workspaces run in gVisor-isolated pods in a separate namespace | users choose **Send to cloud** |
 | Egress proxy (`egressProxy`) | per-project host allowlists for cloud-executor workspaces | you run the cloud executor and projects restrict its network to named hosts |
 | PgBouncer (`pgbouncer`) | a transaction-mode pooler in front of elitea-main | you need more elitea-main replicas than `max_connections` allows |

@@ -22,7 +22,8 @@ use tonic::Status;
 use super::agent_preparation::{AgentInputMaterializer, AgentPreparationConfig};
 use super::invocation_admission::{InvocationAdmission, InvocationAdmissionConfig};
 use super::output_delivery::{
-    AgentOutputPreflight, AgentTerminalRecoveryConfig, ToolkitTerminalReplay,
+    AgentOutputPreflight, AgentProgressConnector, AgentProgressReplaySession, AgentProgressSession,
+    AgentTerminalRecoveryConfig, ToolkitTerminalReplay,
 };
 use super::toolkit_delivery_processor::ToolkitDeliveryProcessor;
 use crate::protocol::command::{
@@ -49,7 +50,7 @@ use crate::transport::command_bus::{
 use crate::transport::input_content::content_fake::{
     ContextAnswer, ContextCall, ContextRoutes, Routes,
 };
-use crate::transport::output_grpc::test_acknowledged_terminal;
+use crate::transport::output_grpc::{ProgressReplayDecision, test_acknowledged_terminal};
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
 use crate::transport::{
@@ -307,6 +308,65 @@ impl ToolkitTerminalReplay for AckingReplay {
         self.frames.lock().expect("frames").push(expected.clone());
         spool.reconcile_pending_through(expected.sequence)?;
         test_acknowledged_terminal(verified, expected)
+    }
+}
+
+/// These runs are direct reads: they publish no progress, and the output plane
+/// refuses a progress session if one were asked for.
+struct NoProgressSession;
+
+#[async_trait]
+impl AgentProgressSession for NoProgressSession {
+    async fn publish_progress(
+        &mut self,
+        _frame: &ExecutionOutputFrameV1,
+    ) -> Result<ProgressReplayDecision, OutputGrpcError> {
+        Err(OutputGrpcError::Unavailable("no progress on a direct read"))
+    }
+
+    fn take_progress_decision(
+        &self,
+        _frame: &ExecutionOutputFrameV1,
+    ) -> Result<Option<ProgressReplayDecision>, OutputGrpcError> {
+        Ok(None)
+    }
+
+    async fn close(&mut self) -> Result<(), OutputGrpcError> {
+        Ok(())
+    }
+}
+
+struct NoProgressReplay;
+
+#[async_trait]
+impl AgentProgressReplaySession for NoProgressReplay {
+    async fn wait(&mut self) -> Result<ProgressReplayDecision, OutputGrpcError> {
+        Err(OutputGrpcError::Unavailable("no progress on a direct read"))
+    }
+
+    async fn close(&mut self) -> Result<(), OutputGrpcError> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl AgentProgressConnector for AckingReplay {
+    type Session = NoProgressSession;
+    type Replay = NoProgressReplay;
+
+    async fn connect_progress(
+        &self,
+        _prepared: PreparedOutputSpool,
+    ) -> Result<Self::Session, OutputGrpcError> {
+        Err(OutputGrpcError::Unavailable("no progress on a direct read"))
+    }
+
+    async fn start_progress_replay(
+        &self,
+        _prepared: PreparedOutputSpool,
+        _expected: &ExecutionOutputFrameV1,
+    ) -> Result<Self::Replay, OutputGrpcError> {
+        Err(OutputGrpcError::Unavailable("no progress on a direct read"))
     }
 }
 

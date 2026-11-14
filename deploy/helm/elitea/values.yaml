@@ -7115,18 +7115,19 @@ worker:
   # shared emptyDir. Indexing only (main.runtime.indexIngestDispatch); the
   # chart refuses it otherwise.
   #
-  # WHY A CONTAINER. The worker can read these documents itself (#1651: the
-  # lock conflict that once kept the PDF backend out is gone) and does when no
-  # sidecar is configured. With the sidecar, the process boundary is the right
-  # place for a parser of untrusted documents: a crash or an OOM kill here is
-  # one document skipped `extract_failed` in the run's summary, never a dead
+  # WHY A CONTAINER AND NOT A FEATURE OF THE WORKER. The worker's Cargo.lock
+  # cannot hold the PDF backend next to its Kubernetes client (one caps
+  # smallvec below the other's floor), so the extractor is its own crate, its
+  # own lock, its own image. The process boundary is also the right place for
+  # a parser of untrusted documents: a crash or an OOM kill here is one
+  # document skipped `extract_failed` in the run's summary, never a dead
   # worker. It has no port and no TLS; the socket directory is the only way
   # in, the process opens no connection of its own, and it serves only the
   # peer uid(s) in `peerUids` (SO_PEERCRED) — the pod-local Unix-socket
   # sidecar exception to the gRPC-over-mTLS rule (AGENTS.md).
   #
-  # OFF by default: without it the worker reads a PDF or Office document in
-  # its own process (more memory per index run, no isolation from the parser).
+  # OFF by default: without it a PDF or Office document is reported skipped
+  # `unsupported_type`, as it was before the sidecar existed.
   extractor:
     enabled: false
     image:

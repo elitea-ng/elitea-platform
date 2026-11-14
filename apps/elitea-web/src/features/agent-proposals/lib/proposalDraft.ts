@@ -58,7 +58,7 @@ function strings(value: unknown): readonly string[] {
 }
 
 /** The key when it names a default avatar, else '' (the saved agent keeps the default look). */
-export function knownAvatarKey(value: unknown): string {
+function knownAvatarKey(value: unknown): string {
   const key = text(value).trim();
   return defaultAvatarOf(key) === undefined ? '' : key;
 }

@@ -5,9 +5,9 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
-## Proposed agents keep their avatar, mobile saves data, and the worker reads documents itself
+## Proposed agents keep their avatar and mobile saves data
 
-An agent that a proposal creates (an automatic hire, or **Create from proposal**) now keeps the sub-agent's avatar when it is one of the default animals (`default:owl`, `default:fox` and the rest); any other avatar key leaves the default look. On mobile, the animated avatar shows its still while the phone is in a low-data state (iOS Low Data Mode or an expensive network, Android Data Saver). A worker with no document extraction sidecar configured now reads PDF, Office and e-mail files in its own process instead of skipping them as unsupported; with the sidecar configured they still go to it. Rebuild the mobile app: the data-saver signal is native.
+An agent that a proposal creates (an automatic hire, or **Create from proposal**) now keeps the sub-agent's avatar when it is one of the default animals (`default:owl`, `default:fox` and the rest); any other avatar key leaves the default look. On mobile, the animated avatar shows its still while the phone is in a low-data state (iOS Low Data Mode or an expensive network, Android Data Saver). Rebuild the mobile app: the data-saver signal is native.
 
 ## Agent Evaluation: run cases as agent runs, with steps, time and tool output controls
 

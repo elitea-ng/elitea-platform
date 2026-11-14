@@ -7,7 +7,7 @@ use crate::protocol::ProtocolError;
 use crate::protocol::command::VerifiedToolkitExecuteReadCommand;
 use crate::protocol::control::{
     AcceptedAgentClaim, AcceptedTerminalClaimRecovery, AgentClaimDecision, AgentControlClient,
-    AgentControlError, AgentOutputRecovery,
+    AgentControlError, AgentOutputRecovery, RecoveredProgress,
 };
 use crate::protocol::elitea::runtime::v1::{ExecutionOutputFrameV1, execution_output_frame_v1};
 use crate::protocol::output::validate_restored_toolkit_execute_read_output_frame;
@@ -150,6 +150,18 @@ impl FreshToolkitDelivery {
         Ok(())
     }
 
+    /// How this claim treats a restored nonterminal index frame, and Main's
+    /// handoff watermark it is judged against (#2041).
+    pub(super) fn recovered_progress(
+        &self,
+        frame: &ExecutionOutputFrameV1,
+    ) -> (Option<RecoveredProgress>, u64) {
+        (
+            self.claim.recovered_progress(frame),
+            self.claim.claim_handoff_watermark(),
+        )
+    }
+
     pub(super) fn terminal_replacement(
         &self,
         previous: &ExecutionOutputFrameV1,
@@ -197,6 +209,19 @@ impl ToolkitOutputRecoveryDelivery {
 
     pub(super) fn matches_output_transport(&self, workload: &str, producer: &str) -> bool {
         self.recovery.matches_output_transport(workload, producer)
+    }
+
+    /// The restored nonterminal index frame, validated against the command,
+    /// and how this recovery claim treats it, with Main's handoff watermark.
+    pub(super) fn recovered_progress(
+        &self,
+        frame: &ExecutionOutputFrameV1,
+    ) -> Result<(Option<RecoveredProgress>, u64), ProtocolError> {
+        validate_restored_toolkit_execute_read_output_frame(&self.verified, frame)?;
+        Ok((
+            self.recovery.recovered_progress(frame),
+            self.recovery.claim_handoff_watermark(),
+        ))
     }
 
     pub(super) fn spool_identity(&self) -> ExecutionSpoolIdentity {
