@@ -667,8 +667,9 @@ func TestEvalRunListBeforeAndScoredOnly(t *testing.T) {
 	third := fixture.startRun(t, dimensionID)
 	// Only the first run finished with a score; the second finished with none.
 	if _, err := fixture.pool.Exec(context.Background(), `
-		UPDATE p_1.eval_runs SET status = 'finished', headline_score = 80 WHERE id = $1::int;
-		UPDATE p_1.eval_runs SET status = 'finished', headline_score = NULL WHERE id = $2::int`, first.ID, second.ID); err != nil {
+		UPDATE p_1.eval_runs SET status = 'finished',
+		       headline_score = CASE WHEN id = $1::int THEN 80 END
+		 WHERE id IN ($1::int, $2::int)`, first.ID, second.ID); err != nil {
 		t.Fatal(err)
 	}
 	response := callEvalRoute(t, fixture.router, http.MethodGet,

@@ -1136,8 +1136,8 @@ func TestApplicationsRepoPostgres_CreateVersionCopiesToolBindingsFromTheSameAppl
 	}
 	for _, version := range []applications.Version{app.Versions[0], other.Versions[0]} {
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools)
-			SELECT $1::integer, application_id, 'application', $2, '["a","b"]'::jsonb FROM p_1.application_versions WHERE id = $1::integer`,
+			INSERT INTO p_1.entity_tool_mapping (entity_version_id, entity_type, tool_id, selected_tools)
+			VALUES ($1::integer, 'application', $2, '["a","b"]'::jsonb)`,
 			version.ID, toolID); err != nil {
 			t.Fatalf("seed mapping: %v", err)
 		}
