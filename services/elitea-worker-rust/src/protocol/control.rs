@@ -390,12 +390,7 @@ impl AcceptedAgentClaim {
         &self,
         frame: &ExecutionOutputFrameV1,
     ) -> Option<RecoveredProgress> {
-        recovered_progress_of(
-            &self.identity,
-            &self.fence,
-            self.claim_handoff_watermark,
-            frame,
-        )
+        recovered_progress_of(&self.identity, self.claim_handoff_watermark, frame)
     }
 
     /// The canonical failure terminal for `sequence` under this claim's fence.
@@ -834,7 +829,6 @@ impl AgentOutputRecovery {
     ) -> Option<RecoveredProgress> {
         recovered_progress_of(
             &self.binding.identity,
-            &self.binding.fence,
             self.binding.claim_handoff_watermark,
             frame,
         )
@@ -1725,31 +1719,28 @@ enum AgentOutputCursorState {
 pub(crate) enum RecoveredProgress {
     /// At or below Main's handoff watermark: Main already holds it.
     Covered,
-    /// Beyond the watermark and bound by a strictly older claim: Main can
-    /// never accept it under the old fence.
+    /// Beyond the watermark: Main did not hold it when this claim was made, and
+    /// only this claim's own worker could send it, so it can never become
+    /// durable. Whatever fence bound it (this claim's own, an older one, or
+    /// one newer in either component) it is set aside as a record and the run
+    /// continues from the watermark.
     Superseded,
 }
 
 /// Classify a restored nonterminal frame against one claim's binding.
 fn recovered_progress_of(
     identity: &ExecutionIdentityV1,
-    fence: &ExecutionFenceV1,
     watermark: u64,
     frame: &ExecutionOutputFrameV1,
 ) -> Option<RecoveredProgress> {
     if frame.terminal || frame.identity.as_ref() != Some(identity) {
         return None;
     }
-    if frame.sequence <= watermark {
-        return Some(RecoveredProgress::Covered);
-    }
-    frame
-        .fence
-        .as_ref()
-        .is_some_and(|old| {
-            old.claim_attempt < fence.claim_attempt && old.lease_epoch < fence.lease_epoch
-        })
-        .then_some(RecoveredProgress::Superseded)
+    Some(if frame.sequence <= watermark {
+        RecoveredProgress::Covered
+    } else {
+        RecoveredProgress::Superseded
+    })
 }
 
 /// Result of consuming an exact durable progress ACK.
@@ -2061,15 +2052,16 @@ impl ToolkitOutputCursor {
     }
 
     /// Consume Main's exact rejection of the pending frame into the sequence
-    /// and failure of the same-sequence terminal that replaces it. The proof
-    /// must cover the cursor's sole pending frame.
+    /// the terminal takes in its place. The proof must cover the cursor's sole
+    /// pending frame. The terminal is the run's real outcome; Main's decision
+    /// is applied when it is replayed.
     pub(crate) fn bind_rejected_progress(
         &mut self,
         verified: &VerifiedToolkitExecuteReadCommand,
         rejected: FrameBoundProgressRejection,
-    ) -> Result<(u64, RuntimeFailureKind), ProtocolError> {
+    ) -> Result<u64, ProtocolError> {
         self.require_command(verified)?;
-        let (rejected_sequence, rejected_sha256, winner) = rejected.into_binding();
+        let (rejected_sequence, rejected_sha256, _winner) = rejected.into_binding();
         let AgentOutputCursorState::Pending {
             sequence,
             frame_sha256,
@@ -2084,12 +2076,7 @@ impl ToolkitOutputCursor {
                 "the progress rejection does not cover the exact pending frame",
             ));
         }
-        let failure = match winner {
-            ProgressRejectionWinner::Cancelled => RuntimeFailureKind::Cancelled,
-            ProgressRejectionWinner::DeadlineExceeded => RuntimeFailureKind::DeadlineExceeded,
-            ProgressRejectionWinner::FrameRefused => RuntimeFailureKind::Internal,
-        };
-        Ok((rejected_sequence, failure))
+        Ok(rejected_sequence)
     }
 
     /// The sequence the terminal takes. Only a cursor with no unacknowledged

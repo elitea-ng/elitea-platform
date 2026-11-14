@@ -19,8 +19,12 @@ use super::output_delivery::{
 };
 use super::toolkit_delivery::{FreshToolkitDelivery, test_fresh_toolkit_delivery};
 use super::toolkit_output::{ToolkitOutputPreflightOutcome, prepare_toolkit_output};
-use super::toolkit_progress::{Narrator, ToolkitProgressError, ToolkitProgressPublisher};
-use crate::indexing::progress::{ProgressNote, ProgressStage};
+use super::toolkit_progress::{
+    Narrator, ProgressChannel, ToolkitProgressError, ToolkitProgressPublisher,
+};
+use crate::indexing::progress::{
+    ProgressNote, ProgressSignal, ProgressSink, ProgressStage, ProgressStop,
+};
 use crate::protocol::command::{
     TestOnlyConformanceHmacAuthenticator, VerifiedToolkitExecuteReadCommand,
     parse_and_verify_toolkit_execute_read_command,
@@ -31,6 +35,7 @@ use crate::protocol::control::{
 };
 use crate::protocol::elitea::runtime::v1::{
     ClaimCommandResponseV1, ExecutionFenceV1, ExecutionOutputFrameV1, NodeEventV1,
+    execution_output_frame_v1,
 };
 use crate::protocol::output::{
     RuntimeFailureKind, ToolkitExecuteReadTerminalOutput, build_execution_node_event_output_frame,
@@ -173,10 +178,13 @@ async fn persist(
 
 // --- the scripted output plane ---------------------------------------------
 
+#[derive(Clone)]
 enum Live {
     Acknowledge,
     PersistThenUnavailable,
     PersistThenReject(ProgressRejectionWinner),
+    /// The stream failed after Main's ACK arrived: the session retains it.
+    RetainAckThenFail,
 }
 
 enum Replay {
@@ -218,6 +226,7 @@ struct FakeConnector(Arc<State>);
 struct FakeSession {
     prepared: Option<PreparedOutputSpool>,
     state: Arc<State>,
+    retained: Mutex<Option<ProgressReplayDecision>>,
 }
 
 #[async_trait]
@@ -249,6 +258,13 @@ impl AgentProgressSession for FakeSession {
                     .persist(frame.clone())?;
                 Err(OutputGrpcError::Unavailable("the scripted stream dropped"))
             }
+            Live::RetainAckThenFail => {
+                *self.retained.lock().expect("retained") =
+                    Some(ProgressReplayDecision::Acknowledged(
+                        test_acknowledged_progress(frame).expect("synthetic ACK"),
+                    ));
+                Err(OutputGrpcError::Unavailable("the scripted stream dropped"))
+            }
             Live::PersistThenReject(winner) => {
                 self.prepared
                     .as_mut()
@@ -265,7 +281,7 @@ impl AgentProgressSession for FakeSession {
         &self,
         _frame: &ExecutionOutputFrameV1,
     ) -> Result<Option<ProgressReplayDecision>, OutputGrpcError> {
-        Ok(None)
+        Ok(self.retained.lock().expect("retained").take())
     }
 
     async fn close(&mut self) -> Result<(), OutputGrpcError> {
@@ -315,6 +331,7 @@ impl AgentProgressConnector for FakeConnector {
         Ok(FakeSession {
             prepared: Some(prepared),
             state: Arc::clone(&self.0),
+            retained: Mutex::new(None),
         })
     }
 
@@ -396,7 +413,6 @@ async fn acknowledged_progress_is_sequential_and_the_terminal_takes_the_next_seq
     assert_eq!(state.connects.load(Ordering::SeqCst), 1);
     let settled = run.publisher.finish(&run.verified).await.expect("settled");
     assert_eq!(settled.terminal_sequence, 10);
-    assert!(settled.forced_failure.is_none());
     assert_eq!(state.closes.load(Ordering::SeqCst), 1);
 
     let terminal = test_agent_output_authority(run.authority_claim)
@@ -447,11 +463,15 @@ async fn a_refused_event_is_dropped_without_spending_a_sequence() {
     );
 }
 
-/// An uncertain delivery with no attempts left stops progress, keeps the frame
-/// unresolved and refuses a terminal: recovery settles it from Main's watermark.
+/// An uncertain delivery with no attempts left stops progress; if even the
+/// final delivery at the end of the run fails the frame stays unresolved and no
+/// terminal is written: recovery settles it from Main's watermark.
 #[tokio::test]
-async fn an_uncertain_frame_leaves_no_terminal_and_stops_progress() {
-    let state = State::scripted(vec![Live::PersistThenUnavailable], vec![]);
+async fn an_uncertain_frame_leaves_no_terminal_when_the_final_delivery_fails_too() {
+    let state = State::scripted(
+        vec![Live::PersistThenUnavailable],
+        vec![Replay::Unavailable],
+    );
     let mut run = run(Arc::clone(&state), 1, 0).await;
     run.publisher
         .publish(&run.verified, event("agent_tool_start"), NOW)
@@ -465,6 +485,55 @@ async fn an_uncertain_frame_leaves_no_terminal_and_stops_progress() {
         panic!("an unresolved frame must not settle");
     };
     assert!(matches!(error, ToolkitProgressError::RecoveryRequired(_)));
+}
+
+/// Progress is best effort: a frame whose delivery stayed uncertain ends
+/// progress, but the run's own terminal is still written once the output plane
+/// answers at the end (here the replay is acknowledged).
+#[tokio::test]
+async fn an_uncertain_progress_frame_does_not_cost_the_terminal() {
+    let state = State::scripted(
+        vec![Live::PersistThenUnavailable],
+        vec![Replay::Acknowledge],
+    );
+    let mut run = run(Arc::clone(&state), 1, 0).await;
+    run.publisher
+        .publish(&run.verified, event("agent_tool_start"), NOW)
+        .await;
+    assert!(run.publisher.is_stopped());
+    let settled = run.publisher.finish(&run.verified).await.expect("settled");
+    assert_eq!(settled.terminal_sequence, 2);
+    let terminal = test_agent_output_authority(run.authority_claim)
+        .bind_toolkit_execute_read_terminal_at(
+            &run.verified,
+            ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::Internal),
+            NOW,
+            settled.terminal_sequence,
+        )
+        .expect("terminal");
+    let (spool, _reopener) = settled
+        .output
+        .persist_terminal(&terminal)
+        .await
+        .expect("the terminal persists");
+    assert_eq!(spool.pending_replay_frame(), Some(terminal));
+}
+
+/// A decision the stream received before it failed is taken, not lost: the
+/// frame is acknowledged without a replay.
+#[tokio::test]
+async fn a_decision_retained_by_a_failed_stream_is_not_lost() {
+    let state = State::scripted(vec![Live::RetainAckThenFail, Live::Acknowledge], vec![]);
+    let mut run = run(Arc::clone(&state), 1, 0).await;
+    run.publisher
+        .publish(&run.verified, event("agent_tool_start"), NOW)
+        .await;
+    assert!(!run.publisher.is_stopped());
+    assert_eq!(state.replays.load(Ordering::SeqCst), 0);
+    run.publisher
+        .publish(&run.verified, event("agent_tool_end"), NOW)
+        .await;
+    assert_eq!(state.sequences(), vec![1, 2]);
 }
 
 /// A frame whose first stream dropped is replayed exactly, once, from the
@@ -495,7 +564,13 @@ async fn an_uncertain_frame_is_replayed_exactly_and_the_sequence_continues() {
 async fn replay_attempts_are_bounded() {
     let state = State::scripted(
         vec![Live::PersistThenUnavailable],
-        vec![Replay::Unavailable, Replay::Unavailable],
+        vec![
+            Replay::Unavailable,
+            Replay::Unavailable,
+            Replay::Unavailable,
+            Replay::Unavailable,
+            Replay::Unavailable,
+        ],
     );
     let mut run = run(Arc::clone(&state), 3, 0).await;
     run.publisher
@@ -508,23 +583,15 @@ async fn replay_attempts_are_bounded() {
     ));
 }
 
-/// Main's rejection (Stop, the deadline, a refused frame) ends progress; the
-/// failure it decides replaces the rejected frame at its own sequence.
+/// Main's rejection (Stop, the deadline, a refused frame) ends progress. The
+/// rejected frame is set aside as a record and the run's real terminal takes
+/// its sequence (Main's decision is applied when the terminal is replayed).
 #[tokio::test]
-async fn a_rejected_frame_decides_the_failure_terminal_at_its_sequence() {
-    for (winner, failure) in [
-        (
-            ProgressRejectionWinner::Cancelled,
-            RuntimeFailureKind::Cancelled,
-        ),
-        (
-            ProgressRejectionWinner::DeadlineExceeded,
-            RuntimeFailureKind::DeadlineExceeded,
-        ),
-        (
-            ProgressRejectionWinner::FrameRefused,
-            RuntimeFailureKind::Internal,
-        ),
+async fn a_rejected_frame_is_set_aside_and_the_real_terminal_takes_its_sequence() {
+    for winner in [
+        ProgressRejectionWinner::Cancelled,
+        ProgressRejectionWinner::DeadlineExceeded,
+        ProgressRejectionWinner::FrameRefused,
     ] {
         let state = State::scripted(
             vec![Live::Acknowledge, Live::PersistThenReject(winner)],
@@ -537,6 +604,7 @@ async fn a_rejected_frame_decides_the_failure_terminal_at_its_sequence() {
         run.publisher
             .publish(&run.verified, event("agent_tool_end"), NOW)
             .await;
+        assert!(run.publisher.rejected_by() == Some(winner));
         // Nothing follows a rejection.
         run.publisher
             .publish(&run.verified, event("agent_tool_start"), NOW)
@@ -545,22 +613,19 @@ async fn a_rejected_frame_decides_the_failure_terminal_at_its_sequence() {
 
         let settled = run.publisher.finish(&run.verified).await.expect("settled");
         assert_eq!(settled.terminal_sequence, 2);
-        assert_eq!(settled.forced_failure, Some(failure));
         let terminal = test_agent_output_authority(run.authority_claim)
             .bind_toolkit_execute_read_terminal_at(
                 &run.verified,
-                ToolkitExecuteReadTerminalOutput::Failure(failure),
+                ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::Internal),
                 NOW,
                 settled.terminal_sequence,
             )
             .expect("terminal");
-        // The rejected frame is replaced by the terminal: one frame, the
-        // terminal, at the same sequence.
         let (spool, _reopener) = settled
             .output
             .persist_terminal(&terminal)
             .await
-            .expect("the terminal replaces the rejected frame");
+            .expect("the terminal takes the rejected frame's sequence");
         assert_eq!(spool.pending_frame_count(), 1);
         assert_eq!(spool.pending_replay_frame(), Some(terminal));
     }
@@ -624,25 +689,26 @@ async fn a_progress_frame_the_watermark_covers_is_reconciled() {
     }
 }
 
-/// A frame this claim cannot account for (its own fence beyond the watermark)
-/// fails closed and stays in the spool untouched.
+/// A frame above the watermark is set aside whichever fence bound it: the
+/// claim's own, or one newer in either component. It never wedges the command.
 #[tokio::test]
-async fn an_unaccounted_progress_frame_fails_closed_and_stays() {
-    let root = root();
-    let output = preflight(root.path().to_path_buf());
-    let (raw, response) = index_fixture(4);
-    let fresh = fresh_delivery(&raw, &response);
-    let frame = progress_frame(&raw, &current_fence(&response), 5);
-    let factory = persist(&output, &fresh, &frame).await;
-    assert!(prepare_toolkit_output(&output, fresh, NOW).await.is_err());
-    assert_eq!(
-        factory
-            .reopen()
+async fn progress_above_the_watermark_is_set_aside_whatever_its_fence() {
+    for bump in [(0_u64, 0_u64), (1, 0), (0, 1), (1, 1)] {
+        let root = root();
+        let output = preflight(root.path().to_path_buf());
+        let (raw, response) = index_fixture(4);
+        let fresh = fresh_delivery(&raw, &response);
+        let mut fence = current_fence(&response);
+        fence.claim_attempt += bump.0;
+        fence.lease_epoch += bump.1;
+        let factory = persist(&output, &fresh, &progress_frame(&raw, &fence, 5)).await;
+        let outcome = prepare_toolkit_output(&output, fresh, NOW)
             .await
-            .expect("reopen")
-            .pending_replay_frame(),
-        Some(frame)
-    );
+            .expect("the frame does not block the claim");
+        assert!(matches!(outcome, ToolkitOutputPreflightOutcome::Empty(_)));
+        drop(outcome);
+        assert!(spool_is_empty(&factory).await);
+    }
 }
 
 fn assert_silent(events: &[NodeEventV1]) {
@@ -777,8 +843,9 @@ fn document_updates_are_throttled_by_count_time_and_cap() {
             at,
         );
         if !events.is_empty() {
-            // A start and an end of one step.
-            assert_eq!(events.len(), 2);
+            // One frame: the running write step again, with its new text.
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].r#type, "agent_tool_start");
             updates += 1;
         }
     }
@@ -832,4 +899,123 @@ fn document_updates_are_throttled_by_count_time_and_cap() {
         },
         NOW + 10,
     ));
+}
+
+// --- the channel: the run never waits on the output plane --------------------
+
+fn ticking_clock() -> impl Fn() -> i64 + Send + Sync {
+    let ticks = std::sync::atomic::AtomicI64::new(NOW);
+    move || ticks.fetch_add(2_000, Ordering::SeqCst)
+}
+
+fn written_by(state: &State) -> Vec<(String, String)> {
+    state
+        .frames
+        .lock()
+        .expect("frames")
+        .iter()
+        .map(|frame| {
+            let Some(execution_output_frame_v1::Payload::NodeEvent(event)) = frame.payload.as_ref()
+            else {
+                panic!("a progress frame")
+            };
+            (
+                event.r#type.clone(),
+                String::from_utf8_lossy(&event.content).into_owned(),
+            )
+        })
+        .collect()
+}
+
+/// `note` only queues: a long run of document updates with nothing draining
+/// leaves one frame of them, the newest.
+#[tokio::test]
+async fn document_updates_coalesce_and_never_wait_for_the_output_plane() {
+    let state = State::scripted(vec![Live::Acknowledge; 4], vec![]);
+    let mut run = run(Arc::clone(&state), 2, 0).await;
+    let clock = ticking_clock();
+    let channel = ProgressChannel::new("exec-1", &clock);
+    assert!(channel.note(ProgressNote::Started(ProgressStage::Plan)) == ProgressSignal::Continue);
+    channel.note(ProgressNote::Planned {
+        to_write: 100,
+        unchanged: 0,
+        vanished: 0,
+    });
+    channel.note(ProgressNote::Started(ProgressStage::Write));
+    for processed in 1..100 {
+        channel.note(ProgressNote::Documents {
+            processed,
+            total: 100,
+            chunks: processed,
+        });
+    }
+    channel.finish_run("done");
+    channel.drain(&mut run.publisher, &run.verified).await;
+    // plan start, plan end, write start, ONE document update, write end.
+    assert_eq!(state.sequences(), vec![1, 2, 3, 4, 5]);
+}
+
+/// Main's rejection reaches the run at its next note.
+#[tokio::test]
+async fn a_rejection_reaches_the_run_at_its_next_note() {
+    for (winner, expected) in [
+        (
+            ProgressRejectionWinner::Cancelled,
+            ProgressSignal::Stop(ProgressStop::Cancelled),
+        ),
+        (
+            ProgressRejectionWinner::DeadlineExceeded,
+            ProgressSignal::Stop(ProgressStop::DeadlineExceeded),
+        ),
+        // A refused frame only ends progress.
+        (
+            ProgressRejectionWinner::FrameRefused,
+            ProgressSignal::Continue,
+        ),
+    ] {
+        let state = State::scripted(vec![Live::PersistThenReject(winner)], vec![]);
+        let mut run = run(Arc::clone(&state), 2, 0).await;
+        let clock = ticking_clock();
+        let channel = ProgressChannel::new("exec-1", &clock);
+        channel.note(ProgressNote::Started(ProgressStage::Plan));
+        channel.finish_run("stopped");
+        channel.drain(&mut run.publisher, &run.verified).await;
+        assert!(
+            channel.note(ProgressNote::Started(ProgressStage::Write)) == expected,
+            "{expected:?}"
+        );
+    }
+}
+
+/// A halt closes every step still open, with the failure text, before the
+/// terminal.
+#[tokio::test]
+async fn a_halt_closes_the_open_steps_with_its_text() {
+    let state = State::scripted(vec![Live::Acknowledge; 8], vec![]);
+    let mut run = run(Arc::clone(&state), 2, 0).await;
+    let clock = ticking_clock();
+    let channel = ProgressChannel::new("exec-1", &clock);
+    channel.note(ProgressNote::Started(ProgressStage::Plan));
+    channel.note(ProgressNote::Planned {
+        to_write: 3,
+        unchanged: 0,
+        vanished: 0,
+    });
+    channel.note(ProgressNote::Started(ProgressStage::Write));
+    channel.finish_run("the vector store is unavailable");
+    channel.drain(&mut run.publisher, &run.verified).await;
+    let frames = written_by(&state);
+    assert_eq!(
+        frames.last(),
+        Some(&(
+            "agent_tool_end".to_owned(),
+            r#""the vector store is unavailable""#.to_owned()
+        ))
+    );
+    // Plan start/end, write start, write end; nothing left open.
+    assert_eq!(frames.len(), 4);
+    let mut narrator = Narrator::new("x");
+    narrator.events(ProgressNote::Started(ProgressStage::Plan), NOW);
+    assert_eq!(narrator.close_open("boom", NOW).len(), 1);
+    assert_eq!(narrator.close_open("boom", NOW).len(), 0);
 }

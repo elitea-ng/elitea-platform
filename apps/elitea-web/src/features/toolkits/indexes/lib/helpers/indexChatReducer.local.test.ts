@@ -68,6 +68,33 @@ describe('generateChatMessageBasedOnResponse', () => {
     expect(result[0]?.toolActions).toHaveLength(1);
   });
 
+  it('a repeated agent_tool_start of a running step renames it, and never reopens a finished one', () => {
+    const history: IndexChatMessage[] = [
+      {
+        id: 'm1',
+        role: 'assistant',
+        content: '',
+        created_at: 1,
+        participant_id: 'system',
+        toolActions: [
+          { id: 'write', name: 'Indexing documents', status: 'processing', created_at: 1, type: 'tool' },
+          { id: 'done', name: 'Planning', status: 'complete', created_at: 1, type: 'tool' },
+        ],
+      },
+    ];
+    const start = (id: string, name: string) =>
+      generateChatMessageBasedOnResponse({
+        message: { message_id: 'm1', type: 'agent_tool_start', response_metadata: { tool_run_id: id, tool_name: name } },
+        chatHistory: history,
+        onFinish,
+      });
+    start('write', 'Indexing documents: 10 of 30 (40 chunks)');
+    start('done', 'Renamed');
+    expect(history[0]?.toolActions).toHaveLength(2);
+    expect(history[0]?.toolActions?.[0]?.name).toBe('Indexing documents: 10 of 30 (40 chunks)');
+    expect(history[0]?.toolActions?.[1]?.name).toBe('Planning');
+  });
+
   it('agent_tool_end marks the matching action complete and records outputs', () => {
     const history: IndexChatMessage[] = [
       {

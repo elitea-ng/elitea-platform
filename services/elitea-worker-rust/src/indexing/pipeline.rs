@@ -71,7 +71,7 @@ use super::model_steps::{
     ChatBinding, ChatLoader, ChatUnavailable, ModelSteps, PictureGateNow, RawImage, StepEnd,
     StepEnv,
 };
-use super::progress::{ProgressNote, ProgressSink, ProgressStage};
+use super::progress::{ProgressNote, ProgressSignal, ProgressSink, ProgressStage, ProgressStop};
 use super::slug::vector_space_slug;
 use super::source::{IndexSource, PathFilter, PlatformAccess};
 use super::{IndexIngestRuntime, IndexRunLimits};
@@ -984,27 +984,39 @@ fn single_versions(prior: &BTreeMap<String, Vec<(String, u64)>>) -> BTreeMap<Str
 }
 
 impl Runner<'_> {
-    /// Reports one note, if the run has a sink.
-    async fn note(&self, note: ProgressNote) {
-        if let Some(progress) = self.progress {
-            progress.note(note).await;
+    /// Reports one note, if the run has a sink. A Stop Main decided ends the
+    /// run as the lease's Stop or the deadline would.
+    fn note(&self, note: ProgressNote) -> Result<(), Halt> {
+        match self.progress.map(|progress| progress.note(note)) {
+            Some(ProgressSignal::Stop(ProgressStop::Cancelled)) => {
+                Err(Halt::Failure(IndexRunFailure::Cancelled))
+            }
+            Some(ProgressSignal::Stop(ProgressStop::DeadlineExceeded)) => {
+                Err(Halt::Failure(IndexRunFailure::DeadlineExceeded))
+            }
+            Some(ProgressSignal::Continue) | None => Ok(()),
         }
     }
 
     async fn run(mut self) -> Result<IndexIngestSummaryV1, IndexRunFailure> {
-        self.note(ProgressNote::Started(ProgressStage::Plan)).await;
+        if let Err(Halt::Failure(failure)) = self.note(ProgressNote::Started(ProgressStage::Plan)) {
+            return Err(failure);
+        }
         let plan = match self.plan().await {
             Ok(plan) => plan,
             // Nothing is written before the plan is made.
             Err(Halt::Reason(reason)) => return Ok(failure(self.parameters, &reason)),
             Err(Halt::Failure(failure)) => return Err(failure),
         };
-        self.note(ProgressNote::Planned {
+        if let Err(Halt::Failure(failure)) = self.note(ProgressNote::Planned {
             to_write: plan.to_write.len() as u64,
             unchanged: self.tally.unchanged_documents,
             vanished: plan.vanished.len() as u64,
-        })
-        .await;
+        }) {
+            // Nothing was written before the plan: a stop here is a plain
+            // runtime failure.
+            return Err(failure);
+        }
         match self.write(&plan).await {
             Ok(()) => Ok(self.summary(&plan)),
             Err(Halt::Reason(reason)) => Ok(self.failed(&reason, &plan)),
@@ -1200,7 +1212,7 @@ impl Runner<'_> {
     /// embedding space the run wrote into is left in `self.space`.
     #[allow(clippy::too_many_lines)] // One linear pass: prepare, embed, fence, write.
     async fn write(&mut self, plan: &RunPlan) -> Result<(), Halt> {
-        self.note(ProgressNote::Started(ProgressStage::Write)).await;
+        self.note(ProgressNote::Started(ProgressStage::Write))?;
         let total = plan.to_write.len() as u64;
         let mut cleaned = !self.parameters.clean_index;
         let mut pending = plan.to_write.iter().cloned();
@@ -1398,12 +1410,13 @@ impl Runner<'_> {
                     version: prepared.reference.version.clone(),
                     chunk_count: u32::try_from(count).unwrap_or(u32::MAX),
                 });
-                self.note(ProgressNote::Documents {
+                if let Err(halted) = self.note(ProgressNote::Documents {
                     processed: self.tally.indexed_documents,
                     total,
                     chunks: self.tally.indexed_chunks,
-                })
-                .await;
+                }) {
+                    break Err(halted);
+                }
             }
         }
         .await;
@@ -1414,8 +1427,7 @@ impl Runner<'_> {
         self.note(ProgressNote::Written {
             documents: self.tally.indexed_documents,
             chunks: self.tally.indexed_chunks,
-        })
-        .await;
+        })?;
         if !cleaned && self.parameters.clean_index {
             // A clean run that had nothing to embed still starts empty.
             self.check_liveness()?;

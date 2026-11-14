@@ -25,7 +25,7 @@ use super::toolkit_output::{
     ToolkitTerminalRecovery, prepare_empty_toolkit_recovery, prepare_toolkit_output,
     replay_toolkit_terminal_with_replacement,
 };
-use super::toolkit_progress::{IndexProgressSink, ToolkitProgressPublisher};
+use super::toolkit_progress::{ProgressChannel, ToolkitProgressPublisher};
 use crate::indexing::progress::ProgressSink;
 use crate::indexing::tools::LazyStepbackModel;
 use crate::indexing::{
@@ -41,7 +41,7 @@ use crate::protocol::control::{
 };
 use crate::protocol::elitea::runtime::v1::{
     ConfigurationValidationResultV1, DigestV1, ExecutionInputEntryV1, IndexIngestCommandV1,
-    IndexIngestInputBindingV1, IndexIngestResultV1, IndexIngestSummaryV1,
+    IndexIngestInputBindingV1, IndexIngestResultV1, IndexIngestStatusV1, IndexIngestSummaryV1,
     ToolkitAuthorizationRequiredV1, ToolkitAvailableToolsResultV1, ToolkitCallToolResultV1,
     ToolkitCallToolStatusV1, ToolkitCallToolSummaryV1, ToolkitExecuteReadResultV1,
     worker_command_v1,
@@ -911,60 +911,73 @@ where
                 return Err(ToolkitProcessError::Control(unknown.error));
             }
         };
-        // Live progress (#2041): the run reports its stages through a sink
-        // that owns the output spool until the run ends. A cursor or config
-        // that cannot be built leaves the run without progress, never
-        // without a terminal.
+        // Live progress (#2041), best effort: the run only queues frames; a
+        // publisher beside it delivers them. Whatever happens to the output
+        // plane, the run's real outcome is still written as the terminal.
         let clock = Arc::clone(&self.clock);
         let now = move || clock.now_unix_millis();
-        let (sink, spare_output) = if let (Ok(cursor), Ok(config)) = (
-            authorized.execution().toolkit_progress_cursor(&verified),
-            AgentProgressPublisherConfig::new(self.terminal_recovery.max_output_sessions()),
-        ) {
-            let publisher =
-                ToolkitProgressPublisher::new(cursor, output, Arc::clone(&self.replay), config);
-            (
-                Some(IndexProgressSink::new(&verified, &now, publisher)),
-                None,
-            )
-        } else {
-            (None, Some(output))
+        let mut spare_output = Some(output);
+        let cursor = authorized.execution().toolkit_progress_cursor(&verified);
+        let config =
+            AgentProgressPublisherConfig::new(self.terminal_recovery.max_output_sessions());
+        let (outcome, settled) = match (cursor, config, spare_output.take()) {
+            (Ok(cursor), Ok(config), Some(output)) => {
+                let mut publisher =
+                    ToolkitProgressPublisher::new(cursor, output, Arc::clone(&self.replay), config);
+                let channel = ProgressChannel::new(&verified.command().execution_id, &now);
+                let run = async {
+                    let outcome = self
+                        .run_index_ingest(
+                            &verified,
+                            &authorized,
+                            &mut lease,
+                            runtime,
+                            &inputs,
+                            Some(&channel as &dyn ProgressSink),
+                        )
+                        .await;
+                    channel.finish_run(&index_close_text(&outcome));
+                    outcome
+                };
+                let (outcome, ()) = tokio::join!(run, channel.drain(&mut publisher, &verified));
+                (outcome, Some(publisher.finish(&verified).await))
+            }
+            (cursor, config, output) => {
+                tracing::warn!(
+                    event = "index_progress_disabled",
+                    error_code = match (&cursor, &config) {
+                        (Err(_), _) => "toolkit_progress.cursor_unavailable",
+                        (_, Err(_)) => "toolkit_progress.config_invalid",
+                        _ => "toolkit_progress.output_unavailable",
+                    },
+                    "the index run goes on without progress frames"
+                );
+                spare_output = output;
+                let outcome = self
+                    .run_index_ingest(&verified, &authorized, &mut lease, runtime, &inputs, None)
+                    .await;
+                (outcome, None)
+            }
         };
-        let outcome = self
-            .run_index_ingest(
-                &verified,
-                &authorized,
-                &mut lease,
-                runtime,
-                &inputs,
-                sink.as_ref().map(|sink| sink as &dyn ProgressSink),
-            )
-            .await;
         let output_authority = authorized.into_output_authority();
-        let (output, terminal_sequence, forced_failure) = match (sink, spare_output) {
-            (Some(sink), _) => match sink.finish().await {
-                Ok(settled) => (
-                    settled.output,
-                    Some(settled.terminal_sequence),
-                    settled.forced_failure,
-                ),
-                Err(error) => {
-                    // A progress frame may or may not be durable in Main: no
-                    // terminal is written here. The command stays unacknowledged
-                    // and the recovery claim of its redelivery reconciles the
-                    // spool from Main's watermark.
-                    tracing::warn!(
-                        event = "index_progress_unresolved",
-                        error_code = error.code(),
-                    );
-                    close_lease_logged(lease).await;
-                    return Ok(ToolkitProcessOutcome::retained(
-                        "toolkit_delivery.index_progress_unresolved",
-                        true,
-                    ));
-                }
-            },
-            (None, Some(output)) => (output, None, None),
+        let (output, terminal_sequence) = match (settled, spare_output) {
+            (Some(Ok(settled)), _) => (settled.output, Some(settled.terminal_sequence)),
+            (Some(Err(error)), _) => {
+                // Even a last delivery of the frame failed: it may or may not
+                // be durable in Main, so no terminal is written here. The
+                // command stays unacknowledged and its redelivery's recovery
+                // claim settles the spool from Main's watermark.
+                tracing::warn!(
+                    event = "index_progress_unresolved",
+                    error_code = error.code(),
+                );
+                close_lease_logged(lease).await;
+                return Ok(ToolkitProcessOutcome::retained(
+                    "toolkit_delivery.index_progress_unresolved",
+                    true,
+                ));
+            }
+            (None, Some(output)) => (output, None),
             (None, None) => {
                 close_lease_logged(lease).await;
                 return Err(ToolkitProcessError::Protocol(ProtocolError::InvalidInput(
@@ -979,9 +992,6 @@ where
                 return Err(ToolkitProcessError::Lease(error));
             }
         };
-        // Main's rejection of a progress frame (Stop, the deadline) decides
-        // the terminal, as it does for an agent run.
-        let terminal = forced_failure.map_or(terminal, ToolkitExecuteReadTerminalOutput::Failure);
         Box::pin(self.publish_fresh_terminal_at(
             delivery,
             verified,
@@ -2229,6 +2239,24 @@ fn index_terminal(end: IndexRunEnd) -> Result<ToolkitExecuteReadTerminalOutput, 
             );
             Err(error)
         }
+    }
+}
+
+/// What an index run's still-open progress steps are closed with.
+fn index_close_text(end: &IndexRunEnd) -> String {
+    match end {
+        IndexRunEnd::Result(result) => result
+            .result_summary
+            .as_ref()
+            .filter(|summary| summary.status != IndexIngestStatusV1::Ok as i32)
+            .map_or_else(|| "Finished".to_owned(), |summary| summary.message.clone()),
+        IndexRunEnd::Failure(failure) => {
+            format!(
+                "Indexing did not finish ({})",
+                runtime_failure_code(*failure)
+            )
+        }
+        IndexRunEnd::LeaseLost(_) => "Indexing stopped".to_owned(),
     }
 }
 

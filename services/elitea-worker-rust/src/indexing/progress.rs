@@ -7,8 +7,6 @@
 //! sink (every test, every caller that does not stream) behaves exactly as it
 //! did before.
 
-use async_trait::async_trait;
-
 /// A stage of the run a person can follow.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProgressStage {
@@ -42,9 +40,24 @@ pub(crate) enum ProgressNote {
     },
 }
 
-/// Receives a run's notes. Reporting never fails the run: a sink that cannot
-/// publish keeps the failure to itself.
-#[async_trait]
+/// Why a sink asks the run to stop: Main rejected a frame because the
+/// execution was stopped or its deadline passed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProgressStop {
+    Cancelled,
+    DeadlineExceeded,
+}
+
+/// What a sink answers a note with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProgressSignal {
+    Continue,
+    Stop(ProgressStop),
+}
+
+/// Receives a run's notes. Reporting never blocks or fails the run: a sink that
+/// cannot publish keeps the failure to itself and answers `Continue`. Only a
+/// Stop or deadline decided by Main is passed back, at the next note.
 pub(crate) trait ProgressSink: Send + Sync {
-    async fn note(&self, note: ProgressNote);
+    fn note(&self, note: ProgressNote) -> ProgressSignal;
 }

@@ -2074,24 +2074,14 @@ fn a_refused_progress_event_does_not_consume_a_sequence() {
     assert_eq!(frame.sequence, 1);
 }
 
-/// Main's exact rejection of the pending frame names the failure and the
-/// sequence of the terminal that replaces it; a rejection of another frame
-/// does not.
+/// Main's exact rejection of the pending frame names the sequence the real
+/// terminal takes in its place; a rejection of another frame does not.
 #[test]
-fn a_rejected_progress_frame_decides_the_failure_at_its_own_sequence() {
-    for (winner, failure) in [
-        (
-            ProgressRejectionWinner::Cancelled,
-            RuntimeFailureKind::Cancelled,
-        ),
-        (
-            ProgressRejectionWinner::DeadlineExceeded,
-            RuntimeFailureKind::DeadlineExceeded,
-        ),
-        (
-            ProgressRejectionWinner::FrameRefused,
-            RuntimeFailureKind::Internal,
-        ),
+fn a_rejected_progress_frame_hands_its_sequence_to_the_terminal() {
+    for winner in [
+        ProgressRejectionWinner::Cancelled,
+        ProgressRejectionWinner::DeadlineExceeded,
+        ProgressRejectionWinner::FrameRefused,
     ] {
         let (mut cursor, verified) = index_progress_cursor(3);
         let frame = cursor
@@ -2105,11 +2095,12 @@ fn a_rejected_progress_frame_decides_the_failure_at_its_own_sequence() {
                 .bind_rejected_progress(&verified, test_rejected_progress(&other, winner).unwrap())
                 .is_err()
         );
-        let (sequence, decided) = cursor
-            .bind_rejected_progress(&verified, test_rejected_progress(&frame, winner).unwrap())
-            .unwrap();
-        assert_eq!(sequence, frame.sequence);
-        assert_eq!(decided, failure);
+        let rejection = test_rejected_progress(&frame, winner).unwrap();
+        assert!(rejection.winner() == winner);
+        assert_eq!(
+            cursor.bind_rejected_progress(&verified, rejection).unwrap(),
+            frame.sequence
+        );
     }
     // Nothing pending, nothing rejected.
     let (mut cursor, verified) = index_progress_cursor(3);
@@ -2233,17 +2224,19 @@ fn a_terminal_at_a_sequence_the_watermark_covers_is_refused() {
     );
 }
 
-/// How a claim treats an unaccepted progress frame found in the spool.
+/// How a claim treats an unaccepted progress frame found in the spool: covered
+/// by Main's watermark, or (above it) set aside whichever fence bound it.
 #[test]
-fn a_claim_classifies_restored_progress_against_its_watermark_and_fence() {
+fn a_claim_classifies_restored_progress_against_its_watermark() {
     let (command, mut response) = fixture(ToolkitCommandKind::IndexIngest);
     response.receipt.as_mut().unwrap().claim_handoff_watermark = 4;
     let verified = verified(&command);
     let claim = claim(&command, response.clone());
-    let old_fence = {
-        let mut fence = response.receipt.as_ref().unwrap().fence.clone().unwrap();
-        fence.claim_attempt -= 1;
-        fence.lease_epoch -= 1;
+    let current = response.receipt.as_ref().unwrap().fence.clone().unwrap();
+    let with = |attempt: i64, epoch: i64| {
+        let mut fence = current.clone();
+        fence.claim_attempt = fence.claim_attempt.checked_add_signed(attempt).unwrap();
+        fence.lease_epoch = fence.lease_epoch.checked_add_signed(epoch).unwrap();
         fence.fence_token = vec![b'o'; 32];
         fence
     };
@@ -2258,24 +2251,31 @@ fn a_claim_classifies_restored_progress_against_its_watermark_and_fence() {
         )
         .unwrap()
     };
-    let current_fence = response.receipt.as_ref().unwrap().fence.clone().unwrap();
     // At or below the watermark Main holds it, whoever bound it.
-    assert_eq!(
-        claim.recovered_progress(&build(&old_fence, 4)),
-        Some(RecoveredProgress::Covered)
-    );
-    assert_eq!(
-        claim.recovered_progress(&build(&current_fence, 3)),
-        Some(RecoveredProgress::Covered)
-    );
-    // Beyond it, only a strictly older claim's frame is superseded.
-    assert_eq!(
-        claim.recovered_progress(&build(&old_fence, 5)),
-        Some(RecoveredProgress::Superseded)
-    );
-    assert_eq!(claim.recovered_progress(&build(&current_fence, 5)), None);
+    for fence in [with(-1, -1), current.clone(), with(1, 1)] {
+        assert_eq!(
+            claim.recovered_progress(&build(&fence, 4)),
+            Some(RecoveredProgress::Covered)
+        );
+    }
+    // Above it: the claim's own fence, one component older, strictly older,
+    // one component newer and strictly newer are all set aside.
+    for fence in [
+        current.clone(),
+        with(-1, 0),
+        with(0, -1),
+        with(-1, -1),
+        with(1, 0),
+        with(0, 1),
+        with(1, 1),
+    ] {
+        assert_eq!(
+            claim.recovered_progress(&build(&fence, 5)),
+            Some(RecoveredProgress::Superseded)
+        );
+    }
     // A terminal is never progress.
-    let mut terminal = build(&old_fence, 5);
+    let mut terminal = build(&current, 5);
     terminal.terminal = true;
     assert_eq!(claim.recovered_progress(&terminal), None);
 }

@@ -20,34 +20,37 @@
 //!   not acknowledged, and the redelivered command's recovery claim reconciles
 //!   the spool from Main's watermark.
 
+use std::collections::VecDeque;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
+
+use tokio::sync::Notify;
 
 use super::output_delivery::{
     AgentOutputPreflightError, AgentOutputSpoolFactory, AgentProgressConnector,
     AgentProgressPublisherConfig, AgentProgressReplaySession, AgentProgressSession,
-    PreparedAgentOutput, ReopenedAgentProgress, reconnectable_output,
+    PreparedAgentOutput, ReopenedAgentProgress, reconnectable_output, retire_superseded_frame,
 };
-use crate::indexing::progress::{ProgressNote, ProgressSink, ProgressStage};
+use crate::indexing::progress::{
+    ProgressNote, ProgressSignal, ProgressSink, ProgressStage, ProgressStop,
+};
 use crate::protocol::ProtocolError;
 use crate::protocol::command::VerifiedToolkitExecuteReadCommand;
 use crate::protocol::control::{AgentProgressCommit, ToolkitOutputCursor};
 use crate::protocol::elitea::runtime::v1::{ExecutionOutputFrameV1, NodeEventV1};
-use crate::protocol::output::RuntimeFailureKind;
 use crate::transport::output_grpc::{
-    DurablyAckedProgress, FrameBoundProgressRejection, ProgressReplayDecision,
+    DurablyAckedProgress, FrameBoundProgressRejection, ProgressRejectionWinner,
+    ProgressReplayDecision,
 };
 use crate::transport::{OutputGrpcError, PreparedOutputSpool};
 
 /// How progress ended, when it can hand the spool back to the terminal.
 pub(super) struct ToolkitProgressSettled {
-    /// The spool, empty (or holding only a rejected frame the terminal
-    /// replaces at its own sequence).
+    /// The spool, empty.
     pub(super) output: PreparedAgentOutput,
     /// The sequence the terminal takes.
     pub(super) terminal_sequence: u64,
-    /// A failure Main's rejection decided: the terminal is this failure.
-    pub(super) forced_failure: Option<RuntimeFailureKind>,
 }
 
 /// Stable, data-free reasons progress could not be settled for a terminal.
@@ -96,6 +99,7 @@ pub(super) struct ToolkitProgressPublisher<C: AgentProgressConnector> {
     live: Option<C::Session>,
     pending: Option<PendingFrame>,
     rejection: Option<FrameBoundProgressRejection>,
+    rejected_by: Option<ProgressRejectionWinner>,
     /// No further frame is published (a rejection, or an unresolved failure).
     stopped: bool,
     max_output_sessions: usize,
@@ -117,9 +121,20 @@ impl<C: AgentProgressConnector> ToolkitProgressPublisher<C> {
             live: None,
             pending: None,
             rejection: None,
+            rejected_by: None,
             stopped: false,
             max_output_sessions: config.max_output_sessions(),
         }
+    }
+
+    /// Whether Main rejected a frame, and who won.
+    pub(super) const fn rejected_by(&self) -> Option<ProgressRejectionWinner> {
+        self.rejected_by
+    }
+
+    /// Whether publishing has ended.
+    pub(super) const fn is_stopped(&self) -> bool {
+        self.stopped
     }
 
     /// Publish one event and wait for Main's decision. Never fails the run: a
@@ -178,7 +193,20 @@ impl<C: AgentProgressConnector> ToolkitProgressPublisher<C> {
                         return Ok(());
                     }
                     Err(error) => {
-                        self.close_live().await;
+                        // A decision the stream received before it failed is
+                        // not lost: close, then take it (as the agent
+                        // publisher's in-flight recovery does).
+                        let retained = self.take_retained(&frame).await?;
+                        match retained {
+                            Some(ProgressReplayDecision::Acknowledged(acknowledged)) => {
+                                return self.commit(acknowledged);
+                            }
+                            Some(ProgressReplayDecision::Rejected(rejected)) => {
+                                self.reject(rejected).await;
+                                return Ok(());
+                            }
+                            None => {}
+                        }
                         self.require_retry(error, attempts)?;
                         continue;
                     }
@@ -234,6 +262,26 @@ impl<C: AgentProgressConnector> ToolkitProgressPublisher<C> {
         }
     }
 
+    /// Close the live session and take the bound decision it retained for
+    /// `frame`, if any.
+    // TODO(#2041 follow-up): share the agent progress publisher's in-flight
+    // state machine by making `FreshAgentProgressPublisher` generic over its
+    // cursor; this publisher keeps the same recovery rules in a smaller form.
+    async fn take_retained(
+        &mut self,
+        frame: &ExecutionOutputFrameV1,
+    ) -> Result<Option<ProgressReplayDecision>, ToolkitProgressError> {
+        let Some(mut session) = self.live.take() else {
+            return Ok(None);
+        };
+        if session.close().await.is_err() {
+            tracing::warn!("progress output session close failed after delivery uncertainty");
+        }
+        session
+            .take_progress_decision(frame)
+            .map_err(ToolkitProgressError::Output)
+    }
+
     /// Continue only after a reconnectable failure with attempts left.
     fn require_retry(
         &self,
@@ -263,6 +311,7 @@ impl<C: AgentProgressConnector> ToolkitProgressPublisher<C> {
     }
 
     async fn reject(&mut self, rejected: FrameBoundProgressRejection) {
+        self.rejected_by = Some(rejected.winner());
         self.rejection = Some(rejected);
         self.stopped = true;
         self.close_live().await;
@@ -278,14 +327,31 @@ impl<C: AgentProgressConnector> ToolkitProgressPublisher<C> {
 
     /// Close the stream and settle the spool for the terminal.
     ///
+    /// A frame still unacknowledged (its delivery was uncertain, which ended
+    /// progress) gets one more bounded delivery here: the output plane has
+    /// usually come back by the time the run ends. Main's decision then settles
+    /// it. A frame Main rejected is set aside as a record and the real terminal
+    /// takes its sequence.
+    ///
     /// # Errors
     ///
-    /// [`ToolkitProgressError::RecoveryRequired`] while a frame is
-    /// unacknowledged and unrejected: the caller must not publish a terminal.
+    /// [`ToolkitProgressError::RecoveryRequired`] while a frame is still
+    /// unresolved: the caller must not publish a terminal.
     pub(super) async fn finish(
         mut self,
         verified: &VerifiedToolkitExecuteReadCommand,
     ) -> Result<ToolkitProgressSettled, ToolkitProgressError> {
+        if self.pending.is_some() && self.rejection.is_none() {
+            if let Some(pending) = self.pending.as_mut() {
+                pending.attempts = 0;
+            }
+            if let Err(error) = self.deliver().await {
+                tracing::warn!(
+                    event = "index_progress_final_delivery_failed",
+                    error_code = error.code(),
+                );
+            }
+        }
         self.close_live().await;
         let Self {
             mut cursor,
@@ -317,11 +383,10 @@ impl<C: AgentProgressConnector> ToolkitProgressPublisher<C> {
                 Ok(ToolkitProgressSettled {
                     output: PreparedAgentOutput::new(prepared, factory),
                     terminal_sequence,
-                    forced_failure: None,
                 })
             }
             (Some(pending), Some(rejected)) => {
-                let (terminal_sequence, failure) = cursor
+                let terminal_sequence = cursor
                     .bind_rejected_progress(verified, rejected)
                     .map_err(ToolkitProgressError::Protocol)?;
                 let reopened = factory
@@ -333,10 +398,12 @@ impl<C: AgentProgressConnector> ToolkitProgressPublisher<C> {
                         "the rejected progress frame is not durably recoverable",
                     ));
                 };
+                let prepared = retire_superseded_frame(&factory, prepared, pending.frame)
+                    .await
+                    .map_err(ToolkitProgressError::Preflight)?;
                 Ok(ToolkitProgressSettled {
                     output: PreparedAgentOutput::new(prepared, factory),
                     terminal_sequence,
-                    forced_failure: Some(failure),
                 })
             }
             (Some(_), None) => Err(ToolkitProgressError::RecoveryRequired(
@@ -442,7 +509,11 @@ fn step_event(
     }
 }
 
-/// Turns notes into frames, and decides which are worth sending.
+const PLAN_STEP: &str = "Reading the source and the index";
+const WRITE_STEP: &str = "Indexing documents";
+
+/// Turns notes into frames and remembers which steps are open, so every halt
+/// can close them.
 #[derive(Debug)]
 pub(super) struct Narrator {
     message_id: String,
@@ -450,6 +521,8 @@ pub(super) struct Narrator {
     /// Whether the plan left documents to write (otherwise the write stage is
     /// not worth a step).
     writes: bool,
+    /// Open steps: `(tool_run_id, name)`.
+    open: Vec<(&'static str, &'static str)>,
 }
 
 impl Narrator {
@@ -458,14 +531,47 @@ impl Narrator {
             message_id: format!("index-run:{execution_id}"),
             throttle: DocumentThrottle::default(),
             writes: true,
+            open: Vec::new(),
         }
     }
 
+    fn close(&mut self, run_id: &'static str, text: &str, now: i64) -> Vec<NodeEventV1> {
+        let Some(at) = self.open.iter().position(|(open, _)| *open == run_id) else {
+            return Vec::new();
+        };
+        let (_, name) = self.open.remove(at);
+        vec![step_event(
+            false,
+            &self.message_id,
+            run_id,
+            name,
+            Some(text),
+            now,
+        )]
+    }
+
+    /// Close every open step with `text` (a failure or a stop).
+    pub(super) fn close_open(&mut self, text: &str, now: i64) -> Vec<NodeEventV1> {
+        let open: Vec<&'static str> = self.open.iter().map(|(id, _)| *id).collect();
+        open.into_iter()
+            .flat_map(|id| self.close(id, text, now))
+            .collect()
+    }
+
+    /// The frames one note is worth: at most one, and a document count is one
+    /// update of the single running write step.
     pub(super) fn events(&mut self, note: ProgressNote, now: i64) -> Vec<NodeEventV1> {
-        let id = self.message_id.as_str();
         match note {
             ProgressNote::Started(ProgressStage::Plan) => {
-                vec![step_event(true, id, "plan", PLAN_STEP, None, now)]
+                self.open.push(("plan", PLAN_STEP));
+                vec![step_event(
+                    true,
+                    &self.message_id,
+                    "plan",
+                    PLAN_STEP,
+                    None,
+                    now,
+                )]
             }
             ProgressNote::Planned {
                 to_write,
@@ -475,14 +581,22 @@ impl Narrator {
                 self.writes = to_write > 0;
                 let text =
                     format!("{to_write} to index, {unchanged} unchanged, {vanished} to remove");
-                vec![step_event(false, id, "plan", PLAN_STEP, Some(&text), now)]
+                self.close("plan", &text, now)
             }
             ProgressNote::Started(ProgressStage::Write) => {
                 if !self.writes {
                     return Vec::new();
                 }
                 self.throttle.start(now);
-                vec![step_event(true, id, "write", WRITE_STEP, None, now)]
+                self.open.push(("write", WRITE_STEP));
+                vec![step_event(
+                    true,
+                    &self.message_id,
+                    "write",
+                    WRITE_STEP,
+                    None,
+                    now,
+                )]
             }
             ProgressNote::Documents {
                 processed,
@@ -492,65 +606,167 @@ impl Narrator {
                 if !self.writes || !self.throttle.admit(processed, total, now) {
                     return Vec::new();
                 }
-                let text = format!("Indexed {processed} of {total} documents ({chunks} chunks)");
-                let run_id = format!("documents-{processed}");
-                vec![
-                    step_event(true, id, &run_id, &text, None, now),
-                    step_event(false, id, &run_id, &text, Some(&text), now),
-                ]
+                // The same step again: the view keeps one action and takes
+                // the newest name.
+                let name = format!("{WRITE_STEP}: {processed} of {total} ({chunks} chunks)");
+                vec![step_event(
+                    true,
+                    &self.message_id,
+                    "write",
+                    &name,
+                    None,
+                    now,
+                )]
             }
             ProgressNote::Written { documents, chunks } => {
                 if !self.writes {
                     return Vec::new();
                 }
                 let text = format!("{documents} documents indexed ({chunks} chunks)");
-                vec![step_event(false, id, "write", WRITE_STEP, Some(&text), now)]
+                self.close("write", &text, now)
             }
         }
     }
 }
 
-const PLAN_STEP: &str = "Reading the source and the index";
-const WRITE_STEP: &str = "Indexing documents";
+/// Most frames waiting for the publisher; beyond it a document update is
+/// dropped (the next one supersedes it anyway).
+const MAX_QUEUED_FRAMES: usize = 32;
 
-/// Turns an index run's notes into progress frames.
-pub(super) struct IndexProgressSink<'a, C: AgentProgressConnector> {
-    verified: &'a VerifiedToolkitExecuteReadCommand,
+struct Queued {
+    event: NodeEventV1,
+    at: i64,
+    /// A document update: only the newest of a run of them is worth sending.
+    coalesce: bool,
+}
+
+struct ChannelState {
+    narrator: Narrator,
+    queue: VecDeque<Queued>,
+    closed: bool,
+}
+
+const STOP_NONE: u8 = 0;
+const STOP_CANCELLED: u8 = 1;
+const STOP_DEADLINE: u8 = 2;
+
+/// Hands an index run's frames to the publisher without ever waiting on the
+/// output plane. The run calls [`ProgressSink::note`], which only queues; the
+/// publisher side ([`Self::drain`]) runs beside the run and delivers.
+pub(super) struct ProgressChannel<'a> {
     now: &'a (dyn Fn() -> i64 + Send + Sync),
-    state: tokio::sync::Mutex<(Narrator, ToolkitProgressPublisher<C>)>,
+    state: Mutex<ChannelState>,
+    wake: Notify,
+    stop: AtomicU8,
 }
 
-impl<'a, C: AgentProgressConnector> IndexProgressSink<'a, C> {
-    pub(super) fn new(
-        verified: &'a VerifiedToolkitExecuteReadCommand,
-        now: &'a (dyn Fn() -> i64 + Send + Sync),
-        publisher: ToolkitProgressPublisher<C>,
-    ) -> Self {
+impl<'a> ProgressChannel<'a> {
+    pub(super) fn new(execution_id: &str, now: &'a (dyn Fn() -> i64 + Send + Sync)) -> Self {
         Self {
-            verified,
             now,
-            state: tokio::sync::Mutex::new((
-                Narrator::new(&verified.command().execution_id),
-                publisher,
-            )),
+            state: Mutex::new(ChannelState {
+                narrator: Narrator::new(execution_id),
+                queue: VecDeque::new(),
+                closed: false,
+            }),
+            wake: Notify::new(),
+            stop: AtomicU8::new(STOP_NONE),
         }
     }
 
-    /// End progress and hand the spool back to the terminal.
-    pub(super) async fn finish(self) -> Result<ToolkitProgressSettled, ToolkitProgressError> {
-        let (_, publisher) = self.state.into_inner();
-        publisher.finish(self.verified).await
+    fn lock(&self) -> std::sync::MutexGuard<'_, ChannelState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn signal(&self) -> ProgressSignal {
+        match self.stop.load(Ordering::SeqCst) {
+            STOP_CANCELLED => ProgressSignal::Stop(ProgressStop::Cancelled),
+            STOP_DEADLINE => ProgressSignal::Stop(ProgressStop::DeadlineExceeded),
+            _ => ProgressSignal::Continue,
+        }
+    }
+
+    /// The run is over: close every step still open with `text` and let
+    /// [`Self::drain`] finish once the queue is empty.
+    pub(super) fn finish_run(&self, text: &str) {
+        let now = (self.now)();
+        {
+            let mut state = self.lock();
+            for event in state.narrator.close_open(text, now) {
+                state.queue.push_back(Queued {
+                    event,
+                    at: now,
+                    coalesce: false,
+                });
+            }
+            state.closed = true;
+        }
+        self.wake.notify_one();
+    }
+
+    /// Deliver queued frames until the run is over and the queue is empty.
+    pub(super) async fn drain<C: AgentProgressConnector>(
+        &self,
+        publisher: &mut ToolkitProgressPublisher<C>,
+        verified: &VerifiedToolkitExecuteReadCommand,
+    ) {
+        loop {
+            let next = {
+                let mut state = self.lock();
+                match state.queue.pop_front() {
+                    Some(queued) => Some(queued),
+                    None if state.closed => return,
+                    None => None,
+                }
+            };
+            let Some(queued) = next else {
+                self.wake.notified().await;
+                continue;
+            };
+            if publisher.is_stopped() {
+                continue;
+            }
+            publisher.publish(verified, queued.event, queued.at).await;
+            match publisher.rejected_by() {
+                Some(ProgressRejectionWinner::Cancelled) => {
+                    self.stop.store(STOP_CANCELLED, Ordering::SeqCst);
+                }
+                Some(ProgressRejectionWinner::DeadlineExceeded) => {
+                    self.stop.store(STOP_DEADLINE, Ordering::SeqCst);
+                }
+                // A refused frame only ends progress.
+                Some(ProgressRejectionWinner::FrameRefused) | None => {}
+            }
+        }
     }
 }
 
-#[async_trait::async_trait]
-impl<C: AgentProgressConnector + 'static> ProgressSink for IndexProgressSink<'_, C> {
-    async fn note(&self, note: ProgressNote) {
+impl ProgressSink for ProgressChannel<'_> {
+    fn note(&self, note: ProgressNote) -> ProgressSignal {
         let now = (self.now)();
-        let mut state = self.state.lock().await;
-        let (narrator, publisher) = &mut *state;
-        for event in narrator.events(note, now) {
-            publisher.publish(self.verified, event, now).await;
+        let coalesce = matches!(note, ProgressNote::Documents { .. });
+        {
+            let mut state = self.lock();
+            let events = state.narrator.events(note, now);
+            for event in events {
+                let queued = Queued {
+                    event,
+                    at: now,
+                    coalesce,
+                };
+                if coalesce {
+                    if state.queue.back().is_some_and(|last| last.coalesce) {
+                        state.queue.pop_back();
+                    } else if state.queue.len() >= MAX_QUEUED_FRAMES {
+                        continue;
+                    }
+                }
+                state.queue.push_back(queued);
+            }
         }
+        self.wake.notify_one();
+        self.signal()
     }
 }
