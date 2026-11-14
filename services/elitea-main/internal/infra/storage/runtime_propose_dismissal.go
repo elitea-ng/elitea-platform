@@ -51,12 +51,12 @@ type RuntimeProposeDismissalResult struct {
 
 // ProposeDismissalRun is what the claimed execution says about a call.
 type ProposeDismissalRun struct {
-	ProjectID        int64
-	ExecutionID      string
-	ConversationUUID string
-	ApplicationID    int64
-	ActorID          int64
-	IsWorkforceManager        bool
+	ProjectID          int64
+	ExecutionID        string
+	ConversationUUID   string
+	ApplicationID      int64
+	ActorID            int64
+	IsWorkforceManager bool
 }
 
 // DismissalOutcome is what the store answers.
