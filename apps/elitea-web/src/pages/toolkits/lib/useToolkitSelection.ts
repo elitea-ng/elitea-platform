@@ -42,7 +42,7 @@ export function useToolkitSelection(projectId: string | undefined, rows: readonl
       }
     }
     if (failed > 0) setDeleteError(t('pages.toolkits.toolkits.deleteFailed', '{{count}} could not be deleted.', { count: failed }));
-    await queryClient.invalidateQueries({ queryKey: getListToolkitInstancesQueryKey(projectId ?? '') });
+    await queryClient.invalidateQueries({ queryKey: getListToolkitInstancesQueryKey(projectId ?? '') }).catch(() => undefined);
     setDeleting(false);
     setConfirmingDelete(false);
   };

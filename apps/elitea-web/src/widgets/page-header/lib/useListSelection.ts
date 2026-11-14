@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { EntitySelection } from '@/shared/ui/EntityCardList';
 
@@ -20,6 +20,14 @@ export function useListSelection(visibleIds: readonly string[]): ListSelection {
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
 
   const ids = useMemo(() => visibleIds.filter((id) => picked.has(id)), [visibleIds, picked]);
+
+  // A row that left the list (deleted, filtered out) is dropped for good, so it is not selected again when it returns.
+  // An empty list is a load in progress, not a list without rows: it prunes nothing.
+  useEffect(() => {
+    if (visibleIds.length === 0) return;
+    const visible = new Set(visibleIds);
+    setPicked((current) => (current.size === 0 || [...current].every((id) => visible.has(id)) ? current : new Set([...current].filter((id) => visible.has(id)))));
+  }, [visibleIds]);
   const selected = useMemo<ReadonlySet<string>>(() => new Set(ids), [ids]);
 
   const toggle = useCallback(

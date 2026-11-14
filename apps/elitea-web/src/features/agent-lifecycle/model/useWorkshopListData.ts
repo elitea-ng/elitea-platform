@@ -88,8 +88,8 @@ export function useWorkshopListData(input: WorkshopListInput): WorkshopListData 
 
   const needle = input.query.trim().toLowerCase();
   const sorted = useMemo(
-    () => sortRows((wire?.rows ?? []).filter((row) => row.name.toLowerCase().includes(needle)), search),
-    [wire, needle, search],
+    () => sortRows(wire?.rows ?? [], search),
+    [wire, search],
   );
   const rows = useMemo(() => sorted.slice(0, visibleCount), [sorted, visibleCount]);
 

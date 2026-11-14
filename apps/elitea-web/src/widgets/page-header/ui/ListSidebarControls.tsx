@@ -67,7 +67,9 @@ interface FacetGroupProps {
 /** One facet: a chip per value that occurs, with its count. A chip is a toggle: it says whether it is on in text, not only in colour. */
 export function FacetGroup({ facet, search, patch, testIdPrefix }: FacetGroupProps): ReactNode {
   const current = facetValue(search, facet);
-  const options = facet.options.filter((option) => option.count > 0 || option.value === current);
+  const shown = facet.options.filter((option) => option.count > 0 || option.value === current);
+  // The value that is on stays offered even at zero rows, so the filter can always be switched off.
+  const options = current === undefined || shown.some((option) => option.value === current) ? shown : [...shown, { value: current, label: current, count: 0 }];
   if (options.length === 0) return null;
   const choose = (value: string | undefined): void => {
     const empty = facet.array === true ? [] : '';
@@ -120,7 +122,7 @@ export function SortControl({ fields, search, patch, testIdPrefix }: SortControl
         <Select
           size="small"
           value={field}
-          onChange={(event) => patch({ sort_by: event.target.value })}
+          onChange={(event) => patch({ sort_by: event.target.value, sort_order: event.target.value === 'name' ? 'asc' : 'desc' })}
           inputProps={{ 'aria-label': label, 'data-testid': `${testIdPrefix}-sort-field` }}
           sx={sortSelectSx}
         >

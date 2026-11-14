@@ -45,7 +45,7 @@ function downloadMarkdown(content: string, filename: string): void {
   link.href = url;
   link.download = filename;
   link.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
 /** Adds `tag` to a skill's base version, keeping its name, description, instructions and the tags it has. */
@@ -73,7 +73,7 @@ export function useSkillBulkActions(projectId: string | undefined): SkillBulkAct
       try {
         const result = await action();
         if (result.failed.length > 0) setError(failure(result.failed.length));
-        if (refresh && projectId !== undefined) await queryClient.invalidateQueries({ queryKey: skillQueryKeys.all(projectId) });
+        if (refresh && projectId !== undefined) await queryClient.invalidateQueries({ queryKey: skillQueryKeys.all(projectId) }).catch(() => undefined);
         return result;
       } finally {
         setBusy(false);

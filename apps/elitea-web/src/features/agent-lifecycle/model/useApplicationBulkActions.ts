@@ -54,7 +54,8 @@ function downloadJson(document: unknown, filename: string): void {
   link.href = url;
   link.download = filename;
   link.click();
-  URL.revokeObjectURL(url);
+  // Revoked late: some browsers start the download after the click returns.
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
 /** Adds `tag` to the version the list shows for one application, keeping the tags it already has. */
@@ -79,7 +80,7 @@ export function useApplicationBulkActions(projectId: string | undefined, kind: '
       try {
         const result = await action();
         if (result.failed.length > 0) setError(failure(result.failed.length));
-        if (refresh) await queryClient.invalidateQueries({ queryKey: getListApplicationsQueryKey(projectId ?? '') });
+        if (refresh) await queryClient.invalidateQueries({ queryKey: getListApplicationsQueryKey(projectId ?? '') }).catch(() => undefined);
         return result;
       } finally {
         setBusy(false);
