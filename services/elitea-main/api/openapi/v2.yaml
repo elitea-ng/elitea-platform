@@ -20849,6 +20849,64 @@ components:
         updated_at: { type: string }
       required: [id, name, on_run_limit]
 
+    EntityFolder:
+      type: object
+      description: >
+        A project folder of one list (agents, pipelines, skills, toolkits or
+        MCPs), shared with every member of the project. `item_ids` are the ids
+        of the entities inside it. An entity is in at most one folder; one in no
+        folder sits at the root. Folders sort by `position` DESCENDING.
+      properties:
+        id: { type: string }
+        kind: { type: string, description: 'The list: agent, pipeline, skill, toolkit or mcp.' }
+        name: { type: string, maxLength: 128 }
+        position: { type: integer }
+        item_ids:
+          type: array
+          items: { type: integer }
+        created_by: { type: string, description: 'The user who made the folder. Audit only; it gates nothing.' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, kind, name, position, item_ids, created_at, updated_at]
+
+    EntityFolderList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/EntityFolder' }
+      required: [items]
+
+    EntityFolderCreateRequest:
+      type: object
+      properties:
+        name: { type: string, maxLength: 128 }
+        position:
+          type: integer
+          nullable: true
+          description: Absent puts the folder at the top of the list.
+      required: [name]
+
+    EntityFolderUpdateRequest:
+      type: object
+      description: >
+        Every field is optional. `name` alone renames and leaves the order
+        alone. The neighbour ids say where the folder was dropped and win over
+        `position`; `position` alone is stored as given.
+      properties:
+        name: { type: string, maxLength: 128 }
+        position: { type: integer, nullable: true }
+        neighbor_above_id: { type: string, nullable: true }
+        neighbor_below_id: { type: string, nullable: true }
+
+    EntityFolderMoveRequest:
+      type: object
+      properties:
+        folder_id:
+          type: string
+          nullable: true
+          description: The target folder of the same list. Null puts the entity back at the root.
+
     EvalSuiteList:
       type: object
       properties:
@@ -27634,6 +27692,153 @@ paths:
       tags: [applications]
       responses:
         '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/entity_folders/prompt_lib/{project_id}/{kind}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: kind
+        in: path
+        required: true
+        description: The list the folders belong to, one of agent, pipeline, skill, toolkit or mcp. Any other value is a 404.
+        schema: { type: string }
+
+    get:
+      operationId: listEntityFolders
+      summary: List the project's folders of one list
+      description: |
+        The folders of the list with the ids of the entities in each, highest
+        position first. Gated on the permission the list itself uses
+        (`models.applications.applications.list` for agents and pipelines,
+        `models.applications.skills.list`, `models.applications.tools.list` for
+        toolkits and MCPs).
+      tags: [applications]
+      responses:
+        '200':
+          description: The folders
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityFolderList'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+    post:
+      operationId: createEntityFolder
+      summary: Create a folder in a list
+      description: |
+        The new folder goes to the top. A name is unique in its list whatever
+        its case: a second one is a 409. Gated on the list's create permission.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntityFolderCreateRequest'
+      responses:
+        '201':
+          description: The created folder
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityFolder'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/entity_folders/prompt_lib/{project_id}/{kind}/{folder_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: kind
+        in: path
+        required: true
+        description: The list the folder belongs to, one of agent, pipeline, skill, toolkit or mcp.
+        schema: { type: string }
+      - name: folder_id
+        in: path
+        required: true
+        schema: { type: string }
+
+    put:
+      operationId: updateEntityFolder
+      summary: Rename or reorder a folder
+      description: |
+        Gated on the list's update permission. A rename never moves the folder.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntityFolderUpdateRequest'
+      responses:
+        '200':
+          description: The updated folder
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EntityFolder'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409': { $ref: '#/components/responses/409' }
+        '500': { $ref: '#/components/responses/500' }
+
+    delete:
+      operationId: deleteEntityFolder
+      summary: Delete a folder
+      description: |
+        The entities inside return to the root. No entity is deleted. Gated on
+        the list's update permission.
+      tags: [applications]
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/entity_folders/prompt_lib/{project_id}/{kind}/items/{entity_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: kind
+        in: path
+        required: true
+        description: The list the entity belongs to, one of agent, pipeline, skill, toolkit or mcp.
+        schema: { type: string }
+      - name: entity_id
+        in: path
+        required: true
+        description: The id of the agent, pipeline, skill, toolkit or MCP.
+        schema: { type: integer }
+
+    put:
+      operationId: moveEntityToFolder
+      summary: Put an entity into a folder, or back at the root
+      description: |
+        The entity and the folder must belong to the same list, else 404. An
+        entity is in one folder, so this replaces its place. Gated on the list's
+        update permission.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntityFolderMoveRequest'
+      responses:
+        '204': { description: Moved }
+        '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }

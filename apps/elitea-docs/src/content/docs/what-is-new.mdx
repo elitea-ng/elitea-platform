@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Folders for agents, pipelines, skills, toolkits and MCPs
+
+Each of the **Agents**, **Pipelines**, **Skills**, **Toolkits & Indexes** and **MCPs** lists now has project folders, shared with every member of the project. Open **Filters** to find the **Folders** section: create a folder with **+**, select one to show only its items, and use a folder's **⋯** menu to **Rename**, **Move up**, **Move down** or **Delete…** it (its items go back to the list; nothing else is deleted). Put an item in a folder with the folder icon on its card, or in the **Folder** column of the table view. There is no new permission: creating a folder needs the list's create permission, and renaming, reordering, deleting and moving need its update permission. **Run the migrations** (one tenant migration) and upgrade Main and the web app together. See [Organize agents, pipelines and toolkits](/how-tos/entity-management/organizing-entities#folders).
+
 ## Edit with AI fills the agent's fields, plus list and skill fixes
 
 **Edit with AI** on an agent now shows the generated draft as a form (name, description, instructions, welcome message, conversation starters) that you can edit, and **Apply** writes each value to its own field instead of pasting JSON into **Instructions**. Resources already attached to the agent are left as they are. In the agents, pipelines and skills lists, unselected tags in the Filters panel now stand out from the panel, and the table view shows a sort icon on the **Name & Description** and **Created** columns. In the agent's **Skills** section, the **+ Skill** menu has **Create new** (opens the New Skill page), and an attached skill is a card with open-in-new-tab and delete icons, like an attached toolkit. Folders exist only for chats; folders for agents, pipelines, skills, toolkits and MCPs are not part of the platform yet.

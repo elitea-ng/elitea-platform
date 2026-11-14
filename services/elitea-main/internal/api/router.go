@@ -61,6 +61,7 @@ import (
 	v2drafts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/drafts"
 	v2core "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	v2entitlements "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entitlements"
+	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -390,6 +391,9 @@ type RouterConfig struct {
 	ToolkitRegistry admin.ToolkitRegistrySource
 	SkillsRepo      v2skills.Repository
 	FoldersRepo     v2folders.Repository
+	// EntityFoldersRepo backs the shared project folders of the Agents,
+	// Pipelines, Skills, Toolkits and MCPs lists (issue 2048).
+	EntityFoldersRepo v2entityfolders.Repository
 	// MemoriesRepo backs persistent, cross-conversation personal memory
 	// (#870) — Settings > Memory's CRUD. Its recall INTO a chat turn is a
 	// separate dependency, wired straight into
@@ -4074,6 +4078,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(requireFolderUpdate).Patch("/folder/prompt_lib/{projectID}/{folderID}", folderHandler.Update)
 					r.With(projectPermission("models.chat.folders.delete")).
 						Delete("/folder/prompt_lib/{projectID}/{folderID}", folderHandler.Delete)
+				}
+
+				// Project folders of the entity lists (issue 2048). One route set
+				// per kind, each gated by the permissions of THAT list: list
+				// reads, create makes a folder, update renames, reorders, moves
+				// an entity and deletes a folder. No new permission.
+				if cfg.EntityFoldersRepo != nil {
+					registerEntityFolderRoutes(r, v2entityfolders.NewHandler(cfg.EntityFoldersRepo), projectPermission)
 				}
 
 				// Long-term memory (#870) — Settings > Memory's persistent,

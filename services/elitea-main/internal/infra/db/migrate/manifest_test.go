@@ -1426,7 +1426,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// settings and limits), the append-only eval_human_scores and the
 	// eval_runs.limit_reached column (issues 2008, 2013). The
 	// tenant history is numbered with the shared one at merge. No permission.
-	require.EqualValues(t, 244, Head(tenant))
+	//
+	// 245: tenant/0245_project_entity_folders.sql, project_folders and
+	// project_folder_items, the shared per-kind folders of the Agents,
+	// Pipelines, Skills, Toolkits and MCPs lists (issue 2048). No permission.
+	require.EqualValues(t, 245, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

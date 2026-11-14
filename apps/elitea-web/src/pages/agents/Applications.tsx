@@ -10,6 +10,7 @@ import { TEAM_PERMISSIONS, TeamsPanel } from '@/features/agent-teams';
 import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { EntityListFilters, useRailTagSelection } from '@/shared/ui/EntityRail';
+import { EntityFolderPanel } from '@/widgets/entity-folders';
 import { ListViewToggle, PageToolbar, pageBodySx, pageSx, type PageToolbarProps } from '@/widgets/page-header';
 import { usePermissionSet, usePermissionSetSettled } from '@/widgets/sidebar';
 
@@ -83,6 +84,8 @@ export function Applications(): ReactNode {
   const permissions = usePermissionSet(projectId);
   const permissionsSettled = usePermissionSetSettled(projectId);
   const canCreate = permissions.has(PERMISSIONS.applications.create) && !isPublicProject;
+  // The project's own lists have folders; the public feeds and the Teams tab do not (issue 2048).
+  const showFolders = hasFolders(isPublicProject, params.tab);
   const { selectedTags } = useRailTagSelection();
   const totals = useApplicationsData(projectId, hasAdminPermission);
   const entityImport = useEntityImport(projectId);
@@ -159,9 +162,22 @@ export function Applications(): ReactNode {
         projectId={projectId}
         subject={title}
         preferTrendingAuthors={TRENDING_AUTHOR_TABS.includes(params.tab ?? '')}
+        foldersSlot={
+          <EntityFolderPanel
+            enabled={showFolders}
+            projectId={projectId}
+            kind="agent"
+            permissions={permissions}
+          />
+        }
       />
     </Box>
   );
+}
+
+/** The project's own lists have folders; the public feeds and the Teams tab do not (issue 2048). */
+function hasFolders(isPublicProject: boolean, tab: string | undefined): boolean {
+  return !isPublicProject && tab !== TEAMS_TAB;
 }
 
 /** ADR-0050 decision 8 (issue 1620): the Teams tab's content, for a caller who may list teams. */

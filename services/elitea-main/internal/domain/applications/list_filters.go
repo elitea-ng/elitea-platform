@@ -56,8 +56,18 @@ func (req *ListRequest) ValidateList() error {
 	default:
 		return apierr.BadRequest("agents_type must be all, classic, or pipeline")
 	}
+	// `folder_id` is a project folder of the agents or pipelines list
+	// (tenant/0245). A folder id is a plain decimal row id.
 	if req.FolderID != "" {
-		return apierr.BadRequest("folder_id is not supported; use ids for folder contents")
+		req.FolderID = strings.TrimSpace(req.FolderID)
+		for _, c := range req.FolderID {
+			if c < '0' || c > '9' {
+				return apierr.BadRequest("folder_id must be a folder id")
+			}
+		}
+		if req.FolderID == "" || len(req.FolderID) > 9 {
+			return apierr.BadRequest("folder_id must be a folder id")
+		}
 	}
 	if req.SortBy == "" {
 		req.SortBy = "created_at"

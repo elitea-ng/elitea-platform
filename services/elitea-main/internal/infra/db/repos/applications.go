@@ -219,6 +219,14 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	case "pipeline":
 		kinds = []string{"pipeline"}
 	}
+	// `folder_id` narrows the list to ONE project folder (migration 0245). The
+	// item rows carry the kind, so a folder id of the other list matches nothing.
+	if req.FolderID != "" {
+		if !isNumericRowID(req.FolderID) {
+			return empty, apierr.BadRequest("folder_id must be a folder id")
+		}
+		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.project_folder_items pfi WHERE pfi.entity_id=a.id AND pfi.entity_kind=ANY(%s::text[]) AND pfi.folder_id=%s::integer)", s, bind(kinds), bind(req.FolderID)))
+	}
 	if access.FolderRestrictions {
 		conditions = append(conditions, foldervisibility.ExclusionSQL(s, "a.id", bind(kinds), bind(access.ActorID)))
 	}

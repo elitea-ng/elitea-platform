@@ -8,6 +8,7 @@ import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle'
 import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { EntityListFilters, useRailTagSelection } from '@/shared/ui/EntityRail';
+import { EntityFolderPanel } from '@/widgets/entity-folders';
 import { ListViewToggle, PageToolbar, pageBodySx, pageSx } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
@@ -73,7 +74,8 @@ export function Pipelines(): ReactNode {
   const projectId = useSelectedProjectId();
   const isPublicProject = isPublicPipelinesProject(projectId);
   const hasAdminPermission = useHasAdminPermission(isPublicProject ? projectId : undefined);
-  const canCreate = usePermissionSet(projectId).has(PERMISSIONS.applications.create) && !isPublicProject;
+  const permissions = usePermissionSet(projectId);
+  const canCreate = permissions.has(PERMISSIONS.applications.create) && !isPublicProject;
   const { selectedTags } = useRailTagSelection();
   const totals = usePipelinesData(projectId, hasAdminPermission);
   const entityImport = useEntityImport(projectId);
@@ -145,6 +147,14 @@ export function Pipelines(): ReactNode {
         projectId={projectId}
         subject={title}
         preferTrendingAuthors={TRENDING_AUTHOR_TABS.includes(params.tab ?? '')}
+        foldersSlot={
+          <EntityFolderPanel
+            enabled={!isPublicProject}
+            projectId={projectId}
+            kind="pipeline"
+            permissions={permissions}
+          />
+        }
       />
     </Box>
   );

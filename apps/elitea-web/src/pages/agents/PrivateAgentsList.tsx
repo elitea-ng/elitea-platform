@@ -9,9 +9,12 @@ import { authorDisplayName, isDeletedAuthor } from '@/entities/author';
 import { useListApplications } from '@/shared/api/generated/applications/applications';
 import type { Application, ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
-import { useRailTagSelection } from '@/shared/ui/EntityRail';
+import { useRailFolderSelection, useRailTagSelection } from '@/shared/ui/EntityRail';
+import { EntityFolderScope } from '@/widgets/entity-folders';
 import { useListSearchQuery } from '@/widgets/page-header';
+import { usePermissionSet } from '@/widgets/sidebar';
 
+import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
 import { sortApplicationsByField, type SortOrder } from './lib/sortApplicationsByField';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { ApplicationListPanel, type ApplicationListRow } from './ui/ApplicationListPanel';
@@ -164,6 +167,8 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
   const query = useListSearchQuery();
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const { selectedTags } = useRailTagSelection();
+  const { selectedFolderId } = useRailFolderSelection();
+  const permissions = usePermissionSet(projectId);
 
   // A new query restarts the "load more" window; without this, narrowing the
   // list would keep whatever count the previous query had grown to.
@@ -186,6 +191,8 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
       agents_type: 'classic',
       ...(trimmedQuery === '' ? {} : { query: trimmedQuery }),
       ...(tagFilter === '' ? {} : { tags: tagFilter }),
+      // The open project folder (issue 2048): the server narrows the list, so a folder of 40 agents pages as a list of 40.
+      ...(selectedFolderId === undefined ? {} : { folder_id: selectedFolderId }),
     },
     { query: { enabled: projectId !== undefined } },
   );
@@ -211,43 +218,49 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
       key={cardContentType}
       sx={containerSx}
     >
-      <ApplicationListPanel
-        rows={visibleRows.map((application) =>
-          toRow(application, (id) => {
-            // #915 — always the "all" tab, matching the baseline's own fixed
-            // (old-router) target: the source agent may not appear under
-            // whichever status tab the fork's own row is showing on.
-            void navigate({ to: '/agents/$tab/$agentId', params: { tab: 'all', agentId: id } });
-          }),
-        )}
-        isLoading={listQuery.isFetching && wire === undefined}
-        isError={listQuery.isError}
-        errorMessage={t('pages.agents.privateList.error', 'Failed to load applications.')}
-        emptyTitle={
-          query
-            ? t('pages.agents.privateList.emptyFound.title', 'Nothing found.')
-            : t('pages.agents.privateList.empty.title', 'No agents yet')
-        }
-        emptyDescription={
-          query
-            ? t('pages.agents.privateList.emptyFound.description', 'Create yours now!')
-            : t(
-                'pages.agents.privateList.empty.description',
-                'Create your first agent to get started. Agents combine a prompt, a model and the toolkits they are allowed to call.',
-              )
-        }
-        onCreate={() => {
-          void navigate({ to: '/agents/create' });
-        }}
-        onSelect={(id) => {
-          void navigate({ to: '/agents/$tab/$agentId', params: { tab: params.tab ?? 'all', agentId: id } });
-        }}
-        hasMore={hasMore}
-        isLoadingMore={false}
-        onLoadMore={() => {
-          setVisibleCount((count) => count + PAGE_SIZE);
-        }}
-      />
+      <EntityFolderScope
+        projectId={isPublicAgentsProject(projectId) ? undefined : projectId}
+        kind="agent"
+        permissions={permissions}
+      >
+        <ApplicationListPanel
+          rows={visibleRows.map((application) =>
+            toRow(application, (id) => {
+              // #915 — always the "all" tab, matching the baseline's own fixed
+              // (old-router) target: the source agent may not appear under
+              // whichever status tab the fork's own row is showing on.
+              void navigate({ to: '/agents/$tab/$agentId', params: { tab: 'all', agentId: id } });
+            }),
+          )}
+          isLoading={listQuery.isFetching && wire === undefined}
+          isError={listQuery.isError}
+          errorMessage={t('pages.agents.privateList.error', 'Failed to load applications.')}
+          emptyTitle={
+            query
+              ? t('pages.agents.privateList.emptyFound.title', 'Nothing found.')
+              : t('pages.agents.privateList.empty.title', 'No agents yet')
+          }
+          emptyDescription={
+            query
+              ? t('pages.agents.privateList.emptyFound.description', 'Create yours now!')
+              : t(
+                  'pages.agents.privateList.empty.description',
+                  'Create your first agent to get started. Agents combine a prompt, a model and the toolkits they are allowed to call.',
+                )
+          }
+          onCreate={() => {
+            void navigate({ to: '/agents/create' });
+          }}
+          onSelect={(id) => {
+            void navigate({ to: '/agents/$tab/$agentId', params: { tab: params.tab ?? 'all', agentId: id } });
+          }}
+          hasMore={hasMore}
+          isLoadingMore={false}
+          onLoadMore={() => {
+            setVisibleCount((count) => count + PAGE_SIZE);
+          }}
+        />
+      </EntityFolderScope>
     </Box>
   );
 }
