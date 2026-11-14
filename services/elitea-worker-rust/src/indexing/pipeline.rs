@@ -2531,13 +2531,15 @@ async fn prepare(
         }
     }
     let plan_of_run = plan;
-    // A document format (PDF, Office, e-mail) is the sidecar's to read; this
-    // process extracts text and HTML itself, on the blocking thread below.
+    // A document format (PDF, Office, e-mail) is the sidecar's to read when the
+    // deployment names one (process isolation for the untrusted parsers);
+    // without a sidecar this process reads it itself, as it does text and
+    // HTML, on the blocking thread below (#1651: `documents` is compiled in).
     // A PDF, DOCX or PPTX whose `use_llm` is on also asks the sidecar for its
     // embedded pictures (ADR-0030 I4 part C); every other document, and these
     // with `use_llm` off (the SDK's default for documents), ask for none and
     // are read exactly as before.
-    let is_document = elitea_doc_extract::is_document_type(&mime);
+    let is_document = elitea_doc_extract::is_document_type(&mime) && extractor.is_some();
     // Planned by the key's extension, else by the media type the source
     // delivered it as (a key without an extension).
     let embedded_plan = if is_document {

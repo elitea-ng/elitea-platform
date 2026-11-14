@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { AVATAR_PACK_SCHEMA, AVATAR_SLOTS, avatarPackOf, avatarSource, avatarStillUrl, isAgentMediaUrl } from './avatarPack';
+import { AVATAR_PACK_SCHEMA, AVATAR_SLOTS, avatarPackOf, avatarSource, avatarStillUrl, isAgentMediaUrl, packDefaultAvatarKey } from './avatarPack';
 
 const media = (ext: string, project = '1') => `/api/v2/agent_media/${project}/${'ab'.repeat(32)}.${ext}`;
 const poster = media('png');
@@ -74,5 +74,21 @@ describe('avatarSource', () => {
     assert.equal(avatarSource(undefined, undefined, 'thinking'), undefined);
     assert.equal(avatarStillUrl(null, '/icons/1/old.png'), '/icons/1/old.png');
     assert.equal(avatarStillUrl(pack, '/icons/1/old.png'), media('png'));
+  });
+});
+
+describe('packDefaultAvatarKey', () => {
+  it('reads a default avatar key a pack names as its still', () => {
+    const named = { schema: AVATAR_PACK_SCHEMA, slots: { still: { url: 'default:fox' } } };
+    assert.equal(packDefaultAvatarKey(named), 'default:fox');
+    // The file rules still drop it: there is no file to download.
+    assert.equal(avatarPackOf(named), undefined);
+  });
+
+  it('is undefined for a file pack, an unknown key or anything else', () => {
+    assert.equal(packDefaultAvatarKey(pack), undefined);
+    assert.equal(packDefaultAvatarKey({ slots: { still: { url: 'default:dragon' } } }), undefined);
+    assert.equal(packDefaultAvatarKey(null), undefined);
+    assert.equal(packDefaultAvatarKey('default:fox'), undefined);
   });
 });

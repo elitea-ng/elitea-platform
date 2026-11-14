@@ -48,7 +48,7 @@ func seedHireProposal(t *testing.T, pool *pgxpool.Pool, n int, tools []string, c
 		toolJSON += fmt.Sprintf(`{"key":%q,"toolkit_type":"","category":"read"}`, tool)
 	}
 	toolJSON += "]"
-	draft := fmt.Sprintf(`{"name":"Hired %d","description":"Reads code.","instructions":"Read and summarise.","risk_tier":"low",
+	draft := fmt.Sprintf(`{"name":"Hired %d","description":"Reads code.","instructions":"Read and summarise.","risk_tier":"low","avatar":"default:fox",
 "soul":{"schema":"elitea.soul/v1","display_name":"Ada","body":"Calm."},"tools":%s}`, n, toolJSON)
 	var id int64
 	if err := pool.QueryRow(context.Background(), `
@@ -211,9 +211,14 @@ func TestWorkforceAutoHireInvariantsProbationUndoAndMax(t *testing.T) {
 		t.Fatalf("probation = %v", got)
 	}
 	var published, versions, tools int
-	var memoryWrite, soulName string
-	_ = pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status <> 'draft'), count(*), max(meta->'memory'->>'write'), max(soul->>'display_name')
-FROM p_1.application_versions WHERE application_id = $1`, hired).Scan(&published, &versions, &memoryWrite, &soulName)
+	var memoryWrite, soulName, avatarStill string
+	_ = pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status <> 'draft'), count(*), max(meta->'memory'->>'write'), max(soul->>'display_name'),
+       coalesce(max(avatar_pack->'slots'->'still'->>'url'), '')
+FROM p_1.application_versions WHERE application_id = $1`, hired).Scan(&published, &versions, &memoryWrite, &soulName, &avatarStill)
+	// #1949: the proposal's runtime avatar key is the hire's avatar pack.
+	if avatarStill != "default:fox" {
+		t.Fatalf("the hire's avatar pack still = %q, want default:fox", avatarStill)
+	}
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM p_1.entity_tool_mapping m JOIN p_1.application_versions v ON v.id = m.entity_version_id WHERE v.application_id = $1`, hired).Scan(&tools)
 	if published != 0 || versions != 1 || tools != 0 || memoryWrite != "review" || soulName != "Ada" {
 		t.Fatalf("unpublished, no tools, memory review, soul: published=%d versions=%d tools=%d memory=%q soul=%q",

@@ -95,6 +95,7 @@ import { exportErrorText } from '@/api/queries/exportConversation';
 import { shareTranscript } from '@/features/chat/export/shareTranscript';
 import { answerHiddenByRegeneration, newQuestionId, type LiveTurn, type StopOptions } from '@/features/chat/turnController';
 import { useAvatarClock } from '@/features/chat/AgentMotion';
+import { useDataSaver } from '@/lib/dataSaver';
 import {
   MESSAGE_CLASS,
   activeAnimatedParticipant,
@@ -741,13 +742,15 @@ export function ThreadView({
   // live reply can move; persisted answers show their still.
   const avatarStates = live && !live.settled ? (live.avatars ?? NO_AVATARS) : NO_AVATARS;
   const avatarNow = useAvatarClock(avatarStates);
+  // ADR-0050 decision 6: the system's low-data state shows the still only (#1650).
+  const dataSaver = useDataSaver();
   // The live reply is the participant its frames name (another agent of the conversation can answer),
   // else the conversation's own target.
   const liveParticipant = activeAnimatedParticipant(avatarStates, avatarNow) ?? primaryParticipant;
   const avatarFor = (participantId: number | null, name: string | null, newest = false) => {
     const primary = participantId === null || participantId === primaryParticipant;
     const label = name ?? (target.ok ? target.name : null) ?? 'Assistant';
-    const motion = avatarMotion({ participantId: participantId ?? undefined, newest }, avatarStates, avatarNow, { reducedMotion: design.reduceMotion });
+    const motion = avatarMotion({ participantId: participantId ?? undefined, newest }, avatarStates, avatarNow, { reducedMotion: design.reduceMotion, dataSaver });
     // The answering participant's pack. The media url names its own project; the cache is the open
     // project's, so a switch drops it.
     const answerId = participantId ?? primaryParticipant;

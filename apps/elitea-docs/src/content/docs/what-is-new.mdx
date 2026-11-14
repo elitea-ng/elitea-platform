@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Proposed agents keep their avatar, mobile saves data, and the worker reads documents itself
+
+An agent that a proposal creates (an automatic hire, or **Create from proposal**) now keeps the sub-agent's avatar when it is one of the default animals (`default:owl`, `default:fox` and the rest); any other avatar key leaves the default look. On mobile, the animated avatar shows its still while the phone is in a low-data state (iOS Low Data Mode or an expensive network, Android Data Saver). A worker with no document extraction sidecar configured now reads PDF, Office and e-mail files in its own process instead of skipping them as unsupported; with the sidecar configured they still go to it. Rebuild the mobile app: the data-saver signal is native.
+
 ## Agent Evaluation: run cases as agent runs, with steps, time and tool output controls
 
 An evaluation case can now run as a real agent run on the worker instead of one model call. Choose **Agent run** in **How a case runs**, in **Run limits** or in the start form: each case runs the pinned agent version with its tools through the same path as a chat, and the judges score its final answer. Saved limits gain a **Steps per case** limit, a **Time per case** limit (the agent run is cancelled and the case stores a timeout) and **Store tool outputs in the results**, shown only for agent runs. A finished agent run's scorecard adds a **Trajectory** card (steps per case p50 and p95, tool calls, errors, retries, and each case's steps), and the **Efficiency** card adds the tool metrics. One model call per case stays the default, and nothing changes unless you choose the mode. **Run the tenant migration `0246` and upgrade Main and the web app together.** See [Evaluation](/menus/agents#agent-runs).

@@ -13,6 +13,7 @@
  */
 import { AGENT_STATE, type AgentState } from '../stream/frameTypes';
 import type { AvatarMotion } from './avatarState';
+import { defaultAvatarOf } from './defaultAvatars';
 
 /** The document version of an avatar pack. */
 export const AVATAR_PACK_SCHEMA = 'elitea.avatar_pack/v1';
@@ -80,6 +81,21 @@ export function avatarPackOf(value: unknown): AvatarPack | undefined {
   }
   if (slots.still === undefined || isVideoUrl(slots.still.url)) return undefined;
   return { schema: AVATAR_PACK_SCHEMA, slots };
+}
+
+/**
+ * The default avatar key (`default:<name>`, `defaultAvatarOf`) a pack's still names, else
+ * `undefined`. A hired or promoted sub-agent whose proposal named a default avatar saves it as
+ * its pack's still (#1949); the file rules above drop such a still, so a client asks here and
+ * draws the glyph.
+ */
+export function packDefaultAvatarKey(pack: unknown): string | undefined {
+  if (typeof pack !== 'object' || pack === null) return undefined;
+  const slots = (pack as Record<string, unknown>).slots;
+  if (typeof slots !== 'object' || slots === null) return undefined;
+  const still = (slots as Record<string, unknown>).still;
+  const url = typeof still === 'object' && still !== null ? (still as Record<string, unknown>).url : undefined;
+  return typeof url === 'string' && defaultAvatarOf(url) !== undefined ? url : undefined;
 }
 
 /** The still to show: the pack's, else the old `meta.icon_meta` url. */

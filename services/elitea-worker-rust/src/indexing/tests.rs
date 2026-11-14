@@ -1790,6 +1790,59 @@ pub(super) fn binary_document(key: &str, bytes: &[u8]) -> Document {
     document
 }
 
+/// A one-page PDF with `text` on it, with a correct cross-reference table.
+fn text_pdf(text: &str) -> Vec<u8> {
+    let stream = format!("BT /F1 12 Tf 72 720 Td ({text}) Tj ET");
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>".to_owned(),
+        format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()),
+    ];
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{object}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(
+        format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+    );
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    out
+}
+
+/// #1651: a worker with no `extractor_socket` reads a PDF itself and indexes
+/// it; nothing is skipped `unsupported_type`.
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_socket_a_pdf_is_extracted_in_process_and_indexed() {
+    let harness = harness(4, None).await;
+    assert!(harness.runtime.extractor.is_none());
+    let pdf = text_pdf("Quarterly policy handbook");
+    let summary = run(
+        &harness,
+        vec![binary_document("handbook.pdf", &pdf)],
+        &command(NS, None),
+        &parameters(false, json!({})),
+        &Always,
+    )
+    .await
+    .expect("summary");
+    assert_eq!(summary.indexed_documents, 1, "{summary:?}");
+    assert!(summary.skipped.is_empty(), "{summary:?}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn documents_go_to_the_extractor_and_are_indexed() {
     let socket = socket_path("ok");
@@ -1963,8 +2016,10 @@ async fn a_reconnected_extractor_serves_the_documents_a_crash_skipped() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn without_an_extractor_a_document_is_unsupported_and_without_a_socket_extract_failed() {
-    // No sidecar configured: the pre-sidecar behaviour, byte for byte.
+async fn without_an_extractor_a_document_is_read_in_process_and_without_a_socket_extract_failed() {
+    // No sidecar configured: the worker reads the document itself (#1651).
+    // Bytes that are not a PDF are an unreadable document, no longer an
+    // unsupported type.
     let harness = harness(4, None).await;
     let summary = run(
         &harness,
@@ -1977,9 +2032,10 @@ async fn without_an_extractor_a_document_is_unsupported_and_without_a_socket_ext
     .expect("summary");
     assert_eq!(
         summary.skipped.get("unsupported_type"),
-        Some(&1),
+        None,
         "{summary:?}"
     );
+    assert_eq!(summary.indexed_documents, 0, "{summary:?}");
     // A sidecar configured but not running (nothing listens at the path):
     // the document is skipped `extract_failed`, the run goes on.
     let socket = socket_path("absent");

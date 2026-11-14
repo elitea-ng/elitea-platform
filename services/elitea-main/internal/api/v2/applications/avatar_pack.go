@@ -104,7 +104,7 @@ func applyAvatarPack(w http.ResponseWriter, body map[string]any, projectID strin
 	v.Present.AvatarPack = true
 	still := agentmedia.StillURL(pack)
 	switch {
-	case still != "" && !stillHeld(still, stored.packs):
+	case still != "" && !agentmedia.IsDefaultAvatarKey(still) && !stillHeld(still, stored.packs):
 		if v.Meta == nil {
 			v.Meta = map[string]any{}
 		}
@@ -164,7 +164,7 @@ func packInProject(pack json.RawMessage, projectID string, held map[string]bool)
 	}
 	for _, slot := range decoded.Slots {
 		for _, url := range []string{slot.URL, slot.PosterURL} {
-			if url == "" || held[url] {
+			if url == "" || held[url] || agentmedia.IsDefaultAvatarKey(url) {
 				continue
 			}
 			if owner, _, _, ok := agentmedia.ParseURL(url); !ok || owner != projectID {

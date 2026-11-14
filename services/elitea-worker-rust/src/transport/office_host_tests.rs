@@ -824,9 +824,11 @@ async fn the_host_reads_text_itself_and_names_what_it_cannot_read() {
             .await,
         Err(TextExtractionFailure::Unreadable)
     );
-    // A PDF or Office document with no sidecar configured.
+    // A PDF or Office document with no sidecar configured is read in
+    // process (#1651): these bytes are not those formats, so they are
+    // unreadable, not "no extractor".
     for name in ["a.pdf", "b.docx", "c.xlsx", "d.pptx"] {
-        assert_eq!(
+        assert_ne!(
             host.extract_text(name, b"%PDF-1.4".to_vec()).await,
             Err(TextExtractionFailure::NoExtractor),
             "{name}"
@@ -861,11 +863,8 @@ fn a_file_is_refused_by_its_name_before_it_is_downloaded() {
     }
     for name in ["a.pdf", "b.docx", "c.xlsx", "d.pptx"] {
         assert_eq!(readable_kind(true, name), Ok(()), "{name}");
-        assert_eq!(
-            readable_kind(false, name),
-            Err(TextExtractionFailure::NoExtractor),
-            "{name}"
-        );
+        // No sidecar: the worker reads it itself (`documents` is compiled in).
+        assert_eq!(readable_kind(false, name), Ok(()), "{name}");
     }
     for name in [
         "photo.png",
@@ -884,10 +883,7 @@ fn a_file_is_refused_by_its_name_before_it_is_downloaded() {
     let host =
         ClaimOfficeHost::new(runtime, "pat", "42", LazyStepbackModel::unbound()).expect("host");
     assert_eq!(host.can_read_text("a.txt"), Ok(()));
-    assert_eq!(
-        host.can_read_text("a.pdf"),
-        Err(TextExtractionFailure::NoExtractor)
-    );
+    assert_eq!(host.can_read_text("a.pdf"), Ok(()));
 }
 
 /// D2: a synchronous tool run (the UI's "test tool" panel) of each Office
