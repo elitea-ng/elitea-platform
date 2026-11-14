@@ -105,7 +105,14 @@ function applyAgentToolStart(updatedHistory: IndexChatMessage[], message: Socket
   msg.toolActions ??= [];
 
   const existingAction = msg.toolActions.find((t) => t.id === message.response_metadata?.tool_run_id);
-  if (existingAction) return updatedHistory;
+  if (existingAction) {
+    // A repeated start of a running step carries its newest name (an index run
+    // reports "Indexing documents: 10 of 30" this way, #2041).
+    if (existingAction.status === ToolActionStatus.processing && message.response_metadata?.tool_name) {
+      existingAction.name = message.response_metadata.tool_name;
+    }
+    return updatedHistory;
+  }
 
   msg.toolActions.push({
     name: message.response_metadata?.tool_name,

@@ -25,6 +25,7 @@ mod run_step_events;
 mod toolkit_delivery;
 mod toolkit_delivery_processor;
 mod toolkit_output;
+mod toolkit_progress;
 
 #[cfg(test)]
 mod agent_lease_tests;
@@ -44,6 +45,8 @@ mod output_delivery_tests;
 mod toolkit_delivery_processor_tests;
 #[cfg(test)]
 mod toolkit_output_tests;
+#[cfg(test)]
+mod toolkit_progress_tests;
 
 pub use agent_delivery::{
     AgentDeliveryCompletion, AgentDeliveryCompletionKind, AgentDeliveryError, AgentDeliveryRoute,
