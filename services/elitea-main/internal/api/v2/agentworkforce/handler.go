@@ -125,7 +125,7 @@ func (h *Handler) actor(w http.ResponseWriter, r *http.Request, projectID int64)
 }
 
 // forbidden is the refusal of a read or a write the caller is not entitled
-// to: ADR-0050 5h lets agent managers and the owner (and HR agents, over
+// to: ADR-0050 5h lets agent managers and the owner (and workforce managers, over
 // gRPC) read a scorecard, and the proposals carry rationales, owner
 // comments and appeal reasons of the same sensitivity.
 var forbidden = agentworkforce.Refuse(agentworkforce.ForbiddenCode,

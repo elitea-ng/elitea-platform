@@ -12316,7 +12316,7 @@ export const getGetAgentWorkforceUrl = (
 };
 
 /**
- * The agent's place on the dismissal ladder (ADR-0050 decision 5g): whether it is under review (watch), suspended, retired (and until when it can be reinstated) or deleted, its owners, legal hold, whether it is an HR agent, its latest daily scorecard, and whether the caller manages agents here or owns the agent. Requires `models.applications.applications.list`.
+ * The agent's place on the dismissal ladder (ADR-0050 decision 5g): whether it is under review (watch), suspended, retired (and until when it can be reinstated) or deleted, its owners, legal hold, whether it is a workforce manager, its latest daily scorecard, and whether the caller manages agents here or owns the agent. Requires `models.applications.applications.list`.
  * @summary Read an agent's workforce state and latest scorecard
  */
 export const getAgentWorkforce = async (

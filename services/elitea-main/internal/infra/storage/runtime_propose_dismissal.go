@@ -17,7 +17,7 @@ import (
 // the claimed execution; the request names only the target agent, the
 // stage, the rationale and a demotion's narrowing.
 //
-// WHAT MAIN DECIDES, not the worker: that the proposer is an HR agent (the
+// WHAT MAIN DECIDES, not the worker: that the proposer is a workforce manager (the
 // frozen version's meta.capabilities.can_review_agents), and every guard of
 // decision 5j against the target (repos.AgentWorkforce.ProposeDismissal).
 // NOTHING IS APPLIED: the row is a proposal a person decides.
@@ -56,7 +56,7 @@ type ProposeDismissalRun struct {
 	ConversationUUID string
 	ApplicationID    int64
 	ActorID          int64
-	IsHRAgent        bool
+	IsWorkforceManager        bool
 }
 
 // DismissalOutcome is what the store answers.
@@ -90,7 +90,7 @@ func dismissalResult(status, message string) RuntimeProposeDismissalResult {
 	return RuntimeProposeDismissalResult{SchemaVersion: RuntimeProposeDismissalSchemaVersion, Status: status, Message: message}
 }
 
-// Propose stores one proposal from the claimed run's HR agent.
+// Propose stores one proposal from the claimed run's workforce manager.
 func (service *RuntimeProposeDismissalService) Propose(ctx context.Context, claim ContentClaim, request DismissalRequest) (RuntimeProposeDismissalResult, error) {
 	if service == nil || service.authorizer == nil || service.sink == nil {
 		return RuntimeProposeDismissalResult{}, runtimeContextUnavailable(runtimeContextStageProposeDismissalRun)
@@ -118,7 +118,7 @@ func (service *RuntimeProposeDismissalService) Propose(ctx context.Context, clai
 		strconv.FormatInt(run.ActorID, 10) != authorization.ActorID {
 		return RuntimeProposeDismissalResult{}, ErrContentUnauthorized
 	}
-	if run.ApplicationID <= 0 || !run.IsHRAgent {
+	if run.ApplicationID <= 0 || !run.IsWorkforceManager {
 		return dismissalResult(agentworkforce.OutcomeNotAllowed,
 			"This agent may not propose dismissals: its version does not set capabilities.can_review_agents."), nil
 	}

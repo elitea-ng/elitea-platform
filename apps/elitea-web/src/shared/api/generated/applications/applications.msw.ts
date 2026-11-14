@@ -2651,7 +2651,11 @@ export const getGetAgentWorkforceResponseMock = (
   suspension_id: faker.number.int(),
   suspension_source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   legal_hold: faker.datatype.boolean(),
-  is_hr_agent: faker.datatype.boolean(),
+  is_workforce_manager: faker.datatype.boolean(),
+  is_hr_agent: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
   auto_hired_at: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
     null,
@@ -2802,7 +2806,11 @@ export const getReinstateAgentResponseMock = (
   suspension_id: faker.number.int(),
   suspension_source: faker.string.alpha({ length: { min: 10, max: 20 } }),
   legal_hold: faker.datatype.boolean(),
-  is_hr_agent: faker.datatype.boolean(),
+  is_workforce_manager: faker.datatype.boolean(),
+  is_hr_agent: faker.helpers.arrayElement([
+    faker.datatype.boolean(),
+    undefined,
+  ]),
   auto_hired_at: faker.helpers.arrayElement([
     faker.date.past().toISOString().slice(0, 19) + "Z",
     null,

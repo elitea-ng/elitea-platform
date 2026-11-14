@@ -86,11 +86,11 @@ service RuntimeContentService {
   // create permission, and stores a proposal; nothing is saved as an agent.
   rpc ProposeAgent(ProposeAgentRequestV1) returns (ProposeAgentResponseV1);
   // Propose demoting or dismissing another agent (ADR-0050 decision 5j,
-  // #1616): the propose_dismissal tool of an HR agent. The project, the
+  // #1616): the propose_dismissal tool of a workforce manager. The project, the
   // proposing agent and the person come from the claim; the request carries
   // only the target agent, the ladder stage, the rationale and a demotion's
   // narrowing. Main checks the can_review_agents capability and the guards
-  // (no self, no hirer, no other HR agent, no higher tier, never critical
+  // (no self, no hirer, no other workforce manager, no higher tier, never critical
   // or under legal hold) and stores a proposal; nothing is applied until a
   // person approves it.
   rpc ProposeDismissal(ProposeDismissalRequestV1) returns (ProposeDismissalResponseV1);

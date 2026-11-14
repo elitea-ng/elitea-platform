@@ -22,7 +22,7 @@ const agentScorecardRoutineID = "main.agent_scorecard"
 // active agent from platform data (run outcomes, breaker trips, approval
 // rejections, guardrail hits, spend, people's ratings) and prunes the
 // scorecards past retention. It never proposes or applies a ladder stage:
-// a person, or an HR agent's proposal a person decides, does.
+// a person, or a workforce manager's proposal a person decides, does.
 func startAgentScorecard(ctx context.Context, pool *pgxpool.Pool, ks killSwitch, logger *slog.Logger) error {
 	store, err := dbrepos.ComposeAgentWorkforce(pool, ks.gate.Notify)
 	if err != nil {

@@ -60,7 +60,13 @@ export const AgentWorkforceAgent = zod.object({
   suspension_id: zod.int().describe("The active suspension, 0 for none."),
   suspension_source: zod.string(),
   legal_hold: zod.boolean(),
-  is_hr_agent: zod.boolean(),
+  is_workforce_manager: zod.boolean(),
+  is_hr_agent: zod
+    .boolean()
+    .optional()
+    .describe(
+      "Deprecated duplicate of is_workforce_manager, kept for one release for older mobile and desktop builds. Removed in the next release.",
+    ),
   auto_hired_at: zod.iso
     .datetime({ offset: true })
     .nullable()

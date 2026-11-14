@@ -88,7 +88,7 @@ const AGENT_MEMORY_FORGET_SCHEMA: &str = "elitea.runtime.agent-memory-forget.v1"
 /// The turn-taking hand-off's schema (ADR-0050 decision 11, #1611).
 const HAND_FLOOR_SCHEMA: &str = "elitea.runtime.hand-floor.v1";
 const PROPOSE_AGENT_SCHEMA: &str = "elitea.runtime.propose-agent.v1";
-/// The HR agent's propose-dismissal answer (ADR-0050 decision 5l, #1616).
+/// The workforce manager's propose-dismissal answer (ADR-0050 decision 5l, #1616).
 const PROPOSE_DISMISSAL_SCHEMA: &str = "elitea.runtime.propose-dismissal.v1";
 /// Main's own request ceiling for the three (`maxRuntimeAgentMemoryRequestBytes`).
 const MAX_AGENT_MEMORY_REQUEST_BYTES: usize = 8 * 1_024;
@@ -1089,7 +1089,7 @@ impl RuntimeContextClient {
     }
 
     /// Propose a workforce stage for another agent of the project (ADR-0050
-    /// decision 5l, #1616). Main reads the project, the proposing HR agent
+    /// decision 5l, #1616). Main reads the project, the proposing workforce manager
     /// and the person from the claimed execution, checks the capability and
     /// the guards, and stores a proposal a person decides.
     pub(crate) async fn propose_dismissal(

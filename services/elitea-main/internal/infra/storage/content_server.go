@@ -878,7 +878,7 @@ func (s *ContentServer) ProposeAgent(ctx context.Context, request *runtimev1.Pro
 	return &runtimev1.ProposeAgentResponseV1{ResponseJson: encoded}, nil
 }
 
-// ProposeDismissal serves an HR agent's propose_dismissal call.
+// ProposeDismissal serves a workforce manager's propose_dismissal call.
 func (s *ContentServer) ProposeDismissal(ctx context.Context, request *runtimev1.ProposeDismissalRequestV1) (*runtimev1.ProposeDismissalResponseV1, error) {
 	if s.runtimeProposeDismissal == nil {
 		return nil, contentStatus(codes.Unimplemented)
