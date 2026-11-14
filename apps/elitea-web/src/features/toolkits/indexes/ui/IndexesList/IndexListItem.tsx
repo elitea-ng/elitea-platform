@@ -16,6 +16,7 @@ import { InfoTooltip } from '@/shared/ui/InfoTooltip';
 import { StopIcon } from '@/shared/ui/icons/stop-icon';
 
 import { IndexStatuses } from '../../lib/constants/indexDetails.constants';
+import { describeIndexError } from '../../lib/helpers/indexError.helpers';
 import { normalizeIndexingReport } from '../../lib/helpers/indexingReport.serialize';
 import { toDisplayString } from '../../lib/helpers/displayString.local';
 import type { IndexRow } from '../../model/indexesStore';
@@ -92,6 +93,8 @@ export function IndexListItem(props: IndexListItemProps): ReactNode {
   const state = index.metadata?.['state'];
   const createdOn = index.metadata?.['created_on'] as number | undefined;
   const isProgressError = Boolean(index['stale']) && state === IndexStatuses.progress;
+  // The failure's own reason on the badge (#2042), not only "Index processing error".
+  const failureReason = state === IndexStatuses.fail ? describeIndexError(index.metadata?.['error']) : undefined;
 
   return (
     <Box
@@ -165,8 +168,8 @@ export function IndexListItem(props: IndexListItemProps): ReactNode {
       )}
       {state === IndexStatuses.fail && (
         <InfoTooltip
-          title={t('features.toolkits.indexListItem.processingError', 'Index processing error')}
-          disableTooltip
+          title={failureReason ?? t('features.toolkits.indexListItem.processingError', 'Index processing error')}
+          disableTooltip={failureReason === undefined}
           sx={{ position: 'absolute', top: '50%', right: '1rem', marginTop: '-.4375rem', color: 'error.main' }}
         />
       )}

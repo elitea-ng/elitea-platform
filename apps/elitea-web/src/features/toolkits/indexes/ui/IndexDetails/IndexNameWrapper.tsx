@@ -13,6 +13,7 @@ import { InfoTooltip } from '@/shared/ui/InfoTooltip';
 
 import { IndexStatuses } from '../../lib/constants/indexDetails.constants';
 import { toDisplayString } from '../../lib/helpers/displayString.local';
+import { describeIndexError } from '../../lib/helpers/indexError.helpers';
 import type { IndexRow } from '../../model/indexesStore';
 
 /**
@@ -50,11 +51,14 @@ export function IndexNameWrapper(props: IndexNameWrapperProps): ReactNode {
   const isPartlyOk = state === IndexStatuses.partlyOk;
   const isWarningBadge = state === IndexStatuses.fail || state === IndexStatuses.cancelled || state === IndexStatuses.partlyOk;
 
+  // The failure's own reason (#2042), not only "Index processing error".
+  const failureReason = isFailed ? describeIndexError(index?.metadata['error']) : undefined;
+
   const badgeLabel = useMemo(() => {
-    if (isFailed) return 'Index processing error';
+    if (isFailed) return failureReason ?? 'Index processing error';
     if (isPartlyOk) return 'Partially indexed';
     return 'Stopped';
-  }, [isFailed, isPartlyOk]);
+  }, [isFailed, isPartlyOk, failureReason]);
 
   return (
     <Box sx={nameWrapperSx}>
@@ -78,7 +82,7 @@ export function IndexNameWrapper(props: IndexNameWrapperProps): ReactNode {
         >
           {isFailed ? (
             <InfoTooltip
-              title={t('features.toolkits.indexNameWrapper.processingError', 'Index processing error')}
+              title={failureReason ?? t('features.toolkits.indexNameWrapper.processingError', 'Index processing error')}
               disableTooltip
               sx={{ color: 'error.main' }}
             />

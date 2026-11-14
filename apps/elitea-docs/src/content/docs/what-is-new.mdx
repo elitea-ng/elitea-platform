@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Index runs show their progress and result, and a failed index says why
+
+When you start an index, the panel now shows a running state at once instead of "No messages yet", and when the run finishes it shows a summary in the same place, without a reload: the outcome, documents and chunks indexed, documents already indexed, what was skipped and why, chunks that failed, how many documents the index holds now, and how long it took. A failed index shows its reason next to its name and in the list tooltip, in plain words: a model the project may not use (`model_gateway.forbidden`) reads "this project is not allowed to use that model…" with what to do about it, and the code stays in brackets for support. A start in a project with no embedding model is refused with that reason instead of creating a run that fails. Live step-by-step progress from the indexing runtime is not reported yet; the panel shows the steps as soon as the runtime sends them. **Upgrade Main, the worker and the web app together.**
+
 ## Edit with AI fills the agent's fields, plus list and skill fixes
 
 **Edit with AI** on an agent now shows the generated draft as a form (name, description, instructions, welcome message, conversation starters) that you can edit, and **Apply** writes each value to its own field instead of pasting JSON into **Instructions**. Resources already attached to the agent are left as they are. In the agents, pipelines and skills lists, unselected tags in the Filters panel now stand out from the panel, and the table view shows a sort icon on the **Name & Description** and **Created** columns. In the agent's **Skills** section, the **+ Skill** menu has **Create new** (opens the New Skill page), and an attached skill is a card with open-in-new-tab and delete icons, like an attached toolkit. Folders exist only for chats; folders for agents, pipelines, skills, toolkits and MCPs are not part of the platform yet.

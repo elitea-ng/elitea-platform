@@ -27,6 +27,20 @@ describe('IndexNameWrapper', () => {
     expect(getByText('Index processing error')).toBeInTheDocument();
   });
 
+  it('shows the failure reason, with the gateway code turned into a sentence, instead of the generic label (#2042)', () => {
+    const index: IndexRow = {
+      id: '1',
+      metadata: {
+        collection: 'test 3',
+        state: 'failed',
+        error: "Index 'test 3' failed: the embedding gateway refused the run (model_gateway.forbidden); nothing further was embedded",
+      },
+    };
+    const { getByText, queryByText } = renderWithTheme(<IndexNameWrapper index={index} />);
+    expect(getByText(/this project is not allowed to use that model/)).toBeInTheDocument();
+    expect(queryByText('Index processing error')).not.toBeInTheDocument();
+  });
+
   it('shows "Partially indexed" for a partly-ok index', () => {
     const { getByText } = renderWithTheme(<IndexNameWrapper index={makeIndex('partly_indexed')} />);
     expect(getByText('Partially indexed')).toBeInTheDocument();

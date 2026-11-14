@@ -836,3 +836,27 @@ func currentEmbeddingBindingForTest(projectID int32, modelName string) Embedding
 		ConfigurationDigest:    runtimedomain.SHA256([]byte("configuration:" + modelName)),
 	}
 }
+
+func TestCurrentAuthoritativeInputResolverRefusesBlankEmbeddingWhenCatalogHasNoModel(t *testing.T) {
+	toolkits := validCurrentToolkitReader()
+	toolkits.toolkit.Settings["embedding_model"] = ""
+	embeddings := &currentEmbeddingBindingSelectorStub{}
+	resolver := newCurrentAuthoritativeResolverWithSettingsAndEmbeddingsForTest(
+		t,
+		toolkits,
+		&currentModelCatalogStub{},
+		&currentToolkitSettingsValidatorStub{},
+		embeddings,
+	)
+
+	_, err := resolver.Resolve(context.Background(), validCurrentStartRequest(nil, `{}`))
+	// A blank model with nothing to default to can only fail the run (#2042):
+	// it is refused at admission as the specific error, which still reads as
+	// "unavailable" to every older classification.
+	if !errors.Is(err, ErrNoEmbeddingModelAvailable) || !errors.Is(err, ErrCurrentEmbeddingBindingUnavailable) {
+		t.Fatalf("error=%v, want ErrNoEmbeddingModelAvailable", err)
+	}
+	if len(embeddings.calls) != 0 {
+		t.Fatalf("calls=%+v", embeddings.calls)
+	}
+}

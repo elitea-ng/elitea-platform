@@ -94,7 +94,7 @@ import type { TestToolkitToolOutcome } from '../../api/toolkitTestRun';
 import { testToolkitTool } from '../../api/toolkitTestRun';
 import { startIndexExecution } from '../../indexes/api/indexesApi';
 import { IndexesToolsEnum } from '../../indexes/lib/constants/indexDetails.constants';
-import { isBoundedIndexExecutionTaskId, parseIndexStartConflictTaskId } from '../../indexes/lib/helpers/indexExecution.helpers';
+import { isBoundedIndexExecutionTaskId, parseIndexStartConflictTaskId, parseIndexStartRefusalMessage } from '../../indexes/lib/helpers/indexExecution.helpers';
 import type { CreatedConversation } from '../helpers/toolkitConversation.helpers';
 import { findToolkitParticipant } from '../helpers/toolkitConversation.helpers';
 import type { ToolkitChatLlmSettings, ToolkitChatModel, UseToolkitChatParams } from './useToolkitChat.types';
@@ -114,6 +114,8 @@ export interface UseToolkitRunDispatchParams {
   /** Every settled or refused REST test-tool run (any tool but `index_data` — see this file's "fifth case"). `useToolkitChat.hooks.ts` owns turning it into a transcript message or a Snackbar. */
   readonly onTestToolOutcome: (outcome: TestToolkitToolOutcome) => void;
   readonly onMcpAuthRequired?: ((message: Readonly<Record<string, unknown>>) => void) | undefined;
+  /** The REST start admitted (or adopted) an `index_data` run: the panel shows its running state now, not at the first frame (#2041). The socket path has its own `start_task` frame for this. */
+  readonly onRunAdmitted?: (() => void) | undefined;
 }
 
 export interface UseToolkitRunDispatchResult {
@@ -177,6 +179,8 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
 
   /** Same latest-ref pattern as `onErrorRef` above, and for the same reason: keeping `onTestToolOutcome` out of `startToolRun`'s already-capped dependency array. */
   const onTestToolOutcomeRef = useRef(onTestToolOutcome);
+  const onRunAdmittedRef = useRef(params.onRunAdmitted);
+  onRunAdmittedRef.current = params.onRunAdmitted;
   const authorizationHandlerRef = useRef(params.onMcpAuthRequired);
   authorizationHandlerRef.current = params.onMcpAuthRequired;
   const testRunRef = useRef(0);
@@ -259,6 +263,7 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
             pendingFallbackRef.current = emitOverSocket;
             setExecutionId(started.task_id);
             onStartTask(started.task_id);
+            onRunAdmittedRef.current?.();
             return;
           }
         } catch (error) {
@@ -271,7 +276,15 @@ export function useToolkitRunDispatch(params: UseToolkitRunDispatchParams): UseT
           if (conflictTaskId !== undefined) {
             setExecutionId(conflictTaskId);
             onStartTask(conflictTaskId);
+            onRunAdmittedRef.current?.();
             return;
+          }
+          // A REFUSED start (#2042) has a reason for the user: raise it, so the
+          // run ends with that sentence instead of a "no live connection" notice.
+          const refusal = parseIndexStartRefusalMessage(error);
+          if (refusal !== undefined) {
+            setExecutionId(undefined);
+            throw new Error(refusal);
           }
           // Every other failure: fall through to the socket path below.
         }

@@ -504,3 +504,41 @@ func testIndexIngestProjection(t *testing.T) (outputapp.IndexIngestFrame, output
 	}
 	return frame, verified
 }
+
+func TestIndexReplayDataCarriesTheTypedRunSummaryOnlyWhenTheWorkerStatedIt(t *testing.T) {
+	skipped, err := outputapp.NewIndexSkipped(map[string]uint64{"too_large": 2, "unsupported_type": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rust, err := indexReplayData(outputapp.IndexIngestResult{ResultSummary: outputapp.IndexIngestSummary{
+		Status:             outputapp.IndexIngestStatusPartlyIndexed,
+		Message:            "Indexed 4 documents.",
+		IndexedDocuments:   4,
+		IndexedChunks:      19,
+		FailedChunks:       1,
+		SkippedJSON:        skipped,
+		EmbeddingModel:     "text-embedding-3-small",
+		UnchangedPresent:   true,
+		UnchangedDocuments: 0,
+		TotalsPresent:      true,
+		TotalDocuments:     23,
+		TotalChunks:        90,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"status":"partly_indexed","message":"Indexed 4 documents.","indexed_documents":4,"indexed_chunks":19,"failed_chunks":1,"unchanged_documents":0,"total_documents":23,"total_chunks":90,"skipped":{"too_large":2,"unsupported_type":1},"embedding_model":"text-embedding-3-small"}`
+	if string(rust) != want {
+		t.Fatalf("rust replay data:\n got=%s\nwant=%s", rust, want)
+	}
+
+	sdk, err := indexReplayData(outputapp.IndexIngestResult{ResultSummary: outputapp.IndexIngestSummary{
+		Status: outputapp.IndexIngestStatusOK, Message: "No new documents to index.",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sdk) != `{"status":"ok","message":"No new documents to index."}` {
+		t.Fatalf("a summary with no typed fields must stay {status,message}: %s", sdk)
+	}
+}

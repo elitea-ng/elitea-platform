@@ -109,6 +109,30 @@ export function parseIndexStartConflictTaskId(error: unknown): string | undefine
   return isBoundedIndexExecutionTaskId(taskId) ? taskId : undefined;
 }
 
+/** A refusal text is shown as is, so it is bounded and single-purpose. */
+const MAX_START_REFUSAL_CHARS = 400;
+
+/**
+ * The reason `start_handler.go` gave for REFUSING an index start (#2042): `422`
+ * "No embedding model is available to this project…" and `503` "Embedding model
+ * is unavailable", both `{error: <sentence>}`. Such a start was admitted by
+ * nobody, so falling back to the socket (which does nothing here) only hid the
+ * reason behind a "no live connection" notice; the caller shows this text
+ * instead. A `422` validation body carries an ERROR LIST, and the busy `503`
+ * carries `retry_after`: neither is a sentence for the user, so neither matches.
+ */
+export function parseIndexStartRefusalMessage(error: unknown): string | undefined {
+  if (!isEliteaApiErrorLike(error)) return undefined;
+  const { failure } = error;
+  if (failure?.kind !== 'http' || (failure.status !== 422 && failure.status !== 503)) return undefined;
+  const body = failure.body;
+  if (typeof body !== 'object' || body === null || Array.isArray(body) || 'retry_after' in body) return undefined;
+  const message = (body as { error?: unknown }).error;
+  if (typeof message !== 'string') return undefined;
+  const text = message.trim();
+  return text !== '' && text.length <= MAX_START_REFUSAL_CHARS ? text : undefined;
+}
+
 export interface CanStartToolkitRunParams {
   readonly indexing: boolean;
   readonly isCreateIndexMode: boolean;

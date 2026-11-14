@@ -9,6 +9,7 @@ import type { TestSocketClient } from '@/shared/api/socket/testing';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { resetConfigForTests } from '@/shared/config/get-config';
 
+import { settleIndexRunProgress } from '../helpers/indexRunNotices.helpers';
 import type { ToolkitChatMessage } from './useToolkitChat.types';
 import { useToolkitChatSocket } from './useToolkitChatSocket.hooks';
 
@@ -222,6 +223,37 @@ describe('useToolkitChatSocket — SSE execution stream (issue #93)', () => {
       });
       expect(onRunFinish).toHaveBeenLastCalledWith(expected);
     }
+  });
+
+  it('replaces the running placeholder with the run summary, counts and all, when the run completes (#2041)', () => {
+    const client = createTestSocketClient();
+    const placeholder = { id: 'index-run-progress', role: 'assistant', content: 'running', created_at: 1, participant_id: 'system' };
+    const { getChatHistory } = setup(client, { executionId: 'exec-1' });
+    act(() => {
+      sse.emit('index.ingest.completed', JSON.stringify({ status: 'ok', message: 'Indexed 4 documents.', indexed_documents: 4, indexed_chunks: 19 }));
+    });
+    const history = settleIndexRunProgress([placeholder], getChatHistory().at(-1) as ToolkitChatMessage);
+    expect(getChatHistory()).toHaveLength(1);
+    expect(getChatHistory()[0]?.content).toContain('4 documents indexed (19 chunks)');
+    expect(history.map((message) => message.id)).not.toContain('index-run-progress');
+  });
+
+  it('shows a step frame of the execution stream whose message the panel has not seen yet (#2041)', () => {
+    const client = createTestSocketClient();
+    const { getChatHistory } = setup(client, { executionId: 'exec-1' });
+    act(() => {
+      sse.emit(
+        'execution.node_event',
+        JSON.stringify({
+          type: 'agent_tool_start',
+          message_id: 'run-1',
+          response_metadata: { tool_run_id: 'step-1', tool_name: 'Listing documents' },
+        }),
+      );
+    });
+    const message = getChatHistory().find((item) => item.id === 'run-1');
+    expect(message).toBeDefined();
+    expect((message as { toolActions?: { name?: string }[] }).toolActions?.[0]?.name).toBe('Listing documents');
   });
 
   it('settles as completed when the terminal frame carries no status (the artifact-shaped projection)', () => {

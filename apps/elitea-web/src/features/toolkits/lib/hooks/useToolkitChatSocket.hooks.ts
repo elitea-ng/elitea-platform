@@ -57,6 +57,7 @@ import { IndexStatuses } from '../../indexes/lib/constants/indexDetails.constant
 import type { GenerateChatMessageBasedOnResponseParams, IndexChatMessage } from '../../indexes/lib/helpers/indexChat.helpers';
 import { generateChatMessageBasedOnResponse, generateMockMessageTemplate } from '../../indexes/lib/helpers/indexChat.helpers';
 import { isFrameForCurrentIndexExecution } from '../../indexes/lib/helpers/indexExecution.helpers';
+import { buildIndexRunSummaryMessage, ensureRunMessage, settleIndexRunProgress } from '../helpers/indexRunNotices.helpers';
 import type { ToolkitChatMessage } from './useToolkitChat.types';
 
 /**
@@ -250,7 +251,7 @@ export function useToolkitChatSocket(params: UseToolkitChatSocketParams): Socket
           // present on both shapes at runtime; the bridge cast documents
           // that real looseness rather than silently dropping entries via a
           // shape-narrowing filter.
-          chatHistory: prev as IndexChatMessage[],
+          chatHistory: ensureRunMessage(prev, message.type, message.message_id, Date.now()) as IndexChatMessage[],
           onFinish: onRunFinish,
           onStartTask,
         }),
@@ -273,9 +274,12 @@ export function useToolkitChatSocket(params: UseToolkitChatSocketParams): Socket
   const trackedMessageIdRef = useRef<string | undefined>(undefined);
   /** Whether the CURRENT `executionId`'s stream has opened at least once — see `onStreamError`'s own doc comment and the module header. */
   const hasStreamOpenedRef = useRef(false);
+  /** When the CURRENT `executionId` was first followed: the summary's duration is measured from it. */
+  const runStartedAtRef = useRef<number | undefined>(undefined);
   useEffect(() => {
     trackedMessageIdRef.current = undefined;
     hasStreamOpenedRef.current = false;
+    runStartedAtRef.current = executionId === undefined ? undefined : Date.now();
   }, [executionId]);
 
   const handleNodeEvent = useCallback(
@@ -305,9 +309,12 @@ export function useToolkitChatSocket(params: UseToolkitChatSocketParams): Socket
   const handleIngestCompleted = useCallback(
     (frame: ExecutionEventData) => {
       if (isAuthCheckSessionRef.current) return;
+      // The outcome where the user is looking (#2041), not only in History.
+      const summary = buildIndexRunSummaryMessage(frame, runStartedAtRef.current, Date.now());
+      setChatHistory((prev) => settleIndexRunProgress(prev, summary));
       onRunFinish(toIndexState(frame));
     },
-    [onRunFinish],
+    [onRunFinish, setChatHistory],
   );
 
   const handleExecutionFailed = useCallback(
@@ -316,7 +323,7 @@ export function useToolkitChatSocket(params: UseToolkitChatSocketParams): Socket
       // Rendered as a chat entry rather than routed to `onRunFinish`, which
       // takes a bare status string and has nowhere to put a reason.
       const notice = generateMockMessageTemplate(failureNotice(frame), 'toolkit');
-      setChatHistory((prev) => [...prev, notice]);
+      setChatHistory((prev) => settleIndexRunProgress(prev, notice));
       onRunFinish(IndexStatuses.fail);
     },
     [onRunFinish, setChatHistory],
