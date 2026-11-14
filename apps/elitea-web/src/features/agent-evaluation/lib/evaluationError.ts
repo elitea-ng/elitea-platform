@@ -17,8 +17,7 @@
  *   - "this dataset has N run(s) scored against it: deleting it would destroy
  *     their results" (409 on deleting a dataset);
  *   - "dimension X cannot be scored by this release: it allows only the code
- *     engine, and this release serves the ai engine alone…" (501 on starting
- *     a run).
+ *     engine, and the code engine needs a sandbox…" (501 on starting a run).
  *
  * Each names a limit, a count or a capability. "Failed to save" names none of
  * them, and a person who read it would try the same thing again.
@@ -49,5 +48,19 @@ export function runErrorMessage(error: unknown): string | undefined {
   return evaluationErrorMessage(
     error,
     t('features.agentEvaluation.runs.startFailed', 'Failed to start the run.'),
+  );
+}
+
+export function suiteErrorMessage(error: unknown): string | undefined {
+  return evaluationErrorMessage(
+    error,
+    t('features.agentEvaluation.suites.saveFailed', 'Failed to save the run limits.'),
+  );
+}
+
+export function humanScoreErrorMessage(error: unknown): string | undefined {
+  return evaluationErrorMessage(
+    error,
+    t('features.agentEvaluation.humanScore.saveFailed', 'Failed to save the score.'),
   );
 }

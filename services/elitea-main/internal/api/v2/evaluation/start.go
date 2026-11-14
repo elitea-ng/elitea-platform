@@ -14,6 +14,15 @@ type RunStarter struct {
 	runs         RunRepository
 	dimensions   Repository
 	orchestrator Enqueuer
+	// suites resolves a start's suite_id. Nil refuses a start that names one.
+	suites SuiteReader
+}
+
+// WithSuites lets the starter resolve the suite a start names, and freeze its
+// limits into the run's snapshot.
+func (s *RunStarter) WithSuites(suites SuiteReader) *RunStarter {
+	s.suites = suites
+	return s
 }
 
 // NewRunStarter builds the starter. A nil orchestrator stores the row and
@@ -62,6 +71,9 @@ func (s *RunStarter) Start(
 		return Run{}, err
 	}
 	snapshot.Agent = agent
+	if err := s.freezeSuite(ctx, projectID, input, &snapshot); err != nil {
+		return Run{}, err
+	}
 
 	created, err := s.runs.CreateRun(ctx, projectID, Run{
 		DatasetID:            input.DatasetID,
@@ -98,5 +110,24 @@ func (s *RunStarter) CancelRun(ctx context.Context, projectID, runID string) err
 	if s.orchestrator != nil {
 		s.orchestrator.Cancel(RunRef{ProjectID: projectID, RunID: runID})
 	}
+	return nil
+}
+
+// freezeSuite copies the named suite's limits into the snapshot. A run started
+// without a suite has no limit.
+func (s *RunStarter) freezeSuite(ctx context.Context, projectID string, input RunStartInput, snapshot *RunSnapshot) error {
+	if input.SuiteID == nil || *input.SuiteID == "" {
+		return nil
+	}
+	if s.suites == nil {
+		return apierr.NotImplemented("evaluation suites are not available on this deployment")
+	}
+	suite, err := s.suites.GetSuite(ctx, projectID, *input.SuiteID)
+	if err != nil {
+		return err
+	}
+	limits := suite.RunLimits
+	snapshot.Limits = &limits
+	snapshot.SuiteID = suite.ID
 	return nil
 }

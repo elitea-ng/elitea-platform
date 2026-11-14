@@ -1,14 +1,14 @@
 /**
- * Start one evaluation run: pick a dataset, pick the dimensions, go.
+ * Start one evaluation run: pick a dataset, pick the dimensions, optionally
+ * pick saved run limits, go.
  *
- * NO SUITE PICKER. There is no suite table in this release, so the dimensions
- * are chosen here and the server freezes their own defaults into the run's
- * snapshot. A picker for a concept the server does not have would be a control
- * whose selection nothing reads.
+ * The dimensions are chosen here and the server freezes their own defaults into
+ * the run's snapshot. The limits picker appears only when the project has saved
+ * limits (RunSuitesPanel); the chosen suite's limits are frozen into the run.
  *
  * THE START BUTTON IS DISABLED WITH A STATED REASON, never silently. A run
- * needs a version, a dataset with at least one case, and at least one `ai`
- * dimension; a button that does nothing when pressed is how each of those
+ * needs a version, a dataset with at least one case, and at least one
+ * dimension the run can score (`ai` or `human`); a button that does nothing when pressed is how each of those
  * reads as a broken feature.
  */
 import { useState, type ReactNode } from 'react';
@@ -21,7 +21,7 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import type { EvalDataset, EvalRunStartRequest } from '@/shared/api/generated/model';
+import type { EvalDataset, EvalRunStartRequest, EvalSuite } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 
@@ -43,8 +43,10 @@ const MAX_DIMENSIONS_PER_RUN = 5;
 
 export interface RunStartFormProps {
   readonly datasets: readonly EvalDataset[];
-  /** Already filtered to the `ai` engine by the caller — this release scores nothing else. */
+  /** Already filtered by the caller to what a run can score: the ai and human engines. */
   readonly dimensions: readonly EvalDimension[];
+  /** Saved run limits. Empty hides the picker. */
+  readonly suites: readonly EvalSuite[];
   readonly applicationId: number | undefined;
   readonly applicationVersionId: number | undefined;
   readonly isStarting: boolean;
@@ -104,9 +106,13 @@ function runStartBlockedReason(props: {
 }
 
 export function RunStartForm(props: RunStartFormProps): ReactNode {
-  const { datasets, dimensions, applicationId, applicationVersionId, isStarting, error, onStart } = props;
+  const { datasets, dimensions, suites, applicationId, applicationVersionId, isStarting, error, onStart } = props;
   const [datasetId, setDatasetId] = useState('');
   const [dimensionIds, setDimensionIds] = useState<string[]>([]);
+  const [chosenSuiteId, setChosenSuiteId] = useState('');
+  // A suite deleted while chosen is no longer a choice: the select would show
+  // blank and the start would send an id the server answers 404 to.
+  const suiteId = suites.some((suite) => suite.id === chosenSuiteId) ? chosenSuiteId : '';
 
   const blockedReason = runStartBlockedReason({ datasetId, dimensionIds, datasets, applicationVersionId });
   // The SERVER's own refusal wins. A 501 names which engine a dimension needs
@@ -137,6 +143,24 @@ export function RunStartForm(props: RunStartFormProps): ReactNode {
         ))}
       </TextField>
 
+      {suites.length > 0 && (
+        <TextField
+          select
+          fullWidth
+          label={t('features.agentEvaluation.runs.limitsLabel', 'Run limits')}
+          value={suiteId}
+          slotProps={{ htmlInput: { 'data-testid': 'run-suite-select' } }}
+          onChange={(event) => setChosenSuiteId(event.target.value)}
+        >
+          <MenuItem value="">{t('features.agentEvaluation.runs.noLimits', 'No limits')}</MenuItem>
+          {suites.map((suite) => (
+            <MenuItem key={suite.id} value={suite.id}>
+              {suite.name}
+            </MenuItem>
+          ))}
+        </TextField>
+      )}
+
       <Typography variant="bodySmall" color="text.secondary">
         {t('features.agentEvaluation.runs.dimensionsLabel', 'Score against')}
       </Typography>
@@ -166,6 +190,7 @@ export function RunStartForm(props: RunStartFormProps): ReactNode {
             application_version_id: applicationVersionId,
             dimension_ids: dimensionIds,
             trigger_type: 'on_demand',
+            ...(suiteId === '' ? {} : { suite_id: suiteId }),
           });
         }}
       >
