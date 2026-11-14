@@ -58,8 +58,8 @@ import { ContinuationError } from '../error-trace/ContinuationError';
 
 import { PersistedMessageTrace } from './PersistedMessageTrace';
 import { CloudSubAgents } from './CloudSubAgents';
-
 import { AnswerContent } from './AnswerContent';
+import { AnswerGuardrails } from './AnswerGuardrails';
 import { readAnswerItems } from './AnswerMessageItems';
 
 import { GoalCheckNotice, RunBriefCard } from '@/entities/run-brief';
@@ -327,7 +327,9 @@ export function ApplicationAnswer({
           ) : (
             <>
               {renderedContent}
-              {!!exception && <ErrorTrace error={exception} />}
+              <AnswerGuardrails answer={answer} projectId={feedbackProjectId} settled={!isProcessing}>
+                {!!exception && <ErrorTrace error={exception} />}
+              </AnswerGuardrails>
               {!!exception && <BudgetUsageLink code={answer.failureCode} />}
               {!!exception && <CapOverrideAction projectId={feedbackProjectId} messageId={messageId} code={answer.failureCode} cap={answer.failureCap} />}
             </>

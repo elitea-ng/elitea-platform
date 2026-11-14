@@ -1,6 +1,11 @@
 {
   "about": "Guardrail row cases. The gateway (ParseRow, internal/guardrail) and elitea-main (validateGuardrailData, internal/api/gateway) must both accept every valid case and both refuse every invalid one. Each side's test reads this file.",
   "cases": [
+    {"name": "personal_data pack", "valid": true, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "personal_data", "action": "mask"}]}}},
+    {"name": "personal_data subset with warn", "valid": true, "data": {"guardrail": {"stage": "input", "detectors": [{"name": "pii", "type": "personal_data", "action": "warn", "rules": ["email", "iban"]}]}}},
+    {"name": "personal_data unknown rule", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "personal_data", "action": "mask", "rules": ["ssn"]}]}}},
+    {"name": "personal_data in the injection slot", "valid": false, "data": {"guardrail": {"stage": "input", "detectors": [{"type": "personal_data", "action": "flag", "content": "tool_results", "slot": "prompt_injection"}]}}},
+    {"name": "warn on secrets", "valid": true, "data": {"guardrail": {"stage": "output", "detectors": [{"type": "secrets", "action": "warn"}]}}},
     {"name": "secrets mask", "valid": true, "data": {"guardrail": {"stage": "output", "detectors": [{"type": "secrets", "action": "mask"}]}}},
     {"name": "full row", "valid": true, "data": {"guardrail": {"stage": "input", "timeout_ms": 1500, "fail_mode": "open", "apply_to_embeddings": true, "stream_window_bytes": 512, "detectors": [
       {"name": "ids", "type": "regex", "action": "mask", "label": "employee_id", "patterns": ["\\bEMP-\\d{6}\\b"], "terms": ["Project Falcon"]},

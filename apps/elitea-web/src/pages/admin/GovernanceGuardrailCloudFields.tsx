@@ -126,6 +126,7 @@ export function GuardrailCloudFields({ draft, onChange }: CloudFieldsProps) {
         <MenuItem value="block">{t('pages.admin.governance.cloud.actionBlock', 'Block')}</MenuItem>
         <MenuItem value="mask">{t('pages.admin.governance.cloud.actionMask', 'Mask')}</MenuItem>
         <MenuItem value="flag">{t('pages.admin.governance.cloud.actionFlag', 'Flag')}</MenuItem>
+        <MenuItem value="warn">{t('pages.admin.governance.cloud.actionWarn', 'Warn')}</MenuItem>
       </TextField>
 
       {form.type === 'azure_content_safety' && (

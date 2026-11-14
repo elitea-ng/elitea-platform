@@ -49,6 +49,26 @@ pub fn budget_scope(body: &[u8]) -> BudgetScope {
     scope().unwrap_or(BudgetScope::Unscoped)
 }
 
+/// The code of a content guardrail's refusal (ADR-0043 decision 1): HTTP 400
+/// with `error.type` `guardrail_error` and `error.code` `guardrail_blocked`.
+/// It is a refusal of the content, not of the request's form, so a caller can
+/// tell the person which control stopped the message.
+pub const GUARDRAIL_BLOCKED_CODE: &str = "model_gateway.guardrail_blocked";
+
+/// Whether a refusal body is the gateway's content guardrail block. Read by
+/// value lookups only: nothing of the body is kept.
+#[must_use]
+pub fn is_guardrail_block(body: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let Some(error) = value.get("error") else {
+        return false;
+    };
+    error.get("type").and_then(Value::as_str) == Some("guardrail_error")
+        && error.get("code").and_then(Value::as_str) == Some("guardrail_blocked")
+}
+
 /// What a non-success status means to a caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
@@ -120,6 +140,9 @@ impl Refusal {
 /// unexpected answer would.
 #[must_use]
 pub fn refusal_code(status: u16, body: &[u8]) -> &'static str {
+    if status == 400 && is_guardrail_block(body) {
+        return GUARDRAIL_BLOCKED_CODE;
+    }
     Refusal::classify(status, body)
         .unwrap_or(Refusal::Rejected)
         .code()
@@ -272,6 +295,35 @@ mod tests {
         }
         for status in [200, 302, 401, 402, 403, 408, 409, 429, 500, 600] {
             assert!(!is_generic_rejection(status), "{status}");
+        }
+    }
+
+    #[test]
+    fn a_guardrail_block_has_its_own_code() {
+        let block = br#"{"error":{"type":"guardrail_error","code":"guardrail_blocked","message":"content guardrail \"keys\" detector \"secrets\" blocked the content (stage input)"}}"#;
+        assert!(is_guardrail_block(block));
+        assert_eq!(refusal_code(400, block), "model_gateway.guardrail_blocked");
+        // Only a 400 with both fields: a detector failure under a closed fail
+        // mode (503 `guardrail_unavailable`) stays an unavailable gateway, and
+        // another 400 stays a plain rejection.
+        let unavailable =
+            br#"{"error":{"type":"guardrail_error","code":"guardrail_unavailable","message":"x"}}"#;
+        assert!(!is_guardrail_block(unavailable));
+        assert_eq!(refusal_code(503, unavailable), "model_gateway.unavailable");
+        assert_eq!(refusal_code(503, block), "model_gateway.unavailable");
+        assert_eq!(refusal_code(400, unavailable), "model_gateway.rejected");
+        for body in [
+            &b"{}"[..],
+            b"not json",
+            br#"{"error":"guardrail_blocked"}"#,
+            br#"{"error":{"type":"invalid_request_error","code":"guardrail_blocked"}}"#,
+        ] {
+            assert!(
+                !is_guardrail_block(body),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+            assert_eq!(refusal_code(400, body), "model_gateway.rejected");
         }
     }
 
