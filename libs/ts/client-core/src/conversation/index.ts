@@ -34,6 +34,7 @@ export {
   AVATAR_PACK_SCHEMA,
   AVATAR_SLOTS,
   avatarPackOf,
+  packDefaultAvatarKey,
   avatarSource,
   avatarStillUrl,
   isAgentMediaUrl,

@@ -26,6 +26,7 @@ import {
   DEFAULT_AVATAR_GRID,
   avatarSource,
   defaultAvatarOf,
+  packDefaultAvatarKey,
   type AvatarMotion,
   type DefaultAvatar,
   type DefaultAvatarRole,
@@ -175,7 +176,7 @@ function MotionLayer({ spec }: { readonly spec: MotionSpec }): ReactNode {
 /** The still with the motion of its state. */
 export function AgentAvatar({ iconUrl, pack, avatarKey, motion = 'still', ephemeral = false, size = DEFAULT_SIZE }: AgentAvatarProps): ReactNode {
   const source = avatarSource(pack, iconUrl, motion);
-  const defaultAvatar = defaultAvatarOf(avatarKey);
+  const defaultAvatar = defaultAvatarOf(avatarKey ?? packDefaultAvatarKey(pack));
   const spec = motion === 'still' || source?.ownMotion === true ? undefined : MOTION_SPEC[motion];
   const breathe = spec !== undefined && spec.peakScale > 1;
   return (
