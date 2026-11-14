@@ -2565,7 +2565,7 @@ async fn prepare(
     // byte cap applies here too (the sidecar path lowers it the same way).
     if elitea_doc_extract::is_document_type(&mime)
         && !is_document
-        && bytes.len() as u64 > limits.max_document_bytes as u64
+        && bytes.len() as u64 > limits.max_document_bytes
     {
         return Preparation::Skipped(SKIP_TOO_LARGE, plan).into();
     }
