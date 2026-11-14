@@ -12,8 +12,9 @@ use super::agent_preparation::{AgentInputMaterializer, AgentPreparationConfig};
 use super::configuration_validation;
 use super::invocation_admission::{InvocationAdmission, InvocationAdmissionError};
 use super::output_delivery::{
-    AgentOutputPreflight, AgentOutputPreflightError, AgentTerminalRecoveryConfig,
-    PreparedAgentOutput, ToolkitTerminalReplay,
+    AgentOutputPreflight, AgentOutputPreflightError, AgentProgressConnector,
+    AgentProgressPublisherConfig, AgentTerminalRecoveryConfig, PreparedAgentOutput,
+    ToolkitTerminalReplay,
 };
 use super::toolkit_delivery::{
     FreshToolkitDelivery, ToolkitDeliveryError, ToolkitDeliveryRoute, ToolkitDeliveryRouter,
@@ -24,10 +25,12 @@ use super::toolkit_output::{
     ToolkitTerminalRecovery, prepare_empty_toolkit_recovery, prepare_toolkit_output,
     replay_toolkit_terminal_with_replacement,
 };
+use super::toolkit_progress::{IndexProgressSink, ToolkitProgressPublisher};
+use crate::indexing::progress::ProgressSink;
 use crate::indexing::tools::LazyStepbackModel;
 use crate::indexing::{
     ChatEntries, ChatEntrySource, ChatUnavailable, IndexIngestRuntime, IndexRun, IndexRunFailure,
-    Interruption, interrupt_summary, run_index,
+    Interruption, interrupt_summary, run_index_with_progress,
 };
 use crate::protocol::ProtocolError;
 use crate::protocol::command::{ToolkitCommandKind, VerifiedToolkitExecuteReadCommand};
@@ -398,7 +401,7 @@ impl<R, RC, T, K, I> ToolkitDeliveryProcessor<R, RC, T, K, I>
 where
     R: ControlRpc + 'static,
     RC: CommandRetirementClient + 'static,
-    T: ToolkitTerminalReplay + 'static,
+    T: ToolkitTerminalReplay + AgentProgressConnector + 'static,
     K: UnixMillisClock,
     I: AgentInputMaterializer + 'static,
 {
@@ -829,6 +832,10 @@ where
     /// failed); before that they are runtime failures, as is a malformed
     /// input. A lost lease publishes nothing: another worker may own the
     /// claim.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One ordered pass: inputs, authorization, the run with its progress, the terminal."
+    )]
     async fn execute_index_ingest(
         &self,
         delivery: CommandDelivery,
@@ -904,10 +911,67 @@ where
                 return Err(ToolkitProcessError::Control(unknown.error));
             }
         };
+        // Live progress (#2041): the run reports its stages through a sink
+        // that owns the output spool until the run ends. A cursor or config
+        // that cannot be built leaves the run without progress, never
+        // without a terminal.
+        let clock = Arc::clone(&self.clock);
+        let now = move || clock.now_unix_millis();
+        let (sink, spare_output) = if let (Ok(cursor), Ok(config)) = (
+            authorized.execution().toolkit_progress_cursor(&verified),
+            AgentProgressPublisherConfig::new(self.terminal_recovery.max_output_sessions()),
+        ) {
+            let publisher =
+                ToolkitProgressPublisher::new(cursor, output, Arc::clone(&self.replay), config);
+            (
+                Some(IndexProgressSink::new(&verified, &now, publisher)),
+                None,
+            )
+        } else {
+            (None, Some(output))
+        };
         let outcome = self
-            .run_index_ingest(&verified, &authorized, &mut lease, runtime, &inputs)
+            .run_index_ingest(
+                &verified,
+                &authorized,
+                &mut lease,
+                runtime,
+                &inputs,
+                sink.as_ref().map(|sink| sink as &dyn ProgressSink),
+            )
             .await;
         let output_authority = authorized.into_output_authority();
+        let (output, terminal_sequence, forced_failure) = match (sink, spare_output) {
+            (Some(sink), _) => match sink.finish().await {
+                Ok(settled) => (
+                    settled.output,
+                    Some(settled.terminal_sequence),
+                    settled.forced_failure,
+                ),
+                Err(error) => {
+                    // A progress frame may or may not be durable in Main: no
+                    // terminal is written here. The command stays unacknowledged
+                    // and the recovery claim of its redelivery reconciles the
+                    // spool from Main's watermark.
+                    tracing::warn!(
+                        event = "index_progress_unresolved",
+                        error_code = error.code(),
+                    );
+                    close_lease_logged(lease).await;
+                    return Ok(ToolkitProcessOutcome::retained(
+                        "toolkit_delivery.index_progress_unresolved",
+                        true,
+                    ));
+                }
+            },
+            (None, Some(output)) => (output, None, None),
+            (None, None) => {
+                close_lease_logged(lease).await;
+                return Err(ToolkitProcessError::Protocol(ProtocolError::InvalidInput(
+                    "the index output spool is unavailable",
+                )));
+            }
+        };
         let terminal = match index_terminal(outcome) {
             Ok(terminal) => terminal,
             Err(error) => {
@@ -915,13 +979,17 @@ where
                 return Err(ToolkitProcessError::Lease(error));
             }
         };
-        Box::pin(self.publish_fresh_terminal(
+        // Main's rejection of a progress frame (Stop, the deadline) decides
+        // the terminal, as it does for an agent run.
+        let terminal = forced_failure.map_or(terminal, ToolkitExecuteReadTerminalOutput::Failure);
+        Box::pin(self.publish_fresh_terminal_at(
             delivery,
             verified,
             output_authority,
             output,
             lease,
             terminal,
+            terminal_sequence,
         ))
         .await?;
         Ok(ToolkitProcessOutcome::completed(
@@ -981,6 +1049,10 @@ where
             })
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One ordered pass: redeem, govern, build the run, run it, bind its result."
+    )]
     async fn run_index_ingest(
         &self,
         verified: &VerifiedToolkitExecuteReadCommand,
@@ -988,6 +1060,7 @@ where
         lease: &mut ClaimLeaseMonitor,
         runtime: &IndexIngestRuntime,
         inputs: &IndexInputs,
+        progress: Option<&dyn ProgressSink>,
     ) -> IndexRunEnd {
         let command = verified.command();
         let Some(worker_command_v1::CapabilityCommand::IndexIngest(index)) =
@@ -1066,7 +1139,7 @@ where
         // observes Stop, the deadline and lease loss itself, between
         // documents. A Stop or deadline that arrives after it returns is
         // folded into the terminal by `publish_fresh_terminal`.
-        let summary = match run_index(runtime, run).await {
+        let summary = match run_index_with_progress(runtime, run, progress).await {
             Ok(summary) => summary,
             Err(IndexRunFailure::Cancelled) => {
                 return IndexRunEnd::Failure(RuntimeFailureKind::Cancelled);
@@ -1640,6 +1713,32 @@ where
         lease: ClaimLeaseMonitor,
         proposed: ToolkitExecuteReadTerminalOutput,
     ) -> Result<(), ToolkitProcessError> {
+        Box::pin(self.publish_fresh_terminal_at(
+            delivery,
+            verified,
+            output_authority,
+            output,
+            lease,
+            proposed,
+            None,
+        ))
+        .await
+    }
+
+    /// [`Self::publish_fresh_terminal`] for a run that published progress: the
+    /// terminal takes `sequence`, the one after the last acknowledged frame.
+    /// `None` is the handoff watermark's successor, as before.
+    #[allow(clippy::too_many_arguments)]
+    async fn publish_fresh_terminal_at(
+        &self,
+        delivery: CommandDelivery,
+        verified: VerifiedToolkitExecuteReadCommand,
+        output_authority: AgentExecutionOutputAuthority,
+        output: PreparedAgentOutput,
+        lease: ClaimLeaseMonitor,
+        proposed: ToolkitExecuteReadTerminalOutput,
+        sequence: Option<u64>,
+    ) -> Result<(), ToolkitProcessError> {
         let proposed = call_tool_terminal(verified.kind(), proposed);
         let result = async {
             let terminal = match lease.check_now().await {
@@ -1653,9 +1752,20 @@ where
                 Err(error) => return Err(ToolkitProcessError::Lease(error)),
             };
             let occurred_at = valid_now(self.clock.as_ref())?;
-            let frame = output_authority
-                .bind_toolkit_execute_read_terminal(&verified, terminal, occurred_at)
-                .map_err(ToolkitProcessError::Protocol)?;
+            let frame = match sequence {
+                Some(sequence) => output_authority.bind_toolkit_execute_read_terminal_at(
+                    &verified,
+                    terminal,
+                    occurred_at,
+                    sequence,
+                ),
+                None => output_authority.bind_toolkit_execute_read_terminal(
+                    &verified,
+                    terminal,
+                    occurred_at,
+                ),
+            }
+            .map_err(ToolkitProcessError::Protocol)?;
             let (spool, reopener) = output
                 .persist_terminal(&frame)
                 .await
@@ -2467,7 +2577,7 @@ pub(super) async fn process_toolkit_verified<R, RC, T, K, I>(
 ) where
     R: ControlRpc + 'static,
     RC: CommandRetirementClient + 'static,
-    T: ToolkitTerminalReplay + 'static,
+    T: ToolkitTerminalReplay + AgentProgressConnector + 'static,
     K: UnixMillisClock,
     I: AgentInputMaterializer + 'static,
 {

@@ -3,6 +3,7 @@ use crate::protocol::command::{
     TestOnlyConformanceHmacAuthenticator, ToolkitCommandKind, VerifiedExecutionCommandKind,
     parse_and_verify_execution_command, parse_and_verify_toolkit_execute_read_command,
 };
+use crate::protocol::elitea::runtime::v1::NodeEventV1;
 use crate::protocol::elitea::runtime::v1::{
     ConfigurationValidationCommandV1, ConfigurationValidationIssueV1,
     ConfigurationValidationResultV1, ExecutionOutputEventTypeV1, IndexIngestCommandV1,
@@ -14,6 +15,9 @@ use crate::protocol::elitea::runtime::v1::{
     WorkerCommandTypeV1, WorkerCommandV1, execution_output_frame_v1,
 };
 use crate::protocol::output::validate_restored_toolkit_execute_read_output_frame;
+use crate::transport::output_grpc::{
+    ProgressRejectionWinner, test_acknowledged_progress, test_rejected_progress,
+};
 use ring::hmac;
 
 const NOW: i64 = 1_700_000_000_000;
@@ -1942,4 +1946,335 @@ fn the_refusal_shape_follows_mains_advertisement() {
             ExecutionOutcomeV1::Failed as i32
         );
     }
+}
+
+/// The signed `index.ingest.v1` command and its accepted claim response.
+pub(crate) fn index_command_and_claim() -> (Vec<u8>, ClaimCommandResponseV1) {
+    let (command, response) = fixture(ToolkitCommandKind::IndexIngest);
+    (signed_bytes(&command), response)
+}
+
+fn progress_event(kind: &str) -> NodeEventV1 {
+    crate::protocol::node_event::decode_current_node_event_json(
+        format!(r#"{{"type":"{kind}","message_id":"index-run:x","response_metadata":{{"tool_run_id":"plan","tool_name":"Planning"}}}}"#)
+            .as_bytes(),
+    )
+    .unwrap()
+}
+
+fn index_progress_cursor(
+    watermark: u64,
+) -> (ToolkitOutputCursor, VerifiedToolkitExecuteReadCommand) {
+    let (command, mut response) = fixture(ToolkitCommandKind::IndexIngest);
+    response.receipt.as_mut().unwrap().claim_handoff_watermark = watermark;
+    let verified = verified(&command);
+    let cursor = LeaseMonitoredAgentExecution {
+        claim: claim(&command, response),
+    }
+    .toolkit_progress_cursor(&verified)
+    .unwrap();
+    (cursor, verified)
+}
+
+/// #2041: progress takes `watermark + 1 ..= n`, each only after the previous
+/// frame's exact ACK, and the terminal takes the next sequence.
+#[test]
+fn the_progress_cursor_sequences_frames_from_the_watermark_and_leaves_the_terminal_the_next() {
+    let (mut cursor, verified) = index_progress_cursor(7);
+    let mut frames = Vec::new();
+    for expected in 8..=10_u64 {
+        let progress = cursor
+            .bind_progress(&verified, progress_event("agent_tool_start"), NOW)
+            .unwrap();
+        assert_eq!(progress.sequence(), expected);
+        let frame = progress.into_frame();
+        assert!(!frame.terminal);
+        assert_eq!(frame.claim_handoff_watermark, 7);
+        assert_eq!(
+            frame.logical_output_id,
+            format!("node-event:{}:{expected}", verified.command().execution_id)
+        );
+        // Restored frames are valid for an index run.
+        validate_restored_toolkit_execute_read_output_frame(&verified, &frame).unwrap();
+        // The next frame and the terminal wait for the ACK.
+        assert!(cursor.terminal_sequence().is_err());
+        assert!(
+            cursor
+                .bind_progress(&verified, progress_event("agent_tool_end"), NOW)
+                .is_err()
+        );
+        let ack = test_acknowledged_progress(&frame).unwrap();
+        assert!(matches!(
+            cursor.commit_progress_durable(ack).unwrap(),
+            AgentProgressCommit::Advanced
+        ));
+        frames.push(frame);
+    }
+    assert_eq!(cursor.terminal_sequence().unwrap(), 11);
+    // The terminal, bound at that sequence, is a valid terminal frame.
+    let (command, response) = fixture(ToolkitCommandKind::IndexIngest);
+    let mut response = response;
+    response.receipt.as_mut().unwrap().claim_handoff_watermark = 7;
+    let claim = claim(&command, response);
+    let terminal = AgentExecutionOutputAuthority { claim }
+        .bind_toolkit_execute_read_terminal_at(
+            &verified,
+            ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::Internal),
+            NOW,
+            11,
+        )
+        .unwrap();
+    assert_eq!(terminal.sequence, 11);
+    assert!(terminal.terminal);
+    validate_restored_toolkit_execute_read_output_frame(&verified, &terminal).unwrap();
+}
+
+/// An ACK that does not cover the pending frame, or none at all, moves nothing.
+#[test]
+fn the_progress_cursor_refuses_a_foreign_ack_and_never_reuses_a_sequence() {
+    let (mut cursor, verified) = index_progress_cursor(0);
+    let first = cursor
+        .bind_progress(&verified, progress_event("agent_tool_start"), NOW)
+        .unwrap()
+        .into_frame();
+    let mut other = first.clone();
+    other.occurred_at_unix_millis += 1;
+    assert!(
+        cursor
+            .commit_progress_durable(test_acknowledged_progress(&other).unwrap())
+            .is_err()
+    );
+    assert!(cursor.terminal_sequence().is_err());
+    cursor
+        .commit_progress_durable(test_acknowledged_progress(&first).unwrap())
+        .unwrap();
+    // A second ACK of the same frame has no pending frame to cover.
+    assert!(
+        cursor
+            .commit_progress_durable(test_acknowledged_progress(&first).unwrap())
+            .is_err()
+    );
+    assert_eq!(cursor.terminal_sequence().unwrap(), 2);
+}
+
+/// A frame that cannot be built (an event the contract refuses) binds nothing
+/// and leaves the sequence free for the next event.
+#[test]
+fn a_refused_progress_event_does_not_consume_a_sequence() {
+    let (mut cursor, verified) = index_progress_cursor(0);
+    let mut invalid = progress_event("agent_tool_start");
+    invalid.r#type.clear();
+    assert!(cursor.bind_progress(&verified, invalid, NOW).is_err());
+    assert_eq!(cursor.terminal_sequence().unwrap(), 1);
+    let frame = cursor
+        .bind_progress(&verified, progress_event("agent_tool_start"), NOW)
+        .unwrap()
+        .into_frame();
+    assert_eq!(frame.sequence, 1);
+}
+
+/// Main's exact rejection of the pending frame names the failure and the
+/// sequence of the terminal that replaces it; a rejection of another frame
+/// does not.
+#[test]
+fn a_rejected_progress_frame_decides_the_failure_at_its_own_sequence() {
+    for (winner, failure) in [
+        (
+            ProgressRejectionWinner::Cancelled,
+            RuntimeFailureKind::Cancelled,
+        ),
+        (
+            ProgressRejectionWinner::DeadlineExceeded,
+            RuntimeFailureKind::DeadlineExceeded,
+        ),
+        (
+            ProgressRejectionWinner::FrameRefused,
+            RuntimeFailureKind::Internal,
+        ),
+    ] {
+        let (mut cursor, verified) = index_progress_cursor(3);
+        let frame = cursor
+            .bind_progress(&verified, progress_event("agent_tool_start"), NOW)
+            .unwrap()
+            .into_frame();
+        let mut other = frame.clone();
+        other.occurred_at_unix_millis += 1;
+        assert!(
+            cursor
+                .bind_rejected_progress(&verified, test_rejected_progress(&other, winner).unwrap())
+                .is_err()
+        );
+        let (sequence, decided) = cursor
+            .bind_rejected_progress(&verified, test_rejected_progress(&frame, winner).unwrap())
+            .unwrap();
+        assert_eq!(sequence, frame.sequence);
+        assert_eq!(decided, failure);
+    }
+    // Nothing pending, nothing rejected.
+    let (mut cursor, verified) = index_progress_cursor(3);
+    let probe = {
+        let (mut other, v) = index_progress_cursor(3);
+        other
+            .bind_progress(&v, progress_event("agent_tool_start"), NOW)
+            .unwrap()
+            .into_frame()
+    };
+    assert!(
+        cursor
+            .bind_rejected_progress(
+                &verified,
+                test_rejected_progress(&probe, ProgressRejectionWinner::Cancelled).unwrap()
+            )
+            .is_err()
+    );
+}
+
+/// Only an index run publishes progress: the cursor refuses any other command,
+/// and a restored `NodeEvent` is malformed under every other kind.
+#[test]
+fn only_an_index_run_has_a_progress_cursor_and_valid_progress_frames() {
+    let (command, response) = fixture(ToolkitCommandKind::AvailableTools);
+    let other = verified(&command);
+    assert!(
+        LeaseMonitoredAgentExecution {
+            claim: claim(&command, response),
+        }
+        .toolkit_progress_cursor(&other)
+        .is_err()
+    );
+    // A progress frame built for an index command is not valid for another.
+    let (mut cursor, index) = index_progress_cursor(0);
+    let frame = cursor
+        .bind_progress(&index, progress_event("agent_tool_start"), NOW)
+        .unwrap()
+        .into_frame();
+    assert!(validate_restored_toolkit_execute_read_output_frame(&index, &frame).is_ok());
+    assert!(validate_restored_toolkit_execute_read_output_frame(&other, &frame).is_err());
+    // The cursor of one command refuses another's.
+    assert!(
+        cursor
+            .bind_progress(&other, progress_event("agent_tool_end"), NOW)
+            .is_err()
+    );
+}
+
+/// A restored progress frame is validated field by field: a terminal flag, a
+/// settlement proposal, another logical id or a changed payload is refused.
+#[test]
+fn a_restored_index_progress_frame_is_validated_field_by_field() {
+    let (mut cursor, verified) = index_progress_cursor(2);
+    let frame = cursor
+        .bind_progress(&verified, progress_event("agent_tool_start"), NOW)
+        .unwrap()
+        .into_frame();
+    validate_restored_toolkit_execute_read_output_frame(&verified, &frame).unwrap();
+    let mutations: Vec<Box<dyn Fn(&mut ExecutionOutputFrameV1)>> = vec![
+        Box::new(|frame| frame.terminal = true),
+        Box::new(|frame| frame.logical_output_id.push('x')),
+        Box::new(|frame| {
+            frame.event_type = ExecutionOutputEventTypeV1::IndexIngestResult as i32;
+        }),
+        Box::new(|frame| {
+            frame.settlement_proposal =
+                Some(crate::protocol::elitea::runtime::v1::SettlementProposalV1::default());
+        }),
+        Box::new(|frame| {
+            if let Some(execution_output_frame_v1::Payload::NodeEvent(event)) =
+                frame.payload.as_mut()
+            {
+                event.message_id = Some("another".to_owned());
+            }
+        }),
+        Box::new(|frame| frame.payload_digest = None),
+        Box::new(|frame| frame.sequence += 1),
+    ];
+    for mutate in mutations {
+        let mut changed = frame.clone();
+        mutate(&mut changed);
+        assert!(
+            validate_restored_toolkit_execute_read_output_frame(&verified, &changed).is_err(),
+            "{changed:?}"
+        );
+    }
+}
+
+/// The terminal sequence cannot fall at or below Main's watermark.
+#[test]
+fn a_terminal_at_a_sequence_the_watermark_covers_is_refused() {
+    let (command, mut response) = fixture(ToolkitCommandKind::IndexIngest);
+    response.receipt.as_mut().unwrap().claim_handoff_watermark = 5;
+    let verified = verified(&command);
+    for sequence in [0, 4, 5] {
+        let claim = claim(&command, response.clone());
+        assert!(
+            AgentExecutionOutputAuthority { claim }
+                .bind_toolkit_execute_read_terminal_at(
+                    &verified,
+                    ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::Internal),
+                    NOW,
+                    sequence,
+                )
+                .is_err(),
+            "{sequence}"
+        );
+    }
+    let claim = claim(&command, response);
+    assert_eq!(
+        AgentExecutionOutputAuthority { claim }
+            .bind_toolkit_execute_read_terminal(
+                &verified,
+                ToolkitExecuteReadTerminalOutput::Failure(RuntimeFailureKind::Internal),
+                NOW,
+            )
+            .unwrap()
+            .sequence,
+        6
+    );
+}
+
+/// How a claim treats an unaccepted progress frame found in the spool.
+#[test]
+fn a_claim_classifies_restored_progress_against_its_watermark_and_fence() {
+    let (command, mut response) = fixture(ToolkitCommandKind::IndexIngest);
+    response.receipt.as_mut().unwrap().claim_handoff_watermark = 4;
+    let verified = verified(&command);
+    let claim = claim(&command, response.clone());
+    let old_fence = {
+        let mut fence = response.receipt.as_ref().unwrap().fence.clone().unwrap();
+        fence.claim_attempt -= 1;
+        fence.lease_epoch -= 1;
+        fence.fence_token = vec![b'o'; 32];
+        fence
+    };
+    let build = |fence: &ExecutionFenceV1, sequence: u64| {
+        crate::protocol::output::build_execution_node_event_output_frame(
+            &verified,
+            fence,
+            progress_event("agent_tool_start"),
+            sequence,
+            NOW,
+            sequence - 1,
+        )
+        .unwrap()
+    };
+    let current_fence = response.receipt.as_ref().unwrap().fence.clone().unwrap();
+    // At or below the watermark Main holds it, whoever bound it.
+    assert_eq!(
+        claim.recovered_progress(&build(&old_fence, 4)),
+        Some(RecoveredProgress::Covered)
+    );
+    assert_eq!(
+        claim.recovered_progress(&build(&current_fence, 3)),
+        Some(RecoveredProgress::Covered)
+    );
+    // Beyond it, only a strictly older claim's frame is superseded.
+    assert_eq!(
+        claim.recovered_progress(&build(&old_fence, 5)),
+        Some(RecoveredProgress::Superseded)
+    );
+    assert_eq!(claim.recovered_progress(&build(&current_fence, 5)), None);
+    // A terminal is never progress.
+    let mut terminal = build(&old_fence, 5);
+    terminal.terminal = true;
+    assert_eq!(claim.recovered_progress(&terminal), None);
 }
