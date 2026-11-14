@@ -86,7 +86,9 @@ var GuardrailNoticeOutcomes = []string{"blocked", "masked", "warned", "error_clo
 // member of the project reads the notices of their own runs only. The groups
 // are built in SQL, so a long run with many requests can never push a blocking
 // outcome out of the limit: the number of rows is bounded by the number of
-// guardrail entries, not by the number of requests. Oldest group first.
+// guardrail entries, not by the number of requests. Oldest group first; verdicts
+// written in one statement share occurred_at, so the first row id breaks the tie
+// in write order.
 func (s *RunSteps) GuardrailNoticeVerdicts(ctx context.Context, projectID, userID int64, runID string, limit int) ([]GuardrailNoticeVerdict, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT stage, row_name, detector, action, outcome,
@@ -97,7 +99,7 @@ SELECT stage, row_name, detector, action, outcome,
   LEFT JOIN LATERAL unnest(v.labels) AS label ON true
  WHERE execution_id = $1 AND project_id = $2 AND user_id = $3 AND outcome = ANY($4)
  GROUP BY stage, row_name, detector, action, outcome
- ORDER BY first_at, row_name, detector
+ ORDER BY first_at, min(id)
  LIMIT $5`, runID, projectID, userID, GuardrailNoticeOutcomes, limit)
 	if err != nil {
 		return nil, fmt.Errorf("run steps: read guardrail notices: %w", err)
