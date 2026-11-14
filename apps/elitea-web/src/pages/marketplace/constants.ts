@@ -5,10 +5,8 @@ import type { MarketplaceSortBy, MarketplaceSortOrder } from './types';
 
 export const OTHER_CATEGORY = 'Other';
 
-/** How many agent rows one request asks for; the handler's own cap (`publicApplicationsMaxLimit`). */
+/** How many agent rows one page asks for; the handler's own cap (`publicApplicationsMaxLimit`). */
 export const AGENT_LISTING_LIMIT = 1000;
-/** The public skills route caps a page at 100 (`skillpublish/public.go`). */
-export const SKILL_LISTING_LIMIT = 100;
 
 /** The Featured row's size, and the Popular row's. */
 export const FEATURED_COUNT = 4;

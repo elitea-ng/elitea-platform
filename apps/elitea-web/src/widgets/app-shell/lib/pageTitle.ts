@@ -30,11 +30,19 @@
  * all) are left without it, matching the old app (which never branches on
  * `params.tab` for those four either).
  */
+import { t } from '@/shared/i18n';
+
 const SECTION_BY_PREFIX: ReadonlyArray<{ prefix: string; label: string; hasTab?: true }> = [
   { prefix: '/chat', label: 'Chat' },
   // The Catalog (Agent HUB) is the Marketplace (ADR-0051); `/elitea-catalog`
   // and `/agents-hub` redirect to it, so neither needs a title of its own.
-  { prefix: '/marketplace', label: 'Marketplace' },
+  // A getter, so the name is translated when a title is built, not when this module loads.
+  {
+    prefix: '/marketplace',
+    get label() {
+      return t('marketplace.title', 'Marketplace');
+    },
+  },
   { prefix: '/agents', label: 'Agents', hasTab: true },
   { prefix: '/pipelines', label: 'Pipelines', hasTab: true },
   { prefix: '/toolkits', label: 'Toolkits', hasTab: true },

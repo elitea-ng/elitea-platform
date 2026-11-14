@@ -32,8 +32,6 @@ export interface ListingCardData {
   readonly version: string | undefined;
   /** The categories the listing is filed under: the agent's one category, a skill's tags. */
   readonly categories: readonly string[];
-  /** Grows with each publish; the Featured row sorts on it. */
-  readonly recency: number;
 }
 
 /**

@@ -26,9 +26,22 @@ const AGENT = {
   is_liked: false,
 };
 
+let createBodies: unknown[] = [];
+let participantBodies: unknown[] = [];
+
 function mockAgent(): void {
+  createBodies = [];
+  participantBodies = [];
   server.use(
     http.get('/api/v2/elitea_core/public_applications/prompt_lib', () => HttpResponse.json({ rows: [AGENT], total: 1 })),
+    http.post('/api/v2/elitea_core/conversations/prompt_lib/:projectId', async ({ request }) => {
+      createBodies.push(await request.json());
+      return HttpResponse.json({ id: '55', name: AGENT.name }, { status: 201 });
+    }),
+    http.post('/api/v2/elitea_core/participants/prompt_lib/:projectId/:conversationId', async ({ request }) => {
+      participantBodies.push(await request.json());
+      return HttpResponse.json([]);
+    }),
     http.get('/api/v2/elitea_core/public_application/prompt_lib/7/v2', () =>
       HttpResponse.json({
         id: '7',
@@ -53,10 +66,12 @@ function mount(path: string) {
     routeTree: rootRoute.addChildren([
       createRoute({ getParentRoute: () => rootRoute, path: '/marketplace/$kind/$listingId', component: MarketplaceListing }),
       createRoute({ getParentRoute: () => rootRoute, path: '/marketplace', component: () => <p data-testid="marketplace-home" /> }),
-      createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: () => <p data-testid="chat-page" /> }),
+      createRoute({ getParentRoute: () => rootRoute, path: '/chat/$conversationId', component: () => <p data-testid="chat-page" /> }),
     ]),
     history: createMemoryHistory({ initialEntries: [path] }),
-  });
+    // The project the conversation starts in.
+    context: { auth: { getSelectedProjectId: () => '5' } },
+  } as never);
   renderWithTheme(<RouterProvider router={router} />);
   return router;
 }
@@ -79,14 +94,19 @@ describe('MarketplaceListing', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('keeps Try in chat: it opens a conversation', async () => {
+  it('keeps Try in chat: it starts a conversation with that agent, not just the chat page', async () => {
     configureGeneratedClient({ baseUrl: '/api/v2' });
     mockAgent();
     const router = mount('/marketplace/agents/7');
     const user = userEvent.setup();
 
     await user.click(await screen.findByTestId('marketplace-try-in-chat'));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/chat'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/55'));
+    expect(createBodies).toEqual([{ name: 'Release Notes Writer', participants: [] }]);
+    // The participant is the public copy at its published version, sent as the bare array the route takes.
+    expect(participantBodies).toEqual([
+      [{ entity_name: 'application', entity_meta: { id: '7', name: 'Release Notes Writer', project_id: '1' }, entity_settings: { version_id: '70' } }],
+    ]);
   });
 
   it('shows the instructions on request', async () => {

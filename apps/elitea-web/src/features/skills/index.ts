@@ -19,7 +19,7 @@ export { useBindSkillIconMutation } from './api/skillIconApi';
 export type { SkillIconMeta } from './api/skillIconApi';
 export { isSkillValid } from './lib/skillValidation';
 export { useSkill, useSkillMutations, useSkills } from './model/useSkills';
-export { usePublicSkills } from './model/usePublicSkills';
+export { useAllPublicSkills } from './model/usePublicSkills';
 export { useSkillCategories } from './model/useSkillPublishing';
 export type { PublicSkillSummary } from './model/publishTypes';
 export type {

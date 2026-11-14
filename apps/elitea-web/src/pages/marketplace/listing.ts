@@ -32,7 +32,6 @@ export function agentCard(app: ApplicationData): ListingCardData {
     likes: app.likes,
     version: app.version_name === '' ? undefined : app.version_name,
     categories: [getCategoryForApplication(app)],
-    recency: Number(app.version_id) || 0,
   };
 }
 
@@ -55,7 +54,6 @@ export function skillCard(skill: PublicSkillSummary): ListingCardData | null {
     likes: undefined,
     version: published.name,
     categories: skill.tags ?? [],
-    recency: published.id,
   };
 }
 
@@ -70,9 +68,9 @@ export function filterByCategories(cards: readonly ListingCardData[], picked: re
   return cards.filter((card) => card.categories.some((category) => picked.includes(category)));
 }
 
-/** Featured: the most recently published listings. There is no editorial flag yet, so recency is the stand-in (ADR-0051 M0). */
-export function featuredRow(cards: readonly ListingCardData[]): ListingCardData[] {
-  return [...cards].sort((a, b) => b.recency - a.recency).slice(0, FEATURED_COUNT);
+/** Featured: the newest listings, from the newest-first list (ADR-0051 M0: there is no editorial flag until M5, so newest is the stand-in). */
+export function featuredRow(newestFirst: readonly ListingCardData[]): ListingCardData[] {
+  return newestFirst.slice(0, FEATURED_COUNT);
 }
 
 /** Popular: the most liked listings that have any like; skills have no like store, so their row is empty. */

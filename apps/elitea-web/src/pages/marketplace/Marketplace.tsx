@@ -64,8 +64,8 @@ export function Marketplace(): ReactNode {
   const shown = useMemo(() => filterByCategories(listings.cards, selectedCategories), [listings.cards, selectedCategories]);
 
   const noFilter = submittedQuery.trim() === '' && selectedCategories.length === 0;
-  const featured = useMemo(() => (noFilter ? featuredRow(listings.cards) : []), [noFilter, listings.cards]);
-  const popular = useMemo(() => (noFilter ? popularRow(listings.cards) : []), [noFilter, listings.cards]);
+  const featured = useMemo(() => (noFilter ? featuredRow(listings.newest) : []), [noFilter, listings.newest]);
+  const popular = useMemo(() => (noFilter ? popularRow(listings.newest) : []), [noFilter, listings.newest]);
 
   const toggleCategory = (category: string): void => {
     setPicked({ kind, names: selectedCategories.includes(category) ? selectedCategories.filter((name) => name !== category) : [...selectedCategories, category] });
@@ -140,11 +140,6 @@ function ListingResults({ listings, shown, featured, popular, kindLabel }: Listi
       <ListingSection id="featured" title={t('marketplace.featured', 'Featured')} cards={featured} />
       <ListingSection id="popular" title={t('marketplace.popular', 'Popular in your organisation')} cards={popular} />
       <ListingSection id="all" title={t('marketplace.all', 'All {{kind}}', { kind: kindLabel.toLowerCase() })} cards={shown} />
-      {listings.total > listings.cards.length && (
-        <Box component="p" sx={noteSx}>
-          {t('marketplace.capped', 'Showing {{shown}} of {{total}}. Narrow the search to see the rest.', { shown: listings.cards.length, total: listings.total })}
-        </Box>
-      )}
     </>
   );
 }
@@ -161,4 +156,3 @@ const bodySx: SxProps<Theme> = {
   padding: '0 1.5rem 1.5rem',
 };
 
-const noteSx: SxProps<Theme> = { margin: 0, color: 'text.secondary', typography: 'bodySmall' };

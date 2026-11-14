@@ -6,7 +6,7 @@
  * Hiring — Install and Fork, versions with release notes, feedback — arrives in
  * later phases of ADR-0051 and is not drawn here.
  */
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Button from '@mui/material/Button';
@@ -14,7 +14,8 @@ import IconButton from '@mui/material/IconButton';
 import LinearProgress from '@mui/material/LinearProgress';
 import Typography from '@mui/material/Typography';
 
-import { useNavigate, useRouter } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
+import { useRouter } from '@tanstack/react-router';
 
 import { StyledShowContextModal } from '@/features/agents';
 import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
@@ -27,6 +28,7 @@ import { getCategoryForApplication } from '../helpers';
 import { agentCard } from '../listing';
 import type { ApplicationData } from '../types';
 import { useAgentVersionDetail } from '../useAgentVersionDetail';
+import { useTryInChat } from '../useTryInChat';
 import { useAgentRows } from '../useMarketplaceListings';
 
 import { AgentConversationStarters } from './AgentConversationStarters';
@@ -48,13 +50,15 @@ interface AgentListingViewProps {
 }
 
 function AgentListingView({ app, versionDetails, isVersionLoading }: AgentListingViewProps): ReactNode {
-  const navigate = useNavigate();
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const tryInChat = useTryInChat(app);
   const [showContext, setShowContext] = useState(false);
   const card = agentCard(app);
 
   const starters = useMemo(() => toStringArray(versionDetails?.conversation_starters), [versionDetails]);
-  const tryInChat = useCallback(() => void navigate({ to: '/chat' }), [navigate]);
+  // A like given here changes the count the grid and the Popular row show; they refetch when next opened.
+  useEffect(() => () => void queryClient.invalidateQueries({ queryKey: ['marketplace', 'agents'] }), [queryClient]);
   const copyLink = useCallback(() => {
     const href = router.buildLocation({ to: '/marketplace/$kind/$listingId', params: { kind: 'agents', listingId: card.id } }).href;
     void handleCopy(`${window.location.origin}${href}`);
@@ -80,11 +84,12 @@ function AgentListingView({ app, versionDetails, isVersionLoading }: AgentListin
           </>
         }
         actions={
-          <Button variant="contained" onClick={tryInChat} data-testid="marketplace-try-in-chat">
+          <Button variant="contained" onClick={tryInChat.start} disabled={tryInChat.start === undefined || tryInChat.isStarting} data-testid="marketplace-try-in-chat">
             {t('marketplace.listing.tryInChat', 'Try in chat')}
           </Button>
         }
       >
+        {tryInChat.isError && <Alert severity="error">{t('marketplace.listing.tryFailed', 'The conversation could not be started. Try again.')}</Alert>}
         <ListingBlock id="overview" title={t('marketplace.listing.overview', 'Overview')}>
           <Typography variant="bodySmall" color="text.secondary">
             {t('marketplace.listing.category', 'Category: {{category}}', { category: getCategoryForApplication(app) })}
@@ -95,7 +100,7 @@ function AgentListingView({ app, versionDetails, isVersionLoading }: AgentListin
           </Button>
         </ListingBlock>
         <ListingBlock id="starters" title={t('marketplace.listing.starters', 'Conversation starters')}>
-          <AgentConversationStarters conversation_starters={starters} onSelectStarter={tryInChat} />
+          <AgentConversationStarters conversation_starters={starters} onSelectStarter={() => tryInChat.start?.()} />
         </ListingBlock>
         <ListingBlock id="welcome" title={t('marketplace.listing.welcome', 'Welcome message')}>
           <AgentWelcomeMessage welcome_message={versionDetails?.welcome_message ?? ''} />

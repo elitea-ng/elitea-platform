@@ -6471,7 +6471,6 @@
   "marketplace.browse.searchSkills": "Search for skills",
   "marketplace.browse.sort": "Sort by",
   "marketplace.browse.title": "Browse",
-  "marketplace.capped": "Showing {{shown}} of {{total}}. Narrow the search to see the rest.",
   "marketplace.card.likes": "{{count}} likes",
   "marketplace.featured": "Featured",
   "marketplace.kind.agents": "Agents",
@@ -6502,5 +6501,6 @@
   "marketplace.summary.search": "Search: {{query}}",
   "marketplace.title": "Marketplace",
   "marketplace.untitled": "Untitled",
-  "widgets.sidebar.nav.marketplace": "Marketplace"
+  "widgets.sidebar.nav.marketplace": "Marketplace",
+  "marketplace.listing.tryFailed": "The conversation could not be started. Try again."
 }

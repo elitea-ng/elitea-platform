@@ -22,7 +22,7 @@ function app(overrides: Partial<ApplicationData> = {}): ApplicationData {
 }
 
 function card(overrides: Partial<ListingCardData> = {}): ListingCardData {
-  return { kind: 'agents', id: '1', name: 'A', description: '', iconUrl: undefined, likes: 0, version: undefined, categories: ['Other'], recency: 1, ...overrides };
+  return { kind: 'agents', id: '1', name: 'A', description: '', iconUrl: undefined, likes: 0, version: undefined, categories: ['Other'], ...overrides };
 }
 
 describe('kindFromSearch', () => {
@@ -45,7 +45,6 @@ describe('agentCard', () => {
       likes: 3,
       version: 'v2',
       categories: ['Development'],
-      recency: 70,
     });
   });
 
@@ -69,7 +68,7 @@ describe('skillCard', () => {
         { id: 6, name: 'v1.0', status: 'published' },
       ],
     });
-    expect(mapped).toMatchObject({ kind: 'skills', id: '42', version: 'v1.0', likes: undefined, categories: ['review', 'Development'], recency: 6 });
+    expect(mapped).toMatchObject({ kind: 'skills', id: '42', version: 'v1.0', likes: undefined, categories: ['review', 'Development'] });
   });
 
   it('drops a skill with no published version or no id: there is nothing to open or add', () => {
@@ -97,12 +96,12 @@ describe('filterByCategories', () => {
 });
 
 describe('featuredRow and popularRow', () => {
-  const many = Array.from({ length: 12 }, (_, index) => card({ id: String(index), recency: index, likes: index }));
+  const many = Array.from({ length: 12 }, (_, index) => card({ id: String(index), likes: index }));
 
-  it('features the most recently published listings, newest first', () => {
+  it('features the first listings of the newest-first list', () => {
     const row = featuredRow(many);
     expect(row).toHaveLength(FEATURED_COUNT);
-    expect(row[0]?.id).toBe('11');
+    expect(row.map((c) => c.id)).toEqual(['0', '1', '2', '3']);
   });
 
   it('ranks the popular row by likes and leaves out listings nobody liked', () => {
