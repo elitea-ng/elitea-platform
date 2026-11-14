@@ -501,7 +501,7 @@ func orEmptyObject(value map[string]any) map[string]any {
 func (r *EvalRunsRepo) FinishRun(
 	ctx context.Context,
 	projectID, runID, status string,
-	headline *float64,
+	_ *float64, // the caller's headline; ignored, see below
 	failure string,
 ) error {
 	schema, err := tenantSchema(projectID)
@@ -534,14 +534,11 @@ func (r *EvalRunsRepo) FinishRun(
 	if current != evaluation.RunStatusRunning {
 		return nil
 	}
-	{
-		var mean *float64
-		if err := tx.QueryRow(ctx, fmt.Sprintf(`
-			SELECT round(avg(normalized_score)::numeric, 2)::float8 FROM %s.eval_results
-			WHERE run_id = $1 AND status = 'ok' AND normalized_score IS NOT NULL`, schema), id).Scan(&mean); err != nil {
-			return fmt.Errorf("eval runs: finish headline: %w", err)
-		}
-		headline = mean
+	var headline *float64
+	if err := tx.QueryRow(ctx, fmt.Sprintf(`
+		SELECT round(avg(normalized_score)::numeric, 2)::float8 FROM %s.eval_results
+		WHERE run_id = $1 AND status = 'ok' AND normalized_score IS NOT NULL`, schema), id).Scan(&headline); err != nil {
+		return fmt.Errorf("eval runs: finish headline: %w", err)
 	}
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`
 		UPDATE %s.eval_runs
