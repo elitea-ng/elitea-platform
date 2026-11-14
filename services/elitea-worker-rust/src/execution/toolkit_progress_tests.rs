@@ -361,8 +361,8 @@ async fn run(state: Arc<State>, max_output_sessions: usize, watermark: u64) -> R
         panic!("a new spool is empty");
     };
     let (fresh, prepared) = empty.into_parts();
-    let (_delivery, verified, claim) = fresh.into_parts();
-    let cursor = test_toolkit_progress_cursor(claim, &verified).expect("progress cursor");
+    let (_delivery, verified, accepted) = fresh.into_parts();
+    let cursor = test_toolkit_progress_cursor(accepted, &verified).expect("progress cursor");
     let publisher = ToolkitProgressPublisher::new(
         cursor,
         prepared,
