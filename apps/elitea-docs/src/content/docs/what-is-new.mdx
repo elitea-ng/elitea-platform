@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## The Catalog is now the Marketplace
+
+The shared library of published agents and skills has a new name and a new place: **Marketplace** is a row in the sidebar, on the web and in the desktop app, beside the **Workshop** group, instead of an entry in the account menu. It was called **Catalog**, and **Agent HUB** before that. The page no longer opens with "Welcome to Agent HUB". Search, kind, category and sort moved into a **Browse** tab in the right sidebar, categories are multi-select for agents and skills alike, and the per-category **Show more** buttons are gone. A **Featured** row and a **Popular in your organisation** row show while no search or category is active. A card is now a link to a listing page of its own, with an address you can share, instead of a dialog, and **Try in chat** is still there. The old addresses `/elitea-catalog` and `/agents-hub` redirect to the Marketplace and keep what they carried: a shared `?agentId=` link opens that agent's listing and `?tab=skills` opens the skills. See [Marketplace](/menus/marketplace).
+
 ## Agent memory is recalled by meaning
 
 An agent's notes are now ranked by how close they are to your message, not only by shared words. The platform keeps a searchable copy of each active note in the vector service, made in the background with the project's default embedding model, and removes it when the note is archived, deleted, cleared, opted out or purged. If the embedding model or the vector store is down, recall falls back to the ranking by words and recency, so no turn fails. Notes saved before the upgrade are copied once in the background. **Run the migrations** (a shared and a tenant one) and upgrade Main and the vector service together. See [Agent memory](/how-tos/agents-pipelines/agent-memory/#recall-by-meaning).

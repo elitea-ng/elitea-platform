@@ -20,7 +20,6 @@ import { AccountMenu, type AccountMenuItem } from '../ui/AccountMenu';
 const globals = globalThis as unknown as Record<string, unknown>;
 const ITEMS: AccountMenuItem[] = [
   { value: 'credentials', label: 'Credentials', url: '/credentials' },
-  { value: 'catalog', label: 'Catalog', url: '/elitea-catalog' },
   { value: 'help', label: 'Help Center', url: '/help-center' },
 ];
 
@@ -68,8 +67,8 @@ describe('AccountMenu', () => {
     expect(within(menu).getByRole('menuitem', { name: 'Credentials' })).toBeInTheDocument();
     expect(within(menu).getByRole('menuitem', { name: 'Get help' })).toBeInTheDocument();
     expect(within(menu).getByRole('menuitem', { name: 'Sign out' })).toBeInTheDocument();
-    await user.click(within(menu).getByRole('menuitem', { name: 'Catalog' }));
-    expect(go).toHaveBeenCalledWith('/elitea-catalog');
+    await user.click(within(menu).getByRole('menuitem', { name: 'Credentials' }));
+    expect(go).toHaveBeenCalledWith('/credentials');
   });
 
   it('names an account that has only an email by its email', async () => {

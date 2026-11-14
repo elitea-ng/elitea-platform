@@ -36,7 +36,7 @@ export const homeTab: NavTab = {
         { kind: 'page', slug: 'menus/applications', title: 'Applications' },
         { kind: 'page', slug: 'menus/credentials', title: 'Credentials' },
         { kind: 'page', slug: 'menus/artifacts', title: 'Artifacts' },
-        { kind: 'page', slug: 'menus/catalog', title: 'Catalog' },
+        { kind: 'page', slug: 'menus/marketplace', title: 'Marketplace' },
         { kind: 'page', slug: 'menus/deepwiki-and-inventory', title: 'DeepWiki and Inventory' },
       ],
     },

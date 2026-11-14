@@ -647,7 +647,7 @@ export const shots: readonly Shot[] = [
   },
   {
     id: "catalog-agents",
-    route: "/app/elitea-catalog",
+    route: "/app/marketplace",
     viewport: DEFAULT_VIEWPORT,
     persona: "member",
     notes: "Needs one published agent (publish route router.go:3048).",

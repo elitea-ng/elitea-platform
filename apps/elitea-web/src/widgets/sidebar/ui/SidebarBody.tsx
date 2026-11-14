@@ -46,7 +46,7 @@ function useNavItems(permissions: ReadonlySet<string>, projectId: string | undef
  * their list (`SidebarChats.tsx`), the place rows — Applications, Artifacts
  * and the "Workshop" (agents, pipelines, skills, toolkits, MCPs) — each with
  * its "+" where the person may create one (`useCreateGate`), and at the
- * bottom the account menu (Settings, Credentials, the Catalog, help, the
+ * bottom the account menu (Settings, Credentials, help, the
  * version and Sign out, as on the desktop), over the Support Bot bar.
  *
  * Collapsed (64px) the rail keeps the icons — one per place, and one "New

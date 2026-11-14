@@ -18,15 +18,16 @@ import { skillQueryKeys } from './useSkills';
 
 const publicSkillQueryKeys = {
   list: (request: PublicSkillQuery) =>
-    ['public-skills', request.query ?? '', request.category ?? ''] as const,
+    ['public-skills', request.query ?? '', request.category ?? '', request.limit ?? ''] as const,
   agentsWithSkill: (projectId: string | undefined, publicSkillId: number | undefined) =>
     ['public-skills', 'agents-with-skill', projectId ?? '', publicSkillId ?? ''] as const,
 };
 
-export function usePublicSkills(request: PublicSkillQuery) {
+export function usePublicSkills(request: PublicSkillQuery, enabled = true) {
   return useQuery({
     queryKey: publicSkillQueryKeys.list(request),
     queryFn: () => fetchPublicSkills(request),
+    enabled,
   });
 }
 

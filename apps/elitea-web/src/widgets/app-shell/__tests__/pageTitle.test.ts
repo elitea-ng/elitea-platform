@@ -15,8 +15,8 @@ describe('derivePageTitle', () => {
     expect(derivePageTitle('/chat', 'Weekly sync', 'My Project')).toBe('Chat: Weekly sync - My Project');
   });
 
-  it('does not confuse /agents-hub with /agents (prefix hazard)', () => {
-    expect(derivePageTitle('/agents-hub', '', 'My Project')).toBe('Agent HUB - My Project');
+  it('titles /marketplace as the Marketplace, not as a section of its own kind', () => {
+    expect(derivePageTitle('/marketplace', '', 'My Project')).toBe('Marketplace - My Project');
   });
 
   it('settings: bare tab -> "Settings - project"', () => {
@@ -67,8 +67,8 @@ describe('derivePageTitle', () => {
       expect(derivePageTitle('/toolkits/mine', 'My Toolkit', 'My Project')).toBe('Toolkits: My Toolkit - My Project');
     });
 
-    it('sections with no $tab route (chat/agents-hub/artifacts/help-center) are unaffected', () => {
-      expect(derivePageTitle('/agents-hub', '', 'My Project')).toBe('Agent HUB - My Project');
+    it('sections with no $tab route (chat/marketplace/artifacts/help-center) are unaffected', () => {
+      expect(derivePageTitle('/marketplace', '', 'My Project')).toBe('Marketplace - My Project');
       expect(derivePageTitle('/artifacts', '', 'My Project')).toBe('Artifacts - My Project');
       expect(derivePageTitle('/help-center', '', 'My Project')).toBe('Help Center - My Project');
       expect(derivePageTitle('/chat', '', 'My Project')).toBe('Chat - My Project');

@@ -16,7 +16,7 @@ import { AccountMenu, type AccountMenuItem } from '@/widgets/account-menu';
  * desktop app has) and, when the deployment has a support assistant, the
  * "Support Bot | ?" bar under it (`SidebarBody.jsx`'s `styles.footerBlock`).
  *
- * Settings, Credentials, the Catalog and Help Center were rows here; they
+ * Settings, Credentials and Help Center were rows here; they
  * live in the account menu now, beside the version and Sign out, as on the
  * desktop. The assistant bar stays a bar: it opens an assistant, not a page.
  */
@@ -36,10 +36,9 @@ export function SidebarAccount({ collapsed, credentials = false }: SidebarAccoun
   const navigate = useNavigate();
   const items: AccountMenuItem[] = [
     ...(credentials ? [{ value: 'credentials', label: t('widgets.sidebar.nav.credentials', 'Credentials'), url: '/credentials' }] : []),
-    { value: 'catalog', label: t('widgets.sidebar.eliteaCatalog', 'Catalog'), url: '/elitea-catalog' },
     { value: 'help', label: t('widgets.sidebar.helpCenter', 'Help Center'), url: '/help-center' },
   ];
-  const selected = ['/settings', '/credentials', '/elitea-catalog', '/help-center'].some((path) => pathname.startsWith(path));
+  const selected = ['/settings', '/credentials', '/help-center'].some((path) => pathname.startsWith(path));
   return (
     <Box sx={accountSx(collapsed)}>
       <AccountMenu items={items} go={(to) => void navigate({ to })} platform="web" collapsed={collapsed} selected={selected} />

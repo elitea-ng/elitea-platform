@@ -149,21 +149,23 @@ export const paramSchemas = {
   viewMode: z.enum(['owner', 'public']).catch('owner').prefault('owner'),
   history_run_id: text(),
 
-  // ── agents-hub / elitea-catalog (PARAM-021) ──────────────────────────────
+  // ── marketplace + the legacy catalogue redirects (PARAM-021) ─────────────
+  /** The shared agent deep link's key: `/agents-hub` and `/elitea-catalog` read it to open that agent's listing page. */
   agentId: text(),
   /**
-   * Which `/elitea-catalog` tab is showing. Not in P1's manifest: the
-   * baseline grew this key after the manifest was extracted, when
-   * `/agents-hub` became a redirect into the new two-tab catalogue
-   * (`EliteaCatalog.jsx`'s `searchParams.get('tab')`).
-   *
-   * Declared as free text rather than `z.enum(['agents','skills'])` so an
-   * unknown value round-trips to the page, which applies the baseline's own
-   * "anything not `skills` means `agents`" rule
-   * (`pages/elitea-catalog`'s `catalogTabFromSearch`). An enum with
-   * `.catch()` would silently rewrite the URL instead.
+   * Which catalogue the legacy `/elitea-catalog?tab=` and `/agents-hub?tab=`
+   * links named. Read only by the redirect (`-lib/marketplaceRedirect.ts`),
+   * which maps it to the Marketplace's `kind`. Free text rather than an enum so
+   * an unknown value reaches the redirect, which degrades it to agents instead
+   * of rewriting the URL.
    */
   tab: text(),
+  /**
+   * Which kind of listing `/marketplace` shows, `agents` or `skills`. Free text
+   * for the same reason as `tab`: the page applies "anything but `skills` is
+   * agents" (`pages/marketplace`'s `kindFromSearch`).
+   */
+  kind: text(),
 
   // ── apps (PARAM-022/023) + every entity list page ────────────────────────
   //
