@@ -11,6 +11,7 @@ import {
   isBoundedIndexExecutionTaskId,
   isFrameForCurrentIndexExecution,
   parseIndexStartConflictTaskId,
+  parseIndexStartRefusalMessage,
 } from './indexExecution.helpers';
 
 describe('isBoundedIndexExecutionTaskId', () => {
@@ -158,5 +159,27 @@ describe('isFrameForCurrentIndexExecution', () => {
 
   it('rejects a frame naming a DIFFERENT run once one is tracked (issue 310: no message_id guard)', () => {
     expect(isFrameForCurrentIndexExecution('m2', 'm1')).toBe(false);
+  });
+});
+
+describe('parseIndexStartRefusalMessage (#2042)', () => {
+  function refusal(body: unknown, status: number): EliteaApiError {
+    return new EliteaApiError({ kind: 'http', status, url: '/elitea_core/test_toolkit_tool/prompt_lib/7', body });
+  }
+
+  it('returns the sentence of a 422 refusal', () => {
+    expect(parseIndexStartRefusalMessage(refusal({ error: 'No embedding model is available to this project.' }, 422))).toBe(
+      'No embedding model is available to this project.',
+    );
+    // A transient catalogue error is not a definitive refusal.
+    expect(parseIndexStartRefusalMessage(refusal({ error: 'Embedding model is unavailable' }, 503))).toBeUndefined();
+  });
+
+  it('is not fooled by the validation error list, the busy 503 or other statuses', () => {
+    expect(parseIndexStartRefusalMessage(refusal({ error: [{ type: 'value_error', loc: ['body'], msg: 'bad' }] }, 422))).toBeUndefined();
+    expect(parseIndexStartRefusalMessage(refusal({ error: 'temporarily_unavailable', message: 'busy', retry_after: 3 }, 503))).toBeUndefined();
+    expect(parseIndexStartRefusalMessage(refusal({ error: 'Toolkit not found' }, 404))).toBeUndefined();
+    expect(parseIndexStartRefusalMessage(refusal({ error: 'x'.repeat(401) }, 422))).toBeUndefined();
+    expect(parseIndexStartRefusalMessage(new Error('boom'))).toBeUndefined();
   });
 });

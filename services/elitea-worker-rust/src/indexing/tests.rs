@@ -697,6 +697,15 @@ async fn a_non_retryable_gateway_refusal_fails_the_run_at_once() {
             "{status}: {}",
             summary.message
         );
+        // The code stays for support, and the words around it say what to do
+        // (#2042): a 403 must not read as a bare fault code.
+        if code == "model_gateway.forbidden" {
+            assert!(
+                summary.message.contains("not allowed to use that model"),
+                "{}",
+                summary.message
+            );
+        }
         assert_eq!(
             harness.embeddings.calls.load(Ordering::SeqCst),
             1,

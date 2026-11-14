@@ -35,6 +35,14 @@ var (
 	ErrCurrentEmbeddingBindingUnavailable = errors.New("current embedding binding is unavailable")
 	ErrCurrentEmbeddingBindingAmbiguous   = errors.New("current embedding binding is ambiguous")
 	ErrInvalidCurrentEmbeddingBinding     = errors.New("invalid current embedding binding")
+
+	// ErrNoEmbeddingModelAvailable is the admission refusal for a project whose
+	// Configurations catalogue holds no embedding model at all (none of its own,
+	// none shared from the public project), while the toolkit names none either.
+	// A run could only fail on it (#2042), so the start is refused instead, with
+	// a reason the user can act on. It wraps the unavailable sentinel so every
+	// existing classification keeps matching it.
+	ErrNoEmbeddingModelAvailable = fmt.Errorf("no embedding model is available to this project: %w", ErrCurrentEmbeddingBindingUnavailable)
 )
 
 // CurrentEmbeddingConfiguration is the non-secret identity of one current

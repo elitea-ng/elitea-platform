@@ -290,6 +290,10 @@ func validTaskID(value string) bool {
 		!strings.ContainsAny(value, "\x00\r\n")
 }
 
+// NoEmbeddingModelMessage is the refusal text for an index start in a project
+// that has no embedding model to index with. The web client shows it as is.
+const NoEmbeddingModelMessage = "No embedding model is available to this project. Add an embedding model in AI configuration, or ask an administrator to share one, then start the index again."
+
 func (h *StartHandler) writeStartError(w http.ResponseWriter, err error) {
 	if status, body, refused := safety.HTTPRefusal(err); refused {
 		// The kill switch (ADR-0041 decision 1): nothing was admitted.
@@ -313,6 +317,10 @@ func (h *StartHandler) writeStartError(w http.ResponseWriter, err error) {
 			Error:  "Indexing is already in progress for this index",
 			TaskID: active.TaskID,
 		})
+	case errors.Is(err, indexingapp.ErrNoEmbeddingModelAvailable):
+		// Refused here, not left to fail the run (#2042): the reason is one
+		// the user can act on, and it is fixed text, never the cause chain.
+		writeError(w, http.StatusUnprocessableEntity, NoEmbeddingModelMessage)
 	case errors.Is(err, indexingapp.ErrCurrentEmbeddingBindingUnavailable),
 		errors.Is(err, indexingapp.ErrCurrentEmbeddingBindingAmbiguous),
 		errors.Is(err, indexingapp.ErrInvalidCurrentEmbeddingBinding):
