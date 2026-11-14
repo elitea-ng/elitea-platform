@@ -20,6 +20,7 @@ import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { EntityListFilters, useRailTagSelection } from '@/shared/ui/EntityRail';
+import { EntityFolderPanel, EntityFolderScope, useFolderFilter } from '@/widgets/entity-folders';
 import { PageToolbar, pageBodySx, pageSx, useListSearchQuery } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
@@ -93,7 +94,11 @@ export function Skills(): ReactNode {
   const mutations = useSkillMutations(projectId);
   const { selectedTags } = useRailTagSelection();
   const permissions = usePermissionSet(projectId);
-  const visibleSkills = useMemo(() => filterSkillsByTags(skills.data?.items ?? [], selectedTags), [skills.data, selectedTags]);
+  const folderFilter = useFolderFilter(projectId, 'skill');
+  const visibleSkills = useMemo(
+    () => filterSkillsByTags(skills.data?.items ?? [], selectedTags).filter((skill) => folderFilter.includes(skill.id)),
+    [skills.data, selectedTags, folderFilter],
+  );
   const title = t('skills.page.title', 'Skills');
   const openCreate = (): void => void navigate({ to: '/skills/create' });
 
@@ -156,29 +161,42 @@ export function Skills(): ReactNode {
           />
         )}
         {onAllTab && (
-          <SkillsList
-            items={visibleSkills}
-            isLoading={skills.isFetching && skills.data === undefined}
-            isError={skills.isError}
-            query={query}
-            onSelect={(skillId) => {
-              void navigate({
-                to: '/skills/$tab/$skillId',
-                params: { tab: 'all', skillId },
-              });
-            }}
-            onDelete={setPendingDelete}
-            onExport={(skill) => {
-              void handleExport(skill);
-            }}
-            onCreate={openCreate}
-          />
+          <EntityFolderScope
+            projectId={projectId}
+            kind="skill"
+            permissions={permissions}
+          >
+            <SkillsList
+              items={visibleSkills}
+              isLoading={skills.isFetching && skills.data === undefined}
+              isError={skills.isError}
+              query={query}
+              onSelect={(skillId) => {
+                void navigate({
+                  to: '/skills/$tab/$skillId',
+                  params: { tab: 'all', skillId },
+                });
+              }}
+              onDelete={setPendingDelete}
+              onExport={(skill) => {
+                void handleExport(skill);
+              }}
+              onCreate={openCreate}
+            />
+          </EntityFolderScope>
         )}
       </Box>
       {onAllTab && (
         <EntityListFilters
           projectId={projectId}
           subject={title}
+          foldersSlot={
+            <EntityFolderPanel
+              projectId={projectId}
+              kind="skill"
+              permissions={permissions}
+            />
+          }
         />
       )}
       <DeleteEntityModal

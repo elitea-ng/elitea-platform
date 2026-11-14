@@ -23,9 +23,11 @@ export interface ToolkitsFiltersProps {
   readonly onSelectType: (typeName: string) => void;
   readonly onClearTypes: () => void;
   readonly isLoading: boolean;
+  /** The list's project-folder panel (issue 2048), above the types. */
+  readonly foldersSlot?: ReactNode;
 }
 
-export function ToolkitsFilters({ projectId, isMCP, subject, tagList, selectedTypes, onSelectType, onClearTypes, isLoading }: ToolkitsFiltersProps): ReactNode {
+export function ToolkitsFilters({ projectId, isMCP, subject, tagList, selectedTypes, onSelectType, onClearTypes, isLoading, foldersSlot }: ToolkitsFiltersProps): ReactNode {
   return (
     <SidePanelTab
       id="filters"
@@ -36,6 +38,7 @@ export function ToolkitsFilters({ projectId, isMCP, subject, tagList, selectedTy
         data-testid="toolkits-filters"
         sx={filtersPanelSx}
       >
+        {foldersSlot}
         <RailTagsPanelView
           title={t('pages.toolkits.toolkits.types', 'Types')}
           emptyText={t('pages.toolkits.toolkits.noTypes', 'No types to display.')}

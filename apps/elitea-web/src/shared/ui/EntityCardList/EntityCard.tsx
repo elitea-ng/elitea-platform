@@ -12,6 +12,7 @@ import { t } from '@/shared/i18n';
 import { EntityCardAuthors } from './EntityCardAuthors';
 import { EntityCardTags } from './EntityCardTags';
 import type { EntityListItem, EntityListTag } from './model';
+import { useEntityRowSlot } from './rowSlot';
 
 /**
  * One entity card in a list page's grid — the port of
@@ -68,7 +69,10 @@ export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestI
       onClick={activate}
       sx={cardSx(item.onClick !== undefined)}
     >
-      {actions !== undefined && <Box sx={actionsSx}>{actions}</Box>}
+      <CardCorner
+        item={item}
+        actions={actions}
+      />
       <Box sx={topRowSx}>
         <Box
           data-testid="entity-card-icon"
@@ -142,6 +146,18 @@ export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestI
           </Tooltip>
         )}
       </Box>
+    </Box>
+  );
+}
+
+/** The card's top-right corner: what the page passed, then what a page-wide row slot adds (the folders' "Move to folder"). */
+function CardCorner({ item, actions }: { readonly item: EntityListItem; readonly actions: ReactNode }): ReactNode {
+  const rowAction = useEntityRowSlot()?.renderCardAction(item);
+  if (actions === undefined && rowAction === undefined) return null;
+  return (
+    <Box sx={actionsSx}>
+      {actions}
+      {rowAction}
     </Box>
   );
 }

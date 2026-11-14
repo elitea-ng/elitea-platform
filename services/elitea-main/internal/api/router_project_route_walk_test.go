@@ -15,6 +15,7 @@ import (
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2artifacts "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/artifacts"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	v2memories "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/memories"
@@ -107,6 +108,7 @@ func newProjectRouteWalkRouter(t *testing.T) chi.Router {
 		AppsRepo:           struct{ applications.Repository }{},
 		SkillsRepo:         struct{ v2skills.Repository }{},
 		FoldersRepo:        struct{ v2folders.Repository }{},
+		EntityFoldersRepo:  struct{ v2entityfolders.Repository }{},
 		TagsRepo:           struct{ v2tags.Repository }{},
 		ConvsRepo:          struct{ v2convs.Repository }{},
 		AnalyticsRepo:      struct{ v2analytics.Repository }{},
