@@ -81,8 +81,9 @@ describe('packDefaultAvatarKey', () => {
   it('reads a default avatar key a pack names as its still', () => {
     const named = { schema: AVATAR_PACK_SCHEMA, slots: { still: { url: 'default:fox' } } };
     assert.equal(packDefaultAvatarKey(named), 'default:fox');
-    // The file rules still drop it: there is no file to download.
-    assert.equal(avatarPackOf(named), undefined);
+    // The validated pack carries the key and no still file to download.
+    assert.deepEqual(avatarPackOf(named), { schema: AVATAR_PACK_SCHEMA, slots: {}, defaultAvatar: 'default:fox' });
+    assert.equal(avatarSource(named, undefined, 'still'), undefined);
   });
 
   it('is undefined for a file pack, an unknown key or anything else', () => {

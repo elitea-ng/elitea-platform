@@ -36,6 +36,11 @@ export interface AvatarPackSlot {
 export interface AvatarPack {
   readonly schema: typeof AVATAR_PACK_SCHEMA;
   readonly slots: Readonly<Partial<Record<AvatarSlotName, AvatarPackSlot>>>;
+  /**
+   * The default avatar key (`default:fox`) the pack's still names instead of a file (#1949). Such a
+   * pack has no `still` slot: the client draws the glyph, and the old icon is not shown.
+   */
+  readonly defaultAvatar?: string | undefined;
 }
 
 /** Whether a url is pack media (`/api/v2/agent_media/{project}/{sha256}.{ext}`). */
@@ -79,6 +84,8 @@ export function avatarPackOf(value: unknown): AvatarPack | undefined {
     const slot = slotOf(rawSlots[name]);
     if (slot !== undefined) slots[name] = slot;
   }
+  const defaultAvatar = packDefaultAvatarKey(value);
+  if (slots.still === undefined && defaultAvatar !== undefined) return { schema: AVATAR_PACK_SCHEMA, slots, defaultAvatar };
   if (slots.still === undefined || isVideoUrl(slots.still.url)) return undefined;
   return { schema: AVATAR_PACK_SCHEMA, slots };
 }

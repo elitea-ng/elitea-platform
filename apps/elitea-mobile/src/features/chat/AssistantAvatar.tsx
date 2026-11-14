@@ -8,6 +8,7 @@ import type { AvatarMotion, AvatarPack } from '@elitea/client-core/conversation'
 
 import { useDesign } from '@/design/DesignProvider';
 import { AgentMotion } from '@/features/chat/AgentMotion';
+import { DefaultAvatarGlyph } from '@/features/chat/DefaultAvatarGlyph';
 import { fetchAgentMedia, packMediaPlan, type AgentMedia } from '@/features/chat/avatarPackMedia';
 import { fetchPublicAgentIcon } from '@/features/discover/agentIconData';
 import { useVettedMedia, useVettedMediaReload } from '@/features/media/vettedMedia';
@@ -170,7 +171,12 @@ export function PackAvatar({
   }
   return (
     <AgentMotion motion={ownMotion ? 'still' : motion} size={edge}>
-      {drawn ?? <Avatar name={name} kind="agent" imageUri={imageUri} mark={mark} size={edge} decorative />}
+      {drawn ??
+        (pack?.defaultAvatar !== undefined ? (
+          <DefaultAvatarGlyph avatarKey={pack.defaultAvatar} size={edge} />
+        ) : (
+          <Avatar name={name} kind="agent" imageUri={imageUri} mark={mark} size={edge} decorative />
+        ))}
     </AgentMotion>
   );
 }

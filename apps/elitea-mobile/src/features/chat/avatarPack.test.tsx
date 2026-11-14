@@ -241,6 +241,14 @@ describe('PackAvatar', () => {
     expect(fetchMedia).toHaveBeenCalledTimes(1);
   });
 
+  it("draws a default avatar a pack's still names, not the old icon or a download (#1949)", async () => {
+    const named = pack({ still: { url: 'default:fox' } });
+    const fetchMedia = served();
+    await withQueries(<PackAvatar projectId={7} pack={named} motion="still" name="Mira" imageUri={null} mark fetchMedia={fetchMedia} />);
+    expect(screen.getByTestId('default-avatar', { includeHiddenElements: true })).toBeTruthy();
+    expect(fetchMedia).not.toHaveBeenCalled();
+  });
+
   it("plays a state's own image with no default motion over it", async () => {
     await withQueries(<PackAvatar projectId={7} pack={FULL} motion="thinking" name="Mira" imageUri={null} mark fetchMedia={served()} />);
     await waitFor(() => expect(shown()).toBe(uriOf(THINKING)));
