@@ -54,6 +54,30 @@ export const EvalRunLimits = zod
       .describe(
         "What the run does when its run limit is reached. `stop` ends the run as errored with the reason, and `report` lets it finish and only records the limit.\n",
       ),
+    execution_mode: zod
+      .string()
+      .optional()
+      .describe(
+        "How the run executes a case: `predict_blocking` (the default, one blocking LLM call) or `runtime_plane` (each case is a real agent run of the pinned version on the worker). The three settings below apply only to `runtime_plane`.\n",
+      ),
+    step_limit_per_case: zod
+      .int()
+      .nullish()
+      .describe(
+        "Most agent steps (model calls and tool calls) one case may take, 1 to 1000. The case's run is cancelled when it is exceeded. Refused on a `predict_blocking` suite.\n",
+      ),
+    time_limit_per_case_seconds: zod
+      .int()
+      .nullish()
+      .describe(
+        "Wall time one case may take, 1 to 3600 seconds. The case's run is cancelled at the deadline and a timeout result is stored. Without one a case is bounded at 15 minutes. Refused on a `predict_blocking` suite.\n",
+      ),
+    store_tool_outputs: zod
+      .boolean()
+      .nullish()
+      .describe(
+        "Whether a case's stored evidence keeps the tool outputs of its steps. Absent or null reads as true.\n",
+      ),
   })
   .describe(
     "The run settings frozen at start from the suite. A null limit is no limit. Tokens are prompt plus completion tokens; costs are estimated USD from the gateway price catalogue.\n",

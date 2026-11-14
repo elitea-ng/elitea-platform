@@ -104,6 +104,9 @@ type Orchestrator struct {
 	logger    *slog.Logger
 	// usage reads the spend attributed to a run, for its limits (limits.go).
 	usage UsageReader
+	// runner runs a case as an agent run in the runtime_plane execution mode
+	// (runtime_plane.go). Nil on a deployment with no runtime plane.
+	runner AgentRunner
 
 	queue chan RunRef
 	// inFlight lets Cancel reach a running goroutine. A cancel writes the
@@ -551,8 +554,32 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 	settled := o.settledCells(ctx, ref)
 	completed := completedCases(settled, run.Snapshot.Bindings)
 
+	runtime := run.ExecutionMode == ExecutionModeRuntimePlane
+	settings := settingsOf(run)
+	if runtime {
+		if o.runner == nil {
+			return ErrRuntimePlaneNotConfigured
+		}
+		if run.ApplicationID == nil || run.ApplicationVersionID == nil {
+			return errors.New("a runtime_plane run needs the agent and its version")
+		}
+		// The agent run is signed, authorized and billed as the person who
+		// started the run. A run with no recorded author would fail every case
+		// the same way, so it is refused once, here.
+		if run.CreatedBy == nil || *run.CreatedBy <= 0 {
+			return errors.New("a runtime_plane run needs the person who started it as the author of its agent runs, and this run has none recorded; start the run again")
+		}
+	}
+
 	guard := o.newLimitGuard(ref, run)
 	done := 0
+	// lost counts results that could not be stored even as an error row.
+	lost := 0
+	save := func(result RunResult) {
+		if !o.saveResult(ctx, ref, result) {
+			lost++
+		}
+	}
 	for _, testCase := range cases {
 		if ctx.Err() != nil {
 			return nil
@@ -566,9 +593,22 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 			return err
 		}
 
-		turnStarted := time.Now()
-		output, agentErr := o.agentTurn(ctx, ref, actor(run), version, testCase)
-		turnEvidence := agentTurnEvidence(time.Since(turnStarted), agentErr)
+		var output string
+		var agentErr error
+		var turnEvidence map[string]any
+		// The case's trajectory is stored ONCE, on the first result row this
+		// pass writes for the case; the other rows carry `trajectory_ref`
+		// (the dimension id of that row) instead of a copy.
+		var trajectory map[string]any
+		trajectoryHolder := ""
+		if runtime {
+			turn := o.runtimeCase(ctx, ref, run, testCase, settings)
+			output, agentErr, turnEvidence, trajectory = turn.output, turn.err, turn.evidence, turn.trajectory
+		} else {
+			turnStarted := time.Now()
+			output, agentErr = o.agentTurn(ctx, ref, actor(run), version, testCase)
+			turnEvidence = agentTurnEvidence(time.Since(turnStarted), agentErr)
+		}
 		for _, binding := range run.Snapshot.Bindings {
 			if ctx.Err() != nil {
 				return nil
@@ -585,7 +625,7 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 				// corrupt snapshot, not a case failure. It is stored as a
 				// `skipped` result so the scorecard has a row to explain the
 				// gap, rather than a missing cell the reader assumes is a bug.
-				o.store(ctx, ref, RunResult{
+				save(RunResult{
 					RunID: ref.RunID, DatasetCaseID: testCase.ID, DimensionID: binding.DimensionID,
 					Status:  ResultStatusSkipped,
 					Verdict: map[string]any{"error": "this run's snapshot has no dimension for the binding"},
@@ -598,7 +638,8 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 					for key, value := range turnEvidence {
 						limited.Evidence[key] = value
 					}
-					o.store(ctx, ref, limited)
+					attachTrajectory(&limited, binding.DimensionID, trajectory, &trajectoryHolder)
+					save(limited)
 					continue
 				}
 			}
@@ -606,7 +647,8 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 			for key, value := range turnEvidence {
 				scored.Evidence[key] = value
 			}
-			o.store(ctx, ref, scored)
+			attachTrajectory(&scored, binding.DimensionID, trajectory, &trajectoryHolder)
+			save(scored)
 		}
 
 		done++
@@ -621,7 +663,24 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 	if ctx.Err() == nil {
 		guard.afterLastCase(ctx)
 	}
+	if lost > 0 {
+		return fmt.Errorf("%d result(s) could not be stored, so the scorecard is incomplete", lost)
+	}
 	return nil
+}
+
+// attachTrajectory puts a case's trajectory on the first row written for it and
+// a reference to that row on the others.
+func attachTrajectory(result *RunResult, dimensionID string, trajectory map[string]any, holder *string) {
+	if trajectory == nil {
+		return
+	}
+	if *holder == "" {
+		*holder = dimensionID
+		result.Evidence["trajectory"] = trajectory
+		return
+	}
+	result.Evidence["trajectory_ref"] = *holder
 }
 
 // agentTurnEvidence is what a case's evidence records about the agent turn's
@@ -830,7 +889,7 @@ func substitute(input string, variables map[string]any) string {
 	return out
 }
 
-func (o *Orchestrator) store(ctx context.Context, ref RunRef, result RunResult) {
+func (o *Orchestrator) store(ctx context.Context, ref RunRef, result RunResult) error {
 	if result.Verdict == nil {
 		result.Verdict = map[string]any{}
 	}
@@ -845,7 +904,27 @@ func (o *Orchestrator) store(ctx context.Context, ref RunRef, result RunResult) 
 		o.logger.Error("evaluation: could not store a result",
 			"project_id", ref.ProjectID, "run_id", ref.RunID,
 			"case_id", result.DatasetCaseID, "error", err)
+		return err
 	}
+	return nil
+}
+
+// saveResult stores a result, and when the store refuses it (a value the table
+// cannot hold) stores an error row for the same cell that says so, so the case
+// does not silently disappear from the scorecard. It reports false only when
+// even that row could not be stored; the walk then fails the run.
+func (o *Orchestrator) saveResult(ctx context.Context, ref RunRef, result RunResult) bool {
+	err := o.store(ctx, ref, result)
+	if err == nil {
+		return true
+	}
+	fallback := RunResult{
+		RunID: result.RunID, DatasetCaseID: result.DatasetCaseID, DimensionID: result.DimensionID,
+		Status:   ResultStatusError,
+		Verdict:  map[string]any{"error": "the result could not be stored and was replaced by this error"},
+		Evidence: map[string]any{"error": "the result could not be stored", "store_failed": true},
+	}
+	return o.store(ctx, ref, fallback) == nil
 }
 
 // headline is the plain mean of the NORMALISED scores of the run's `ok`

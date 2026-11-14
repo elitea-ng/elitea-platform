@@ -64,6 +64,12 @@ export const EvalRunStartRequest = zod
       .min(1)
       .max(evalRunStartRequestDimensionIdsMax),
     trigger_type: zod.enum(["on_demand", "offline_batch"]).optional(),
+    execution_mode: zod
+      .string()
+      .optional()
+      .describe(
+        "Overrides the suite's execution mode for this run: `predict_blocking` or `runtime_plane`. Absent keeps the suite's, and a run with no suite is `predict_blocking`. `runtime_plane` needs `application_id`.\n",
+      ),
   })
   .describe(
     "The dimensions are named directly and the server freezes their own defaults into the run's snapshot. `suite_id` optionally names a suite whose limits are frozen into the run too.\n",

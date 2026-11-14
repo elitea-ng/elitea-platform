@@ -485,7 +485,7 @@ describe('useToolkitChat', () => {
     act(() => box.current?.handleIndexData());
     await waitFor(() => expect(box.current?.chatHistory[0]?.id).toBe('index-run-progress'));
 
-    await act(async () => {
+    act(() => {
       box.current?.onCancelIndexing();
     });
 

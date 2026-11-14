@@ -936,7 +936,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 521 -> 527 (issues 2008 and 2013): list/create/update/deleteEvalSuite (run limits) and
 // list/recordEvalHumanScore.
 // 527 -> 528 (issue 2009): enhanceEvalRun, Enhance with AI on a finished evaluation run.
-const GENERATED_OPERATION_COUNT = 528;
+// 528 -> 529 (issue 2012): listRunGuardrailNotices, the chat notice of a
+// blocked, redacted or warned message (see MANIFEST_ENTRY_COUNT).
+const GENERATED_OPERATION_COUNT = 529;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1249,8 +1251,12 @@ const GENERATED_OPERATION_COUNT = 528;
  * 368 -> 370 (issues 2009 and 2011): evaluation.enhanceRun (the Enhance with AI
  * wizard) and analytics.getEvaluationRunAnalytics (a run's consumption card).
  * Both generated.
+ *
+ * 370 -> 371 (issue 2012): chat.listRunGuardrailNotices, the guardrail notice
+ * under a chat answer (features/chat-messages/api/guardrailNoticesApi.ts).
+ * Generated.
  */
-const MANIFEST_ENTRY_COUNT = 370;
+const MANIFEST_ENTRY_COUNT = 371;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

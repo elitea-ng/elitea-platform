@@ -183,3 +183,16 @@ func (g *limitGuard) record(ctx context.Context, which string) {
 		}
 	}
 }
+
+// RuntimeLimitReason answers why a case that is still running as an agent run
+// must be stopped, or "": a per-case token or cost limit, or a per-run limit
+// when the run stops at its run limit (a run that only reports lets the case
+// finish). Both usages are what the gateway attributed so far.
+func RuntimeLimitReason(limits RunLimits, runUsage, caseUsage Usage) string {
+	if limits.OnRunLimit != RunLimitActionReport {
+		if _, reason := runLimitReached(limits, runUsage); reason != "" {
+			return reason
+		}
+	}
+	return caseLimitReason(limits, caseUsage)
+}

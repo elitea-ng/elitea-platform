@@ -1498,6 +1498,17 @@ pub(super) async fn rejection_with_detail(
         Ok(Ok(collected)) => collected.to_bytes(),
         _ => Bytes::new(),
     };
+    // A content guardrail's block (ADR-0043) is its own code: the chat tells
+    // the person which control refused the message instead of a generic
+    // rejection. Only the fact is kept; the body, which names the guardrail
+    // and its labels, is not forwarded.
+    if status == 400 && elitea_llm_wire::refusal::is_guardrail_block(&bytes) {
+        return model_error(
+            ErrorCategory::InvalidInput,
+            elitea_llm_wire::refusal::GUARDRAIL_BLOCKED_CODE,
+            "the model gateway blocked the content",
+        );
+    }
     if let Some(detail) = rejection_detail(&bytes) {
         tracing::warn!(
             event = "model_gateway_rejected_detail",

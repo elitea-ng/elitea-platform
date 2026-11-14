@@ -81,6 +81,7 @@ import type {
   OkResponse,
   ParticipantCandidatesPage,
   RunBriefState,
+  RunGuardrailNotices,
   StaticPipelineContinuationReceipt,
   SteeringMessage,
   SteeringMessageList,
@@ -2185,6 +2186,29 @@ export const getGetWorkspaceHandoffPolicyResponseMock = (
   pull_requests: faker.datatype.boolean(),
   pull_request_approval: faker.datatype.boolean(),
   pull_request_credentials: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getListRunGuardrailNoticesResponseMock = (
+  overrideResponse: Partial<Extract<RunGuardrailNotices, object>> = {},
+): RunGuardrailNotices => ({
+  run_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  notices: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    stage: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    action: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    guardrail: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    detector: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    labels: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    requests: faker.number.int(),
+    first_seen_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
   ...overrideResponse,
 });
 
@@ -4547,6 +4571,32 @@ export const getGetWorkspaceHandoffPolicyMockHandler = (
   );
 };
 
+export const getListRunGuardrailNoticesMockHandler = (
+  overrideResponse?:
+    | RunGuardrailNotices
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<RunGuardrailNotices> | RunGuardrailNotices),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/guardrail_notices/prompt_lib/:projectId/:runId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListRunGuardrailNoticesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getBeginWorkspaceHandoffMockHandler = (
   overrideResponse?:
     | WorkspaceHandoffBegun
@@ -5908,6 +5958,7 @@ export const getChatMock = () => [
   getCommitLocalTurnMockHandler(),
   getUploadLocalTurnScreenshotMockHandler(),
   getGetWorkspaceHandoffPolicyMockHandler(),
+  getListRunGuardrailNoticesMockHandler(),
   getBeginWorkspaceHandoffMockHandler(),
   getGetWorkspaceHandoffMockHandler(),
   getEraseWorkspaceHandoffMockHandler(),

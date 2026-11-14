@@ -1118,6 +1118,42 @@ async fn a_workspace_with_a_running_turn_cannot_be_removed() {
     assert!(h.folder.path().exists(), "the folder itself is untouched");
 }
 
+/// Issue 2012: a content guardrail's block (HTTP 400 `guardrail_blocked`) is its
+/// own refusal code on a Local work turn, not the generic rejection, so the
+/// turn says a guardrail blocked the message. The body, which names the
+/// guardrail, is not echoed.
+#[tokio::test]
+async fn a_guardrail_block_is_its_own_refusal_on_a_local_turn() {
+    let server = serve({
+        let inner = platform(agent_details(), &[]);
+        move |req: &Req| {
+            if req.path == "/llm/v1/chat/completions" {
+                return Res::json(
+                    400,
+                    &json!({"error": {"type": "guardrail_error", "code": "guardrail_blocked",
+                    "message": "content guardrail \"zq-private-name\" detector \"secrets\" blocked the content (stage input)"}}),
+                );
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let error = events.iter().find(|e| e.kind == "error").unwrap();
+    assert_eq!(error.payload["code"], "model_gateway.guardrail_blocked");
+    let text = error.payload.to_string();
+    assert!(
+        text.contains("content guardrail of the platform blocked"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("zq-private-name"),
+        "the guardrail's name is not echoed: {text}"
+    );
+}
+
 #[tokio::test]
 async fn a_model_refusal_is_committed_as_a_failed_turn() {
     let server = serve({
