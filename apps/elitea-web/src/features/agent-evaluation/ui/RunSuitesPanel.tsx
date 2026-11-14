@@ -8,9 +8,10 @@
  * the gateway attributed to the run; they are checked between model calls, so a
  * run can pass a limit by the call that crosses it.
  *
- * ONLY THE CONTROLS THAT DO SOMETHING. Steps, time and tool output limits are
- * not offered: a case is one model call with no tools today, so they would
- * change nothing.
+ * ONLY THE CONTROLS THAT DO SOMETHING. The steps limit, the time limit and the
+ * tool outputs setting appear only when the suite runs agent runs
+ * (SuiteRuntimeControls): a case of the default mode is one model call with no
+ * tools, so they would change nothing.
  *
  * Without the right to start runs the form is read-only: it shows the limits and
  * offers no save.
@@ -40,6 +41,7 @@ import {
   type SuiteForm,
 } from '../lib/suiteForm';
 import { useEvalSuiteMutations } from '../model/useEvalSuites';
+import { SuiteRuntimeControls } from './SuiteRuntimeControls';
 
 const panelSx: SxProps<Theme> = {
   display: 'flex',
@@ -146,6 +148,7 @@ export function RunSuitesPanel(props: RunSuitesPanelProps): ReactNode {
         slotProps={{ htmlInput: { 'data-testid': 'suite-name', maxLength: 128 } }}
         onChange={(event) => set({ name: event.target.value })}
       />
+      <SuiteRuntimeControls form={form} disabled={!canEdit} onChange={set} />
       <LimitField
         label={t('features.agentEvaluation.suites.tokensPerCase', 'Tokens per case')}
         value={form.tokenLimitPerCase}

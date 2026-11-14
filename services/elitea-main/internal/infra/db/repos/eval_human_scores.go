@@ -223,3 +223,30 @@ func (r *EvalRunsRepo) MarkLimitReached(ctx context.Context, projectID, runID, l
 	}
 	return nil
 }
+
+// RecordCaseRun stores the runtime execution a case ran as
+// (tenant/0246 eval_case_runs), so the gateway calls signed with that
+// execution id are attributed to the run and the case. It is idempotent on
+// (run, execution): the orchestrator may report the same admission twice.
+func (r *EvalRunsRepo) RecordCaseRun(ctx context.Context, projectID, runID, caseID, executionID, conversationUUID string) error {
+	schema, err := tenantSchema(projectID)
+	if err != nil {
+		return err
+	}
+	run, err := parseEvalID(runID, "run")
+	if err != nil {
+		return err
+	}
+	caseNumber, err := parseEvalID(caseID, "case")
+	if err != nil {
+		return err
+	}
+	if _, err := r.pool.Exec(ctx, fmt.Sprintf(`
+		INSERT INTO %s.eval_case_runs (run_id, dataset_case_id, execution_id, conversation_uuid)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid)
+		ON CONFLICT (run_id, execution_id) DO NOTHING`, schema),
+		run, caseNumber, executionID, conversationUUID); err != nil {
+		return fmt.Errorf("eval runs: record case run: %w", err)
+	}
+	return nil
+}

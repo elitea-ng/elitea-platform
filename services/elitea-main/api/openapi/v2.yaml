@@ -20718,6 +20718,12 @@ components:
         suite_id:
           type: string
           description: The suite the limits came from. The run never reads the suite again.
+        execution_note:
+          type: string
+          description: >
+            Why the run did not get the execution mode its saved limits asked
+            for (a release gate run measures a frozen agent definition and ran
+            as `predict_blocking`). Absent when the mode is as asked.
 
     EvalRunLimits:
       type: object
@@ -20736,6 +20742,34 @@ components:
             What the run does when its run limit is reached. `stop` ends the
             run as errored with the reason, and `report` lets it finish and only
             records the limit.
+        execution_mode:
+          type: string
+          description: >
+            How the run executes a case: `predict_blocking` (the default, one
+            blocking LLM call) or `runtime_plane` (each case is a real agent run
+            of the pinned version on the worker). The three settings below apply
+            only to `runtime_plane`.
+        step_limit_per_case:
+          type: integer
+          nullable: true
+          description: >
+            Most agent steps (model calls and tool calls) one case may take, 1 to
+            1000. The case's run is cancelled when it is exceeded. Refused on a
+            `predict_blocking` suite.
+        time_limit_per_case_seconds:
+          type: integer
+          nullable: true
+          description: >
+            Wall time one case may take, 1 to 3600 seconds. The case's run is
+            cancelled at the deadline and a timeout result is stored. Without
+            one a case is bounded at 15 minutes. Refused on a `predict_blocking`
+            suite.
+        store_tool_outputs:
+          type: boolean
+          nullable: true
+          description: >
+            Whether a case's stored evidence keeps the tool outputs of its
+            steps. Absent or null reads as true.
 
     EvalRun:
       type: object
@@ -20759,7 +20793,9 @@ components:
             input: no tools, no toolkits, no conversation memory. It is
             returned on every read so a score cannot claim to have measured
             what it did not, and so a later runtime-plane run is distinguishable
-            from these rather than silently re-labelling them.
+            from these rather than silently re-labelling them. `runtime_plane`
+            runs each case as a real agent run on the worker; its results carry
+            the run's steps in `evidence.trajectory`.
         snapshot: { $ref: '#/components/schemas/EvalRunSnapshot' }
         progress:
           type: object
@@ -20818,6 +20854,12 @@ components:
           minItems: 1
           maxItems: 5
         trigger_type: { type: string, enum: [on_demand, offline_batch] }
+        execution_mode:
+          type: string
+          description: >
+            Overrides the suite's execution mode for this run: `predict_blocking`
+            or `runtime_plane`. Absent keeps the suite's, and a run with no suite
+            is `predict_blocking`. `runtime_plane` needs `application_id`.
       required: [dataset_id, application_version_id, dimension_ids]
       additionalProperties: false
 
@@ -20880,6 +20922,34 @@ components:
         on_run_limit:
           type: string
           description: '`stop` or `report`.'
+        execution_mode:
+          type: string
+          description: >
+            How the run executes a case: `predict_blocking` (the default, one
+            blocking LLM call) or `runtime_plane` (each case is a real agent run
+            of the pinned version on the worker). The three settings below apply
+            only to `runtime_plane`.
+        step_limit_per_case:
+          type: integer
+          nullable: true
+          description: >
+            Most agent steps (model calls and tool calls) one case may take, 1 to
+            1000. The case's run is cancelled when it is exceeded. Refused on a
+            `predict_blocking` suite.
+        time_limit_per_case_seconds:
+          type: integer
+          nullable: true
+          description: >
+            Wall time one case may take, 1 to 3600 seconds. The case's run is
+            cancelled at the deadline and a timeout result is stored. Without
+            one a case is bounded at 15 minutes. Refused on a `predict_blocking`
+            suite.
+        store_tool_outputs:
+          type: boolean
+          nullable: true
+          description: >
+            Whether a case's stored evidence keeps the tool outputs of its
+            steps. Absent or null reads as true.
         created_at: { type: string }
         updated_at: { type: string }
       required: [id, name, on_run_limit]
@@ -20909,6 +20979,34 @@ components:
         on_run_limit:
           type: string
           description: '`stop` ends the run as errored when its run limit is reached; `report` only records it.'
+        execution_mode:
+          type: string
+          description: >
+            How the run executes a case: `predict_blocking` (the default, one
+            blocking LLM call) or `runtime_plane` (each case is a real agent run
+            of the pinned version on the worker). The three settings below apply
+            only to `runtime_plane`.
+        step_limit_per_case:
+          type: integer
+          nullable: true
+          description: >
+            Most agent steps (model calls and tool calls) one case may take, 1 to
+            1000. The case's run is cancelled when it is exceeded. Refused on a
+            `predict_blocking` suite.
+        time_limit_per_case_seconds:
+          type: integer
+          nullable: true
+          description: >
+            Wall time one case may take, 1 to 3600 seconds. The case's run is
+            cancelled at the deadline and a timeout result is stored. Without
+            one a case is bounded at 15 minutes. Refused on a `predict_blocking`
+            suite.
+        store_tool_outputs:
+          type: boolean
+          nullable: true
+          description: >
+            Whether a case's stored evidence keeps the tool outputs of its
+            steps. Absent or null reads as true.
       required: [name]
       additionalProperties: false
 

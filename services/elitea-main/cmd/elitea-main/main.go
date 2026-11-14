@@ -2087,6 +2087,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// and for the same typed-nil reason. `tools/call` runs an agent through the
 	// SAME use case; left nil it keeps answering the refusal it always has.
 	var mcpAgentStart v2mcp.AgentStartUseCase
+	// The evaluation runtime_plane mode's half of the same wiring: the chat
+	// start and stop use cases, assigned under the same guard and for the same
+	// typed-nil reason.
+	var evalAgentStart agentexecutionapi.StartUseCase
+	var evalAgentCancel agentexecutionapi.CurrentAgentCanceller
 	var mcpToolkitExecute v2mcp.ToolkitExecuteReadUseCase
 	// The tool-run halves, assigned ONLY inside the guard below and for the
 	// same typed-nil reason: a nil concrete value in a non-nil interface reads
@@ -2391,6 +2396,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			workspaceTurnStarter.bind(publicRoutes.AgentStart)
 			supportAssistantStart = publicRoutes.AgentStart
 			mcpAgentStart = publicRoutes.AgentStart
+			evalAgentStart = publicRoutes.AgentStart
 			childAgentStart = publicRoutes.AgentStart
 			credentialAuthorizationContinuer = publicRoutes.AgentStart
 			// The pipeline trigger and schedule handler. It runs pipelines
@@ -2493,6 +2499,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// The cloud turn canceller of the workspace handoff (ADR-0034):
 			// the same stop use case the chat's DELETE route drives.
 			workspaceTurnCanceller.bind(publicRoutes.AgentCancel)
+			evalAgentCancel = publicRoutes.AgentCancel
 			currentAgentCancel, err = agentexecutionapi.NewCurrentAgentCancelRoute(
 				publicRoutes.AgentCancel,
 				apiGroupAuth,
@@ -2757,6 +2764,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// The run limits (issue 2013) are enforced from the usage the gateway
 		// attributed to the run, which the analytics repository reads.
 		orchestrator.WithUsage(dbrepos.NewAnalyticsRepo(pool))
+		// runtime_plane runs execute each case as an agent run through the
+		// chat start use case (issue 2011 step B). Without a runtime plane the
+		// runner stays unset, and such a run errors with the reason.
+		if runner := composeEvalAgentRunner(pool, objectStore, evalAgentStart, evalAgentCancel,
+			dbrepos.NewAnalyticsRepo(pool), legacyrbac.NewPostgresResolver(pool), logger); runner != nil {
+			orchestrator.WithAgentRunner(runner)
+		}
 		// Started with the PROCESS context, so the workers and the recovery
 		// sweep stop on SIGTERM. A run in flight then hands its row back to
 		// `created`, and the next process resumes it at startup; a process

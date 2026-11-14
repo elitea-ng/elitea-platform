@@ -205,7 +205,7 @@ describe('EvaluationRunsView', () => {
 
     await userEvent.click(await screen.findByTestId('run-dimension-3'));
     // The MUI select is a listbox, not a native <select>.
-    await userEvent.click(screen.getByRole('combobox'));
+    await userEvent.click(screen.getByRole('combobox', { name: 'Dataset' }));
     await userEvent.click(await screen.findByRole('option', { name: 'Support' }));
     await userEvent.click(screen.getByTestId('run-start'));
 
@@ -244,7 +244,7 @@ describe('EvaluationRunsView', () => {
     );
 
     await userEvent.click(await screen.findByTestId('run-dimension-3'));
-    await userEvent.click(screen.getByRole('combobox'));
+    await userEvent.click(screen.getByRole('combobox', { name: 'Dataset' }));
     await userEvent.click(await screen.findByRole('option', { name: 'Support' }));
     await userEvent.click(screen.getByTestId('run-start'));
 
@@ -483,18 +483,18 @@ describe('EvaluationRunsView', () => {
 
     // 2. A dataset with no cases: a run over nothing finishes instantly with no
     //    headline, which reads as a broken agent.
-    await userEvent.click(screen.getByRole('combobox'));
+    await userEvent.click(screen.getByRole('combobox', { name: 'Dataset' }));
     await userEvent.click(await screen.findByRole('option', { name: 'Empty set' }));
     expect(screen.getByTestId('run-start-error')).toHaveTextContent('has no cases');
 
     // 2b. Cases, every one excluded. The server refuses this start with a 422;
     //     the form says so first instead of offering a button that always fails.
-    await userEvent.click(screen.getByRole('combobox'));
+    await userEvent.click(screen.getByRole('combobox', { name: 'Dataset' }));
     await userEvent.click(await screen.findByRole('option', { name: 'Excluded set' }));
     expect(screen.getByTestId('run-start-error')).toHaveTextContent('Every case in this dataset is excluded');
 
     // 3. A usable dataset, but nothing to score against.
-    await userEvent.click(screen.getByRole('combobox'));
+    await userEvent.click(screen.getByRole('combobox', { name: 'Dataset' }));
     await userEvent.click(await screen.findByRole('option', { name: 'Full set' }));
     expect(screen.getByTestId('run-start-error')).toHaveTextContent('at least one dimension');
 

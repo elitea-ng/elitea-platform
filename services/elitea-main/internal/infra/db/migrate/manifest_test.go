@@ -1430,7 +1430,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// settings and limits), the append-only eval_human_scores and the
 	// eval_runs.limit_reached column (issues 2008, 2013). The
 	// tenant history is numbered with the shared one at merge. No permission.
-	require.EqualValues(t, 244, Head(tenant))
+	//
+	// 246: tenant/0246_eval_runtime_plane.sql, the runtime_plane execution
+	// mode and its per-case limits on eval_suites, and eval_case_runs, the
+	// execution each case ran as (issues 2011 step B, 2013 step 2). No
+	// permission.
+	require.EqualValues(t, 246, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
