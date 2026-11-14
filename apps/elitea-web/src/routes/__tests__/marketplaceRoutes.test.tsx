@@ -105,9 +105,9 @@ describe.each(['/elitea-catalog', '/agents-hub'])('%s redirects to the Marketpla
     expect(router.state.location.pathname).toBe('/marketplace/agents/app-1');
   });
 
-  it('keeps the kind and the id together: ?tab=skills&agentId= opens the skill listing', async () => {
+  it('treats agentId as an agent id whatever the tab says', async () => {
     const router = await loadAt(`${legacy}?tab=skills&agentId=7`);
-    expect(router.state.location.pathname).toBe('/marketplace/skills/7');
+    expect(router.state.location.pathname).toBe('/marketplace/agents/7');
   });
 
   it('keeps the legacy tab=agents deep link shape (?tab=agents&agentId=)', async () => {

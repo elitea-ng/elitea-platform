@@ -51,7 +51,7 @@ export function Marketplace(): ReactNode {
   // What the server is asked: it trails the box by `SEARCH_DEBOUNCE_MS`.
   const [submittedQuery, setSubmittedQuery] = useState('');
   const [sortKey, setSortKey] = useState('newest');
-  // Remembered with its kind, so a switch to the other kind starts with no category and Back restores nothing stale.
+  // Remembered with its kind, so a switch to the other kind starts with no category (switching back restores the earlier pick).
   const [picked, setPicked] = useState<PickedCategories>({ kind, names: [] });
   const selectedCategories = picked.kind === kind ? picked.names : [];
 

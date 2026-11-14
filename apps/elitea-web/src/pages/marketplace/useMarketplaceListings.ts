@@ -107,8 +107,9 @@ export interface MarketplaceRequest {
 function useAgentListings(query: string, sortKey: string, enabled: boolean): MarketplaceListings {
   const rows = useAgentRows(query, sortKey, enabled);
   const categories = useGetAgentCategories(resolvePublicProjectId(), { query: { enabled } });
-  const names = categories.data?.status === 200 ? categories.data.data.categories : [];
+  const body = categories.data?.status === 200 ? categories.data.data : undefined;
   return useMemo(() => {
+    const names = body?.categories ?? [];
     const cards = (rows.data?.rows ?? []).map(agentCard);
     return {
       cards,
@@ -117,7 +118,7 @@ function useAgentListings(query: string, sortKey: string, enabled: boolean): Mar
       isPending: rows.isPending,
       isError: rows.isError,
     };
-  }, [rows.data, rows.isPending, rows.isError, names]);
+  }, [rows.data, rows.isPending, rows.isError, body]);
 }
 
 /** The skill side of the page: the rows with a published version as cards, sorted here, and the skill categories. */
