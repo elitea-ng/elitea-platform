@@ -8,11 +8,13 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { cardGradientSx } from '@/shared/lib/cardGradient';
 import { t } from '@/shared/i18n';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 
 import { EntityCardAuthors } from './EntityCardAuthors';
 import { EntityCardTags } from './EntityCardTags';
 import type { EntityListItem, EntityListTag } from './model';
 import { useEntityRowSlot } from './rowSlot';
+import { useSelectableRow } from './selection';
 
 /**
  * One entity card in a list page's grid — the port of
@@ -55,20 +57,22 @@ export interface EntityCardProps {
 }
 
 export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestId = 'entity-card' }: EntityCardProps): ReactNode {
-  const authors = item.authors ?? [];
-  const tags = item.tags ?? [];
-  const hasBottomDivider = authors.length > 0 && tags.length > 0;
-
-  const activate = (): void => {
-    item.onClick?.();
-  };
+  const row = useSelectableRow(item.id, item.onClick);
 
   return (
     <Box
       data-testid={dataTestId}
-      onClick={activate}
-      sx={cardSx(item.onClick !== undefined)}
+      data-selected={row.selected ? 'true' : undefined}
+      onClick={row.activate}
+      sx={cardSx(item.onClick !== undefined, row.selected)}
     >
+      {row.selectable && (
+        <CardSelectBox
+          name={item.name}
+          selected={row.selected}
+          onToggle={row.toggle}
+        />
+      )}
       <CardCorner
         item={item}
         actions={actions}
@@ -99,6 +103,20 @@ export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestI
           </Typography>
         </Tooltip>
       </Box>
+      <CardBottomRow
+        item={item}
+        {...(onTagClick === undefined ? {} : { onTagClick })}
+      />
+    </Box>
+  );
+}
+
+/** The card's bottom row: the author avatars and tag chips, then the status badge and the fork marker. */
+function CardBottomRow({ item, onTagClick }: { readonly item: EntityListItem; readonly onTagClick?: (tag: EntityListTag) => void }): ReactNode {
+  const authors = item.authors ?? [];
+  const tags = item.tags ?? [];
+  const hasBottomDivider = authors.length > 0 && tags.length > 0;
+  return (
       <Box sx={bottomRowSx}>
         <Box sx={bottomLeftSx}>
           <EntityCardAuthors authors={authors} />
@@ -115,6 +133,16 @@ export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestI
             {...(onTagClick === undefined ? {} : { onTagClick })}
           />
         </Box>
+        {item.badge !== undefined && (
+          <Typography
+            component="span"
+            variant="labelSmall"
+            data-testid="entity-card-status"
+            sx={badgeSx}
+          >
+            {item.badge}
+          </Typography>
+        )}
         {item.forkedFrom !== undefined && (
           /*
            * #915, corrected: a MARKER, not a control.
@@ -146,6 +174,26 @@ export function EntityCard({ item, actions, onTagClick, 'data-testid': dataTestI
           </Tooltip>
         )}
       </Box>
+  );
+}
+
+/** The selection checkbox in a card's top-left corner. Its clicks never reach the card behind it. */
+function CardSelectBox({ name, selected, onToggle }: { readonly name: string; readonly selected: boolean; readonly onToggle: () => void }): ReactNode {
+  return (
+    <Box
+      data-entity-select=""
+      sx={selectBoxSx(selected)}
+      onClick={(event) => {
+        event.stopPropagation();
+      }}
+    >
+      <BaseCheckbox
+        size="small"
+        checked={selected}
+        data-testid="entity-card-select"
+        aria-label={t('shared.entityList.select', 'Select {{name}}', { name })}
+        onChange={onToggle}
+      />
     </Box>
   );
 }
@@ -162,19 +210,33 @@ function CardCorner({ item, actions }: { readonly item: EntityListItem; readonly
   );
 }
 
-function cardSx(clickable: boolean): SxProps<Theme> {
+function cardSx(clickable: boolean, selected: boolean): SxProps<Theme> {
   return (theme: Theme) => ({
     ...cardGradientSx(theme),
+    ...(selected ? { outline: `0.125rem solid ${theme.vars.palette.border.flowNode}`, outlineOffset: '-0.125rem' } : {}),
     boxSizing: 'border-box',
     width: '100%',
     height: '7rem',
     display: 'flex',
     flexDirection: 'column',
     cursor: clickable ? 'pointer' : 'default',
+    '&:hover [data-entity-select]': { opacity: 1 },
     '&:has([data-entity-card-open]:focus-visible)': {
       outline: `0.125rem solid ${theme.vars.palette.border.lines}`,
       outlineOffset: '0.125rem',
     },
+  });
+}
+
+/** The selection checkbox: in the card's top-left corner, drawn while the card is hovered, focused or selected. */
+function selectBoxSx(selected: boolean): SxProps<Theme> {
+  return (theme: Theme) => ({
+    position: 'absolute',
+    top: theme.spacing(0.25),
+    left: theme.spacing(0.25),
+    zIndex: 1,
+    opacity: selected ? 1 : 0,
+    '&:focus-within': { opacity: 1 },
   });
 }
 
@@ -282,6 +344,18 @@ const sectionDividerSx: SxProps<Theme> = { height: '0.9375rem', alignSelf: 'cent
 const forkedFromSx: SxProps<Theme> = (theme: Theme) => ({
   flexShrink: 0,
   alignSelf: 'center',
+  color: theme.vars.palette.text.secondary,
+  whiteSpace: 'nowrap',
+});
+
+/** The status badge: a pill with its word in it, in the bottom row's right-hand slot. */
+const badgeSx: SxProps<Theme> = (theme: Theme) => ({
+  flexShrink: 0,
+  alignSelf: 'center',
+  paddingInline: theme.spacing(1),
+  paddingBlock: theme.spacing(0.25),
+  borderRadius: theme.vars.shape.radiusPill,
+  border: `1px solid ${theme.vars.palette.border.lines}`,
   color: theme.vars.palette.text.secondary,
   whiteSpace: 'nowrap',
 });

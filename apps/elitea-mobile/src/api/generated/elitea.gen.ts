@@ -2546,11 +2546,23 @@ export interface components {
         };
         /** @description NOTE(W2): internal/domain/applications/types.go:86-92 (ListResponse), marshaled directly by List (internal/api/v2/applications/handler.go:101-107). */
         ApplicationList: {
+            facets?: components["schemas"]["ApplicationListFacets"];
             page: number;
             page_size: number;
             rows: components["schemas"]["Application"][];
             total: number;
             total_pages: number;
+        };
+        /** @description The counts behind the Workshop's status and origin filters. Each count honours every list filter except the status and origin filters themselves (internal/domain/applications/types.go ListFacets). */
+        ApplicationListFacets: {
+            /** @description Agents per origin (`own`, `forked`); only origins that occur are keys. */
+            origins: {
+                [key: string]: number;
+            };
+            /** @description Agents per publish state (`draft`, `published`); only states that occur are keys. */
+            statuses: {
+                [key: string]: number;
+            };
         };
         /** @description NOTE(W2): internal/api/v2/applicationskills/handler.go:45-51, CurrentApplicationSkill. */
         ApplicationSkillAttachment: {
@@ -5926,8 +5938,12 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 /** @description Number of items to skip before starting to collect results */
                 offset?: components["parameters"]["Offset"];
+                /** @description Narrows the list to agents the project owns (`own`) or that came from a fork (`forked`). The `facets.origins` counts ignore this filter. */
+                origin?: string;
                 /** @description Search text (preferred over `search` by the handler). */
                 query?: string;
+                /** @description Narrows the list to agents in one publish state, `draft` or `published`: the state each row reports in `status`. The `facets.statuses` counts ignore this filter. */
+                status?: string;
                 /** @description Comma-separated tag filter. Each entry matches a tag NAME or a tag ID. The entries combine with AND: a listed application carries every named tag on one of its versions. Blank entries are ignored (repos/applications.go splitTagFilter). */
                 tags?: string;
             };

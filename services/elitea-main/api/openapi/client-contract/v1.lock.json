@@ -6391,7 +6391,17 @@
             "minimum": 0
           }
         },
+        "query:origin": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "query:query": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "query:status": {
           "schema": {
             "type": "string"
           }
@@ -6415,6 +6425,23 @@
                 "total_pages"
               ],
               "properties": {
+                "facets": {
+                  "type": "object",
+                  "required": [
+                    "origins",
+                    "statuses"
+                  ],
+                  "properties": {
+                    "origins": {
+                      "type": "object",
+                      "open": true
+                    },
+                    "statuses": {
+                      "type": "object",
+                      "open": true
+                    }
+                  }
+                },
                 "page": {
                   "type": "integer"
                 },

@@ -154,7 +154,8 @@ test('J16d: the dashboard lists a pipeline the API created, and the search box n
   created.push(pipeline);
 
   await openPipelinesList(page);
-  await expect(page.getByRole('tablist', { name: 'Pipelines' })).toBeVisible();
+  await expect(page.getByTestId('pipeline-list-sidebar')).toBeVisible();
+  await expect(page.getByRole('tablist', { name: 'Pipelines' })).toHaveCount(0);
 
   const row = cards(page).filter({ hasText: name });
   await expect(row, 'a pipeline created through the API must appear on the dashboard').toHaveCount(1, {

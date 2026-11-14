@@ -50,6 +50,14 @@ func (req *ListRequest) ValidateList() error {
 		}
 		req.Statuses[i] = status
 	}
+	req.Status = strings.ToLower(strings.TrimSpace(req.Status))
+	if req.Status != "" && req.Status != "draft" && req.Status != "published" {
+		return apierr.BadRequest("status must be draft or published")
+	}
+	req.Origin = strings.ToLower(strings.TrimSpace(req.Origin))
+	if req.Origin != "" && req.Origin != "own" && req.Origin != "forked" {
+		return apierr.BadRequest("origin must be own or forked")
+	}
 	req.AgentsType = strings.ToLower(strings.TrimSpace(req.AgentsType))
 	switch req.AgentsType {
 	case "", "all", "classic", "pipeline":

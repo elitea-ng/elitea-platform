@@ -286,8 +286,8 @@ const ROUTES: readonly VisualRoute[] = [
     // @covers /agents/:tab
     name: 'agents-list-empty',
     path: '/app/agents/latest',
-    // The empty state, NOT `getByTestId('agents-tab-all')`. Measured: the tab
-    // strip renders during load (loaded YES, stalled YES) — it is chrome. The
+    // The empty state, NOT the sidebar's search box. Measured: the list's
+    // controls render during load (loaded YES, stalled YES) — they are chrome. The
     // empty-state copy renders only from a resolved, empty list: loaded YES,
     // stalled no.
     landmark: (page) => page.getByText('No agents yet'),

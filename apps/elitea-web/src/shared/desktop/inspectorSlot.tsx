@@ -15,7 +15,7 @@
  *
  * Outside the desktop frame there is no inspector. The web shell has a side panel of its own (`widgets/app-shell`'s
  * `WebSidePanel`) with the same contract, so a page that only needs "a right
- * panel, wherever this build keeps it" — the list pages' Filters, the chat's
+ * panel, wherever this build keeps it" — the list pages' List and Filters, the chat's
  * Conversation — reads `useSidePanelSlot()` instead: the desktop inspector or
  * the web side panel, `null` only where neither exists (a unit test).
  * `<InspectorTab>` registers there.
@@ -26,7 +26,7 @@ import { createPortal } from 'react-dom';
 import { ThemeProvider, type Theme } from '@mui/material/styles';
 
 /** Every tab a page can contribute. Ids are unique across pages, so a tab id names its page too. */
-export type InspectorTabId = 'changes' | 'approvals' | 'plan' | 'processes' | 'index' | 'context' | 'browser' | 'conversation' | 'cloud-browser' | 'filters';
+export type InspectorTabId = 'changes' | 'approvals' | 'plan' | 'processes' | 'index' | 'context' | 'browser' | 'conversation' | 'cloud-browser' | 'filters' | 'list';
 
 /** The kind of page an inspector belongs to: the layout (groups, widths) is remembered per kind. `browse`: the list pages (their Filters). */
 export type InspectorPage = 'local' | 'chat' | 'browse';
@@ -42,6 +42,7 @@ export const INSPECTOR_TAB_PAGE: Readonly<Record<InspectorTabId, InspectorPage>>
   conversation: 'chat',
   'cloud-browser': 'chat',
   filters: 'browse',
+  list: 'browse',
 };
 
 /** What a page says about one of its tabs. */
@@ -75,8 +76,10 @@ export const InspectorSlotProvider = InspectorSlotContext.Provider;
 
 /** The right panel of whichever shell is on screen: the desktop inspector or the web side panel. */
 export interface SidePanelSlot extends InspectorSlot {
-  /** Opens the panel on `tab` (the toolbar's Filters button). */
+  /** Opens the panel on `tab` (the toolbar's Filters button, the `/` shortcut). */
   readonly show: (tab: InspectorTabId) => void;
+  /** The panel covers the page instead of sitting beside it (the web side panel below 1024px): a page's summary bar stays on screen. */
+  readonly overlay?: boolean;
 }
 
 const SidePanelSlotContext = createContext<SidePanelSlot | null>(null);

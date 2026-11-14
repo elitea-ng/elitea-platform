@@ -7,8 +7,11 @@
  * panel shows the active tab of the tabs offered; the newest registration of a
  * tab wins, as in the frame.
  *
- * Open or closed is remembered per viewer (`el.sidePanel.open`); with nothing
- * remembered it is open on a wide window (≥1440px: at 1280px the 248px rail
+ * Open or closed is remembered per viewer AND per page (`el.sidePanel.open.<first
+ * tab the page offers>`: a list's List tab, the chat's Conversation), so closing
+ * it on the agents list leaves the chat's panel alone; a choice made before it
+ * was per page (`el.sidePanel.open`) still answers for a page with none of its
+ * own. With nothing remembered it is open on a wide window (≥1440px: at 1280px the 248px rail
  * and the 320px panel left the page 712px, too narrow for a list's toolbar,
  * whose search folded and whose primary action was cut off). Below 1024px the panel is
  * a temporary drawer over the page, opened only on request and never
@@ -24,23 +27,27 @@ import { createStorage } from '@/shared/lib/storage';
 
 const OPEN_KEY = 'sidePanel.open';
 
+/** The remembered choice of one page; the key it was kept under before it was per page answers when the page has none. */
+const pageKey = (page: string): string => `${OPEN_KEY}.${page}`;
+
 /** A drawer over the page below this width. */
 const SIDE_PANEL_NARROW_QUERY = '(max-width: 1023.95px)';
 /** Open by default from this width, when the viewer never chose. */
 const SIDE_PANEL_WIDE_QUERY = '(min-width: 1440px)';
 
-function readStoredOpen(): boolean | null {
+function readStoredOpen(page: string): boolean | null {
   try {
-    const raw = createStorage('local').get(OPEN_KEY);
+    const storage = createStorage('local');
+    const raw = (page === '' ? null : storage.get(pageKey(page))) ?? storage.get(OPEN_KEY);
     return raw === 'true' ? true : raw === 'false' ? false : null;
   } catch {
     return null;
   }
 }
 
-function writeStoredOpen(open: boolean): void {
+function writeStoredOpen(page: string, open: boolean): void {
   try {
-    createStorage('local').set(OPEN_KEY, String(open));
+    createStorage('local').set(page === '' ? OPEN_KEY : pageKey(page), String(open));
   } catch {
     // Not remembered.
   }
@@ -65,7 +72,7 @@ export interface WebSidePanelHost {
 export function useWebSidePanelHost(): WebSidePanelHost {
   const narrow = useMediaQuery(SIDE_PANEL_NARROW_QUERY);
   const wide = useMediaQuery(SIDE_PANEL_WIDE_QUERY);
-  const [storedOpen, setStoredOpen] = useState<boolean | null>(readStoredOpen);
+  const [choices, setChoices] = useState<ReadonlyMap<string, boolean>>(new Map());
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [stack, registrations] = useRegistrationStack<InspectorTabInfo>();
   const [chosen, setChosen] = useState<InspectorTabId | null>(null);
@@ -80,6 +87,9 @@ export function useWebSidePanelHost(): WebSidePanelHost {
   }, [registrations]);
 
   const active = tabs.find((info) => info.id === chosen)?.id ?? tabs[0]?.id ?? null;
+  // The page is named by the first tab it offers, which a tab switch inside the panel does not change.
+  const page = tabs[0]?.id ?? '';
+  const storedOpen = choices.get(page) ?? readStoredOpen(page);
   const open = narrow ? drawerOpen : (storedOpen ?? wide);
   const shown = open && active !== null;
 
@@ -89,10 +99,10 @@ export function useWebSidePanelHost(): WebSidePanelHost {
         setDrawerOpen(next);
         return;
       }
-      setStoredOpen(next);
-      writeStoredOpen(next);
+      setChoices((current) => new Map(current).set(page, next));
+      writeStoredOpen(page, next);
     },
-    [narrow],
+    [narrow, page],
   );
 
   const show = useCallback(
@@ -109,6 +119,6 @@ export function useWebSidePanelHost(): WebSidePanelHost {
     return map;
   }, [shown, body, active]);
 
-  const slot = useMemo<SidePanelSlot>(() => ({ register, targets, show }), [register, targets, show]);
+  const slot = useMemo<SidePanelSlot>(() => ({ register, targets, show, overlay: narrow }), [register, targets, show, narrow]);
   return { slot, tabs, active, shown, narrow, activate: setChosen, setOpen, setBody };
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import {
@@ -10,6 +10,7 @@ import { getPermissionListMockHandler } from '@/shared/api/generated/auth/auth.m
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
+import { SidePanelHarness } from '@/test/sidePanelHarness';
 
 import { Pipelines } from './Pipelines';
 import { renderPipelinesRoute } from './__tests__/testRouter';
@@ -72,12 +73,13 @@ describe('Pipelines', () => {
     expect(await screen.findByTestId('pipelines-tab-admin')).toBeInTheDocument();
   });
 
-  it('shows only the single "All" tab on a private project', async () => {
+  it('shows no tabs on a private project: its pipelines are one list (ADR-0051)', async () => {
     setConfig('1');
     renderPipelinesRoute(<Pipelines />, '/pipelines/all', { projectId: '9' });
 
-    expect(await screen.findByTestId('pipelines-tab-all')).toBeInTheDocument();
-    expect(screen.queryByTestId('pipelines-tab-drafts')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('pipeline-summary-bar')).toBeInTheDocument();
+    expect(screen.queryByTestId('pipelines-tab-all')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('page-toolbar')).not.toBeInTheDocument();
   });
 
   it("clicking a tab navigates to its :tab URL", async () => {
@@ -138,14 +140,14 @@ describe('Pipelines', () => {
     expect(await screen.findByText('Latest (2)')).toBeInTheDocument();
   });
 
-  /** COMPOSITION ROOT — see `pages/agents/Applications.test.tsx` (issue 841). */
-  it('renders its tabs and its import control inside the page toolbar, and no heading of its own', async () => {
-    renderPipelinesRoute(<Pipelines />, '/pipelines/all', { projectId: '9' });
+  /** COMPOSITION ROOT — see `pages/agents/Applications.test.tsx` (ADR-0051 M1). */
+  it('renders its search and import control inside the List tab, with no toolbar row and no heading of its own', async () => {
+    renderPipelinesRoute(<SidePanelHarness><Pipelines /></SidePanelHarness>, '/pipelines/all', { projectId: '9' });
 
-    const toolbar = await screen.findByTestId('page-toolbar');
-    expect(toolbar).toContainElement(await screen.findByTestId('pipelines-tab-all'));
-    expect(toolbar).toContainElement(screen.getByRole('tablist', { name: 'Pipelines' }));
-    expect(toolbar).toContainElement(screen.getByTestId('pipelines-import-button'));
+    const tab = await screen.findByTestId('side-panel-tab-list');
+    expect(await within(tab).findByTestId('pipeline-search-input')).toBeInTheDocument();
+    expect(within(tab).getByTestId('pipelines-import-button')).toBeInTheDocument();
+    expect(screen.queryByTestId('page-toolbar')).toBeNull();
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
@@ -157,7 +159,8 @@ describe('Pipelines', () => {
     const visited: string[] = [];
     router.subscribe('onBeforeNavigate', (event) => visited.push(event.toLocation.pathname));
 
-    await user.click(await screen.findByRole('button', { name: 'New pipeline' }));
+    const bar = await screen.findByTestId('pipeline-summary-bar');
+    await user.click(await within(bar).findByRole('button', { name: 'New pipeline' }));
 
     // The fixture renders this page on every route, so the create route's own page is not there to stay on.
     await waitFor(() => expect(visited).toContain('/pipelines/create'));
@@ -166,8 +169,9 @@ describe('Pipelines', () => {
   it('offers no create action without the create permission', async () => {
     renderPipelinesRoute(<Pipelines />, '/pipelines/all', { projectId: '9' });
 
-    await screen.findByTestId('page-toolbar');
+    await screen.findByTestId('pipeline-summary-bar');
     expect(screen.queryByTestId('pipelines-create')).toBeNull();
+    expect(screen.queryByTestId('pipelines-create-summary')).toBeNull();
   });
 });
 
@@ -176,17 +180,17 @@ describe('Pipelines', () => {
  * `pages/agents/Applications.test.tsx` for the same three claims and why they
  * cannot be made by a component test.
  */
-describe('Pipelines — header controls', () => {
-  it('mounts the search box and the view toggle on a tab that has a list', async () => {
+describe('Pipelines — list controls', () => {
+  it('mounts the search box and the view toggle in the List tab', async () => {
     setConfig('1');
-    renderPipelinesRoute(<Pipelines />, '/pipelines/all', { projectId: '2' });
+    renderPipelinesRoute(<SidePanelHarness><Pipelines /></SidePanelHarness>, '/pipelines/all', { projectId: '2' });
 
     expect(await screen.findByTestId('pipeline-search-input')).toBeInTheDocument();
     expect(screen.getByTestId('pipeline-table-view-button')).toBeInTheDocument();
     expect(screen.getByTestId('pipeline-card-view-button')).toBeInTheDocument();
   });
 
-  it('hands the typed query to the tab body, which sends it to the server', async () => {
+  it('hands the typed query to the list, which sends it to the server', async () => {
     setConfig('1');
     const seen: (string | null)[] = [];
     server.use(
@@ -196,7 +200,7 @@ describe('Pipelines — header controls', () => {
       }),
     );
     const user = userEvent.setup();
-    renderPipelinesRoute(<Pipelines />, '/pipelines/all', { projectId: '2' });
+    renderPipelinesRoute(<SidePanelHarness><Pipelines /></SidePanelHarness>, '/pipelines/all', { projectId: '2' });
 
     await user.type(await screen.findByTestId('pipeline-search-input'), 'alpha');
 

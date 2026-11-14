@@ -22,3 +22,4 @@ export { PermissionTrimmingTable, trimmingItemKey } from './ui/PermissionTrimmin
 export { credentialReviewErrorMessage } from './api/trimmingApi';
 export { RequestPublishDialog } from './ui/RequestPublishDialog';
 export { useAgentRegistry } from './api/governanceApi';
+export { workshopList } from './lib/workshopList';

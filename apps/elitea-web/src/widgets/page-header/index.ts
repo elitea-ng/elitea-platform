@@ -17,3 +17,8 @@ export type { PageSearchProps } from './ui/PageSearch';
 export { ListViewToggle } from './ui/ListViewToggle';
 export type { ListViewToggleProps } from './ui/ListViewToggle';
 export { readPersistedListView, writePersistedListView } from './lib/listViewPersistence';
+
+/** The Workshop's right sidebar (a List tab with every control), its summary bar and its selection section (ADR-0051). */
+export { EntityListSidebar } from './ui/EntityListSidebar';
+export { ListSelectionSection } from './ui/ListSelectionSection';
+export { useListSelection } from './lib/useListSelection';

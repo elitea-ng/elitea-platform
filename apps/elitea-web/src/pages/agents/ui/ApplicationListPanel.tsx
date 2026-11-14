@@ -32,6 +32,8 @@ export interface ApplicationListRow {
   readonly authors?: readonly { readonly id?: string; readonly name: string; readonly avatar?: string; readonly deleted?: boolean }[];
   readonly tags?: readonly string[];
   readonly createdAt?: string;
+  /** The status as a word (Draft, Published): the card's badge and the table's Status column. */
+  readonly badge?: string;
   /** #1995 — the uploaded icon (`meta.icon_meta.url`); the agent glyph when absent. */
   readonly iconUrl?: string;
   /**
@@ -94,6 +96,7 @@ export function ApplicationListPanel({
         authors: row.authors ?? [],
         tags: (row.tags ?? []).map((tag) => ({ id: tag, name: tag })),
         ...(row.createdAt === undefined ? {} : { createdAt: row.createdAt }),
+        ...(row.badge === undefined ? {} : { badge: row.badge }),
         onClick: () => {
           onSelect(row.id);
         },

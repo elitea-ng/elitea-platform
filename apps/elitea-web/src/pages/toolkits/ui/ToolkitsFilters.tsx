@@ -1,59 +1,44 @@
 import type { ReactNode } from 'react';
 
-import Box from '@mui/material/Box';
-
 import { t } from '@/shared/i18n';
-import { filtersPanelSx, RailTagsPanelView } from '@/shared/ui/EntityRail';
-import { SidePanelTab } from '@/shared/ui/side-panel';
+import { RailTagsPanelView } from '@/shared/ui/EntityRail';
 
 import { ToolkitsAuthorCard } from './ToolkitsAuthorCard';
 
 /**
- * The toolkits / MCPs list's Filters tab in the shell's side panel: the
- * "Types" filter over the loaded rows, then the viewer's author card. The
- * same panel the other list pages show (`shared/ui/EntityRail`'s
- * `EntityListFilters`), with the toolkit types where they show tags.
+ * The toolkits / MCPs list's own filters in the List tab of the shell's right
+ * panel (`EntityListSidebar`): the "Types" filter over the loaded rows, then
+ * the viewer's author card. The same panels the other list pages show
+ * (`shared/ui/EntityRail`'s `EntityListFiltersBody`), with the toolkit types
+ * where they show tags.
  */
-export interface ToolkitsFiltersProps {
+export interface ToolkitsFiltersBodyProps {
   readonly projectId: string | undefined;
   readonly isMCP: boolean;
-  readonly subject: string;
   readonly tagList: readonly { readonly id: number; readonly name: string }[];
   readonly selectedTypes: readonly string[];
   readonly onSelectType: (typeName: string) => void;
   readonly onClearTypes: () => void;
   readonly isLoading: boolean;
-  /** The list's project-folder panel (issue 2048), above the types. */
-  readonly foldersSlot?: ReactNode;
 }
 
-export function ToolkitsFilters({ projectId, isMCP, subject, tagList, selectedTypes, onSelectType, onClearTypes, isLoading, foldersSlot }: ToolkitsFiltersProps): ReactNode {
+export function ToolkitsFiltersBody({ projectId, isMCP, tagList, selectedTypes, onSelectType, onClearTypes, isLoading }: ToolkitsFiltersBodyProps): ReactNode {
   return (
-    <SidePanelTab
-      id="filters"
-      title={t('shell.sidePanel.filters', 'Filters')}
-      subject={subject}
-    >
-      <Box
-        data-testid="toolkits-filters"
-        sx={filtersPanelSx}
-      >
-        {foldersSlot}
-        <RailTagsPanelView
-          title={t('pages.toolkits.toolkits.types', 'Types')}
-          emptyText={t('pages.toolkits.toolkits.noTypes', 'No types to display.')}
-          tags={tagList}
-          selectedTags={selectedTypes}
-          onToggleTag={onSelectType}
-          onClearTags={onClearTypes}
-          isLoading={isLoading}
-          isError={false}
-        />
-        <ToolkitsAuthorCard
-          projectId={projectId}
-          isMCP={isMCP}
-        />
-      </Box>
-    </SidePanelTab>
+    <>
+      <RailTagsPanelView
+        title={t('pages.toolkits.toolkits.types', 'Types')}
+        emptyText={t('pages.toolkits.toolkits.noTypes', 'No types to display.')}
+        tags={tagList}
+        selectedTags={selectedTypes}
+        onToggleTag={onSelectType}
+        onClearTags={onClearTypes}
+        isLoading={isLoading}
+        isError={false}
+      />
+      <ToolkitsAuthorCard
+        projectId={projectId}
+        isMCP={isMCP}
+      />
+    </>
   );
 }
