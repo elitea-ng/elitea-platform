@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -97,33 +98,53 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-type createBody struct {
-	Name     string `json:"name"`
-	Position *int   `json:"position"`
-}
-
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	kind, err := KindOf(r)
 	if err != nil {
 		apierr.Write(w, err)
 		return
 	}
-	var body createBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apierr.Write(w, apierr.BadRequest("invalid request body"))
-		return
-	}
-	name, err := cleanName(body.Name)
+	raw, err := readObject(r.Body)
 	if err != nil {
 		apierr.Write(w, err)
 		return
 	}
-	created, err := h.repo.Create(r.Context(), chi.URLParam(r, "projectID"), kind, name, body.Position)
+	var name string
+	if v, ok := raw["name"]; !ok || json.Unmarshal(v, &name) != nil {
+		apierr.Write(w, apierr.BadRequest("name is required"))
+		return
+	}
+	name, err = cleanName(name)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	position, err := positionField(raw)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	created, err := h.repo.Create(r.Context(), chi.URLParam(r, "projectID"), kind, name, position)
 	if err != nil {
 		apierr.Write(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+// positionField reads the optional `position`, which must fit a 32-bit integer
+// (the column's type; a larger value would be a database error, not a 400).
+func positionField(raw map[string]json.RawMessage) (*int, error) {
+	v, ok := raw["position"]
+	if !ok || string(v) == "null" {
+		return nil, nil
+	}
+	var p int64
+	if err := json.Unmarshal(v, &p); err != nil || p > math.MaxInt32 || p < math.MinInt32 {
+		return nil, apierr.BadRequest("position must be a 32-bit integer")
+	}
+	n := int(p)
+	return &n, nil
 }
 
 // Update renames and/or reorders. `name` absent leaves the name alone, and with
@@ -142,7 +163,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
-	name, position, err := h.resolveUpdate(r.Context(), projectID, kind, raw)
+	name, position, err := h.resolveUpdate(r.Context(), projectID, kind, folderID, raw)
 	if err != nil {
 		apierr.Write(w, err)
 		return
@@ -155,7 +176,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, updated)
 }
 
-func (h *Handler) resolveUpdate(ctx context.Context, projectID string, kind Kind, raw map[string]json.RawMessage) (*string, *int, error) {
+func (h *Handler) resolveUpdate(ctx context.Context, projectID string, kind Kind, folderID string, raw map[string]json.RawMessage) (*string, *int, error) {
 	var name *string
 	if v, ok := raw["name"]; ok && string(v) != "null" {
 		var s string
@@ -168,13 +189,9 @@ func (h *Handler) resolveUpdate(ctx context.Context, projectID string, kind Kind
 		}
 		name = &clean
 	}
-	var position *int
-	if v, ok := raw["position"]; ok && string(v) != "null" {
-		var p int
-		if err := json.Unmarshal(v, &p); err != nil {
-			return nil, nil, apierr.BadRequest("position must be an integer")
-		}
-		position = &p
+	position, err := positionField(raw)
+	if err != nil {
+		return nil, nil, err
 	}
 	above, hasAbove := optionalID(raw["neighbor_above_id"])
 	below, hasBelow := optionalID(raw["neighbor_below_id"])
@@ -185,6 +202,14 @@ func (h *Handler) resolveUpdate(ctx context.Context, projectID string, kind Kind
 	if err != nil {
 		return nil, nil, err
 	}
+	if !hasFolder(existing, folderID) {
+		return nil, nil, apierr.NotFound("folder not found")
+	}
+	for _, id := range []string{above, below} {
+		if id != "" && (id == folderID || !hasFolder(existing, id)) {
+			return nil, nil, apierr.BadRequest("a neighbour folder is not in this list")
+		}
+	}
 	pos, rebalance := folders.PositionBetween(toPositions(existing), above, below)
 	if rebalance {
 		if existing, err = h.repo.Rebalance(ctx, projectID, kind); err != nil {
@@ -193,6 +218,15 @@ func (h *Handler) resolveUpdate(ctx context.Context, projectID string, kind Kind
 		pos, _ = folders.PositionBetween(toPositions(existing), above, below)
 	}
 	return name, &pos, nil
+}
+
+func hasFolder(in []Folder, id string) bool {
+	for i := range in {
+		if in[i].ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func toPositions(in []Folder) []folders.Folder {
@@ -226,8 +260,8 @@ func (h *Handler) Move(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	entityID, err := strconv.Atoi(chi.URLParam(r, "entityID"))
-	if err != nil || entityID <= 0 {
-		apierr.Write(w, apierr.BadRequest("entity id must be a positive integer"))
+	if err != nil || entityID <= 0 || entityID > math.MaxInt32 {
+		apierr.Write(w, apierr.BadRequest("entity id must be a positive 32-bit integer"))
 		return
 	}
 	raw, err := readObject(r.Body)

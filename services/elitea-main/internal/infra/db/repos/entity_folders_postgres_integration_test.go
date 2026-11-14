@@ -51,9 +51,7 @@ func folderNames(items []entityfolders.Folder) []string {
 }
 
 func TestEntityFoldersRepoPostgres_CreateRenameReorderAndKindScoping(t *testing.T) {
-	// The ledgered corpus alone: this is the shape every real tenant gets.
-	pool := newMigratedPostgresIntegrationPool(t)
-	repo := NewEntityFoldersRepo(pool)
+	_, repo, _ := newEntityFoldersFixture(t)
 	ctx := testContext(t)
 
 	first, err := repo.Create(ctx, "1", entityfolders.KindSkill, "Drafts", nil)
@@ -318,5 +316,102 @@ func TestApplicationsRepoPostgres_ListFiltersByProjectFolder(t *testing.T) {
 	_, err = apps.List(ctx, applications.ListRequest{ProjectID: "1", FolderID: "1; DROP TABLE x"})
 	if apiStatus(err) != 400 {
 		t.Fatalf("bad folder id: status %d err %v", apiStatus(err), err)
+	}
+}
+
+func TestEntityFoldersRepoPostgres_ItemIDsDropDeletedAndRekindedEntities(t *testing.T) {
+	apps, repo, pool := newEntityFoldersFixture(t)
+	ctx := testContext(t)
+	seedUser(t, pool, 1, "first@example.com")
+	gone := createTestApplication(t, apps, "Goner", 1, &applications.Version{Name: "base", AgentType: "openai"})
+	stays := createTestApplication(t, apps, "Stays", 1, &applications.Version{Name: "base", AgentType: "openai"})
+	becomes := createTestApplication(t, apps, "Becomes", 1, &applications.Version{Name: "base", AgentType: "openai"})
+	folder, err := repo.Create(ctx, "1", entityfolders.KindAgent, "Mine", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	num := func(id string) int {
+		n := 0
+		for _, c := range id {
+			n = n*10 + int(c-'0')
+		}
+		return n
+	}
+	for _, a := range []applications.Application{gone, stays, becomes} {
+		if err := repo.Move(ctx, "1", entityfolders.KindAgent, num(a.ID), &folder.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM p_1.applications WHERE id = $1`, num(gone.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := apps.CreateVersion(ctx, "1", becomes.ID, applications.Version{Name: "flow", AgentType: "pipeline", AuthorID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := repo.List(ctx, "1", entityfolders.KindAgent)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list: %v %v", listed, err)
+	}
+	if want := []int{num(stays.ID)}; !reflect.DeepEqual(listed[0].ItemIDs, want) {
+		t.Fatalf("item_ids %v, want only the live agent %v", listed[0].ItemIDs, want)
+	}
+}
+
+func TestEntityFoldersRepoPostgres_OutOfRangeIdsAreNotFoundNotServerErrors(t *testing.T) {
+	_, repo, _ := newEntityFoldersFixture(t)
+	ctx := testContext(t)
+	huge := "2147483648"
+	name := "x"
+	if _, err := repo.Update(ctx, "1", entityfolders.KindSkill, huge, &name, nil); apiStatus(err) != 404 {
+		t.Fatalf("update: %v", err)
+	}
+	if err := repo.Delete(ctx, "1", entityfolders.KindSkill, huge); apiStatus(err) != 404 {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := repo.Move(ctx, "1", entityfolders.KindSkill, 1, &huge); apiStatus(err) == 500 || apiStatus(err) == 0 {
+		t.Fatalf("move: %v", err)
+	}
+}
+
+// The agents list, the pipelines list and the folder lists classify by one SQL
+// fragment; this pins that an agent and a pipeline never overlap in any of them.
+func TestApplicationKindClassificationAgreesBetweenListsAndFolders(t *testing.T) {
+	apps, repo, pool := newEntityFoldersFixture(t)
+	ctx := testContext(t)
+	seedUser(t, pool, 1, "first@example.com")
+	a := createTestApplication(t, apps, "Plain", 1, &applications.Version{Name: "base", AgentType: "openai"})
+	p := createTestApplication(t, apps, "Flow", 1, &applications.Version{Name: "base", AgentType: "pipeline"})
+	n := func(id string) int {
+		v := 0
+		for _, c := range id {
+			v = v*10 + int(c-'0')
+		}
+		return v
+	}
+	fa, _ := repo.Create(ctx, "1", entityfolders.KindAgent, "A", nil)
+	fp, _ := repo.Create(ctx, "1", entityfolders.KindPipeline, "P", nil)
+	if err := repo.Move(ctx, "1", entityfolders.KindAgent, n(p.ID), &fa.ID); apiStatus(err) != 404 {
+		t.Fatalf("pipeline as agent: %v", err)
+	}
+	if err := repo.Move(ctx, "1", entityfolders.KindPipeline, n(a.ID), &fp.ID); apiStatus(err) != 404 {
+		t.Fatalf("agent as pipeline: %v", err)
+	}
+	for kind, want := range map[string]string{"classic": "Plain", "pipeline": "Flow"} {
+		res, err := apps.List(ctx, applications.ListRequest{ProjectID: "1", AgentsType: kind, SortBy: "name", SortOrder: "asc"})
+		if err != nil || res.Total != 1 || res.Rows[0].Name != want {
+			t.Fatalf("%s list: %+v %v", kind, res, err)
+		}
+	}
+}
+
+// The ledgered corpus alone (what every real tenant migrates through) carries both tables.
+func TestEntityFoldersMigrationIsInTheLedgeredCorpus(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	var folders, items *string
+	if err := pool.QueryRow(testContext(t), `SELECT to_regclass('p_1.project_folders')::text, to_regclass('p_1.project_folder_items')::text`).Scan(&folders, &items); err != nil {
+		t.Fatal(err)
+	}
+	if folders == nil || items == nil {
+		t.Fatalf("corpus tables: %v %v", folders, items)
 	}
 }

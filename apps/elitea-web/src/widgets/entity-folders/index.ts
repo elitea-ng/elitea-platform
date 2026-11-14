@@ -10,5 +10,5 @@ export type { EntityFolderPanelProps } from './ui/EntityFolderPanel';
 export { EntityFolderScope } from './ui/EntityFolderScope';
 /** @public */
 export type { EntityFolderScopeProps } from './ui/EntityFolderScope';
-export { useFolderFilter } from './lib/useFolderFilter';
+export { folderIdParam, useFolderFilter } from './lib/useFolderFilter';
 export type { FolderFilter } from './lib/useFolderFilter';

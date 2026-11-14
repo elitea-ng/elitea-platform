@@ -1,5 +1,6 @@
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -70,5 +71,21 @@ describe('Pipelines Filters tab', () => {
 
     await user.click(await screen.findByTestId('tags-panel-chip-alpha'));
     await waitFor(() => expect(screen.getByTestId('tags-panel-chip-alpha')).toHaveAttribute('aria-pressed', 'true'));
+  });
+});
+
+describe('Pipelines folders panel', () => {
+  it('is in the Filters tab of a private project\'s All tab, with its own folder list', async () => {
+    setConfig('1');
+    server.use(http.get('/api/v2/elitea_core/entity_folders/prompt_lib/2/pipeline', () => HttpResponse.json({ items: [] })));
+    renderPipelinesRoute(<SidePanelHarness><Pipelines /></SidePanelHarness>, '/pipelines/all', { projectId: '2' });
+    expect(await screen.findByTestId('entity-folder-panel')).toBeInTheDocument();
+  });
+
+  it('is absent in the public project, which has no folders', async () => {
+    setConfig('1');
+    renderPipelinesRoute(<SidePanelHarness><Pipelines /></SidePanelHarness>, '/pipelines/latest', { projectId: '1' });
+    await screen.findByTestId('entity-list-filters');
+    expect(screen.queryByTestId('entity-folder-panel')).not.toBeInTheDocument();
   });
 });

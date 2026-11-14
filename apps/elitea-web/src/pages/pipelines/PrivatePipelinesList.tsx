@@ -9,8 +9,8 @@ import { authorDisplayName, isDeletedAuthor } from '@/entities/author';
 import { useListApplications } from '@/shared/api/generated/applications/applications';
 import type { Application, ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
-import { useRailFolderSelection, useRailTagSelection } from '@/shared/ui/EntityRail';
-import { EntityFolderScope } from '@/widgets/entity-folders';
+import { useRailTagSelection } from '@/shared/ui/EntityRail';
+import { EntityFolderScope, folderIdParam, useFolderFilter } from '@/widgets/entity-folders';
 import { useListSearchQuery } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
@@ -135,12 +135,13 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
   const query = useListSearchQuery();
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const { selectedTags } = useRailTagSelection();
-  const { selectedFolderId } = useRailFolderSelection();
+  const folderId = useFolderFilter(isPublicPipelinesProject(projectId) ? undefined : projectId, 'pipeline').folderId;
   const permissions = usePermissionSet(projectId);
 
+  // A new query or another folder restarts the "load more" window.
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [query]);
+  }, [query, folderId]);
 
   // See `pages/agents/PrivateAgentsList.tsx` — the same server-side tag
   // filter, over the same list endpoint with `agents_type: 'pipeline'`.
@@ -158,7 +159,7 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
       ...(trimmedQuery === '' ? {} : { query: trimmedQuery }),
       ...(tagFilter === '' ? {} : { tags: tagFilter }),
       // The open project folder (issue 2048), narrowed by the server.
-      ...(selectedFolderId === undefined ? {} : { folder_id: selectedFolderId }),
+      ...folderIdParam(folderId),
     },
     { query: { enabled: projectId !== undefined } },
   );

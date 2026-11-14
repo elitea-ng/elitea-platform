@@ -6416,5 +6416,7 @@
   "widgets.entityFolders.renameConfirm": "Rename",
   "widgets.entityFolders.renameTitle": "Rename folder",
   "widgets.entityFolders.saveFailed": "The folder could not be saved.",
-  "widgets.entityFolders.title": "Folders"
+  "widgets.entityFolders.title": "Folders",
+  "pages.toolkits.toolkits.emptyFolder": "This folder is empty. Move items into it with the folder icon on a card.",
+  "widgets.entityFolders.moveFailed": "The item could not be moved to that folder."
 }

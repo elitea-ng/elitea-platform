@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -115,7 +116,7 @@ func TestReorderNeighboursBeatPosition(t *testing.T) {
 }
 
 func TestReorderToTopSitsOneGapAboveTheFolderBelow(t *testing.T) {
-	repo := &fakeRepo{list: []entityfolders.Folder{{ID: "1", Position: 2 * folders.PositionGap}}}
+	repo := &fakeRepo{list: []entityfolders.Folder{{ID: "1", Position: 2 * folders.PositionGap}, {ID: "3", Position: 1}}}
 	rec := serve(repo, http.MethodPut, "/p/7/skill/3", `{"neighbor_above_id":null,"neighbor_below_id":"1"}`)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, pos(3*folders.PositionGap), repo.updPos)
@@ -123,7 +124,7 @@ func TestReorderToTopSitsOneGapAboveTheFolderBelow(t *testing.T) {
 
 func TestReorderRebalancesWhenNeighboursAreAdjacent(t *testing.T) {
 	repo := &fakeRepo{
-		list:       []entityfolders.Folder{{ID: "1", Position: 11}, {ID: "2", Position: 10}},
+		list:       []entityfolders.Folder{{ID: "1", Position: 11}, {ID: "2", Position: 10}, {ID: "3", Position: 1}},
 		rebalanced: []entityfolders.Folder{{ID: "1", Position: 2 * folders.PositionGap}, {ID: "2", Position: folders.PositionGap}},
 	}
 	rec := serve(repo, http.MethodPut, "/p/7/skill/3", `{"neighbor_above_id":"1","neighbor_below_id":"2"}`)
@@ -183,4 +184,39 @@ func TestEveryKindIsServedWithItsOwnKind(t *testing.T) {
 		require.Equal(t, http.StatusCreated, rec.Code, kind)
 		require.Equal(t, kind, repo.kind)
 	}
+}
+
+func TestReorderWithUnknownNeighboursIsRefusedNotPlacedAtTheDefault(t *testing.T) {
+	repo := &fakeRepo{list: []entityfolders.Folder{{ID: "1", Position: 2 * folders.PositionGap}, {ID: "3", Position: folders.PositionGap}}}
+	for _, body := range []string{
+		`{"neighbor_above_id":"99","neighbor_below_id":"1"}`,
+		`{"neighbor_above_id":"1","neighbor_below_id":"nope"}`,
+		`{"neighbor_below_id":"3"}`, // the folder cannot be its own neighbour
+	} {
+		rec := serve(repo, http.MethodPut, "/p/7/skill/3", body)
+		require.Equal(t, http.StatusBadRequest, rec.Code, body)
+	}
+	require.Nil(t, repo.updPos, "nothing may be written for a refused reorder")
+	require.Zero(t, repo.rebalances)
+}
+
+func TestReorderOfAMissingFolderIs404BeforeAnyRebalance(t *testing.T) {
+	repo := &fakeRepo{list: []entityfolders.Folder{{ID: "1", Position: 11}, {ID: "2", Position: 10}}}
+	rec := serve(repo, http.MethodPut, "/p/7/skill/77", `{"neighbor_above_id":"1","neighbor_below_id":"2"}`)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	require.Zero(t, repo.rebalances)
+}
+
+func TestOutOfRangeIdsAndPositionsAre400(t *testing.T) {
+	require.Equal(t, http.StatusBadRequest, serve(&fakeRepo{}, http.MethodPut, "/p/7/skill/items/2147483648", `{}`).Code)
+	require.Equal(t, http.StatusBadRequest, serve(&fakeRepo{}, http.MethodPost, "/p/7/skill", `{"name":"A","position":2147483648}`).Code)
+	require.Equal(t, http.StatusBadRequest, serve(&fakeRepo{}, http.MethodPut, "/p/7/skill/3", `{"position":-2147483649}`).Code)
+	require.Equal(t, http.StatusNoContent, serve(&fakeRepo{}, http.MethodPut, "/p/7/skill/items/2147483647", `{}`).Code)
+}
+
+func TestCreateBodyIsCappedAtOneMebibyte(t *testing.T) {
+	huge := `{"name":"` + strings.Repeat("x", 2<<20) + `"}`
+	repo := &fakeRepo{}
+	require.Equal(t, http.StatusBadRequest, serve(repo, http.MethodPost, "/p/7/skill", huge).Code)
+	require.Empty(t, repo.createName)
 }

@@ -22,6 +22,7 @@ import { matchesQuery, toListItem, toTagList } from './lib/toolkitListRows';
 import { useFolderRows } from './lib/useFolderRows';
 import { toolkitsCopy } from './lib/toolkitsCopy';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
+import { EmptyFolderNote } from './ui/EmptyFolderNote';
 import { ToolkitsFilters } from './ui/ToolkitsFilters';
 
 const PAGE_SIZE = 20;
@@ -355,11 +356,13 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
                 isError: list.isError,
                 hasMore: list.hasMore,
                 onLoadMore: list.onLoadMore,
-                totalCount: list.totalCount,
+                totalCount: folderFilter.active ? rows.length : list.totalCount,
               }}
               query={query}
               isMCP={isMCP}
-              emptyStateConfig={{ title: copy.emptyTitle, description: copy.emptyDescription, onCreateClick: handleCreateClick }}
+              {...(folderFilter.active
+                ? { emptyListPlaceHolder: <EmptyFolderNote /> }
+                : { emptyStateConfig: { title: copy.emptyTitle, description: copy.emptyDescription, onCreateClick: handleCreateClick } })}
             />
           </EntityFolderScope>
         </Box>

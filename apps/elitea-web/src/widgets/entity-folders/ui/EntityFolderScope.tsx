@@ -1,7 +1,9 @@
 import { useMemo, type ReactNode } from 'react';
 
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
+import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -12,6 +14,7 @@ import {
   type EntityFolder,
   type EntityFolderKind,
 } from '@/entities/entity-folder';
+import { serverErrorOf } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { EntityRowSlotProvider, type EntityListItem, type EntityRowSlot } from '@/shared/ui/EntityCardList';
 
@@ -37,7 +40,8 @@ export function EntityFolderScope({ projectId, kind, permissions, children }: En
   // No project (the public project's own lists pass none) means no folders to move into.
   const canUpdate = entityFolderAccess(kind, permissions).canUpdate && projectId !== undefined;
   const folders = useEntityFolders(projectId, kind).data;
-  const { mutate: moveEntity } = useEntityFolderMutations(projectId, kind).move;
+  const move = useEntityFolderMutations(projectId, kind).move;
+  const { mutate: moveEntity } = move;
   const slot = useMemo<EntityRowSlot>(() => {
     const known = folders ?? [];
     const control = (item: EntityListItem, current: EntityFolder | undefined): ReactNode =>
@@ -71,7 +75,28 @@ export function EntityFolderScope({ projectId, kind, permissions, children }: En
       },
     };
   }, [folders, canUpdate, moveEntity]);
-  return <EntityRowSlotProvider value={slot}>{children}</EntityRowSlotProvider>;
+  return (
+    <EntityRowSlotProvider value={slot}>
+      {children}
+      <Snackbar
+        open={move.isError}
+        autoHideDuration={6000}
+        onClose={() => {
+          move.reset();
+        }}
+      >
+        <Alert
+          severity="error"
+          data-testid="entity-folder-move-error"
+          onClose={() => {
+            move.reset();
+          }}
+        >
+          {serverErrorOf(move.error) ?? t('widgets.entityFolders.moveFailed', 'The item could not be moved to that folder.')}
+        </Alert>
+      </Snackbar>
+    </EntityRowSlotProvider>
+  );
 }
 
 const cellSx: SxProps<Theme> = (theme: Theme) => ({

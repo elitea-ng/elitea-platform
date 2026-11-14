@@ -18,7 +18,7 @@ import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
 import { useHasAdminPermission } from './lib/useHasAdminPermission';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { useApplicationsData } from './useApplicationsData';
-import { TEAMS_TAB, useApplicationTabs } from './useApplicationTabs';
+import { TEAMS_TAB, privateApplicationTabValues, useApplicationTabs } from './useApplicationTabs';
 
 /** The four public tabs (`latest`/`my-liked`/`trending`) plus `admin` are the ones the baseline pins to "Trending Authors" (`RightInfoPanel` picks per-project elsewhere; `PrivateAgentsList.jsx:141-151` hard-codes it for Admin). */
 const TRENDING_AUTHOR_TABS: readonly string[] = ['latest', 'my-liked', 'trending', 'admin'];
@@ -177,7 +177,8 @@ export function Applications(): ReactNode {
 
 /** The project's own lists have folders; the public feeds and the Teams tab do not (issue 2048). */
 function hasFolders(isPublicProject: boolean, tab: string | undefined): boolean {
-  return !isPublicProject && tab !== TEAMS_TAB;
+  // Only the project's own status tabs filter by folder; Teams, and the public Latest / My liked / Trending / Admin feeds, ignore it.
+  return !isPublicProject && privateApplicationTabValues().some((value) => value === tab);
 }
 
 /** ADR-0050 decision 8 (issue 1620): the Teams tab's content, for a caller who may list teams. */

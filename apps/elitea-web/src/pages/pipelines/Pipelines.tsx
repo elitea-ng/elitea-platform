@@ -149,7 +149,7 @@ export function Pipelines(): ReactNode {
         preferTrendingAuthors={TRENDING_AUTHOR_TABS.includes(params.tab ?? '')}
         foldersSlot={
           <EntityFolderPanel
-            enabled={!isPublicProject}
+            enabled={!isPublicProject && params.tab === 'all'}
             projectId={projectId}
             kind="pipeline"
             permissions={permissions}

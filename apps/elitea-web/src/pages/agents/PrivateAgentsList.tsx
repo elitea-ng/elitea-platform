@@ -9,8 +9,8 @@ import { authorDisplayName, isDeletedAuthor } from '@/entities/author';
 import { useListApplications } from '@/shared/api/generated/applications/applications';
 import type { Application, ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
-import { useRailFolderSelection, useRailTagSelection } from '@/shared/ui/EntityRail';
-import { EntityFolderScope } from '@/widgets/entity-folders';
+import { useRailTagSelection } from '@/shared/ui/EntityRail';
+import { EntityFolderScope, folderIdParam, useFolderFilter } from '@/widgets/entity-folders';
 import { useListSearchQuery } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
@@ -167,14 +167,15 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
   const query = useListSearchQuery();
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const { selectedTags } = useRailTagSelection();
-  const { selectedFolderId } = useRailFolderSelection();
+  const folderId = useFolderFilter(isPublicAgentsProject(projectId) ? undefined : projectId, 'agent').folderId;
   const permissions = usePermissionSet(projectId);
 
   // A new query restarts the "load more" window; without this, narrowing the
   // list would keep whatever count the previous query had grown to.
+  // A new query or another folder restarts the "load more" window.
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
-  }, [query]);
+  }, [query, folderId]);
 
   const trimmedQuery = query.trim();
   // The rail's tag selection goes to the SERVER, as the `tags` request param
@@ -192,7 +193,7 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
       ...(trimmedQuery === '' ? {} : { query: trimmedQuery }),
       ...(tagFilter === '' ? {} : { tags: tagFilter }),
       // The open project folder (issue 2048): the server narrows the list, so a folder of 40 agents pages as a list of 40.
-      ...(selectedFolderId === undefined ? {} : { folder_id: selectedFolderId }),
+      ...folderIdParam(folderId),
     },
     { query: { enabled: projectId !== undefined } },
   );

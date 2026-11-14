@@ -120,3 +120,15 @@ describe('EntityFolderScope on the table', () => {
     expect(screen.queryByRole('columnheader', { name: 'Folder' })).not.toBeInTheDocument();
   });
 });
+
+describe('EntityFolderScope when a move fails', () => {
+  it('says so, with the server sentence, and the card stays where it was', async () => {
+    serveFolders('skill', FOLDERS);
+    server.use(http.put(MOVE_URL, () => HttpResponse.json({ error: 'folder not found' }, { status: 404 })));
+    const user = userEvent.setup();
+    renderInRouter(scoped([UPDATE], <EntityCard item={OTHER} />));
+    await user.click(await screen.findByRole('button', { name: 'Move Summariser to a folder' }));
+    await user.click((await screen.findAllByTestId('move-to-folder-option'))[0] as HTMLElement);
+    expect(await screen.findByTestId('entity-folder-move-error')).toHaveTextContent('folder not found');
+  });
+});
