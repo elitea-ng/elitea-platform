@@ -30,7 +30,7 @@
 //
 // LAYOUT (ADR-0031 decision 2). One Qdrant collection per embedding space
 // and collection family. The shared family (toolkit indexes, DeepWiki,
-// memory) is `emb_<model_slug>_<dimension>`: float16 dense vectors with an
+// memory, agent memory) is `emb_<model_slug>_<dimension>`: float16 dense vectors with an
 // int8 quantized copy, plus a BM25 sparse vector. The Inventory family is
 // `inv_<model_slug>_<dimension>`: float32 dense vectors, no quantization, no
 // BM25 (HybridSearch is refused for it), searched by an exact scan, so its

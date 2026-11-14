@@ -93,7 +93,7 @@ pub struct CollectionLayout {
 ///
 /// | family      | sources                          | name                         | dense    | int8 | BM25 | search |
 /// |-------------|----------------------------------|------------------------------|----------|------|------|--------|
-/// | `Shared`    | toolkit index, `DeepWiki`, memory | `emb_<slug>_<dimension>` | float16  | yes  | yes  | HNSW   |
+/// | `Shared`    | toolkit index, `DeepWiki`, memory, agent memory | `emb_<slug>_<dimension>` | float16  | yes  | yes  | HNSW   |
 /// | `Inventory` | inventory                        | `inv_<slug>_<dimension>`     | float32  | no   | no   | exact  |
 ///
 /// Inventory is apart because its conformance suite pins cosine scores to
@@ -105,7 +105,8 @@ pub struct CollectionLayout {
 /// hybrid search, which is refused for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Family {
-    /// Toolkit indexes, `DeepWiki` and memory (ADR-0031 decision 2).
+    /// Toolkit indexes, `DeepWiki`, memory and agent memory (ADR-0031
+    /// decision 2).
     Shared,
     /// Inventory (ADR-0031 decision 7).
     Inventory,
@@ -140,9 +141,10 @@ impl Family {
     #[must_use]
     pub const fn of(source: pb::Source) -> Option<Self> {
         match source {
-            pb::Source::ToolkitIndex | pb::Source::Deepwiki | pb::Source::Memory => {
-                Some(Self::Shared)
-            }
+            pb::Source::ToolkitIndex
+            | pb::Source::Deepwiki
+            | pb::Source::Memory
+            | pb::Source::AgentMemory => Some(Self::Shared),
             pb::Source::Inventory => Some(Self::Inventory),
             pb::Source::Unspecified => None,
         }
@@ -269,6 +271,7 @@ pub fn source_keyword(source: i32) -> Result<&'static str, Status> {
         Ok(pb::Source::Deepwiki) => Ok("deepwiki"),
         Ok(pb::Source::Inventory) => Ok("inventory"),
         Ok(pb::Source::Memory) => Ok("memory"),
+        Ok(pb::Source::AgentMemory) => Ok("agent_memory"),
         Ok(pb::Source::Unspecified) | Err(_) => Err(Status::invalid_argument("source is required")),
     }
 }
@@ -281,6 +284,7 @@ pub fn source_from_keyword(keyword: &str) -> pb::Source {
         "deepwiki" => pb::Source::Deepwiki,
         "inventory" => pb::Source::Inventory,
         "memory" => pb::Source::Memory,
+        "agent_memory" => pb::Source::AgentMemory,
         _ => pb::Source::Unspecified,
     }
 }
@@ -468,6 +472,7 @@ mod tests {
             pb::Source::ToolkitIndex,
             pb::Source::Deepwiki,
             pb::Source::Memory,
+            pb::Source::AgentMemory,
         ] {
             assert_eq!(Family::of(source), Some(Family::Shared), "{source:?}");
         }
@@ -601,6 +606,15 @@ mod tests {
         assert!(has_control_character("a\u{1f}b"));
         assert!(has_control_character("a\nb"));
         assert!(!has_control_character("chunk-3 é"));
+    }
+
+    #[test]
+    fn agent_memory_is_served_and_round_trips_its_keyword() {
+        assert_eq!(
+            source_keyword(pb::Source::AgentMemory as i32).expect("served"),
+            "agent_memory"
+        );
+        assert_eq!(source_from_keyword("agent_memory"), pb::Source::AgentMemory);
     }
 
     #[test]

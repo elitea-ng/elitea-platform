@@ -1130,7 +1130,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 247: shared/0247_guardrail_warn_action.sql, the `warn` action and the
 	// `warned` outcome in the CHECK constraints of
 	// gateway.guardrail_verdicts (issue 2012). No data, no permission.
-	require.EqualValues(t, 247, Head(shared))
+	//
+	// 248: shared/0248_agent_memory_vector_journal.sql, the journal of an
+	// agent's memory vectors (centry.agent_memory_vector_journal, issue 1657),
+	// and the one-time enqueue of the entries the tenants already hold. No
+	// permission.
+	require.EqualValues(t, 248, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1439,7 +1444,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 247: tenant/0247_project_entity_folders.sql, project_folders and
 	// project_folder_items, the shared per-kind folders of the Agents,
 	// Pipelines, Skills, Toolkits and MCPs lists (issue 2048). No permission.
-	require.EqualValues(t, 247, Head(tenant))
+	//
+	// 248: tenant/0248_agent_memory_vector_trigger.sql, the trigger that
+	// writes the shared agent memory vector journal when an entry changes,
+	// and the one-time enqueue of the active entries (issue 1657). No
+	// permission.
+	require.EqualValues(t, 248, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

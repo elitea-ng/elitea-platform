@@ -1,6 +1,7 @@
 package agentmemory
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -28,19 +29,67 @@ type Candidate struct {
 // DefaultActiveLimit entries, and ranking 200 of them per turn is cheap.
 const RecallPool = 200
 
+// Ranker ranks an agent's entries against a turn's input by vector
+// similarity (issue 1657). Rank answers the similarity of the entries the
+// index holds and finds close, by entry id; an entry the index does not hold
+// (not embedded yet) is simply absent. An error means the index could not
+// answer (an embedding or vector outage): the caller recalls by keyword.
+type Ranker interface {
+	Rank(ctx context.Context, projectID, applicationID int64, query string) (map[int64]float32, error)
+}
+
 // Select picks the entries a turn recalls: pinned entries first, then the
 // rest by keyword overlap with the turn's input and then recency, within
 // settings' entry and byte budgets. An entry about a person is a candidate
 // only when that person is present. A cursor is never recalled into the
 // prompt: it is the heartbeat's state, not knowledge.
 func Select(candidates []Candidate, present map[int64]bool, input string, settings Settings) []Candidate {
+	return SelectRanked(candidates, present, input, settings, nil)
+}
+
+// RankingMatters reports whether the order of the candidates can change what
+// Select picks: some candidate (after the cursor and presence rules) does not
+// fit the entry or byte budget. When every candidate fits, all of them are
+// recalled whatever the order, so a similarity ranking would cost an embedding
+// and a search for nothing. Pinned entries come first either way.
+func RankingMatters(candidates []Candidate, present map[int64]bool, settings Settings) bool {
+	if !settings.Enabled || settings.MaxEntries <= 0 {
+		return false
+	}
+	count, bytes := 0, 0
+	for _, candidate := range candidates {
+		if candidate.Kind == KindCursor || (candidate.SubjectUserID > 0 && !present[candidate.SubjectUserID]) {
+			continue
+		}
+		count++
+		bytes += len(candidate.Content)
+		if count > settings.MaxEntries || bytes > settings.RecallBytes() {
+			return true
+		}
+	}
+	return false
+}
+
+// SelectRanked is Select with the vector index's answer. similarity holds
+// the entries the index ranked (Ranker.Rank). The presence filter, the
+// cursor rule and the budgets are Select's, and the platform's rows are still
+// the only candidates: the index only orders them, it never adds an entry,
+// so an entry the index lost or kept after its row went is never recalled.
+//
+// The order is: pinned entries first; then entries the index ranked, by
+// similarity, highest first; then the others, by keyword overlap; each tie by
+// recency. With no similarity (nil or empty: the index was down, or holds
+// nothing of this agent) the order is Select's keyword order exactly.
+func SelectRanked(candidates []Candidate, present map[int64]bool, input string, settings Settings, similarity map[int64]float32) []Candidate {
 	if !settings.Enabled || settings.MaxEntries <= 0 {
 		return nil
 	}
 	keywords := keywordSet(input)
 	type scored struct {
 		Candidate
-		score int
+		score      int
+		similarity float32
+		ranked     bool
 	}
 	pool := make([]scored, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -50,11 +99,19 @@ func Select(candidates []Candidate, present map[int64]bool, input string, settin
 		if candidate.SubjectUserID > 0 && !present[candidate.SubjectUserID] {
 			continue
 		}
-		pool = append(pool, scored{Candidate: candidate, score: overlap(candidate.Content, keywords)})
+		entry := scored{Candidate: candidate, score: overlap(candidate.Content, keywords)}
+		entry.similarity, entry.ranked = similarity[candidate.ID]
+		pool = append(pool, entry)
 	}
 	sort.SliceStable(pool, func(i, j int) bool {
 		if pool[i].Pinned != pool[j].Pinned {
 			return pool[i].Pinned
+		}
+		if pool[i].ranked != pool[j].ranked {
+			return pool[i].ranked
+		}
+		if pool[i].ranked && pool[i].similarity != pool[j].similarity {
+			return pool[i].similarity > pool[j].similarity
 		}
 		if pool[i].score != pool[j].score {
 			return pool[i].score > pool[j].score
