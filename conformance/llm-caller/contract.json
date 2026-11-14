@@ -33,6 +33,8 @@
     {"name": "bad gateway", "status": 502, "body": {}, "code": "model_gateway.unavailable", "retryable": true},
     {"name": "unavailable", "status": 503, "body": {}, "code": "model_gateway.unavailable", "retryable": true},
     {"name": "bad request", "status": 400, "body": {"error": {"type": "invalid_request_error", "code": "project_scope_conflict", "message": "no"}}, "code": "model_gateway.rejected", "retryable": false},
+    {"name": "content guardrail block", "status": 400, "body": {"error": {"type": "guardrail_error", "code": "guardrail_blocked", "message": "content guardrail \"keys\" detector \"secrets\" blocked the content (stage input, labels github-token)"}}, "code": "model_gateway.guardrail_blocked", "retryable": false},
+    {"name": "guardrail unavailable under a closed fail mode", "status": 503, "body": {"error": {"type": "guardrail_error", "code": "guardrail_unavailable", "message": "content guardrail \"cloud\" detector \"azure\" failed and its fail mode is closed (stage input)"}}, "code": "model_gateway.unavailable", "retryable": true},
     {"name": "unknown model", "status": 404, "body": {"error": {"type": "invalid_request_error", "message": "no such model"}}, "code": "model_gateway.rejected", "retryable": false},
     {"name": "unprocessable", "status": 422, "body": {}, "code": "model_gateway.rejected", "retryable": false}
   ],

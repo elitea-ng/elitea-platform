@@ -10442,15 +10442,50 @@ components:
         stage: { type: string, enum: [input, output] }
         row: { type: string, description: The name of the guardrail governance entry. }
         detector: { type: string }
-        detector_type: { type: string, enum: [regex, secrets, http, azure_content_safety, bedrock_guardrails, model_armor, llama_guard, presidio] }
-        action: { type: string, enum: [block, mask, flag] }
-        outcome: { type: string, enum: [pass, flagged, masked, blocked, error_open, error_closed] }
+        detector_type: { type: string, enum: [regex, secrets, personal_data, http, azure_content_safety, bedrock_guardrails, model_armor, llama_guard, presidio] }
+        action: { type: string, enum: [block, mask, flag, warn] }
+        outcome: { type: string, enum: [pass, flagged, warned, masked, blocked, error_open, error_closed] }
         fail_mode: { type: string, enum: [open, closed] }
         labels: { type: array, items: { type: string }, description: "The finding labels. A detector in a slot also adds slot:<name>, for example slot:prompt_injection." }
         findings: { type: integer, format: int32 }
         max_score: { type: number, format: float }
         latency_ms: { type: integer, format: int64 }
         runs: { type: integer, format: int32, description: The number of checks merged into the record. A streamed answer is checked once per window. }
+
+    RunGuardrailNotices:
+      type: object
+      required: [run_id, notices]
+      properties:
+        run_id: { type: string }
+        notices:
+          type: array
+          items: { $ref: '#/components/schemas/RunGuardrailNotice' }
+
+    RunGuardrailNotice:
+      type: object
+      description: >
+        One guardrail's effect on a run, merged over the run's LLM requests.
+        It never holds the inspected text or the matched value.
+      required: [kind, stage, action, guardrail, detector, labels, requests, first_seen_at]
+      properties:
+        kind:
+          type: string
+          description: >
+            What happened: `blocked` (the request or the answer was refused),
+            `redacted` (a match was masked), `warned` (a warn guardrail found
+            a match and changed nothing) or `unavailable` (a guardrail with
+            fail mode closed could not run, so the request was refused).
+        stage:
+          type: string
+          description: "`input` (the request to the model) or `output` (the answer)."
+        action:
+          type: string
+          description: The detector's configured action, `block`, `mask`, `flag` or `warn`.
+        guardrail: { type: string, description: The name of the guardrail governance entry. }
+        detector: { type: string }
+        labels: { type: array, items: { type: string }, description: "The finding labels, for example `email`. Never a value." }
+        requests: { type: integer, format: int32, description: The number of the run's LLM requests the notice covers. }
+        first_seen_at: { type: string, format: date-time }
 
     RunStepsBreak:
       type: object
@@ -32626,6 +32661,39 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ConversationRunList' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/guardrail_notices/prompt_lib/{project_id}/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/RunStepRunId'
+    get:
+      operationId: listRunGuardrailNotices
+      summary: What the content guardrails did to a run, for the chat
+      description: >
+        The guardrail verdicts of a run that the person must be told about,
+        merged to one notice per guardrail, stage and kind (ADR-0043 decision
+        1): a request or an answer the gateway blocked, content it redacted
+        (masked), content a `warn` guardrail warned about, and a guardrail
+        with fail mode closed that could not run. A notice names the stage,
+        the action, the guardrail (the governance entry's name) and the
+        finding labels such as `email`. It never holds the inspected text or
+        the matched value. A run with no notice, and an unknown run, answer an
+        empty list. The gateway writes verdicts up to one second after the
+        request, so a client asks again once when a turn failed or ended and
+        the list is empty. Requires `models.chat.messages.create`, the
+        permission that sends a chat message; reading the full verdicts needs
+        `runs.evidence.read` (listRunSteps).
+      tags: [chat]
+      responses:
+        '200':
+          description: The run's guardrail notices
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunGuardrailNotices' }
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }

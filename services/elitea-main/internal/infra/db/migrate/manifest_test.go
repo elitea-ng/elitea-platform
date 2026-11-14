@@ -1126,7 +1126,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	//
 	// 245: shared/0245_evaluation_human_score_permissions.sql, the
 	// evaluation.human_score.read and .create grants (issue 2008).
-	require.EqualValues(t, 245, Head(shared))
+	//
+	// 247: shared/0247_guardrail_warn_action.sql, the `warn` action and the
+	// `warned` outcome in the CHECK constraints of
+	// gateway.guardrail_verdicts (issue 2012). No data, no permission.
+	require.EqualValues(t, 247, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
