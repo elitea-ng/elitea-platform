@@ -67,15 +67,27 @@ interface ScorecardBodyProps {
   readonly liveRun: EvalRun | undefined;
 }
 
+function dimensionNamesOf(run: EvalRun): ReadonlyMap<string, string> {
+  return new Map(Object.entries(run.snapshot?.dimensions ?? {}).map(([id, dimension]) => [id, dimension.name ?? id]));
+}
+
+/** Enhance reads a finished run that missed a target, spends tokens and quotes the instructions. */
+function canEnhanceRun(
+  permissions: { readonly canStartRuns: boolean; readonly canReadVersions: boolean },
+  run: EvalRun | undefined,
+  scorecard: EvalScorecard | undefined,
+): boolean {
+  if (!permissions.canStartRuns || !permissions.canReadVersions || run?.status !== 'finished') return false;
+  return scorecard?.results.some((result) => result.target_met === false) === true;
+}
+
 /**
  * Everything inside the dialog. Split out of `RunScorecard` to keep that
  * function inside the §3.5 cyclomatic-complexity budget of 12, and because it
  * has no queries of its own: it is a pure function of the two values above.
  */
 function ScorecardBody({ projectId, scorecard, liveRun }: ScorecardBodyProps): ReactNode {
-  const dimensionNames = new Map(
-    Object.entries(scorecard.run.snapshot?.dimensions ?? {}).map(([id, dimension]) => [id, dimension.name ?? id]),
-  );
+  const dimensionNames = dimensionNamesOf(scorecard.run);
   return (
     <>
       <Typography variant="bodySmall" color="text.secondary" data-testid="scorecard-progress">
@@ -178,9 +190,7 @@ export function RunScorecard(props: RunScorecardProps): ReactNode {
   const scorecard = scorecardQuery.data;
   const liveRun = runQuery.data ?? scorecard?.run;
   const permissions = useEvaluationPermissions(projectId);
-  // Enhance reads a FINISHED run that scored something; it spends model tokens, so it takes the run create permission.
-  const canEnhance =
-    permissions.canStartRuns && permissions.canReadVersions && liveRun?.status === 'finished' && scorecard?.results.some((result) => result.target_met === false) === true;
+  const canEnhance = canEnhanceRun(permissions, liveRun, scorecard);
 
   return (
     <BaseModal

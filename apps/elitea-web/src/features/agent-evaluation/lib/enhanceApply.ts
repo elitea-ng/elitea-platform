@@ -83,5 +83,5 @@ export function draftVersionBody(base: ApplicationVersionDetail, instructions: s
     // An absent or null field is "nothing stored": leave it off, so the new version stores the default.
     if (value === null || value === undefined) delete copy[key];
   }
-  return { ...copy, instructions } as Omit<VersionWriteRequest, 'name'>;
+  return { ...copy, instructions };
 }

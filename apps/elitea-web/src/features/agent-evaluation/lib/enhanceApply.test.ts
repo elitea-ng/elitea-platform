@@ -51,7 +51,7 @@ describe('draft version', () => {
   });
 
   it('leaves out null and absent fields so the new version stores its defaults', () => {
-    const body = draftVersionBody({ ...base, soul: null, meta: null } as unknown as ApplicationVersionDetail, 'new');
+    const body = draftVersionBody({ ...base, soul: null, meta: null }, 'new');
     expect(body).not.toHaveProperty('soul');
     expect(body).not.toHaveProperty('meta');
   });

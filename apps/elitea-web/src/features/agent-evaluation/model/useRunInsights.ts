@@ -14,6 +14,10 @@ import { fetchPreviousScoredRun, fetchRunAnalytics } from '../api/evaluationInsi
 import { fetchScorecard } from '../api/evaluationRunsApi';
 import { evalRunQueryKeys } from './useEvalRuns';
 
+async function previousOrNull(projectId: string, run: EvalRun | undefined): Promise<EvalRun | null> {
+  return run === undefined ? null : ((await fetchPreviousScoredRun(projectId, run)) ?? null);
+}
+
 function present(...values: readonly (string | undefined)[]): boolean {
   return values.every((value) => value !== undefined && value !== '');
 }
@@ -31,6 +35,15 @@ export function useRunAnalytics(
   });
 }
 
+function usePreviousScoredRun(projectId: string | undefined, run: EvalRun | undefined, enabled: boolean) {
+  return useQuery<EvalRun | null>({
+    queryKey: ['evalRuns', projectId ?? '', 'previous', run?.id ?? ''],
+    // null, not undefined: react-query refuses an undefined result.
+    queryFn: () => previousOrNull(projectId ?? '', run),
+    enabled: enabled && present(projectId, run?.id),
+  });
+}
+
 /** The previous scored run of the same dataset, and its scorecard. */
 export function usePreviousRun(
   projectId: string | undefined,
@@ -41,12 +54,7 @@ export function usePreviousRun(
   readonly scorecard: UseQueryResult<EvalScorecard>;
   readonly loading: boolean;
 } {
-  const history = useQuery<EvalRun | null>({
-    queryKey: ['evalRuns', projectId ?? '', 'previous', run?.id ?? ''],
-    // null, not undefined: react-query refuses an undefined result.
-    queryFn: async () => (run === undefined ? null : ((await fetchPreviousScoredRun(projectId ?? '', run)) ?? null)),
-    enabled: enabled && present(projectId, run?.id),
-  });
+  const history = usePreviousScoredRun(projectId, run, enabled);
   const previous = history.data ?? undefined;
   const scorecard = useQuery<EvalScorecard>({
     queryKey: evalRunQueryKeys.scorecard(projectId ?? '', previous?.id ?? ''),

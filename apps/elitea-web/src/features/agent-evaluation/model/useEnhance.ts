@@ -33,19 +33,21 @@ export function useApplyEnhancement(projectId: string | undefined) {
   });
 }
 
+function hasPatch(proposal: EvalEnhanceProposal | undefined): boolean {
+  return proposal?.instruction_patch !== null && proposal?.instruction_patch !== undefined;
+}
+
+function isId(value: number | null | undefined): value is number {
+  return value !== null && value !== undefined;
+}
+
 export function useVersionInstructions(projectId: string | undefined, proposal: EvalEnhanceProposal | undefined) {
-  const applicationId = proposal?.application_id ?? undefined;
-  const versionId = proposal?.application_version_id ?? undefined;
+  const applicationId = proposal?.application_id;
+  const versionId = proposal?.application_version_id;
   return useQuery({
     queryKey: ['evalRuns', projectId ?? '', 'versionInstructions', applicationId, versionId],
     queryFn: () => fetchVersionInstructions(projectId ?? '', applicationId ?? 0, versionId ?? 0),
-    enabled:
-      projectId !== undefined &&
-      projectId !== '' &&
-      applicationId !== undefined &&
-      versionId !== undefined &&
-      proposal?.instruction_patch !== null &&
-      proposal?.instruction_patch !== undefined,
+    enabled: projectId !== undefined && projectId !== '' && isId(applicationId) && isId(versionId) && hasPatch(proposal),
     retry: false,
   });
 }

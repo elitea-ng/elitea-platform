@@ -24,11 +24,11 @@ function analytics(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function run(id: string, overrides: Record<string, unknown> = {}): EvalRun {
+function run(id: string, overrides: Partial<EvalRun> = {}): EvalRun {
   return {
     id, dataset_id: '5', application_id: 42, status: 'finished', execution_mode: 'predict_blocking',
     progress: { done: 2, total: 2 }, headline_score: 75, created_at: `2026-11-0${id}T00:00:00Z`, ...overrides,
-  } as EvalRun;
+  };
 }
 
 function row(runId: string, caseId: string, normalized: number, latency?: number, timedOut = false) {
