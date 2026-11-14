@@ -140,6 +140,7 @@ import type {
   RunBriefRequest,
   RunBriefState,
   RunCheckRequest,
+  RunGuardrailNotices,
   SendChatMessageParams,
   StaticPipelineContinuationBody,
   StaticPipelineContinuationReceipt,
@@ -9413,6 +9414,245 @@ export function useGetWorkspaceHandoffPolicy<
 } {
   const queryOptions = getGetWorkspaceHandoffPolicyQueryOptions(
     projectId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listRunGuardrailNoticesResponse200 = {
+  data: RunGuardrailNotices;
+  status: 200;
+};
+
+export type listRunGuardrailNoticesResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listRunGuardrailNoticesResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listRunGuardrailNoticesResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listRunGuardrailNoticesResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listRunGuardrailNoticesResponseSuccess =
+  listRunGuardrailNoticesResponse200 & {
+    headers: Headers;
+  };
+export type listRunGuardrailNoticesResponseError = (
+  | listRunGuardrailNoticesResponse400
+  | listRunGuardrailNoticesResponse401
+  | listRunGuardrailNoticesResponse403
+  | listRunGuardrailNoticesResponse500
+) & {
+  headers: Headers;
+};
+
+export type listRunGuardrailNoticesResponse =
+  listRunGuardrailNoticesResponseSuccess | listRunGuardrailNoticesResponseError;
+
+export const getListRunGuardrailNoticesUrl = (
+  projectId: string,
+  runId: string,
+) => {
+  return `/elitea_core/guardrail_notices/prompt_lib/${projectId}/${runId}`;
+};
+
+/**
+ * The guardrail verdicts of a run that the person must be told about, merged to one notice per guardrail, stage and kind (ADR-0043 decision 1): a request or an answer the gateway blocked, content it redacted (masked), content a `warn` guardrail warned about, and a guardrail with fail mode closed that could not run. A notice names the stage, the action, the guardrail (the governance entry's name) and the finding labels such as `email`. It never holds the inspected text or the matched value. A run with no notice, and an unknown run, answer an empty list. The gateway writes verdicts up to one second after the request, so a client asks again once when a turn failed or ended and the list is empty. Requires `models.chat.messages.create`, the permission that sends a chat message; reading the full verdicts needs `runs.evidence.read` (listRunSteps).
+ * @summary What the content guardrails did to a run, for the chat
+ */
+export const listRunGuardrailNotices = async (
+  projectId: string,
+  runId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listRunGuardrailNoticesResponse> => {
+  return eliteaFetch<listRunGuardrailNoticesResponse>(
+    getListRunGuardrailNoticesUrl(projectId, runId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListRunGuardrailNoticesQueryKey = (
+  projectId: string,
+  runId: string,
+) => {
+  return [
+    `/elitea_core/guardrail_notices/prompt_lib/${projectId}/${runId}`,
+  ] as const;
+};
+
+export const getListRunGuardrailNoticesQueryOptions = <
+  TData = Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListRunGuardrailNoticesQueryKey(projectId, runId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listRunGuardrailNotices>>
+  > = ({ signal }) =>
+    listRunGuardrailNotices(projectId, runId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      runId !== null &&
+      runId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListRunGuardrailNoticesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listRunGuardrailNotices>>
+>;
+export type ListRunGuardrailNoticesQueryError =
+  N400Response | N401Response | N403Response | N500Response;
+
+export function useListRunGuardrailNotices<
+  TData = Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+          TError,
+          Awaited<ReturnType<typeof listRunGuardrailNotices>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListRunGuardrailNotices<
+  TData = Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+          TError,
+          Awaited<ReturnType<typeof listRunGuardrailNotices>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListRunGuardrailNotices<
+  TData = Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary What the content guardrails did to a run, for the chat
+ */
+
+export function useListRunGuardrailNotices<
+  TData = Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  runId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listRunGuardrailNotices>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListRunGuardrailNoticesQueryOptions(
+    projectId,
+    runId,
     options,
   );
 

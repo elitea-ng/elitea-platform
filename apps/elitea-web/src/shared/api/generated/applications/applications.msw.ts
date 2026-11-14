@@ -4574,6 +4574,7 @@ export const getListRunStepsResponseMock = (
       detector_type: faker.helpers.arrayElement([
         "regex",
         "secrets",
+        "personal_data",
         "http",
         "azure_content_safety",
         "bedrock_guardrails",
@@ -4581,10 +4582,16 @@ export const getListRunStepsResponseMock = (
         "llama_guard",
         "presidio",
       ] as const),
-      action: faker.helpers.arrayElement(["block", "mask", "flag"] as const),
+      action: faker.helpers.arrayElement([
+        "block",
+        "mask",
+        "flag",
+        "warn",
+      ] as const),
       outcome: faker.helpers.arrayElement([
         "pass",
         "flagged",
+        "warned",
         "masked",
         "blocked",
         "error_open",
