@@ -28,7 +28,7 @@ function sourcesUnder(dir) {
 
 describe('document scan: native code', () => {
   it('finds the scanner module and its kit', () => {
-    assert.deepEqual(swift.map((s) => s.name).sort(), ['DocumentScanKit.swift', 'DocumentScanner.swift']);
+    assert.deepEqual(swift.map((s) => s.name).sort(), ['DataSaver.swift', 'DocumentScanKit.swift', 'DocumentScanner.swift']);
   });
 
   for (const { name, code } of swift) {

@@ -67,6 +67,52 @@ func ParseURL(url string) (projectID, file, extension string, ok bool) {
 // URLOf renders the public URL of a stored object.
 func URLOf(projectID, file string) string { return URLPrefix + projectID + "/" + file }
 
+// DefaultAvatarPrefix is the key prefix of a default avatar (ADR-0050
+// decisions 4 and 6): a `spawn_agent` profile's `avatar` and the `still` of a
+// pack that names one of the platform's drawn avatars rather than an
+// uploaded file.
+const DefaultAvatarPrefix = "default:"
+
+// DefaultAvatarNames is the closed set of default avatar names. It mirrors
+// DEFAULT_AVATAR_NAMES in libs/ts/client-core/src/conversation/defaultAvatars.ts
+// (a test reads that file, so the two cannot drift).
+var DefaultAvatarNames = []string{"owl", "hawk", "fox", "wolf", "bear", "otter", "heron", "lynx"}
+
+// IsDefaultAvatarKey reports whether key is `default:<name>` of the closed set.
+func IsDefaultAvatarKey(key string) bool {
+	name, ok := strings.CutPrefix(key, DefaultAvatarPrefix)
+	if !ok {
+		return false
+	}
+	for _, known := range DefaultAvatarNames {
+		if name == known {
+			return true
+		}
+	}
+	return false
+}
+
+// PackForAvatarKey is the ONE mapping from a runtime avatar key (a proposal
+// draft's `avatar`) to a saved agent's avatar pack: a key that names a
+// default avatar becomes a pack whose still is that key; anything else (empty,
+// another prefix, an unknown name) answers nil, and the agent keeps the
+// default look. Both create paths use it (auto-hire in Go; the web create
+// from a proposal mirrors it in proposalDraft.ts).
+func PackForAvatarKey(key string) json.RawMessage {
+	key = strings.TrimSpace(key)
+	if !IsDefaultAvatarKey(key) {
+		return nil
+	}
+	pack, err := NormalizePack(map[string]any{
+		"schema": PackSchema,
+		"slots":  map[string]any{SlotStill: map[string]any{"url": key}},
+	})
+	if err != nil {
+		return nil
+	}
+	return pack
+}
+
 // Slot is one slot of a pack.
 type Slot struct {
 	URL string `json:"url"`
@@ -135,6 +181,13 @@ func NormalizePack(raw any) (json.RawMessage, error) {
 			return nil, refusePack("the avatar pack has an unknown slot %q", name)
 		}
 		slot := pack.Slots[name]
+		if IsDefaultAvatarKey(slot.URL) && name == SlotStill {
+			// A drawn default avatar: no file, no media type, no poster.
+			slot.MediaType, slot.PosterURL = "", ""
+			slot.GeneratedBy = strings.TrimSpace(slot.GeneratedBy)
+			pack.Slots[name] = slot
+			continue
+		}
 		_, _, extension, ok := ParseURL(slot.URL)
 		if !ok {
 			return nil, refusePack("slot %q: the url must be an uploaded agent media path (%s{project}/{sha256}.{ext})", name, URLPrefix)

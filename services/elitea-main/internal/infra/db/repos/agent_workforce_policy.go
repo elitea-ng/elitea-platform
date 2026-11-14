@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmedia"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentproposal"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentsoul"
@@ -682,8 +683,10 @@ WHERE project_id = $1 AND id = $2 AND status = 'proposed'`, policy.ProjectID, ca
 // registry row (tier low, the person the proposing run served as the owner
 // and the version's author). The draft carries no model settings (a saved
 // agent picks its own model), so llm_settings stays empty as on the create
-// route; the sub-agent's avatar is a runtime key with no saved-agent column
-// and is not carried, as on the person's create from the same proposal.
+// route. The sub-agent's avatar, a runtime short key, is carried as the
+// version's avatar pack when it names a default avatar
+// (agentmedia.PackForAvatarKey, #1949, the same mapping the person's create
+// from the same proposal applies); any other key leaves the default look.
 func (s *AgentWorkforce) createHiredAgent(ctx context.Context, tx pgx.Tx, projectID int64, candidate hireCandidate) (int64, error) {
 	if _, err := tenantschema.QuoteInt(projectID); err != nil {
 		return 0, agentworkforce.Refuse(agentworkforce.InvalidCode, "The project id is invalid.")
@@ -740,6 +743,7 @@ func (s *AgentWorkforce) createHiredAgent(ctx context.Context, tx pgx.Tx, projec
 			},
 			PipelineSettings: map[string]any{},
 			Soul:             soul,
+			AvatarPack:       agentmedia.PackForAvatarKey(stringOf(candidate.draft["avatar"])),
 		},
 	})
 	if err != nil {
