@@ -85,7 +85,9 @@ test('J-entity-folders: create a folder, move an agent into it, filter, and dele
 
   // Deleting the folder returns the agent to the list and deletes nothing.
   await page.getByTestId('page-toolbar-filters').click();
-  await page.getByTestId('entity-folder-row').filter({ hasText: folderName }).getByTestId('entity-folder-more').click();
+  await expect(page.getByTestId('entity-folder-panel')).toBeVisible({ timeout: 20_000 });
+  // The ⋯ button sits beside the row button, not inside it, so it is found by its own name.
+  await page.getByRole('button', { name: `More for folder ${folderName}` }).click();
   await page.getByRole('menuitem', { name: 'Delete…' }).click();
   await page.getByTestId('entity-folder-delete-dialog').getByRole('button', { name: 'Delete' }).click();
   await expect(page.getByTestId('entity-folder-row').filter({ hasText: folderName })).toHaveCount(0);
