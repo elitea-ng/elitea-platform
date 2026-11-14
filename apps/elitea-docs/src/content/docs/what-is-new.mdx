@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Edit with AI fills the agent's fields, plus list and skill fixes
+
+**Edit with AI** on an agent now shows the generated draft as a form (name, description, instructions, welcome message, conversation starters) that you can edit, and **Apply** writes each value to its own field instead of pasting JSON into **Instructions**. Resources already attached to the agent are left as they are. In the agents, pipelines and skills lists, unselected tags in the Filters panel now stand out from the panel, and the table view shows a sort icon on the **Name & Description** and **Created** columns. In the agent's **Skills** section, the **+ Skill** menu has **Create new** (opens the New Skill page), and an attached skill is a card with open-in-new-tab and delete icons, like an attached toolkit. Folders exist only for chats; folders for agents, pipelines, skills, toolkits and MCPs are not part of the platform yet.
+
 ## Agent Evaluation: human scores and run limits
 
 A dimension that only a person can score can now be used in a run: the run answers each case and waits, the scorecard shows **Waiting for a human score**, and a reviewer scores each case with a note. Scores are kept as a history (a re-score adds one), the run's overall score is recalculated after each score, and a release gate with a human dimension stays pending until every case is scored. New permissions: evaluation human-score read (admins, editors, viewers) and create (admins, editors). A **Run limits** button on the Runs tab saves token and cost limits per case and per run, and whether a run **stops** or only **reports** when its run limit is reached; the run list shows which limit a run reached. **Run the migrations** (a tenant and a shared one), and upgrade Main and the web app together. See [Evaluation](/menus/agents#evaluation).

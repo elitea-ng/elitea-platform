@@ -6247,7 +6247,6 @@
   "artifacts.rename.title": "Rename file",
   "artifacts.table.renameSelected": "Rename selected file",
   "common.rename": "Rename",
-  "artifacts.create.retentionDefaultHelp": "Leave empty to use the project's default retention.",
   "features.agentEvaluation.humanScore.binary": "Score 0 or 1.",
   "features.agentEvaluation.humanScore.latest": "Scored {{score}} by reviewer {{reviewer}}{{note}}",
   "features.agentEvaluation.humanScore.notNumber": "Enter a number.",
@@ -6266,7 +6265,6 @@
   "features.agentEvaluation.runs.showLimits": "Run limits",
   "features.agentEvaluation.runs.tokenLimitReached": "Token limit reached",
   "features.agentEvaluation.scorecard.pendingHuman": "Waiting for a human score",
-  "features.agentEvaluation.suites.badCost": "A cost limit is an amount in USD above 0, or empty for no limit.",
   "features.agentEvaluation.suites.badTokens": "A token limit is a whole number of at least 1, or empty for no limit.",
   "features.agentEvaluation.suites.chooseLabel": "Saved limits",
   "features.agentEvaluation.suites.costPerCase": "Cost per case (USD)",
@@ -6284,5 +6282,16 @@
   "features.agentEvaluation.suites.tokensPerCase": "Tokens per case",
   "features.agentEvaluation.suites.tokensPerRun": "Tokens per run",
   "features.agentEvaluation.suites.whenReached": "When the run limit is reached",
-  "features.agentEvaluation.humanScore.scoredNoHistory": "Scored by a reviewer."
+  "features.agentEvaluation.humanScore.scoredNoHistory": "Scored by a reviewer.",
+  "artifacts.create.retentionDefaultHelp": "Leave empty to use the project's default retention.",
+  "features.agentSkills.createNew": "Create new",
+  "features.agentSkills.open": "Open skill in a new tab",
+  "features.agentSkills.openAria": "open in new tab",
+  "features.agents.aiEdit.fieldDescription": "Description",
+  "features.agents.aiEdit.fieldInstructions": "Instructions",
+  "features.agents.aiEdit.fieldName": "Name",
+  "features.agents.aiEdit.fieldStarters": "Conversation starters (one per line)",
+  "features.agents.aiEdit.fieldWelcome": "Welcome message",
+  "features.agents.aiEdit.proposedChanges": "Proposed changes",
+  "features.agentEvaluation.suites.badCostMin": "A cost limit is an amount in USD of at least 0.0001, or empty for no limit."
 }

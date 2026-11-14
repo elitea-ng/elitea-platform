@@ -2,9 +2,7 @@ import type { ReactNode } from 'react';
 import { useState } from 'react';
 
 import AddIcon from '@mui/icons-material/Add';
-import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined';
 import Box from '@mui/material/Box';
-import IconButton from '@mui/material/IconButton';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -13,6 +11,7 @@ import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 
 import { useAgentSkills, useSkillPicker } from '../model/useAgentSkills';
+import { AttachedSkillRow } from './AttachedSkillRow';
 import { SkillPickerMenu } from './SkillPickerMenu';
 
 /**
@@ -46,6 +45,10 @@ export interface AgentSkillsPanelProps {
   readonly appVersionId: string | undefined;
   /** Read-only view (a public agent, or a viewer) hides the write controls. */
   readonly disabled?: boolean;
+  /** "Create new" in the picker: the caller owns navigation. Absent, the item is not offered. */
+  readonly onCreateNew?: (() => void) | undefined;
+  /** Opens a skill in a new tab: the caller owns URL building (router basepath). Absent, no icon. */
+  readonly onOpenSkill?: ((skillId: number) => void) | undefined;
   readonly sx?: SxProps<Theme>;
 }
 
@@ -54,7 +57,7 @@ function canAttachSkill(disabled: boolean, versionId: number | undefined, isFull
   return !disabled && versionId !== undefined && !isFull;
 }
 
-export function AgentSkillsPanel({ projectId, appVersionId, disabled = false, sx }: AgentSkillsPanelProps): ReactNode {
+export function AgentSkillsPanel({ projectId, appVersionId, disabled = false, onCreateNew, onOpenSkill, sx }: AgentSkillsPanelProps): ReactNode {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [query, setQuery] = useState('');
   // An unparseable id is treated as no id at all: the section then says the
@@ -99,34 +102,13 @@ export function AgentSkillsPanel({ projectId, appVersionId, disabled = false, sx
                     </BaseBtn>
                   )}
                   {skills.attached.map((skill) => (
-                    <Box
+                    <AttachedSkillRow
                       key={skill.id}
-                      sx={rowSx}
-                      data-testid="agent-attached-skill"
-                    >
-                      <Box>
-                        <Typography variant="bodyMedium">{skill.name}</Typography>
-                        {skill.description !== undefined && skill.description !== '' && (
-                          <Typography
-                            variant="bodySmall"
-                            color="text.secondary"
-                          >
-                            {skill.description}
-                          </Typography>
-                        )}
-                      </Box>
-                      {!disabled && (
-                        <IconButton
-                          aria-label={t('features.agentSkills.detach', 'Detach skill')}
-                          data-testid={`agent-detach-skill-${String(skill.id)}`}
-                          disabled={skills.detach.isPending}
-                          onClick={() => skills.detach.mutate(skill.id)}
-                          size="small"
-                        >
-                          <DeleteOutlinedIcon fontSize="small" />
-                        </IconButton>
-                      )}
-                    </Box>
+                      skill={skill}
+                      onOpen={onOpenSkill === undefined ? undefined : () => onOpenSkill(skill.id)}
+                      onDetach={disabled ? undefined : () => skills.detach.mutate(skill.id)}
+                      isDetaching={skills.detach.isPending}
+                    />
                   ))}
                   <Typography
                     variant="bodySmall"
@@ -155,6 +137,14 @@ export function AgentSkillsPanel({ projectId, appVersionId, disabled = false, sx
                 isLoading={picker.isLoading}
                 attachedIds={attachedIds}
                 onClose={() => setAnchorEl(null)}
+                onCreateNew={
+                  onCreateNew === undefined
+                    ? undefined
+                    : () => {
+                        setAnchorEl(null);
+                        onCreateNew();
+                      }
+                }
                 onPick={(skillId, pickedVersionId) => {
                   setAnchorEl(null);
                   skills.attach.mutate({ skillId, skillVersionId: pickedVersionId });
@@ -169,4 +159,3 @@ export function AgentSkillsPanel({ projectId, appVersionId, disabled = false, sx
 }
 
 const containerSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.5rem' };
-const rowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' };

@@ -220,11 +220,17 @@ const chipsContainerSx: SxProps<Theme> = (theme: Theme) => ({
   '&::-webkit-scrollbar': { display: 'none' },
 });
 
+/**
+ * Issue 2049: `background.tag.default` is the SAME colour as the rail's own
+ * surface in both schemes, so an unselected tag was invisible as a chip. The
+ * translucent `userInputBackground` tint reads as a raised chip on any surface.
+ */
 const chipSx: SxProps<Theme> = (theme: Theme) => ({
   borderRadius: theme.vars.shape.radiusMd,
   border: 'none',
-  backgroundColor: theme.vars.palette.background.tag.default,
+  backgroundColor: theme.vars.palette.background.userInputBackground,
   color: theme.vars.palette.text.tag.default,
+  '&:hover': { backgroundColor: theme.vars.palette.background.tagChip.hover },
 });
 
 const selectedChipSx: SxProps<Theme> = (theme: Theme) => ({

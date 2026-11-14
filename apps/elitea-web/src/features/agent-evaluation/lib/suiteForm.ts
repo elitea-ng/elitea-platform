@@ -78,7 +78,7 @@ export function suiteFormError(form: SuiteForm): string | undefined {
   }
   if (parseCost(form.costLimitPerCase) === 'invalid' || parseCost(form.costLimitPerRun) === 'invalid') {
     return t(
-      'features.agentEvaluation.suites.badCost',
+      'features.agentEvaluation.suites.badCostMin',
       'A cost limit is an amount in USD of at least 0.0001, or empty for no limit.',
     );
   }
