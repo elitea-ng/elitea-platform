@@ -3441,6 +3441,16 @@
       "usedBy": ["features/chat-messages/api/contextViewApi.ts"]
     },
     {
+      "id": "chat.listRunGuardrailNotices",
+      "method": "GET",
+      "path": "/elitea_core/guardrail_notices/prompt_lib/{projectId}/{runId}",
+      "operationId": "listRunGuardrailNotices",
+      "source": "generated",
+      "responseSchema": "RunGuardrailNotices",
+      "fixture": null,
+      "usedBy": ["features/chat-messages/api/guardrailNoticesApi.ts"]
+    },
+    {
       "id": "chat.decideExecutionInterrupt",
       "method": "POST",
       "path": "/elitea_core/task/prompt_lib/{projectId}/{responseMessageId}/interrupts/{interruptKey}/decision",

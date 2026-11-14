@@ -42,3 +42,32 @@ VALUES ('output', 'mask', 'leaked', 'closed')`); err == nil {
 		t.Fatalf("verdict = %+v", v)
 	}
 }
+
+// TestGuardrailNoticeVerdictsKeepOnlyWhatTheChatReports pins migration 0247
+// (warn and warned are accepted) and the notice read: only blocked, masked,
+// warned and error_closed verdicts of the run and project come back.
+func TestGuardrailNoticeVerdictsKeepOnlyWhatTheChatReports(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	store, err := ComposeRunSteps(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO gateway.guardrail_verdicts
+       (project_id, user_id, execution_id, route, stage, row_name, detector, detector_type, action, outcome, fail_mode, labels)
+VALUES (3, 8, 'exec-gn-1', '/llm/v1/chat/completions', 'input', 'heads-up', 'pii', 'personal_data', 'warn', 'warned', 'open', '{email}'),
+       (3, 8, 'exec-gn-1', '/llm/v1/chat/completions', 'input', 'audit', 'regex', 'regex', 'flag', 'flagged', 'open', '{x}'),
+       (3, 8, 'exec-gn-1', '/llm/v1/chat/completions', 'input', 'ok', 'pii', 'personal_data', 'mask', 'pass', 'closed', '{}'),
+       (3, 8, 'exec-gn-1', '/llm/v1/chat/completions', 'input', 'cloud', 'azure', 'azure_content_safety', 'block', 'error_closed', 'closed', '{detector_error}'),
+       (4, 8, 'exec-gn-1', '/llm/v1/chat/completions', 'input', 'other', 'pii', 'personal_data', 'warn', 'warned', 'open', '{email}')`); err != nil {
+		t.Fatalf("seed verdicts (the warn action and warned outcome need migration 0247): %v", err)
+	}
+	got, err := store.GuardrailNoticeVerdicts(ctx, 3, "exec-gn-1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Outcome != "warned" || got[0].Row != "heads-up" || got[1].Outcome != "error_closed" {
+		t.Fatalf("notices = %+v", got)
+	}
+}

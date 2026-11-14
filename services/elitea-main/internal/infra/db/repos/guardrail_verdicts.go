@@ -55,3 +55,47 @@ SELECT occurred_at, route, stage, row_name, detector, detector_type, action, out
 	}
 	return verdicts, nil
 }
+
+// GuardrailNoticeVerdict is a guardrail verdict that the person who sent the
+// message must be told about: the gateway blocked the request, masked part of
+// it, warned about it, or could not run a guardrail whose fail mode is closed.
+// Like GuardrailVerdict it holds no content.
+type GuardrailNoticeVerdict struct {
+	OccurredAt time.Time
+	Stage      string
+	Row        string
+	Detector   string
+	Action     string
+	Outcome    string
+	Labels     []string
+}
+
+// GuardrailNoticeOutcomes are the verdict outcomes a chat notice reports. A
+// pass, a flag and a failure under fail mode open say nothing to the person:
+// a flag is an audit record by definition, and an open failure changed
+// nothing.
+var GuardrailNoticeOutcomes = []string{"blocked", "masked", "warned", "error_closed"}
+
+// GuardrailNoticeVerdicts reads up to limit of the verdicts of a run that a
+// chat notice reports, oldest first. They are read by execution id, the run
+// id, as GuardrailVerdicts does.
+func (s *RunSteps) GuardrailNoticeVerdicts(ctx context.Context, projectID int64, runID string, limit int) ([]GuardrailNoticeVerdict, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT occurred_at, stage, row_name, detector, action, outcome, labels
+  FROM gateway.guardrail_verdicts
+ WHERE execution_id = $1 AND project_id = $2 AND outcome = ANY($3)
+ ORDER BY occurred_at, id
+ LIMIT $4`, runID, projectID, GuardrailNoticeOutcomes, limit)
+	if err != nil {
+		return nil, fmt.Errorf("run steps: read guardrail notices: %w", err)
+	}
+	verdicts, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (GuardrailNoticeVerdict, error) {
+		var v GuardrailNoticeVerdict
+		err := row.Scan(&v.OccurredAt, &v.Stage, &v.Row, &v.Detector, &v.Action, &v.Outcome, &v.Labels)
+		return v, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("run steps: read guardrail notices: %w", err)
+	}
+	return verdicts, nil
+}

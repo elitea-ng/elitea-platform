@@ -4885,6 +4885,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(readEvidence).Get(v2runevidence.VerifyPath, runEvidence.Verify)
 					r.With(readEvidence).Get(v2runevidence.ContentPath, runEvidence.GetContent)
 					r.With(readEvidence).Get(v2runevidence.ConversationRunsPath, runEvidence.ListConversationRuns)
+					// The chat's guardrail notices (issue 2012) take the
+					// permission that sends a chat message: a person who
+					// chats must learn why a message was refused, and the
+					// notice carries no step content.
+					r.With(projectPermission(v2runevidence.NoticesPermission)).Get(v2runevidence.NoticesPath, runEvidence.GuardrailNotices)
 				}
 				r.With(requirePublish).
 					Get("/publish_validate/prompt_lib/{projectID}/{versionID}", coreHandler.PublishValidate)

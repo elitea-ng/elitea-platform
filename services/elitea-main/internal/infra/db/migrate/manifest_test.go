@@ -1123,7 +1123,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// gateway.gateway_model_image_prices and the kind, image_count, image_size,
 	// image_quality and pricing_source columns of gateway.llm_request_logs
 	// (issue 1969). No backfill, no permission.
-	require.EqualValues(t, 243, Head(shared))
+	//
+	// 247: shared/0247_guardrail_warn_action.sql, the `warn` action and the
+	// `warned` outcome in the CHECK constraints of
+	// gateway.guardrail_verdicts (issue 2012). No data, no permission.
+	require.EqualValues(t, 247, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

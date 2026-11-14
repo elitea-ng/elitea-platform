@@ -5,7 +5,7 @@
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
  * client contract:    1.54
- * operations sha256:  90f7ce0d441261594219777baafedfb6c11c64e23476f55952ced30a49d7d69e
+ * operations sha256:  f7ee943a688628161a2769979c78db8a8fbddc8137d5fbb7eab75d49b27deda1
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -1054,6 +1054,31 @@ export interface paths {
          *     unknown event type.
          */
         post: operations["generateApplicationDraftStream"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/guardrail_notices/prompt_lib/{project_id}/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                /** @description The run (execution) id. */
+                run_id: components["parameters"]["RunStepRunId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * What the content guardrails did to a run, for the chat
+         * @description The guardrail verdicts of a run that the person must be told about, merged to one notice per guardrail, stage and kind (ADR-0043 decision 1): a request or an answer the gateway blocked, content it redacted (masked), content a `warn` guardrail warned about, and a guardrail with fail mode closed that could not run. A notice names the stage, the action, the guardrail (the governance entry's name) and the finding labels such as `email`. It never holds the inspected text or the matched value. A run with no notice, and an unknown run, answer an empty list. The gateway writes verdicts up to one second after the request, so a client asks again once when a turn failed or ended and the list is empty. Requires `models.chat.messages.create`, the permission that sends a chat message; reading the full verdicts needs `runs.evidence.read` (listRunSteps).
+         */
+        get: operations["listRunGuardrailNotices"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4384,6 +4409,31 @@ export interface components {
             /** @description The platform's cap at that tier. */
             tier_cap?: number;
         };
+        /** @description One guardrail's effect on a run, merged over the run's LLM requests. It never holds the inspected text or the matched value. */
+        RunGuardrailNotice: {
+            /** @description The detector's configured action, `block`, `mask`, `flag` or `warn`. */
+            action: string;
+            detector: string;
+            /** Format: date-time */
+            first_seen_at: string;
+            /** @description The name of the guardrail governance entry. */
+            guardrail: string;
+            /** @description What happened: `blocked` (the request or the answer was refused), `redacted` (a match was masked), `warned` (a warn guardrail found a match and changed nothing) or `unavailable` (a guardrail with fail mode closed could not run, so the request was refused). */
+            kind: string;
+            /** @description The finding labels, for example `email`. Never a value. */
+            labels: string[];
+            /**
+             * Format: int32
+             * @description The number of the run's LLM requests the notice covers.
+             */
+            requests: number;
+            /** @description `input` (the request to the model) or `output` (the answer). */
+            stage: string;
+        };
+        RunGuardrailNotices: {
+            notices: components["schemas"]["RunGuardrailNotice"][];
+            run_id: string;
+        };
         /** @description Opaque selected-tools blob (object or null) — see marker. */
         SelectedTools: unknown;
         /** @description NOTE(W2): `config` is never populated in responses, `is_default` (the boolean property, unrelated to `default_version_id`) is always false, `type` is always the literal "skill", and `updated_at` is always the zero sentinel "0001-01-01T00:00:00Z" — the skills table itself has no updated_at/is_default columns (migrations/001_initial.sql). instructions/tags/versions/ version_details/default_version_id, in contrast, DO round-trip. */
@@ -5180,6 +5230,8 @@ export interface components {
         Offset: number;
         /** @description Project identifier (extracted from URL path) */
         ProjectId: string;
+        /** @description The run (execution) id. */
+        RunStepRunId: string;
         /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
         XClientVersion: string;
     };
@@ -6741,6 +6793,35 @@ export interface operations {
                     "application/json": components["schemas"]["PredictLLMUnavailableResponse"];
                 };
             };
+        };
+    };
+    listRunGuardrailNotices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                /** @description The run (execution) id. */
+                run_id: components["parameters"]["RunStepRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run's guardrail notices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunGuardrailNotices"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            500: components["responses"]["500"];
         };
     };
     listMemories: {

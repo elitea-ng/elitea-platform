@@ -10,6 +10,7 @@ import (
 const (
 	OutcomePass        = "pass"
 	OutcomeFlagged     = "flagged"
+	OutcomeWarned      = "warned"
 	OutcomeMasked      = "masked"
 	OutcomeBlocked     = "blocked"
 	OutcomeErrorOpen   = "error_open"
@@ -52,6 +53,10 @@ func strongestAction(row *Row) string {
 			return ActionBlock
 		case ActionMask:
 			action = ActionMask
+		case ActionWarn:
+			if action == ActionFlag {
+				action = ActionWarn
+			}
 		}
 	}
 	return action
@@ -84,14 +89,16 @@ func outcomeRank(o string) int {
 	switch o {
 	case OutcomeFlagged:
 		return 1
-	case OutcomeErrorOpen:
+	case OutcomeWarned:
 		return 2
-	case OutcomeMasked:
+	case OutcomeErrorOpen:
 		return 3
-	case OutcomeBlocked:
+	case OutcomeMasked:
 		return 4
-	case OutcomeErrorClosed:
+	case OutcomeBlocked:
 		return 5
+	case OutcomeErrorClosed:
+		return 6
 	}
 	return 0
 }

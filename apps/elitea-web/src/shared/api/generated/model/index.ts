@@ -860,6 +860,8 @@ export * from "./runCapOverride.zod";
 export * from "./runCapOverrideRequest.zod";
 export * from "./runCapRefusal.zod";
 export * from "./runCheckRequest.zod";
+export * from "./runGuardrailNotice.zod";
+export * from "./runGuardrailNotices.zod";
 export * from "./runGuardrailVerdict.zod";
 export * from "./runPipelineInboundTriggerParams.zod";
 export * from "./runStep.zod";
