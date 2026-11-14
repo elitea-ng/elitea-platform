@@ -34,6 +34,8 @@ export interface EvaluationPermissions {
   readonly canDeleteDatasets: boolean;
   readonly canReadRuns: boolean;
   readonly canStartRuns: boolean;
+  readonly canReadHumanScores: boolean;
+  readonly canScoreHuman: boolean;
   /** Enhance with AI quotes the pinned version's instructions, which the version read grants. */
   readonly canReadVersions: boolean;
 }
@@ -57,6 +59,8 @@ export function useEvaluationPermissions(projectId: string | undefined): Evaluat
       canDeleteDatasets: granted.has(PERMISSIONS.evaluation.datasetDelete),
       canReadRuns: granted.has(PERMISSIONS.evaluation.runRead),
       canStartRuns: granted.has(PERMISSIONS.evaluation.runCreate),
+      canReadHumanScores: granted.has(PERMISSIONS.evaluation.humanScoreRead),
+      canScoreHuman: granted.has(PERMISSIONS.evaluation.humanScoreCreate),
       canReadVersions: granted.has(VERSIONS_GET),
     };
   }, [permissionQuery.data]);

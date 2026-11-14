@@ -1,11 +1,10 @@
 /**
- * One run's scorecard. READ-ONLY.
+ * One run's scorecard.
  *
- * There is no human-score input in this release, and the response OMITS
- * `human_scores` rather than answering `[]`. That omission is rendered, not
- * swallowed: `unavailable` names each missing capability with its reason, and a
- * reader who cannot see human scores is told the deployment cannot have any
- * rather than being left to conclude nobody has entered one.
+ * A result bound to a human dimension waits as `pending_human`; a reviewer with
+ * the right scores it here (HumanScoreCell), which turns it into a score and
+ * moves the headline. `unavailable` still names each capability this release
+ * does not serve, with its reason.
  *
  * A CASE THAT COULD NOT BE SCORED shows its status and its verdict, never a
  * zero. Zero is a real and very bad score; printing it for an unscorable case
@@ -26,6 +25,7 @@ import { isRunTerminal, useEvalRun, useEvalScorecard } from '../model/useEvalRun
 import { useEvaluationPermissions } from '../model/useEvaluationPermissions';
 import { EnhanceWithAi } from './EnhanceWizard';
 import { RunInsights } from './RunInsights';
+import { HumanScoreCell } from './HumanScoreCell';
 
 const rowSx: SxProps<Theme> = {
   display: 'flex',
@@ -50,6 +50,9 @@ function resultReason(result: EvalRunResult): string | undefined {
 
 /** The score cell: the normalised number, or the reason there is none. */
 function resultScoreText(result: EvalRunResult): string {
+  if (result.status === 'pending_human') {
+    return t('features.agentEvaluation.scorecard.pendingHuman', 'Waiting for a human score');
+  }
   if (result.status !== 'ok' || result.normalized_score === null || result.normalized_score === undefined) {
     return t('features.agentEvaluation.scorecard.unscored', 'Not scored ({{status}})', {
       status: result.status,
@@ -58,6 +61,11 @@ function resultScoreText(result: EvalRunResult): string {
   return t('features.agentEvaluation.scorecard.score', '{{score}} / 100', {
     score: result.normalized_score,
   });
+}
+
+/** A result a person scores: waiting for one, or already carrying one. */
+function isHumanResult(result: EvalRunResult): boolean {
+  return result.status === 'pending_human' || result.verdict?.['scored_by'] === 'human';
 }
 
 interface ScorecardBodyProps {
@@ -143,6 +151,7 @@ function ScorecardBody({ projectId, scorecard, liveRun }: ScorecardBodyProps): R
               {resultReason(result)}
             </Typography>
           )}
+          {isHumanResult(result) && <HumanScoreCell projectId={projectId} run={scorecard.run} result={result} />}
         </Box>
       ))}
 

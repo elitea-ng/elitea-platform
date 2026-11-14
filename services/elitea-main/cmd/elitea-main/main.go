@@ -2754,6 +2754,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if evalRunsRepo != nil {
 		orchestrator := v2evaluation.NewOrchestrator(
 			evalRunsRepo, v2evaluation.NewAIJudge(predictCompleter), predictCompleter, logger)
+		// The run limits (issue 2013) are enforced from the usage the gateway
+		// attributed to the run, which the analytics repository reads.
+		orchestrator.WithUsage(dbrepos.NewAnalyticsRepo(pool))
 		// Started with the PROCESS context, so the workers and the recovery
 		// sweep stop on SIGTERM. A run in flight then hands its row back to
 		// `created`, and the next process resumes it at startup; a process
@@ -3232,11 +3235,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// for the reason above. The orchestrator is started below, after the
 		// config is built, so that a nil pool leaves all three fields nil
 		// together and the thirteen routes are simply not registered.
-		EvalDatasetsRepo:  evalDatasetsRepository(pool),
-		EvalRunsRepo:      evalRunsRepo,
-		EvalOrchestrator:  evalOrchestrator,
-		ReleaseGate:       releaseGate,
-		SuspensionChanged: executionSuspensions.gate.Notify,
+		EvalDatasetsRepo: evalDatasetsRepository(pool),
+		EvalRunsRepo:     evalRunsRepo,
+		EvalOrchestrator: evalOrchestrator,
+		EvalSuitesRepo:   evalSuitesRepository(pool),
+		// The run repository stores the human scores too (issue 2008).
+		EvalHumanScoresRepo: evalHumanScoresRepository(evalRunsRepo),
+		ReleaseGate:         releaseGate,
+		SuspensionChanged:   executionSuspensions.gate.Notify,
 		// ADR-0044 decision 1 (#1501): the governed profile forces the
 		// connector catalogue to approved_only.
 		CatalogueGoverned:  credentialAdmission.Governed(),
@@ -3490,6 +3496,18 @@ func evalRunsRepository(pool *pgxpool.Pool) v2evaluation.RunRepository {
 		return nil
 	}
 	return dbrepos.NewEvalRunsRepo(pool)
+}
+
+func evalHumanScoresRepository(runs v2evaluation.RunRepository) v2evaluation.HumanScoreRepository {
+	scores, _ := runs.(v2evaluation.HumanScoreRepository)
+	return scores
+}
+
+func evalSuitesRepository(pool *pgxpool.Pool) v2evaluation.SuiteRepository {
+	if pool == nil {
+		return nil
+	}
+	return dbrepos.NewEvalSuitesRepo(pool)
 }
 
 func tagsRepository(pool *pgxpool.Pool) v2tags.Repository {

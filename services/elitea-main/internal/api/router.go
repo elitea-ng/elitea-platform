@@ -481,6 +481,14 @@ type RouterConfig struct {
 	// invisibly absent. The run START route reports the row it wrote either
 	// way, so a queued run is never claimed to be running.
 	EvalOrchestrator v2evaluation.Enqueuer
+	// EvalSuitesRepo holds the evaluation suites (run settings and limits,
+	// issue 2013). Unassigned, the suite routes are not registered and a run
+	// start cannot name a suite.
+	EvalSuitesRepo v2evaluation.SuiteRepository
+	// EvalHumanScoresRepo stores the human scores of runs (issue 2008). It is
+	// the run repository's own implementation in production. Unassigned, the
+	// two human score routes are not registered.
+	EvalHumanScoresRepo v2evaluation.HumanScoreRepository
 	// ReleaseGate is the evaluation release gate (ADR-0040 decision 4). Nil
 	// leaves its four routes registered, answering 503.
 	ReleaseGate *releasegate.Gate
@@ -4241,6 +4249,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				if cfg.EvalRunsRepo != nil && cfg.EvalDimensionsRepo != nil {
 					runHandler := v2evaluation.NewRunHandler(
 						cfg.EvalRunsRepo, cfg.EvalDimensionsRepo, cfg.EvalOrchestrator)
+					if cfg.EvalSuitesRepo != nil {
+						runHandler.WithSuites(cfg.EvalSuitesRepo)
+					}
 					requireRunRead := evaluationGate(v2evaluation.PermissionRunRead)
 					requireRunWrite := evaluationGate(v2evaluation.PermissionRunCreate)
 
@@ -4254,6 +4265,30 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/eval_run_cancel/prompt_lib/{projectID}/{runID}", runHandler.Cancel)
 					r.With(requireRunRead).
 						Get("/eval_results/prompt_lib/{projectID}/{runID}", runHandler.Results)
+
+					// Human scores (issue 2008).
+					if cfg.EvalHumanScoresRepo != nil {
+						humanHandler := v2evaluation.NewHumanScoreHandler(cfg.EvalRunsRepo, cfg.EvalHumanScoresRepo)
+						r.With(evaluationGate(v2evaluation.PermissionHumanScoreRead)).
+							Get("/eval_human_scores/prompt_lib/{projectID}/{runID}", humanHandler.List)
+						r.With(evaluationGate(v2evaluation.PermissionHumanScoreCreate)).
+							Post("/eval_human_scores/prompt_lib/{projectID}/{runID}", humanHandler.Create)
+					}
+				}
+
+				// Suites: run settings and limits (issue 2013, step 1). Read
+				// takes run.read and write takes run.create, the rights to
+				// see and to start runs.
+				if cfg.EvalSuitesRepo != nil {
+					suiteHandler := v2evaluation.NewSuiteHandler(cfg.EvalSuitesRepo)
+					r.With(evaluationGate(v2evaluation.PermissionRunRead)).
+						Get("/eval_suites/prompt_lib/{projectID}", suiteHandler.List)
+					r.With(evaluationGate(v2evaluation.PermissionRunCreate)).
+						Post("/eval_suites/prompt_lib/{projectID}", suiteHandler.Create)
+					r.With(evaluationGate(v2evaluation.PermissionRunCreate)).
+						Put("/eval_suite/prompt_lib/{projectID}/{suiteID}", suiteHandler.Update)
+					r.With(evaluationGate(v2evaluation.PermissionRunCreate)).
+						Delete("/eval_suite/prompt_lib/{projectID}/{suiteID}", suiteHandler.Delete)
 				}
 
 				// Enhance with AI: one proposal from a finished run, written

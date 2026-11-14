@@ -178,8 +178,12 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// library. Leave EvalDimensionsRepo nil and the five run operations the
 		// spec declares resolve to no route at all, and the forward check fails
 		// with a message about the spec rather than about this config.
-		EvalDatasetsRepo:   struct{ v2evaluation.DatasetRepository }{},
-		EvalRunsRepo:       struct{ v2evaluation.RunRepository }{},
+		EvalDatasetsRepo: struct{ v2evaluation.DatasetRepository }{},
+		EvalRunsRepo:     struct{ v2evaluation.RunRepository }{},
+		EvalSuitesRepo:   struct{ v2evaluation.SuiteRepository }{},
+		EvalHumanScoresRepo: struct {
+			v2evaluation.HumanScoreRepository
+		}{},
 		EvalDimensionsRepo: struct{ v2evaluation.Repository }{},
 		SkillsRepo:         struct{ v2skills.Repository }{},
 		FoldersRepo:        struct{ v2folders.Repository }{},

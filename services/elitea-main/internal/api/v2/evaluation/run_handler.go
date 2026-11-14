@@ -28,6 +28,13 @@ type RunHandler struct {
 	runs         RunRepository
 	dimensions   Repository
 	orchestrator Enqueuer
+	suites       SuiteReader
+}
+
+// WithSuites lets a run start name a suite (RunStartInput.SuiteID).
+func (h *RunHandler) WithSuites(suites SuiteReader) *RunHandler {
+	h.suites = suites
+	return h
 }
 
 func NewRunHandler(runs RunRepository, dimensions Repository, orchestrator Enqueuer) *RunHandler {
@@ -122,7 +129,7 @@ func (h *RunHandler) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	created, err := NewRunStarter(h.runs, h.dimensions, h.orchestrator).
+	created, err := NewRunStarter(h.runs, h.dimensions, h.orchestrator).WithSuites(h.suites).
 		Start(r.Context(), projectID, input, callerUserID(r), nil)
 	if err != nil {
 		apierr.Write(w, err)
@@ -188,16 +195,17 @@ func buildSnapshot(
 			// request named, and nothing would say so.
 			return RunSnapshot{}, apierr.BadRequest("dimension " + id + " is not in this project's library")
 		}
-		// ENGINES ARE RESTRICTED TO `ai` IN THIS SLICE, and the refusal names
-		// the reason rather than scoring the dimension some other way. There is
-		// no code sandbox in elitea-main; a `code` validation that silently
-		// passed would be the most dangerous fallback in the feature.
-		if !supportsAI(dimension) {
+		// The ai engine scores a dimension that allows it. A dimension that
+		// allows only the human engine is scored by a reviewer: its results
+		// wait as pending_human until a human score is recorded (human.go).
+		// A `code` validation is refused with a named reason: there is no code
+		// sandbox in elitea-main, and one that silently passed would be the
+		// most dangerous fallback in the feature.
+		engine, ok := runEngine(dimension)
+		if !ok {
 			return RunSnapshot{}, apierr.NotImplemented(
 				"dimension " + dimension.Name + " cannot be scored by this release: it allows only the " +
-					engineList(dimension) + " engine, and this release serves the ai engine alone — " +
-					"the code engine needs a sandbox elitea-main does not have, and the human engine needs the " +
-					"human-score surface, which is not built")
+					engineList(dimension) + " engine, and the code engine needs a sandbox elitea-main does not have")
 		}
 		snapshot.Dimensions[id] = SnapshotDimension{
 			Name:        dimension.Name,
@@ -209,7 +217,7 @@ func buildSnapshot(
 		}
 		snapshot.Bindings = append(snapshot.Bindings, SnapshotBinding{
 			DimensionID:    id,
-			Engine:         EngineAI,
+			Engine:         engine,
 			Weight:         dimension.DefaultWeight,
 			Target:         dimension.DefaultTarget,
 			TargetOperator: dimension.DefaultTargetOperator,
@@ -219,13 +227,23 @@ func buildSnapshot(
 	return snapshot, nil
 }
 
-func supportsAI(dimension Dimension) bool {
+// runEngine picks the engine a run scores a dimension with: ai when the
+// dimension allows it, else human. The second value is false for a dimension
+// no engine of this release can score.
+func runEngine(dimension Dimension) (string, bool) {
+	human := false
 	for _, engine := range dimension.AllowedEngines {
-		if engine == EngineAI {
-			return true
+		switch engine {
+		case EngineAI:
+			return EngineAI, true
+		case EngineHuman:
+			human = true
 		}
 	}
-	return false
+	if human {
+		return EngineHuman, true
+	}
+	return "", false
 }
 
 func engineList(dimension Dimension) string {
@@ -264,15 +282,13 @@ func (h *RunHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, withoutFrozenAgent(cancelled))
 }
 
-// scorecardResponse is the READ-ONLY scorecard.
+// scorecardResponse is the scorecard: the run, one page of its results and its
+// headline.
 //
 // Its keys are the reference's ResultsScorecardDialog's: `run`, `results`,
-// `headline_score`, `total`, `offset`. `human_scores` is NOT present, and its
-// absence is deliberate and load-bearing: this release has no human-score
-// surface, so answering `"human_scores": []` would tell a client "there are
-// none" where the truth is "this deployment cannot have any". An OMITTED key
-// with a flag saying why is the shape budgets/usage_dimensions.go established
-// and #617's evidence bar asks for by name.
+// `headline_score`, `total`, `offset`. The human scores are read through their
+// own route (human.go), and a result a reviewer has not scored yet is a
+// `pending_human` result.
 type scorecardResponse struct {
 	Run           Run         `json:"run"`
 	Results       []RunResult `json:"results"`
@@ -294,10 +310,6 @@ type capabilityGap struct {
 // properties of the RELEASE and not of the run. Building it per request from
 // the run would make a deployment's capabilities look like they varied.
 var scorecardGaps = []capabilityGap{
-	{
-		Key:    "human_scores",
-		Reason: "this release has no human-score surface: eval_human_scores is not created and nothing writes it",
-	},
 	{
 		Key:    "platform_validations",
 		Reason: "platform validations are code-engine bindings, and there is no code sandbox in elitea-main",

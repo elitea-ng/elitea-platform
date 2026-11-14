@@ -78,7 +78,13 @@ function mockSupportingReads(options: {
   );
 }
 
-beforeEach(() => configureGeneratedClient({ baseUrl: BASE }));
+beforeEach(() => {
+  configureGeneratedClient({ baseUrl: BASE });
+  // The run limits (suites) read every runs view makes. Empty unless a test says otherwise.
+  server.use(
+    http.get(`${BASE}/elitea_core/eval_suites/prompt_lib/:projectId`, () => HttpResponse.json({ rows: [], total: 0 })),
+  );
+});
 afterEach(() => resetGeneratedClient());
 
 describe('EvaluationRunsView', () => {
@@ -138,13 +144,14 @@ describe('EvaluationRunsView', () => {
    * A `code` dimension is NOT offered. Offering it would produce a 501 the
    * person could not have predicted from the form.
    */
-  it('offers only ai dimensions to score against', async () => {
+  it('offers the ai and human dimensions to score against, and not code', async () => {
     mockPermissions(ALL_RUN_PERMISSIONS);
     mockSupportingReads({
       datasets: [{ id: '5', name: 'Support', description: '', application_id: null, is_shared: false, case_count: 2, active_case_count: 2 }],
       dimensions: [
         dimensionRow(),
         dimensionRow({ id: '4', name: 'JSON shape', allowed_engines: ['code'] }),
+        dimensionRow({ id: '5', name: 'Tone', allowed_engines: ['human'] }),
       ],
     });
 
@@ -154,6 +161,8 @@ describe('EvaluationRunsView', () => {
 
     expect(await screen.findByTestId('run-dimension-3')).toBeInTheDocument();
     expect(screen.queryByTestId('run-dimension-4')).not.toBeInTheDocument();
+    // A dimension only a person can score is offered: the run waits for the reviewer.
+    expect(screen.getByTestId('run-dimension-5')).toBeInTheDocument();
   });
 
   /*

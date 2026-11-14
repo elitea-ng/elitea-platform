@@ -117,6 +117,18 @@ A saved agent's editor includes an **Evaluation** tab to define what "good" look
   <Tab title="Runs">Start a run against a dataset and your dimensions. Runs poll for progress while this tab stays open — leaving it pauses polling until you return — and produce a scorecard with one score per dimension per case when they finish.</Tab>
 </Tabs>
 
+### Human scores
+
+A dimension that allows only the **Human** engine is scored by a person. A run still answers every case, but it does not call the AI judge for that dimension: the case shows **Waiting for a human score** on the run's scorecard, with no number. A reviewer enters a score (on the dimension's own scale: 0 or 1 for a yes/no dimension, otherwise between its minimum and maximum) and an optional note, and **Save score**. The case then shows the score, and the run's overall score is recalculated from the scored cases; cases still waiting do not count, and are not treated as zero.
+
+Scores are never overwritten. **Re-score** adds a new one, the newest is the score in force, and each shows who gave it and the note. Reading scores needs the evaluation human-score read permission and entering one needs the human-score create permission; project admins and editors have the create permission, and viewers can read. The release gate treats a case that is still waiting for a human score as undecided, so a gate with a human dimension stays pending until every case is scored. A dimension that allows both the AI and Human engines is scored by the AI judge.
+
+### Run limits
+
+**Run limits** (a button on the Runs tab) saves a named set of limits you pick when you start a run: tokens and cost (an estimate in USD from the price list) **per case** and **per run**, and what the run does when the **run** limit is reached: **Stop the run** (the run ends as errored, says which limit it reached, and keeps the cases it scored) or **Only report it** (the run finishes and shows a **Token limit reached** or **Cost limit reached** note). Leave a field empty for no limit.
+
+The limits are checked from the usage already recorded for the run, between model calls, so a run can pass a limit by the call that crosses it. A case that reaches its own limit is not judged further (its remaining judge results are skipped, with the reason), and the run goes on. Changing or deleting saved limits does not change runs that already started. Anyone who can read runs sees the limits; changing them needs the permission to start runs. Limits on steps, time and tool output are not offered: a case is a single model call with no tools today, so they would change nothing.
+
 ### Insights on a finished run
 
 Open a finished run's scorecard to see three cards above the scores:

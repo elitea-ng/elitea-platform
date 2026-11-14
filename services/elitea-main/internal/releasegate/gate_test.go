@@ -486,3 +486,94 @@ func TestStartingGateIsNotEvaluatedUntilStarted(t *testing.T) {
 		t.Fatalf("a stale starting gate = %s %+v, %v", result.State, result.Failures, err)
 	}
 }
+
+// A result that waits for a human score is undecided: the gate stays pending
+// while any is left, and settles once the reviewer has scored it (issue 2008).
+func TestStartGateStaysPendingWhileAResultAwaitsAHumanScore(t *testing.T) {
+	gate, store, runs, _ := newTestGate(t)
+	store.suites = []SuiteConfig{{ApplicationID: 3, DatasetID: 4, Criteria: []Criterion{threshold("1", 50)}}}
+
+	id, err := gate.StartGate(context.Background(), 1, 3, 30, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := gate.Result(context.Background(), 1, id)
+	runID := strconv.FormatInt(result.Runs[0].EvalRunID, 10)
+
+	pending := evaluation.RunResult{DatasetCaseID: "8", DimensionID: "1", Status: evaluation.ResultStatusPendingHuman}
+	runs.finish(runID, evaluation.RunStatusFinished, ok("7", "1", 100, met(true)), pending)
+
+	result, err = gate.Result(context.Background(), 1, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != StatePending {
+		t.Fatalf("a result awaiting a human score must leave the gate pending, got %s %+v", result.State, result.Failures)
+	}
+
+	runs.finish(runID, evaluation.RunStatusFinished, ok("7", "1", 100, met(true)), ok("8", "1", 90, met(true)))
+	result, err = gate.Result(context.Background(), 1, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != StatePassed {
+		t.Fatalf("after the human score the gate must decide, got %s %+v", result.State, result.Failures)
+	}
+}
+
+func TestPendingGateSaysItWaitsForHumanScores(t *testing.T) {
+	gate, store, runs, _ := newTestGate(t)
+	store.suites = []SuiteConfig{{ApplicationID: 3, DatasetID: 4, Criteria: []Criterion{threshold("1", 50)}}}
+	id, err := gate.StartGate(context.Background(), 1, 3, 30, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := gate.Result(context.Background(), 1, id)
+	runID := strconv.FormatInt(result.Runs[0].EvalRunID, 10)
+	pending := func(caseID string) evaluation.RunResult {
+		return evaluation.RunResult{DatasetCaseID: caseID, DimensionID: "1", Status: evaluation.ResultStatusPendingHuman}
+	}
+	runs.finish(runID, evaluation.RunStatusFinished, pending("7"), pending("8"))
+
+	result, _ = gate.Result(context.Background(), 1, id)
+	if result.State != StatePending || result.PendingReason != "waiting for 2 human scores" {
+		t.Fatalf("state %s reason %q", result.State, result.PendingReason)
+	}
+	// One score lands: the next read says one is left, and Pass settles the gate
+	// once the last one is in.
+	runs.finish(runID, evaluation.RunStatusFinished, ok("7", "1", 90, met(true)), pending("8"))
+	result, _ = gate.Result(context.Background(), 1, id)
+	if result.PendingReason != "waiting for 1 human score" {
+		t.Fatalf("reason %q", result.PendingReason)
+	}
+	runs.finish(runID, evaluation.RunStatusFinished, ok("7", "1", 90, met(true)), ok("8", "1", 80, met(true)))
+	passed, err := gate.Pass(context.Background())
+	if err != nil || passed.Settled != 1 {
+		t.Fatalf("pass settled %d: %v", passed.Settled, err)
+	}
+	if result, _ = gate.Result(context.Background(), 1, id); result.State != StatePassed || result.PendingReason != "" {
+		t.Fatalf("state %s reason %q", result.State, result.PendingReason)
+	}
+}
+
+// A run that errored or was cancelled fails the gate. Pending human rows of
+// another run of the gate must not keep it waiting.
+func TestFailedRunDoesNotWaitForHumanScoresOfAnotherRun(t *testing.T) {
+	gate, store, runs, _ := newTestGate(t)
+	store.suites = []SuiteConfig{{ApplicationID: 3, DatasetID: 4, Regression: true, Criteria: []Criterion{threshold("1", 50)}}}
+	release := int64(5)
+	id, err := gate.StartGate(context.Background(), 1, 3, 30, &release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := gate.Result(context.Background(), 1, id)
+	candidate, baseline := result.Runs[0], result.Runs[1]
+	runs.finish(strconv.FormatInt(baseline.EvalRunID, 10), evaluation.RunStatusErrored)
+	runs.finish(strconv.FormatInt(candidate.EvalRunID, 10), evaluation.RunStatusFinished,
+		evaluation.RunResult{DatasetCaseID: "7", DimensionID: "1", Status: evaluation.ResultStatusPendingHuman})
+
+	result, _ = gate.Result(context.Background(), 1, id)
+	if result.State != StateFailed {
+		t.Fatalf("state = %s, want failed: the errored run decides", result.State)
+	}
+}

@@ -66,8 +66,9 @@ const (
 // the verdict — never `ok` with a score of 0, which is a real and very bad
 // score and would drag a headline down with a number nobody measured.
 //
-// `pending_human` and `skipped` are accepted on read (a later slice writes
-// them) and are not produced here.
+// `pending_human` is written for a binding whose engine is `human`: the case
+// was answered and waits for a reviewer (human.go). `skipped` is written for a
+// binding the run could not score (a code engine, a case limit).
 const (
 	ResultStatusOK           = "ok"
 	ResultStatusError        = "error"
@@ -149,6 +150,12 @@ type RunSnapshot struct {
 	Bindings   []SnapshotBinding            `json:"bindings"`
 	// Agent is the frozen agent turn input, or nil (see SnapshotAgent).
 	Agent *SnapshotAgent `json:"agent,omitempty"`
+	// Limits are the suite's run settings, frozen at start (RunLimits), or nil
+	// when the run was started without a suite: it then has no limit.
+	Limits *RunLimits `json:"limits,omitempty"`
+	// SuiteID names the suite the limits came from. Informational: the run
+	// never reads the suite again.
+	SuiteID string `json:"suite_id,omitempty"`
 }
 
 // Run is one stored run row.
@@ -173,9 +180,13 @@ type Run struct {
 	// legitimate score, so the two must stay distinguishable on the wire.
 	HeadlineScore *float64 `json:"headline_score"`
 	Error         string   `json:"error,omitempty"`
-	CreatedAt     string   `json:"created_at"`
-	StartedAt     string   `json:"started_at,omitempty"`
-	FinishedAt    string   `json:"finished_at,omitempty"`
+	// LimitReached is `tokens` or `cost` once the run reached its run limit
+	// (LimitReachedTokens, LimitReachedCost), whether the run stopped or only
+	// reported it.
+	LimitReached string `json:"limit_reached,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	StartedAt    string `json:"started_at,omitempty"`
+	FinishedAt   string `json:"finished_at,omitempty"`
 }
 
 // RunProgress is the reference's `progress{done,total}`.
@@ -212,6 +223,8 @@ type RunStartInput struct {
 	ApplicationVersionID *int     `json:"application_version_id"`
 	DimensionIDs         []string `json:"dimension_ids"`
 	TriggerType          string   `json:"trigger_type"`
+	// SuiteID, when set, starts the run with that suite's limits.
+	SuiteID *string `json:"suite_id"`
 }
 
 // MaxDimensionsPerRun bounds the fan-out. A run performs one agent call per

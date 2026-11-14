@@ -169,6 +169,8 @@ export const PERMISSIONS = {
     datasetDelete: 'models.applications.evaluation.dataset.delete',
     runRead: 'models.applications.evaluation.run.read',
     runCreate: 'models.applications.evaluation.run.create',
+    humanScoreRead: 'models.applications.evaluation.human_score.read',
+    humanScoreCreate: 'models.applications.evaluation.human_score.create',
   },
   /**
    * The outbound project webhook registry (issue #876).
