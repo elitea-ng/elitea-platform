@@ -13,8 +13,9 @@ import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { generateContentBlocking, readGeneratedContent, type AiEditLlmSettings } from '../../api/aiEdit';
+import { aiEditPatch, buildAiEditInput, parseAiEditDraft, type AiEditFields } from '../../lib/aiEditDraft';
 import { applicationErrorMessage } from '../../lib/errorMessage';
-import { TextDiffHighlight } from './TextDiffHighlight';
+import { AiEditReviewForm } from './AiEditReviewForm';
 
 /**
  * Port of `apps/elitea-ui/src/[fsd]/entities/edit-entity-with-ai/ui/
@@ -46,25 +47,24 @@ export interface EditInstructionsWithAiModalProps {
   readonly open: boolean;
   readonly onClose: () => void;
   readonly projectId: string;
-  readonly instructions: string;
+  readonly current: AiEditFields;
   /** The resolved Service Prompt — the caller's gate guarantees it is non-empty. */
   readonly basePrompt: string;
   readonly llmSettings: AiEditLlmSettings;
-  readonly onApply: (instructions: string) => void;
+  /** Only the fields the review changed, relative to what the prompt was built from. */
+  readonly onApply: (patch: Partial<AiEditFields>) => void;
 }
 
 type Phase = 'prompt' | 'loading' | 'review';
 
-function buildUserInput(basePrompt: string, instructions: string, request: string): string {
-  return `${basePrompt}\n\nCURRENT INSTRUCTIONS:\n${instructions}\n\nREQUESTED CHANGE:\n${request}`;
-}
-
 export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalProps): ReactNode {
-  const { open, onClose, projectId, instructions, basePrompt, llmSettings, onApply } = props;
+  const { open, onClose, projectId, current, basePrompt, llmSettings, onApply } = props;
 
   const [phase, setPhase] = useState<Phase>('prompt');
   const [request, setRequest] = useState('');
-  const [proposed, setProposed] = useState('');
+  const [proposed, setProposed] = useState<AiEditFields>(current);
+  // What the prompt was built from. The review diffs against it and Apply writes the difference to it.
+  const [snapshot, setSnapshot] = useState<AiEditFields>(current);
   const [error, setError] = useState<string | undefined>(undefined);
 
   const generationTokenRef = useRef(0);
@@ -74,9 +74,10 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
     if (open) return;
     setPhase('prompt');
     setRequest('');
-    setProposed('');
+    setProposed(current);
+    setSnapshot(current);
     setError(undefined);
-  }, [open]);
+  }, [open, current]);
 
   const handleClose = useCallback(() => {
     generationTokenRef.current += 1;
@@ -88,6 +89,7 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
   const handleGenerate = useCallback(async (): Promise<void> => {
     if (request.trim() === '') return;
     const token = ++generationTokenRef.current;
+    const base = current;
     const controller = new AbortController();
     abortRef.current = controller;
     setPhase('loading');
@@ -96,7 +98,7 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
       const result = await generateContentBlocking(
         projectId,
         {
-          user_input: buildUserInput(basePrompt, instructions, request.trim()),
+          user_input: buildAiEditInput(basePrompt, base, request.trim()),
           chat_history: [],
           llm_settings: llmSettings,
         },
@@ -110,7 +112,9 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
         setPhase('prompt');
         return;
       }
-      setProposed(content);
+      // The prompt asks for a JSON agent configuration; plain text stands for the instructions alone.
+      setSnapshot(base);
+      setProposed(parseAiEditDraft(content, base) ?? { ...base, instructions: content });
       setPhase('review');
     } catch (caught) {
       if (token !== generationTokenRef.current) return;
@@ -122,12 +126,12 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
     } finally {
       abortRef.current = undefined;
     }
-  }, [basePrompt, instructions, llmSettings, projectId, request]);
+  }, [basePrompt, current, llmSettings, projectId, request]);
 
   const handleApply = useCallback(() => {
-    onApply(proposed);
+    onApply(aiEditPatch(snapshot, proposed));
     handleClose();
-  }, [handleClose, onApply, proposed]);
+  }, [handleClose, onApply, proposed, snapshot]);
 
   const content =
     phase === 'loading' ? (
@@ -141,23 +145,11 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
         </Typography>
       </Box>
     ) : phase === 'review' ? (
-      <Box sx={reviewSx}>
-        <Typography variant="labelMedium">{t('features.agents.aiEdit.proposedTitle', 'Proposed instructions')}</Typography>
-        <TextDiffHighlight
-          original={instructions}
-          modified={proposed}
-          mode="modified"
-        />
-        <TextField
-          fullWidth
-          multiline
-          minRows={6}
-          maxRows={16}
-          label={t('features.agents.aiEdit.editProposed', 'Edit before applying')}
-          value={proposed}
-          onChange={(event) => setProposed(event.target.value)}
-        />
-      </Box>
+      <AiEditReviewForm
+        current={snapshot}
+        draft={proposed}
+        onChange={setProposed}
+      />
     ) : (
       <Box sx={promptSx}>
         <TextField
@@ -194,7 +186,7 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
         <BaseBtn
           variant="elitea"
           size="small"
-          disabled={proposed.trim() === ''}
+          disabled={proposed.instructions.trim() === '' || proposed.name.trim() === ''}
           onClick={handleApply}
         >
           {t('features.agents.aiEdit.apply', 'Apply')}
@@ -242,4 +234,3 @@ const loadingSx: SxProps<Theme> = {
   minHeight: '12rem',
 };
 const promptSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: '30rem' };
-const reviewSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: '30rem' };
