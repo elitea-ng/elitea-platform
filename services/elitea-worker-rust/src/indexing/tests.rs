@@ -2030,11 +2030,7 @@ async fn without_an_extractor_a_document_is_read_in_process_and_without_a_socket
     )
     .await
     .expect("summary");
-    assert_eq!(
-        summary.skipped.get("unsupported_type"),
-        None,
-        "{summary:?}"
-    );
+    assert_eq!(summary.skipped.get("unsupported_type"), None, "{summary:?}");
     assert_eq!(summary.indexed_documents, 0, "{summary:?}");
     // A sidecar configured but not running (nothing listens at the path):
     // the document is skipped `extract_failed`, the run goes on.
