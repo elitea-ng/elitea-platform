@@ -58,6 +58,39 @@ export function useRailTagSelection(): RailTagSelection {
 }
 
 /**
+ * The open project folder of a list page (issue 2048), kept in the shell-wide
+ * `entity_folder` search param so the folder panel in the side panel and the
+ * list below the toolbar read one value, and a filtered list is linkable. The
+ * param is shared by the five lists, and a list's own folders have their own
+ * ids, so a stale value from another list matches nothing there; the panel
+ * clears it when the folder is not in its list.
+ */
+export interface RailFolderSelection {
+  readonly selectedFolderId: string | undefined;
+  /** `undefined` shows every entity again. */
+  readonly selectFolder: (folderId: string | undefined) => void;
+}
+
+interface FolderSearch {
+  /** A string once the route's `text()` schema has run; a router that parses the URL alone hands a numeric id back as a number. */
+  readonly entity_folder?: string | number;
+}
+
+export function useRailFolderSelection(): RailFolderSelection {
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as FolderSearch;
+  const raw = search.entity_folder;
+  const selectedFolderId = raw === undefined || raw === '' ? undefined : String(raw);
+  const selectFolder = useCallback(
+    (folderId: string | undefined) => {
+      void navigate({ to: '.', search: (prev) => ({ ...prev, entity_folder: folderId }) });
+    },
+    [navigate],
+  );
+  return { selectedFolderId, selectFolder };
+}
+
+/**
  * The viewer's own identity, read from the router context the app installs
  * (`src/app/router-context.ts`'s `AuthContext`) — structurally, not by
  * importing that module: `app/` is the top layer and `shared/` may not

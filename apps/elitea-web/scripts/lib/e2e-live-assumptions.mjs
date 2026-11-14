@@ -421,7 +421,6 @@ export const LIVE_SAFETY_EXCLUDED = Object.freeze([
 export const LIVE_ENV_DEPENDENT = Object.freeze([
   'journeys/agents/agents.issues-import-version-format.spec.ts', // E2E-MOCK-MODEL
   // seeded rig fixtures beyond the project's name (folders, dashboards, resources)
-  'journeys/agents/agents.closed-entity-folders-gap.spec.ts',
   'journeys/agents/agents.list.spec.ts',
   'journeys/pipelines/pipelines.dashboard.spec.ts',
   'journeys/shell/shell.resources.spec.ts',

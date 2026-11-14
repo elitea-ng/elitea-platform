@@ -39,6 +39,7 @@ import (
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
 	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -187,6 +188,7 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		EvalDimensionsRepo: struct{ v2evaluation.Repository }{},
 		SkillsRepo:         struct{ v2skills.Repository }{},
 		FoldersRepo:        struct{ v2folders.Repository }{},
+		EntityFoldersRepo:  struct{ v2entityfolders.Repository }{},
 		MemoriesRepo:       struct{ v2memories.Repository }{},
 		TagsRepo:           struct{ v2tags.Repository }{},
 		AnalyticsRepo:      struct{ v2analytics.Repository }{},

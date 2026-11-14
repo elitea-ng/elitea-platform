@@ -17,6 +17,7 @@ describe('search-params > shared', () => {
     { key: 'conversation', valid: 'conv-1', malformed: { a: 1 } },
     { key: 'create', valid: '1', malformed: 'yes' },
     { key: 'destTab', valid: 'History', malformed: { a: 1 } },
+    { key: 'entity_folder', valid: '12', malformed: { a: 1 } },
     { key: 'from', valid: '/agents', malformed: { a: 1 } },
     { key: 'history_run_id', valid: 'run-1', malformed: { a: 1 } },
     { key: 'index_name', valid: 'idx-1', malformed: { a: 1 } },

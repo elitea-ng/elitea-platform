@@ -29,6 +29,6 @@ export { railStatForKind, railStatForPath, railStatRoutePrefixes, resolveRailSta
 /** @public */
 export type { RailAuthorCounts, RailStatDescriptor, RailStatKind, RailStatValues } from './lib/railStatistics';
 
-export { selectRailViewer, useRailTagSelection, useRailViewer } from './useRailContext';
+export { selectRailViewer, useRailFolderSelection, useRailTagSelection, useRailViewer } from './useRailContext';
 /** @public */
-export type { RailTagSelection, RailViewer } from './useRailContext';
+export type { RailFolderSelection, RailTagSelection, RailViewer } from './useRailContext';

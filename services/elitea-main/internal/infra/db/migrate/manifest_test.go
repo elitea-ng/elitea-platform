@@ -1441,6 +1441,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// execution each case ran as (issues 2011 step B, 2013 step 2). No
 	// permission.
 	//
+	// 247: tenant/0247_project_entity_folders.sql, project_folders and
+	// project_folder_items, the shared per-kind folders of the Agents,
+	// Pipelines, Skills, Toolkits and MCPs lists (issue 2048). No permission.
+	//
 	// 248: tenant/0248_agent_memory_vector_trigger.sql, the trigger that
 	// writes the shared agent memory vector journal when an entry changes,
 	// and the one-time enqueue of the active entries (issue 1657). No
