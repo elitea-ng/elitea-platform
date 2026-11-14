@@ -84,7 +84,7 @@ describe('SimpleLLMInputItem', () => {
     const value = view.getByLabelText('Value');
     const inputRoot = value.parentElement as HTMLElement;
     const textField = inputRoot.parentElement as HTMLElement;
-    const typeRoot = view.getByRole('combobox', { name: /Type/ }).closest('.MuiFormControl-root') as HTMLElement;
+    const typeRoot = view.getByRole('combobox', { name: /Type/ }).closest('[class*="MuiFormControl"]') as HTMLElement;
     // Same `small` size on both fields.
     expect(inputRoot.className).toContain('sizeSmall');
     expect(typeRoot.querySelector('[class*="sizeSmall"]')).not.toBeNull();

@@ -81,7 +81,7 @@ function alignmentFor(alignWithSelect: boolean, fieldName: string): { readonly m
   return alignWithSelect ? { multiline: fieldName.toLowerCase() === 'code' } : undefined;
 }
 
-function actionsFor(alignWithSelect: boolean): InputBaseProps['actions'] {
+function actionsFor(alignWithSelect: boolean): NonNullable<InputBaseProps['actions']> {
   return { enabled: true, showCopy: true, showFullScreen: true, ...(alignWithSelect ? { offsetY: ALIGNED_LABEL_ROW_SHIFT } : {}) };
 }
 
