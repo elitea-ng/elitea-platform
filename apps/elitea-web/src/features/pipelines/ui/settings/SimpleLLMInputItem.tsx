@@ -225,7 +225,8 @@ function fieldRowSx(isMultiline: boolean): SxProps<Theme> {
   return { display: 'flex', gap: '0.75rem', alignItems: isMultiline ? 'flex-start' : 'flex-end', minHeight: '3.79rem' };
 }
 const typeSelectWrapperSx: SxProps<Theme> = { width: '7.25rem' };
-const selectSx: SxProps<Theme> = { marginBottom: '0rem' };
+// `minWidth: 0`: the select's stock 10rem minimum is wider than the 7.25rem Type column, so its underline ran on under the Value field.
+const selectSx: SxProps<Theme> = { marginBottom: '0rem', minWidth: 0 };
 
 const valueWrapperSx: SxProps<Theme> = { flex: 1 };
 

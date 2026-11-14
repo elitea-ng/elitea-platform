@@ -25,12 +25,25 @@ export function valuePlaceholder(variable: string): string {
   }
 }
 
-/** Props that keep the label above the field and draw the hint in a legible colour on the node's dark surface. */
-export function visiblePlaceholderProps(placeholder: string): Pick<TextFieldProps, 'placeholder' | 'slotProps' | 'sx'> {
+/**
+ * Props that keep the label above the field and draw the hint in a legible colour on the node's dark
+ * surface, and that line the Value field up with the Type select beside it (#2001).
+ *
+ * The standard `TextField` brand style pads its root (8px on top), pads its input row 12px on the
+ * left and gives the input an 8px bottom margin; the `SingleSelect` next to it has none of those, and
+ * is `size="small"`. Left alone, the two labels, the two underlines and the two text starts sat at
+ * different heights and the Value text began under the caret. This zeroes those extras and uses the
+ * same `small` size, so both fields share one label line, one text line and one underline.
+ * (`&&&` beats the brand style's descendant selector without naming a `.Mui*` class.)
+ */
+export function visiblePlaceholderProps(placeholder: string): Pick<TextFieldProps, 'placeholder' | 'size' | 'slotProps' | 'sx'> {
   return {
     placeholder,
-    slotProps: { inputLabel: { shrink: true } },
+    size: 'small',
+    slotProps: { inputLabel: { shrink: true }, input: { sx: { '&&&': { padding: 0 } } } },
     sx: (theme: Theme) => ({
+      padding: 0,
+      '& input, & textarea': { marginBottom: 0 },
       '& input::placeholder, & textarea::placeholder': { color: theme.vars.palette.text.secondary, opacity: 1 },
     }),
   };

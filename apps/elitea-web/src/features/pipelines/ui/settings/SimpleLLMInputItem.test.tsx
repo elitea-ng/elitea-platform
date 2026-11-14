@@ -79,6 +79,21 @@ describe('SimpleLLMInputItem', () => {
     }
   });
 
+  it.each([true, false])('the Value field shares the Type select\'s size, label line and text start, with AI assistant %s (issue 2001)', assistant => {
+    const view = renderItem({ variableName: 'system', variable: 'system', type: 'fixed', value: 'hello', defaultValue: '', onChangeMapping: vi.fn(), enableAIAssistant: assistant });
+    const value = view.getByLabelText('Value');
+    const inputRoot = value.parentElement as HTMLElement;
+    const textField = inputRoot.parentElement as HTMLElement;
+    // Same `small` size as the Type select, which is built small.
+    expect(inputRoot.className).toContain('sizeSmall');
+    // The standard TextField brand style adds 8px above, 12px left of and 8px below the text; the select has none.
+    expect(getComputedStyle(textField).paddingTop).toBe('0px');
+    expect(getComputedStyle(inputRoot).paddingLeft).toBe('0px');
+    expect(getComputedStyle(value).marginBottom).toBe('0px');
+    // Both labels are shrunk above their fields.
+    expect(view.container.querySelectorAll('label[data-shrink="true"]').length).toBeGreaterThanOrEqual(2);
+  });
+
   it('renders a plain text field for a fixed/fstring/string type', () => {
     const { getByLabelText } = renderItem({
       variableName: 'system',
