@@ -911,6 +911,7 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         }
         Some(
             "model_gateway.rejected"
+            | "model_gateway.guardrail_blocked"
             | "model_gateway.invalid_request"
             | "anthropic_gateway.invalid_request"
             | "anthropic_gateway.sampling_unsupported",

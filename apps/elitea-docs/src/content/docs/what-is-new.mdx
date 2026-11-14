@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Agent Evaluation: run cases as agent runs, with steps, time and tool output controls
+
+An evaluation case can now run as a real agent run on the worker instead of one model call. Choose **Agent run** in **How a case runs**, in **Run limits** or in the start form: each case runs the pinned agent version with its tools through the same path as a chat, and the judges score its final answer. Saved limits gain a **Steps per case** limit, a **Time per case** limit (the agent run is cancelled and the case stores a timeout) and **Store tool outputs in the results**, shown only for agent runs. A finished agent run's scorecard adds a **Trajectory** card (steps per case p50 and p95, tool calls, errors, retries, and each case's steps), and the **Efficiency** card adds the tool metrics. One model call per case stays the default, and nothing changes unless you choose the mode. **Run the tenant migration `0246` and upgrade Main and the web app together.** See [Evaluation](/menus/agents#agent-runs).
+
 ## GKE and Argo CD: no Autopilot drift, clearer storage error
 
 Every container the Helm chart renders now requests at least 50m CPU and 52Mi memory, the GKE Autopilot minimum, so Argo CD no longer shows the NATS sidecars, the worker's material init container, the web pod and the cleanup Job as permanently out of sync. When elitea-main cannot reach a GCS bucket with Workload Identity, the startup error now names the service-account annotation and the `roles/iam.workloadIdentityUser` binding to check. The GKE guide adds a wrapper-chart and hand-written-Ingress section and four more troubleshooting rows.
@@ -28,6 +32,10 @@ A dimension that only a person can score can now be used in a run: the run answe
 ## Agent evaluation: Enhance with AI and run insights
 
 A finished evaluation run's scorecard now has **Enhance with AI**: the model reads the agent version the run scored and the cases that missed their targets, and proposes an instruction patch, rubric or target changes for dimensions, and corrected expected outputs for cases. You review them step by step and nothing is saved until the last step; an instruction patch creates a draft version that still goes through the agent's change request and release gate. The scorecard also shows the run's consumption (agent and judge tokens and cost), an efficiency strip (latency p50 and p95, timeouts, tokens and cost per case) and a comparison with the previous run on the same dataset. **Upgrade Main and the web app together.** See [Evaluation](/menus/agents#evaluation).
+
+## Personal data rules, a warn level, and guardrail notices in the chat
+
+The LLM gateway has a built-in **personal data** detector next to the secret rules: `personal_data` finds e-mail addresses, phone numbers, payment cards (Luhn-checked) and IBANs (mod-97-checked), with no service to run. A guardrail detector has a new action, **warn**, which changes nothing and tells the person. **Admin › LLM Governance › Credentials / Personal data** creates the matching entries on one screen. **When a guardrail blocks, redacts or warns about a message, the chat now says so**, on web, desktop and mobile, with the name of the entry and the kind of data found, never the data. A blocked message no longer shows a generic runtime error. A message is still stored as the person wrote it: only what goes to the model is masked. See [Content controls](/admin/enterprise-controls/content-controls#chat-notices).
 
 ## Pipeline editor fixes
 

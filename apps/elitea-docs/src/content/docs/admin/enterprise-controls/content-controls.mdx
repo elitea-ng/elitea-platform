@@ -21,9 +21,9 @@ An entry has these settings:
 | --- | --- | --- |
 | Scope | Projects, providers and models, as in the other governance entries. Agents of one project (`scope.agent_ids`), with exactly one project in `scope.project_ids`. Users are not permitted. | Every request |
 | `stage` | `input`: the request, before the provider call. `output`: the answer, streamed or not. | — (required) |
-| `detectors` | An ordered list of 1 to 16 detectors. Each detector has a `type` (`regex`, `secrets`, `http`, `azure_content_safety`, `bedrock_guardrails`, `model_armor`, `llama_guard` or `presidio`) and an `action` (`block`, `mask` or `flag`). On an input entry, `content: tool_results` makes a detector read the tool results only. | — (required) |
+| `detectors` | An ordered list of 1 to 16 detectors. Each detector has a `type` (`regex`, `secrets`, `personal_data`, `http`, `azure_content_safety`, `bedrock_guardrails`, `model_armor`, `llama_guard` or `presidio`) and an `action` (`block`, `mask`, `flag` or `warn`). On an input entry, `content: tool_results` makes a detector read the tool results only. | — (required) |
 | `timeout_ms` | 50 to 30000. The time limit for all detectors of the entry on one check. All the calls of the entry share this one limit. | 2000 |
-| `fail_mode` | `closed`: a detector failure or a timeout refuses the request. `open`: the request continues and the verdict records the failure. | `closed` when a detector blocks or masks; `open` when all detectors flag |
+| `fail_mode` | `closed`: a detector failure or a timeout refuses the request. `open`: the request continues and the verdict records the failure. | `closed` when a detector blocks or masks; `open` when all detectors flag or warn |
 | `apply_to_embeddings` | `true` applies an input entry to embedding requests too. | `false` |
 | `stream_window_bytes` | 64 to 8192. The look-behind buffer of a streamed answer for an output entry. | 256 |
 
@@ -35,7 +35,7 @@ The gateway applies the entries as follows:
 
 1. **Every matching entry runs.** The narrowest entry does not replace the wider ones. The entries run from the widest scope to the narrowest, and then by name. The detectors of an entry run in their order. A block in an entry stops the check before a later entry sends content to its classifier.
 2. **Every detector reads the original content.** The gateway collects the spans of all `mask` detectors and replaces them one time, with `[REDACTED:<label>]`.
-3. **A `block` result stops the check** and refuses the request or the answer. A `flag` result changes nothing and adds a verdict.
+3. **A `block` result stops the check** and refuses the request or the answer. A `flag` result changes nothing and adds a verdict. A `warn` result changes nothing too, adds a verdict, and shows the person a [notice in the chat](#chat-notices).
 4. **The input stage runs before the provider call.** It reads the message text, the Responses instructions and the tool results in all formats: a chat `tool` message, a Responses `function_call_output` (text or content parts), a shell call output, and an Anthropic `tool_result`. A blocked request does not reach the provider. A masked request goes to the provider with the markers.
 5. **The output stage runs on unary and streamed answers**, in the OpenAI chat and completions, Responses and Anthropic Messages formats. It reads the answer text and the tool call arguments: chat `tool_calls[].function.arguments`, Responses `function_call` arguments and custom tool input, and Anthropic `tool_use` input. A `block` on tool call arguments refuses the answer.
 6. **A mask keeps tool call arguments valid JSON.** The gateway checks each string value of the arguments in its decoded form and replaces only the masked values. Arguments that are not valid JSON are checked and masked as plain text.
@@ -53,6 +53,13 @@ The error message names the entry, the detector and the labels. It never contain
 
 - **`regex`** finds the `patterns` (1 to 64 expressions of at most 1024 bytes) and the `terms` (at most 1000 words or phrases, 64 KiB in total). The patterns use the RE2 syntax, which has linear time and no back-references. A pattern that matches an empty string is refused. A term matches without case, on word boundaries. Set a `label` to name the findings (default `custom`).
 - **`secrets`** uses the platform secret rules: `aws-access-key-id`, `aws-secret-access-key`, `private-key`, `github-token`, `github-fine-grained-token`, `gitlab-token`, `slack-token`, `slack-webhook`, `connection-string-password`, `password-assignment` and `jwt`. These are the rules that the desktop handoff uses. Set `rules` to use only some of them. The label of a finding is its rule id. When a rule names a secret group, a `mask` action replaces only the secret value, not the key name around it. The `private-key` rule matches the full PEM block, from the `BEGIN` line through the `END` line. A `mask` action replaces the header, the key body and the footer with one marker. When the text has no `END` line, the mask continues to the end of that message or tool result. In a request, a key without an `END` line does not mask the messages after it.
+- **`personal_data`** finds personal data with the built-in rule pack, with no service to run. The rules are `email`, `phone`, `payment-card` and `iban`; set `rules` to use only some of them. The label of a finding is its rule id. Each rule checks a value before it reports it, so that a number that only looks like personal data is not a finding:
+  - `email`: an address such as `jane.doe@corp.example`. Asset names such as `icon@2x.png`, and the documentation domains `example.com`, `example.org` and `example.net`, are not findings.
+  - `phone`: an international number that starts with `+` and has 8 to 15 digits, or a formatted North American number such as `415-555-2671` or `(415) 555-2671`. A date, a version number or a bare run of digits is not a phone number. A national number in another format needs a `regex` entry or Presidio.
+  - `payment-card`: 13 to 19 digits, with spaces or dashes of one kind, that pass the Luhn check and start with the prefix of a known issuer (Visa, Mastercard, American Express, Discover, JCB, Diners Club, UnionPay, Maestro). A run of one repeated digit is not a card.
+  - `iban`: upper-case, with a registered country code, the registered length for that country and a valid mod-97 check.
+
+  The pack finds the common formats and trades recall for precision on purpose. Use [Presidio](/admin/enterprise-controls/guardrail-adapters/presidio) when you need names, addresses and national identifiers. A `personal_data` detector cannot fill the prompt-injection slot.
 - **`http`** sends the content to a classifier that you operate, with the [HTTP adapter contract](#http-adapter-contract).
 - **Cloud classifiers** send the content to a classifier service of your cloud account. Each one has a setup guide:
   - [`azure_content_safety`](/admin/enterprise-controls/guardrail-adapters/azure-content-safety): Azure AI Content Safety harm categories, blocklists and Prompt Shields.
@@ -68,7 +75,7 @@ The error message names the entry, the detector and the labels. It never contain
 The gateway sends the content to a detector in calls. The size of one call depends on the detector:
 
 - **`regex` and `http`** read all the messages and tool results of the check in one call, joined by blank lines. So an `http` detector makes one call for each check.
-- **`secrets`** reads each message and each tool result alone. A match never crosses from one message to the next.
+- **`secrets` and `personal_data`** read each message and each tool result alone. A match never crosses from one message to the next.
 - **The cloud and self-hosted classifiers** have a size limit for one call. The gateway puts whole messages together into units up to that limit. A unit never mixes tool results with other messages. A message that is longer than the limit goes into two or more units, cut at a space when one is near. A finding without a position covers its unit, not all of the request.
 
 | Detector | Limit for one call |
@@ -166,7 +173,7 @@ Embedding requests have no text output, so output entries do not apply to them. 
 
 ### Evidence
 
-Each detector run is a **verdict**. A verdict records the entry, the detector, its type, the action, the outcome, the fail mode, the labels, the number of findings, the highest score, the latency and the number of checks it merges. **A verdict never contains the inspected text or the matched text.** The outcome is one of `pass`, `flagged`, `masked`, `blocked`, `error_open` (the detector failed and the request continued) and `error_closed` (the detector failed and the request was refused). An agent entry that the gateway could not evaluate has a verdict with the detector `agent_scope`, the label `agent_unresolved` and the outcome `error_open` or `error_closed`.
+Each detector run is a **verdict**. A verdict records the entry, the detector, its type, the action, the outcome, the fail mode, the labels, the number of findings, the highest score, the latency and the number of checks it merges. **A verdict never contains the inspected text or the matched text.** The outcome is one of `pass`, `flagged`, `warned`, `masked`, `blocked`, `error_open` (the detector failed and the request continued) and `error_closed` (the detector failed and the request was refused). An agent entry that the gateway could not evaluate has a verdict with the detector `agent_scope`, the label `agent_unresolved` and the outcome `error_open` or `error_closed`.
 
 A streamed answer is checked one time for each window. The gateway merges these checks into one verdict for each detector, with `runs` set to the number of checks.
 
@@ -195,6 +202,29 @@ The gateway writes the verdicts to the table `gateway.guardrail_verdicts` togeth
 
 For an agent run, the [run steps API](/admin/enterprise-controls/reconstruct-a-run) returns the verdicts of the run in `guardrail_verdicts` on the first page of `GET /api/v2/elitea_core/run_steps/prompt_lib/{project_id}/{run_id}`. The verdicts are not part of the run's hash chain: the gateway writes them, and elitea-main writes the chain.
 
+### Chat notices
+
+A person who sends a message learns what a guardrail did to it. In the web chat, the desktop app and the mobile app, a notice appears under the answer when the gateway blocked, redacted or warned about the message or the answer:
+
+| Kind | When | What the person sees |
+| --- | --- | --- |
+| `blocked` | A `block` detector found a match | A message that names the entry. A blocked message used to show a generic runtime error. |
+| `redacted` | A `mask` detector replaced a match | A message that part of the message or the answer was redacted. |
+| `warned` | A `warn` detector found a match | A message that names the entry and the kinds of data found, for example `email, iban`. The content is not changed. |
+| `unavailable` | A detector failed and the fail mode is `closed` | A message that the guardrail could not run, so the request was stopped. |
+
+A `flag` detector shows no notice: it is an audit record. A detector that failed under the fail mode `open` shows none either, because it changed nothing.
+
+A notice carries the stage, the action, the name of the entry, the detector and the labels. **It never carries the inspected text or the matched value.** The clients read it from `GET /api/v2/elitea_core/guardrail_notices/prompt_lib/{project_id}/{run_id}`, a summary of the verdicts of the run. The route needs the permission that sends a chat message (`models.chat.messages.create`), not `runs.evidence.read`, because a person who chats must learn why a message was refused. The gateway writes verdicts up to one second after the request, so the clients ask once, about a second and a half after the turn ends.
+
+A block reaches the worker as the gateway error `guardrail_blocked`. The run fails with the code `MODEL_REQUEST_REJECTED`, and the chat replaces its generic text with the notice. On a Local work turn of the desktop app, the same block has the refusal code `model_gateway.guardrail_blocked`.
+
+**What the notices do not cover.** The web chat shows a notice under an answer that streamed in the open window, and under a stored answer that failed with a guardrail block. After a reload, a redaction or a warning on an answer that did not fail is not shown again. The mobile app shows the notices of the turn that the person has just watched, until the next turn starts. The conversation still keeps the text that the person wrote, as sent: the gateway masks only what goes to the model. Inspecting a message before it is stored needs an amendment of ADR-0043, and this release does not do it.
+
+### Presets
+
+**Admin › LLM Governance › Credentials / Personal data** is a one-screen preset. Choose whether to check credentials (the `secrets` rules), personal data (the `personal_data` rules) or both, what to do with a match (block, redact or warn) and where to check (what people send to the model, the answer of the model, or both). The preset creates the entries through the ordinary create route, one for each stage, for example `Credentials and personal data - input` and `Credentials and personal data - output`. The defaults block credentials and mask personal data. The entries apply to every project; edit an entry to narrow its scope. They are ordinary entries: change or delete them like any other.
+
 ### Configure
 
 1. Open **Admin › LLM Governance** and select **New entry**.
@@ -208,7 +238,8 @@ For an `http`, `llama_guard` or `presidio` detector or a cloud classifier, first
 
 ### Limitations
 
-- The built-in detectors find patterns, terms and known secret formats. Harm categories and personal data need a classifier: a cloud classifier detector, Llama Guard, Presidio or the HTTP adapter.
+- The built-in detectors find patterns, terms, known secret formats and the four personal data formats above (e-mail, phone, payment card, IBAN). Harm categories, names, addresses and national identifiers need a classifier: a cloud classifier detector, Llama Guard, Presidio or the HTTP adapter.
+- A guardrail does not inspect a message before it is stored. The conversation keeps the original text, and only what goes to the model is masked.
 - Azure AI Content Safety and Llama Guard return no positions, so their findings cover all of the content.
 
 ## Output contracts

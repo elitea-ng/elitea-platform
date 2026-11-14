@@ -38,6 +38,14 @@ const (
 	LimitReachedCost   = "cost"
 )
 
+// How a run executes a case (Run.ExecutionMode). predict_blocking is the
+// default and what a suite keeps unless it is changed on purpose.
+//
+// runtime_plane runs each case as a real agent run of the pinned agent version
+// on the worker, through the chat start path (issue 2011 step B). Its three
+// controls (step limit, time limit, tool outputs) mean nothing without steps
+// and tools, so a predict_blocking suite may not set them (issue 2013 step 2).
+
 // Bounds on a limit, so a value always fits the columns (integer and
 // numeric(14,4)) and a typo is refused instead of stored.
 const (
@@ -46,6 +54,9 @@ const (
 	// MinCostLimit is the smallest cost the column holds (numeric(14,4)): a
 	// smaller value would be stored as 0 and the table refuses it.
 	MinCostLimit = 0.0001
+	// MaxStepLimit and MaxTimeLimitSeconds bound the runtime_plane controls.
+	MaxStepLimit        = 1000
+	MaxTimeLimitSeconds = 3600
 )
 
 // RunLimits is the settings part of a suite. A nil limit is "no limit". Tokens
@@ -59,7 +70,27 @@ type RunLimits struct {
 	CostLimitPerRun   *float64 `json:"cost_limit_per_run"`
 	// OnRunLimit is RunLimitActionStop or RunLimitActionReport.
 	OnRunLimit string `json:"on_run_limit"`
+
+	// ExecutionMode is ExecutionModePredictBlocking (the default) or
+	// ExecutionModeRuntimePlane. The three fields below apply only to
+	// runtime_plane and are refused on a predict_blocking suite.
+	ExecutionMode string `json:"execution_mode"`
+	// StepLimitPerCase is the most agent steps (model calls and tool calls) one
+	// case may take; the case's run is cancelled when it is reached.
+	StepLimitPerCase *int `json:"step_limit_per_case"`
+	// TimeLimitPerCaseSeconds is the wall time one case may take; the case's run
+	// is cancelled at the deadline and a timeout result is stored.
+	TimeLimitPerCaseSeconds *int `json:"time_limit_per_case_seconds"`
+	// StoreToolOutputs keeps the tool outputs of a case's steps in its stored
+	// evidence. Nil reads as true: a suite written before the field kept them.
+	StoreToolOutputs *bool `json:"store_tool_outputs"`
 }
+
+// IsRuntimePlane reports whether the settings run cases as agent runs.
+func (l RunLimits) IsRuntimePlane() bool { return l.ExecutionMode == ExecutionModeRuntimePlane }
+
+// KeepsToolOutputs answers StoreToolOutputs with its default.
+func (l RunLimits) KeepsToolOutputs() bool { return l.StoreToolOutputs == nil || *l.StoreToolOutputs }
 
 // HasAny reports whether any limit is set.
 func (l RunLimits) HasAny() bool {
@@ -94,6 +125,24 @@ func (l RunLimits) Validate() error {
 	if l.OnRunLimit != RunLimitActionStop && l.OnRunLimit != RunLimitActionReport {
 		return apierr.BadRequest("on_run_limit must be stop or report")
 	}
+	return l.validateRuntime()
+}
+
+// validateRuntime checks the execution mode and the controls that belong to
+// runtime_plane.
+func (l RunLimits) validateRuntime() error {
+	if l.ExecutionMode != "" && l.ExecutionMode != ExecutionModePredictBlocking && l.ExecutionMode != ExecutionModeRuntimePlane {
+		return apierr.BadRequest("execution_mode must be predict_blocking or runtime_plane")
+	}
+	if l.StepLimitPerCase != nil && (*l.StepLimitPerCase < 1 || *l.StepLimitPerCase > MaxStepLimit) {
+		return apierr.BadRequest(fmt.Sprintf("step_limit_per_case must be a whole number between 1 and %d", MaxStepLimit))
+	}
+	if l.TimeLimitPerCaseSeconds != nil && (*l.TimeLimitPerCaseSeconds < 1 || *l.TimeLimitPerCaseSeconds > MaxTimeLimitSeconds) {
+		return apierr.BadRequest(fmt.Sprintf("time_limit_per_case_seconds must be a whole number of seconds between 1 and %d", MaxTimeLimitSeconds))
+	}
+	if !l.IsRuntimePlane() && (l.StepLimitPerCase != nil || l.TimeLimitPerCaseSeconds != nil) {
+		return apierr.BadRequest("step_limit_per_case and time_limit_per_case_seconds apply only to the runtime_plane execution mode")
+	}
 	return nil
 }
 
@@ -120,6 +169,16 @@ func (w *SuiteWrite) Normalize() {
 	w.Name = strings.TrimSpace(w.Name)
 	if w.OnRunLimit == "" {
 		w.OnRunLimit = RunLimitActionStop
+	}
+	if w.ExecutionMode == "" {
+		w.ExecutionMode = ExecutionModePredictBlocking
+	}
+	if w.StoreToolOutputs == nil || !w.IsRuntimePlane() {
+		// The tool-output flag means something only for runtime_plane; a
+		// predict_blocking suite stores the default rather than a setting that
+		// does nothing.
+		keep := true
+		w.StoreToolOutputs = &keep
 	}
 }
 
