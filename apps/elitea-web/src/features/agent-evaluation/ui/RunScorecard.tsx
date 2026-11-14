@@ -11,7 +11,7 @@
  * zero. Zero is a real and very bad score; printing it for an unscorable case
  * would report a bad prompt as a bad agent.
  */
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -20,12 +20,11 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { EvalRun, EvalRunResult, EvalScorecard } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
-import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { isRunTerminal, useEvalRun, useEvalScorecard } from '../model/useEvalRuns';
 import { useEvaluationPermissions } from '../model/useEvaluationPermissions';
-import { EnhanceWizard } from './EnhanceWizard';
+import { EnhanceWithAi } from './EnhanceWizard';
 import { RunInsights } from './RunInsights';
 
 const rowSx: SxProps<Theme> = {
@@ -179,10 +178,9 @@ export function RunScorecard(props: RunScorecardProps): ReactNode {
   const scorecard = scorecardQuery.data;
   const liveRun = runQuery.data ?? scorecard?.run;
   const permissions = useEvaluationPermissions(projectId);
-  const [enhancingRunId, setEnhancingRunId] = useState<string | undefined>(undefined);
   // Enhance reads a FINISHED run that scored something; it spends model tokens, so it takes the run create permission.
   const canEnhance =
-    permissions.canStartRuns && liveRun?.status === 'finished' && scorecard?.results.some((result) => result.target_met === false) === true;
+    permissions.canStartRuns && permissions.canReadVersions && liveRun?.status === 'finished' && scorecard?.results.some((result) => result.target_met === false) === true;
 
   return (
     <BaseModal
@@ -207,12 +205,7 @@ export function RunScorecard(props: RunScorecardProps): ReactNode {
           )}
 
           {scorecard !== undefined && <ScorecardBody projectId={projectId} scorecard={scorecard} liveRun={liveRun} />}
-          {canEnhance && (
-            <BaseBtn variant="secondary" data-testid="run-enhance" onClick={() => setEnhancingRunId(runId)}>
-              {t('features.agentEvaluation.enhance.open', 'Enhance with AI')}
-            </BaseBtn>
-          )}
-          <EnhanceWizard projectId={projectId} runId={enhancingRunId} onClose={() => setEnhancingRunId(undefined)} />
+          {canEnhance && runId !== undefined && <EnhanceWithAi projectId={projectId} runId={runId} />}
         </Box>
       }
     />

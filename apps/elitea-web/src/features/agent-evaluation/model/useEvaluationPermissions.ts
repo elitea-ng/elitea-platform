@@ -21,6 +21,8 @@ import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { Permission } from '@/shared/api/generated/model';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
+const VERSIONS_GET = 'models.applications.versions.get';
+
 export interface EvaluationPermissions {
   readonly canRead: boolean;
   readonly canCreate: boolean;
@@ -32,6 +34,8 @@ export interface EvaluationPermissions {
   readonly canDeleteDatasets: boolean;
   readonly canReadRuns: boolean;
   readonly canStartRuns: boolean;
+  /** Enhance with AI quotes the pinned version's instructions, which the version read grants. */
+  readonly canReadVersions: boolean;
 }
 
 export function useEvaluationPermissions(projectId: string | undefined): EvaluationPermissions {
@@ -53,6 +57,7 @@ export function useEvaluationPermissions(projectId: string | undefined): Evaluat
       canDeleteDatasets: granted.has(PERMISSIONS.evaluation.datasetDelete),
       canReadRuns: granted.has(PERMISSIONS.evaluation.runRead),
       canStartRuns: granted.has(PERMISSIONS.evaluation.runCreate),
+      canReadVersions: granted.has(VERSIONS_GET),
     };
   }, [permissionQuery.data]);
 }

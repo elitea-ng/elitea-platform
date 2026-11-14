@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"log/slog"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -594,13 +597,26 @@ func (o *Orchestrator) walk(ctx context.Context, ref RunRef, run Run, progress *
 // column or a migration. The judge's calls are not part of it.
 func agentTurnEvidence(elapsed time.Duration, agentErr error) map[string]any {
 	evidence := map[string]any{"agent_latency_ms": elapsed.Milliseconds()}
-	if agentErr != nil && (errors.Is(agentErr, context.DeadlineExceeded) || isTimeoutError(agentErr)) {
+	if isTimeoutError(agentErr) {
 		evidence["agent_timed_out"] = true
 	}
 	return evidence
 }
 
+// isTimeoutError reads typed signals only: the caller's deadline, a gRPC
+// DeadlineExceeded from the gateway hop, a gateway 504 or 408 answer
+// (predict.GatewayStatusError), or a network timeout. No message matching.
 func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+		return true
+	}
+	var gateway *predict.GatewayStatusError
+	if errors.As(err, &gateway) {
+		return gateway.Status == http.StatusGatewayTimeout || gateway.Status == http.StatusRequestTimeout
+	}
 	var timeout interface{ Timeout() bool }
 	return errors.As(err, &timeout) && timeout.Timeout()
 }

@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/predict"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"net/http"
 	"strings"
 	"testing"
@@ -212,6 +216,54 @@ func TestEnhanceCapsTheEvidenceAndKeepsTheWorstScores(t *testing.T) {
 	}
 }
 
+func TestEnhanceDoesNotRequestOrAcceptAPatchForOversizeInstructions(t *testing.T) {
+	t.Parallel()
+
+	repo := finishedRunWithMisses(t)
+	repo.version.Instructions = strings.Repeat("x", MaxEnhanceInstructionRunes+1)
+	completer := &stubCompleter{answer: goodAnswer}
+	response := call(t, enhanceRouter(repo, completer), http.MethodPost, "/eval_run_enhance/prompt_lib/1/1", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", response.Code, response.Body.String())
+	}
+	var proposal EnhanceProposal
+	if err := json.Unmarshal(response.Body.Bytes(), &proposal); err != nil {
+		t.Fatal(err)
+	}
+	// The model said yes to a patch; the server does not take it, and says why.
+	if proposal.InstructionPatch != nil || !strings.Contains(proposal.InstructionPatchUnavailable, "longer than") {
+		t.Errorf("patch %+v unavailable %q", proposal.InstructionPatch, proposal.InstructionPatchUnavailable)
+	}
+	if !strings.Contains(completer.requests[0].Messages[0].Content, "DO NOT propose an instruction_patch") {
+		t.Error("the model was still asked for a patch")
+	}
+	// The other two kinds are unaffected.
+	if len(proposal.DimensionChanges) != 1 || len(proposal.DatasetChanges) != 1 {
+		t.Errorf("other fixes lost: %+v", proposal)
+	}
+}
+
+func TestEnhanceTargetMustLieOnTheScaleAndNamesTheRunTarget(t *testing.T) {
+	t.Parallel()
+
+	repo := finishedRunWithMisses(t)
+	run := repo.run("1")
+	rows := missedRows(run, repo.storedResults(), repo.cases)
+	raw, _ := parseEnhanceAnswer(`{"summary":"s","dimension_changes":[
+	 {"dimension_id":"3","default_target":9,"default_target_operator":">=","description":"new rubric","rationale":"off the 1..5 scale"}]}`)
+	proposal := validateProposal(raw, "be helpful", run, rows)
+	if len(proposal.DimensionChanges) != 1 {
+		t.Fatalf("changes = %+v", proposal.DimensionChanges)
+	}
+	change := proposal.DimensionChanges[0]
+	if change.DefaultTarget != nil {
+		t.Errorf("a target of 9 on a 1..5 scale was accepted: %v", *change.DefaultTarget)
+	}
+	if change.RunTarget == nil || *change.RunTarget != 4 || change.RunTargetOperator != ">=" {
+		t.Errorf("run target = %v %q, want the binding's >= 4", change.RunTarget, change.RunTargetOperator)
+	}
+}
+
 // The latency of the agent turn is recorded on every result row of the case.
 func TestOrchestratorRecordsAgentLatencyAndTimeouts(t *testing.T) {
 	t.Parallel()
@@ -235,5 +287,18 @@ func TestOrchestratorRecordsAgentLatencyAndTimeouts(t *testing.T) {
 	}
 	if _, flagged := agentTurnEvidence(time.Second, errors.New("502"))["agent_timed_out"]; flagged {
 		t.Error("a non-timeout failure was flagged as a timeout")
+	}
+	// Typed signals: a gateway 504 or 408, and a gRPC deadline.
+	for name, err := range map[string]error{
+		"504":  fmt.Errorf("predict: %w", &predict.GatewayStatusError{Status: 504}),
+		"408":  &predict.GatewayStatusError{Status: 408},
+		"grpc": status.Error(codes.DeadlineExceeded, "slow"),
+	} {
+		if agentTurnEvidence(time.Second, err)["agent_timed_out"] != true {
+			t.Errorf("%s was not flagged as a timeout", name)
+		}
+	}
+	if _, flagged := agentTurnEvidence(time.Second, &predict.GatewayStatusError{Status: 502})["agent_timed_out"]; flagged {
+		t.Error("a 502 was flagged as a timeout")
 	}
 }

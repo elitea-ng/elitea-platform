@@ -45,6 +45,8 @@ import { VersionWriteRequest } from "./versionWriteRequest.zod";
 
 export const saveApplicationNewVersionBodyTwoCopySkillsFromVersionIdMax = 2147483647;
 
+export const saveApplicationNewVersionBodyTwoCopyToolsFromVersionIdMax = 2147483647;
+
 export const SaveApplicationNewVersionBody = VersionWriteRequest.and(
   zod.object({
     copy_skills_from_version_id: zod
@@ -53,6 +55,14 @@ export const SaveApplicationNewVersionBody = VersionWriteRequest.and(
       .max(saveApplicationNewVersionBodyTwoCopySkillsFromVersionIdMax)
       .optional()
       .describe("Optional source version in the same application and project."),
+    copy_tools_from_version_id: zod
+      .int()
+      .min(1)
+      .max(saveApplicationNewVersionBodyTwoCopyToolsFromVersionIdMax)
+      .optional()
+      .describe(
+        "Optional source version in the same application and project. Copies its toolkit and tool bindings, with their selected tools, onto the new version in the same transaction. A missing, invalid or foreign source copies nothing.\n",
+      ),
   }),
 );
 

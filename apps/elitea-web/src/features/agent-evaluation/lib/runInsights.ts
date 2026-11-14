@@ -130,39 +130,3 @@ export function compareRuns(current: Side, previous: Side): RunComparison {
     costPerCase: delta(current.efficiency.costPerCase, previous.efficiency.costPerCase),
   };
 }
-
-/**
- * The previous run on the SAME dataset: the nearest older run that finished
- * with a score. The list arrives newest first, which is what makes "nearest
- * older" the first match after the current run.
- */
-export function findPreviousRun(runs: readonly EvalRun[], current: EvalRun): EvalRun | undefined {
-  const index = runs.findIndex((run) => run.id === current.id);
-  const older = index === -1 ? runs.filter((run) => (run.created_at ?? '') < (current.created_at ?? '')) : runs.slice(index + 1);
-  return older.find(
-    (run) =>
-      run.dataset_id === current.dataset_id &&
-      run.status === 'finished' &&
-      run.headline_score !== null &&
-      run.headline_score !== undefined,
-  );
-}
-
-export interface RunLimit {
-  readonly key: string;
-  readonly value: string;
-}
-
-/**
- * The run's limits, rendered ONLY when the run carries a `limits` object. Run
- * limits are added by another change; this reads the field if it is there and
- * says nothing when it is not, so the card never invents a limit.
- */
-export function readRunLimits(run: unknown): RunLimit[] {
-  if (typeof run !== 'object' || run === null) return [];
-  const limits = (run as { readonly limits?: unknown }).limits;
-  if (typeof limits !== 'object' || limits === null) return [];
-  return Object.entries(limits as Record<string, unknown>).flatMap(([key, value]) =>
-    typeof value === 'number' || typeof value === 'string' ? [{ key, value: String(value) }] : [],
-  );
-}

@@ -42,7 +42,7 @@ function kindLabel(fix: AppliedFix): string {
 function AppliedRow({ fix, onRequestPublish }: { readonly fix: AppliedFix; readonly onRequestPublish: (versionId: number) => void }): ReactNode {
   const failed = fix.error !== undefined;
   return (
-    <Box data-testid={`enhance-applied-${fix.kind}-${fix.label}`}>
+    <Box data-testid={`enhance-applied-${fix.kind}-${fix.id}`}>
       <Typography variant="bodyMedium" color={failed ? 'error' : 'text.primary'} role={failed ? 'alert' : undefined}>
         {failed
           ? t('features.agentEvaluation.enhance.fixFailed', '{{what}} was not saved: {{reason}}', {
@@ -71,7 +71,8 @@ export function EnhanceReview({ counts, applied, applying, error, onRequestPubli
   const total = counts.instructions + counts.dimensions + counts.cases;
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }} data-testid="enhance-review">
-      {applied === undefined ? (
+      {applied !== undefined && applied.map((fix) => <AppliedRow key={`${fix.kind}-${fix.id}`} fix={fix} onRequestPublish={onRequestPublish} />)}
+      {(applied === undefined || total > 0) && (
         <Typography variant="bodyMedium" data-testid="enhance-review-summary">
           {total === 0
             ? t('features.agentEvaluation.enhance.reviewNone', 'Nothing is accepted. Go back and accept at least one change.')
@@ -81,8 +82,6 @@ export function EnhanceReview({ counts, applied, applying, error, onRequestPubli
                 counts,
               )}
         </Typography>
-      ) : (
-        applied.map((fix) => <AppliedRow key={`${fix.kind}-${fix.label}`} fix={fix} onRequestPublish={onRequestPublish} />)
       )}
       {applying && (
         <Typography component="output" variant="bodySmall" color="text.secondary">

@@ -1188,6 +1188,10 @@ export const getEnhanceEvalRunResponseMock = (
     ]),
     null,
   ]),
+  instruction_patch_unavailable: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
   dimension_changes: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
@@ -1207,6 +1211,14 @@ export const getEnhanceEvalRunResponseMock = (
       undefined,
     ]),
     rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    run_target: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      undefined,
+    ]),
+    run_target_operator: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
   })),
   dataset_changes: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },

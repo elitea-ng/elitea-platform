@@ -43,27 +43,45 @@ export function caseWriteInput(row: EvalDatasetCase, change: EvalEnhanceDatasetC
   return { input: row.input, variables: row.variables, expected_output: change.expected_output };
 }
 
-/** A short unique-per-run name; `application_versions` is unique on (application, name). */
-export function draftVersionName(runId: string): string {
-  return `eval-fix-${runId}`.slice(0, 20);
+/**
+ * A name unique per accept: `application_versions` is unique on
+ * (application, name), and a second accept of the same run (a retry, a second
+ * review) must not collide with the first draft.
+ */
+export function draftVersionName(runId: string, now: number = Date.now()): string {
+  return `eval-fix-${runId}-${now.toString(36)}`;
 }
 
+/** Keys the server owns on a stored version: never sent back on a create. */
+const SERVER_OWNED_KEYS = [
+  'id',
+  'application_id',
+  'name',
+  'status',
+  'created_at',
+  'author_id',
+  'author',
+  // Toolkit and tool bindings are copied by the server (`copy_tools_from_version_id`), not re-sent.
+  'tools',
+  'is_forked',
+] as const;
+
 /**
- * The pinned version's own fields with the patched instructions. Only fields
- * the write contract accepts are carried, and the result is a DRAFT: nothing
- * here publishes it. Publishing stays on the agent's release path, where a
- * medium-risk-or-above agent needs a change request and its release gate.
+ * The pinned version, field for field, with the patched instructions: every
+ * stored field the write contract accepts is carried (model settings, welcome
+ * message, conversation starters, variables, tags, meta, pipeline settings,
+ * soul, avatar pack and anything added later), and ONLY the instructions
+ * differ. Skills and tool bindings come across by the server's copy-source
+ * options. The result is a DRAFT: nothing here publishes it. Publishing stays
+ * on the agent's release path, where a medium-risk-or-above agent needs a
+ * change request and its release gate.
  */
 export function draftVersionBody(base: ApplicationVersionDetail, instructions: string): Omit<VersionWriteRequest, 'name'> {
-  const body: Omit<VersionWriteRequest, 'name'> = { instructions };
-  if (base.agent_type !== undefined) body.agent_type = base.agent_type;
-  if (base.welcome_message !== undefined) body.welcome_message = base.welcome_message;
-  if (base.llm_settings !== undefined) body.llm_settings = base.llm_settings;
-  if (base.conversation_starters !== undefined) body.conversation_starters = base.conversation_starters;
-  if (base.variables !== undefined) body.variables = base.variables;
-  if (base.tags !== undefined) body.tags = base.tags;
-  if (base.meta !== undefined && base.meta !== null) body.meta = base.meta;
-  if (base.pipeline_settings !== undefined) body.pipeline_settings = base.pipeline_settings;
-  if (base.soul !== undefined) body.soul = base.soul;
-  return body;
+  const copy: Record<string, unknown> = { ...base };
+  for (const key of SERVER_OWNED_KEYS) delete copy[key];
+  for (const [key, value] of Object.entries(copy)) {
+    // An absent or null field is "nothing stored": leave it off, so the new version stores the default.
+    if (value === null || value === undefined) delete copy[key];
+  }
+  return { ...copy, instructions } as Omit<VersionWriteRequest, 'name'>;
 }

@@ -55,6 +55,13 @@ export const EvalEnhanceDimensionChange = zod
         "One of the comparison operators >=, >, <=, <, ==. Present with default_target.",
       ),
     rationale: zod.string(),
+    run_target: zod
+      .number()
+      .optional()
+      .describe(
+        "The target the run's results were judged against, as frozen in the run. A target change writes the library default and applies to new runs.\n",
+      ),
+    run_target_operator: zod.string().optional(),
   })
   .describe(
     "A rubric and/or target change. A field left out is a field to keep.",

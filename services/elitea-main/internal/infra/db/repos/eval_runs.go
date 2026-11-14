@@ -125,6 +125,15 @@ func (r *EvalRunsRepo) ListRuns(
 		datasetID = &parsed
 	}
 
+	var beforeID *int
+	if filter.BeforeID != nil {
+		parsed, parseErr := parseEvalID(*filter.BeforeID, "run")
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		beforeID = &parsed
+	}
+
 	// Newest first. The reference's run-history panel computes a delta against
 	// the nearest OLDER scored run, so the order is not cosmetic: it is the
 	// order that makes "the previous run" mean the same thing to the client and
@@ -134,8 +143,10 @@ func (r *EvalRunsRepo) ListRuns(
 		FROM %s.eval_runs
 		WHERE ($1::int IS NULL OR application_id = $1::int)
 		  AND ($2::int IS NULL OR dataset_id = $2::int)
+		  AND ($4::int IS NULL OR id < $4::int)
+		  AND (NOT $5::bool OR (status = 'finished' AND headline_score IS NOT NULL))
 		ORDER BY id DESC
-		LIMIT $3`, schema), filter.ApplicationID, datasetID, limit)
+		LIMIT $3`, schema), filter.ApplicationID, datasetID, limit, beforeID, filter.ScoredOnly)
 	if err != nil {
 		return nil, fmt.Errorf("eval runs: list: %w", err)
 	}

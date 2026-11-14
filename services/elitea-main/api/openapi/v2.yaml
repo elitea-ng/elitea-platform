@@ -20839,6 +20839,11 @@ components:
               type: string
               description: The complete new instructions, not a diff.
           required: [rationale, instructions]
+        instruction_patch_unavailable:
+          type: string
+          description: >
+            Present when no instruction patch was requested or accepted because
+            the instructions are longer than one proposal can rewrite whole.
         dimension_changes:
           type: array
           items: { $ref: '#/components/schemas/EvalEnhanceDimensionChange' }
@@ -20859,6 +20864,13 @@ components:
           type: string
           description: One of the comparison operators >=, >, <=, <, ==. Present with default_target.
         rationale: { type: string }
+        run_target:
+          type: number
+          description: >
+            The target the run's results were judged against, as frozen in the
+            run. A target change writes the library default and applies to new
+            runs.
+        run_target_operator: { type: string }
       required: [dimension_id, dimension_name, rationale]
 
     EvalEnhanceDatasetChange:
@@ -27181,6 +27193,16 @@ paths:
           in: query
           required: false
           schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: before_run_id
+          in: query
+          required: false
+          schema: { type: string }
+          description: Only runs started before this run (a smaller id).
+        - name: scored_only
+          in: query
+          required: false
+          schema: { type: boolean }
+          description: Only runs that finished with a headline score.
       responses:
         '200':
           description: The run listing
@@ -38322,6 +38344,16 @@ paths:
                       minimum: 1
                       maximum: 2147483647
                       description: Optional source version in the same application and project.
+                    copy_tools_from_version_id:
+                      type: integer
+                      minimum: 1
+                      maximum: 2147483647
+                      description: >
+                        Optional source version in the same application and
+                        project. Copies its toolkit and tool bindings, with
+                        their selected tools, onto the new version in the same
+                        transaction. A missing, invalid or foreign source copies
+                        nothing.
       responses:
         '201':
           description: Created version

@@ -657,6 +657,36 @@ func TestEvalRunListIsNewestFirst(t *testing.T) {
 	}
 }
 
+// "The previous scored run" is a query, not a client-side scan of a page: a
+// history longer than the page must still find it.
+func TestEvalRunListBeforeAndScoredOnly(t *testing.T) {
+	fixture := newEvalRunFixture(t)
+	dimensionID := fixture.seedAIDimension(t)
+	first := fixture.startRun(t, dimensionID)
+	second := fixture.startRun(t, dimensionID)
+	third := fixture.startRun(t, dimensionID)
+	// Only the first run finished with a score; the second finished with none.
+	if _, err := fixture.pool.Exec(context.Background(), `
+		UPDATE p_1.eval_runs SET status = 'finished', headline_score = 80 WHERE id = $1::int;
+		UPDATE p_1.eval_runs SET status = 'finished', headline_score = NULL WHERE id = $2::int`, first.ID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	response := callEvalRoute(t, fixture.router, http.MethodGet,
+		"/eval_runs/prompt_lib/1?before_run_id="+third.ID+"&scored_only=true&limit=1", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", response.Code, response.Body.String())
+	}
+	var page struct {
+		Rows []evaluation.Run `json:"rows"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Rows) != 1 || page.Rows[0].ID != first.ID {
+		t.Errorf("rows = %+v, want only the scored run %s", page.Rows, first.ID)
+	}
+}
+
 // scriptedLLM answers the agent turn and the judge turn from one stub, the way
 // the production composition does: both take the SAME PredictCompleter, so a
 // test that used two clients would not be exercising the wiring the service

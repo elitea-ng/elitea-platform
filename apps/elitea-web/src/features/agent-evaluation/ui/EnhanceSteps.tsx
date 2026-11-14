@@ -59,7 +59,17 @@ export interface InstructionStepProps {
 export function InstructionStep({ proposal, current, accepted, onChange }: InstructionStepProps): ReactNode {
   const patch = proposal.instruction_patch;
   if (patch === null || patch === undefined) {
-    return <Nothing text={t('features.agentEvaluation.enhance.noInstructions', 'No instruction change proposed.')} />;
+    // When the instructions were too long to rewrite, say that; a plain "none proposed" would hide it.
+    const unavailable = proposal.instruction_patch_unavailable;
+    return (
+      <Nothing
+        text={
+          unavailable !== undefined && unavailable !== ''
+            ? t('features.agentEvaluation.enhance.instructionsUnavailable', 'No instruction change was requested: {{reason}}.', { reason: unavailable })
+            : t('features.agentEvaluation.enhance.noInstructions', 'No instruction change proposed.')
+        }
+      />
+    );
   }
   return (
     <Box sx={itemSx} data-testid="enhance-instruction">
@@ -118,6 +128,15 @@ export function DimensionStep({ changes, accepted, onToggle }: DimensionStepProp
         <Box key={change.dimension_id} sx={itemSx} data-testid={`enhance-dimension-${change.dimension_id}`}>
           <Typography variant="labelMedium">{change.dimension_name}</Typography>
           <Typography variant="bodyMedium">{describeDimension(change)}</Typography>
+          {change.default_target !== undefined && change.run_target !== undefined && (
+            <Typography variant="bodySmall" color="text.secondary" data-testid={`enhance-run-target-${change.dimension_id}`}>
+              {t(
+                'features.agentEvaluation.enhance.runTarget',
+                'This run was judged against {{operator}} {{target}}. Accepting changes the dimension’s default target, which new runs use.',
+                { operator: change.run_target_operator ?? '', target: change.run_target },
+              )}
+            </Typography>
+          )}
           <Typography variant="bodySmall" color="text.secondary">
             {change.rationale}
           </Typography>

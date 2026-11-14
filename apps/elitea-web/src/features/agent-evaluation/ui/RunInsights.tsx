@@ -17,7 +17,6 @@ import type { EvalScorecard } from '@/shared/api/generated/model';
 import {
   caseTurns,
   compareRuns,
-  readRunLimits,
   summarizeEfficiency,
 } from '../lib/runInsights';
 import { isRunTerminal } from '../model/useEvalRuns';
@@ -63,7 +62,7 @@ export function RunInsights({ projectId, scorecard, dimensionNames }: RunInsight
   if (!settled) return null;
   return (
     <Box sx={rootSx} data-testid="run-insights">
-      <ConsumptionCard analytics={analyticsQuery.data} gap={gapOf(analyticsQuery.error)} limits={readRunLimits(run)} />
+      <ConsumptionCard analytics={analyticsQuery.data} gap={gapOf(analyticsQuery.error)} />
       <EfficiencyStrip efficiency={efficiency} />
       <ComparisonCard comparison={comparison} noPrevious={previous === undefined && !loading} dimensionNames={dimensionNames} />
     </Box>

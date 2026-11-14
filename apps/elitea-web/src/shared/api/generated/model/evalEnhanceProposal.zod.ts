@@ -66,6 +66,12 @@ export const EvalEnhanceProposal = zod
           .describe("The complete new instructions, not a diff."),
       })
       .nullable(),
+    instruction_patch_unavailable: zod
+      .string()
+      .optional()
+      .describe(
+        "Present when no instruction patch was requested or accepted because the instructions are longer than one proposal can rewrite whole.\n",
+      ),
     dimension_changes: zod.array(EvalEnhanceDimensionChange),
     dataset_changes: zod.array(EvalEnhanceDatasetChange),
   })

@@ -54,6 +54,14 @@ func (h *RunHandler) List(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("dataset_id"); raw != "" {
 		filter.DatasetID = &raw
 	}
+	if raw := r.URL.Query().Get("before_run_id"); raw != "" {
+		if _, err := strconv.Atoi(raw); err != nil {
+			apierr.Write(w, apierr.BadRequest("before_run_id must be an integer"))
+			return
+		}
+		filter.BeforeID = &raw
+	}
+	filter.ScoredOnly = r.URL.Query().Get("scored_only") == "true"
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed <= 0 || parsed > MaxRunListLimit {

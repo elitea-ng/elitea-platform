@@ -121,7 +121,7 @@ A saved agent's editor includes an **Evaluation** tab to define what "good" look
 
 Open a finished run's scorecard to see three cards above the scores:
 
-- **Consumption** shows the tokens and estimated cost of the agent's answers and of the judge, side by side, with a total. The money is an estimate at the catalogue rate. A run that started before consumption was recorded, or whose calls the gateway has pruned, says so instead of showing zero. The card needs the analytics permission. If the run carries limits, they are listed under the figures.
+- **Consumption** shows the tokens and estimated cost of the agent's answers and of the judge, side by side, with a total. The money is an estimate at the catalogue rate. A run that started before consumption was recorded, or whose calls the gateway has pruned, says so instead of showing zero. The card needs the analytics permission.
 - **Efficiency** shows the latency of the agent's answer at p50 and p95, how many answers timed out, and tokens and cost per case. Latency is recorded from now on; a run scored before that reads "not recorded".
 - **Compared with the previous run** shows the change in the overall score, in each dimension's average, in p50 latency and in cost per case against the nearest earlier scored run of the same dataset.
 
@@ -131,11 +131,11 @@ These measure one model turn per case: the run does not use tools or toolkits, s
 
 When a finished run missed a target, the scorecard offers **Enhance with AI** (it needs the permission to start runs). The model reads the agent version the run scored and the results that missed, with the outputs and the judge's rationale, and proposes up to three kinds of fix, which you review one step at a time:
 
-1. **Instructions**: a revised version of the instructions, shown as a diff. Accepting creates a new **draft** version of the agent. Nothing is published: a draft follows the agent's normal release path, so an agent above low risk goes through a change request and its release gate. Use **Request publish** in the last step, or publish from the agent page.
-2. **Rubrics and targets**: a changed rubric or target for a dimension. It applies to new runs; this run keeps the rubric it was scored with.
+1. **Instructions**: a revised version of the instructions, shown as a diff. Accepting creates a new **draft** version of the agent, copied from the version the run scored (settings, variables, skills and toolkit bindings) with only the instructions changed. If the instructions are longer than 24000 characters, no instruction change is proposed and the step says why. Nothing is published: a draft follows the agent's normal release path, so an agent above low risk goes through a change request and its release gate. Use **Request publish** in the last step, or publish from the agent page.
+2. **Rubrics and targets**: a changed rubric or target for a dimension. The step shows the target the run was judged against; accepting changes the dimension's default, which new runs use. This run keeps the rubric and target it was scored with. A proposed target must lie on the dimension's scale.
 3. **Expected outputs**: a corrected expected answer for a case in the dataset.
 
-Nothing is saved until the last step, and you can untick any change. Each saved fix goes through the same permissions as editing it by hand, and a refused one is reported with its reason while the others are still saved.
+Nothing is saved until the last step, and you can untick any change. Saving can be repeated: it retries only the fixes that failed. Each saved fix goes through the same permissions as editing it by hand, and a refused one is reported with its reason while the others are still saved.
 
 ## History
 

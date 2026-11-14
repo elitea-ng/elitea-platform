@@ -156,6 +156,11 @@ type Version struct {
 	// CopySkillsFromVersionID is a create-version option, not stored metadata.
 	// Zero disables copying. The repository requires the same application and tenant.
 	CopySkillsFromVersionID int32 `json:"-"`
+	// CopyToolsFromVersionID copies the source version's toolkit and tool
+	// bindings (entity_tool_mapping, with their selected tools) onto the new
+	// version, in the same transaction. Zero disables copying. The source must
+	// be a version of the same application.
+	CopyToolsFromVersionID int32 `json:"-"`
 
 	// EditorID is the user who saves an UPDATE, recorded as the author of
 	// the version revision the save appends (ADR-0040 decision 2). It is a

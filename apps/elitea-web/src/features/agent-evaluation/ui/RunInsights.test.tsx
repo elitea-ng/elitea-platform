@@ -43,11 +43,17 @@ function scorecard(current: EvalRun, results: unknown[]): EvalScorecard {
   return { run: current, results, headline_score: current.headline_score, total: results.length, offset: 0, unavailable: [] } as unknown as EvalScorecard;
 }
 
+const previousQueries: URLSearchParams[] = [];
+
 function mockHistory(options: { readonly previous?: boolean } = {}): void {
+  previousQueries.length = 0;
   server.use(
-    http.get(`${BASE}/elitea_core/eval_runs/prompt_lib/:projectId`, () =>
-      HttpResponse.json({ rows: options.previous === false ? [run('2')] : [run('2'), run('1', { headline_score: 50 })], total: 2 }),
-    ),
+    // The previous run is a server-side query: nearest older scored run, one row.
+    http.get(`${BASE}/elitea_core/eval_runs/prompt_lib/:projectId`, ({ request }) => {
+      previousQueries.push(new URL(request.url).searchParams);
+      const rows = options.previous === false ? [] : [run('1', { headline_score: 50 })];
+      return HttpResponse.json({ rows, total: rows.length });
+    }),
     http.get(`${BASE}/elitea_core/eval_results/prompt_lib/:projectId/:runId`, ({ params }) =>
       HttpResponse.json(scorecard(run(String(params['runId']), { headline_score: 50 }), [row('1', 'a', 40, 2000), row('1', 'b', 60, 3000)])),
     ),
@@ -74,8 +80,6 @@ describe('RunInsights', () => {
     expect(screen.getByTestId('run-efficiency-p95')).toHaveTextContent('5.0 s');
     expect(screen.getByTestId('run-efficiency-timeouts')).toHaveTextContent('1');
     expect(screen.getByTestId('run-efficiency-tokens')).toHaveTextContent('500');
-    // No `limits` on the run: the card says nothing about limits.
-    expect(screen.queryByTestId('run-limits')).toBeNull();
   });
 
   it('compares with the previous run on the same dataset', async () => {
@@ -89,6 +93,10 @@ describe('RunInsights', () => {
     await waitFor(() => expect(screen.getByTestId('run-comparison-headline')).toHaveTextContent('+25.0'));
     expect(screen.getByTestId('run-comparison-dimension-3')).toHaveTextContent('Helpfulness: +25.0');
     expect(screen.getByTestId('run-comparison-latency')).toHaveTextContent('-1.0 s');
+    expect(previousQueries[0]?.get('before_run_id')).toBe('2');
+    expect(previousQueries[0]?.get('scored_only')).toBe('true');
+    expect(previousQueries[0]?.get('limit')).toBe('1');
+    expect(previousQueries[0]?.get('dataset_id')).toBe('5');
   });
 
   it('says there is no earlier run instead of comparing with nothing', async () => {
@@ -117,14 +125,6 @@ describe('RunInsights', () => {
     expect(screen.queryByTestId('run-consumption-total')).toBeNull();
     // No latency was recorded for this run either.
     expect(screen.getByTestId('run-efficiency-p50')).toHaveTextContent('not recorded');
-  });
-
-  it('renders the limits only when the run carries them', async () => {
-    server.use(http.get(`${BASE}/elitea_core/eval_run_analytics/prompt_lib/:projectId/:runId`, () => HttpResponse.json(analytics())));
-    mockHistory({ previous: false });
-    const limited = { ...run('2'), limits: { max_total_tokens: 20000 } } as EvalRun;
-    renderWithEvaluationProviders(<RunInsights projectId="1" dimensionNames={names} scorecard={scorecard(limited, [row('2', 'a', 80, 100)])} />);
-    expect(await screen.findByTestId('run-limits')).toHaveTextContent('Max total tokens: 20000');
   });
 
   it('shows nothing while the run is still active', () => {

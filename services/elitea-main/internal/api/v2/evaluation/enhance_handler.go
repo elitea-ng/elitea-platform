@@ -79,6 +79,10 @@ func (h *EnhanceHandler) Enhance(w http.ResponseWriter, r *http.Request) {
 		missed = missed[:MaxEnhanceMissedRows]
 	}
 
+	systemNote := ""
+	if !instructionsFit(version.Instructions) {
+		systemNote = enhanceNoPatchNote
+	}
 	temperature := 0.2
 	answer, err := h.completer.Complete(r.Context(), predict.CompletionRequest{
 		ProjectID:   projectID,
@@ -86,7 +90,7 @@ func (h *EnhanceHandler) Enhance(w http.ResponseWriter, r *http.Request) {
 		Model:       version.ModelName,
 		Temperature: &temperature,
 		Messages: []predict.Message{
-			{Role: "system", Content: enhanceSystemPrompt},
+			{Role: "system", Content: enhanceSystemPrompt + systemNote},
 			{Role: "user", Content: buildEnhancePrompt(version.Instructions, run, missed)},
 		},
 	})

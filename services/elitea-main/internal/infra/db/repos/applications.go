@@ -747,7 +747,7 @@ func (r *ApplicationsRepo) CreateVersion(ctx context.Context, projectID, applica
 	if v.AuthorID <= 0 {
 		return applications.Version{}, apierr.Unauthorized("an authenticated author is required to create a version")
 	}
-	if v.CopySkillsFromVersionID <= 0 {
+	if v.CopySkillsFromVersionID <= 0 && v.CopyToolsFromVersionID <= 0 {
 		return insertVersion(ctx, r.pool, s, applicationID, v)
 	}
 	project, err := parseProjectID(projectID)
@@ -761,16 +761,40 @@ func (r *ApplicationsRepo) CreateVersion(ctx context.Context, projectID, applica
 		if err != nil {
 			return err
 		}
-		_, err = sqlcgen.New(tx).CopyApplicationVersionSkills(ctx, sqlcgen.CopyApplicationVersionSkillsParams{
-			SourceVersionID: v.CopySkillsFromVersionID,
-			TargetVersionID: created.ID,
-		})
-		return err
+		if v.CopySkillsFromVersionID > 0 {
+			if _, err = sqlcgen.New(tx).CopyApplicationVersionSkills(ctx, sqlcgen.CopyApplicationVersionSkillsParams{
+				SourceVersionID: v.CopySkillsFromVersionID,
+				TargetVersionID: created.ID,
+			}); err != nil {
+				return err
+			}
+		}
+		if v.CopyToolsFromVersionID > 0 {
+			return copyVersionTools(ctx, tx, s, v.CopyToolsFromVersionID, created.ID)
+		}
+		return nil
 	})
 	if err != nil {
 		return applications.Version{}, fmt.Errorf("applications: create version with skills: %w", err)
 	}
 	return created, nil
+}
+
+// copyVersionTools copies the toolkit and tool bindings of one version onto
+// another version of the SAME application. The join on application_id is the
+// ownership check: a source from another application (or project) matches no
+// row and copies nothing. entity_type, entity_id and selected_tools ride along
+// as publish does (internal/api/v2/eliteacore/publish_core.go).
+func copyVersionTools(ctx context.Context, tx pgx.Tx, schema string, sourceVersionID int32, targetVersionID string) error {
+	_, err := tx.Exec(ctx, fmt.Sprintf(`
+		INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
+		SELECT target.id, mapping.entity_id, mapping.entity_type, mapping.tool_id, mapping.selected_tools, now() AT TIME ZONE 'UTC'
+		FROM %s.application_versions AS source
+		JOIN %s.application_versions AS target ON target.application_id = source.application_id
+		JOIN %s.entity_tool_mapping AS mapping ON mapping.entity_version_id = source.id
+		WHERE source.id = $1::integer AND target.id = $2::text::integer AND source.id <> target.id`,
+		schema, schema, schema, schema), sourceVersionID, targetVersionID)
+	return err
 }
 
 // querier is the subset of pgxpool.Pool / pgx.Tx insertVersion needs, so the

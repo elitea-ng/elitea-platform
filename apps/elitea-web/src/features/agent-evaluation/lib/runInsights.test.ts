@@ -6,9 +6,7 @@ import {
   caseTurns,
   compareRuns,
   dimensionAverages,
-  findPreviousRun,
   percentile,
-  readRunLimits,
   summarizeEfficiency,
 } from './runInsights';
 
@@ -96,17 +94,6 @@ describe('summarizeEfficiency', () => {
 });
 
 describe('comparison with the previous run', () => {
-  it('finds the nearest older scored run of the same dataset', () => {
-    const runs = [
-      run('4'),
-      run('3', { dataset_id: '9' }),
-      run('2', { headline_score: null }),
-      run('1'),
-    ];
-    expect(findPreviousRun(runs, run('4'))?.id).toBe('1');
-    expect(findPreviousRun([run('1')], run('1'))).toBeUndefined();
-  });
-
   it('compares only the dimensions both runs scored', () => {
     const now = [result('a', '1', 80), result('b', '1', 60), result('a', '2', 90)];
     const before = [result('a', '1', 50), result('a', '3', 10)];
@@ -118,19 +105,5 @@ describe('comparison with the previous run', () => {
     expect(comparison.headline).toBe(25);
     expect(comparison.dimensions).toEqual([{ dimensionId: '1', current: 70, previous: 50, delta: 20 }]);
     expect(comparison.p50Ms).toBeUndefined();
-  });
-});
-
-describe('readRunLimits', () => {
-  it('renders nothing when the run carries no limits field', () => {
-    expect(readRunLimits(run('1'))).toEqual([]);
-    expect(readRunLimits(undefined)).toEqual([]);
-  });
-
-  it('reads scalar limits when the field exists', () => {
-    expect(readRunLimits({ ...run('1'), limits: { max_tokens: 5000, note: 'x', nested: { a: 1 } } })).toEqual([
-      { key: 'max_tokens', value: '5000' },
-      { key: 'note', value: 'x' },
-    ]);
   });
 });

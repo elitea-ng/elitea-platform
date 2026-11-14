@@ -14,8 +14,8 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import type { AnalyticsEvaluationRun, AnalyticsUsageFigures } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
-import { formatCost, formatCount, formatDelta, formatMs, limitLabel } from '../lib/insightsFormat';
-import type { Efficiency, RunComparison, RunLimit } from '../lib/runInsights';
+import { formatCost, formatCount, formatDelta, formatMs } from '../lib/insightsFormat';
+import type { Efficiency, RunComparison } from '../lib/runInsights';
 
 const cardSx: SxProps<Theme> = {
   display: 'flex',
@@ -63,7 +63,6 @@ export interface ConsumptionCardProps {
   readonly analytics: AnalyticsEvaluationRun | undefined;
   /** Why there is nothing to show: no permission, or not on this deployment. */
   readonly gap: 'forbidden' | 'unavailable' | undefined;
-  readonly limits: readonly RunLimit[];
 }
 
 function gapText(analytics: AnalyticsEvaluationRun | undefined, gap: ConsumptionCardProps['gap']): string | undefined {
@@ -81,7 +80,7 @@ function gapText(analytics: AnalyticsEvaluationRun | undefined, gap: Consumption
   return undefined;
 }
 
-export function ConsumptionCard({ analytics, gap, limits }: ConsumptionCardProps): ReactNode {
+export function ConsumptionCard({ analytics, gap }: ConsumptionCardProps): ReactNode {
   const reason = gapText(analytics, gap);
   return (
     <Box sx={cardSx} data-testid="run-consumption">
@@ -100,18 +99,6 @@ export function ConsumptionCard({ analytics, gap, limits }: ConsumptionCardProps
             {t('features.agentEvaluation.insights.estimate', 'Money is an estimate at the catalogue rate.')}
           </Typography>
         </>
-      )}
-      {limits.length > 0 && (
-        <Box data-testid="run-limits">
-          <Typography variant="bodySmall" color="text.secondary">
-            {t('features.agentEvaluation.insights.limits', 'Limits')}
-          </Typography>
-          {limits.map((limit) => (
-            <Typography key={limit.key} variant="bodySmall">
-              {`${limitLabel(limit.key)}: ${limit.value}`}
-            </Typography>
-          ))}
-        </Box>
       )}
     </Box>
   );

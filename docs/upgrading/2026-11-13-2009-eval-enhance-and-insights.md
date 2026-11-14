@@ -21,3 +21,12 @@ already existed.
 - **Latency:** `agent_latency_ms` (and `agent_timed_out` when the turn ended on a
   deadline) is stored in the result `evidence` of every case scored after the
   upgrade. Runs scored earlier have none and the UI says "not recorded".
+- **Also additive:** `POST .../versions/prompt_lib/{project_id}/{application_id}` accepts
+  `copy_tools_from_version_id` (a version of the same application), which copies the
+  source's toolkit and tool bindings onto the new version in the same transaction,
+  as `copy_skills_from_version_id` does for skills. `GET .../eval_runs/prompt_lib/{project_id}`
+  accepts `before_run_id` and `scored_only`, so "the previous scored run" is one query.
+- **Long instructions:** when an agent's instructions exceed 24000 characters, Enhance
+  asks for no instruction patch and says why (`instruction_patch_unavailable`).
+- **Timeouts:** an agent turn counts as timed out (`agent_timed_out`) on the caller's
+  deadline, a gRPC deadline from the gateway hop, a gateway 504 or 408, or a network timeout.

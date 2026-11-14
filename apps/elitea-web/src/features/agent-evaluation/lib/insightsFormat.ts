@@ -33,9 +33,3 @@ export function formatDelta(value: number | undefined, format: (n: number) => st
   const sign = value > 0 ? '+' : value < 0 ? '-' : '';
   return `${sign}${format(Math.abs(value))}`;
 }
-
-/** `snake_case` limit keys read as words. */
-export function limitLabel(key: string): string {
-  const words = key.replaceAll('_', ' ').trim();
-  return words === '' ? key : words.charAt(0).toUpperCase() + words.slice(1);
-}

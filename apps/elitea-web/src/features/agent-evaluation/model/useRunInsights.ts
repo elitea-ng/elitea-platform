@@ -10,9 +10,8 @@ import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 
 import type { AnalyticsEvaluationRun, EvalRun, EvalScorecard } from '@/shared/api/generated/model';
 
-import { fetchDatasetRuns, fetchRunAnalytics } from '../api/evaluationInsightsApi';
+import { fetchPreviousScoredRun, fetchRunAnalytics } from '../api/evaluationInsightsApi';
 import { fetchScorecard } from '../api/evaluationRunsApi';
-import { findPreviousRun } from '../lib/runInsights';
 import { evalRunQueryKeys } from './useEvalRuns';
 
 function present(...values: readonly (string | undefined)[]): boolean {
@@ -42,12 +41,13 @@ export function usePreviousRun(
   readonly scorecard: UseQueryResult<EvalScorecard>;
   readonly loading: boolean;
 } {
-  const history = useQuery<EvalRun[]>({
-    queryKey: ['evalRuns', projectId ?? '', 'history', run?.dataset_id ?? ''],
-    queryFn: () => fetchDatasetRuns(projectId ?? '', run?.dataset_id ?? '', run?.application_id ?? undefined),
-    enabled: enabled && present(projectId, run?.dataset_id),
+  const history = useQuery<EvalRun | null>({
+    queryKey: ['evalRuns', projectId ?? '', 'previous', run?.id ?? ''],
+    // null, not undefined: react-query refuses an undefined result.
+    queryFn: async () => (run === undefined ? null : ((await fetchPreviousScoredRun(projectId ?? '', run)) ?? null)),
+    enabled: enabled && present(projectId, run?.id),
   });
-  const previous = run === undefined ? undefined : findPreviousRun(history.data ?? [], run);
+  const previous = history.data ?? undefined;
   const scorecard = useQuery<EvalScorecard>({
     queryKey: evalRunQueryKeys.scorecard(projectId ?? '', previous?.id ?? ''),
     queryFn: () => fetchScorecard(projectId ?? '', previous?.id ?? ''),

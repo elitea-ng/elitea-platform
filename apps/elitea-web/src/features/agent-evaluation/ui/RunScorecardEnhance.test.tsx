@@ -10,6 +10,7 @@ import { renderWithEvaluationProviders } from '../__tests__/testUtils';
 import { RunScorecard } from './RunScorecard';
 
 const BASE = '/api/v2';
+const VERSIONS_GET = 'models.applications.versions.get';
 
 function mock(options: { readonly permissions: readonly string[]; readonly status: string; readonly targetMet: boolean }): void {
   const run = { id: '9', dataset_id: '5', application_id: 42, status: options.status, execution_mode: 'predict_blocking', progress: { done: 1, total: 1 }, headline_score: 40, snapshot: { dimensions: { '3': { name: 'Helpfulness' } } } };
@@ -34,7 +35,7 @@ afterEach(() => resetGeneratedClient());
 
 describe('RunScorecard — Enhance with AI entry point', () => {
   it('offers Enhance on a finished run that missed a target, to someone who may start runs', async () => {
-    mock({ permissions: [PERMISSIONS.evaluation.runRead, PERMISSIONS.evaluation.runCreate], status: 'finished', targetMet: false });
+    mock({ permissions: [PERMISSIONS.evaluation.runRead, PERMISSIONS.evaluation.runCreate, VERSIONS_GET], status: 'finished', targetMet: false });
     renderWithEvaluationProviders(<RunScorecard projectId="1" runId="9" onClose={() => undefined} />);
     expect(await screen.findByTestId('run-enhance')).toBeInTheDocument();
     // The insights render in the same dialog.
@@ -42,7 +43,7 @@ describe('RunScorecard — Enhance with AI entry point', () => {
   });
 
   it('does not offer it when every target was met', async () => {
-    mock({ permissions: [PERMISSIONS.evaluation.runRead, PERMISSIONS.evaluation.runCreate], status: 'finished', targetMet: true });
+    mock({ permissions: [PERMISSIONS.evaluation.runRead, PERMISSIONS.evaluation.runCreate, VERSIONS_GET], status: 'finished', targetMet: true });
     renderWithEvaluationProviders(<RunScorecard projectId="1" runId="9" onClose={() => undefined} />);
     await screen.findByTestId('scorecard-headline');
     expect(screen.queryByTestId('run-enhance')).toBeNull();
@@ -50,6 +51,14 @@ describe('RunScorecard — Enhance with AI entry point', () => {
 
   it('does not offer it to a reader, because it spends model tokens', async () => {
     mock({ permissions: [PERMISSIONS.evaluation.runRead], status: 'finished', targetMet: false });
+    renderWithEvaluationProviders(<RunScorecard projectId="1" runId="9" onClose={() => undefined} />);
+    await screen.findByTestId('scorecard-headline');
+    expect(screen.queryByTestId('run-enhance')).toBeNull();
+  });
+
+  // The proposal quotes the pinned version's instructions, which the run permissions do not grant.
+  it('does not offer it without the version read permission', async () => {
+    mock({ permissions: [PERMISSIONS.evaluation.runRead, PERMISSIONS.evaluation.runCreate], status: 'finished', targetMet: false });
     renderWithEvaluationProviders(<RunScorecard projectId="1" runId="9" onClose={() => undefined} />);
     await screen.findByTestId('scorecard-headline');
     expect(screen.queryByTestId('run-enhance')).toBeNull();

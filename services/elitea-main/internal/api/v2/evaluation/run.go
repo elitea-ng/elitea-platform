@@ -268,6 +268,12 @@ type RunListFilter struct {
 	ApplicationID *int
 	DatasetID     *string
 	Limit         int
+	// BeforeID keeps only runs with a smaller id than this one (runs started
+	// earlier), and ScoredOnly only runs that finished with a headline score.
+	// Together with Limit 1 they answer "the previous scored run" exactly,
+	// however long the history is.
+	BeforeID   *string
+	ScoredOnly bool
 }
 
 // DefaultRunListLimit and MaxRunListLimit bound the history read. The

@@ -52,6 +52,12 @@ type EnhanceDimensionChange struct {
 	DefaultTarget         *float64 `json:"default_target,omitempty"`
 	DefaultTargetOperator string   `json:"default_target_operator,omitempty"`
 	Rationale             string   `json:"rationale"`
+	// RunTarget and RunTargetOperator are the target the run's results were
+	// judged against (the binding frozen in the run's snapshot, which is the
+	// dimension's library default as it was when the run started). A target
+	// change here writes the library default, and applies to new runs.
+	RunTarget         *float64 `json:"run_target,omitempty"`
+	RunTargetOperator string   `json:"run_target_operator,omitempty"`
 }
 
 // EnhanceDatasetChange is a new expected output for one missed case.
@@ -75,8 +81,12 @@ type EnhanceProposal struct {
 	AnalysedRows         int                      `json:"analysed_rows"`
 	MissedRows           int                      `json:"missed_rows"`
 	InstructionPatch     *EnhanceInstructionPatch `json:"instruction_patch"`
-	DimensionChanges     []EnhanceDimensionChange `json:"dimension_changes"`
-	DatasetChanges       []EnhanceDatasetChange   `json:"dataset_changes"`
+	// InstructionPatchUnavailable says why no instruction patch was requested
+	// or accepted: the instructions are longer than the model can be asked to
+	// rewrite whole. Empty when a patch was possible.
+	InstructionPatchUnavailable string                   `json:"instruction_patch_unavailable,omitempty"`
+	DimensionChanges            []EnhanceDimensionChange `json:"dimension_changes"`
+	DatasetChanges              []EnhanceDatasetChange   `json:"dataset_changes"`
 }
 
 // missedRow is one (case, dimension) result that missed its target.
@@ -139,6 +149,16 @@ Reply with a single JSON object and nothing else, in exactly this shape:
  "dataset_changes": [{"case_id": "<id>", "expected_output": "<new expected answer>", "rationale": "<why>"}]}
 
 Do not wrap the JSON in a code fence. Do not add any text before or after it.`
+
+// enhanceNoPatchNote is added to the system prompt when the instructions are
+// too long to rewrite whole.
+const enhanceNoPatchNote = "\n\nThe agent's instructions are too long to rewrite in full, so DO NOT propose an instruction_patch: answer \"instruction_patch\": null."
+
+// instructionsFit reports whether the whole instructions can be sent to the
+// model and replaced by a whole rewrite.
+func instructionsFit(instructions string) bool {
+	return len([]rune(instructions)) <= MaxEnhanceInstructionRunes
+}
 
 // buildEnhancePrompt renders the user turn. Everything in it is DATA about the
 // run; the system prompt is the only instruction.
@@ -244,6 +264,7 @@ func parseEnhanceAnswer(raw string) (rawProposal, bool) {
 // empty replacement or a no-op is dropped, never repaired: a proposal that
 // reached the wizard is one the normal endpoints will accept.
 func validateProposal(raw rawProposal, instructions string, run Run, rows []missedRow) EnhanceProposal {
+	patchable := instructionsFit(instructions)
 	proposal := EnhanceProposal{
 		RunID:                run.ID,
 		ApplicationID:        run.ApplicationID,
@@ -252,7 +273,11 @@ func validateProposal(raw rawProposal, instructions string, run Run, rows []miss
 		DimensionChanges:     []EnhanceDimensionChange{},
 		DatasetChanges:       []EnhanceDatasetChange{},
 	}
-	if patch := raw.InstructionPatch; patch != nil {
+	if !patchable {
+		proposal.InstructionPatchUnavailable = fmt.Sprintf(
+			"the agent's instructions are longer than %d characters, which is more than can be rewritten in one proposal; edit them by hand", MaxEnhanceInstructionRunes)
+	}
+	if patch := raw.InstructionPatch; patch != nil && patchable {
 		next := strings.TrimSpace(patch.Instructions)
 		if next != "" && next != strings.TrimSpace(instructions) && len([]rune(next)) <= MaxEnhanceInstructionRunes {
 			proposal.InstructionPatch = &EnhanceInstructionPatch{
@@ -279,6 +304,11 @@ func validateProposal(raw rawProposal, instructions string, run Run, rows []miss
 			DimensionName: dimension.Name,
 			Rationale:     truncateRunes(strings.TrimSpace(change.Rationale), maxEnhanceRationale),
 		}
+		for _, binding := range run.Snapshot.Bindings {
+			if binding.DimensionID == change.DimensionID && binding.Target != nil {
+				out.RunTarget, out.RunTargetOperator = binding.Target, binding.TargetOperator
+			}
+		}
 		if change.Description != nil {
 			text := strings.TrimSpace(*change.Description)
 			if text != "" && text != dimension.Description && len(text) <= MaxDimensionDescriptionBytes {
@@ -286,7 +316,10 @@ func validateProposal(raw rawProposal, instructions string, run Run, rows []miss
 			}
 		}
 		operator := strings.TrimSpace(change.DefaultTargetOperator)
-		if change.DefaultTarget != nil && knownOperators[operator] {
+		// The target must lie on the dimension's own scale: a target the
+		// judge can never produce would fail every case, or none.
+		if change.DefaultTarget != nil && knownOperators[operator] &&
+			*change.DefaultTarget >= dimension.ScaleMin && *change.DefaultTarget <= dimension.ScaleMax {
 			out.DefaultTarget = change.DefaultTarget
 			out.DefaultTargetOperator = operator
 		}

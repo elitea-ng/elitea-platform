@@ -6310,5 +6310,7 @@
   "features.agentEvaluation.insights.tokensPerCase": "Tokens per case",
   "features.agentEvaluation.insights.total": "Total",
   "features.agentEvaluation.insights.unavailable": "This deployment does not record consumption.",
-  "features.agentEvaluation.insights.unpriced": "not priced"
+  "features.agentEvaluation.insights.unpriced": "not priced",
+  "features.agentEvaluation.enhance.instructionsUnavailable": "No instruction change was requested: {{reason}}.",
+  "features.agentEvaluation.enhance.runTarget": "This run was judged against {{operator}} {{target}}. Accepting changes the dimension’s default target, which new runs use."
 }

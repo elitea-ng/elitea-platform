@@ -37,10 +37,20 @@ export async function fetchRunAnalytics(projectId: string, runId: string): Promi
   return body<AnalyticsEvaluationRun>(await getEvaluationRunAnalytics(projectId, runId));
 }
 
-/** Runs of one dataset (and agent), newest first: the history the comparison reads the previous run from. */
-export async function fetchDatasetRuns(projectId: string, datasetId: string, applicationId: number | undefined): Promise<EvalRun[]> {
-  const params = applicationId === undefined ? { dataset_id: datasetId } : { dataset_id: datasetId, application_id: applicationId };
-  return body<{ readonly rows: EvalRun[] }>(await listEvalRuns(projectId, params)).rows;
+/**
+ * The nearest earlier run of the same dataset (and agent) that finished with a
+ * score. The server answers it (`before_run_id`, `scored_only`, limit 1), so
+ * it is found however long the history is.
+ */
+export async function fetchPreviousScoredRun(projectId: string, run: EvalRun): Promise<EvalRun | undefined> {
+  const params = {
+    dataset_id: run.dataset_id,
+    before_run_id: run.id,
+    scored_only: true,
+    limit: 1,
+    ...(run.application_id === null || run.application_id === undefined ? {} : { application_id: run.application_id }),
+  };
+  return body<{ readonly rows: EvalRun[] }>(await listEvalRuns(projectId, params)).rows[0];
 }
 
 export async function requestEnhancement(projectId: string, runId: string): Promise<EvalEnhanceProposal> {
@@ -59,18 +69,25 @@ type AppliedKind = 'instructions' | 'dimension' | 'case';
 /** One accepted fix and what happened to it. `error` is set when the write was refused. */
 export interface AppliedFix {
   readonly kind: AppliedKind;
+  /** The id the fix is keyed by: `instructions`, a dimension id or a case id. */
+  readonly id: string;
   readonly label: string;
   readonly error?: unknown;
   /** The draft version an instruction patch created. */
   readonly version?: ApplicationVersionDetail;
 }
 
-async function attempt(kind: AppliedKind, label: string, write: () => Promise<ApplicationVersionDetail | undefined>): Promise<AppliedFix> {
+async function attempt(
+  kind: AppliedKind,
+  id: string,
+  label: string,
+  write: () => Promise<ApplicationVersionDetail | undefined>,
+): Promise<AppliedFix> {
   try {
     const version = await write();
-    return version === undefined ? { kind, label } : { kind, label, version };
+    return version === undefined ? { kind, id, label } : { kind, id, label, version };
   } catch (error) {
-    return { kind, label, error };
+    return { kind, id, label, error };
   }
 }
 
@@ -92,6 +109,7 @@ async function applyInstructionPatch(
     ...draftVersionBody(base, patch.instructions),
     name: draftVersionName(proposal.run_id),
     copy_skills_from_version_id: versionId,
+    copy_tools_from_version_id: versionId,
   } satisfies SaveApplicationNewVersionBody);
   return body<ApplicationVersionDetail>(created);
 }
@@ -109,12 +127,12 @@ export async function applyEnhancement(
 ): Promise<AppliedFix[]> {
   const applied: AppliedFix[] = [];
   if (accepted.instructions && proposal.instruction_patch !== null && proposal.instruction_patch !== undefined) {
-    applied.push(await attempt('instructions', 'instructions', () => applyInstructionPatch(projectId, proposal)));
+    applied.push(await attempt('instructions', 'instructions', 'instructions', () => applyInstructionPatch(projectId, proposal)));
   }
   for (const change of proposal.dimension_changes) {
     if (!accepted.dimensionIds.has(change.dimension_id)) continue;
     applied.push(
-      await attempt('dimension', change.dimension_name, async () => {
+      await attempt('dimension', change.dimension_id, change.dimension_name, async () => {
         const row = library.find((dimension) => dimension.id === change.dimension_id);
         if (row === undefined) throw new Error('The dimension is no longer in the library.');
         await updateEvalDimension(projectId, row.id, dimensionWriteInput(row, change));
@@ -125,7 +143,7 @@ export async function applyEnhancement(
   for (const change of proposal.dataset_changes) {
     if (!accepted.caseIds.has(change.case_id)) continue;
     applied.push(
-      await attempt('case', change.case_id, async () => {
+      await attempt('case', change.case_id, change.case_id, async () => {
         const dataset = await fetchEvalDataset(projectId, change.dataset_id);
         const row = dataset.cases.find((testCase) => testCase.id === change.case_id);
         if (row === undefined) throw new Error('The case is no longer in the dataset.');

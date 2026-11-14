@@ -74,56 +74,87 @@ function useAcceptance(proposal: EvalEnhanceProposal | undefined) {
   };
 }
 
-export interface EnhanceWizardProps {
+export interface EnhanceWithAiProps {
   readonly projectId: string | undefined;
-  /** `undefined` keeps the wizard closed. */
-  readonly runId: string | undefined;
+  readonly runId: string;
+}
+
+/**
+ * The entry point: the button, and the wizard it opens.
+ *
+ * THE PAID CALL IS FIRED BY THE CLICK, not by an effect in the wizard. An
+ * effect that asks on mount runs twice under StrictMode (and on any remount),
+ * and each ask is a model call that is billed.
+ */
+export function EnhanceWithAi({ projectId, runId }: EnhanceWithAiProps): ReactNode {
+  const enhance = useEnhanceRun(projectId);
+  // Counted per opening: the wizard is remounted each time, so a second run never starts from the first one's review.
+  const [opening, setOpening] = useState(0);
+  const [open, setOpen] = useState(false);
+  const { mutate, reset } = enhance;
+  const start = (): void => {
+    reset();
+    mutate(runId);
+    setOpening((count) => count + 1);
+    setOpen(true);
+  };
+  return (
+    <>
+      <BaseBtn variant="secondary" data-testid="run-enhance" onClick={start}>
+        {t('features.agentEvaluation.enhance.open', 'Enhance with AI')}
+      </BaseBtn>
+      {open && <EnhanceWizardBody key={opening} projectId={projectId} enhance={enhance} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+interface EnhanceWizardBodyProps {
+  readonly projectId: string | undefined;
+  readonly enhance: ReturnType<typeof useEnhanceRun>;
   readonly onClose: () => void;
 }
 
-export function EnhanceWizard({ projectId, runId, onClose }: EnhanceWizardProps): ReactNode {
-  // Remounted per opening, so a second run never starts from the first one's review.
-  return runId === undefined ? null : <EnhanceWizardBody projectId={projectId} runId={runId} onClose={onClose} />;
+function fixKey(fix: Pick<AppliedFix, 'kind' | 'id'>): string {
+  return `${fix.kind}:${fix.id}`;
 }
 
-function EnhanceWizardBody({ projectId, runId, onClose }: EnhanceWizardProps & { readonly runId: string }): ReactNode {
-  const enhance = useEnhanceRun(projectId);
+function EnhanceWizardBody({ projectId, enhance, onClose }: EnhanceWizardBodyProps): ReactNode {
   const apply = useApplyEnhancement(projectId);
   const [step, setStep] = useState<StepKey>('instructions');
-  const [applied, setApplied] = useState<readonly AppliedFix[] | undefined>(undefined);
+  // Every fix's latest outcome, by key. A retry replaces a failure with its new outcome.
+  const [outcomes, setOutcomes] = useState<ReadonlyMap<string, AppliedFix>>(new Map());
   const [publishVersionId, setPublishVersionId] = useState<number | undefined>(undefined);
-
-  // One request per opening. `mutate` is stable; the guard keeps a re-render from asking twice.
-  const { mutate, isIdle } = enhance;
-  useEffect(() => {
-    if (isIdle) mutate(runId);
-  }, [isIdle, mutate, runId]);
 
   const proposal = enhance.data;
   const accepted = useAcceptance(proposal);
   const current = useVersionInstructions(projectId, proposal);
   const library = useEvalDimensions(projectId, proposal?.application_id ?? undefined);
   const registry = useAgentRegistry(projectId, proposal?.application_id ?? undefined);
-  const counts = useMemo(
-    () => ({
-      instructions: accepted.instructions && proposal?.instruction_patch ? 1 : 0,
-      dimensions: accepted.dimensionIds.size,
-      cases: accepted.caseIds.size,
-    }),
-    [accepted.instructions, accepted.dimensionIds, accepted.caseIds, proposal],
-  );
+
+  // What is still to save: the accepted fixes minus those already saved. A failed one stays,
+  // so Save is a retry of exactly the failures and never creates a second draft.
+  const pending = useMemo(() => {
+    const saved = (fix: Pick<AppliedFix, 'kind' | 'id'>): boolean => outcomes.get(fixKey(fix)) !== undefined && outcomes.get(fixKey(fix))?.error === undefined;
+    return {
+      instructions: accepted.instructions && !!proposal?.instruction_patch && !saved({ kind: 'instructions', id: 'instructions' }),
+      dimensionIds: new Set([...accepted.dimensionIds].filter((id) => !saved({ kind: 'dimension', id }))),
+      caseIds: new Set([...accepted.caseIds].filter((id) => !saved({ kind: 'case', id }))),
+    };
+  }, [accepted.instructions, accepted.dimensionIds, accepted.caseIds, proposal, outcomes]);
+  const counts = {
+    instructions: pending.instructions ? 1 : 0,
+    dimensions: pending.dimensionIds.size,
+    cases: pending.caseIds.size,
+  };
   const total = counts.instructions + counts.dimensions + counts.cases;
   const stepIndex = STEP_KEYS.indexOf(step);
+  const applied = outcomes.size === 0 ? undefined : [...outcomes.values()];
 
   const save = (): void => {
     if (proposal === undefined || total === 0) return;
     apply.mutate(
-      {
-        proposal,
-        accepted: { instructions: accepted.instructions, dimensionIds: accepted.dimensionIds, caseIds: accepted.caseIds },
-        library: library.data ?? [],
-      },
-      { onSuccess: setApplied },
+      { proposal, accepted: pending, library: library.data ?? [] },
+      { onSuccess: (fixes) => setOutcomes((previous) => new Map([...previous, ...fixes.map((fix) => [fixKey(fix), fix] as const)])) },
     );
   };
 
@@ -139,7 +170,7 @@ function EnhanceWizardBody({ projectId, runId, onClose }: EnhanceWizardProps & {
           node: (
             <WizardActions
               step={step}
-              canSave={total > 0 && applied === undefined && !apply.isPending}
+              canSave={total > 0 && !apply.isPending}
               ready={proposal !== undefined}
               onBack={() => setStep(STEP_KEYS[Math.max(0, stepIndex - 1)] ?? 'instructions')}
               onNext={() => setStep(STEP_KEYS[Math.min(STEP_KEYS.length - 1, stepIndex + 1)] ?? 'review')}

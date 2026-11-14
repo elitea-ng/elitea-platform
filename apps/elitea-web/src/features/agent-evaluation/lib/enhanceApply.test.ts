@@ -33,16 +33,31 @@ describe('caseWriteInput', () => {
 });
 
 describe('draft version', () => {
-  it('carries the pinned version with the new instructions and never a name or id', () => {
-    const base = { id: '9', application_id: '1', name: 'base', status: 'draft', instructions: 'old', agent_type: 'openai', llm_settings: { model_name: 'qwen' }, meta: { step_limit: 4 } } as unknown as ApplicationVersionDetail;
-    const body = draftVersionBody(base, 'new');
-    expect(body).toMatchObject({ instructions: 'new', agent_type: 'openai', llm_settings: { model_name: 'qwen' }, meta: { step_limit: 4 } });
-    expect(body).not.toHaveProperty('name');
-    expect(body).not.toHaveProperty('id');
+  // Everything the pinned version holds, including keys this file has never heard of.
+  const base = {
+    id: '9', application_id: '1', name: 'base', status: 'draft', created_at: '2026-11-01T00:00:00Z', author_id: '3',
+    author: { id: '3' }, is_forked: false, tools: [{ id: 1 }],
+    instructions: 'old', agent_type: 'openai', welcome_message: 'hi', llm_settings: { model_name: 'qwen', temperature: 0.2 },
+    conversation_starters: ['a', 'b'], variables: [{ name: 'x', value: '1' }], tags: [{ name: 't' }],
+    meta: { step_limit: 4, notes: 'n' }, pipeline_settings: { nodes: [] }, soul: { voice: 'dry' }, a_future_field: { keep: true },
+  } as unknown as ApplicationVersionDetail;
+
+  it('differs from the base only in the instructions', () => {
+    const body = draftVersionBody(base, 'new') as Record<string, unknown>;
+    const serverOwned = ['id', 'application_id', 'name', 'status', 'created_at', 'author_id', 'author', 'is_forked', 'tools'];
+    const expected: Record<string, unknown> = { ...(base as unknown as Record<string, unknown>), instructions: 'new' };
+    for (const key of serverOwned) delete expected[key];
+    expect(body).toEqual(expected);
   });
 
-  it('names the draft after the run, within the version name limit', () => {
-    expect(draftVersionName('42')).toBe('eval-fix-42');
-    expect(draftVersionName('9'.repeat(40)).length).toBeLessThanOrEqual(20);
+  it('leaves out null and absent fields so the new version stores its defaults', () => {
+    const body = draftVersionBody({ ...base, soul: null, meta: null } as unknown as ApplicationVersionDetail, 'new');
+    expect(body).not.toHaveProperty('soul');
+    expect(body).not.toHaveProperty('meta');
+  });
+
+  it('names every accept uniquely, so a second accept cannot collide with the first draft', () => {
+    expect(draftVersionName('42', 1_000_000)).toBe('eval-fix-42-lfls');
+    expect(draftVersionName('42', 1_000_000)).not.toBe(draftVersionName('42', 2_000_000));
   });
 });
