@@ -91,6 +91,8 @@ import type {
   CopyAgentMemory200,
   DefaultIcon,
   DocumentLoadersResponse,
+  EntityFolder,
+  EntityFolderList,
   EvalDataset,
   EvalDatasetCase,
   EvalDatasetDetail,
@@ -1654,6 +1656,71 @@ export const getUpdateEvalSuiteResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  ...overrideResponse,
+});
+
+export const getListEntityFoldersResponseMock = (
+  overrideResponse: Partial<Extract<EntityFolderList, object>> = {},
+): EntityFolderList => ({
+  items: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    name: faker.string.alpha({ length: { min: 10, max: 128 } }),
+    position: faker.number.int(),
+    item_ids: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.number.int()),
+    created_by: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  ...overrideResponse,
+});
+
+export const getCreateEntityFolderResponseMock = (
+  overrideResponse: Partial<Extract<EntityFolder, object>> = {},
+): EntityFolder => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  name: faker.string.alpha({ length: { min: 10, max: 128 } }),
+  position: faker.number.int(),
+  item_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  created_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getUpdateEntityFolderResponseMock = (
+  overrideResponse: Partial<Extract<EntityFolder, object>> = {},
+): EntityFolder => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  name: faker.string.alpha({ length: { min: 10, max: 128 } }),
+  position: faker.number.int(),
+  item_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
+  created_by: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
 });
 
@@ -15395,6 +15462,128 @@ export const getDeleteEvalSuiteMockHandler = (
   );
 };
 
+export const getListEntityFoldersMockHandler = (
+  overrideResponse?:
+    | EntityFolderList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<EntityFolderList> | EntityFolderList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/entity_folders/prompt_lib/:projectId/:kind",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListEntityFoldersResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateEntityFolderMockHandler = (
+  overrideResponse?:
+    | EntityFolder
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<EntityFolder> | EntityFolder),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/entity_folders/prompt_lib/:projectId/:kind",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateEntityFolderResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateEntityFolderMockHandler = (
+  overrideResponse?:
+    | EntityFolder
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<EntityFolder> | EntityFolder),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/entity_folders/prompt_lib/:projectId/:kind/:folderId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateEntityFolderResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteEntityFolderMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/entity_folders/prompt_lib/:projectId/:kind/:folderId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getMoveEntityToFolderMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/entity_folders/prompt_lib/:projectId/:kind/items/:entityId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getListEvalHumanScoresMockHandler = (
   overrideResponse?:
     | EvalHumanScoreList
@@ -18929,6 +19118,11 @@ export const getApplicationsMock = () => [
   getCreateEvalSuiteMockHandler(),
   getUpdateEvalSuiteMockHandler(),
   getDeleteEvalSuiteMockHandler(),
+  getListEntityFoldersMockHandler(),
+  getCreateEntityFolderMockHandler(),
+  getUpdateEntityFolderMockHandler(),
+  getDeleteEntityFolderMockHandler(),
+  getMoveEntityToFolderMockHandler(),
   getListEvalHumanScoresMockHandler(),
   getRecordEvalHumanScoreMockHandler(),
   getEnhanceEvalRunMockHandler(),

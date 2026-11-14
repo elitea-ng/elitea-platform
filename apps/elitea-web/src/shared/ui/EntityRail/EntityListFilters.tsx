@@ -45,9 +45,11 @@ export interface EntityListFiltersProps {
   /** Overrides the pathname-prefix statistic lookup — for `/user-public/:tab`, whose prefix names no entity while its tab does. */
   readonly statKind?: RailStatKind;
   readonly indexesTotal?: number;
+  /** The list's project-folder panel (issue 2048), drawn above the tags. The page composes it: `shared/` cannot import the widget that owns it. */
+  readonly foldersSlot?: ReactNode;
 }
 
-export function EntityListFilters({ projectId, subject, authorIdFromUrl, preferTrendingAuthors = false, statKind, indexesTotal }: EntityListFiltersProps): ReactNode {
+export function EntityListFilters({ projectId, subject, authorIdFromUrl, preferTrendingAuthors = false, statKind, indexesTotal, foldersSlot }: EntityListFiltersProps): ReactNode {
   const location = useLocation();
   const tagSelection = useRailTagSelection();
   const viewer = useRailViewer(authorIdFromUrl);
@@ -63,6 +65,7 @@ export function EntityListFilters({ projectId, subject, authorIdFromUrl, preferT
         data-testid="entity-list-filters"
         sx={filtersPanelSx}
       >
+        {foldersSlot}
         <RailTagsPanel
           projectId={projectId}
           selectedTags={tagSelection.selectedTags}

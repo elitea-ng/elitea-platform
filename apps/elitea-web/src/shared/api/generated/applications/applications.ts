@@ -127,6 +127,11 @@ import type {
   DesktopOperationError,
   DocumentLoadersResponse,
   DraftRefusedResponse,
+  EntityFolder,
+  EntityFolderCreateRequest,
+  EntityFolderList,
+  EntityFolderMoveRequest,
+  EntityFolderUpdateRequest,
   ErrorResponse,
   EvalDataset,
   EvalDatasetCase,
@@ -4786,6 +4791,1470 @@ export function useDeleteEvalSuite<
   const queryOptions = getDeleteEvalSuiteQueryOptions(
     projectId,
     suiteId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listEntityFoldersResponse200 = {
+  data: EntityFolderList;
+  status: 200;
+};
+
+export type listEntityFoldersResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listEntityFoldersResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listEntityFoldersResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type listEntityFoldersResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listEntityFoldersResponseSuccess = listEntityFoldersResponse200 & {
+  headers: Headers;
+};
+export type listEntityFoldersResponseError = (
+  | listEntityFoldersResponse401
+  | listEntityFoldersResponse403
+  | listEntityFoldersResponse404
+  | listEntityFoldersResponse500
+) & {
+  headers: Headers;
+};
+
+export type listEntityFoldersResponse =
+  listEntityFoldersResponseSuccess | listEntityFoldersResponseError;
+
+export const getListEntityFoldersUrl = (projectId: string, kind: string) => {
+  return `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}`;
+};
+
+/**
+ * The folders of the list with the ids of the entities in each, highest
+ * position first. Gated on the permission the list itself uses
+ * (`models.applications.applications.list` for agents and pipelines,
+ * `models.applications.skills.list`, `models.applications.tools.list` for
+ * toolkits and MCPs).
+ * @summary List the project's folders of one list
+ */
+export const listEntityFolders = async (
+  projectId: string,
+  kind: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listEntityFoldersResponse> => {
+  return eliteaFetch<listEntityFoldersResponse>(
+    getListEntityFoldersUrl(projectId, kind),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListEntityFoldersQueryKey = (
+  projectId: string,
+  kind: string,
+) => {
+  return [
+    `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}`,
+  ] as const;
+};
+
+export const getListEntityFoldersQueryOptions = <
+  TData = Awaited<ReturnType<typeof listEntityFolders>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEntityFolders>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListEntityFoldersQueryKey(projectId, kind);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listEntityFolders>>
+  > = ({ signal }) =>
+    listEntityFolders(projectId, kind, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listEntityFolders>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListEntityFoldersQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listEntityFolders>>
+>;
+export type ListEntityFoldersQueryError =
+  N401Response | N403Response | N404Response | N500Response;
+
+export function useListEntityFolders<
+  TData = Awaited<ReturnType<typeof listEntityFolders>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEntityFolders>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEntityFolders>>,
+          TError,
+          Awaited<ReturnType<typeof listEntityFolders>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEntityFolders<
+  TData = Awaited<ReturnType<typeof listEntityFolders>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEntityFolders>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listEntityFolders>>,
+          TError,
+          Awaited<ReturnType<typeof listEntityFolders>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListEntityFolders<
+  TData = Awaited<ReturnType<typeof listEntityFolders>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEntityFolders>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the project's folders of one list
+ */
+
+export function useListEntityFolders<
+  TData = Awaited<ReturnType<typeof listEntityFolders>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listEntityFolders>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListEntityFoldersQueryOptions(
+    projectId,
+    kind,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createEntityFolderResponse201 = {
+  data: EntityFolder;
+  status: 201;
+};
+
+export type createEntityFolderResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type createEntityFolderResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createEntityFolderResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createEntityFolderResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type createEntityFolderResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type createEntityFolderResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type createEntityFolderResponseSuccess =
+  createEntityFolderResponse201 & {
+    headers: Headers;
+  };
+export type createEntityFolderResponseError = (
+  | createEntityFolderResponse400
+  | createEntityFolderResponse401
+  | createEntityFolderResponse403
+  | createEntityFolderResponse404
+  | createEntityFolderResponse409
+  | createEntityFolderResponse500
+) & {
+  headers: Headers;
+};
+
+export type createEntityFolderResponse =
+  createEntityFolderResponseSuccess | createEntityFolderResponseError;
+
+export const getCreateEntityFolderUrl = (projectId: string, kind: string) => {
+  return `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}`;
+};
+
+/**
+ * The new folder goes to the top. A name is unique in its list whatever
+ * its case: a second one is a 409. Gated on the list's create permission.
+ * @summary Create a folder in a list
+ */
+export const createEntityFolder = async (
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createEntityFolderResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createEntityFolderResponse>(
+    getCreateEntityFolderUrl(projectId, kind),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(entityFolderCreateRequest),
+    },
+  );
+};
+
+export const getCreateEntityFolderQueryKey = (
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest?: EntityFolderCreateRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}`,
+    entityFolderCreateRequest,
+  ] as const;
+};
+
+export const getCreateEntityFolderQueryOptions = <
+  TData = Awaited<ReturnType<typeof createEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateEntityFolderQueryKey(projectId, kind, entityFolderCreateRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createEntityFolder>>
+  > = ({ signal }) =>
+    createEntityFolder(projectId, kind, entityFolderCreateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createEntityFolder>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateEntityFolderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createEntityFolder>>
+>;
+export type CreateEntityFolderQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | N409Response
+  | N500Response;
+
+export function useCreateEntityFolder<
+  TData = Awaited<ReturnType<typeof createEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof createEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateEntityFolder<
+  TData = Awaited<ReturnType<typeof createEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof createEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateEntityFolder<
+  TData = Awaited<ReturnType<typeof createEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Create a folder in a list
+ */
+
+export function useCreateEntityFolder<
+  TData = Awaited<ReturnType<typeof createEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityFolderCreateRequest: EntityFolderCreateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateEntityFolderQueryOptions(
+    projectId,
+    kind,
+    entityFolderCreateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateEntityFolderResponse200 = {
+  data: EntityFolder;
+  status: 200;
+};
+
+export type updateEntityFolderResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type updateEntityFolderResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateEntityFolderResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateEntityFolderResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type updateEntityFolderResponse409 = {
+  data: N409Response;
+  status: 409;
+};
+
+export type updateEntityFolderResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type updateEntityFolderResponseSuccess =
+  updateEntityFolderResponse200 & {
+    headers: Headers;
+  };
+export type updateEntityFolderResponseError = (
+  | updateEntityFolderResponse400
+  | updateEntityFolderResponse401
+  | updateEntityFolderResponse403
+  | updateEntityFolderResponse404
+  | updateEntityFolderResponse409
+  | updateEntityFolderResponse500
+) & {
+  headers: Headers;
+};
+
+export type updateEntityFolderResponse =
+  updateEntityFolderResponseSuccess | updateEntityFolderResponseError;
+
+export const getUpdateEntityFolderUrl = (
+  projectId: string,
+  kind: string,
+  folderId: string,
+) => {
+  return `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/${folderId}`;
+};
+
+/**
+ * Gated on the list's update permission. A rename never moves the folder.
+ * @summary Rename or reorder a folder
+ */
+export const updateEntityFolder = async (
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateEntityFolderResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updateEntityFolderResponse>(
+    getUpdateEntityFolderUrl(projectId, kind, folderId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(entityFolderUpdateRequest),
+    },
+  );
+};
+
+export const getUpdateEntityFolderQueryKey = (
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest?: EntityFolderUpdateRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/${folderId}`,
+    entityFolderUpdateRequest,
+  ] as const;
+};
+
+export const getUpdateEntityFolderQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateEntityFolderQueryKey(
+      projectId,
+      kind,
+      folderId,
+      entityFolderUpdateRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateEntityFolder>>
+  > = ({ signal }) =>
+    updateEntityFolder(projectId, kind, folderId, entityFolderUpdateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined &&
+      folderId !== null &&
+      folderId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateEntityFolder>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateEntityFolderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateEntityFolder>>
+>;
+export type UpdateEntityFolderQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | N409Response
+  | N500Response;
+
+export function useUpdateEntityFolder<
+  TData = Awaited<ReturnType<typeof updateEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof updateEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateEntityFolder<
+  TData = Awaited<ReturnType<typeof updateEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof updateEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateEntityFolder<
+  TData = Awaited<ReturnType<typeof updateEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Rename or reorder a folder
+ */
+
+export function useUpdateEntityFolder<
+  TData = Awaited<ReturnType<typeof updateEntityFolder>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | N409Response
+    | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  entityFolderUpdateRequest: EntityFolderUpdateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateEntityFolderQueryOptions(
+    projectId,
+    kind,
+    folderId,
+    entityFolderUpdateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteEntityFolderResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteEntityFolderResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteEntityFolderResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteEntityFolderResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type deleteEntityFolderResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteEntityFolderResponseSuccess =
+  deleteEntityFolderResponse204 & {
+    headers: Headers;
+  };
+export type deleteEntityFolderResponseError = (
+  | deleteEntityFolderResponse401
+  | deleteEntityFolderResponse403
+  | deleteEntityFolderResponse404
+  | deleteEntityFolderResponse500
+) & {
+  headers: Headers;
+};
+
+export type deleteEntityFolderResponse =
+  deleteEntityFolderResponseSuccess | deleteEntityFolderResponseError;
+
+export const getDeleteEntityFolderUrl = (
+  projectId: string,
+  kind: string,
+  folderId: string,
+) => {
+  return `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/${folderId}`;
+};
+
+/**
+ * The entities inside return to the root. No entity is deleted. Gated on
+ * the list's update permission.
+ * @summary Delete a folder
+ */
+export const deleteEntityFolder = async (
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteEntityFolderResponse> => {
+  return eliteaFetch<deleteEntityFolderResponse>(
+    getDeleteEntityFolderUrl(projectId, kind, folderId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteEntityFolderQueryKey = (
+  projectId: string,
+  kind: string,
+  folderId: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/${folderId}`,
+  ] as const;
+};
+
+export const getDeleteEntityFolderQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteEntityFolder>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteEntityFolderQueryKey(projectId, kind, folderId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteEntityFolder>>
+  > = ({ signal }) =>
+    deleteEntityFolder(projectId, kind, folderId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined &&
+      folderId !== null &&
+      folderId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteEntityFolder>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteEntityFolderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteEntityFolder>>
+>;
+export type DeleteEntityFolderQueryError =
+  N401Response | N403Response | N404Response | N500Response;
+
+export function useDeleteEntityFolder<
+  TData = Awaited<ReturnType<typeof deleteEntityFolder>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof deleteEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteEntityFolder<
+  TData = Awaited<ReturnType<typeof deleteEntityFolder>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEntityFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteEntityFolder>>,
+          TError,
+          Awaited<ReturnType<typeof deleteEntityFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteEntityFolder<
+  TData = Awaited<ReturnType<typeof deleteEntityFolder>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete a folder
+ */
+
+export function useDeleteEntityFolder<
+  TData = Awaited<ReturnType<typeof deleteEntityFolder>>,
+  TError = N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  folderId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteEntityFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteEntityFolderQueryOptions(
+    projectId,
+    kind,
+    folderId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type moveEntityToFolderResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type moveEntityToFolderResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type moveEntityToFolderResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type moveEntityToFolderResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type moveEntityToFolderResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type moveEntityToFolderResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type moveEntityToFolderResponseSuccess =
+  moveEntityToFolderResponse204 & {
+    headers: Headers;
+  };
+export type moveEntityToFolderResponseError = (
+  | moveEntityToFolderResponse400
+  | moveEntityToFolderResponse401
+  | moveEntityToFolderResponse403
+  | moveEntityToFolderResponse404
+  | moveEntityToFolderResponse500
+) & {
+  headers: Headers;
+};
+
+export type moveEntityToFolderResponse =
+  moveEntityToFolderResponseSuccess | moveEntityToFolderResponseError;
+
+export const getMoveEntityToFolderUrl = (
+  projectId: string,
+  kind: string,
+  entityId: number,
+) => {
+  return `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/items/${entityId}`;
+};
+
+/**
+ * The entity and the folder must belong to the same list, else 404. An
+ * entity is in one folder, so this replaces its place. Gated on the list's
+ * update permission.
+ * @summary Put an entity into a folder, or back at the root
+ */
+export const moveEntityToFolder = async (
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<moveEntityToFolderResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<moveEntityToFolderResponse>(
+    getMoveEntityToFolderUrl(projectId, kind, entityId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(entityFolderMoveRequest),
+    },
+  );
+};
+
+export const getMoveEntityToFolderQueryKey = (
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest?: EntityFolderMoveRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/items/${entityId}`,
+    entityFolderMoveRequest,
+  ] as const;
+};
+
+export const getMoveEntityToFolderQueryOptions = <
+  TData = Awaited<ReturnType<typeof moveEntityToFolder>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof moveEntityToFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getMoveEntityToFolderQueryKey(
+      projectId,
+      kind,
+      entityId,
+      entityFolderMoveRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof moveEntityToFolder>>
+  > = ({ signal }) =>
+    moveEntityToFolder(projectId, kind, entityId, entityFolderMoveRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined &&
+      entityId !== null &&
+      entityId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof moveEntityToFolder>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type MoveEntityToFolderQueryResult = NonNullable<
+  Awaited<ReturnType<typeof moveEntityToFolder>>
+>;
+export type MoveEntityToFolderQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useMoveEntityToFolder<
+  TData = Awaited<ReturnType<typeof moveEntityToFolder>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof moveEntityToFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof moveEntityToFolder>>,
+          TError,
+          Awaited<ReturnType<typeof moveEntityToFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMoveEntityToFolder<
+  TData = Awaited<ReturnType<typeof moveEntityToFolder>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof moveEntityToFolder>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof moveEntityToFolder>>,
+          TError,
+          Awaited<ReturnType<typeof moveEntityToFolder>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMoveEntityToFolder<
+  TData = Awaited<ReturnType<typeof moveEntityToFolder>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof moveEntityToFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Put an entity into a folder, or back at the root
+ */
+
+export function useMoveEntityToFolder<
+  TData = Awaited<ReturnType<typeof moveEntityToFolder>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderMoveRequest: EntityFolderMoveRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof moveEntityToFolder>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getMoveEntityToFolderQueryOptions(
+    projectId,
+    kind,
+    entityId,
+    entityFolderMoveRequest,
     options,
   );
 

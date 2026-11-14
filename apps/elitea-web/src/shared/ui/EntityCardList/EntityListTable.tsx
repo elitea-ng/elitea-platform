@@ -10,6 +10,7 @@ import { CalendarIcon } from '@/shared/ui/icons/calendar-icon';
 import { EntityCardAuthors } from './EntityCardAuthors';
 import { HeaderCell } from './EntityListHeaderCell';
 import type { EntityListItem } from './model';
+import { useEntityRowSlot } from './rowSlot';
 
 /**
  * The `?view=table` rendering of a list page — the port of
@@ -37,6 +38,7 @@ export interface EntityListTableProps {
 export function EntityListTable({ items }: EntityListTableProps): ReactNode {
   const [sortField, setSortField] = useState<SortField>('createdAt');
   const [descending, setDescending] = useState(true);
+  const slot = useEntityRowSlot();
   const showType = items.some((item) => item.typeLabel !== undefined && item.typeLabel !== '');
 
   const sorted = useMemo(() => {
@@ -57,7 +59,7 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
     setDescending(true);
   };
 
-  const columns = gridTemplateColumns(showType);
+  const columns = gridTemplateColumns(showType, slot !== undefined);
 
   return (
     <Box
@@ -87,6 +89,7 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
               toggleSort('createdAt');
             }}
           />
+          {slot !== undefined && <HeaderCell label={slot.columnLabel} />}
         </Box>
       </Box>
       <Box
@@ -185,6 +188,18 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
                 </>
               )}
             </Box>
+            {slot !== undefined && (
+              <Box
+                component="td"
+                data-testid="entity-row-slot"
+                sx={cellSx}
+                onClick={(event) => {
+                  event.stopPropagation();
+                }}
+              >
+                {slot.renderCell(item)}
+              </Box>
+            )}
           </Box>
         ))}
       </Box>
@@ -200,8 +215,8 @@ function formatCreated(iso: string): string {
 }
 
 /** `DataTable.jsx`'s `gridTemplateColumns` — `minmax(<minWidth>, 1fr)` for the name column, fixed rem widths for the rest. */
-function gridTemplateColumns(showType: boolean): string {
-  return ['minmax(12.5rem, 1fr)', ...(showType ? ['9.375rem'] : []), '15rem', '8.75rem'].join(' ');
+function gridTemplateColumns(showType: boolean, showSlot: boolean): string {
+  return ['minmax(12.5rem, 1fr)', ...(showType ? ['9.375rem'] : []), '15rem', '8.75rem', ...(showSlot ? ['11rem'] : [])].join(' ');
 }
 
 const tableSx: SxProps<Theme> = {

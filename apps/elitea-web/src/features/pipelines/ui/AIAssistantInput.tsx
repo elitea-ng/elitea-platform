@@ -15,7 +15,7 @@ import { t } from '@/shared/i18n';
 
 import { AIAssistantModal } from './AIAssistantModal';
 import type { AIAssistantModalProps, AiAssistantFieldBinding, AiAssistantFStringAutocomplete, AiAssistantPipelineContext } from './AIAssistantModal';
-import { visiblePlaceholderProps } from './settings/valuePlaceholder';
+import { ALIGNED_LABEL_ROW_SHIFT, alignedFieldProps, visiblePlaceholderProps } from './settings/valuePlaceholder';
 import { detectContentType } from '../lib/aiAssistantLanguage';
 import type { AiAssistantLlmSettings } from '../api/aiAssistantPredict';
 
@@ -72,14 +72,27 @@ export interface AIAssistantInputProps {
   readonly pipelineContext?: AiAssistantPipelineContext;
   /** The hint an empty field shows; the label then stays above the field. */
   readonly placeholder?: string;
+  /** Set by the Type/Value row: lines the field up with the select beside it (#2001). Off for standalone fields. */
+  readonly alignWithSelect?: boolean;
 }
 
-const triggerButtonSx: SxProps<Theme> = (theme) => ({
+/** The Type/Value row aligns the field with its select; a standalone field keeps the stock layout. */
+function alignmentFor(alignWithSelect: boolean, fieldName: string): { readonly multiline: boolean } | undefined {
+  return alignWithSelect ? { multiline: fieldName.toLowerCase() === 'code' } : undefined;
+}
+
+function actionsFor(alignWithSelect: boolean): NonNullable<InputBaseProps['actions']> {
+  return { enabled: true, showCopy: true, showFullScreen: true, ...(alignWithSelect ? { offsetY: ALIGNED_LABEL_ROW_SHIFT } : {}) };
+}
+
+function triggerButtonSx(aligned: boolean): SxProps<Theme> {
+  return (theme) => ({
   position: 'absolute',
-  top: theme.spacing(-2.5),
+  top: theme.spacing(-2.5 + (aligned ? ALIGNED_LABEL_ROW_SHIFT : 0)),
   right: theme.spacing(1.5),
   zIndex: 1,
-});
+  });
+}
 
 /**
  * Minimal duck-typed change-event shape `AiAssistantFieldBinding.onChange`/
@@ -123,10 +136,11 @@ function buildInputBaseProps(
   disabled: boolean | undefined,
   fieldBinding: AiAssistantFieldBinding | undefined,
   placeholder: string | undefined,
+  aligned: { readonly multiline: boolean } | undefined,
 ): InputBaseProps {
   return {
     value,
-    ...(placeholder !== undefined ? visiblePlaceholderProps(placeholder) : {}),
+    ...(placeholder !== undefined ? (aligned ? alignedFieldProps(placeholder, aligned.multiline) : visiblePlaceholderProps(placeholder)) : {}),
     ...(label !== undefined ? { label } : {}),
     ...(disabled !== undefined ? { disabled } : {}),
     ...(fieldBinding?.name !== undefined ? { name: fieldBinding.name } : {}),
@@ -171,6 +185,7 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
     fStringAutocomplete,
     pipelineContext,
     placeholder,
+    alignWithSelect = false,
   } = props;
 
   const [showAIAssistantModal, setShowAIAssistantModal] = useState(false);
@@ -191,7 +206,7 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
   const detectedLanguage = useMemo(() => language ?? detectContentType(value), [language, value]);
 
   const triggerLabel = t('pipelines.aiAssistant.input.openTrigger', 'AI Assistant');
-  const inputBaseProps = buildInputBaseProps(value, label, disabled, fieldBinding, placeholder);
+  const inputBaseProps = buildInputBaseProps(value, label, disabled, fieldBinding, placeholder, alignmentFor(alignWithSelect, fieldName));
   const modalProps = buildAiAssistantModalProps(
     { value, title: fieldName, fieldName, open: showAIAssistantModal, onClose: handleCloseAIAssistant, specifiedLanguage: detectedLanguage, modelConfig },
     { disabled, projectId, fieldBinding, fStringAutocomplete, pipelineContext },
@@ -220,7 +235,7 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
         // Copy + full-screen, hover-revealed, on every field. Router Condition, State Modifier
         // Jinja template and Decision description had neither, and with the assistant trigger
         // hidden there was no way to open the full text at all (#2007).
-        actions={{ enabled: true, showCopy: true, showFullScreen: true }}
+        actions={actionsFor(alignWithSelect)}
         onFullScreen={handleOpenFullScreen}
       />
       {aiAssistantServed && (
@@ -230,7 +245,7 @@ export const AIAssistantInput = memo(function AIAssistantInput(props: AIAssistan
         >
           <IconButton
             onClick={handleOpenAIAssistant}
-            sx={triggerButtonSx}
+            sx={triggerButtonSx(alignWithSelect)}
             aria-label={triggerLabel}
             size="small"
           >

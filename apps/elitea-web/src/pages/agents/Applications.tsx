@@ -10,6 +10,7 @@ import { TEAM_PERMISSIONS, TeamsPanel } from '@/features/agent-teams';
 import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { EntityListFilters, useRailTagSelection } from '@/shared/ui/EntityRail';
+import { EntityFolderPanel } from '@/widgets/entity-folders';
 import { ListViewToggle, PageToolbar, pageBodySx, pageSx, type PageToolbarProps } from '@/widgets/page-header';
 import { usePermissionSet, usePermissionSetSettled } from '@/widgets/sidebar';
 
@@ -17,7 +18,7 @@ import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
 import { useHasAdminPermission } from './lib/useHasAdminPermission';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { useApplicationsData } from './useApplicationsData';
-import { TEAMS_TAB, useApplicationTabs } from './useApplicationTabs';
+import { TEAMS_TAB, privateApplicationTabValues, useApplicationTabs } from './useApplicationTabs';
 
 /** The four public tabs (`latest`/`my-liked`/`trending`) plus `admin` are the ones the baseline pins to "Trending Authors" (`RightInfoPanel` picks per-project elsewhere; `PrivateAgentsList.jsx:141-151` hard-codes it for Admin). */
 const TRENDING_AUTHOR_TABS: readonly string[] = ['latest', 'my-liked', 'trending', 'admin'];
@@ -83,6 +84,8 @@ export function Applications(): ReactNode {
   const permissions = usePermissionSet(projectId);
   const permissionsSettled = usePermissionSetSettled(projectId);
   const canCreate = permissions.has(PERMISSIONS.applications.create) && !isPublicProject;
+  // The project's own lists have folders; the public feeds and the Teams tab do not (issue 2048).
+  const showFolders = hasFolders(isPublicProject, params.tab);
   const { selectedTags } = useRailTagSelection();
   const totals = useApplicationsData(projectId, hasAdminPermission);
   const entityImport = useEntityImport(projectId);
@@ -159,9 +162,23 @@ export function Applications(): ReactNode {
         projectId={projectId}
         subject={title}
         preferTrendingAuthors={TRENDING_AUTHOR_TABS.includes(params.tab ?? '')}
+        foldersSlot={
+          <EntityFolderPanel
+            enabled={showFolders}
+            projectId={projectId}
+            kind="agent"
+            permissions={permissions}
+          />
+        }
       />
     </Box>
   );
+}
+
+/** The project's own lists have folders; the public feeds and the Teams tab do not (issue 2048). */
+function hasFolders(isPublicProject: boolean, tab: string | undefined): boolean {
+  // Only the project's own status tabs filter by folder; Teams, and the public Latest / My liked / Trending / Admin feeds, ignore it.
+  return !isPublicProject && privateApplicationTabValues().some((value) => value === tab);
 }
 
 /** ADR-0050 decision 8 (issue 1620): the Teams tab's content, for a caller who may list teams. */

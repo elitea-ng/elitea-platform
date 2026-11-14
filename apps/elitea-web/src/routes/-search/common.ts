@@ -24,6 +24,7 @@ export const commonSearchSchema = pickParams(
   'conversation',
   'create',
   'destTab',
+  'entity_folder',
   'from',
   'history_run_id',
   'index_name',

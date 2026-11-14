@@ -4342,6 +4342,71 @@
       "usedBy": [
         "features/agent-workforce"
       ]
+    },
+    {
+      "$comment": "READ. The project's folders of one list (agents, pipelines, skills, toolkits, MCPs) with the ids of the entities in each. Gated on the list's own list permission.",
+      "id": "entityFolder.list",
+      "method": "GET",
+      "path": "/elitea_core/entity_folders/prompt_lib/{projectId}/{kind}",
+      "operationId": "listEntityFolders",
+      "source": "generated",
+      "responseSchema": "EntityFolderList",
+      "fixture": null,
+      "usedBy": [
+        "entities/entity-folder"
+      ]
+    },
+    {
+      "$comment": "Makes a folder in one list. Gated on the list's create permission; a duplicate name is a 409.",
+      "id": "entityFolder.create",
+      "method": "POST",
+      "path": "/elitea_core/entity_folders/prompt_lib/{projectId}/{kind}",
+      "operationId": "createEntityFolder",
+      "source": "generated",
+      "responseSchema": "EntityFolder",
+      "fixture": null,
+      "usedBy": [
+        "entities/entity-folder"
+      ]
+    },
+    {
+      "$comment": "Renames or reorders a folder (neighbour ids win over a position). Gated on the list's update permission.",
+      "id": "entityFolder.update",
+      "method": "PUT",
+      "path": "/elitea_core/entity_folders/prompt_lib/{projectId}/{kind}/{folderId}",
+      "operationId": "updateEntityFolder",
+      "source": "generated",
+      "responseSchema": "EntityFolder",
+      "fixture": null,
+      "usedBy": [
+        "entities/entity-folder"
+      ]
+    },
+    {
+      "$comment": "Deletes a folder. Its entities return to the root; none is deleted.",
+      "id": "entityFolder.delete",
+      "method": "DELETE",
+      "path": "/elitea_core/entity_folders/prompt_lib/{projectId}/{kind}/{folderId}",
+      "operationId": "deleteEntityFolder",
+      "source": "generated",
+      "responseSchema": "unknown",
+      "fixture": null,
+      "usedBy": [
+        "entities/entity-folder"
+      ]
+    },
+    {
+      "$comment": "Puts one entity into a folder of its list, or back at the root with folder_id null.",
+      "id": "entityFolder.move",
+      "method": "PUT",
+      "path": "/elitea_core/entity_folders/prompt_lib/{projectId}/{kind}/items/{entityId}",
+      "operationId": "moveEntityToFolder",
+      "source": "generated",
+      "responseSchema": "unknown",
+      "fixture": null,
+      "usedBy": [
+        "entities/entity-folder"
+      ]
     }
   ]
 }

@@ -19,6 +19,8 @@ export interface InputBaseActionsOptions {
   showFullScreen?: boolean;
   /** Keeps the toolbar visible without a real hover — for Storybook/tests. */
   forceShow?: boolean;
+  /** Moves the toolbar vertically, in spacing units (negative = up), for a field whose label row sits higher than a stock one. */
+  offsetY?: number;
 }
 
 /** @public */
@@ -80,11 +82,12 @@ const outlinedLabelRowSx = {
   paddingLeft: '0.75rem',
 };
 
-function toolbarPositionSx(hasLabel: boolean) {
+function toolbarPositionSx(hasLabel: boolean, actions: InputBaseActionsOptions | undefined) {
+  const offsetY = actions?.offsetY ?? 0;
   return (theme: Theme) => ({
     position: 'absolute' as const,
     display: 'flex',
-    top: hasLabel ? theme.spacing(0.25) : theme.spacing(-2.5),
+    top: theme.spacing((hasLabel ? 0.25 : -2.5) + offsetY),
     right: theme.spacing(1.5),
     zIndex: 1,
   });
@@ -235,7 +238,7 @@ export function InputBase({
           onCopy={handleCopy}
           onToggleExpand={toggleExpand}
           onFullScreen={onFullScreen}
-          sx={toolbarPositionSx(Boolean(label))}
+          sx={toolbarPositionSx(Boolean(label), actions)}
         />
       )}
       <MuiTextField

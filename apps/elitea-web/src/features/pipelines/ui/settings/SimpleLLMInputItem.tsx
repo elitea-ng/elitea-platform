@@ -12,7 +12,7 @@ import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 import { capitalizeFirstChar } from '@/shared/lib/string';
 
 import { AIAssistantInput } from '../AIAssistantInput';
-import { valuePlaceholder, visiblePlaceholderProps } from './valuePlaceholder';
+import { ALIGNED_LABEL_ROW_SHIFT, alignedFieldProps, valuePlaceholder } from './valuePlaceholder';
 import type { AiAssistantLlmSettings } from '../../api/aiAssistantPredict';
 import { FStringAutocompletePopper } from '../FStringAutocompletePopper';
 import { useFStringInputAutocomplete } from '../../model/useFStringInputAutocomplete';
@@ -130,6 +130,7 @@ function NodeFieldInput(props: NodeFieldInputProps): ReactNode {
           label={t('pipelines.simpleLLMInputItem.value', 'Value')}
           fieldName={variableName}
           placeholder={valuePlaceholder(variable)}
+          alignWithSelect
           disabled={disabled}
           modelConfig={modelConfig}
           fieldBinding={{ name: 'value', id: `${variable}-value`, onInput }}
@@ -143,9 +144,9 @@ function NodeFieldInput(props: NodeFieldInputProps): ReactNode {
           disabled={disabled}
           name="value"
           id={`${variable}-value`}
-          {...visiblePlaceholderProps(valuePlaceholder(variable))}
+          {...alignedFieldProps(valuePlaceholder(variable), isMultiline)}
           {...(isMultiline ? { expand: { minRows: 3, maxRows: 8 } } : {})}
-          actions={{ enabled: true, showCopy: true, showFullScreen: true, showExpand: isMultiline }}
+          actions={{ enabled: true, showCopy: true, showFullScreen: true, showExpand: isMultiline, offsetY: ALIGNED_LABEL_ROW_SHIFT }}
           onChange={handleChange}
           onBlur={closeAutocomplete}
           onClick={onFieldClick}
@@ -225,7 +226,8 @@ function fieldRowSx(isMultiline: boolean): SxProps<Theme> {
   return { display: 'flex', gap: '0.75rem', alignItems: isMultiline ? 'flex-start' : 'flex-end', minHeight: '3.79rem' };
 }
 const typeSelectWrapperSx: SxProps<Theme> = { width: '7.25rem' };
-const selectSx: SxProps<Theme> = { marginBottom: '0rem' };
+// `minWidth: 0`: the select's stock 10rem minimum is wider than the 7.25rem Type column, so its underline ran on under the Value field.
+const selectSx: SxProps<Theme> = { marginBottom: '0rem', minWidth: 0 };
 
 const valueWrapperSx: SxProps<Theme> = { flex: 1 };
 

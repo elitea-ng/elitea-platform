@@ -32,11 +32,28 @@ Pinning keeps an entity at the top of its list, across sessions, so you don't ha
 
 ## Folders
 
-Folders group conversations in the chat sidebar — this is new in this platform (the legacy site had no equivalent). Create a folder from the conversation list, then drag conversations into it, or move a conversation into a folder from its context menu.
+Two kinds of folders exist, and they work differently.
+
+**Chat folders** group conversations in the chat sidebar. Create a folder from the conversation list, then drag conversations into it, or move a conversation into a folder from its context menu.
 
 <Screenshot id="chat-sidebar-folder" alt="Chat sidebar showing a folder containing conversations" />
 
+**Project folders** group the items of the **Agents**, **Pipelines**, **Skills**, **Toolkits & Indexes** and **MCPs** lists. Each list has its own folders, a folder holds items of that list only, and an item is in one folder at a time. They belong to the project, not to you: every member sees the same folders and the same contents, like the items themselves. They appear in your project's own lists, not in the public tabs or the Public project.
+
+<Steps>
+1. Open the list (for example **Agents**) and select **Filters** in the toolbar. The **Folders** section is at the top of the panel.
+2. Select **+** (**New folder**), type a name and select **Create**. A name is unique within its list, ignoring upper and lower case; a second **Reports** is refused with a message.
+3. Put an item in a folder: select the folder icon on its card (or in the **Folder** column of the table view), then choose the folder. Choose **Remove from folder** in the same menu to take it out.
+4. Select a folder in the **Folders** section to show only its items, and **All** to show everything again. The open folder is kept in the page address, so a link to the filtered list works.
+</Steps>
+
+A folder's **⋯** menu has **Rename**, **Move up**, **Move down** and **Delete…**. The folders are listed in the order you set, and a new folder goes to the top. **Delete…** removes the folder only: its items go back to the list and nothing else is deleted.
+
+What you can do follows the permissions you already have for that list. Anyone who can list the items sees the folders. Creating a folder needs the list's create permission (for example, create agents). Renaming, reordering and deleting folders and moving an item into one need the list's update permission (for example, update agents). Without them you see the folders and the **Folder** column and no controls. There is no separate folder permission.
+
+The **Skills**, **Toolkits & Indexes** and **MCPs** lists load more rows as you scroll; with a folder open, the page loads the remaining rows so the folder shows all of its items. The mobile app has no project lists, so it has no project folders; the desktop app has them, exactly as the browser does.
+
 ## Next steps
 
-- [Use chat](/how-tos/chat-conversations/how-to-use-chat-functionality) for where folders live day to day.
+- [Use chat](/how-tos/chat-conversations/how-to-use-chat-functionality) for where chat folders live day to day.
 - [Use public items from chat](/how-tos/chat-conversations/use-public-items-from-chat) for finding entities other people have published.
