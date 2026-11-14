@@ -9,7 +9,7 @@ Main has five new operations under
 
 - **Who is affected:** every deployment (one tenant migration); client builders
   (additive change).
-- **What to do:** **run the migrations** (tenant `0245_project_entity_folders.sql`),
+- **What to do:** **run the migrations** (tenant `0247_project_entity_folders.sql`),
   and upgrade Main before, or together with, the web and desktop apps; an app
   that calls the new routes against an older Main gets 404. No new setting, no new
   permission.

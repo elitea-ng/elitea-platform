@@ -18,7 +18,7 @@ import (
 )
 
 // EntityFoldersRepo stores the project folders of the Agents, Pipelines,
-// Skills, Toolkits and MCPs lists (tenant migration 0245).
+// Skills, Toolkits and MCPs lists (tenant migration 0247).
 type EntityFoldersRepo struct {
 	pool *pgxpool.Pool
 }

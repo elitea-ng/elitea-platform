@@ -15,12 +15,12 @@ import (
 )
 
 // newEntityFoldersFixture is the full legacy-shaped project schema (001_initial
-// carries applications, skills and elitea_tools) plus the REAL tenant/0245 file
+// carries applications, skills and elitea_tools) plus the REAL tenant/0247 file
 // applied to p_1, so the entity tables the folders point at exist.
 func newEntityFoldersFixture(t *testing.T) (*ApplicationsRepo, *EntityFoldersRepo, *pgxpool.Pool) {
 	t.Helper()
 	apps, pool := newApplicationsTestRepo(t)
-	raw, err := platformmigrations.Files.ReadFile("tenant/0245_project_entity_folders.sql")
+	raw, err := platformmigrations.Files.ReadFile("tenant/0247_project_entity_folders.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func newEntityFoldersFixture(t *testing.T) (*ApplicationsRepo, *EntityFoldersRep
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, string(raw)); err != nil {
-		t.Fatalf("apply 0245: %v", err)
+		t.Fatalf("apply 0247: %v", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatal(err)

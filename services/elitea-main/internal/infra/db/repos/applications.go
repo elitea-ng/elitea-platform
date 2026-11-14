@@ -230,7 +230,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	case "pipeline":
 		kinds = []string{"pipeline"}
 	}
-	// `folder_id` narrows the list to ONE project folder (migration 0245). The
+	// `folder_id` narrows the list to ONE project folder (migration 0247). The
 	// item rows carry the kind, so a folder id of the other list matches nothing.
 	if req.FolderID != "" {
 		if !isNumericRowID(req.FolderID) {

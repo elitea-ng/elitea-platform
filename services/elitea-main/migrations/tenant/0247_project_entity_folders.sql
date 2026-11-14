@@ -1,4 +1,4 @@
--- 0245_project_entity_folders.sql — folders for the Agents, Pipelines, Skills,
+-- 0247_project_entity_folders.sql — folders for the Agents, Pipelines, Skills,
 -- Toolkits and MCPs lists (issue 2048).
 --
 -- ONE model for all five lists, keyed by `entity_kind`:
