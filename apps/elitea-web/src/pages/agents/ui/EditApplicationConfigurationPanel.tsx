@@ -20,6 +20,7 @@ import { AgentModelSettings } from '@/widgets/agent-model-settings';
 
 import type { EditApplicationEditorBridge } from '../lib/useEditApplicationEditorBridge';
 import type { EditApplicationVersionFieldsState } from '../lib/useEditApplicationVersionFields';
+import { useSkillNav } from '../lib/useSkillNav';
 import { EditApplicationToolsPanel } from './EditApplicationToolsPanel';
 import { EditApplicationTriggersPanel } from './EditApplicationTriggersPanel';
 
@@ -103,6 +104,7 @@ function applicationIconMetaOf(
 export function EditApplicationConfigurationPanel(props: EditApplicationConfigurationPanelProps): ReactNode {
   const { projectId, applicationId, activeVersion, editor, versionFields, isEditorDisabled, isDirty, isReadOnly, onModelSettingsChange } =
     props;
+  const skillNav = useSkillNav();
   const tags = versionFields.fields.tags;
   const setTags = versionFields.setTags;
   const handleMcpAccessChange = useCallback((enabled: boolean) => setTags(withMcpExposure(tags, enabled)), [setTags, tags]);
@@ -190,6 +192,8 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         projectId={projectId}
         appVersionId={activeVersion?.id}
         disabled={isReadOnly}
+        onCreateNew={skillNav.createNew}
+        onOpenSkill={skillNav.openInNewTab}
       />
       {/*
        * Legacy issue 6656 — the agent's inbound webhook. It replaces the

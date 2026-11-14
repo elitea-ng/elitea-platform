@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Edit with AI fills the agent's fields, plus list and skill fixes
+
+**Edit with AI** on an agent now shows the generated draft as a form (name, description, instructions, welcome message, conversation starters) that you can edit, and **Apply** writes each value to its own field instead of pasting JSON into **Instructions**. Resources already attached to the agent are left as they are. In the agents, pipelines and skills lists, unselected tags in the Filters panel now stand out from the panel, and the table view shows a sort icon on the **Name & Description** and **Created** columns. In the agent's **Skills** section, the **+ Skill** menu has **Create new** (opens the New Skill page), and an attached skill is a card with open-in-new-tab and delete icons, like an attached toolkit. Folders exist only for chats; folders for agents, pipelines, skills, toolkits and MCPs are not part of the platform yet.
+
 ## Agent evaluation: Enhance with AI and run insights
 
 A finished evaluation run's scorecard now has **Enhance with AI**: the model reads the agent version the run scored and the cases that missed their targets, and proposes an instruction patch, rubric or target changes for dimensions, and corrected expected outputs for cases. You review them step by step and nothing is saved until the last step; an instruction patch creates a draft version that still goes through the agent's change request and release gate. The scorecard also shows the run's consumption (agent and judge tokens and cost), an efficiency strip (latency p50 and p95, timeouts, tokens and cost per case) and a comparison with the previous run on the same dataset. **Upgrade Main and the web app together.** See [Evaluation](/menus/agents#evaluation).

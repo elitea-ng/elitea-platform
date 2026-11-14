@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useMemo } from 'react';
 
 import { EditInstructionsWithAiButton } from '@/features/agents';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
@@ -21,8 +22,12 @@ import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
  */
 interface EditApplicationAiEditEditor {
   readonly values: {
+    readonly name?: string | undefined;
+    readonly description?: string | undefined;
     readonly version_details: {
       readonly instructions?: string | undefined;
+      readonly welcome_message?: string | undefined;
+      readonly conversation_starters?: readonly string[] | undefined;
       readonly llm_settings?: AgentLlmSettings | undefined;
     };
   };
@@ -36,16 +41,35 @@ export interface EditApplicationAiEditSlotProps {
 }
 
 export function EditApplicationAiEditSlot({ editor, projectId, disabled }: EditApplicationAiEditSlotProps): ReactNode {
-  const { instructions, llm_settings } = editor.values.version_details;
+  const { name, description, version_details: version } = editor.values;
+  const { instructions, welcome_message, conversation_starters, llm_settings } = version;
+  const current = useMemo(
+    () => ({
+      name: name ?? '',
+      description: description ?? '',
+      instructions: instructions ?? '',
+      welcome_message: welcome_message ?? '',
+      conversation_starters: conversation_starters ?? [],
+    }),
+    [name, description, instructions, welcome_message, conversation_starters],
+  );
+  // Each changed field lands in ITS field, through the same `onFieldChange`
+  // every other edit uses, so an applied edit reaches the save body AND the
+  // dirty comparison the nav blocker reads (#133). The modal passes only the
+  // fields the review changed, and never a blank name.
+  const apply = (patch: Partial<typeof current>): void => {
+    if (patch.name !== undefined) editor.onFieldChange('name', patch.name);
+    if (patch.description !== undefined) editor.onFieldChange('description', patch.description);
+    if (patch.instructions !== undefined) editor.onFieldChange('version_details.instructions', patch.instructions);
+    if (patch.welcome_message !== undefined) editor.onFieldChange('version_details.welcome_message', patch.welcome_message);
+    if (patch.conversation_starters !== undefined) editor.onFieldChange('version_details.conversation_starters', patch.conversation_starters);
+  };
   return (
     <EditInstructionsWithAiButton
       projectId={projectId}
-      instructions={instructions ?? ''}
+      current={current}
       llmSettings={llm_settings}
-      // Routed through the same `onFieldChange` every other version-level
-      // field uses, so an applied edit lands in the save body AND in the
-      // dirty comparison the nav blocker reads (#133).
-      onApply={(next) => editor.onFieldChange('version_details.instructions', next)}
+      onApply={apply}
       disabled={disabled}
     />
   );
