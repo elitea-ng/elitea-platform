@@ -14,6 +14,8 @@ interface ListSelection {
   /** The selected ids, in the order the list shows them. */
   readonly ids: readonly string[];
   readonly clear: () => void;
+  /** After a bulk action: when it failed on some rows, only those rows stay selected; when it failed on none, nothing changes. */
+  readonly settle: (result: { readonly failed: readonly string[] }) => void;
 }
 
 export function useListSelection(visibleIds: readonly string[]): ListSelection {
@@ -58,6 +60,10 @@ export function useListSelection(visibleIds: readonly string[]): ListSelection {
     setPicked(new Set());
   }, []);
 
+  const settle = useCallback((result: { readonly failed: readonly string[] }) => {
+    if (result.failed.length > 0) setPicked(new Set(result.failed));
+  }, []);
+
   const selection = useMemo<EntitySelection>(() => ({ selected, toggle, toggleAll }), [selected, toggle, toggleAll]);
-  return { selection, ids, clear };
+  return { selection, ids, clear, settle };
 }

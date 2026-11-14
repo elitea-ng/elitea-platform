@@ -28,7 +28,7 @@ export interface ListFilterChip {
 }
 
 /** A page's modes that are not filters: Agents | Teams, Skills | Public. */
-export interface ListMode {
+interface ListMode {
   readonly value: string;
   readonly label: string;
   readonly testId: string;
@@ -70,10 +70,18 @@ export interface EntityListSidebarProps {
 /** The search params the sidebar reads: the list's own and the ones its facets name. */
 export type SearchRecord = Record<string, unknown>;
 
-export function facetValue(search: SearchRecord, facet: ListFacet): string | undefined {
+/** The values of a facet that are on: one for a single-choice facet, any number for a list (`statuses`). */
+export function facetValues(search: SearchRecord, facet: ListFacet): string[] {
   const raw = search[facet.param];
-  const value: unknown = Array.isArray(raw) ? (raw as unknown[])[0] : raw;
-  return typeof value === 'string' && value !== '' ? value : undefined;
+  const all: unknown[] = Array.isArray(raw) ? (raw as unknown[]) : [raw];
+  return all.filter((value): value is string => typeof value === 'string' && value !== '');
+}
+
+/** The next value of a facet when `value` is toggled: added to or removed from a list, or chosen or cleared when single. */
+export function toggledFacet(facet: ListFacet, current: readonly string[], value: string): string | string[] {
+  const on = current.includes(value);
+  if (facet.array === true) return on ? current.filter((item) => item !== value) : [...current, value];
+  return on ? '' : value;
 }
 
 /** The route's search and one write that merges into it, so a page's controls share one URL and never clobber each other. */

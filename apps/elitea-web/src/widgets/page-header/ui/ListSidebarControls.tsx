@@ -14,7 +14,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 
-import { facetValue, type EntityListSidebarProps, type ListFacet, type SearchRecord } from './listSidebarModel';
+import { facetValues, toggledFacet, type EntityListSidebarProps, type ListFacet, type SearchRecord } from './listSidebarModel';
 
 /** A titled group of controls in the List tab. */
 export function Section({ label, children }: { readonly label: string; readonly children: ReactNode }): ReactNode {
@@ -66,15 +66,12 @@ interface FacetGroupProps {
 
 /** One facet: a chip per value that occurs, with its count. A chip is a toggle: it says whether it is on in text, not only in colour. */
 export function FacetGroup({ facet, search, patch, testIdPrefix }: FacetGroupProps): ReactNode {
-  const current = facetValue(search, facet);
-  const shown = facet.options.filter((option) => option.count > 0 || option.value === current);
-  // The value that is on stays offered even at zero rows, so the filter can always be switched off.
-  const options = current === undefined || shown.some((option) => option.value === current) ? shown : [...shown, { value: current, label: current, count: 0 }];
+  const current = facetValues(search, facet);
+  const shown = facet.options.filter((option) => option.count > 0 || current.includes(option.value));
+  // A value that is on stays offered even at zero rows, so the filter can always be switched off.
+  const missing = current.filter((value) => !shown.some((option) => option.value === value)).map((value) => ({ value, label: value, count: 0 }));
+  const options = [...shown, ...missing];
   if (options.length === 0) return null;
-  const choose = (value: string | undefined): void => {
-    const empty = facet.array === true ? [] : '';
-    patch({ [facet.param]: value === undefined ? empty : facet.array === true ? [value] : value });
-  };
   return (
     <Section label={facet.label}>
       <Box
@@ -83,7 +80,7 @@ export function FacetGroup({ facet, search, patch, testIdPrefix }: FacetGroupPro
         sx={chipsSx}
       >
         {options.map((option) => {
-          const on = option.value === current;
+          const on = current.includes(option.value);
           return (
             <Chip
               key={option.value}
@@ -94,7 +91,7 @@ export function FacetGroup({ facet, search, patch, testIdPrefix }: FacetGroupPro
               aria-pressed={on}
               data-testid={`${testIdPrefix}-facet-${facet.param}-${option.value}`}
               label={`${option.label} (${option.count})`}
-              onClick={() => choose(on ? undefined : option.value)}
+              onClick={() => patch({ [facet.param]: toggledFacet(facet, current, option.value) })}
             />
           );
         })}

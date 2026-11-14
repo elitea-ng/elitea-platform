@@ -225,8 +225,8 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
               count={selected.ids.length}
               noun={t('pages.agents.applications.selectionNoun', 'agents')}
               onClear={selected.clear}
-              onAddTag={(tag) => void bulk.addTag(selected.ids, tag)}
-              onExport={() => void bulk.exportMany(selected.ids)}
+              onAddTag={(tag) => void bulk.addTag(selected.ids, tag).then(selected.settle)}
+              onExport={() => void bulk.exportMany(selected.ids).then(selected.settle)}
               onDelete={() => setConfirmingDelete(true)}
               busy={bulk.busy}
               error={bulk.error}
@@ -254,7 +254,7 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
               onCreate={() => void navigate({ to: '/agents/create' })}
               onSelect={open}
               hasMore={list.hasMore}
-              isLoadingMore={false}
+              isLoadingMore={list.isLoadingMore}
               onLoadMore={list.loadMore}
             />
           </EntityFolderScope>
@@ -266,7 +266,10 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
         confirming={bulk.busy}
         onClose={() => setConfirmingDelete(false)}
         onConfirm={() => {
-          void bulk.deleteMany(selected.ids).then(() => setConfirmingDelete(false));
+          void bulk.deleteMany(selected.ids).then((result) => {
+            selected.settle(result);
+            setConfirmingDelete(false);
+          });
         }}
       />
     </>

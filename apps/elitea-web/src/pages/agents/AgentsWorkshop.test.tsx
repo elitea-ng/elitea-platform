@@ -116,13 +116,13 @@ describe('AgentsWorkshop (ADR-0051 M1)', () => {
     const { router } = renderAgentsRoute(<Applications />, '/agents/all?statuses=draft', { projectId: '9' });
 
     const bar = await screen.findByTestId('agent-summary-bar');
-    await waitFor(() => expect(within(bar).getByTestId('agent-summary-chip-statuses')).toHaveTextContent('Status: Draft'));
+    await waitFor(() => expect(within(bar).getByTestId('agent-summary-chip-statuses-draft')).toHaveTextContent('Status: Draft'));
     await waitFor(() => expect(screen.getAllByTestId('entity-card')).toHaveLength(2));
 
     await user.click(within(bar).getByTestId('agent-summary-clear'));
 
     await waitFor(() => expect(screen.getAllByTestId('entity-card')).toHaveLength(3));
-    expect(screen.queryByTestId('agent-summary-chip-statuses')).toBeNull();
+    expect(screen.queryByTestId('agent-summary-chip-statuses-draft')).toBeNull();
     expect(router.state.location.search).not.toHaveProperty('statuses', ['draft']);
   });
 
@@ -204,5 +204,70 @@ describe('AgentsWorkshop (ADR-0051 M1)', () => {
     await user.keyboard('/');
 
     expect(screen.getByTestId('agent-search-input')).toHaveFocus();
+  });
+
+  it('reaches every row the counts claim: "Load more" fetches the next server page', async () => {
+    const many: Row[] = Array.from({ length: 90 }, (_, i) => ({ id: String(i + 1), name: `Agent ${String(i + 1).padStart(3, '0')}`, status: 'draft' }));
+    const offsets: (string | null)[] = [];
+    server.use(
+      getListApplicationsMockHandler((info) => {
+        const url = new URL(info.request.url);
+        const offset = Number(url.searchParams.get('offset') ?? 0);
+        const limit = Number(url.searchParams.get('limit') ?? 20);
+        offsets.push(url.searchParams.get('offset'));
+        return { ...page(many.slice(offset, offset + limit)), total: many.length };
+      }),
+    );
+    const user = userEvent.setup();
+    renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9' });
+
+    await waitFor(() => expect(screen.getAllByTestId('entity-card')).toHaveLength(40));
+    await user.click(await screen.findByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(screen.getAllByTestId('entity-card')).toHaveLength(80));
+    await user.click(await screen.findByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(screen.getAllByTestId('entity-card')).toHaveLength(90));
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    expect(offsets).toEqual(expect.arrayContaining(['0', '40', '80']));
+  });
+
+  it('applies every status of a link with several, and the facet is a multi-select', async () => {
+    const seen: (string | null)[] = [];
+    server.use(
+      getListApplicationsMockHandler((info) => {
+        seen.push(new URL(info.request.url).searchParams.get('status'));
+        return page(ROWS);
+      }),
+    );
+    const user = userEvent.setup();
+    const statuses = encodeURIComponent(JSON.stringify(['draft', 'published']));
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, `/agents/all?statuses=${statuses}`, { projectId: '9' });
+
+    await waitFor(() => expect(seen).toContain('draft,published'));
+    expect(await screen.findByTestId('agent-facet-statuses-draft')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('agent-facet-statuses-published')).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(screen.getByTestId('agent-facet-statuses-published'));
+    await waitFor(() => expect(seen).toContain('draft'));
+    expect(screen.getByTestId('agent-facet-statuses-draft')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('agent-facet-statuses-published')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('after a partial bulk failure keeps only the failed rows selected, with the error', async () => {
+    server.use(
+      http.delete('*/elitea_core/application/prompt_lib/:projectId/:id', ({ params }) =>
+        params['id'] === '3' ? HttpResponse.json({ error: 'published' }, { status: 409 }) : new HttpResponse(null, { status: 204 }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/all', { projectId: '9' });
+
+    const cards = await screen.findAllByTestId('entity-card');
+    await user.click(within(cards[0] as HTMLElement).getByRole('checkbox'));
+    await user.click(within(cards[2] as HTMLElement).getByRole('checkbox'));
+    await user.click(await screen.findByTestId('agent-selection-delete'));
+    await user.click(await screen.findByRole('button', { name: 'Delete', hidden: false }));
+
+    expect(await screen.findByTestId('agent-selection-count')).toHaveTextContent('1 agents selected');
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be deleted');
   });
 });

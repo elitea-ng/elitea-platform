@@ -50,9 +50,23 @@ func (req *ListRequest) ValidateList() error {
 		}
 		req.Statuses[i] = status
 	}
-	req.Status = strings.ToLower(strings.TrimSpace(req.Status))
-	if req.Status != "" && req.Status != "draft" && req.Status != "published" {
-		return apierr.BadRequest("status must be draft or published")
+	// `status` is one state or a comma-separated list of them; both states are no filter at all.
+	seen := map[string]bool{}
+	for _, part := range strings.Split(strings.ToLower(req.Status), ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if part != "draft" && part != "published" {
+			return apierr.BadRequest("status must be draft or published")
+		}
+		seen[part] = true
+	}
+	req.Status = ""
+	if len(seen) == 1 {
+		for state := range seen {
+			req.Status = state
+		}
 	}
 	req.Origin = strings.ToLower(strings.TrimSpace(req.Origin))
 	if req.Origin != "" && req.Origin != "own" && req.Origin != "forked" {

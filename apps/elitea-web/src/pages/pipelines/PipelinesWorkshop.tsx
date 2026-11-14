@@ -132,8 +132,8 @@ export function PipelinesWorkshop(): ReactNode {
               count={selected.ids.length}
               noun={t('pages.pipelines.pipelines.selectionNoun', 'pipelines')}
               onClear={selected.clear}
-              onAddTag={(tag) => void bulk.addTag(selected.ids, tag)}
-              onExport={() => void bulk.exportMany(selected.ids)}
+              onAddTag={(tag) => void bulk.addTag(selected.ids, tag).then(selected.settle)}
+              onExport={() => void bulk.exportMany(selected.ids).then(selected.settle)}
               onDelete={() => setConfirmingDelete(true)}
               busy={bulk.busy}
               error={bulk.error}
@@ -161,7 +161,7 @@ export function PipelinesWorkshop(): ReactNode {
               onCreate={() => void navigate({ to: '/pipelines/create' })}
               onSelect={open}
               hasMore={list.hasMore}
-              isLoadingMore={false}
+              isLoadingMore={list.isLoadingMore}
               onLoadMore={list.loadMore}
             />
           </EntityFolderScope>
@@ -173,7 +173,10 @@ export function PipelinesWorkshop(): ReactNode {
         confirming={bulk.busy}
         onClose={() => setConfirmingDelete(false)}
         onConfirm={() => {
-          void bulk.deleteMany(selected.ids).then(() => setConfirmingDelete(false));
+          void bulk.deleteMany(selected.ids).then((result) => {
+            selected.settle(result);
+            setConfirmingDelete(false);
+          });
         }}
       />
     </Box>

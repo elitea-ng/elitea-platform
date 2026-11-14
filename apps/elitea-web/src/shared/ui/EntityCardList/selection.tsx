@@ -23,7 +23,7 @@ export function useEntitySelection(): EntitySelection | undefined {
 }
 
 /** ⌘-click on a card (Ctrl-click where there is no ⌘) toggles it instead of opening it. */
-export function isSelectionClick(event: { readonly metaKey: boolean; readonly ctrlKey: boolean }): boolean {
+function isSelectionClick(event: { readonly metaKey: boolean; readonly ctrlKey: boolean }): boolean {
   return event.metaKey || event.ctrlKey;
 }
 

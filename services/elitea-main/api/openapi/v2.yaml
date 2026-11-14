@@ -38297,9 +38297,18 @@ paths:
           in: query
           schema: { type: string }
           description: >
-            Narrows the list to agents in one publish state, `draft` or
-            `published`: the state each row reports in `status`. The
+            Narrows the list to agents in a publish state, `draft` or
+            `published` (or both, comma-separated, which is no filter): the
+            state each row reports in `status`. The
             `facets.statuses` counts ignore this filter.
+        - name: sort_by
+          in: query
+          schema: { type: string }
+          description: One of `created_at` (default), `updated_at`, `name`, `id`, `author`, `authors`, `likes`.
+        - name: sort_order
+          in: query
+          schema: { type: string }
+          description: '`desc` (default) or `asc`.'
         - name: origin
           in: query
           schema: { type: string }

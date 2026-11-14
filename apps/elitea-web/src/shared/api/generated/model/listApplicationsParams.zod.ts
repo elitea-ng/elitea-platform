@@ -63,6 +63,8 @@ export const ListApplicationsParams = zod.object({
   folder_id: zod.string().optional(),
   agents_type: zod.string().optional(),
   status: zod.string().optional(),
+  sort_by: zod.string().optional(),
+  sort_order: zod.string().optional(),
   origin: zod.string().optional(),
 });
 

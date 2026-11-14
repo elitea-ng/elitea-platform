@@ -33,15 +33,16 @@ export function useToolkitSelection(projectId: string | undefined, rows: readonl
   const deleteSelected = async (): Promise<void> => {
     setDeleting(true);
     setDeleteError(undefined);
-    let failed = 0;
+    const failed: string[] = [];
     for (const id of selected.ids) {
       try {
         await deleteApplicationTool(projectId ?? '', Number(id));
       } catch {
-        failed += 1;
+        failed.push(id);
       }
     }
-    if (failed > 0) setDeleteError(t('pages.toolkits.toolkits.deleteFailed', '{{count}} could not be deleted.', { count: failed }));
+    if (failed.length > 0) setDeleteError(t('pages.toolkits.toolkits.deleteFailed', '{{count}} could not be deleted.', { count: failed.length }));
+    selected.settle({ failed });
     await queryClient.invalidateQueries({ queryKey: getListToolkitInstancesQueryKey(projectId ?? '') }).catch(() => undefined);
     setDeleting(false);
     setConfirmingDelete(false);

@@ -184,8 +184,8 @@ export function Skills(): ReactNode {
               count={selected.ids.length}
               noun={t('skills.page.selectionNoun', 'skills')}
               onClear={selected.clear}
-              onAddTag={(tag) => void bulk.addTag(selected.ids, tag)}
-              onExport={() => void bulk.exportMany(selected.ids)}
+              onAddTag={(tag) => void bulk.addTag(selected.ids, tag).then(selected.settle)}
+              onExport={() => void bulk.exportMany(selected.ids).then(selected.settle)}
               onDelete={() => setConfirmingBulkDelete(true)}
               busy={bulk.busy}
               error={bulk.error}
@@ -255,7 +255,10 @@ export function Skills(): ReactNode {
         confirming={bulk.busy}
         onClose={() => setConfirmingBulkDelete(false)}
         onConfirm={() => {
-          void bulk.deleteMany(selected.ids).then(() => setConfirmingBulkDelete(false));
+          void bulk.deleteMany(selected.ids).then((result) => {
+            selected.settle(result);
+            setConfirmingBulkDelete(false);
+          });
         }}
       />
     </Box>

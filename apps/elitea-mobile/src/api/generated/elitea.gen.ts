@@ -5942,7 +5942,11 @@ export interface operations {
                 origin?: string;
                 /** @description Search text (preferred over `search` by the handler). */
                 query?: string;
-                /** @description Narrows the list to agents in one publish state, `draft` or `published`: the state each row reports in `status`. The `facets.statuses` counts ignore this filter. */
+                /** @description One of `created_at` (default), `updated_at`, `name`, `id`, `author`, `authors`, `likes`. */
+                sort_by?: string;
+                /** @description `desc` (default) or `asc`. */
+                sort_order?: string;
+                /** @description Narrows the list to agents in a publish state, `draft` or `published` (or both, comma-separated, which is no filter): the state each row reports in `status`. The `facets.statuses` counts ignore this filter. */
                 status?: string;
                 /** @description Comma-separated tag filter. Each entry matches a tag NAME or a tag ID. The entries combine with AND: a listed application carries every named tag on one of its versions. Blank entries are ignored (repos/applications.go splitTagFilter). */
                 tags?: string;

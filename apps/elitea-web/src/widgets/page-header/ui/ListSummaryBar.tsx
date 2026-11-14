@@ -9,7 +9,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 
-import { facetValue, useListSearch, type EntityListSidebarProps, type ListFilterChip, type SearchRecord } from './listSidebarModel';
+import { facetValues, toggledFacet, useListSearch, type EntityListSidebarProps, type ListFilterChip, type SearchRecord } from './listSidebarModel';
 import { useListSearchQuery } from './PageSearch';
 
 type SidebarProps = EntityListSidebarProps;
@@ -21,10 +21,11 @@ function summaryChips(props: SidebarProps, query: string, search: SearchRecord, 
     chips.push({ id: 'query', label: t('widgets.listSidebar.summary.search', 'Search: {{query}}', { query }), onRemove: () => patch({ query: '' }) });
   }
   for (const facet of props.facets ?? []) {
-    const value = facetValue(search, facet);
-    if (value === undefined) continue;
-    const label = facet.options.find((option) => option.value === value)?.label ?? value;
-    chips.push({ id: facet.param, label: `${facet.chipLabel}: ${label}`, onRemove: () => patch({ [facet.param]: facet.array === true ? [] : '' }) });
+    const current = facetValues(search, facet);
+    for (const value of current) {
+      const label = facet.options.find((option) => option.value === value)?.label ?? value;
+      chips.push({ id: `${facet.param}-${value}`, label: `${facet.chipLabel}: ${label}`, onRemove: () => patch({ [facet.param]: toggledFacet(facet, current, value) }) });
+    }
   }
   return [...chips, ...(props.extraChips ?? [])];
 }

@@ -6401,6 +6401,16 @@
             "type": "string"
           }
         },
+        "query:sort_by": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "query:sort_order": {
+          "schema": {
+            "type": "string"
+          }
+        },
         "query:status": {
           "schema": {
             "type": "string"

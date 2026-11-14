@@ -2,13 +2,11 @@
 
 The agents and pipelines list endpoint
 (`GET /api/v2/elitea_core/applications/prompt_lib/{projectID}`,
-`listApplications`) gains two optional query parameters, `status` (`draft` or
-`published`) and `origin` (`own` or `forked`), and its response gains `facets`:
+`listApplications`) gains two optional query parameters, `status` (`draft`, `published`, or both comma-separated, which is no filter), `sort_by`/`sort_order` (already read by the handler, now in the spec) and `origin` (`own` or `forked`), and its response gains `facets`:
 the number of matching items per status and per origin, which ignore the
 `status` and `origin` filters themselves and honour every other filter. The web
 and desktop apps use them: the status tabs are gone, and Status and Origin are
-filters in the list's side panel. The web app also asks for up to 100 items per
-list request (it asked for the default 20 before).
+filters in the list's side panel. The web app pages the list with `limit`/`offset` (40 per page).
 
 - **Who is affected:** every deployment (no migration); client builders
   (additive change, the client contract lock is updated).
