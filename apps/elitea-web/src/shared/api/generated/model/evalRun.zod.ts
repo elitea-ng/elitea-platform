@@ -55,7 +55,7 @@ export const EvalRun = zod.object({
   execution_mode: zod
     .enum(["predict_blocking", "runtime_plane"])
     .describe(
-      "WHAT ACTUALLY RAN. `predict_blocking` is ONE blocking LLM turn per case, built from the agent version's instructions and the case input: no tools, no toolkits, no conversation memory. It is returned on every read so a score cannot claim to have measured what it did not, and so a later runtime-plane run is distinguishable from these rather than silently re-labelling them.\n",
+      "WHAT ACTUALLY RAN. `predict_blocking` is ONE blocking LLM turn per case, built from the agent version's instructions and the case input: no tools, no toolkits, no conversation memory. It is returned on every read so a score cannot claim to have measured what it did not, and so a later runtime-plane run is distinguishable from these rather than silently re-labelling them. `runtime_plane` runs each case as a real agent run on the worker; its results carry the run's steps in `evidence.trajectory`.\n",
     ),
   snapshot: EvalRunSnapshot.optional(),
   progress: zod.object({

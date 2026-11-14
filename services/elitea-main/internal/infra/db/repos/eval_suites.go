@@ -31,6 +31,10 @@ const evalSuiteColumns = `
 	token_limit_per_run::bigint,
 	cost_limit_per_run::float8,
 	on_run_limit,
+	execution_mode,
+	step_limit_per_case,
+	time_limit_per_case_seconds,
+	store_tool_outputs,
 	created_at,
 	updated_at`
 
@@ -39,7 +43,8 @@ func scanEvalSuite(row pgx.Row) (evaluation.Suite, error) {
 	var createdAt, updatedAt time.Time
 	err := row.Scan(&suite.ID, &suite.UUID, &suite.Name, &suite.Description,
 		&suite.TokenLimitPerCase, &suite.CostLimitPerCase, &suite.TokenLimitPerRun, &suite.CostLimitPerRun,
-		&suite.OnRunLimit, &createdAt, &updatedAt)
+		&suite.OnRunLimit, &suite.ExecutionMode, &suite.StepLimitPerCase, &suite.TimeLimitPerCaseSeconds,
+		&suite.StoreToolOutputs, &createdAt, &updatedAt)
 	if err != nil {
 		return evaluation.Suite{}, err
 	}
@@ -98,11 +103,14 @@ func (r *EvalSuitesRepo) CreateSuite(ctx context.Context, projectID string, in e
 	suite, err := scanEvalSuite(r.pool.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO %s.eval_suites (
 			name, description, token_limit_per_case, cost_limit_per_case,
-			token_limit_per_run, cost_limit_per_run, on_run_limit
-		) VALUES ($1, NULLIF($2, ''), $3::int, $4::float8, $5::int, $6::float8, $7)
+			token_limit_per_run, cost_limit_per_run, on_run_limit,
+			execution_mode, step_limit_per_case, time_limit_per_case_seconds, store_tool_outputs
+		) VALUES ($1, NULLIF($2, ''), $3::int, $4::float8, $5::int, $6::float8, $7,
+			$8, $9::int, $10::int, COALESCE($11::boolean, true))
 		RETURNING `+evalSuiteColumns, schema),
 		in.Name, in.Description, in.TokenLimitPerCase, in.CostLimitPerCase,
-		in.TokenLimitPerRun, in.CostLimitPerRun, in.OnRunLimit))
+		in.TokenLimitPerRun, in.CostLimitPerRun, in.OnRunLimit,
+		in.ExecutionMode, in.StepLimitPerCase, in.TimeLimitPerCaseSeconds, in.StoreToolOutputs))
 	if err != nil {
 		return evaluation.Suite{}, wrapEvalWrite("suite create", err)
 	}
@@ -123,11 +131,14 @@ func (r *EvalSuitesRepo) UpdateSuite(ctx context.Context, projectID, suiteID str
 		SET name = $2, description = NULLIF($3, ''),
 		    token_limit_per_case = $4::int, cost_limit_per_case = $5::float8,
 		    token_limit_per_run = $6::int, cost_limit_per_run = $7::float8,
-		    on_run_limit = $8, updated_at = now()
+		    on_run_limit = $8, execution_mode = $9, step_limit_per_case = $10::int,
+		    time_limit_per_case_seconds = $11::int, store_tool_outputs = COALESCE($12::boolean, true),
+		    updated_at = now()
 		WHERE id = $1
 		RETURNING `+evalSuiteColumns, schema),
 		id, in.Name, in.Description, in.TokenLimitPerCase, in.CostLimitPerCase,
-		in.TokenLimitPerRun, in.CostLimitPerRun, in.OnRunLimit))
+		in.TokenLimitPerRun, in.CostLimitPerRun, in.OnRunLimit,
+		in.ExecutionMode, in.StepLimitPerCase, in.TimeLimitPerCaseSeconds, in.StoreToolOutputs))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return evaluation.Suite{}, apierr.NotFound("suite not found")

@@ -235,7 +235,8 @@ describe('run limits', () => {
 
     await userEvent.click(await screen.findByTestId('run-limits-toggle'));
     const panel = screen.getByTestId('run-suites-panel');
-    // Steps, time and tool output are not offered: a case is one model call today.
+    // Steps, time and tool output are not offered for the default mode: a case
+    // is one model call there (SuiteRuntimeMode.test.tsx covers the other mode).
     expect(panel).not.toHaveTextContent(/steps|time limit|tool output/i);
 
     await userEvent.type(screen.getByTestId('suite-name'), 'Nightly');
@@ -247,6 +248,10 @@ describe('run limits', () => {
     await waitFor(() =>
       expect(sent).toEqual({
         name: 'Nightly',
+        execution_mode: 'predict_blocking',
+        step_limit_per_case: null,
+        time_limit_per_case_seconds: null,
+        store_tool_outputs: true,
         token_limit_per_case: null,
         cost_limit_per_case: 0.25,
         token_limit_per_run: 50000,

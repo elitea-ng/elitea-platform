@@ -16,6 +16,7 @@ import { t } from '@/shared/i18n';
 
 import { formatCost, formatCount, formatDelta, formatMs } from '../lib/insightsFormat';
 import type { Efficiency, RunComparison } from '../lib/runInsights';
+import type { TrajectorySummary } from '../lib/trajectory';
 
 const cardSx: SxProps<Theme> = {
   display: 'flex',
@@ -104,7 +105,33 @@ export function ConsumptionCard({ analytics, gap }: ConsumptionCardProps): React
   );
 }
 
-export function EfficiencyStrip({ efficiency }: { readonly efficiency: Efficiency }): ReactNode {
+export interface EfficiencyStripProps {
+  readonly efficiency: Efficiency;
+  /** Present for a run whose cases were agent runs: the tool metrics join the strip. */
+  readonly trajectory?: TrajectorySummary | undefined;
+}
+
+/** Tool calls per measured case, one decimal; `undefined` when no case was measured. */
+function toolCallsPerCase(trajectory: TrajectorySummary): number | undefined {
+  const measured = trajectory.cases.length;
+  return measured === 0 ? undefined : Math.round((trajectory.toolCalls / measured) * 10) / 10;
+}
+
+function ToolMetrics({ trajectory }: { readonly trajectory: TrajectorySummary }): ReactNode {
+  return (
+    <>
+      <Stat
+        label={t('features.agentEvaluation.insights.toolCallsPerCase', 'Tool calls per case')}
+        value={formatCount(toolCallsPerCase(trajectory))}
+        testId="run-efficiency-tool-calls"
+      />
+      <Stat label={t('features.agentEvaluation.insights.toolErrors', 'Tool errors')} value={formatCount(trajectory.toolErrors)} testId="run-efficiency-tool-errors" />
+      <Stat label={t('features.agentEvaluation.insights.retries', 'Retries')} value={formatCount(trajectory.retries)} testId="run-efficiency-retries" />
+    </>
+  );
+}
+
+export function EfficiencyStrip({ efficiency, trajectory }: EfficiencyStripProps): ReactNode {
   const partial = efficiency.measuredCases < efficiency.totalCases;
   return (
     <Box sx={cardSx} data-testid="run-efficiency">
@@ -119,6 +146,7 @@ export function EfficiencyStrip({ efficiency }: { readonly efficiency: Efficienc
         />
         <Stat label={t('features.agentEvaluation.insights.tokensPerCase', 'Tokens per case')} value={formatCount(efficiency.tokensPerCase)} testId="run-efficiency-tokens" />
         <Stat label={t('features.agentEvaluation.insights.costPerCase', 'Cost per case')} value={formatCost(efficiency.costPerCase)} testId="run-efficiency-cost" />
+        {trajectory !== undefined && <ToolMetrics trajectory={trajectory} />}
       </Box>
       {partial && (
         <Typography variant="bodySmall" color="text.secondary" data-testid="run-efficiency-partial">

@@ -40,6 +40,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/analytics"
 )
 
 // evaluationAttributionMigration is the ledger NAME of the migration that
@@ -51,9 +53,27 @@ const evaluationAttributionMigration = "execution_trigger_origin"
 // caps the agent view.
 const estimateEvaluationAgentRows = 100
 
-// evaluationCallPredicate selects the evaluation calls. The prefix holds no
-// LIKE wildcard, so no ESCAPE is needed.
-const evaluationCallPredicate = `l.execution_id LIKE 'eval:%'`
+// evalAttribution answers how the estimate names a call's evaluation
+// attribution: the expression for it and the join that feeds it. A runtime_plane
+// case runs as an agent run whose calls carry the runtime execution id, so the
+// executions recorded in the project's eval_case_runs (and the executions
+// linked to their root runs) are named `eval:<run>:case:<case>`, as a
+// predict_blocking case's call is signed. A project without the table reads the
+// log's id as it is.
+func evalAttribution(ctx context.Context, tx pgx.Tx, projectID int64) (expr, join string, err error) {
+	schema := pgx.Identifier{"p_" + strconv.FormatInt(projectID, 10)}.Sanitize()
+	present, err := relationsPresent(ctx, tx, schema+".eval_case_runs")
+	if err != nil || !present {
+		return "l.execution_id", "", err
+	}
+	links, err := relationsPresent(ctx, tx, "elitea_runtime.run_chain_links")
+	if err != nil {
+		return "", "", err
+	}
+	mapping := analytics.EvalCaseExecutionsSQL(schema, 0, links)
+	return "COALESCE(cr.attr, l.execution_id)", ` LEFT JOIN (SELECT execution_id, 'eval:' || run_id::text || ':case:' || dataset_case_id::text AS attr FROM (` +
+		mapping + `) AS m) AS cr ON cr.execution_id = l.execution_id`, nil
+}
 
 // estimateEvaluation is the `estimate.evaluation` block.
 type estimateEvaluation struct {
@@ -153,11 +173,15 @@ WHERE target_kind = 'shared' AND name = $1`, evaluationAttributionMigration).Sca
 func evaluationTotals(ctx context.Context, tx pgx.Tx, pricesPresent, priced bool,
 	projectID int64, from, to time.Time, pattern string,
 ) (estimateTotals, int64, error) {
+	attribution, attributionJoin, err := evalAttribution(ctx, tx, projectID)
+	if err != nil {
+		return estimateTotals{}, 0, err
+	}
 	query := `
 WITH calls AS (
-  SELECT l.execution_id, l.prompt_tokens, l.completion_tokens, ` + rateColumns(pricesPresent) +
-		sourceClause(pricesPresent) + requestLogWindow + `
-    AND l.execution_id LIKE ` + pattern + `
+  SELECT ` + attribution + ` AS execution_id, l.prompt_tokens, l.completion_tokens, ` + rateColumns(pricesPresent) +
+		sourceClause(pricesPresent) + attributionJoin + requestLogWindow + `
+    AND ` + attribution + ` LIKE ` + pattern + `
 )
 SELECT count(*)::bigint,
        count(DISTINCT split_part(execution_id, ':', 2))::bigint,
@@ -209,11 +233,15 @@ LEFT JOIN ` + schema + `.applications AS app ON app.id = run.application_id`
 		nameGroup = `, coalesce(app.name, '')`
 	}
 
+	attribution, attributionJoin, err := evalAttribution(ctx, tx, projectID)
+	if err != nil {
+		return err
+	}
 	query := `
 WITH calls AS (
-  SELECT l.execution_id, l.prompt_tokens, l.completion_tokens, ` + rateColumns(pricesPresent) +
-		sourceClause(pricesPresent) + requestLogWindow + `
-    AND ` + evaluationCallPredicate + `
+  SELECT ` + attribution + ` AS execution_id, l.prompt_tokens, l.completion_tokens, ` + rateColumns(pricesPresent) +
+		sourceClause(pricesPresent) + attributionJoin + requestLogWindow + `
+    AND ` + attribution + ` LIKE 'eval:%'
 ), tagged AS (
   SELECT calls.*,
          CASE WHEN split_part(execution_id, ':', 2) ~ '^[1-9][0-9]{0,8}$'
