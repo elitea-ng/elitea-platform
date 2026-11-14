@@ -9,7 +9,7 @@ export function EmptyFolderNote(): ReactNode {
   return (
     <Typography
       variant="bodyMedium"
-      role="status"
+      component="output"
       data-testid="toolkits-empty-folder"
       sx={{ padding: '2rem', textAlign: 'center' }}
     >

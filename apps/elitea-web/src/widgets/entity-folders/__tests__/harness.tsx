@@ -10,6 +10,12 @@ import { configureGeneratedClient } from '@/shared/api/generated/mutator';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { server } from '@/test/setup';
 
+/** The folder search param as the route keeps it: a string id, or absent. */
+function folderSearch(value: unknown): { entity_folder?: string } {
+  return typeof value === 'string' || typeof value === 'number' ? { entity_folder: `${value}` } : {};
+}
+
+
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 
 export const BASE = '/api/v2';
@@ -46,9 +52,7 @@ export function renderInRouter(content: ReactElement, path = '/skills/all'): Ren
   const route = createRoute({
     getParentRoute: () => root,
     path: '/skills/$tab',
-    validateSearch: (search: Record<string, unknown>) => ({
-      ...(search['entity_folder'] === undefined ? {} : { entity_folder: String(search['entity_folder']) }),
-    }),
+    validateSearch: (search: Record<string, unknown>) => folderSearch(search['entity_folder']),
     component: () => content,
   });
   const router = createRouter({

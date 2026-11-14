@@ -15,6 +15,12 @@ import { server } from '@/test/setup';
 
 import { Toolkits } from './Toolkits';
 
+/** The folder search param as the route keeps it: a string id, or absent. */
+function folderSearch(value: unknown): { entity_folder?: string } {
+  return typeof value === 'string' || typeof value === 'number' ? { entity_folder: `${value}` } : {};
+}
+
+
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 const FOLDERS = '/api/v2/elitea_core/entity_folders/prompt_lib/project-1/toolkit';
 
@@ -27,7 +33,7 @@ function renderAt(path: string, content: ReactElement) {
   const tab = createRoute({
     getParentRoute: () => root,
     path: '/toolkits/$tab',
-    validateSearch: (s: Record<string, unknown>) => ({ ...(s['entity_folder'] === undefined ? {} : { entity_folder: String(s['entity_folder']) }) }),
+    validateSearch: (s: Record<string, unknown>) => folderSearch(s['entity_folder']),
     component: () => content,
   });
   const create = createRoute({ getParentRoute: () => root, path: '/toolkits/create' });
@@ -60,7 +66,7 @@ beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
   server.use(
     getGetPlatformSettingsMockHandler(getGetPlatformSettingsResponseMock({ mcp_enabled: true, mcp_in_menu_enabled: true })),
-    getListToolkitInstancesMockHandler({ rows: [row('11', 'Alpha'), row('12', 'Beta')], total: 2 } as never),
+    getListToolkitInstancesMockHandler({ rows: [row('11', 'Alpha'), row('12', 'Beta')], total: 2 }),
   );
 });
 afterEach(() => {

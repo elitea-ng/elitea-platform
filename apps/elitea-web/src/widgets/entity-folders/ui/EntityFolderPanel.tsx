@@ -80,7 +80,7 @@ function FolderPanelBody({ projectId, kind, permissions }: Omit<EntityFolderPane
 
   return (
     <Box
-      role="group"
+      component="section"
       aria-label={t('widgets.entityFolders.title', 'Folders')}
       data-testid="entity-folder-panel"
       sx={panelSx}
