@@ -2236,6 +2236,7 @@ fn agent_memory_scope(namespaces: &[&str]) -> pb::Scope {
 /// B's points and never another source's; no other token reaches it; and it
 /// is not an index, so listing never shows it.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One scenario, every RPC in turn.
 async fn an_agent_memory_token_reaches_only_its_own_project_and_source() {
     let _ = require_qdrant!();
     let mut h = harness().await.expect("harness");
@@ -2334,7 +2335,7 @@ async fn an_agent_memory_token_reaches_only_its_own_project_and_source() {
 
     // It is not an index: the token's listing shows nothing of it, and a
     // listing that names it is refused for a token that lacks it.
-    assert!(h.listed_sources(TOKEN_A_AGENT).await.is_empty());
+    assert_eq!(h.listed_sources(TOKEN_A_AGENT).await, [] as [i32; 0]);
     assert!(
         !h.listed_sources(TOKEN_A)
             .await
