@@ -31,8 +31,9 @@ var entityFolderPermissions = map[entityfolders.Kind]entityFolderPerms{
 //
 // `{kind}` is one segment, so the spec describes five operations and not
 // twenty-five. The permission depends on the kind, so the gate is chosen per
-// request from a table built once here; an unknown kind is a 404 before any
-// permission is asked.
+// request from a table built once here. An unknown kind still passes a project
+// gate first (the agents list permission) and only then answers 404, so a caller
+// from another project is refused before learning anything about the path.
 func registerEntityFolderRoutes(r chi.Router, h *entityfolders.Handler, gate func(string) func(http.Handler) http.Handler) {
 	base := "/entity_folders/prompt_lib/{projectID}/{kind}"
 	r.With(kindGate(gate, func(p entityFolderPerms) string { return p.list })).Get(base, h.List)
@@ -51,10 +52,14 @@ func kindGate(gate func(string) func(http.Handler) http.Handler, pick func(entit
 		for kind, perms := range entityFolderPermissions {
 			gated[kind] = gate(pick(perms))(next)
 		}
+		unknown := gate(entityFolderPermissions[entityfolders.KindAgent].list)(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			_, err := entityfolders.KindOf(req)
+			apierr.Write(w, err)
+		}))
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			kind, err := entityfolders.KindOf(req)
 			if err != nil {
-				apierr.Write(w, err)
+				unknown.ServeHTTP(w, req)
 				return
 			}
 			gated[kind].ServeHTTP(w, req)

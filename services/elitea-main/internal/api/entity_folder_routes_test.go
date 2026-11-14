@@ -110,8 +110,9 @@ func TestEntityFolderRoutesPermissionsAreTheListsOwn(t *testing.T) {
 	}
 }
 
-// A denied caller never reaches the handler, and an unknown kind is a 404 that
-// does not even ask for a permission.
+// A denied caller never reaches the handler. An unknown kind is refused by the
+// project gate like any other path (a foreign caller learns nothing), and only a
+// caller the gate admits gets its 404; neither reaches the repository.
 func TestEntityFolderRoutesRefuseBeforeTheHandlerRuns(t *testing.T) {
 	deny := func(string) func(http.Handler) http.Handler {
 		return func(http.Handler) http.Handler {
@@ -134,19 +135,23 @@ func TestEntityFolderRoutesRefuseBeforeTheHandlerRuns(t *testing.T) {
 		t.Fatalf("the repository was reached %d times by denied callers", stub.calls)
 	}
 
-	asked := 0
-	counting := func(string) func(http.Handler) http.Handler {
-		asked++
+	unknownKinds := []string{"/entity_folders/prompt_lib/7/widget", "/entity_folders/prompt_lib/7/AGENT"}
+	for _, path := range unknownKinds {
+		if rec := serveEntityFolder(router, http.MethodGet, path, ""); rec.Code != http.StatusForbidden {
+			t.Fatalf("GET %s by a denied caller: status %d, want 403 (the project gate runs before the kind check)", path, rec.Code)
+		}
+	}
+
+	allow := func(string) func(http.Handler) http.Handler {
 		return func(next http.Handler) http.Handler { return next }
 	}
-	router, stub = entityFolderRouter(counting)
-	asked = 0
-	for _, path := range []string{"/entity_folders/prompt_lib/7/widget", "/entity_folders/prompt_lib/7/AGENT"} {
+	router, stub = entityFolderRouter(allow)
+	for _, path := range unknownKinds {
 		if rec := serveEntityFolder(router, http.MethodGet, path, ""); rec.Code != http.StatusNotFound {
 			t.Fatalf("GET %s: status %d, want 404", path, rec.Code)
 		}
 	}
-	if asked != 0 || stub.calls != 0 {
-		t.Fatalf("an unknown kind reached a gate (%d) or the repository (%d)", asked, stub.calls)
+	if stub.calls != 0 {
+		t.Fatalf("an unknown kind reached the repository (%d)", stub.calls)
 	}
 }
