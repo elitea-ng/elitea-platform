@@ -1145,6 +1145,11 @@ pub(crate) struct FrameBoundProgressRejection {
 }
 
 impl FrameBoundProgressRejection {
+    /// Who won, without consuming the proof.
+    pub(crate) const fn winner(&self) -> ProgressRejectionWinner {
+        self.winner
+    }
+
     pub(crate) fn into_binding(self) -> (u64, [u8; 32], ProgressRejectionWinner) {
         (self.sequence, self.frame_sha256, self.winner)
     }

@@ -32,6 +32,7 @@ pub(crate) mod image_fit;
 pub(crate) mod inputs;
 pub(crate) mod model_steps;
 pub(crate) mod pipeline;
+pub(crate) mod progress;
 mod refusal;
 pub(crate) mod slug;
 pub(crate) mod source;
@@ -79,9 +80,11 @@ use crate::transport::extractor_client::ExtractorClient;
 use model_steps::ChatModelBinder;
 
 pub(crate) use model_steps::ChatUnavailable;
+#[cfg(test)]
+pub(crate) use pipeline::run_index;
 pub(crate) use pipeline::{
     ChatEntries, ChatEntrySource, IndexRun, IndexRunFailure, Interruption, interrupt_summary,
-    run_index,
+    run_index_with_progress,
 };
 
 /// What every index run shares: the vector client, the gateway embeddings

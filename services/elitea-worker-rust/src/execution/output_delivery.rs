@@ -369,6 +369,12 @@ impl PreparedAgentOutput {
         Ok((prepared, factory.seal_terminal(expected)))
     }
 
+    /// The spool and its factory, for the index run's progress publisher
+    /// (#2041), which hands them back through [`Self::new`] at the terminal.
+    pub(super) fn into_parts(self) -> (PreparedOutputSpool, AgentOutputSpoolFactory) {
+        (self.prepared, self.factory)
+    }
+
     #[cfg(test)]
     pub(crate) fn into_test_spool(self) -> PreparedOutputSpool {
         self.prepared
@@ -401,8 +407,7 @@ impl AgentOutputSpoolFactory {
         }
     }
 
-    #[allow(dead_code)] // Consumed by the capability-disabled progress publisher.
-    async fn reopen_progress(
+    pub(super) async fn reopen_progress(
         &self,
         expected: &ExecutionOutputFrameV1,
     ) -> Result<ReopenedAgentProgress, AgentOutputPreflightError> {
@@ -419,8 +424,7 @@ impl AgentOutputSpoolFactory {
     }
 }
 
-#[allow(dead_code)] // Consumed by the capability-disabled progress publisher.
-enum ReopenedAgentProgress {
+pub(super) enum ReopenedAgentProgress {
     Empty(PreparedOutputSpool),
     Pending(PreparedOutputSpool),
 }
@@ -434,6 +438,11 @@ pub(crate) struct AgentProgressPublisherConfig {
 
 #[allow(dead_code)] // Consumed by the capability-disabled progress publisher.
 impl AgentProgressPublisherConfig {
+    #[must_use]
+    pub(super) const fn max_output_sessions(self) -> usize {
+        self.max_output_sessions
+    }
+
     /// Validate the complete session budget for one exact progress frame.
     ///
     /// # Errors
@@ -2490,7 +2499,7 @@ const fn output_winner(error: &OutputGrpcError) -> Option<RuntimeFailureKind> {
     }
 }
 
-const fn reconnectable_output(error: &OutputGrpcError) -> bool {
+pub(super) const fn reconnectable_output(error: &OutputGrpcError) -> bool {
     matches!(
         error,
         OutputGrpcError::Unavailable(_)
@@ -3219,7 +3228,7 @@ async fn rebind_pending_terminal(
 /// as an encrypted record (never replayed, never silently dropped) and logged
 /// with its digest. The resumed run publishes its own events from Main's
 /// watermark; the claim route, not this frame, decides how the run ends.
-async fn retire_superseded_frame(
+pub(super) async fn retire_superseded_frame(
     factory: &AgentOutputSpoolFactory,
     prepared: PreparedOutputSpool,
     frame: ExecutionOutputFrameV1,
