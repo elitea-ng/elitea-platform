@@ -262,6 +262,8 @@ export const paramSchemas = {
   project_id: text(),
   save_toolkit: flag(),
   statuses: list(),
+  /** The Workshop's origin facet (ADR-0051): `own` or `forked`. Agents and pipelines lists. */
+  origin: text(),
   'tags[]': list(),
   /** The open project folder of an entity list (issue 2048): agents, pipelines, skills, toolkits, MCPs. */
   entity_folder: text(),

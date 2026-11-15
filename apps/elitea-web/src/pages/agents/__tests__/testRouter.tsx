@@ -93,6 +93,10 @@ function buildTestRouter(
       sort_order: typeof search.sort_order === 'string' ? search.sort_order : undefined,
       author_id: typeof search.author_id === 'string' ? search.author_id : undefined,
       'tags[]': tagList(search['tags[]']),
+      // The Workshop's status and origin facets (ADR-0051), shell-wide in the real tree.
+      statuses: tagList(search.statuses),
+      origin: typeof search.origin === 'string' ? search.origin : undefined,
+      view: typeof search.view === 'string' ? search.view : undefined,
     }),
     component: () => content,
   });

@@ -22,6 +22,7 @@ export { useSkill, useSkillMutations, useSkills } from './model/useSkills';
 export { useAllPublicSkills } from './model/usePublicSkills';
 export { useSkillCategories } from './model/useSkillPublishing';
 export type { PublicSkillSummary } from './model/publishTypes';
+export { useSkillBulkActions } from './model/useSkillBulkActions';
 export type {
   SkillDraft,
   SkillRecord,

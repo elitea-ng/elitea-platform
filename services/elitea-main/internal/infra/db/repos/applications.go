@@ -273,25 +273,6 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			JOIN %[1]s.tags ft ON ft.id = fta.tag_id
 			WHERE ftv.application_id = a.id AND (ft.name = $%[2]d OR ft.id::text = $%[2]d))`, s, len(args)))
 	}
-	where := ""
-	if len(conditions) > 0 {
-		where = " WHERE " + strings.Join(conditions, " AND ")
-	}
-
-	// Count and page share one snapshot and the same predicates.
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return empty, fmt.Errorf("applications: list snapshot: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	var total int
-	countQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT a.id) FROM %s.applications a`, s) + join + where
-	if err := tx.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return empty, fmt.Errorf("applications: list count: %w", err)
-	}
-
-	selectArgs := append([]any{}, args...)
-	limitIdx := len(selectArgs) + 1
 	// The agent's PUBLISH state, computed per application.
 	//
 	// `Application.Status` was never selected, so every listed agent carried
@@ -312,6 +293,78 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			SELECT 1 FROM %s.application_versions pv
 			WHERE pv.application_id = a.id AND pv.status = 'published'
 		) THEN 'published' ELSE 'draft' END`, s)
+	// An agent is forked when its stable version records where it came from
+	// (`applications.IsForkedFromMeta`).
+	forkedSQL := "(COALESCE(av.meta, '{}'::jsonb) ?& ARRAY['parent_entity_id','parent_project_id'])"
+	// Status and origin are facets: the page of rows is narrowed by them, the
+	// facet counts are not (each count honours every OTHER filter).
+	facetConditions := []string{}
+	switch req.Status {
+	case "draft":
+		facetConditions = append(facetConditions, "("+statusExpr+") <> 'published'")
+	case "published":
+		facetConditions = append(facetConditions, "("+statusExpr+") = 'published'")
+	}
+	switch req.Origin {
+	case "forked":
+		facetConditions = append(facetConditions, forkedSQL)
+	case "own":
+		facetConditions = append(facetConditions, "NOT "+forkedSQL)
+	}
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
+	}
+	facetBase := where
+	if len(facetConditions) > 0 {
+		if where == "" {
+			where = " WHERE " + strings.Join(facetConditions, " AND ")
+		} else {
+			where += " AND " + strings.Join(facetConditions, " AND ")
+		}
+	}
+
+	// Count and page share one snapshot and the same predicates.
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return empty, fmt.Errorf("applications: list snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var total int
+	countQuery := fmt.Sprintf(`SELECT COUNT(DISTINCT a.id) FROM %s.applications a`, s) + join + where
+	if err := tx.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
+		return empty, fmt.Errorf("applications: list count: %w", err)
+	}
+
+	facets := applications.ListFacets{Statuses: map[string]int{}, Origins: map[string]int{}}
+	facetRows, err := tx.Query(ctx, `SELECT `+statusExpr+`, `+forkedSQL+`, COUNT(*) FROM `+s+`.applications a`+join+facetBase+` GROUP BY 1, 2`, args...)
+	if err != nil {
+		return empty, fmt.Errorf("applications: list facets: %w", err)
+	}
+	for facetRows.Next() {
+		var (
+			status string
+			forked bool
+			n      int
+		)
+		if err := facetRows.Scan(&status, &forked, &n); err != nil {
+			facetRows.Close()
+			return empty, fmt.Errorf("applications: list facets scan: %w", err)
+		}
+		facets.Statuses[status] += n
+		origin := "own"
+		if forked {
+			origin = "forked"
+		}
+		facets.Origins[origin] += n
+	}
+	facetRows.Close()
+	if err := facetRows.Err(); err != nil {
+		return empty, fmt.Errorf("applications: list facets rows: %w", err)
+	}
+
+	selectArgs := append([]any{}, args...)
+	limitIdx := len(selectArgs) + 1
 	// Every tag of every version of the application, by name, deduplicated
 	// and sorted.
 	//
@@ -432,7 +485,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		totalPages++
 	}
 	return applications.ListResponse{
-		Rows: items, Total: total, Page: page, PageSize: pageSize, TotalPages: totalPages,
+		Rows: items, Total: total, Page: page, PageSize: pageSize, TotalPages: totalPages, Facets: &facets,
 	}, nil
 }
 

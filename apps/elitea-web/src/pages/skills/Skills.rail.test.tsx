@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -75,14 +75,14 @@ describe('filterSkillsByTags', () => {
 });
 
 describe('Skills Filters tab', () => {
-  it('offers the project tags in the side panel and keeps the one search box in the toolbar', async () => {
+  it('offers the project tags and the one search box in the List tab of the side panel', async () => {
     renderSkillsRoute(<SidePanelHarness><Skills /></SidePanelHarness>);
 
-    const filters = await screen.findByTestId('entity-list-filters');
-    expect(screen.getByTestId('side-panel-tab-filters')).toContainElement(filters);
-    expect(await screen.findByTestId('tags-panel-chip-alpha')).toBeInTheDocument();
-    expect(screen.getByTestId('page-toolbar')).toContainElement(screen.getByPlaceholderText('Search skills'));
+    const list = await screen.findByTestId('side-panel-tab-list');
+    expect(await within(list).findByTestId('tags-panel-chip-alpha')).toBeInTheDocument();
+    expect(within(list).getByPlaceholderText('Search skills')).toBeInTheDocument();
     expect(screen.getAllByPlaceholderText('Search skills')).toHaveLength(1);
+    expect(screen.queryByTestId('page-toolbar')).toBeNull();
   });
 
   it('filters the skill list down to the selected tag', async () => {

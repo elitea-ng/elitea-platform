@@ -31,7 +31,7 @@ export interface InspectorLayout {
 export const INSPECTOR_WIDTH = { min: 260, max: 720 } as const;
 export const SPLIT_RANGE = { min: 0.2, max: 0.8 } as const;
 
-const TAB_ORDER: readonly InspectorTabId[] = ['changes', 'approvals', 'plan', 'processes', 'index', 'context', 'browser', 'conversation', 'cloud-browser', 'filters'];
+const TAB_ORDER: readonly InspectorTabId[] = ['changes', 'approvals', 'plan', 'processes', 'index', 'context', 'browser', 'conversation', 'cloud-browser', 'list', 'filters'];
 const TAB_IDS = new Set<string>(TAB_ORDER);
 /**
  * Tabs a page offers only some of the time (Plan: once the agent keeps a

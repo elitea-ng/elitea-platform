@@ -31,3 +31,6 @@ export type { EntityListAuthor, EntityListItem, EntityListTag, EntityListView } 
 
 export { EntityRowSlotProvider } from './rowSlot';
 export type { EntityRowSlot } from './rowSlot';
+
+export { EntitySelectionProvider } from './selection';
+export type { EntitySelection } from './selection';

@@ -7,13 +7,13 @@ An agent combines instructions, a model, and optional toolkits and skills into a
 
 <Screenshot id="agents-list" alt="The Agents dashboard listing project agents" />
 
-The Agents page lists the project's agents. Its toolbar has the search box, **Filters** (tags and authors, in the side panel), the card/table switch, **Import** and **+ New agent**; see [Page layout](/menus/page-layout). The **My liked** and **Trending** tabs are hidden until they are supported.
+The Agents page lists the project's agents as one list, with no tabs. Every agent shows a **Draft** or **Published** badge. Every control is in the **List** tab of the side panel on the right: the search, **+ New agent**, **Import**, the **Status** and **Origin** filters (with how many agents each holds, and only values that occur), sort, the card/table switch, folders and the tag filter; see [Page layout](/menus/page-layout#list-pages). **Teams** is a switch at the top of that tab. The **My liked** and **Trending** tabs are hidden until they are supported.
 
 ## Create an agent
 
 <Steps>
   <Step title="Open the form">
-    Select **+ New agent** in the Agents page toolbar, or the **+** next to **Agents** in the sidebar.
+    Select **+ New agent** in the **List** tab (or in the bar above the list when the side panel is closed), or the **+** next to **Agents** in the sidebar.
   </Step>
   <Step title="Fill in General and Instructions">
     **Name** and **Description** are required; **Instructions** define the agent's behavior. Tags, a welcome message, and up to four conversation starters are optional.
@@ -102,7 +102,7 @@ Selecting **Save** again updates the current version. Use **Save As Version** to
 
 - **Publish** a draft version through a guided wizard with automated AI validation, making it visible in the [Marketplace](/menus/marketplace). See [Agent publishing](/how-tos/agents-pipelines/publishing).
 - **Export** downloads the selected version as a single `.md` file, or a `.zip` if it references nested agents.
-- **Import** an exported file from the Agents page toolbar.
+- **Import** an exported file from the **List** tab of the Agents page.
 - **Fork** copies the selected version into another project you choose.
 
 See [Import/export](/how-tos/agents-pipelines/import-export) and [Forking](/how-tos/agents-pipelines/forking) for full detail; toolkit credentials must be reconfigured manually after either operation.

@@ -8,7 +8,11 @@ import { useWebSidePanelHost } from './useWebSidePanelHost';
 // jsdom has no matchMedia: MUI's useMediaQuery answers false, so this is a
 // window neither narrow nor wide — closed until the viewer opens it.
 describe('useWebSidePanelHost', () => {
-  afterEach(() => createStorage('local').remove('sidePanel.open'));
+  afterEach(() => {
+    createStorage('local').remove('sidePanel.open');
+    createStorage('local').remove('sidePanel.open.list');
+    createStorage('local').remove('sidePanel.open.conversation');
+  });
 
   it('offers nothing and shows nothing before a page registers a tab', () => {
     const { result } = renderHook(() => useWebSidePanelHost());
@@ -49,6 +53,32 @@ describe('useWebSidePanelHost', () => {
       result.current.slot.register({ id: 'filters', title: 'Filters', subject: 'Agents' });
     });
     expect(result.current.shown).toBe(true);
+  });
+
+  it('remembers open or closed per page, not for every page at once', () => {
+    const lists = renderHook(() => useWebSidePanelHost());
+    act(() => {
+      lists.result.current.slot.register({ id: 'list', title: 'List', subject: 'Agents' });
+    });
+    act(() => lists.result.current.setOpen(true));
+    expect(createStorage('local').get('sidePanel.open.list')).toBe('true');
+    lists.unmount();
+
+    // The chat has chosen nothing: a list's choice does not open it.
+    const chat = renderHook(() => useWebSidePanelHost());
+    act(() => {
+      chat.result.current.slot.register({ id: 'conversation', title: 'Conversation', subject: 'Chat' });
+    });
+    expect(chat.result.current.shown).toBe(false);
+    act(() => chat.result.current.setOpen(true));
+    act(() => chat.result.current.setOpen(false));
+    chat.unmount();
+
+    const again = renderHook(() => useWebSidePanelHost());
+    act(() => {
+      again.result.current.slot.register({ id: 'list', title: 'List', subject: 'Agents' });
+    });
+    expect(again.result.current.shown).toBe(true);
   });
 
   it('drops a tab when its page unregisters it', () => {

@@ -31,6 +31,7 @@ export const commonSearchSchema = pickParams(
   'isFromCreation',
   'message_id',
   'name',
+  'origin',
   'project_id',
   'query',
   'return_url',

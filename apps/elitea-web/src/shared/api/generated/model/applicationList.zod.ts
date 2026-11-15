@@ -42,6 +42,7 @@
  */
 import * as zod from "zod";
 import { Application } from "./application.zod";
+import { ApplicationListFacets } from "./applicationListFacets.zod";
 
 export const ApplicationList = zod
   .object({
@@ -50,6 +51,7 @@ export const ApplicationList = zod
     page: zod.int(),
     page_size: zod.int(),
     total_pages: zod.int(),
+    facets: ApplicationListFacets.optional(),
   })
   .describe(
     "NOTE(W2): internal/domain/applications/types.go:86-92 (ListResponse), marshaled directly by List (internal/api/v2/applications/handler.go:101-107).\n",

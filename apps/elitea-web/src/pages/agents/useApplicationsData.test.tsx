@@ -50,26 +50,13 @@ describe('useApplicationsData', () => {
     expect(result.current.trendingTotal).toBeUndefined();
   });
 
-  it('resolves applicationsTotal from the private-project endpoint on a private project', async () => {
+  it('fetches nothing on a private project: it has no tabs, so no counts (ADR-0051)', () => {
     server.use(
       getListApplicationsMockHandler({ rows: [], total: 3, page: 1, page_size: 20, total_pages: 1 }),
     );
     const { result } = renderHook(() => useApplicationsData('9', false), { wrapper });
-    await waitFor(() => expect(result.current.applicationsTotal).toBe(3));
     expect(result.current.latestTotal).toBeUndefined();
-  });
-
-  it('the five per-status totals are always undefined — no server-side status filter exists', async () => {
-    server.use(
-      getListApplicationsMockHandler({ rows: [], total: 3, page: 1, page_size: 20, total_pages: 1 }),
-    );
-    const { result } = renderHook(() => useApplicationsData('9', false), { wrapper });
-    await waitFor(() => expect(result.current.applicationsTotal).toBe(3));
-    expect(result.current.draftTotal).toBeUndefined();
-    expect(result.current.publishedTotal).toBeUndefined();
-    expect(result.current.moderationTotal).toBeUndefined();
-    expect(result.current.approvalTotal).toBeUndefined();
-    expect(result.current.rejectedTotal).toBeUndefined();
+    expect(result.current.applicationsTotal).toBeUndefined();
   });
 
   it('fetches applicationsTotal on the public project only when the caller has admin permission', async () => {

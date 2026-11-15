@@ -77,11 +77,11 @@ describe('usePipelinesData', () => {
     expect(result.current.trendingTotal).toBeUndefined();
   });
 
-  it('resolves applicationsTotal from the private-project endpoint on a private project', async () => {
+  it('fetches nothing on a private project: it has no tabs, so no counts (ADR-0051)', () => {
     server.use(getListApplicationsMockHandler({ rows: [], total: 3, page: 1, page_size: 20, total_pages: 1 }));
     const { result } = renderHook(() => usePipelinesData('9', false), { wrapper });
-    await waitFor(() => expect(result.current.applicationsTotal).toBe(3));
     expect(result.current.latestTotal).toBeUndefined();
+    expect(result.current.applicationsTotal).toBeUndefined();
   });
 
   it('fetches applicationsTotal on the public project only when the caller has admin permission', async () => {

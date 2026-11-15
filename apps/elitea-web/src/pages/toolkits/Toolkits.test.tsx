@@ -4,7 +4,7 @@ import { ThemeProvider } from '@mui/material/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Outlet, RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import type { AnyRouter } from '@tanstack/react-router';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -15,6 +15,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
+import { SidePanelHarness } from '@/test/sidePanelHarness';
 
 import { Toolkits, shouldRedirectToCreatePage } from './Toolkits';
 
@@ -192,7 +193,6 @@ describe('Toolkits', () => {
 
     mountPage();
     expect(await screen.findByText('My GitHub')).toBeInTheDocument();
-    expect(screen.getByTestId('page-toolbar-summary')).toHaveTextContent('1 toolkits');
   });
 
   it('renders the real, fetched toolkit cards (regression: R1 — used to render a permanently-blank placeholder Box with no data fetch at all)', async () => {
@@ -201,7 +201,6 @@ describe('Toolkits', () => {
     renderToolkitsPage(<Toolkits />, '/toolkits/all', 'proj-1');
 
     expect(await screen.findByText('My GitHub')).toBeInTheDocument();
-    expect(screen.getByTestId('page-toolbar-summary')).toHaveTextContent('1 toolkits');
     expect(screen.getByTestId('toolkit-card')).toBeInTheDocument();
   });
 
@@ -231,7 +230,6 @@ describe('Toolkits', () => {
 
     expect(await screen.findByText('My MCP Server')).toBeInTheDocument();
     expect(screen.queryByText('My GitHub')).not.toBeInTheDocument();
-    expect(screen.getByTestId('page-toolbar-summary')).toHaveTextContent('1 MCPs');
   });
 
   it('navigates to the toolkit detail route when a card is clicked', async () => {
@@ -308,24 +306,25 @@ describe('Toolkits', () => {
     server.use(getListToolkitInstancesMockHandler({ rows: [], total: 0 }));
     setPublicProjectConfig('proj-1');
 
-    renderToolkitsPage(<Toolkits isMCP />, '/mcps/all', 'proj-1');
+    renderToolkitsPage(<SidePanelHarness><Toolkits isMCP /></SidePanelHarness>, '/mcps/all', 'proj-1');
 
     expect(await screen.findByRole('textbox', { name: 'Search MCPs' })).toBeInTheDocument();
     expect(screen.getByTestId('mcps-list-panel')).toBeInTheDocument();
   });
 
   /**
-   * COMPOSITION ROOT — one surface, so no tab: the toolbar carries a count
-   * and the search, and the shell's breadcrumb names the page.
+   * COMPOSITION ROOT — one surface, so no tab and no toolbar row: the search
+   * is in the right sidebar's List tab (ADR-0051), and the shell's breadcrumb
+   * names the page.
    */
-  it('renders a summary and search in the page toolbar, and no tab or heading of its own', async () => {
+  it('renders its search in the List tab, with no toolbar row, tab or heading of its own', async () => {
     server.use(getListToolkitInstancesMockHandler({ rows: [], total: 0 }));
     setPublicProjectConfig('proj-1');
-    renderToolkitsPage(<Toolkits />, '/toolkits/all', 'proj-1');
+    renderToolkitsPage(<SidePanelHarness><Toolkits /></SidePanelHarness>, '/toolkits/all', 'proj-1');
 
-    const toolbar = await screen.findByTestId('page-toolbar');
-    expect(toolbar).toContainElement(screen.getByTestId('page-toolbar-summary'));
-    expect(toolbar).toContainElement(screen.getByRole('textbox', { name: 'Search toolkits' }));
+    const tab = await screen.findByTestId('side-panel-tab-list');
+    expect(await within(tab).findByRole('textbox', { name: 'Search toolkits' })).toBeInTheDocument();
+    expect(screen.queryByTestId('page-toolbar')).toBeNull();
     expect(screen.queryByRole('tablist')).toBeNull();
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });

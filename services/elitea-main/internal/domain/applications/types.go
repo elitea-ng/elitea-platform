@@ -234,16 +234,21 @@ type GuardrailRule struct {
 }
 
 type ListRequest struct {
-	ProjectID   string     `json:"-"`
-	Page        int        `json:"page,omitempty"`
-	PageSize    int        `json:"page_size,omitempty"`
-	Search      string     `json:"search,omitempty"`
-	Tags        string     `json:"tags,omitempty"`
-	FolderID    string     `json:"folder_id,omitempty"`
-	AgentsType  string     `json:"-"`
-	IDs         []int32    `json:"ids,omitempty"`
-	AuthorID    int64      `json:"author_id,omitempty"`
-	Statuses    []string   `json:"statuses,omitempty"`
+	ProjectID  string   `json:"-"`
+	Page       int      `json:"page,omitempty"`
+	PageSize   int      `json:"page_size,omitempty"`
+	Search     string   `json:"search,omitempty"`
+	Tags       string   `json:"tags,omitempty"`
+	FolderID   string   `json:"folder_id,omitempty"`
+	AgentsType string   `json:"-"`
+	IDs        []int32  `json:"ids,omitempty"`
+	AuthorID   int64    `json:"author_id,omitempty"`
+	Statuses   []string `json:"statuses,omitempty"`
+	// Status narrows the list to agents in ONE publish state, `draft` or
+	// `published`, the state the row itself reports (`Application.Status`).
+	Status string `json:"status,omitempty"`
+	// Origin narrows the list to agents the project `own`s or that are `forked`.
+	Origin      string     `json:"origin,omitempty"`
 	MyLiked     bool       `json:"my_liked,omitempty"`
 	WithoutTags bool       `json:"without_tags,omitempty"`
 	TrendStart  *time.Time `json:"trend_start_period,omitempty"`
@@ -260,6 +265,18 @@ type ListResponse struct {
 	Page       int           `json:"page"`
 	PageSize   int           `json:"page_size"`
 	TotalPages int           `json:"total_pages"`
+	// Facets counts the matching agents by status and by origin, so a list
+	// offers only the filter values that occur.
+	Facets *ListFacets `json:"facets,omitempty"`
+}
+
+// ListFacets are the per-value counts of one list query. Each count ignores
+// the status and origin filters themselves and honours every other filter
+// (search, tags, folder), so a facet never shrinks to zero because it is the
+// one selected.
+type ListFacets struct {
+	Statuses map[string]int `json:"statuses"`
+	Origins  map[string]int `json:"origins"`
 }
 
 type CreateRequest struct {
