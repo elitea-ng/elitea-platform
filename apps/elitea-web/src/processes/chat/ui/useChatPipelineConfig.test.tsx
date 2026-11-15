@@ -44,13 +44,13 @@ function wrapper({ children }: { readonly children: ReactNode }): ReactNode {
 function panelProps(panels: { readonly tools: ReactNode; readonly information?: ReactNode }) {
   const element = panels.information as ReactElement<{
     readonly onFieldChange: (path: string, value: unknown) => void;
-    readonly tagsSlot: ReactElement<{ readonly value: readonly unknown[]; readonly onChange: (next: readonly { readonly name: string }[]) => void }>;
+    readonly generalSlots: { readonly tags: ReactElement<{ readonly value: readonly unknown[]; readonly onChange: (next: readonly { readonly name: string }[]) => void }> };
     readonly values: { readonly name: string; readonly description: string; readonly version_details: Record<string, unknown> };
   }>;
   return {
     onFieldChange: element.props.onFieldChange,
-    onTagsChange: element.props.tagsSlot.props.onChange,
-    tagValue: element.props.tagsSlot.props.value,
+    onTagsChange: element.props.generalSlots.tags.props.onChange,
+    tagValue: element.props.generalSlots.tags.props.value,
     values: element.props.values,
   };
 }
