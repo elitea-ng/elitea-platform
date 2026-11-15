@@ -79,7 +79,7 @@ App Review Information (and Play's App access, TestFlight's Test Information):
 > 4. Allow Face ID when asked (or skip).
 >
 > To try it: open the Chats tab and start a chat with "[sample agent]"; open
-> Discover; tap the bell on Home for notifications. Settings, "Log out & wipe"
+> Marketplace; tap the bell on Home for notifications. Settings, "Log out & wipe"
 > removes everything from the device.
 >
 > Notes: dictation uses on-device speech recognition only. The app collects no

@@ -128,7 +128,7 @@ describe('Discover is client contract 1.3', () => {
     __resetWorkspaceInfoForTests();
     await render(withQueries(<DiscoverScreen />));
     expect(screen.getByText('Checking this workspace')).toBeTruthy();
-    expect(screen.queryByText("Discover isn't available")).toBeNull();
+    expect(screen.queryByText("Marketplace isn't available")).toBeNull();
     expect(server.requests).toHaveLength(0);
     await act(async () => setWorkspaceInfo({ origin: FAKE_ORIGIN, discovery: DiscoveryDocumentSchema.parse(discoveryDocument13()) }));
     expect(await screen.findByText('Elitea Travel Planner')).toBeTruthy();
@@ -137,7 +137,7 @@ describe('Discover is client contract 1.3', () => {
   it('on a 1.1 workspace the screen says it is not available without asking the server', async () => {
     const server = install('1.1');
     await render(withQueries(<DiscoverScreen />));
-    expect(screen.getByText("Discover isn't available")).toBeTruthy();
+    expect(screen.getByText("Marketplace isn't available")).toBeTruthy();
     expect(server.requests).toHaveLength(0);
   });
 });
@@ -385,7 +385,7 @@ describe('Agent details', () => {
     mockParams = { id: '77' };
     await render(withQueries(<PublicAgentScreen />));
     expect(screen.getByText('Agent not found')).toBeTruthy();
-    await fireEvent.press(screen.getByText('Back to Discover'));
+    await fireEvent.press(screen.getByText('Back to Marketplace'));
     expect(mockBack).toHaveBeenCalled();
   });
 });

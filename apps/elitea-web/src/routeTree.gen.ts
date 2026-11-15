@@ -38,6 +38,7 @@ import { Route as ShellDeepwikiIndexRouteImport } from './routes/_shell/deepwiki
 import { Route as ShellDeepwikiToolkitIdRouteImport } from './routes/_shell/deepwiki.$toolkitId'
 import { Route as ShellInventoryIndexRouteImport } from './routes/_shell/inventory.index'
 import { Route as ShellInventoryToolkitIdRouteImport } from './routes/_shell/inventory.$toolkitId'
+import { Route as ShellMarketplaceIndexRouteImport } from './routes/_shell/marketplace/index'
 import { Route as ShellMcpsIndexRouteImport } from './routes/_shell/mcps/index'
 import { Route as ShellMcpsTabRouteImport } from './routes/_shell/mcps/$tab'
 import { Route as ShellMcpsCreateRouteImport } from './routes/_shell/mcps/create'
@@ -82,6 +83,7 @@ import { Route as ShellAppsTabAppIdRouteImport } from './routes/_shell/apps/$tab
 import { Route as ShellAppsCreateAppTypeRouteImport } from './routes/_shell/apps/create.$appType'
 import { Route as ShellCredentialsTabCredential_uidRouteImport } from './routes/_shell/credentials/$tab.$credential_uid'
 import { Route as ShellCredentialsCreateCredentialCredentialTypeRouteImport } from './routes/_shell/credentials/create-credential.$credentialType'
+import { Route as ShellMarketplaceKindListingIdRouteImport } from './routes/_shell/marketplace/$kind.$listingId'
 import { Route as ShellMcpsTabMcpIdRouteImport } from './routes/_shell/mcps/$tab.$mcpId'
 import { Route as ShellMcpsCreateMcpTypeRouteImport } from './routes/_shell/mcps/create.$mcpType'
 import { Route as ShellPipelinesTabAgentIdRouteImport } from './routes/_shell/pipelines/$tab.$agentId'
@@ -245,6 +247,11 @@ const ShellInventoryIndexRoute = ShellInventoryIndexRouteImport.update({
 const ShellInventoryToolkitIdRoute = ShellInventoryToolkitIdRouteImport.update({
   id: '/inventory/$toolkitId',
   path: '/inventory/$toolkitId',
+  getParentRoute: () => ShellRouteRoute,
+} as any)
+const ShellMarketplaceIndexRoute = ShellMarketplaceIndexRouteImport.update({
+  id: '/marketplace/',
+  path: '/marketplace/',
   getParentRoute: () => ShellRouteRoute,
 } as any)
 const ShellMcpsIndexRoute = ShellMcpsIndexRouteImport.update({
@@ -481,6 +488,12 @@ const ShellCredentialsCreateCredentialCredentialTypeRoute =
     path: '/$credentialType',
     getParentRoute: () => ShellCredentialsCreateCredentialRoute,
   } as any)
+const ShellMarketplaceKindListingIdRoute =
+  ShellMarketplaceKindListingIdRouteImport.update({
+    id: '/marketplace/$kind/$listingId',
+    path: '/marketplace/$kind/$listingId',
+    getParentRoute: () => ShellRouteRoute,
+  } as any)
 const ShellMcpsTabMcpIdRoute = ShellMcpsTabMcpIdRouteImport.update({
   id: '/$mcpId',
   path: '/$mcpId',
@@ -649,6 +662,7 @@ export interface FileRoutesByFullPath {
   '/credentials/': typeof ShellCredentialsIndexRoute
   '/deepwiki/': typeof ShellDeepwikiIndexRoute
   '/inventory/': typeof ShellInventoryIndexRoute
+  '/marketplace/': typeof ShellMarketplaceIndexRoute
   '/mcps/': typeof ShellMcpsIndexRoute
   '/pipelines/': typeof ShellPipelinesIndexRoute
   '/settings/': typeof ShellSettingsIndexRoute
@@ -660,6 +674,7 @@ export interface FileRoutesByFullPath {
   '/apps/create/$appType': typeof ShellAppsCreateAppTypeRoute
   '/credentials/$tab/$credential_uid': typeof ShellCredentialsTabCredential_uidRoute
   '/credentials/create-credential/$credentialType': typeof ShellCredentialsCreateCredentialCredentialTypeRoute
+  '/marketplace/$kind/$listingId': typeof ShellMarketplaceKindListingIdRoute
   '/mcps/$tab/$mcpId': typeof ShellMcpsTabMcpIdRoute
   '/mcps/create/$mcpType': typeof ShellMcpsCreateMcpTypeRoute
   '/pipelines/$tab/$agentId': typeof ShellPipelinesTabAgentIdRouteWithChildren
@@ -740,6 +755,7 @@ export interface FileRoutesByTo {
   '/credentials': typeof ShellCredentialsIndexRoute
   '/deepwiki': typeof ShellDeepwikiIndexRoute
   '/inventory': typeof ShellInventoryIndexRoute
+  '/marketplace': typeof ShellMarketplaceIndexRoute
   '/mcps': typeof ShellMcpsIndexRoute
   '/pipelines': typeof ShellPipelinesIndexRoute
   '/settings': typeof ShellSettingsIndexRoute
@@ -751,6 +767,7 @@ export interface FileRoutesByTo {
   '/apps/create/$appType': typeof ShellAppsCreateAppTypeRoute
   '/credentials/$tab/$credential_uid': typeof ShellCredentialsTabCredential_uidRoute
   '/credentials/create-credential/$credentialType': typeof ShellCredentialsCreateCredentialCredentialTypeRoute
+  '/marketplace/$kind/$listingId': typeof ShellMarketplaceKindListingIdRoute
   '/mcps/$tab/$mcpId': typeof ShellMcpsTabMcpIdRoute
   '/mcps/create/$mcpType': typeof ShellMcpsCreateMcpTypeRoute
   '/pipelines/$tab/$agentId': typeof ShellPipelinesTabAgentIdRouteWithChildren
@@ -834,6 +851,7 @@ export interface FileRoutesById {
   '/_shell/credentials/': typeof ShellCredentialsIndexRoute
   '/_shell/deepwiki/': typeof ShellDeepwikiIndexRoute
   '/_shell/inventory/': typeof ShellInventoryIndexRoute
+  '/_shell/marketplace/': typeof ShellMarketplaceIndexRoute
   '/_shell/mcps/': typeof ShellMcpsIndexRoute
   '/_shell/pipelines/': typeof ShellPipelinesIndexRoute
   '/_shell/settings/': typeof ShellSettingsIndexRoute
@@ -845,6 +863,7 @@ export interface FileRoutesById {
   '/_shell/apps/create/$appType': typeof ShellAppsCreateAppTypeRoute
   '/_shell/credentials/$tab/$credential_uid': typeof ShellCredentialsTabCredential_uidRoute
   '/_shell/credentials/create-credential/$credentialType': typeof ShellCredentialsCreateCredentialCredentialTypeRoute
+  '/_shell/marketplace/$kind/$listingId': typeof ShellMarketplaceKindListingIdRoute
   '/_shell/mcps/$tab/$mcpId': typeof ShellMcpsTabMcpIdRoute
   '/_shell/mcps/create/$mcpType': typeof ShellMcpsCreateMcpTypeRoute
   '/_shell/pipelines/$tab/$agentId': typeof ShellPipelinesTabAgentIdRouteWithChildren
@@ -928,6 +947,7 @@ export interface FileRouteTypes {
     | '/credentials/'
     | '/deepwiki/'
     | '/inventory/'
+    | '/marketplace/'
     | '/mcps/'
     | '/pipelines/'
     | '/settings/'
@@ -939,6 +959,7 @@ export interface FileRouteTypes {
     | '/apps/create/$appType'
     | '/credentials/$tab/$credential_uid'
     | '/credentials/create-credential/$credentialType'
+    | '/marketplace/$kind/$listingId'
     | '/mcps/$tab/$mcpId'
     | '/mcps/create/$mcpType'
     | '/pipelines/$tab/$agentId'
@@ -1019,6 +1040,7 @@ export interface FileRouteTypes {
     | '/credentials'
     | '/deepwiki'
     | '/inventory'
+    | '/marketplace'
     | '/mcps'
     | '/pipelines'
     | '/settings'
@@ -1030,6 +1052,7 @@ export interface FileRouteTypes {
     | '/apps/create/$appType'
     | '/credentials/$tab/$credential_uid'
     | '/credentials/create-credential/$credentialType'
+    | '/marketplace/$kind/$listingId'
     | '/mcps/$tab/$mcpId'
     | '/mcps/create/$mcpType'
     | '/pipelines/$tab/$agentId'
@@ -1112,6 +1135,7 @@ export interface FileRouteTypes {
     | '/_shell/credentials/'
     | '/_shell/deepwiki/'
     | '/_shell/inventory/'
+    | '/_shell/marketplace/'
     | '/_shell/mcps/'
     | '/_shell/pipelines/'
     | '/_shell/settings/'
@@ -1123,6 +1147,7 @@ export interface FileRouteTypes {
     | '/_shell/apps/create/$appType'
     | '/_shell/credentials/$tab/$credential_uid'
     | '/_shell/credentials/create-credential/$credentialType'
+    | '/_shell/marketplace/$kind/$listingId'
     | '/_shell/mcps/$tab/$mcpId'
     | '/_shell/mcps/create/$mcpType'
     | '/_shell/pipelines/$tab/$agentId'
@@ -1353,6 +1378,13 @@ declare module '@tanstack/react-router' {
       path: '/inventory/$toolkitId'
       fullPath: '/inventory/$toolkitId'
       preLoaderRoute: typeof ShellInventoryToolkitIdRouteImport
+      parentRoute: typeof ShellRouteRoute
+    }
+    '/_shell/marketplace/': {
+      id: '/_shell/marketplace/'
+      path: '/marketplace'
+      fullPath: '/marketplace/'
+      preLoaderRoute: typeof ShellMarketplaceIndexRouteImport
       parentRoute: typeof ShellRouteRoute
     }
     '/_shell/mcps/': {
@@ -1662,6 +1694,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/credentials/create-credential/$credentialType'
       preLoaderRoute: typeof ShellCredentialsCreateCredentialCredentialTypeRouteImport
       parentRoute: typeof ShellCredentialsCreateCredentialRoute
+    }
+    '/_shell/marketplace/$kind/$listingId': {
+      id: '/_shell/marketplace/$kind/$listingId'
+      path: '/marketplace/$kind/$listingId'
+      fullPath: '/marketplace/$kind/$listingId'
+      preLoaderRoute: typeof ShellMarketplaceKindListingIdRouteImport
+      parentRoute: typeof ShellRouteRoute
     }
     '/_shell/mcps/$tab/$mcpId': {
       id: '/_shell/mcps/$tab/$mcpId'
@@ -2116,11 +2155,13 @@ interface ShellRouteRouteChildren {
   ShellCredentialsIndexRoute: typeof ShellCredentialsIndexRoute
   ShellDeepwikiIndexRoute: typeof ShellDeepwikiIndexRoute
   ShellInventoryIndexRoute: typeof ShellInventoryIndexRoute
+  ShellMarketplaceIndexRoute: typeof ShellMarketplaceIndexRoute
   ShellMcpsIndexRoute: typeof ShellMcpsIndexRoute
   ShellPipelinesIndexRoute: typeof ShellPipelinesIndexRoute
   ShellSkillsIndexRoute: typeof ShellSkillsIndexRoute
   ShellToolkitsIndexRoute: typeof ShellToolkitsIndexRoute
   ShellWorkspacesIndexRoute: typeof ShellWorkspacesIndexRoute
+  ShellMarketplaceKindListingIdRoute: typeof ShellMarketplaceKindListingIdRoute
   ShellUserPublicAgentsAgentIdRoute: typeof ShellUserPublicAgentsAgentIdRouteWithChildren
   ShellUserPublicAppsAppIdRoute: typeof ShellUserPublicAppsAppIdRoute
   ShellUserPublicMcpsMcpIdRoute: typeof ShellUserPublicMcpsMcpIdRoute
@@ -2165,11 +2206,13 @@ const ShellRouteRouteChildren: ShellRouteRouteChildren = {
   ShellCredentialsIndexRoute: ShellCredentialsIndexRoute,
   ShellDeepwikiIndexRoute: ShellDeepwikiIndexRoute,
   ShellInventoryIndexRoute: ShellInventoryIndexRoute,
+  ShellMarketplaceIndexRoute: ShellMarketplaceIndexRoute,
   ShellMcpsIndexRoute: ShellMcpsIndexRoute,
   ShellPipelinesIndexRoute: ShellPipelinesIndexRoute,
   ShellSkillsIndexRoute: ShellSkillsIndexRoute,
   ShellToolkitsIndexRoute: ShellToolkitsIndexRoute,
   ShellWorkspacesIndexRoute: ShellWorkspacesIndexRoute,
+  ShellMarketplaceKindListingIdRoute: ShellMarketplaceKindListingIdRoute,
   ShellUserPublicAgentsAgentIdRoute:
     ShellUserPublicAgentsAgentIdRouteWithChildren,
   ShellUserPublicAppsAppIdRoute: ShellUserPublicAppsAppIdRoute,

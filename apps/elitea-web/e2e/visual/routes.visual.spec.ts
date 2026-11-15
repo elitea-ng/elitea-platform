@@ -445,18 +445,18 @@ const ROUTES: readonly VisualRoute[] = [
     landmark: (page) => page.getByText('Still no local MCP available'),
   },
   {
-    // @covers /agents-hub
-    name: 'agents-hub',
-    path: '/app/agents-hub',
-    // A category chip that comes from the API. The page's obvious landmarks all
-    // fail the experiment: "Welcome to Agent HUB", the search box, "No agents
-    // found", and the chips `Trending`/`My Liked` are all present during load
-    // (loaded YES, stalled YES) — `Trending` and `My Liked` are hardcoded, the
-    // other seven chips are fetched. So the stalled screen is a plausible-
-    // looking hub with two chips instead of nine, which is exactly the kind of
-    // screenshot this suite must not accept. `Business Analyst` is one of the
-    // fetched chips: loaded YES, stalled no.
-    landmark: (page) => page.getByText('Business Analyst'),
+    // @covers /marketplace
+    name: 'marketplace',
+    path: '/app/marketplace',
+    // A category checkbox in the Browse sidebar, which comes from the API. The
+    // page's obvious landmarks all fail the experiment: the summary bar, the
+    // search box and "No listings match" are present during load (loaded YES,
+    // stalled YES), so the stalled screen is a plausible-looking Marketplace
+    // with no categories, which is exactly the kind of screenshot this suite
+    // must not accept. `Business Analyst` is one of the fetched categories
+    // (`useGetAgentCategories`): loaded YES, stalled no. The viewport is wider
+    // than 1440px, so the sidebar is open by default and the checkbox shows.
+    landmark: (page) => page.getByRole('checkbox', { name: 'Business Analyst' }),
     light: true,
   },
   {

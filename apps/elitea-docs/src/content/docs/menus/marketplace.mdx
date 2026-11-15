@@ -1,0 +1,47 @@
+---
+title: "Marketplace"
+description: "Browse, search, and use published agents and skills from Elitea's shared library."
+---
+
+Marketplace is the shared library of published agents and skills, visible across every project you have access to — a discovery surface, not a personal workspace. It was called **Catalog** (and, before that, **Agent HUB**). Open it from the **Marketplace** row in the sidebar, beside the **Workshop** group, on the web and in the desktop app.
+
+<Screenshot id="catalog-agents" alt="Marketplace showing published agent cards with the Browse sidebar open" />
+
+## Agents and Skills
+
+The **Browse** tab of the right sidebar holds every control for the list: search, the **Kind** (**Agents** or **Skills**), **Category** and **Sort by**. Agents and skills work the same way:
+
+- Search matches name and description.
+- **Category** is multi-select: tick as many as you like, and a listing shows if it carries any of them.
+- **Sort by** offers **Newest first** and **Name A-Z**, and **Most liked** for agents (skills have no likes).
+
+The strip above the list shows how many listings match and every active filter as a chip you can remove, with **Clear all**, so you can see why the list is short even when the sidebar is closed. **Browse** in that strip opens the sidebar. On a narrow window the sidebar is a drawer.
+
+With no search and no category chosen, the page opens with a **Featured** row (the most recently published listings) and, for agents, a **Popular in your organisation** row (the most liked), above the full list. The rows are hidden as soon as you search or pick a category: a filtered list is the answer, not a shelf. There is no per-category **Show more**; narrow the list instead.
+
+Each card shows the icon, the name, a one-line description, the current version and, for agents, the like count. The whole card is a link, so you can open it in a new tab or copy its address.
+
+## A listing
+
+Select a card to open its own page at `/marketplace/{kind}/{listing}`. The page has an address you can bookmark and share, and the **Copy link** button copies it.
+
+- **An agent** shows its description, category, conversation starters and welcome message. **Show context** reads its instructions (read-only). **Try in chat** starts a conversation with the published copy, and a conversation starter does the same.
+- **A skill** shows its description, tags and instructions. **Add to an agent** forks the skill into your project and attaches it to the agent version you choose; it needs permission to fork in the project, and the page says so when you do not have it.
+
+Links to the old pages keep working: `/elitea-catalog` and `/agents-hub` redirect to the Marketplace, `?tab=skills` becomes the **Skills** kind, and a shared `?agentId=` link opens that agent's listing page.
+
+## What you can and cannot change
+
+Published items are read-only. In a conversation with a published agent you can change the **model**, its **settings** (Creativity or Reasoning Effort, Max Completion Tokens, Steps Limit), and the values of any variables it defines — these changes apply only to your conversation. You cannot edit its name, instructions, welcome message, conversation starters, or attached toolkits; to get an editable copy, [fork](/how-tos/agents-pipelines/forking) it or build your own from the [Agents](/menus/agents) menu.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Expected agent or skill is missing">It may not be published yet, still pending moderation, or filtered out by an active search or category. Look at the chips above the list and select **Clear all**.</Accordion>
+  <Accordion title="Cannot start a conversation">Refresh the page and confirm you still have Chat access; if the problem persists, contact your administrator.</Accordion>
+  <Accordion title="The page says a listing is not in the Marketplace any more">The publisher withdrew it, or the link is wrong. Select **Back to the Marketplace**.</Accordion>
+</AccordionGroup>
+
+<Info title="Related">
+[Agents](/menus/agents) · [Skills](/menus/skills) · [Use public items from chat](/how-tos/chat-conversations/use-public-items-from-chat) · [Agent publishing](/how-tos/agents-pipelines/publishing)
+</Info>

@@ -18,7 +18,7 @@ import { PERMISSIONS } from '@/shared/lib/permissions';
 
 import type { NavItemValue } from './navSections';
 
-export type CreatableNavItem = Exclude<NavItemValue, 'workspaces' | 'credentials'>;
+export type CreatableNavItem = Exclude<NavItemValue, 'workspaces' | 'credentials' | 'marketplace'>;
 
 /** `undefined` = no permission needed. */
 const CREATE_PERMISSIONS: Readonly<Record<CreatableNavItem, readonly string[] | undefined>> = {
@@ -32,7 +32,7 @@ const CREATE_PERMISSIONS: Readonly<Record<CreatableNavItem, readonly string[] | 
   artifacts: undefined,
 };
 
-/** A row with no create rule (Credentials, the desktop's Catalog and Help) creates nothing. */
+/** A row with no create rule (Credentials, the Marketplace and Help) creates nothing. */
 export function isCreatable(value: string): value is CreatableNavItem {
   return Object.hasOwn(CREATE_PERMISSIONS, value);
 }

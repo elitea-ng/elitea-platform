@@ -68,7 +68,8 @@ const MIN_ROUTES = 60;
  */
 const RESOLUTION = {
   // ---- agents (A1) ----
-  '_shell/agents-hub.tsx': ['pages/agents-hub/AgentHub', 'AgentHub', [], 'wired', 'AgentHubProps is intentionally empty — "route props are handled at the route layer".'],
+  '_shell/agents-hub.tsx': ['pages/marketplace/Marketplace', 'Marketplace', [], 'wired', 'Redirect source into the Marketplace (ADR-0051); redirectToMarketplace carries ?agentId= and ?tab=.'],
+  '_shell/elitea-catalog.tsx': ['pages/marketplace/Marketplace', 'Marketplace', [], 'wired', 'Redirect source into the Marketplace (ADR-0051); redirectToMarketplace carries ?agentId= and ?tab=.'],
   '_shell/agents/$tab.tsx': ['pages/agents/Applications', 'Applications', [], 'wired', 'Route keeps its ExclusiveOutlet composition; only the leaf component changes.'],
   '_shell/agents/$tab.$agentId.tsx': ['pages/agents/EditApplication', 'EditApplication', [], 'wired', ''],
   '_shell/agents/create.tsx': ['pages/agents/CreateApplication', 'CreateApplication', [], 'wired', ''],

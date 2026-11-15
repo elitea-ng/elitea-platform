@@ -1,6 +1,6 @@
 /**
  * SidebarFooter.test.tsx — the rail's foot: the account menu (Settings,
- * Credentials, the Catalog, Help Center, as on the desktop) and the support
+ * Credentials, Help Center, as on the desktop) and the support
  * assistant bar. The menu itself is covered in `widgets/account-menu`.
  */
 import userEvent from '@testing-library/user-event';
@@ -28,12 +28,12 @@ afterEach(() => {
 });
 
 describe('SidebarAccount — the account menu at the rail\'s foot', () => {
-  it('holds Settings, Credentials, the Catalog and Help Center', async () => {
+  it('holds Settings, Credentials and Help Center', async () => {
     const user = userEvent.setup();
     await renderAtPath('/chat', <SidebarAccount collapsed={false} credentials />);
     await user.click(screen.getByTestId('shell-account'));
     const menu = await screen.findByRole('menu', { name: 'Account menu' });
-    for (const name of ['Settings', 'Credentials', 'Catalog', 'Get help', 'Sign out']) {
+    for (const name of ['Settings', 'Credentials', 'Get help', 'Sign out']) {
       expect(within(menu).getByRole('menuitem', { name })).toBeInTheDocument();
     }
     expect(screen.getByTestId('account-menu-version')).toHaveTextContent('Version dev');
@@ -44,8 +44,9 @@ describe('SidebarAccount — the account menu at the rail\'s foot', () => {
     await renderAtPath('/chat', <SidebarAccount collapsed={false} />);
     await user.click(screen.getByTestId('shell-account'));
     const menu = await screen.findByRole('menu', { name: 'Account menu' });
-    expect(within(menu).getByRole('menuitem', { name: 'Catalog' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: 'Get help' })).toBeInTheDocument();
     expect(within(menu).queryByRole('menuitem', { name: 'Credentials' })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole('menuitem', { name: 'Catalog' })).not.toBeInTheDocument();
   });
 });
 

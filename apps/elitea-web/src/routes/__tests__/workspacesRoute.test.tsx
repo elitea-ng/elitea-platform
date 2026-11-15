@@ -102,8 +102,8 @@ describe('the Workspaces route in the real app shell', () => {
     expect(within(folder).getByText('proj')).toBeInTheDocument();
     // Rows follow the web nav's permission filter (this user has none): the ungated ones show.
     expect(within(sidebar).getByTestId('shell-elitea-applications')).toBeInTheDocument();
-    // Catalog lives in the account menu at the sidebar's foot.
-    expect(within(sidebar).queryByTestId('shell-elitea-catalog')).toBeNull();
+    // The Marketplace is a primary row, ungated like Applications.
+    expect(within(sidebar).getByTestId('shell-elitea-marketplace')).toBeInTheDocument();
     expect(within(sidebar).getByTestId('shell-account')).toBeInTheDocument();
     expect(within(sidebar).queryByTestId('shell-elitea-chat')).toBeNull();
 

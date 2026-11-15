@@ -68,14 +68,14 @@ describe('the tab bar', () => {
     ['1.3', discoveryDocument13()],
     ['1.1', discoveryDocument11()],
     ['1.0', discoveryDocument()],
-  ])('on a %s workspace shows Home, Chats, Discover and Settings (the Discover screen refuses below 1.3)', async (_label, doc) => {
+  ])('on a %s workspace shows Home, Chats, Marketplace and Settings (the Marketplace screen refuses below 1.3)', async (_label, doc) => {
     workspace(doc);
     await render(<TabsLayout />);
     expect(screen.getByTestId('tab-(home)')).toBeTruthy();
     expect(screen.getByTestId('tab-chats')).toBeTruthy();
     expect(screen.getByTestId('tab-discover')).toBeTruthy();
     expect(screen.getByTestId('tab-settings')).toBeTruthy();
-    expect(screen.getByText('Discover')).toBeTruthy();
+    expect(screen.getByText('Marketplace')).toBeTruthy();
   });
 
   it('keeps one configuration, so nothing remounts, when the workspace becomes known or changes contract', async () => {

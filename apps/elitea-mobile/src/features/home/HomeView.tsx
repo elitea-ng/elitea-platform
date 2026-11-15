@@ -190,7 +190,7 @@ export function HomeView({
     : undefined;
   const cards = [
     { key: 'new', title: 'New chat', icon: 'newChat' as const, hint: 'Pick an agent and start a chat', onPress: onNewChat },
-    { key: 'discover', title: 'Discover agents', icon: 'discover' as const, hint: "Opens your workspace's agent catalogue", onPress: onDiscover },
+    { key: 'discover', title: 'Marketplace', icon: 'discover' as const, hint: "Opens the Marketplace: your workspace's published agents", onPress: onDiscover },
     onVoice
       ? { key: 'voice', title: 'Dictate a message', icon: 'mic' as const, hint: 'Pick an agent, then speak; the words are typed on this device', onPress: onVoice }
       : null,

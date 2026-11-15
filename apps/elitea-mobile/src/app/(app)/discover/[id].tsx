@@ -42,12 +42,12 @@ export default function PublicAgentScreen() {
   const [error, setError] = useState<string | null>(null);
   const memoryAvailable = useAgentMemoryAvailable();
 
-  if (!available) return <StatusScreen title="Discover isn't available" />;
+  if (!available) return <StatusScreen title="Marketplace isn't available" />;
   if (projectId === null) return <StatusScreen title="No project selected" />;
   if (agent === null) {
     return (
       <StatusScreen title="Agent not found" body="It is no longer in the list. Go back and search again.">
-        <Button title="Back to Discover" variant="tonal" block={false} onPress={() => router.back()} />
+        <Button title="Back to Marketplace" variant="tonal" block={false} onPress={() => router.back()} />
       </StatusScreen>
     );
   }

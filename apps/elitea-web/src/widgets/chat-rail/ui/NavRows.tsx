@@ -25,6 +25,7 @@ import HandymanOutlinedIcon from '@mui/icons-material/HandymanOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
+import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
@@ -45,6 +46,7 @@ export const NAV_ICONS: Readonly<Record<string, ReactNode>> = {
   applications: <AppsOutlinedIcon />,
   artifacts: <Inventory2OutlinedIcon />,
   credentials: <KeyOutlinedIcon />,
+  marketplace: <StorefrontOutlinedIcon />,
 };
 
 /** The pages the Workshop group holds. */

@@ -1,29 +1,14 @@
 /**
- * `/elitea-catalog` -> `EliteaCatalog` — the two-tab agent + skill catalogue
- * (baseline `ProtectedRoutes.jsx:193`, `RouteDefinitions.EliteaCatalog`).
- *
- * Search contract: `tab` (which catalogue) plus `agentId`, which the agents
- * tab still reads for its deep-linked modal — the baseline's `AgentModal`
- * builds exactly `${EliteaCatalog}?tab=agents&agentId=...`
- * (`AgentModal.jsx:73`), so both keys must survive validation here or the
- * share link opens the catalogue with no modal.
+ * `/elitea-catalog` — now a redirect source only: the Catalog is the
+ * Marketplace (ADR-0051). `?tab=skills` becomes `?kind=skills`, and the shared
+ * `?agentId=` deep link becomes the agent's listing page.
  */
 import { createFileRoute } from '@tanstack/react-router';
 
-import { EliteaCatalog } from '@/pages/elitea-catalog';
-
-import { RouteError, RoutePending } from '../-ui/RouteStatus';
 import { pickParams } from '../-search/params';
+import { redirectToMarketplace } from '../-lib/marketplaceRedirect';
 
 export const Route = createFileRoute('/_shell/elitea-catalog')({
   validateSearch: pickParams('tab', 'agentId'),
-  pendingComponent: RoutePending,
-  errorComponent: RouteError,
-  component: EliteaCatalogRoute,
+  beforeLoad: ({ search }) => redirectToMarketplace(search),
 });
-
-function EliteaCatalogRoute() {
-  return (
-    <EliteaCatalog />
-  );
-}

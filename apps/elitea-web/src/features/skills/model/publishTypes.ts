@@ -48,21 +48,21 @@ export interface SkillCategory {
 }
 
 interface PublicSkillVersionSummary {
-  readonly id?: number;
-  readonly name?: string;
-  readonly status?: string;
-  readonly created_at?: string;
-  readonly tags?: readonly string[];
+  readonly id?: number | undefined;
+  readonly name?: string | undefined;
+  readonly status?: string | undefined;
+  readonly created_at?: string | undefined;
+  readonly tags?: readonly string[] | undefined;
 }
 
 export interface PublicSkillSummary {
-  readonly id?: number;
-  readonly name?: string;
-  readonly description?: string;
-  readonly owner_id?: number;
-  readonly tags?: readonly string[];
-  readonly versions?: readonly PublicSkillVersionSummary[];
-  readonly has_published_version?: boolean;
+  readonly id?: number | undefined;
+  readonly name?: string | undefined;
+  readonly description?: string | undefined;
+  readonly owner_id?: number | undefined;
+  readonly tags?: readonly string[] | undefined;
+  readonly versions?: readonly PublicSkillVersionSummary[] | undefined;
+  readonly has_published_version?: boolean | undefined;
 }
 
 export interface PublicSkillListPage {

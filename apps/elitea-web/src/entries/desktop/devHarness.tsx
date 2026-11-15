@@ -256,7 +256,7 @@ export function mountDesktopHarness(container: HTMLElement): void {
       createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: WorkspaceSessionPage }),
       page('/agents', 'Agents'),
       page('/settings', 'Settings'),
-      page('/elitea-catalog', 'Catalog'),
+      page('/marketplace', 'Marketplace'),
       createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: () => <HarnessChat title="New chat" /> }),
       createRoute({ getParentRoute: () => rootRoute, path: '/chat/archived', component: ArchivedChatsPage }),
       createRoute({ getParentRoute: () => rootRoute, path: '/chat/$conversationId', component: () => <HarnessChat title="quick overview" /> }),

@@ -1,4 +1,5 @@
 import { identity } from '@/config/identity';
+import { routeForMarketplaceLink } from '@/linking/marketplaceLink';
 import { parseSurfaceLink, routeForSurfaceLink } from '@/features/surfaces/surfaceLinks';
 import { getSession } from '@/state/session';
 
@@ -16,7 +17,10 @@ import { getSession } from '@/state/session';
  * A widget or Live Activity link (`elitea://surface/…`,
  * src/features/surfaces/surfaceLinks.ts) becomes the screen it names when it
  * belongs to the active workspace (and, for a conversation, the selected
- * project), else the app's start.
+ * project), else the app's start. A Marketplace link (`elitea://marketplace`, the
+ * web's `/marketplace/agents/<id>` and the old `/elitea-catalog`, `/agents-hub`
+ * addresses) becomes the Marketplace tab or the agent's sheet
+ * (src/linking/marketplaceLink.ts).
  * Every other URL passes through unchanged.
  */
 export function rewriteSystemPath(
@@ -30,7 +34,7 @@ export function rewriteSystemPath(
     const { workspaceId, hydrated, projectId = null } = session();
     return routeForSurfaceLink(surface, workspaceId, hydrated, projectId);
   }
-  return path;
+  return routeForMarketplaceLink(path) ?? path;
 }
 
 export function isOAuthRedirect(path: string): boolean {
