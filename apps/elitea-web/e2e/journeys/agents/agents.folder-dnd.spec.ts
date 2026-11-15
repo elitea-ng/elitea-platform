@@ -89,15 +89,17 @@ test('T6: four agents into a new folder, three by pointer and one by keyboard wi
   // Three by pointer.
   for (const name of names.slice(0, 3)) await dragCardToFolder(page, name, folderName);
 
-  // The fourth by keyboard: Tab to its handle, Space, arrows toward the sidebar, Space.
+  // The fourth by keyboard: focus its handle, Space, arrows toward the folder, Space.
   const handle = page.getByTestId('entity-card').filter({ hasText: names[3] ?? '' }).getByTestId('entity-drag-handle');
   await handle.focus();
   await page.keyboard.press('Space');
   const live = page.locator('[aria-live]').filter({ hasText: /Picked up|is over|dropped/ });
   await expect(live.first()).toContainText('Picked up');
+  // Right moves the drag onto the nearest folder row in the side panel; the new folder is the top row, so Up reaches it from any row below.
+  await page.keyboard.press('ArrowRight');
   for (let step = 0; step < 8; step += 1) {
-    if (/is over/.test((await live.first().textContent()) ?? '') && (await live.first().textContent())?.includes(folderName) === true) break;
-    await page.keyboard.press('ArrowRight');
+    if (((await live.first().textContent()) ?? '').includes(`is over ${folderName}`)) break;
+    await page.keyboard.press('ArrowUp');
   }
   await expect(live.first()).toContainText(`is over ${folderName}`);
   const moved = page.waitForResponse((r) => r.url().includes('/items/') && r.request().method() === 'PUT');

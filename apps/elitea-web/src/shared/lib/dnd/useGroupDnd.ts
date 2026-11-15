@@ -75,7 +75,7 @@ export function useGroupDnd<TItem, TGroup>(
   policy: DndPolicy<TItem, TGroup>,
   options: GroupDndOptions = {},
 ): GroupDnd<TItem, TGroup> {
-  const { custom, toastSuccess, toastError } = options;
+  const { custom, toastSuccess, toastError, coordinateGetter = sortableKeyboardCoordinates } = options;
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null);
   const [draggedItems, setDraggedItems] = useState<readonly TItem[]>([]);
   const [draggedFrom, setDraggedFrom] = useState<TGroup | null>(null);
@@ -83,7 +83,7 @@ export function useGroupDnd<TItem, TGroup>(
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     // Keyboard drag (Space, arrows, Space): the same coordinate getter the chat rail has always used.
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, { coordinateGetter }),
   );
 
   // Everything the drag handlers read but do not own, in one ref: the policy is

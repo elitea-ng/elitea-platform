@@ -1,4 +1,4 @@
-import type { DragEndEvent, DragStartEvent, UniqueIdentifier, useSensors } from '@dnd-kit/core';
+import type { DragEndEvent, DragStartEvent, KeyboardCoordinateGetter, UniqueIdentifier, useSensors } from '@dnd-kit/core';
 
 /**
  * What a drag-and-drop screen tells the generic hook. `TItem` is the thing
@@ -41,6 +41,8 @@ export interface CustomDrag {
 }
 
 export interface GroupDndOptions {
+  /** How an arrow key moves a keyboard drag. Default: dnd-kit's sortable getter, for sortable items; plain draggables dropped on drop zones pass `droppableKeyboardCoordinates`. */
+  readonly coordinateGetter?: KeyboardCoordinateGetter;
   readonly custom?: CustomDrag;
   readonly toastSuccess?: ((message: string) => void) | undefined;
   readonly toastError?: ((message: string) => void) | undefined;

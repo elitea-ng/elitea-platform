@@ -4,6 +4,7 @@
  * and keyboard), the drag state and the sequential move.
  */
 export { useGroupDnd } from './useGroupDnd';
+export { droppableKeyboardCoordinates } from './droppableKeyboardCoordinates';
 export { buildDndAnnouncements, dndInstructions } from './announcements';
 export type { DndAnnouncementLabels } from './announcements';
 export type { CustomDrag, DndPolicy, DropAreaState } from './types';

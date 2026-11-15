@@ -8,7 +8,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useEntityFolderMutations, useEntityFolders, type EntityFolderKind } from '@/entities/entity-folder';
 import { t } from '@/shared/i18n';
-import { buildDndAnnouncements, dndInstructions, useGroupDnd } from '@/shared/lib/dnd';
+import { buildDndAnnouncements, dndInstructions, droppableKeyboardCoordinates, useGroupDnd } from '@/shared/lib/dnd';
 import { visuallyHidden } from '@/shared/lib/visuallyHidden';
 
 import { entityFolderAccess } from '../lib/access';
@@ -77,7 +77,7 @@ function ActiveDnd({ projectId, kind, selectedIds, children }: Omit<EntityFolder
   );
   const labels = useMemo(() => entityAnnouncementLabels(known, nameOf), [known, nameOf]);
   const announcements = useMemo(() => buildDndAnnouncements(labels), [labels]);
-  const dnd = useGroupDnd(policy, { toastError: setError, toastSuccess: setStatus });
+  const dnd = useGroupDnd(policy, { toastError: setError, toastSuccess: setStatus, coordinateGetter: droppableKeyboardCoordinates });
   const { handleDragEnd } = dnd;
   // How many items the drag in flight carries, kept for the end of the drop: the state is reset by then.
   const carried = useRef(0);
