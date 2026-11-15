@@ -1197,6 +1197,30 @@ pub mod bubblewrap {
     /// Pathname sockets a command could talk to without the network:
     /// the session bus, agents, Docker.
     const SOCKET_DIRS: &[&str] = &["/run/user", "/var/run/user"];
+    /// The existing directories of `candidates`, by their real path, each once.
+    ///
+    /// On most Linux hosts `/var/run` is a symlink to `/run`, so `/run/user`
+    /// and `/var/run/user` are one directory. Masking both asks bwrap to
+    /// create a tmpfs mount point under a path it reaches through the symlink
+    /// it has just hidden behind the first mount, and it fails with
+    /// `Can't mkdir /var/run/user`. A host with no `/var/run/user` at all has
+    /// nothing to mask there. So each directory is resolved and masked once.
+    #[must_use]
+    pub fn socket_mask_dirs(candidates: &[&str]) -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        for candidate in candidates {
+            let path = Path::new(candidate);
+            if !path.is_dir() {
+                continue;
+            }
+            let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            if !dirs.contains(&real) {
+                dirs.push(real);
+            }
+        }
+        dirs
+    }
+
     const SOCKET_FILES: &[&str] = &[
         "/var/run/docker.sock",
         "/run/docker.sock",
@@ -1348,7 +1372,7 @@ pub mod bubblewrap {
             .hide_dirs
             .iter()
             .map(PathBuf::as_path)
-            .chain(SOCKET_DIRS.iter().map(Path::new).filter(|dir| dir.is_dir()))
+            .chain(socket_mask_dirs(SOCKET_DIRS).iter().map(PathBuf::as_path))
         {
             push(&mut out, &["--tmpfs"], dir);
         }
@@ -1973,6 +1997,20 @@ mod tests {
         );
         assert_eq!(seatbelt::escape("/a.b(c)^"), "/a[.]b[(]c[)]\\^");
         assert!(seatbelt::glob_body("[abc", false).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_directory_reached_through_a_symlink_is_masked_once() {
+        let dir = tempfile::tempdir().expect("dir");
+        let real = std::fs::canonicalize(dir.path()).expect("canonical");
+        std::fs::create_dir_all(real.join("run/user")).expect("run/user");
+        std::os::unix::fs::symlink(real.join("run"), real.join("var-run")).expect("symlink");
+        let direct = real.join("run/user").display().to_string();
+        let linked = real.join("var-run/user").display().to_string();
+        let missing = real.join("nothing/user").display().to_string();
+        let dirs = super::bubblewrap::socket_mask_dirs(&[&direct, &linked, &missing]);
+        assert_eq!(dirs, vec![real.join("run/user")]);
     }
 
     /// H3: on Linux the protected paths reach the sandbox: bubblewrap keeps
