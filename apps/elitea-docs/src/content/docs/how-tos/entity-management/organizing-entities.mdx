@@ -26,7 +26,7 @@ Tags are shared within a project — anyone with search access can filter by the
 
 ## Pins
 
-Pinning keeps an entity at the top of its list, across sessions, so you don't have to scroll or search for something you use constantly. Pin and unpin with a single click from an entity's list row; pinning works for agents, pipelines, toolkits, credentials, and MCPs.
+On the **Agents**, **Pipelines**, **Skills**, **Toolkits & Indexes** and **MCPs** lists a pin is yours alone; see [Your Pinned group](#your-pinned-group) below. Elsewhere, pinning keeps an entity at the top of its list, across sessions, so you don't have to scroll or search for something you use constantly. Pin and unpin with a single click from an entity's list row; pinning works for agents, pipelines, toolkits, credentials, and MCPs.
 
 <Screenshot id="entities-pin-action" alt="Entity list row with the pin action highlighted" />
 
@@ -47,11 +47,23 @@ Two kinds of folders exist, and they work differently.
 4. Select a folder in the **Folders** section to show only its items, and **All** to show everything again. The open folder is kept in the page address, so a link to the filtered list works.
 </Steps>
 
+### Drag and drop, keyboard and Move to folder
+
+Each card and each table row has a grip. Drag it onto a folder in the **Folders** section to put the item there, onto another folder to move it, or onto the **Drop here to take it out of its folder** area that appears while you drag an item that is in a folder. Drag one of several selected items and all of them go together.
+
+To do the same from the keyboard, press **Tab** to the grip (it is named *Drag \<name\> to a folder*), press **Space** to pick the item up, use the **arrow keys** to move to a folder, and press **Space** to drop it; **Escape** cancels. A screen reader says each step (*Picked up Reviewer*, *Reviewer is over Support*, *Reviewer dropped on Support*) and, once the server has answered, *Moved Reviewer to Support*. You never have to drag: the folder icon on a card or row (**Move to folder**), and **Move to folder** in the selection section of the side panel (select several items first), give the same result. The selection's **Move to folder** moves every selected item, and keeps only the ones the server refused selected.
+
+An item you move lands at the top of the folder. Moving an item is recorded in the audit trail with the item and the folder, because anyone with update rights can move another member's item.
+
+### Your Pinned group
+
+Select the pin on a card or row to add the item to your **Pinned** group, and select **Pinned** at the top of the **Folders** section to show only what you pinned (with how many). Pins are private: other members do not see yours, and you need only the right to list the items, not to update them. Unlike a folder, a pin does not take the item out of its folder.
+
 A folder's **⋯** menu has **Rename**, **Move up**, **Move down** and **Delete…**. The folders are listed in the order you set, and a new folder goes to the top. **Delete…** removes the folder only: its items go back to the list and nothing else is deleted.
 
 What you can do follows the permissions you already have for that list. Anyone who can list the items sees the folders. Creating a folder needs the list's create permission (for example, create agents). Renaming, reordering and deleting folders and moving an item into one need the list's update permission (for example, update agents). Without them you see the folders and the **Folder** column and no controls. There is no separate folder permission.
 
-The **Skills**, **Toolkits & Indexes** and **MCPs** lists load more rows as you scroll; with a folder open, the page loads the remaining rows so the folder shows all of its items. The mobile app has no project lists, so it has no project folders; the desktop app has them, exactly as the browser does.
+The **Skills**, **Toolkits & Indexes** and **MCPs** lists load more rows as you scroll; with a folder open, the page loads the remaining rows so the folder shows all of its items. The mobile app has no Agents, Pipelines, Skills, Toolkits or MCPs management lists (it chats with the items you already have), so it has no project folders or pins; the desktop app is the browser build and has all of the above, exactly as the browser does.
 
 ## Next steps
 

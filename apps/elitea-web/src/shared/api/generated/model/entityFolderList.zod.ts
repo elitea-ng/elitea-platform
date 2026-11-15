@@ -45,6 +45,11 @@ import { EntityFolder } from "./entityFolder.zod";
 
 export const EntityFolderList = zod.object({
   items: zod.array(EntityFolder),
+  pinned_ids: zod
+    .array(zod.int())
+    .describe(
+      "The ids the CALLER pinned in this list, newest first. Private to them.",
+    ),
 });
 
 export type EntityFolderList = zod.input<typeof EntityFolderList>;

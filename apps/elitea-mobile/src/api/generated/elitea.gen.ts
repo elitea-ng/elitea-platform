@@ -5940,6 +5940,8 @@ export interface operations {
                 offset?: components["parameters"]["Offset"];
                 /** @description Narrows the list to agents the project owns (`own`) or that came from a fork (`forked`). The `facets.origins` counts ignore this filter. */
                 origin?: string;
+                /** @description `true` narrows the list to the agents or pipelines the caller pinned (the personal Pinned group, tenant/0249). Private to them. */
+                pinned?: boolean;
                 /** @description Search text (preferred over `search` by the handler). */
                 query?: string;
                 /** @description One of `created_at` (default), `updated_at`, `name`, `id`, `author`, `authors`, `likes`. */

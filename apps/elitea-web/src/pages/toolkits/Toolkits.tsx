@@ -16,7 +16,7 @@ import { PERMISSIONS } from '@/shared/lib/permissions';
 import { t } from '@/shared/i18n';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { EntityCard, EntitySelectionProvider, entityTypeIcon } from '@/shared/ui/EntityCardList';
-import { EntityFolderScope, useFolderFilter } from '@/widgets/entity-folders';
+import { EntityFolderDnd, EntityFolderScope, useFolderFilter } from '@/widgets/entity-folders';
 import { pageBodySx, pageSx, useListSearchQuery } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
@@ -305,6 +305,12 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
   const { selected } = selection;
 
   return (
+    <EntityFolderDnd
+      projectId={isPublic ? undefined : projectId}
+      kind={kind}
+      permissions={permissions}
+      selectedIds={selected.ids}
+    >
     <Box sx={pageSx}>
       <ToolkitsSidebar
         isMCP={isMCP}
@@ -361,5 +367,6 @@ export function Toolkits({ isMCP = false }: ToolkitsProps): ReactNode {
         onConfirm={() => void selection.deleteSelected()}
       />
     </Box>
+    </EntityFolderDnd>
   );
 }

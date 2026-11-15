@@ -11,6 +11,7 @@ import {
   folderOfEntity,
   useEntityFolderMutations,
   useEntityFolders,
+  useEntityPins,
   type EntityFolder,
   type EntityFolderKind,
 } from '@/entities/entity-folder';
@@ -20,7 +21,9 @@ import { EntityRowSlotProvider, type EntityListItem, type EntityRowSlot } from '
 
 import { entityFolderAccess } from '../lib/access';
 
+import { DragHandle } from './DragHandle';
 import { MoveToFolderControl } from './MoveToFolderControl';
+import { PinToggle } from './PinToggle';
 
 export interface EntityFolderScopeProps {
   readonly projectId: string | undefined;
@@ -40,22 +43,41 @@ export function EntityFolderScope({ projectId, kind, permissions, children }: En
   // No project (the public project's own lists pass none) means no folders to move into.
   const canUpdate = entityFolderAccess(kind, permissions).canUpdate && projectId !== undefined;
   const folders = useEntityFolders(projectId, kind).data;
-  const move = useEntityFolderMutations(projectId, kind).move;
+  const { move, pin } = useEntityFolderMutations(projectId, kind);
   const { mutate: moveEntity } = move;
+  const { mutate: pinEntity } = pin;
+  const pinnedIds = useEntityPins(projectId, kind).data;
   const slot = useMemo<EntityRowSlot>(() => {
     const known = folders ?? [];
-    const control = (item: EntityListItem, current: EntityFolder | undefined): ReactNode =>
-      canUpdate ? (
-        <MoveToFolderControl
-          entityName={item.name}
-          folders={known}
-          current={current}
-          onMove={(folderId) => {
-            const entityId = Number(item.id);
-            if (Number.isInteger(entityId)) moveEntity({ entityId, folderId });
-          }}
-        />
-      ) : null;
+    const pinned = new Set(pinnedIds ?? []);
+    const control = (item: EntityListItem, current: EntityFolder | undefined): ReactNode => {
+      const entityId = Number(item.id);
+      if (!Number.isInteger(entityId)) return null;
+      return (
+        <Box sx={controlsSx}>
+          <DragHandle entityId={entityId} entityName={item.name} />
+          {projectId !== undefined && (
+            <PinToggle
+              entityName={item.name}
+              pinned={pinned.has(entityId)}
+              onToggle={(next) => {
+                pinEntity({ entityId, pinned: next });
+              }}
+            />
+          )}
+          {canUpdate && (
+            <MoveToFolderControl
+              entityName={item.name}
+              folders={known}
+              current={current}
+              onMove={(folderId) => {
+                moveEntity({ entityId, folderId });
+              }}
+            />
+          )}
+        </Box>
+      );
+    };
     return {
       columnLabel: t('widgets.entityFolders.column', 'Folder'),
       renderCardAction: (item) => control(item, folderOfEntity(known, item.id)),
@@ -74,15 +96,16 @@ export function EntityFolderScope({ projectId, kind, permissions, children }: En
         );
       },
     };
-  }, [folders, canUpdate, moveEntity]);
+  }, [folders, pinnedIds, projectId, canUpdate, moveEntity, pinEntity]);
   return (
     <EntityRowSlotProvider value={slot}>
       {children}
       <Snackbar
-        open={move.isError}
+        open={move.isError || pin.isError}
         autoHideDuration={6000}
         onClose={() => {
           move.reset();
+          pin.reset();
         }}
       >
         <Alert
@@ -90,14 +113,17 @@ export function EntityFolderScope({ projectId, kind, permissions, children }: En
           data-testid="entity-folder-move-error"
           onClose={() => {
             move.reset();
+          pin.reset();
           }}
         >
-          {serverErrorOf(move.error) ?? t('widgets.entityFolders.moveFailed', 'The item could not be moved to that folder.')}
+          {serverErrorOf(move.error ?? pin.error) ?? t('widgets.entityFolders.moveFailed', 'The item could not be moved to that folder.')}
         </Alert>
       </Snackbar>
     </EntityRowSlotProvider>
   );
 }
+
+const controlsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center' };
 
 const cellSx: SxProps<Theme> = (theme: Theme) => ({
   display: 'flex',

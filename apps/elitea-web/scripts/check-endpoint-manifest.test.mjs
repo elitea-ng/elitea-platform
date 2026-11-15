@@ -940,7 +940,8 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // blocked, redacted or warned message (see MANIFEST_ENTRY_COUNT).
 // 529 -> 534 (issue 2048): list/create/update/deleteEntityFolder and moveEntityToFolder, the project
 // folders of the agents, pipelines, skills, toolkits and MCPs lists.
-const GENERATED_OPERATION_COUNT = 534;
+// 534 -> 535 (issue 1628): setEntityPin, the personal Pinned group.
+const GENERATED_OPERATION_COUNT = 535;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

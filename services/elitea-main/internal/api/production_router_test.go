@@ -2376,6 +2376,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PUT /api/v2/elitea_core/conversation_read/prompt_lib/{projectID}/{conversationID}",
 		"PUT /api/v2/elitea_core/entity_folders/prompt_lib/{projectID}/{kind}/items/{entityID}",
 		"PUT /api/v2/elitea_core/entity_folders/prompt_lib/{projectID}/{kind}/{folderID}",
+		"PUT /api/v2/elitea_core/entity_pins/prompt_lib/{projectID}/{kind}/{entityID}",
 		"PUT /api/v2/elitea_core/entity_settings/prompt_lib/{projectID}/{conversationID}/{participantID}",
 		"PUT /api/v2/elitea_core/folder/prompt_lib/{projectID}/{folderID}",
 		"PUT /api/v2/elitea_core/memory/prompt_lib/{projectID}/{memoryID}",

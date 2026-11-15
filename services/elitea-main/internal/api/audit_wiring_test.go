@@ -120,7 +120,8 @@ func TestProductionRouterDoesNotAuditContentTraffic(t *testing.T) {
 // correctness" class this repo keeps producing (see AuditedSurfaces' doc).
 // Walking the real router is the only way to tell the two apart.
 func TestEveryAuditedSurfaceMatchesAMountedRoute(t *testing.T) {
-	router, ok := NewRouter(RouterConfig{}).(chi.Routes)
+	// The entity folder routes exist only when their repository is configured.
+	router, ok := NewRouter(RouterConfig{EntityFoldersRepo: &entityFolderStub{}}).(chi.Routes)
 	if !ok {
 		t.Fatal("NewRouter no longer returns a chi.Routes; this test cannot walk it")
 	}

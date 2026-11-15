@@ -10,6 +10,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
@@ -20,10 +21,6 @@ import (
 func newEntityFoldersFixture(t *testing.T) (*ApplicationsRepo, *EntityFoldersRepo, *pgxpool.Pool) {
 	t.Helper()
 	apps, pool := newApplicationsTestRepo(t)
-	raw, err := platformmigrations.Files.ReadFile("tenant/0247_project_entity_folders.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
 	ctx := context.Background()
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -33,8 +30,14 @@ func newEntityFoldersFixture(t *testing.T) (*ApplicationsRepo, *EntityFoldersRep
 	if _, err = tx.Exec(ctx, `SET LOCAL search_path TO p_1`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = tx.Exec(ctx, string(raw)); err != nil {
-		t.Fatalf("apply 0247: %v", err)
+	for _, name := range []string{"tenant/0247_project_entity_folders.sql", "tenant/0249_project_folder_item_order_and_pins.sql"} {
+		raw, readErr := platformmigrations.Files.ReadFile(name)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if _, err = tx.Exec(ctx, string(raw)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatal(err)
@@ -156,7 +159,7 @@ func TestEntityFoldersRepoPostgres_MoveValidatesKindAndDeleteReturnsItemsToRoot(
 		return n
 	}
 	move := func(kind entityfolders.Kind, entity int, folder *string) error {
-		return repo.Move(ctx, "1", kind, entity, folder)
+		return repo.Move(ctx, "1", kind, entity, folder, entityfolders.Placement{})
 	}
 
 	for _, ok := range []struct {
@@ -193,7 +196,7 @@ func TestEntityFoldersRepoPostgres_MoveValidatesKindAndDeleteReturnsItemsToRoot(
 	}
 
 	items, _ := repo.List(ctx, "1", entityfolders.KindMCP)
-	if len(items) != 1 || !reflect.DeepEqual(items[0].ItemIDs, []int{502, 503}) {
+	if len(items) != 1 || !reflect.DeepEqual(items[0].ItemIDs, []int{503, 502}) {
 		t.Fatalf("mcp folder items: %+v", items)
 	}
 
@@ -272,7 +275,7 @@ func TestApplicationsRepoPostgres_ListFiltersByProjectFolder(t *testing.T) {
 		for _, c := range id {
 			n = n*10 + int(c-'0')
 		}
-		if err := repo.Move(ctx, "1", entityfolders.KindAgent, n, &agents.ID); err != nil {
+		if err := repo.Move(ctx, "1", entityfolders.KindAgent, n, &agents.ID, entityfolders.Placement{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -280,7 +283,7 @@ func TestApplicationsRepoPostgres_ListFiltersByProjectFolder(t *testing.T) {
 	for _, c := range p.ID {
 		pn = pn*10 + int(c-'0')
 	}
-	if err := repo.Move(ctx, "1", entityfolders.KindPipeline, pn, &pipes.ID); err != nil {
+	if err := repo.Move(ctx, "1", entityfolders.KindPipeline, pn, &pipes.ID, entityfolders.Placement{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -338,7 +341,7 @@ func TestEntityFoldersRepoPostgres_ItemIDsDropDeletedAndRekindedEntities(t *test
 		return n
 	}
 	for _, a := range []applications.Application{gone, stays, becomes} {
-		if err := repo.Move(ctx, "1", entityfolders.KindAgent, num(a.ID), &folder.ID); err != nil {
+		if err := repo.Move(ctx, "1", entityfolders.KindAgent, num(a.ID), &folder.ID, entityfolders.Placement{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -368,7 +371,7 @@ func TestEntityFoldersRepoPostgres_OutOfRangeIdsAreNotFoundNotServerErrors(t *te
 	if err := repo.Delete(ctx, "1", entityfolders.KindSkill, huge); apiStatus(err) != 404 {
 		t.Fatalf("delete: %v", err)
 	}
-	if err := repo.Move(ctx, "1", entityfolders.KindSkill, 1, &huge); apiStatus(err) == 500 || apiStatus(err) == 0 {
+	if err := repo.Move(ctx, "1", entityfolders.KindSkill, 1, &huge, entityfolders.Placement{}); apiStatus(err) == 500 || apiStatus(err) == 0 {
 		t.Fatalf("move: %v", err)
 	}
 }
@@ -390,10 +393,10 @@ func TestApplicationKindClassificationAgreesBetweenListsAndFolders(t *testing.T)
 	}
 	fa, _ := repo.Create(ctx, "1", entityfolders.KindAgent, "A", nil)
 	fp, _ := repo.Create(ctx, "1", entityfolders.KindPipeline, "P", nil)
-	if err := repo.Move(ctx, "1", entityfolders.KindAgent, n(p.ID), &fa.ID); apiStatus(err) != 404 {
+	if err := repo.Move(ctx, "1", entityfolders.KindAgent, n(p.ID), &fa.ID, entityfolders.Placement{}); apiStatus(err) != 404 {
 		t.Fatalf("pipeline as agent: %v", err)
 	}
-	if err := repo.Move(ctx, "1", entityfolders.KindPipeline, n(a.ID), &fp.ID); apiStatus(err) != 404 {
+	if err := repo.Move(ctx, "1", entityfolders.KindPipeline, n(a.ID), &fp.ID, entityfolders.Placement{}); apiStatus(err) != 404 {
 		t.Fatalf("agent as pipeline: %v", err)
 	}
 	for kind, want := range map[string]string{"classic": "Plain", "pipeline": "Flow"} {
@@ -413,5 +416,149 @@ func TestEntityFoldersMigrationIsInTheLedgeredCorpus(t *testing.T) {
 	}
 	if folders == nil || items == nil {
 		t.Fatalf("corpus tables: %v %v", folders, items)
+	}
+}
+
+func TestEntityFoldersRepoPostgres_ItemsKeepTheirPlaceAndPinsArePrivate(t *testing.T) {
+	_, repo, pool := newEntityFoldersFixture(t)
+	ctx := testContext(t)
+	seedUser(t, pool, 1, "first@example.com")
+	seedUser(t, pool, 2, "second@example.com")
+	for _, id := range []int{701, 702, 703, 704} {
+		if _, err := pool.Exec(ctx, `INSERT INTO p_1.skills (id, name, description, owner_id, author_id) VALUES ($1, $2, '', 1, 1)`, id, "skill"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	folder, err := repo.Create(ctx, "1", entityfolders.KindSkill, "Set", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	move := func(id int, place entityfolders.Placement) error {
+		return repo.Move(ctx, "1", entityfolders.KindSkill, id, &folder.ID, place)
+	}
+	ids := func() []int {
+		t.Helper()
+		items, err := repo.List(ctx, "1", entityfolders.KindSkill)
+		if err != nil || len(items) != 1 {
+			t.Fatalf("list: %v %+v", err, items)
+		}
+		return items[0].ItemIDs
+	}
+	at := func(v int) *int { return &v }
+
+	// Without neighbours an entity lands at the top.
+	for _, id := range []int{701, 702, 703} {
+		if err := move(id, entityfolders.Placement{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := ids(); !reflect.DeepEqual(got, []int{703, 702, 701}) {
+		t.Fatalf("top placement: %v", got)
+	}
+	// Between two neighbours, the ids win; reordering inside the folder works.
+	if err := move(701, entityfolders.Placement{Above: at(703), Below: at(702)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(); !reflect.DeepEqual(got, []int{703, 701, 702}) {
+		t.Fatalf("between placement: %v", got)
+	}
+	// A neighbour outside the folder is a 400, not a guess.
+	if err := move(704, entityfolders.Placement{Above: at(999)}); apiStatus(err) != 400 {
+		t.Fatalf("foreign neighbour: status %d, err %v", apiStatus(err), err)
+	}
+	// Repeated drops straight under the first entity halve the same gap until no
+	// integer is left between the neighbours; the folder is then respaced and the
+	// order is still the order dropped.
+	if err := move(704, entityfolders.Placement{}); err != nil {
+		t.Fatal(err)
+	}
+	rotation := []int{701, 702, 704}
+	for i := 0; i < 30; i++ {
+		moved := rotation[i%len(rotation)]
+		order := ids() // 704 sits on top after its own move; the rest follow
+		top := order[0]
+		below := 0
+		for _, id := range order[1:] {
+			if id != moved {
+				below = id
+				break
+			}
+		}
+		if moved == top {
+			continue
+		}
+		if err := move(moved, entityfolders.Placement{Above: at(top), Below: at(below)}); err != nil {
+			t.Fatalf("drop %d: %v", i, err)
+		}
+		if got := ids(); got[0] != top || got[1] != moved || len(got) != 4 {
+			t.Fatalf("drop %d: %v, want %d then %d", i, got, top, moved)
+		}
+	}
+
+	// The entity named as its own neighbour (a client computing from the list it
+	// shows, where the entity still sits) is ignored, not refused.
+	if err := move(704, entityfolders.Placement{Above: at(704)}); err != nil {
+		t.Fatalf("self neighbour: %v", err)
+	}
+	// A top position that would leave a 32-bit integer respaces the folder
+	// instead of failing every later move with a 500.
+	if _, err := pool.Exec(ctx, `UPDATE p_1.project_folder_items SET position = 2147483000 WHERE folder_id = $1 AND entity_id = 703`, folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := move(701, entityfolders.Placement{}); err != nil {
+		t.Fatalf("top beyond int32: %v", err)
+	}
+	if got := ids(); got[0] != 701 || len(got) != 4 {
+		t.Fatalf("after the overflow respace: %v, want 701 on top", got)
+	}
+
+	// Pins: the caller's own, never another member's; a missing entity is a 404.
+	if err := repo.SetPin(ctx, "1", entityfolders.KindSkill, 702, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetPin(ctx, "1", entityfolders.KindSkill, 702, true); err != nil {
+		t.Fatalf("pinning twice: %v", err)
+	}
+	if apiStatus(repo.SetPin(ctx, "1", entityfolders.KindSkill, 9999, true)) != 404 {
+		t.Fatal("pinning a missing skill must be 404")
+	}
+	if apiStatus(repo.SetPin(ctx, "1", entityfolders.KindAgent, 702, true)) != 404 {
+		t.Fatal("pinning a skill id as an agent must be 404")
+	}
+	mine, err := repo.Pinned(ctx, "1", entityfolders.KindSkill)
+	if err != nil || !reflect.DeepEqual(mine, []int{702}) {
+		t.Fatalf("my pins: %v %v", mine, err)
+	}
+	other := auth.ContextWithUser(ctx, auth.User{ID: "2", UserID: "2"})
+	if theirs, err := repo.Pinned(other, "1", entityfolders.KindSkill); err != nil || len(theirs) != 0 {
+		t.Fatalf("another member sees my pin: %v %v", theirs, err)
+	}
+	if err := repo.SetPin(ctx, "1", entityfolders.KindSkill, 702, false); err != nil {
+		t.Fatal(err)
+	}
+	if mine, _ = repo.Pinned(ctx, "1", entityfolders.KindSkill); len(mine) != 0 {
+		t.Fatalf("unpinned still listed: %v", mine)
+	}
+}
+
+func TestEntityFoldersRepoPostgres_ApplicationsListNarrowsToTheCallersPins(t *testing.T) {
+	apps, repo, pool := newEntityFoldersFixture(t)
+	ctx := testContext(t)
+	seedUser(t, pool, 1, "first@example.com")
+	a := createTestApplication(t, apps, "Alpha", 1, &applications.Version{Name: "base", AgentType: "openai"})
+	createTestApplication(t, apps, "Beta", 1, &applications.Version{Name: "base", AgentType: "openai"})
+	id := 0
+	for _, c := range a.ID {
+		id = id*10 + int(c-'0')
+	}
+	if err := repo.SetPin(ctx, "1", entityfolders.KindAgent, id, true); err != nil {
+		t.Fatal(err)
+	}
+	res, err := apps.List(ctx, applications.ListRequest{ProjectID: "1", Pinned: true, AgentsType: "classic", SortBy: "name", SortOrder: "asc"})
+	if err != nil || res.Total != 1 || res.Rows[0].Name != "Alpha" {
+		t.Fatalf("pinned list: %+v err %v", res, err)
+	}
+	if res, err = apps.List(ctx, applications.ListRequest{ProjectID: "1", AgentsType: "classic", SortBy: "name", SortOrder: "asc"}); err != nil || res.Total != 2 {
+		t.Fatalf("unfiltered list: %+v err %v", res, err)
 	}
 }

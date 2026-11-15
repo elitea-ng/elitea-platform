@@ -49,6 +49,16 @@ export const EntityFolderMoveRequest = zod.object({
     .describe(
       "The target folder of the same list. Null puts the entity back at the root.",
     ),
+  neighbor_above_id: zod
+    .int()
+    .nullish()
+    .describe(
+      "The entity displayed above the drop inside the target folder. With `neighbor_below_id` it decides the place (ids win over any position); both absent puts the entity at the top. A neighbour that is not in the folder is a 400.\n",
+    ),
+  neighbor_below_id: zod
+    .int()
+    .nullish()
+    .describe("The entity displayed below the drop inside the target folder."),
 });
 
 export type EntityFolderMoveRequest = zod.input<typeof EntityFolderMoveRequest>;

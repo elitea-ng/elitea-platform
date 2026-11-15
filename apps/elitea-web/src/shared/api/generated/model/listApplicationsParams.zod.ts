@@ -61,6 +61,7 @@ export const ListApplicationsParams = zod.object({
   query: zod.string().optional(),
   tags: zod.string().optional(),
   folder_id: zod.string().optional(),
+  pinned: zod.boolean().optional(),
   agents_type: zod.string().optional(),
   status: zod.string().optional(),
   sort_by: zod.string().optional(),

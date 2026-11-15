@@ -21007,7 +21007,11 @@ components:
         items:
           type: array
           items: { $ref: '#/components/schemas/EntityFolder' }
-      required: [items]
+        pinned_ids:
+          type: array
+          description: The ids the CALLER pinned in this list, newest first. Private to them.
+          items: { type: integer }
+      required: [items, pinned_ids]
 
     EntityFolderCreateRequest:
       type: object
@@ -21038,6 +21042,25 @@ components:
           type: string
           nullable: true
           description: The target folder of the same list. Null puts the entity back at the root.
+        neighbor_above_id:
+          type: integer
+          nullable: true
+          description: >
+            The entity displayed above the drop inside the target folder. With
+            `neighbor_below_id` it decides the place (ids win over any
+            position); both absent puts the entity at the top. A neighbour that
+            is not in the folder is a 400.
+        neighbor_below_id:
+          type: integer
+          nullable: true
+          description: The entity displayed below the drop inside the target folder.
+
+    EntityFolderPinRequest:
+      type: object
+      properties:
+        pinned:
+          type: boolean
+          description: Absent means true.
 
     EvalSuiteList:
       type: object
@@ -27987,7 +28010,9 @@ paths:
       summary: Put an entity into a folder, or back at the root
       description: |
         The entity and the folder must belong to the same list, else 404. An
-        entity is in one folder, so this replaces its place. Gated on the list's
+        entity is in one folder, so this replaces its place. Inside the folder
+        it lands at the top, or between the named neighbours. The move is
+        audited with the entity. Gated on the list's
         update permission.
       tags: [applications]
       requestBody:
@@ -27998,6 +28023,43 @@ paths:
               $ref: '#/components/schemas/EntityFolderMoveRequest'
       responses:
         '204': { description: Moved }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/entity_pins/prompt_lib/{project_id}/{kind}/{entity_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: kind
+        in: path
+        required: true
+        description: The list the entity belongs to, one of agent, pipeline, skill, toolkit or mcp.
+        schema: { type: string }
+      - name: entity_id
+        in: path
+        required: true
+        schema: { type: integer }
+
+    put:
+      operationId: setEntityPin
+      summary: Pin or unpin an entity for the caller
+      description: |
+        The personal Pinned group: private to the caller, never shown to another
+        member, and deliberately not audited (a trail row per toggle would show
+        an admin what a member pinned). Gated on the list permission, not on
+        update rights. Pinning an
+        entity that is not of the list's kind is a 404; unpinning is always 204.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EntityFolderPinRequest'
+      responses:
+        '204': { description: Done }
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
@@ -38294,6 +38356,12 @@ paths:
         - name: folder_id
           in: query
           schema: { type: string }
+        - name: pinned
+          in: query
+          description: >
+            `true` narrows the list to the agents or pipelines the caller
+            pinned (the personal Pinned group, tenant/0249). Private to them.
+          schema: { type: boolean }
         - name: agents_type
           in: query
           schema: { type: string }

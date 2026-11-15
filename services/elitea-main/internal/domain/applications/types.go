@@ -234,12 +234,15 @@ type GuardrailRule struct {
 }
 
 type ListRequest struct {
-	ProjectID  string   `json:"-"`
-	Page       int      `json:"page,omitempty"`
-	PageSize   int      `json:"page_size,omitempty"`
-	Search     string   `json:"search,omitempty"`
-	Tags       string   `json:"tags,omitempty"`
-	FolderID   string   `json:"folder_id,omitempty"`
+	ProjectID string `json:"-"`
+	Page      int    `json:"page,omitempty"`
+	PageSize  int    `json:"page_size,omitempty"`
+	Search    string `json:"search,omitempty"`
+	Tags      string `json:"tags,omitempty"`
+	FolderID  string `json:"folder_id,omitempty"`
+	// Pinned narrows the list to what the CALLER pinned (the personal Pinned
+	// group, tenant/0249).
+	Pinned     bool     `json:"pinned,omitempty"`
 	AgentsType string   `json:"-"`
 	IDs        []int32  `json:"ids,omitempty"`
 	AuthorID   int64    `json:"author_id,omitempty"`

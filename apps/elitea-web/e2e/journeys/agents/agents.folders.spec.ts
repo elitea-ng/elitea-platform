@@ -92,5 +92,6 @@ test('J-entity-folders: create a folder, move an agent into it, filter, and dele
   await expect(page.getByTestId('entity-folder-row').filter({ hasText: folderName })).toHaveCount(0);
   folderIds.length = 0;
   await expect(page.getByTestId('entity-list-row').filter({ hasText: insideName })).toBeVisible();
-  await expect(page.getByTestId('entity-folder-cell-name')).toHaveCount(0);
+  // Scoped to this agent's row: other journeys run in parallel in the same project and keep their own agents in folders.
+  await expect(page.getByTestId('entity-list-row').filter({ hasText: insideName }).getByTestId('entity-folder-cell-name')).toHaveCount(0);
 });
