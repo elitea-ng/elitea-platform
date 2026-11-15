@@ -1221,6 +1221,27 @@ pub mod bubblewrap {
         dirs
     }
 
+    /// The existing entries of `candidates` (socket files included), by their
+    /// real path, each once. `/var/run/docker.sock` and `/run/docker.sock`
+    /// are one file when `/var/run` is a symlink; bwrap cannot create the
+    /// mount point for the second one through the symlink, so each real path
+    /// is masked once and never through a symlinked parent.
+    #[must_use]
+    pub fn socket_mask_files(candidates: &[&str]) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = Vec::new();
+        for candidate in candidates {
+            let path = Path::new(candidate);
+            if !path.exists() {
+                continue;
+            }
+            let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            if !files.contains(&real) {
+                files.push(real);
+            }
+        }
+        files
+    }
+
     const SOCKET_FILES: &[&str] = &[
         "/var/run/docker.sock",
         "/run/docker.sock",
@@ -1376,12 +1397,12 @@ pub mod bubblewrap {
         {
             push(&mut out, &["--tmpfs"], dir);
         }
-        for file in masks.hide_files.iter().map(PathBuf::as_path).chain(
-            SOCKET_FILES
-                .iter()
-                .map(Path::new)
-                .filter(|file| file.exists()),
-        ) {
+        for file in masks
+            .hide_files
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(socket_mask_files(SOCKET_FILES).iter().map(PathBuf::as_path))
+        {
             hide_file(&mut out, file);
         }
         // A readable root inside a hidden directory (a task worktree, for
@@ -2011,6 +2032,21 @@ mod tests {
         let missing = real.join("nothing/user").display().to_string();
         let dirs = super::bubblewrap::socket_mask_dirs(&[&direct, &linked, &missing]);
         assert_eq!(dirs, vec![real.join("run/user")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_file_reached_through_a_symlinked_parent_is_masked_once() {
+        let dir = tempfile::tempdir().expect("dir");
+        let real = std::fs::canonicalize(dir.path()).expect("canonical");
+        std::fs::create_dir_all(real.join("run")).expect("run");
+        std::fs::write(real.join("run/docker.sock"), b"").expect("sock stand-in");
+        std::os::unix::fs::symlink(real.join("run"), real.join("var-run")).expect("symlink");
+        let direct = real.join("run/docker.sock").display().to_string();
+        let linked = real.join("var-run/docker.sock").display().to_string();
+        let missing = real.join("run/none.sock").display().to_string();
+        let files = super::bubblewrap::socket_mask_files(&[&linked, &direct, &missing]);
+        assert_eq!(files, vec![real.join("run/docker.sock")]);
     }
 
     /// H3: on Linux the protected paths reach the sandbox: bubblewrap keeps

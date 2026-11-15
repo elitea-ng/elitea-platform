@@ -180,7 +180,17 @@ except Exception:
     note "loading $image"
     if [ "$ENGINE" = "docker" ]; then
       # Streams from the daemon into the node: no second copy on disk.
-      kind load docker-image "$image" --name "$CLUSTER" >/dev/null
+      if ! kind load docker-image "$image" --name "$CLUSTER" >/dev/null; then
+        # kind imports with `ctr images import --all-platforms`, which fails
+        # ("content digest ... not found") for a multi-arch image whose
+        # other-platform blobs the daemon never pulled. Import the host
+        # platform only, from a plain save.
+        note "retrying $image as a single-platform import"
+        "$ENGINE" save -o "$archive" "$image"
+        "$ENGINE" exec --privileged -i "${CLUSTER}-control-plane" \
+          ctr --namespace=k8s.io images import --digests --snapshotter=overlayfs - \
+          < "$archive" >/dev/null
+      fi
     else
       # `kind load docker-image` shells out to docker; under podman the
       # archive route is the one that works.
