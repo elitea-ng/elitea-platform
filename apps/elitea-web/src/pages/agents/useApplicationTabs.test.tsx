@@ -5,18 +5,13 @@ import { renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import type { ApplicationsTabTotals } from './useApplicationsData';
-import { privateApplicationTabValues, publicApplicationTabValues, useApplicationTabs } from './useApplicationTabs';
+import { publicApplicationTabValues, useApplicationTabs } from './useApplicationTabs';
 
 const TOTALS: ApplicationsTabTotals = {
   latestTotal: 3,
   myLikedTotal: undefined,
   trendingTotal: undefined,
   applicationsTotal: 5,
-  draftTotal: undefined,
-  publishedTotal: undefined,
-  moderationTotal: undefined,
-  approvalTotal: undefined,
-  rejectedTotal: undefined,
 };
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -24,56 +19,40 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 
-describe('publicApplicationTabValues / privateApplicationTabValues', () => {
-  it('mirrors the baseline ApplicationsTabs / PrivateApplicationTabs arrays exactly', () => {
+describe('publicApplicationTabValues', () => {
+  it('mirrors the baseline ApplicationsTabs array exactly', () => {
     expect(publicApplicationTabValues()).toEqual(['latest', 'my-liked', 'trending', 'admin']);
-    expect(privateApplicationTabValues()).toEqual(['all', 'drafts', 'published', 'moderation', 'approval', 'rejected']);
   });
 });
 
 describe('useApplicationTabs', () => {
   it('returns the four public tabs, in order, on the public project', () => {
-    const { result } = renderHook(() => useApplicationTabs(true, TOTALS, true), { wrapper });
+    const { result } = renderHook(() => useApplicationTabs(TOTALS, true), { wrapper });
     expect(result.current.map((tab) => tab.value)).toEqual(['latest', 'my-liked', 'trending', 'admin']);
     expect(result.current[0]?.count).toBe(3);
   });
 
   it('hides the Admin tab when the caller lacks admin permission', () => {
-    const { result } = renderHook(() => useApplicationTabs(true, TOTALS, false), { wrapper });
+    const { result } = renderHook(() => useApplicationTabs(TOTALS, false), { wrapper });
     const admin = result.current.find((tab) => tab.value === 'admin');
     expect(admin?.hidden).toBe(true);
   });
 
   it('hides the My liked and Trending placeholders, which have no data source yet', () => {
-    const { result } = renderHook(() => useApplicationTabs(true, TOTALS, true), { wrapper });
+    const { result } = renderHook(() => useApplicationTabs(TOTALS, true), { wrapper });
     const hidden = result.current.filter((tab) => tab.hidden === true).map((tab) => tab.value);
     expect(hidden).toEqual(['my-liked', 'trending']);
   });
 
   it('shows the Admin tab when the caller has admin permission', () => {
-    const { result } = renderHook(() => useApplicationTabs(true, TOTALS, true), { wrapper });
+    const { result } = renderHook(() => useApplicationTabs(TOTALS, true), { wrapper });
     const admin = result.current.find((tab) => tab.value === 'admin');
     expect(admin?.hidden).toBe(false);
   });
 
-  it('returns the six private tabs, in order, on a private project', () => {
-    const { result } = renderHook(() => useApplicationTabs(false, TOTALS, false), { wrapper });
-    expect(result.current.map((tab) => tab.value)).toEqual([
-      'all',
-      'drafts',
-      'published',
-      'moderation',
-      'approval',
-      'rejected',
-    ]);
-    expect(result.current[0]?.count).toBe(5);
-  });
-
-  it('adds the Teams tab last on a private project when the page passes it (issue 1620)', () => {
-    const teams = <span>teams</span>;
-    const { result } = renderHook(() => useApplicationTabs(false, TOTALS, false, teams), { wrapper });
-    expect(result.current.map((tab) => tab.value).at(-1)).toBe('teams');
-    const onPublic = renderHook(() => useApplicationTabs(true, TOTALS, false, teams), { wrapper });
-    expect(onPublic.result.current.map((tab) => tab.value)).not.toContain('teams');
+  it('has no status tabs: a private project\'s agents are one list (ADR-0051)', () => {
+    const { result } = renderHook(() => useApplicationTabs(TOTALS, false), { wrapper });
+    const values = result.current.map((tab) => tab.value);
+    for (const gone of ['all', 'drafts', 'published', 'moderation', 'approval', 'rejected', 'teams']) expect(values).not.toContain(gone);
   });
 });

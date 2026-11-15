@@ -39,6 +39,8 @@ export interface EntityListItem {
   /** Table view's "Type" column, and the card's bottom row when the domain has no tags (credentials/toolkits). */
   readonly typeLabel?: string;
   readonly onClick?: () => void;
+  /** The row's status as a word ("Draft", "Published"): a badge on the card and a Status column in the table. Text, so it is announced, not only coloured. */
+  readonly badge?: string;
   /**
    * #915 — when set, both card and table views render a "Forked from" link
    * beside the entity's name that navigates to the SOURCE entity instead of

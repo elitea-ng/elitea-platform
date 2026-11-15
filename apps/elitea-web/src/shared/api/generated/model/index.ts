@@ -166,6 +166,7 @@ export * from "./applicationDraft.zod";
 export * from "./applicationExport.zod";
 export * from "./applicationExportResponse.zod";
 export * from "./applicationList.zod";
+export * from "./applicationListFacets.zod";
 export * from "./applicationRelationList.zod";
 export * from "./applicationRelationUpdateRequest.zod";
 export * from "./applicationRelationUpdatedResponse.zod";

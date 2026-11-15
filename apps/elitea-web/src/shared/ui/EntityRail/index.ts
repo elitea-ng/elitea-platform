@@ -5,7 +5,7 @@
  * its parts, and `shared/` is the only layer both may import under
  * `.dependency-cruiser.cjs`.
  */
-export { EntityListFilters, filtersPanelSx } from './EntityListFilters';
+export { EntityListFilters, EntityListFiltersBody, filtersPanelSx } from './EntityListFilters';
 /** @public */
 export type { EntityListFiltersProps } from './EntityListFilters';
 

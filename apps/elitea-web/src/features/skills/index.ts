@@ -18,6 +18,7 @@ export { useBindSkillIconMutation } from './api/skillIconApi';
 export type { SkillIconMeta } from './api/skillIconApi';
 export { isSkillValid } from './lib/skillValidation';
 export { useSkill, useSkillMutations, useSkills } from './model/useSkills';
+export { useSkillBulkActions } from './model/useSkillBulkActions';
 export type {
   SkillDraft,
   SkillRecord,

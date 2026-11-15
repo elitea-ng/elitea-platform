@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getPermissionListMockHandler } from '@/shared/api/generated/auth/auth.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
+import { SidePanelHarness } from '@/test/sidePanelHarness';
 
 import { Skills } from './Skills';
 import { renderSkillsRoute } from './__tests__/testRouter';
@@ -84,17 +85,18 @@ describe('Skills page', () => {
   });
 
   /**
-   * COMPOSITION ROOT — the shell's breadcrumb names the page now; the page
-   * draws only its toolbar: the tabs, import, and "+ New skill" for a caller
-   * who may create.
+   * COMPOSITION ROOT — the shell's breadcrumb names the page; the page draws no
+   * toolbar row (ADR-0051): the Skills | Public switch, import and
+   * "+ New skill" for a caller who may create are in the right sidebar.
    */
-  it('renders its tabs, import and create controls in the page toolbar, and no heading of its own', async () => {
+  it('renders its mode switch, import and create controls in the List tab, and no heading of its own', async () => {
     server.use(getPermissionListMockHandler([{ name: CREATE, enabled: true }]));
-    renderSkillsRoute(<Skills />);
+    renderSkillsRoute(<SidePanelHarness><Skills /></SidePanelHarness>);
 
-    const toolbar = await screen.findByTestId('page-toolbar');
-    expect(await within(toolbar).findByRole('button', { name: 'New skill' })).toBeInTheDocument();
-    expect(within(toolbar).getByRole('tablist')).toBeInTheDocument();
+    const tab = await screen.findByTestId('side-panel-tab-list');
+    expect(await within(tab).findByRole('button', { name: 'New skill' })).toBeInTheDocument();
+    expect(within(tab).getByTestId('skills-mode-public')).toBeInTheDocument();
+    expect(screen.queryByTestId('page-toolbar')).toBeNull();
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 

@@ -32,6 +32,8 @@ export interface PipelineListRow {
   readonly authors?: readonly { readonly id?: string; readonly name: string; readonly avatar?: string; readonly deleted?: boolean }[];
   readonly tags?: readonly string[];
   readonly createdAt?: string;
+  /** The status as a word (Draft, Published): the card's badge and the table's Status column. */
+  readonly badge?: string;
   /**
    * #915 — set by the caller (which already holds the router's `navigate`)
    * when this row is a fork, to render a "Forked from" link that opens the
@@ -81,6 +83,7 @@ export function PipelineListPanel({
         authors: row.authors ?? [],
         tags: (row.tags ?? []).map((tag) => ({ id: tag, name: tag })),
         ...(row.createdAt === undefined ? {} : { createdAt: row.createdAt }),
+        ...(row.badge === undefined ? {} : { badge: row.badge }),
         onClick: () => {
           onSelect(row.id);
         },

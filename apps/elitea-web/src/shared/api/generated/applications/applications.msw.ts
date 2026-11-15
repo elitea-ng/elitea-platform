@@ -5511,6 +5511,17 @@ export const getListApplicationsResponseMock = (
   page: faker.number.int(),
   page_size: faker.number.int(),
   total_pages: faker.number.int(),
+  facets: faker.helpers.arrayElement([
+    {
+      statuses: {
+        [faker.string.alphanumeric(5)]: faker.number.int(),
+      },
+      origins: {
+        [faker.string.alphanumeric(5)]: faker.number.int(),
+      },
+    },
+    undefined,
+  ]),
   ...overrideResponse,
 });
 

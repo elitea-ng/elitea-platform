@@ -5,9 +5,8 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 
-import { authorDisplayName, isDeletedAuthor } from '@/entities/author';
 import { useListApplications } from '@/shared/api/generated/applications/applications';
-import type { Application, ApplicationList } from '@/shared/api/generated/model';
+import type { ApplicationList } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { useRailTagSelection } from '@/shared/ui/EntityRail';
 import { EntityFolderScope, folderIdParam, useFolderFilter } from '@/widgets/entity-folders';
@@ -17,67 +16,14 @@ import { usePermissionSet } from '@/widgets/sidebar';
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
 import { sortApplicationsByField, type SortOrder } from './lib/sortApplicationsByField';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
-import { ApplicationListPanel, type ApplicationListRow } from './ui/ApplicationListPanel';
+import { applicationName, matchesApplicationQuery, toApplicationRow } from './lib/applicationRows';
+import { ApplicationListPanel } from './ui/ApplicationListPanel';
 
 const PAGE_SIZE = 20;
 
 export interface PrivateAgentsListProps {
-  /** `undefined` (the "All"/public-Admin tab) shows every status; otherwise only rows whose `status` is in this list. */
-  readonly statuses: readonly string[] | undefined;
   /** Empty-state copy selector — mirrors the baseline's `cardContentType`-keyed `EmptyListPlaceHolder` branches (`PrivateAgentsList.jsx:40-63`), narrowed to the one axis (status) that still has content to differ on once `query`-vs-not is handled by `ApplicationListPanel`'s single empty state. */
   readonly cardContentType: string;
-}
-
-/** Same "Untitled" fallback `entities/application`'s `applicationDisplayName` selector encodes — reproduced locally because this file works with the GENERATED snake_case `Application` type directly (see this file's own doc comment for why), not the entities/application domain type that selector is typed against. */
-function applicationName(application: Application): string {
-  return application.name.trim() !== '' ? application.name : 'Untitled';
-}
-
-/**
- * #915 — the SOURCE agent's id, when this row is a fork. `Application.meta`
- * is a permissive passthrough bag (`x-elitea-passthrough`, no fixed shape);
- * `repos/applications.go`'s `List` now merges `parent_entity_id` into it
- * exactly when `is_forked` is true (the same pair `ApplicationInformation
- * .tsx`'s own "Forked from" row reads off the version detail), so reading
- * it back here needs the same duck-typed narrowing that file's own
- * `forkOrigin` helper uses.
- */
-function forkedFromId(application: Application): string | undefined {
-  if (!application.is_forked) return undefined;
-  const parentEntityId = application.meta?.['parent_entity_id'];
-  return typeof parentEntityId === 'string' || typeof parentEntityId === 'number' ? String(parentEntityId) : undefined;
-}
-
-/** The uploaded icon the list row carries on `meta.icon_meta` (#1995). */
-function iconUrlOf(application: Application): string | undefined {
-  const iconMeta = application.meta?.['icon_meta'];
-  if (typeof iconMeta !== 'object' || iconMeta === null) return undefined;
-  const url = (iconMeta as Record<string, unknown>)['url'];
-  return typeof url === 'string' && url !== '' ? url : undefined;
-}
-
-function toRow(application: Application, onSelectForkedFrom: (id: string) => void): ApplicationListRow {
-  const forkedFrom = forkedFromId(application);
-  const iconUrl = iconUrlOf(application);
-  return {
-    id: application.id,
-    name: applicationName(application),
-    description: application.description ?? '',
-    // A deleted author's account answers no name or email (#6702).
-    authors: (application.authors ?? []).map((author) => ({
-      id: author.id, name: authorDisplayName(author), deleted: isDeletedAuthor(author),
-    })),
-    tags: application.tags ?? [],
-    createdAt: application.created_at,
-    ...(iconUrl === undefined ? {} : { iconUrl }),
-    ...(forkedFrom === undefined ? {} : { forkedFrom: { onClick: () => onSelectForkedFrom(forkedFrom) } }),
-  };
-}
-
-function matchesQuery(application: Application, query: string): boolean {
-  const needle = query.trim().toLowerCase();
-  if (needle === '') return true;
-  return application.name.toLowerCase().includes(needle);
 }
 
 interface SortSearch {
@@ -151,7 +97,7 @@ interface SortSearch {
  * `EmptyStatePage`/tour CTA for the zero-applications-at-all case (same
  * reason).
  */
-export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsListProps): ReactNode {
+export function PrivateAgentsList({ cardContentType }: PrivateAgentsListProps): ReactNode {
   const projectId = useSelectedProjectId();
   const navigate = useNavigate();
   const params = useParams({ strict: false }) as { tab?: string };
@@ -204,12 +150,11 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
 
   const filteredSorted = useMemo(() => {
     const rows = wire?.rows ?? [];
-    const byStatus = statuses === undefined ? rows : rows.filter((row) => statuses.includes(row.status ?? ''));
-    const byQuery = byStatus.filter((row) => matchesQuery(row, query));
+    const byQuery = rows.filter((row) => matchesApplicationQuery(row, query));
     return sortApplicationsByField(byQuery, sortBy, sortOrder, (row, field) =>
       field === 'name' ? applicationName(row) : row.created_at,
     );
-  }, [wire, statuses, query, sortBy, sortOrder]);
+  }, [wire, query, sortBy, sortOrder]);
 
   const visibleRows = filteredSorted.slice(0, visibleCount);
   const hasMore = visibleCount < filteredSorted.length;
@@ -226,7 +171,7 @@ export function PrivateAgentsList({ statuses, cardContentType }: PrivateAgentsLi
       >
         <ApplicationListPanel
           rows={visibleRows.map((application) =>
-            toRow(application, (id) => {
+            toApplicationRow(application, (id) => {
               // #915 — always the "all" tab, matching the baseline's own fixed
               // (old-router) target: the source agent may not appear under
               // whichever status tab the fork's own row is showing on.

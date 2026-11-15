@@ -31,12 +31,15 @@ const AGENTS_LIST = '/app/agents/latest';
 
 /** The agents list, resolved: its empty state renders only from an answered listing. */
 async function openAgentsList(page: Page): Promise<void> {
+  // These two shots are of the sidebar CLOSED at 1280 (the persona's state keeps it open for the journeys).
+  await page.addInitScript(() => localStorage.setItem('el.sidePanel.open.list', 'false'));
   const projectName = await selectProject(page, undefined);
   await page.goto(BASE_URL + AGENTS_LIST, { waitUntil: 'domcontentloaded' });
   await shellSettled(page, projectName);
   await expect(page.getByText('No agents yet').first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('shell-top-bar')).toBeVisible();
-  await expect(page.getByTestId('page-toolbar')).toBeVisible();
+  // No toolbar row (ADR-0051): below 1440px the sidebar waits to be asked for, and the summary bar holds New and the active filters.
+  await expect(page.getByTestId('agent-summary-bar')).toBeVisible();
 }
 
 async function shoot(page: Page, name: string): Promise<void> {
@@ -61,9 +64,9 @@ test.describe('list page at 1280', () => {
 
   test('@visual shell-list-filters-open-1280', async ({ page }) => {
     await openAgentsList(page);
-    await page.getByTestId('page-toolbar-filters').click();
-    await expect(page.getByTestId('side-panel-body-filters')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId('side-panel-chip-filters')).toHaveAttribute('aria-selected', 'true');
+    await page.getByTestId('agent-summary-search').click();
+    await expect(page.getByTestId('side-panel-body-list')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('side-panel-chip-list')).toHaveAttribute('aria-selected', 'true');
     await shoot(page, 'shell-list-filters-open-1280');
   });
 });

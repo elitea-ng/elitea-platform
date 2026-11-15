@@ -13077,10 +13077,33 @@ components:
         page: { type: integer }
         page_size: { type: integer }
         total_pages: { type: integer }
+        facets:
+          $ref: '#/components/schemas/ApplicationListFacets'
       description: >
         NOTE(W2): internal/domain/applications/types.go:86-92 (ListResponse),
         marshaled directly by List
         (internal/api/v2/applications/handler.go:101-107).
+
+    ApplicationListFacets:
+      type: object
+      required: [statuses, origins]
+      properties:
+        statuses:
+          type: object
+          additionalProperties: { type: integer }
+          description: >
+            Agents per publish state (`draft`, `published`); only states that
+            occur are keys.
+        origins:
+          type: object
+          additionalProperties: { type: integer }
+          description: >
+            Agents per origin (`own`, `forked`); only origins that occur are
+            keys.
+      description: >
+        The counts behind the Workshop's status and origin filters. Each count
+        honours every list filter except the status and origin filters
+        themselves (internal/domain/applications/types.go ListFacets).
 
     ApplicationVersionSummary:
       type: object
@@ -38274,6 +38297,29 @@ paths:
         - name: agents_type
           in: query
           schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+          description: >
+            Narrows the list to agents in a publish state, `draft` or
+            `published` (or both, comma-separated, which is no filter): the
+            state each row reports in `status`. The
+            `facets.statuses` counts ignore this filter.
+        - name: sort_by
+          in: query
+          schema: { type: string }
+          description: One of `created_at` (default), `updated_at`, `name`, `id`, `author`, `authors`, `likes`.
+        - name: sort_order
+          in: query
+          schema: { type: string }
+          description: '`desc` (default) or `asc`.'
+        - name: origin
+          in: query
+          schema: { type: string }
+          description: >
+            Narrows the list to agents the project owns (`own`) or that came
+            from a fork (`forked`). The `facets.origins` counts ignore this
+            filter.
       responses:
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '400': { $ref: '#/components/responses/InvalidClientVersion' }

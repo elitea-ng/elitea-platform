@@ -33,8 +33,8 @@ async function openAgentsFilters(page: Page): Promise<void> {
   await page.goto(`${BASE_URL}/app/agents/all`);
   await ensureProjectSelected(page, DEFAULT_PROJECT_NAME);
   await page.waitForURL('**/app/agents/all**', { timeout: 20_000 });
+  // The List tab of the right sidebar is open by default on a wide window (ADR-0051); the folders are in it.
   await expect(page.getByTestId('agent-search-input')).toBeVisible({ timeout: 30_000 });
-  await page.getByTestId('page-toolbar-filters').click();
   await expect(page.getByTestId('entity-folder-panel')).toBeVisible({ timeout: 20_000 });
 }
 
@@ -84,7 +84,6 @@ test('J-entity-folders: create a folder, move an agent into it, filter, and dele
   await expect(row.getByTestId('entity-folder-cell-name')).toHaveText(folderName);
 
   // Deleting the folder returns the agent to the list and deletes nothing.
-  await page.getByTestId('page-toolbar-filters').click();
   await expect(page.getByTestId('entity-folder-panel')).toBeVisible({ timeout: 20_000 });
   // The ⋯ button sits beside the row button, not inside it, so it is found by its own name.
   await page.getByRole('button', { name: `More for folder ${folderName}` }).click();

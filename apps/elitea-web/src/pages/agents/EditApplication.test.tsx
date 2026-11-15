@@ -404,7 +404,8 @@ describe('EditApplication', () => {
     });
     await viewer.findByTestId('version-selector-trigger', {}, { timeout: 15_000 });
     expect(viewer.queryByRole('button', { name: /save as version/i })).not.toBeInTheDocument();
-  });
+    // Two mounts of up to 15s each equalled the 30s test budget: under the sharded coverage run it timed out.
+  }, 60_000);
 
   it('clicking Cancel does not throw and keeps the page mounted', async () => {
     server.use(getGetApplicationMockHandler(detail()));
