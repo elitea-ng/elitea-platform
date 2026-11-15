@@ -239,10 +239,7 @@ test('a published agent is findable in the Marketplace by name and by category, 
   await expect(category, `the Marketplace must offer the '${MARKETPLACE_CATEGORY}' category`).toBeVisible({ timeout: 20_000 });
   await category.check();
   await expect(category, 'the checkbox must report itself checked').toBeChecked();
-  await expect(
-    page.getByText(`Category: ${MARKETPLACE_CATEGORY}`),
-    'an active category must show as a removable chip beside the list',
-  ).toBeVisible();
+  // The summary bar's chips are for a CLOSED sidebar (unit-tested); with Browse open the checkbox is the filter's state.
   await expect(
     page.getByTestId(`marketplace-card-link-agents-${agent.id}`).first(),
     'the published agent must be reachable through its category with no search term',
