@@ -42,6 +42,8 @@
  */
 import * as zod from "zod";
 
+export const applicationListFacetsUpdateAvailableMin = 0;
+
 export const ApplicationListFacets = zod
   .object({
     statuses: zod
@@ -52,7 +54,14 @@ export const ApplicationListFacets = zod
     origins: zod
       .record(zod.string(), zod.int())
       .describe(
-        "Agents per origin (`own`, `forked`); only origins that occur are keys.\n",
+        "Agents per origin (`own`, `installed`, `forked`); only origins that occur are keys. `installed` is an agent hired from the Marketplace with a read-only definition (ADR-0051).\n",
+      ),
+    update_available: zod
+      .int()
+      .min(applicationListFacetsUpdateAvailableMin)
+      .optional()
+      .describe(
+        "Installed and forked agents whose listing has a newer hireable version than the one they came from.\n",
       ),
   })
   .describe(

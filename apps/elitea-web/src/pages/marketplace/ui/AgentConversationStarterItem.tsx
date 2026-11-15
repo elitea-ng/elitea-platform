@@ -14,26 +14,21 @@ export interface AgentConversationStarterItemProps {
   onSelectStarter?: (text: string) => void;
 }
 
-export const AgentConversationStarterItem = memo(
-  ({ text, onSelectStarter }: AgentConversationStarterItemProps) => {
-    const textRef = useRef<HTMLSpanElement>(null);
+export const AgentConversationStarterItem = memo(({ text, onSelectStarter }: AgentConversationStarterItemProps) => {
+  const textRef = useRef<HTMLSpanElement>(null);
 
-    const handleClick = useCallback(() => {
-      onSelectStarter?.(text);
-    }, [onSelectStarter, text]);
+  const handleClick = useCallback(() => {
+    onSelectStarter?.(text);
+  }, [onSelectStarter, text]);
 
-    return (
-      <Box
-        sx={styles.item}
-        onClick={handleClick}
-      >
-        <Typography ref={textRef} variant="bodySmall" sx={styles.text}>
-          {text}
-        </Typography>
-      </Box>
-    );
-  },
-);
+  return (
+    <Box sx={styles.item} onClick={handleClick}>
+      <Typography ref={textRef} variant="bodySmall" sx={styles.text}>
+        {text}
+      </Typography>
+    </Box>
+  );
+});
 
 AgentConversationStarterItem.displayName = 'AgentConversationStarterItem';
 

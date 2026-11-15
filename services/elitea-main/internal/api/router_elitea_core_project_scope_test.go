@@ -145,6 +145,14 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodPost, "/api/v2/elitea_core/folder/prompt_lib/7", "/api/v2/elitea_core/folder/prompt_lib/8", "models.chat.folders.create"},
 	{http.MethodPut, "/api/v2/elitea_core/folder/prompt_lib/7/1", "/api/v2/elitea_core/folder/prompt_lib/8/1", "models.chat.folders.update"},
 	{http.MethodDelete, "/api/v2/elitea_core/folder/prompt_lib/7/1", "/api/v2/elitea_core/folder/prompt_lib/8/1", "models.chat.folders.delete"},
+	// The Marketplace (ADR-0051): reads take the agent list permission, a hire the
+	// permission that creates an agent.
+	{http.MethodGet, "/api/v2/elitea_core/marketplace_listings/prompt_lib/7", "/api/v2/elitea_core/marketplace_listings/prompt_lib/8", "models.applications.applications.list"},
+	{http.MethodGet, "/api/v2/elitea_core/marketplace_listing/prompt_lib/7/1", "/api/v2/elitea_core/marketplace_listing/prompt_lib/8/1", "models.applications.applications.list"},
+	{http.MethodPatch, "/api/v2/elitea_core/marketplace_listing/prompt_lib/7/1", "/api/v2/elitea_core/marketplace_listing/prompt_lib/8/1", "models.applications.applications.list"},
+	{http.MethodPost, "/api/v2/elitea_core/marketplace_listing_version/prompt_lib/7/1/2", "/api/v2/elitea_core/marketplace_listing_version/prompt_lib/8/1/2", "models.applications.applications.list"},
+	{http.MethodPost, "/api/v2/elitea_core/marketplace_hire/prompt_lib/7", "/api/v2/elitea_core/marketplace_hire/prompt_lib/8", "models.applications.applications.create"},
+	{http.MethodGet, "/api/v2/elitea_core/marketplace_origin/prompt_lib/7/1", "/api/v2/elitea_core/marketplace_origin/prompt_lib/8/1", "models.applications.applications.list"},
 	// Project folders of the entity lists: each kind is gated by ITS list's permissions.
 	{http.MethodGet, "/api/v2/elitea_core/entity_folders/prompt_lib/7/agent", "/api/v2/elitea_core/entity_folders/prompt_lib/8/agent", "models.applications.applications.list"},
 	{http.MethodPost, "/api/v2/elitea_core/entity_folders/prompt_lib/7/agent", "/api/v2/elitea_core/entity_folders/prompt_lib/8/agent", "models.applications.applications.create"},

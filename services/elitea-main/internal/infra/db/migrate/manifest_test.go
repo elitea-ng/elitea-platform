@@ -1139,7 +1139,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 249: shared/0249_agent_workforce_manager_source.sql, the proposal source
 	// hr_agent renamed workforce_manager (rows and the two CHECK constraints
 	// of 0237). No permission.
-	require.EqualValues(t, 249, Head(shared))
+	//
+	// 250: shared/0250_marketplace_listings.sql, the Marketplace's listings,
+	// listing versions and hires (elitea_marketplace, ADR-0051, issue 1629), and
+	// the hire, upgrade and upstream_merge kinds of change requests. No
+	// backfill in SQL (the service builds the listings on first read), no
+	// permission.
+	require.EqualValues(t, 250, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

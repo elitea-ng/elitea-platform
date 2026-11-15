@@ -940,7 +940,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // blocked, redacted or warned message (see MANIFEST_ENTRY_COUNT).
 // 529 -> 534 (issue 2048): list/create/update/deleteEntityFolder and moveEntityToFolder, the project
 // folders of the agents, pipelines, skills, toolkits and MCPs lists.
-const GENERATED_OPERATION_COUNT = 534;
+// 534 -> 540 (issue 1629, ADR-0051 M3): searchMarketplaceListings, get/updateMarketplaceListing,
+// setMarketplaceVersionState, hireMarketplaceListing and getMarketplaceOrigin.
+const GENERATED_OPERATION_COUNT = 540;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1260,8 +1262,15 @@ const GENERATED_OPERATION_COUNT = 534;
  *
  * 371 -> 376 (issue 2048): the five project-folder operations of the entity lists
  * (entityFolder.list, create, update, delete, move). All generated.
+ *
+ * 376 -> 377 (issue 1629, ADR-0051 M3): marketplace.getOrigin, the origin banner of an installed or forked
+ * agent's editor. Generated.
+ *
+ * 377 -> 382 (issue 1629, ADR-0051 M3): the Marketplace operations the page calls
+ * (marketplace.searchListings, getListing, updateListing, setVersionState and
+ * hire). All generated.
  */
-const MANIFEST_ENTRY_COUNT = 376;
+const MANIFEST_ENTRY_COUNT = 382;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

@@ -15,6 +15,7 @@ interface WorkshopSearch {
   readonly sort_order?: string;
   readonly statuses?: readonly string[];
   readonly origin?: string;
+  readonly update_available?: string;
 }
 
 export interface WorkshopListInput {
@@ -48,6 +49,7 @@ function listParams(input: WorkshopListInput, search: WorkshopSearch): ListAppli
     tags: input.tags.join(','),
     status: (search.statuses ?? []).join(','),
     origin: search.origin,
+    update_available: search.update_available === 'true' ? 'true' : undefined,
     folder_id: input.folderId,
     sort_by: search.sort_by === 'name' ? 'name' : 'created_at',
     sort_order: search.sort_order === 'asc' ? 'asc' : 'desc',
@@ -94,7 +96,7 @@ export function useWorkshopListData(input: WorkshopListInput): WorkshopListData 
     wire: pages?.[0],
     isLoading: list.isPending && list.isFetching,
     isError: list.isError,
-    filtered: input.query.trim() !== '' || (search.statuses ?? []).length > 0 || (search.origin ?? '') !== '',
+    filtered: input.query.trim() !== '' || (search.statuses ?? []).length > 0 || (search.origin ?? '') !== '' || search.update_available === 'true',
     hasMore: list.hasNextPage,
     isLoadingMore: list.isFetchingNextPage,
     loadMore: () => void list.fetchNextPage(),

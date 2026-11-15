@@ -41,7 +41,7 @@ text unless the workspace policy allows titles
 ([docs/native-surfaces.md](docs/native-surfaces.md)).
 Marketplace (1.3; it was Discover, and the web's Catalog or Agent HUB): the workspace's public agents with search, category, tags and icon,
 an agent page with its welcome message and conversation starters, and a chat started
-in the active project.
+in the active project. Browse is read-only: hiring needs toolkit binding, which ADR-0051 keeps on web and desktop, so mobile has no Hire or Install in this phase.
 Agent memory (1.44): what an agent remembers in the project, from a conversation's
 participants or a Marketplace agent; delete a note (yours, or any with the permission)
 and the "remember things about me" switch.

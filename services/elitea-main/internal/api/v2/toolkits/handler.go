@@ -23,6 +23,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/toolrelation"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/toolkitnaming"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
@@ -1505,6 +1506,14 @@ func (h *Handler) updateToolRelation(w http.ResponseWriter, r *http.Request, pro
 	// serve the permission trimming report's removals (toolrelation).
 	if err := toolrelation.CheckVersionEditable(ctx, h.pool, s, entityVersionID); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": toolrelation.PublishedVersionMessage})
+		return
+	}
+
+	// An agent installed from the Marketplace keeps the tools its snapshot
+	// holds: attaching another one changes its definition (ADR-0051 decision 3).
+	// Detaching stays possible, as the permission trimming report's removals are.
+	if hasRelation && marketplace.IsInstalledVersion(ctx, h.pool, s, entityVersionID) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": marketplace.ReadOnlyCode, "msg": marketplace.ReadOnlyMessage})
 		return
 	}
 

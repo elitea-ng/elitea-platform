@@ -69,8 +69,8 @@ func (req *ListRequest) ValidateList() error {
 		}
 	}
 	req.Origin = strings.ToLower(strings.TrimSpace(req.Origin))
-	if req.Origin != "" && req.Origin != "own" && req.Origin != "forked" {
-		return apierr.BadRequest("origin must be own or forked")
+	if req.Origin != "" && req.Origin != "own" && req.Origin != "installed" && req.Origin != "forked" {
+		return apierr.BadRequest("origin must be own, installed or forked")
 	}
 	req.AgentsType = strings.ToLower(strings.TrimSpace(req.AgentsType))
 	switch req.AgentsType {

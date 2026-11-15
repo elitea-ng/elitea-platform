@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { statusBadgeLabel, workshopFacets } from '../lib/workshopFacets';
+import type { Application } from '@/shared/api/generated/model';
+
+import { originBadgeLabel, statusBadgeLabel, workshopFacets, workshopRowBadge } from '../lib/workshopFacets';
 
 describe('workshopFacets', () => {
   it('offers only the values that occur, with the server counts', () => {
@@ -32,5 +34,32 @@ describe('statusBadgeLabel', () => {
     expect(statusBadgeLabel('published')).toBe('Published');
     expect(statusBadgeLabel('')).toBeUndefined();
     expect(statusBadgeLabel(undefined)).toBeUndefined();
+  });
+});
+
+function row(id: string, name: string, meta: Record<string, unknown>): Application {
+  return { id, name, status: 'draft', meta } as unknown as Application;
+}
+
+describe('installed origin and the update quick filter', () => {
+  it('offers Installed in order and Update available only when one exists', () => {
+    const [, origin, updates] = workshopFacets({ statuses: {}, origins: { forked: 1, installed: 2, own: 3 }, update_available: 2 });
+    expect(origin?.options.map((option) => option.label)).toEqual(['Own', 'Installed', 'Forked']);
+    expect(updates).toMatchObject({ param: 'update_available' });
+    expect(updates?.options).toEqual([{ value: 'true', label: 'Update available', count: 2 }]);
+    const [, , none] = workshopFacets({ statuses: {}, origins: {}, update_available: 0 });
+    expect(none?.options).toEqual([]);
+  });
+
+  it('words the origin badge and the second hire of one listing', () => {
+    const first = row('1', 'Changelog Writer', { origin_kind: 'installed', origin_listing_id: '7', origin_version_name: 'v2.3' });
+    const second = row('2', 'Changelog Writer 2', { origin_kind: 'installed', origin_listing_id: '7', origin_version_name: 'v2.4' });
+    const fork = row('3', 'Notes', { origin_kind: 'forked', origin_listing_name: 'Triage Helper', origin_version_name: 'v1.2' });
+    expect(originBadgeLabel(first)).toBe('Installed v2.3');
+    expect(originBadgeLabel(fork)).toBe('Forked from Triage Helper v1.2');
+    expect(originBadgeLabel(row('4', 'Own', {}))).toBe('');
+    const rows = [first, second, fork];
+    expect(workshopRowBadge(first, rows)).toBe('Draft · Installed v2.3');
+    expect(workshopRowBadge(second, rows)).toBe('Draft · Installed v2.4 · also hired as Changelog Writer');
   });
 });

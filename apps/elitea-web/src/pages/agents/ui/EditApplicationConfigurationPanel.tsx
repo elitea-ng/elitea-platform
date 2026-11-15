@@ -40,6 +40,8 @@ export interface EditApplicationConfigurationPanelProps {
   readonly editor: EditApplicationEditorBridge;
   readonly versionFields: EditApplicationVersionFieldsState;
   readonly isEditorDisabled: boolean;
+  /** An installed agent (ADR-0051): the definition shows but cannot change; name, description, icon, tags stay editable. */
+  readonly definitionLocked?: boolean;
   readonly isDirty: boolean;
   readonly isReadOnly: boolean;
   readonly onModelSettingsChange: (next: AgentLlmSettings) => void;
@@ -104,6 +106,7 @@ function applicationIconMetaOf(
 export function EditApplicationConfigurationPanel(props: EditApplicationConfigurationPanelProps): ReactNode {
   const { projectId, applicationId, activeVersion, editor, versionFields, isEditorDisabled, isDirty, isReadOnly, onModelSettingsChange } =
     props;
+  const locked = props.definitionLocked === true;
   const skillNav = useSkillNav();
   const tags = versionFields.fields.tags;
   const setTags = versionFields.setTags;
@@ -124,6 +127,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         values={editor.values}
         onFieldChange={editor.onFieldChange}
         disabled={isEditorDisabled}
+        definitionDisabled={isEditorDisabled || locked}
         metaControls={{ contextHistoryError: contextBlockRefusal(props.saveError) }}
         /* #345 — the tag control. It reaches the wire through
            `toVersionSaveBody`'s `tags`, which `UpdateVersion` now
@@ -155,7 +159,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
             projectId={projectId}
             value={editor.values.version_details.llm_settings}
             onChange={onModelSettingsChange}
-            disabled={isEditorDisabled}
+            disabled={isEditorDisabled || locked}
           />
         }
       />
@@ -174,7 +178,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         activeVersion={activeVersion}
         versionFields={versionFields}
         isDirty={isDirty}
-        isReadOnly={isReadOnly}
+        isReadOnly={isReadOnly || locked}
       />
       {/*
        * The SKILLS section (gap 11). Skills could be created, versioned,
@@ -191,7 +195,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
       <AgentSkillsPanel
         projectId={projectId}
         appVersionId={activeVersion?.id}
-        disabled={isReadOnly}
+        disabled={isReadOnly || locked}
         onCreateNew={skillNav.createNew}
         onOpenSkill={skillNav.openInNewTab}
       />

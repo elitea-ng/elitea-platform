@@ -222,6 +222,8 @@ export interface CreateAgentFormProps {
   readonly values: AgentDraftValues;
   readonly onFieldChange: AgentFieldChange;
   readonly disabled?: boolean | undefined;
+  /** Locks instructions, welcome message and starters while name, description and tags stay editable (an installed agent). Defaults to `disabled`. */
+  readonly definitionDisabled?: boolean | undefined;
   readonly showInstructions?: boolean | undefined;
   readonly entityType?: 'application' | 'pipeline' | undefined;
   /**
@@ -273,6 +275,7 @@ export function CreateAgentForm({
   values,
   onFieldChange,
   disabled = false,
+  definitionDisabled,
   showInstructions = true,
   entityType = 'application',
   generateAgentButtonSlot,
@@ -284,6 +287,7 @@ export function CreateAgentForm({
   sx,
 }: CreateAgentFormProps): ReactNode {
   const versionDetails = values.version_details;
+  const lockDefinition = definitionDisabled ?? disabled;
   const state = useCreateAgentFormState(values, onFieldChange);
 
   // Client-side "required" validation-error state, restored to parity with
@@ -361,7 +365,7 @@ export function CreateAgentForm({
           <InstructionsInput
             instructions={versionDetails?.instructions}
             onInstructionsChange={state.onInstructionsChange}
-            disabled={disabled}
+            disabled={lockDefinition}
             lineNumbers={entityType === 'pipeline'}
           />
         </Box>
@@ -375,13 +379,13 @@ export function CreateAgentForm({
           welcomeMessage={versionDetails?.welcome_message}
           onWelcomeMessageChange={state.onWelcomeMessageChange}
           versionId={versionDetails?.id}
-          disabled={disabled}
+          disabled={lockDefinition}
         />
       </Box>
       <ConversationStartersEditor
         starters={versionDetails?.conversation_starters}
         onStartersChange={state.onConversationStartersChange}
-        disabled={disabled}
+        disabled={lockDefinition}
         sx={conversationStartersSx}
       />
       <Box sx={advanceSettingsSx}>

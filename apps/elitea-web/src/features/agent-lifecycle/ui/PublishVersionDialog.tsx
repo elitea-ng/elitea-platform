@@ -8,7 +8,11 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
-import { isValidPublishVersionName, type NormalizedPublishValidation, type PublishCategory } from '../lib/publishValidation';
+import {
+  isValidPublishVersionName,
+  type NormalizedPublishValidation,
+  type PublishCategory,
+} from '../lib/publishValidation';
 import { PublishPreparationStep } from './PublishPreparationStep';
 import { PublishValidationReport } from './PublishValidationReport';
 import { PublishWizardMessages } from './PublishWizardMessages';
@@ -57,7 +61,12 @@ export interface PublishVersionDialogProps {
   readonly error: string | undefined;
   readonly onClose: () => void;
   readonly onValidate: (versionName: string, category: PublishCategory | '') => void;
-  readonly onPublish: (versionName: string, category: PublishCategory | '', validationToken: string | undefined) => void;
+  readonly onPublish: (
+    versionName: string,
+    category: PublishCategory | '',
+    validationToken: string | undefined,
+    releaseNotes: string,
+  ) => void;
 }
 
 export function PublishVersionDialog({
@@ -79,6 +88,8 @@ export function PublishVersionDialog({
   const [versionName, setVersionName] = useState('');
   const [category, setCategory] = useState<PublishCategory | ''>('');
   const [agreed, setAgreed] = useState(false);
+  // Optional, and not part of the validation: the notes do not change what the gate checks.
+  const [releaseNotes, setReleaseNotes] = useState('');
   // #2025: set when Continue is pressed with a field missing, so the fields are marked.
   const [attempted, setAttempted] = useState(false);
   // Publish pressed while validation FAILED: the reason is spelled out below.
@@ -93,6 +104,7 @@ export function PublishVersionDialog({
     setVersionName('');
     setCategory('');
     setAgreed(false);
+    setReleaseNotes('');
     setAttempted(false);
     setPublishRefused(false);
   }, [open]);
@@ -140,7 +152,7 @@ export function PublishVersionDialog({
       return;
     }
     setStep('publishing');
-    onPublish(versionName, category, validation?.validationToken);
+    onPublish(versionName, category, validation?.validationToken, releaseNotes);
   };
 
   return (
@@ -172,6 +184,8 @@ export function PublishVersionDialog({
               onCategoryChange={setCategory}
               agreed={agreed}
               onAgreedChange={setAgreed}
+              releaseNotes={releaseNotes}
+              onReleaseNotesChange={setReleaseNotes}
               showErrors={attempted}
             />
           ) : (

@@ -10176,7 +10176,7 @@ components:
       properties:
         id: { type: integer, format: int64 }
         application_id: { type: integer, format: int64 }
-        kind: { type: string, enum: [release, recertification, legacy_unreviewed] }
+        kind: { type: string, enum: [release, recertification, legacy_unreviewed, hire, upgrade, upstream_merge] }
         state: { type: string, enum: [draft, submitted, approved, rejected, withdrawn, published] }
         risk_tier: { $ref: '#/components/schemas/AgentRiskTier' }
         candidate_version_id: { type: integer, format: int64, nullable: true }
@@ -13098,8 +13098,15 @@ components:
           type: object
           additionalProperties: { type: integer }
           description: >
-            Agents per origin (`own`, `forked`); only origins that occur are
-            keys.
+            Agents per origin (`own`, `installed`, `forked`); only origins
+            that occur are keys. `installed` is an agent hired from the
+            Marketplace with a read-only definition (ADR-0051).
+        update_available:
+          type: integer
+          minimum: 0
+          description: >
+            Installed and forked agents whose listing has a newer hireable
+            version than the one they came from.
       description: >
         The counts behind the Workshop's status and origin filters. Each count
         honours every list filter except the status and origin filters
@@ -14675,6 +14682,313 @@ components:
         (internal/api/v2/eliteacore/public_applications.go). Only the id and
         the name are aggregated — the tag's `data` jsonb is not read here.
 
+    MarketplaceFacetCount:
+      type: object
+      required: [value, label, count]
+      properties:
+        value: { type: string, description: The filter value to send back. }
+        label: { type: string, description: The text to show. }
+        count: { type: integer, minimum: 0 }
+      description: >
+        One facet value and how many listings carry it. Each count honours
+        every search filter except the facet it belongs to.
+
+    MarketplaceFacets:
+      type: object
+      required: [kinds, categories, tags, publishers, tiers, required_types, hired_here]
+      properties:
+        kinds:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceFacetCount' }
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceFacetCount' }
+        tags:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceFacetCount' }
+          description: The 50 most used tags.
+        publishers:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceFacetCount' }
+          description: The 50 publishers with most listings. `value` is the publisher id.
+        tiers:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceFacetCount' }
+          description: Listings per risk tier (low, medium, high, critical).
+        required_types:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceFacetCount' }
+          description: Toolkit and MCP types the listings need.
+        hired_here:
+          type: integer
+          minimum: 0
+          description: Listings the project in the path has already hired or added.
+      description: >
+        The counts behind the Browse sidebar
+        (internal/marketplace/search.go Facets).
+
+    MarketplacePublisher:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+      description: >
+        The person who published the listing
+        (internal/marketplace/search.go).
+
+    MarketplaceVersionRef:
+      type: object
+      required: [id, name, published_at]
+      properties:
+        id: { type: string, description: The catalogue version id. }
+        name: { type: string }
+        published_at: { type: string, format: date-time }
+      description: >
+        A listing version by name
+        (internal/marketplace/search.go).
+
+    MarketplaceHired:
+      type: object
+      required: [application_id, mode, version_id, version_name]
+      properties:
+        application_id: { type: string, description: The project agent or skill. }
+        mode: { type: string, description: '`install` or `fork`.' }
+        version_id: { type: string }
+        version_name: { type: string }
+      description: >
+        One hire of the listing in the project in the path
+        (internal/marketplace/search.go).
+
+    MarketplaceListingSummary:
+      type: object
+      required: [id, kind, entity_id, name, description, category, tags, tier, hires, rating_count, likes,
+                 is_liked, featured, required_types, has_write_tools, state, hired]
+      properties:
+        id: { type: string, description: The listing id. }
+        kind: { type: string, description: '`agent` or `skill`.' }
+        entity_id:
+          type: string
+          description: >
+            The public catalogue agent or skill. Try in chat, likes and the
+            public read use it.
+        name: { type: string }
+        description: { type: string }
+        icon_url: { type: string, nullable: true }
+        category: { type: string }
+        tags:
+          type: array
+          items: { type: string }
+        publisher:
+          allOf: [{ $ref: '#/components/schemas/MarketplacePublisher' }]
+          nullable: true
+        tier:
+          type: string
+          description: The risk tier at the source (low, medium, high, critical).
+        current_version:
+          allOf: [{ $ref: '#/components/schemas/MarketplaceVersionRef' }]
+          nullable: true
+          description: The newest version that is neither yanked nor withdrawn. Null when none is left.
+        hires: { type: integer, minimum: 0, description: Projects that hired or added it. }
+        rating_avg:
+          type: number
+          nullable: true
+          description: Average review rating; null until reviews exist (ADR-0051 M5).
+        rating_count: { type: integer, minimum: 0 }
+        likes: { type: integer, minimum: 0 }
+        is_liked: { type: boolean }
+        featured: { type: boolean }
+        required_types:
+          type: array
+          items: { type: string }
+        has_write_tools: { type: boolean }
+        state: { type: string, description: '`listed` or `delisted`.' }
+        hired:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceHired' }
+          description: Hires in the project in the path; empty when none.
+      description: >
+        One listing as a card shows it (internal/marketplace/search.go).
+
+    MarketplaceListingPage:
+      type: object
+      required: [rows, total, facets]
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceListingSummary' }
+        total: { type: integer, minimum: 0 }
+        facets: { $ref: '#/components/schemas/MarketplaceFacets' }
+      description: >
+        A page of listings with the facet counts
+        (internal/marketplace/search.go Search).
+
+    MarketplaceRequirement:
+      type: object
+      required: [key, kind, type, name, tools, has_write_tools]
+      properties:
+        key:
+          type: string
+          description: Stable key inside one version; a hire binding names it.
+        kind: { type: string, description: '`toolkit`, `mcp`, `skill` or `agent`.' }
+        type: { type: string, description: 'The toolkit or MCP type, or the skill or agent name.' }
+        name: { type: string, description: The name the publisher gave the toolkit. }
+        tools:
+          type: array
+          items: { type: string }
+          description: The tools the agent uses. Never credentials.
+        has_write_tools: { type: boolean }
+      description: >
+        What a listing version needs from the project
+        (internal/marketplace/snapshot.go). It holds types and names, never
+        credentials or settings.
+
+    MarketplaceRequirements:
+      type: object
+      required: [items, model_class, tier, has_write_tools]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceRequirement' }
+        model_class:
+          type: string
+          description: The model capability class the agent needs (`tool_calling` or `chat`).
+        tier: { type: string }
+        has_write_tools: { type: boolean }
+      description: >
+        The requirements of one listing version
+        (internal/marketplace/snapshot.go).
+
+    MarketplaceVersion:
+      type: object
+      required: [id, name, state, release_notes, digest, published_at, requirements]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        state:
+          type: string
+          description: >
+            `current` (the newest hireable version), `available`,
+            `deprecated` (hireable, with a warning) or `yanked` (not
+            hireable).
+        state_reason: { type: string }
+        release_notes: { type: string }
+        digest: { type: string, description: 'The SHA-256 of the snapshot, in hex.' }
+        published_at: { type: string, format: date-time }
+        withdrawn: { type: boolean, description: The publisher unpublished this version. }
+        requirements: { $ref: '#/components/schemas/MarketplaceRequirements' }
+      description: >
+        One listing version with its snapshot facts
+        (internal/marketplace/search.go).
+
+    MarketplaceListingDetail:
+      type: object
+      required: [listing, versions, can_manage, can_moderate]
+      properties:
+        listing: { $ref: '#/components/schemas/MarketplaceListingSummary' }
+        welcome_message: { type: string }
+        conversation_starters:
+          type: array
+          items: { type: string }
+        soul_summary: { type: string }
+        versions:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceVersion' }
+          description: Newest first. Withdrawn versions show only to the publisher and the administrator.
+        can_manage:
+          type: boolean
+          description: The caller is the publisher and may deprecate or yank a version.
+        can_moderate:
+          type: boolean
+          description: The caller is a platform administrator and may yank, delist and feature.
+      description: >
+        The listing page read (internal/marketplace/search.go Get).
+
+    MarketplaceVersionStateRequest:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          description: '`available`, `deprecated` or `yanked`. The publisher may set any; an administrator may yank.'
+        reason: { type: string, maxLength: 500 }
+      description: >
+        Change a version's state (internal/api/v2/eliteacore/marketplace_manage.go).
+
+    MarketplaceListingUpdateRequest:
+      type: object
+      properties:
+        featured: { type: boolean, description: The editorial flag. Administrator only. }
+        state: { type: string, description: '`listed` or `delisted`. Administrator only.' }
+        reason: { type: string, maxLength: 500 }
+      description: >
+        Administrator edits of a listing
+        (internal/api/v2/eliteacore/marketplace_manage.go).
+
+    MarketplaceBinding:
+      type: object
+      required: [requirement_key]
+      properties:
+        requirement_key: { type: string }
+        toolkit_id:
+          type: string
+          description: The project toolkit, agent or skill that satisfies the requirement.
+        disabled:
+          type: boolean
+          description: Hire without it. The tools that need it stay unavailable.
+      description: >
+        Binds one requirement of the chosen version to the project
+        (internal/api/v2/eliteacore/marketplace_hire.go).
+
+    MarketplaceHireRequest:
+      type: object
+      required: [listing_id, version_id, mode]
+      properties:
+        listing_id: { type: string }
+        version_id: { type: string }
+        mode: { type: string, description: '`install` or `fork`.' }
+        name: { type: string, maxLength: 255, description: A name override. }
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceBinding' }
+      description: >
+        The hire wizard's answer (internal/api/v2/eliteacore/marketplace_hire.go).
+
+    MarketplaceHireResult:
+      type: object
+      required: [application_id, version_id, mode, tools_enabled, awaiting_approval]
+      properties:
+        application_id: { type: string }
+        version_id: { type: string, description: The project agent version. }
+        mode: { type: string }
+        tools_enabled: { type: boolean }
+        awaiting_approval:
+          type: boolean
+          description: A change request of kind `hire` waits for a person to enable the tools.
+        change_request_id: { type: string }
+      description: >
+        What the hire created (internal/api/v2/eliteacore/marketplace_hire.go).
+
+    MarketplaceOrigin:
+      type: object
+      required: [mode, listing_id, listing_name, listing_state, version_id, version_name, digest, version_state]
+      properties:
+        mode: { type: string, description: '`installed` or `forked`.' }
+        listing_id: { type: string }
+        listing_name: { type: string }
+        listing_state: { type: string, description: '`listed` or `delisted`; delisted shows the withdrawn banner.' }
+        version_id: { type: string }
+        version_name: { type: string }
+        version_state: { type: string, description: '`available`, `deprecated` or `yanked`.' }
+        digest: { type: string }
+        latest_version:
+          allOf: [{ $ref: '#/components/schemas/MarketplaceVersionRef' }]
+          nullable: true
+          description: A newer hireable version, when one exists.
+      description: >
+        Where an installed or forked agent came from
+        (internal/marketplace/origin.go).
+
     PublicApplicationSummary:
       type: object
       required: [project_id, id, name, description, version_id, version_name,
@@ -14757,6 +15071,13 @@ components:
           enum: ["Business Analyst", "Quality Assurance", "Development",
                  "DevOps", "Project Management", "Knowledge & Documentation",
                  "Elitea", "Epam", "Other"]
+        release_notes:
+          type: string
+          maxLength: 4000
+          description: >
+            What changed in this version. The listing page shows it per
+            version (ADR-0051). A publish through a change request uses the
+            request summary.
       description: >
         NOTE(W2): internal/api/v2/eliteacore/handler.go:446-450; category
         whitelist at :512-516.
@@ -38317,9 +38638,15 @@ paths:
           in: query
           schema: { type: string }
           description: >
-            Narrows the list to agents the project owns (`own`) or that came
-            from a fork (`forked`). The `facets.origins` counts ignore this
-            filter.
+            Narrows the list to agents the project owns (`own`), hired from
+            the Marketplace as installed (`installed`) or that came from a
+            fork (`forked`). The `facets.origins` counts ignore this filter.
+        - name: update_available
+          in: query
+          schema: { type: boolean }
+          description: >
+            Keeps only installed and forked agents whose listing has a newer
+            hireable version. The `facets.update_available` count ignores it.
       responses:
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '400': { $ref: '#/components/responses/InvalidClientVersion' }
@@ -38463,6 +38790,276 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /elitea_core/marketplace_listings/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: searchMarketplaceListings
+      summary: Search the Marketplace
+      description: |
+        Facet search over the listings (ADR-0051 decision 2). Answers
+        `{rows, total, facets}`. `project_id` is the project that hires: the
+        `hired_here` filter and the `hired` field read it.
+
+        Every parameter is validated in internal/marketplace/search.go. A
+        `kind`, `sort`, `max_tier` or numeric parameter outside its range
+        answers 400. `query` matches the name, description and soul summary;
+        the pattern is a bind parameter. The `facets` counts ignore the facet
+        they describe.
+      tags: [marketplace]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+        - name: kind
+          in: query
+          schema: { type: string }
+          description: '`agent` or `skill`. Absent keeps both.'
+        - name: query
+          in: query
+          schema: { type: string, maxLength: 200 }
+          description: Words matched against the name, description and soul summary.
+        - name: category
+          in: query
+          schema: { type: string }
+          description: Comma-separated categories.
+        - name: tag
+          in: query
+          schema: { type: string }
+          description: Comma-separated tags; a listing needs one of them.
+        - name: publisher_id
+          in: query
+          schema: { type: string }
+        - name: entity_id
+          in: query
+          schema: { type: string }
+          description: >
+            The public catalogue agent or skill id. The old `?agentId=` links
+            use it to find their listing.
+        - name: max_tier
+          in: query
+          schema: { type: string }
+          description: The highest risk tier to show (low, medium, high, critical).
+        - name: requires
+          in: query
+          schema: { type: string }
+          description: Comma-separated toolkit or MCP types; a listing needs one of them.
+        - name: min_rating
+          in: query
+          schema: { type: number, minimum: 0, maximum: 5 }
+        - name: hired_here
+          in: query
+          schema: { type: boolean }
+          description: Keep only listings the project has hired or added.
+        - name: featured
+          in: query
+          schema: { type: boolean }
+          description: Keep only listings an administrator features.
+        - name: sort
+          in: query
+          schema: { type: string }
+          description: '`relevance` (default), `hires`, `rating`, `newest` or `name`.'
+      responses:
+        '200':
+          description: A page of listings with the facet counts
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceListingPage' }
+              example:
+                rows:
+                  - id: "7"
+                    kind: agent
+                    entity_id: "42"
+                    name: Changelog Writer
+                    description: Drafts release notes from merged pull requests.
+                    category: Development
+                    tags: [github, release]
+                    publisher: { id: "3", name: Dana Owner }
+                    tier: medium
+                    current_version: { id: "311", name: v2.3, published_at: "2026-10-30T09:00:00Z" }
+                    hires: 120
+                    rating_avg: null
+                    rating_count: 0
+                    likes: 31
+                    is_liked: false
+                    featured: true
+                    required_types: [github]
+                    has_write_tools: true
+                    state: listed
+                    hired: []
+                total: 1
+                facets:
+                  kinds: [{ value: agent, label: Agents, count: 1 }]
+                  categories: [{ value: Development, label: Development, count: 1 }]
+                  tags: [{ value: github, label: github, count: 1 }]
+                  publishers: [{ value: "3", label: Dana Owner, count: 1 }]
+                  tiers: [{ value: medium, label: medium, count: 1 }]
+                  required_types: [{ value: github, label: github, count: 1 }]
+                  hired_here: 0
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/marketplace_listing/prompt_lib/{project_id}/{listing_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: listing_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getMarketplaceListing
+      summary: Read one listing with its versions
+      description: |
+        The listing page read: the card, the versions newest first with state,
+        release notes, digest and requirements, and the hires of the project in
+        the path. A delisted listing reads only for a project that has it
+        hired, for its publisher and for an administrator
+        (internal/marketplace/search.go Get).
+      tags: [marketplace]
+      responses:
+        '200':
+          description: The listing
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceListingDetail' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+    patch:
+      operationId: updateMarketplaceListing
+      summary: Feature, delist or list a listing (platform administrator)
+      description: |
+        Sets the editorial Featured flag or delists a listing. A delisted
+        listing leaves search and cannot be hired; its snapshots stay while a
+        project has them installed or as a fork origin
+        (internal/api/v2/eliteacore/marketplace_manage.go).
+      tags: [marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceListingUpdateRequest' }
+      responses:
+        '200':
+          description: The listing after the change
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceListingSummary' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  /elitea_core/marketplace_listing_version/prompt_lib/{project_id}/{listing_id}/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: listing_id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: setMarketplaceVersionState
+      summary: Deprecate, yank or restore a listing version
+      description: |
+        The publisher may set any state. A platform administrator may yank.
+        A yanked version is not hireable; agents installed from it keep
+        running and show a warning
+        (internal/api/v2/eliteacore/marketplace_manage.go).
+      tags: [marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceVersionStateRequest' }
+      responses:
+        '200':
+          description: The version after the change
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceVersion' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  /elitea_core/marketplace_hire/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: hireMarketplaceListing
+      summary: Hire a listing into the project (Install or Fork)
+      description: |
+        The hire wizard's write (ADR-0051 decision 3). Install creates an
+        agent of origin `installed` whose definition is read-only and pinned
+        to the version by id and digest. Fork creates an editable agent that
+        records `origin_listing_id`, `origin_version_id` and `origin_digest`.
+        A skill is added as a project skill, pinned the same way.
+
+        Every required toolkit or MCP type needs a binding to a project
+        toolkit, or `disabled`. Above low tier, or with write tools, the agent
+        is created with its tools disabled and a change request of kind
+        `hire` enables them on approval. A personal project has no second
+        approver: the call answers 409 `hire_needs_shared_project` unless the
+        platform policy `marketplace_personal_self_approve` is on, in which
+        case the hire is self-approved and audited
+        (internal/api/v2/eliteacore/marketplace_hire.go).
+      tags: [marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceHireRequest' }
+      responses:
+        '201':
+          description: The hired agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceHireResult' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: >-
+            An unbound requirement (`binding_missing`), a yanked or withdrawn
+            version (`version_not_hireable`), an open change request on the
+            agent, or a personal project that needs a shared one
+            (`hire_needs_shared_project`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /elitea_core/marketplace_origin/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      operationId: getMarketplaceOrigin
+      summary: Where an installed or forked agent came from
+      description: |
+        The origin of a hired agent: listing, pinned version, digest and
+        states, and a newer hireable version when one exists. Answers 404 for
+        an agent that was not hired from the Marketplace
+        (internal/marketplace/origin.go).
+      tags: [marketplace]
+      responses:
+        '200':
+          description: The origin
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceOrigin' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
 
   /elitea_core/public_applications/prompt_lib:
     get:
@@ -43404,6 +44001,10 @@ paths:
                 category:
                   type: string
                   description: One of /skill_categories; an omitted category falls back to "Other".
+                release_notes:
+                  type: string
+                  maxLength: 4000
+                  description: What changed in this version. The listing page shows it (ADR-0051).
       responses:
         '200':
           description: Published

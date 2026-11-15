@@ -245,7 +245,7 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
             permissions={permissions}
           >
             <ApplicationListPanel
-              rows={list.rows.map((application) => toApplicationRow(application, open, workshopList.statusBadge(application.status)))}
+              rows={list.rows.map((application) => toApplicationRow(application, open, workshopList.rowBadge(application, list.rows)))}
               isLoading={list.isLoading}
               isError={list.isError}
               errorMessage={t('pages.agents.privateList.error', 'Failed to load applications.')}

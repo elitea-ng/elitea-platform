@@ -122,6 +122,7 @@ export interface SkillPublishingState {
   readonly versionName: string;
   readonly versionNameError: string | undefined;
   readonly category: string;
+  readonly releaseNotes: string;
   readonly categories: readonly SkillCategory[];
   readonly report: SkillValidationReport | undefined;
   readonly error: string | undefined;
@@ -132,6 +133,7 @@ export interface SkillPublishingState {
   readonly close: () => void;
   readonly setVersionName: (value: string) => void;
   readonly setCategory: (value: string) => void;
+  readonly setReleaseNotes: (value: string) => void;
   /** Clears a refusal that was surfaced outside the dialog (unpublish). */
   readonly dismissError: () => void;
   readonly validate: () => Promise<void>;
@@ -155,14 +157,14 @@ export function useSkillPublishing(
   const [step, setStep] = useState<PublishStep>('preparation');
   const [versionName, setVersionNameState] = useState('');
   const [category, setCategoryState] = useState('');
+  // Not part of the validation verdict: notes do not change what the gate checks.
+  const [releaseNotes, setReleaseNotes] = useState('');
   const [report, setReport] = useState<SkillValidationReport>();
   const [token, setToken] = useState<string>();
   const [error, setError] = useState<string>();
 
-  const canShowPublish =
-    permissions.has(PERMISSIONS.skills.publish) && target.versionStatus === 'draft';
-  const canUnpublish =
-    permissions.has(PERMISSIONS.skills.publish) && target.versionStatus === 'published';
+  const canShowPublish = permissions.has(PERMISSIONS.skills.publish) && target.versionStatus === 'draft';
+  const canUnpublish = permissions.has(PERMISSIONS.skills.publish) && target.versionStatus === 'published';
 
   const invalidate = useCallback(async (): Promise<void> => {
     if (projectId) await queryClient.invalidateQueries({ queryKey: skillQueryKeys.all(projectId) });
@@ -181,6 +183,7 @@ export function useSkillPublishing(
       publishSkill(projectId ?? '', target.skillId ?? 0, target.versionId ?? 0, {
         versionName: versionName.trim(),
         category,
+        ...(releaseNotes.trim() ? { releaseNotes: releaseNotes.trim() } : {}),
         ...(token ? { validationToken: token } : {}),
       }),
     onSuccess: invalidate,
@@ -252,6 +255,7 @@ export function useSkillPublishing(
     setStep('preparation');
     setVersionNameState('');
     setCategoryState('');
+    setReleaseNotes('');
     setReport(undefined);
     setToken(undefined);
     setError(undefined);
@@ -315,6 +319,7 @@ export function useSkillPublishing(
     versionName,
     versionNameError,
     category,
+    releaseNotes,
     categories: categories.data ?? [],
     report,
     error,
@@ -325,6 +330,7 @@ export function useSkillPublishing(
     close,
     setVersionName,
     setCategory,
+    setReleaseNotes,
     dismissError,
     validate,
     publish,

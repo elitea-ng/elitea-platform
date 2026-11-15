@@ -51,6 +51,14 @@ export function ChangeRequestDetail({ projectId, applicationId, changeRequestId 
       >
         {request.summary}
       </Typography>
+      {String(request.kind) === 'hire' && request.state !== 'approved' && request.state !== 'published' && (
+        <Alert
+          severity="info"
+          data-testid="change-request-hire-note"
+        >
+          {t('features.agentLifecycle.changeRequest.hireNote', 'Tools stay disabled until this hire is approved.')}
+        </Alert>
+      )}
       <Typography
         variant="bodySmall"
         color="text.secondary"

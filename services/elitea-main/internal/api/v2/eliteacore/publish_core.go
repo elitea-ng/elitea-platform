@@ -236,6 +236,9 @@ type publishWrite struct {
 	publishedBy    int64
 	hasPublisher   bool
 	releaseActorID int64
+	// releaseNotes is what changed in this version, for the Marketplace
+	// listing (ADR-0051 decision 2). Optional.
+	releaseNotes string
 }
 
 // publishOutcome is what publishTx wrote.
@@ -351,6 +354,14 @@ func (h *Handler) publishTx(ctx context.Context, tx pgx.Tx, p publishWrite) (pub
 	if err := h.embedSubAgents(ctx, tx, s, p.projectID, p.versionID, cloneID); err != nil {
 		slog.ErrorContext(ctx, "publish: embed the sub-agents", "schema", s, "version_id", cloneID, "error", err)
 		return publishOutcome{}, refuse(http.StatusInternalServerError, map[string]any{"error": "failed to publish agent sub-agents"})
+	}
+
+	// The Marketplace listing of this publish (ADR-0051 decision 2): the
+	// snapshot of the published clone with its requirements, in the same
+	// transaction, so a version the catalogue shows always has its snapshot.
+	if err := h.recordListing(ctx, tx, p, cloneID, twin); err != nil {
+		slog.ErrorContext(ctx, "publish: record the marketplace listing", "schema", s, "version_id", cloneID, "error", err)
+		return publishOutcome{}, refuse(http.StatusInternalServerError, map[string]any{"error": "failed to publish agent to the marketplace"})
 	}
 
 	// The release of this publish (ADR-0040 decision 2), recorded last in
@@ -476,7 +487,7 @@ func (h *Handler) PublishCandidateTx(ctx context.Context, tx pgx.Tx, candidate a
 		schema: s, projectID: projectID, appID: appID, versionID: versionID,
 		versionName: candidate.VersionName, category: candidate.Category,
 		publishedBy: candidate.PublisherID, hasPublisher: candidate.PublisherID > 0,
-		releaseActorID: candidate.PublisherID,
+		releaseActorID: candidate.PublisherID, releaseNotes: candidate.ReleaseNotes,
 	})
 	if refusal != nil {
 		return agentlifecycle.PublishedCandidate{}, refusal

@@ -24,6 +24,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
@@ -1279,6 +1280,15 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An agent installed from the Marketplace keeps the one version its snapshot
+	// made: a new version would let its definition drift (ADR-0051 decision 3).
+	if h.pool != nil {
+		if schema, schemaOK := tenantSchema(projectID); schemaOK && marketplace.IsInstalledApplication(r.Context(), h.pool, schema, applicationID) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": marketplace.ReadOnlyCode, "msg": marketplace.ReadOnlyMessage})
+			return
+		}
+	}
+
 	name, _ := body["name"].(string)
 	if name == "" {
 		apierr.Write(w, apierr.BadRequest("version name is required"))
@@ -1393,6 +1403,18 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		apierr.Write(w, apierr.BadRequest("invalid request body"))
 		return
+	}
+
+	// The definition of an agent installed from the Marketplace is read-only
+	// (ADR-0051 decision 3). A save that repeats the stored values, as the editor
+	// sends, is not a change.
+	if h.pool != nil {
+		if schema, schemaOK := tenantSchema(projectID); schemaOK &&
+			marketplace.IsInstalledVersion(r.Context(), h.pool, schema, versionID) &&
+			marketplace.DefinitionChanged(r.Context(), h.pool, schema, versionID, body) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": marketplace.ReadOnlyCode, "msg": marketplace.ReadOnlyMessage})
+			return
+		}
 	}
 
 	user, ownerID, ok := principal(r)

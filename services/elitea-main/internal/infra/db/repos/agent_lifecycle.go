@@ -1336,6 +1336,11 @@ WHERE id = $1`, change.ID, requirement.Approvals, requirement.GovernanceApproval
 // and the configurations they pin) differs from the one taken at submit.
 // The revisions see the version row only; the digest sees the attachments.
 func (s *AgentLifecycle) checkFresh(ctx context.Context, tx pgx.Tx, change agentlifecycle.ChangeRequest) error {
+	if change.Kind.IsMarketplace() {
+		// Pinned to a listing version by id and digest, and checked against the
+		// listing when the final approval enables the tools.
+		return nil
+	}
 	stale := agentlifecycle.Refuse(agentlifecycle.StaleCode,
 		"The agent changed after this change request was submitted. Withdraw it and submit a new one.")
 	head, _, err := headRelease(ctx, tx, change.ProjectID, change.ApplicationID)
@@ -1417,6 +1422,11 @@ WHERE tenant_project_id = $1 AND revoked_at IS NULL
 
 // finalize publishes or certifies after the final approval, in tx.
 func (s *AgentLifecycle) finalize(ctx context.Context, tx pgx.Tx, change agentlifecycle.ChangeRequest, registry agentlifecycle.Registry, requirement agentlifecycle.Requirement, approverID int64, outcome *ApprovalOutcome) ([]int64, error) {
+	if change.Kind.IsMarketplace() {
+		// A hire enables the tools of the hired agent. It publishes nothing
+		// and certifies nothing (agent_lifecycle_marketplace.go).
+		return nil, s.finalizeMarketplace(ctx, tx, change, approverID)
+	}
 	releaseID := change.CurrentReleaseID
 	state := agentlifecycle.ChangeApproved
 	if change.Kind == agentlifecycle.KindRelease {
@@ -1426,6 +1436,7 @@ func (s *AgentLifecycle) finalize(ctx context.Context, tx pgx.Tx, change agentli
 		published, err := s.publisher.PublishCandidateTx(ctx, tx, agentlifecycle.PublishCandidate{
 			ProjectID: change.ProjectID, ApplicationID: change.ApplicationID, VersionID: change.CandidateVersionID,
 			VersionName: change.VersionName, Category: change.Category, PublisherID: change.ProposedBy,
+			ReleaseNotes: change.Summary,
 		})
 		if err != nil {
 			return nil, err

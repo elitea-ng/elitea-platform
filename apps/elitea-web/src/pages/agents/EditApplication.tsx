@@ -25,6 +25,7 @@ import { useEditApplicationForm } from './lib/useEditApplicationForm';
 import { useEditApplicationVersionControls } from './lib/useEditApplicationVersionControls';
 import { useEditApplicationVersionFields } from './lib/useEditApplicationVersionFields';
 import { useIsVersionNotFound } from './lib/useIsVersionNotFound';
+import { isInstalledOrigin, useMarketplaceOrigin } from './lib/useMarketplaceOrigin';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { EditApplicationActions } from './ui/EditApplicationActions';
 import { EditApplicationAiEditSlot } from './ui/EditApplicationAiEditSlot';
@@ -34,6 +35,7 @@ import { EditApplicationEditorTabs } from './ui/EditApplicationEditorTabs';
 import { EditApplicationPersonaPanel } from './ui/EditApplicationPersonaPanel';
 import { EditApplicationSaveBar } from './ui/EditApplicationSaveBar';
 import { EditApplicationSplit, EditApplicationTestPane } from './ui/EditApplicationTestPane';
+import { MarketplaceOriginBanner } from './ui/MarketplaceOriginBanner';
 
 interface EditApplicationParams {
   readonly tab?: string;
@@ -244,6 +246,9 @@ export function EditApplication(): ReactNode {
   // same terms as the rest of the form. Named rather than repeated because a
   // second inline `||` puts this component over the §3.5 complexity gate (12).
   const isEditorDisabled = isReadOnlyView || isFetching;
+  // ADR-0051: an installed agent's definition is its listing version's snapshot; only project settings change.
+  const origin = useMarketplaceOrigin(projectId, applicationId);
+  const definitionLocked = isInstalledOrigin(origin);
 
   // Routed through the same `onFieldChange` every other version-level field
   // uses, so the picked model lands in `useEditApplicationVersionFields` —
@@ -334,6 +339,7 @@ export function EditApplication(): ReactNode {
           }
         />
         <Box sx={contentSx}>
+          {origin !== undefined && <MarketplaceOriginBanner origin={origin} />}
           {isError && (
             <Typography
               role="alert"
@@ -366,7 +372,7 @@ export function EditApplication(): ReactNode {
              */
             applicationVersionId={versionControls.activeVersionId}
             versions={versionControls.versionOptions}
-            personaPanel={<EditApplicationPersonaPanel versionFields={versionFields} disabled={isEditorDisabled} />}
+            personaPanel={<EditApplicationPersonaPanel versionFields={versionFields} disabled={isEditorDisabled || definitionLocked} />}
             avatarPanel={<EditApplicationAvatarPanel projectId={projectId} versionFields={versionFields} disabled={isEditorDisabled} />}
             configurationPanel={
               <EditApplicationConfigurationPanel
@@ -376,6 +382,7 @@ export function EditApplication(): ReactNode {
                 editor={editor}
                 versionFields={versionFields}
                 isEditorDisabled={isEditorDisabled}
+                definitionLocked={definitionLocked}
                 isDirty={isDirty}
                 isReadOnly={isReadOnlyView}
                 saveError={saveError}

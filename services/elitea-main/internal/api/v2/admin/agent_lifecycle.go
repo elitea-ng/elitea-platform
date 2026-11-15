@@ -121,6 +121,16 @@ func agentLifecycleSection() map[string]any {
 		"section": section,
 		"default": string(platformconfig.DefaultMemoryAutoMaxTier),
 	})
+	fields = append(fields, map[string]any{
+		"key":   platformconfig.KeyMarketplacePersonalSelfApprove,
+		"type":  "boolean",
+		"title": "Self-approve Marketplace Hires in Personal Projects",
+		"description": "A personal project has one member, so a hire above low tier, or with write tools, has no " +
+			"second approver. Off: the hire needs a shared project. On: the person approves their own hire, and " +
+			"the audit log records the policy.",
+		"section": section,
+		"default": false,
+	})
 	return map[string]any{
 		"id":    section,
 		"title": "Agent Lifecycle",

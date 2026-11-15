@@ -22,7 +22,14 @@ export interface ListingShellProps {
   readonly children: ReactNode;
 }
 
-export function ListingShell({ name, iconUrl, version, meta, actions, children }: ListingShellProps): React.JSX.Element {
+export function ListingShell({
+  name,
+  iconUrl,
+  version,
+  meta,
+  actions,
+  children,
+}: ListingShellProps): React.JSX.Element {
   return (
     <Box data-testid="marketplace-listing" sx={pageSx}>
       <Box component="header" sx={headerSx}>
@@ -31,7 +38,9 @@ export function ListingShell({ name, iconUrl, version, meta, actions, children }
           <Typography component="h2" variant="headingLarge" data-testid="marketplace-listing-name">
             {name}
           </Typography>
-          {version !== undefined && version !== '' && <Chip size="small" label={version} data-testid="marketplace-listing-version" />}
+          {version !== undefined && version !== '' && (
+            <Chip size="small" label={version} data-testid="marketplace-listing-version" />
+          )}
           {meta}
         </Box>
         <Box sx={actionsSx}>{actions}</Box>
@@ -42,7 +51,15 @@ export function ListingShell({ name, iconUrl, version, meta, actions, children }
 }
 
 /** One titled block of a listing page. */
-export function ListingBlock({ id, title, children }: { readonly id: string; readonly title: string; readonly children: ReactNode }): React.JSX.Element {
+export function ListingBlock({
+  id,
+  title,
+  children,
+}: {
+  readonly id: string;
+  readonly title: string;
+  readonly children: ReactNode;
+}): React.JSX.Element {
   const headingId = `marketplace-block-${id}`;
   return (
     <Box component="section" aria-labelledby={headingId} sx={blockSx}>
@@ -68,9 +85,20 @@ const pageSx: SxProps<Theme> = {
 
 const headerSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' };
 
-const iconSx: SxProps<Theme> = (theme: Theme) => ({ width: '3rem', height: '3rem', borderRadius: theme.vars.shape.radiusMd });
+const iconSx: SxProps<Theme> = (theme: Theme) => ({
+  width: '3rem',
+  height: '3rem',
+  borderRadius: theme.vars.shape.radiusMd,
+});
 
-const titleSx: SxProps<Theme> = { flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' };
+const titleSx: SxProps<Theme> = {
+  flex: 1,
+  minWidth: 0,
+  display: 'flex',
+  alignItems: 'center',
+  gap: '0.75rem',
+  flexWrap: 'wrap',
+};
 
 const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.75rem' };
 

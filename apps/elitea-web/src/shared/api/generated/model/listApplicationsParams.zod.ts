@@ -66,6 +66,7 @@ export const ListApplicationsParams = zod.object({
   sort_by: zod.string().optional(),
   sort_order: zod.string().optional(),
   origin: zod.string().optional(),
+  update_available: zod.boolean().optional(),
 });
 
 export type ListApplicationsParams = zod.input<typeof ListApplicationsParams>;

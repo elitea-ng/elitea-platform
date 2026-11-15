@@ -1,38 +1,101 @@
 ---
 title: "Marketplace"
-description: "Browse, search, and use published agents and skills from Elitea's shared library."
+description: "Browse, search, hire, and add published agents and skills from Elitea's shared library, with versions, release notes, and requirements."
 ---
 
 Marketplace is the shared library of published agents and skills, visible across every project you have access to — a discovery surface, not a personal workspace. It was called **Catalog** (and, before that, **Agent HUB**). Open it from the **Marketplace** row in the sidebar, beside the **Workshop** group, on the web and in the desktop app.
 
 <Screenshot id="catalog-agents" alt="Marketplace showing published agent cards with the Browse sidebar open" />
 
-## Agents and Skills
+## Search and facets
 
-The **Browse** tab of the right sidebar holds every control for the list: search, the **Kind** (**Agents** or **Skills**), **Category** and **Sort by**. Agents and skills work the same way:
+The **Browse** tab of the right sidebar holds every control for the list. Search matches the name, the description, and the soul summary. The server counts each facet value over the whole Marketplace. A facet ignores its own filter, so a count shows what one more click adds.
 
-- Search matches name and description.
-- **Category** is multi-select: tick as many as you like, and a listing shows if it carries any of them.
-- **Sort by** offers **Newest first** and **Name A-Z**, and **Most liked** for agents (skills have no likes).
+- **Kind**: **Agents** or **Skills**.
+- **Category** and **Tag**: tick as many as you like. A listing shows if it carries any of them.
+- **Publisher**: the person who published the listing.
+- **Max tier**: the highest risk tier to show (low, medium, high, critical).
+- **Requires**: the toolkit and MCP types a listing needs, for example `github`.
+- **Rating**: the minimum average rating. Ratings arrive with a later phase, so every listing reads **No ratings yet** now.
+- **Hired here**: only the listings your project already hired or added.
+- **Sort by**: **Relevance**, **Most hired**, **Top rated**, **Newest**, and **Name A-Z**.
 
-The strip above the list shows how many listings match and every active filter as a chip you can remove, with **Clear all**, so you can see why the list is short even when the sidebar is closed. **Browse** in that strip opens the sidebar. On a narrow window the sidebar is a drawer.
+The strip above the list shows how many listings match and every active filter as a chip you can remove, with **Clear all**. On a narrow window the sidebar is a drawer.
 
-With no search and no category chosen, the page opens with a **Featured** row (the most recently published listings) and, for agents, a **Popular in your organisation** row (the most liked), above the full list. The rows are hidden as soon as you search or pick a category: a filtered list is the answer, not a shelf. There is no per-category **Show more**; narrow the list instead.
+With no search and no facet active, the page opens with a **Featured** row and a **Popular in your organisation** row (the most hired). A platform administrator sets **Featured** by hand. The rows hide as soon as you search or pick a facet.
 
-Each card shows the icon, the name, a one-line description, the current version and, for agents, the like count. The whole card is a link, so you can open it in a new tab or copy its address.
+Each card shows the icon, the name, the publisher, a one-line description, the hire count, the current version, the tier, and a **Requires** chip for each toolkit type. A card shows **Hired v2.3** when your project has the listing. The whole card is a link.
 
 ## A listing
 
-Select a card to open its own page at `/marketplace/{kind}/{listing}`. The page has an address you can bookmark and share, and the **Copy link** button copies it.
+Select a card to open its page at `/marketplace/{kind}/{listing}`. The page has an address you can bookmark, and **Copy link** copies it. A banner says when the listing is delisted.
 
-- **An agent** shows its description, category, conversation starters and welcome message. **Show context** reads its instructions (read-only). **Try in chat** starts a conversation with the published copy, and a conversation starter does the same.
-- **A skill** shows its description, tags and instructions. **Add to an agent** forks the skill into your project and attaches it to the agent version you choose; it needs permission to fork in the project, and the page says so when you do not have it.
+- **Overview**: the description, the conversation starters, and the requirements.
+- **Versions**: newest first. Each version shows its state, its publish date, its release notes, and a short digest.
+- **Feedback**: likes show as "Saved by N". Reviews arrive with a later phase.
+- **Used by this project**: the hires your project already has, with links.
 
-Links to the old pages keep working: `/elitea-catalog` and `/agents-hub` redirect to the Marketplace, `?tab=skills` becomes the **Skills** kind, and a shared `?agentId=` link opens that agent's listing page.
+**Try in chat** starts a conversation with the published copy. **Show context** reads the instructions.
+
+### Version states
+
+| State | Meaning |
+| --- | --- |
+| **current** | The newest version that can be hired. |
+| **available** | An older version that can still be hired. |
+| **deprecated** | Still hireable. The wizard shows a warning. |
+| **yanked** | Not hireable. Agents already installed from it keep running and show a warning. |
+
+The publisher can deprecate, yank, and restore a version in the **Versions** section. A platform administrator can yank a version and can delist or feature a listing. A version that an administrator yanked stays yanked until an administrator restores it.
+
+### Requirements
+
+A version lists what it needs from your project: toolkit and MCP types with the tools it uses, the skills, the nested agents, the model class, and the risk tier. Requirements hold types and names. They never hold credentials or toolkit settings. The digest is a SHA-256 over the stored definition and the requirements.
+
+## Hire an agent
+
+Select **Hire** on an agent listing. **Hire** is a split button: **Install** is the default, and **Fork** is the other choice. The wizard has four steps.
+
+1. **Version**: the current version is the default. Pick any version that is not yanked. A deprecated version shows a warning. The release notes show for the version you pick.
+2. **Mode**:
+   - **Install** (recommended) creates an agent whose definition is read-only and pinned to the version by id and digest. It shows in the Workshop as **Installed v2.3**. A new listing version never changes it. You can still change the name, the description, the icon, the tags, and the proactivity settings.
+   - **Fork** creates a normal editable agent. It records the listing, the version, and the digest it came from. The Workshop shows **Forked from … v1.2**.
+3. **Bindings**: bind each required toolkit or MCP type to a toolkit of that type in your project. Use **Create a toolkit** when you have none. You cannot finish with an unbound toolkit unless you choose **Disable for now**. The tools that need it stay unavailable.
+4. **Review**: the tier, the tools, and the effect of the hire. Then select **Hire**.
+
+### Who must approve
+
+If the tier is above low, or the agent has a write tool, the agent is created with every tool disabled. A change request of kind `hire` waits for a person other than you. The tools turn on when the approvals that the tier needs are in. See [Agent lifecycle](/admin/enterprise-controls/agent-lifecycle). An agent of low tier with only read tools turns on at once.
+
+A personal project has no second approver. The wizard then says that the hire needs a shared project. A platform administrator can switch on the policy `marketplace_personal_self_approve`. Then you approve your own hire, and the audit log records the policy.
+
+You can hire the same listing more than once. The Workshop marks the second hire "also hired as …".
+
+You cannot publish an installed agent as it is. Fork it first.
+
+## Add a skill
+
+**Add to an agent** on a skill listing has a version pick. A yanked version is disabled. The skill is forked into your project and attached to the agent versions you choose. The Marketplace counts the add as a hire.
+
+## Publish with release notes
+
+The publish dialog of an agent and of a skill has an optional **Release notes** field (up to 4000 characters). The listing shows the notes with the version. When a change request publishes the agent, its summary is the release notes.
+
+## Unpublish
+
+Unpublish delists the version. The listing leaves search, and nobody can hire it. The stored snapshot stays while any project has it installed or as a fork origin. An installed agent keeps running on its snapshot and shows a **Listing withdrawn** banner. If the listing has another version, the listing stays listed with that version.
+
+## In the Workshop
+
+The **Origin** filter in the agents list gains **Installed**. The **Update available** filter keeps the installed and forked agents whose listing has a newer version. The editor of an installed agent shows a banner with the pinned version and a link to the listing. Its definition fields are read-only.
+
+## On mobile
+
+The mobile **Discover** tab only browses. It does not hire or add. Hiring needs toolkit binding, and that stays on the web and desktop apps.
 
 ## What you can and cannot change
 
-Published items are read-only. In a conversation with a published agent you can change the **model**, its **settings** (Creativity or Reasoning Effort, Max Completion Tokens, Steps Limit), and the values of any variables it defines — these changes apply only to your conversation. You cannot edit its name, instructions, welcome message, conversation starters, or attached toolkits; to get an editable copy, [fork](/how-tos/agents-pipelines/forking) it or build your own from the [Agents](/menus/agents) menu.
+Published items are read-only, and so is the definition of an installed agent. In a conversation with a published agent you can change the **model**, its **settings** (Creativity or Reasoning Effort, Max Completion Tokens, Steps Limit), and the values of any variables it defines — these changes apply only to your conversation. You cannot edit its name, instructions, welcome message, conversation starters, or attached toolkits; to get an editable copy, [fork](/how-tos/agents-pipelines/forking) it or build your own from the [Agents](/menus/agents) menu.
 
 ## Troubleshooting
 

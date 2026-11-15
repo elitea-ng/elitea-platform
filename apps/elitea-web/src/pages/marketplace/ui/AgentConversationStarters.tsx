@@ -40,11 +40,7 @@ export const AgentConversationStarters = memo(
         {filtered.length > 0 ? (
           <Box sx={gridSx(filtered.length === 1)}>
             {filtered.map((text, i) => (
-              <AgentConversationStarterItem
-                key={i}
-                text={text}
-                {...(onSelectStarter ? { onSelectStarter } : {})}
-              />
+              <AgentConversationStarterItem key={i} text={text} {...(onSelectStarter ? { onSelectStarter } : {})} />
             ))}
           </Box>
         ) : (
