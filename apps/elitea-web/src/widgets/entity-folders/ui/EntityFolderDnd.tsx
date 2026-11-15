@@ -36,20 +36,26 @@ const collisions: CollisionDetection = (args) => {
  * zones, the handle on each card or row is the draggable. Pointer and keyboard
  * (Space, arrows, Space) both work, a screen reader hears each step, and the
  * result is also announced once the server has answered. Without update rights
- * on the list it renders its children alone.
+ * on the list it offers no handle and no drop zone, with the same tree.
  */
 export function EntityFolderDnd({ projectId, kind, permissions, selectedIds = [], children }: EntityFolderDndProps): ReactNode {
-  const canUpdate = entityFolderAccess(kind, permissions).canUpdate && projectId !== undefined;
-  return canUpdate ? (
-    <ActiveDnd projectId={projectId} kind={kind} selectedIds={selectedIds}>
+  const enabled = entityFolderAccess(kind, permissions).canUpdate && projectId !== undefined;
+  // The same tree whatever the permissions say: permissions load after the first paint, and a wrapper that appeared only once they
+  // arrived would remount the page below it (and drop what a person had already started, such as a picked import file).
+  return (
+    <ActiveDnd projectId={projectId} kind={kind} selectedIds={selectedIds} enabled={enabled}>
       {children}
     </ActiveDnd>
-  ) : (
-    children
   );
 }
 
-function ActiveDnd({ projectId, kind, selectedIds, children }: Omit<EntityFolderDndProps, 'permissions'> & { readonly selectedIds: readonly string[] }): ReactNode {
+function ActiveDnd({
+  projectId,
+  kind,
+  selectedIds,
+  enabled,
+  children,
+}: Omit<EntityFolderDndProps, 'permissions'> & { readonly selectedIds: readonly string[]; readonly enabled: boolean }): ReactNode {
   const folders = useEntityFolders(projectId, kind).data;
   const { moveQuiet, refreshEntities } = useEntityFolderMutations(projectId, kind);
   const names = useRef(new Map<number, string>());
@@ -125,7 +131,7 @@ function ActiveDnd({ projectId, kind, selectedIds, children }: Omit<EntityFolder
         ),
       }}
     >
-      <EntityFolderDndContext.Provider value={value}>{children}</EntityFolderDndContext.Provider>
+      <EntityFolderDndContext.Provider value={enabled ? value : undefined}>{children}</EntityFolderDndContext.Provider>
       <DragOverlay dropAnimation={null}>
         {dnd.isDragging && overlayLabel !== undefined ? (
           <Box data-testid="entity-folder-drag-overlay" sx={overlaySx}>

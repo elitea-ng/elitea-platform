@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
@@ -77,6 +79,37 @@ describe('EntityFolderDnd', () => {
     renderInRouter(page([UPDATE]));
     await user.click(await screen.findByTestId('entity-drag-handle'));
     expect(ITEM.onClick).not.toHaveBeenCalled();
+  });
+});
+
+describe('EntityFolderDnd when permissions arrive late', () => {
+  it('keeps the page below it mounted, so a started action is not lost', async () => {
+    serveFolders('skill', FOLDERS);
+    function Late(): React.ReactElement {
+      const [granted, setGranted] = useState<ReadonlySet<string>>(new Set());
+      return (
+        <EntityFolderDnd
+          projectId={PROJECT}
+          kind="skill"
+          permissions={granted}
+        >
+          <input data-testid="kept" />
+          <button
+            type="button"
+            onClick={() => {
+              setGranted(new Set([UPDATE]));
+            }}
+          >
+            grant
+          </button>
+        </EntityFolderDnd>
+      );
+    }
+    const user = userEvent.setup();
+    renderInRouter(<Late />);
+    await user.type(await screen.findByTestId('kept'), 'agent.json');
+    await user.click(screen.getByRole('button', { name: 'grant' }));
+    expect(screen.getByTestId('kept')).toHaveValue('agent.json');
   });
 });
 
