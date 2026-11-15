@@ -1000,7 +1000,7 @@ impl OrdinaryNativeAgentAssembler {
                     .map_err(tool_binding_error)?,
             );
         }
-        // propose_dismissal (ADR-0050 decision 5l, #1616): an HR agent's
+        // propose_dismissal (ADR-0050 decision 5l, #1616): a workforce manager's
         // one workforce tool, only when the version grants
         // can_review_agents. Bound after the filter: it writes nothing but a
         // proposal a person decides.

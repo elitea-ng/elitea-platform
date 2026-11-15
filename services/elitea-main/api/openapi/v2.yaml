@@ -9643,9 +9643,9 @@ components:
         application_name: { type: string }
         kind: { type: string, description: dismiss or demote. }
         stage: { type: string, description: 'watch, demote, suspend, retire or delete.' }
-        source: { type: string, description: 'person, hr_agent or policy (the project''s automatic dismissal policy).' }
+        source: { type: string, description: 'person, workforce_manager or policy (the project''s automatic dismissal policy).' }
         proposed_by_user_id: { type: integer, format: int64, nullable: true }
-        proposer_application_id: { type: integer, format: int64, nullable: true, description: The HR agent that proposed it. }
+        proposer_application_id: { type: integer, format: int64, nullable: true, description: The workforce manager that proposed it. }
         execution_id: { type: string, nullable: true }
         rationale: { type: string }
         narrowing: { $ref: '#/components/schemas/AgentWorkforceNarrowing' }
@@ -9711,7 +9711,7 @@ components:
       type: object
       required: [project_id, application_id, application_name, risk_tier, business_owner_id, technical_owner_id,
         under_review, under_review_since, lifecycle_state, retired_at, retired_by, reinstate_until, purge_after,
-        suspension_id, suspension_source, legal_hold, is_hr_agent, auto_hired_at, probation_until,
+        suspension_id, suspension_source, legal_hold, is_workforce_manager, auto_hired_at, probation_until,
         probation_reviewed_at, orphaned_since]
       properties:
         project_id: { type: integer, format: int64 }
@@ -9730,7 +9730,11 @@ components:
         suspension_id: { type: integer, format: int64, description: 'The active suspension, 0 for none.' }
         suspension_source: { type: string }
         legal_hold: { type: boolean }
-        is_hr_agent: { type: boolean }
+        is_workforce_manager: { type: boolean }
+        is_hr_agent:
+          type: boolean
+          deprecated: true
+          description: Deprecated duplicate of is_workforce_manager, kept for one release for older mobile and desktop builds. Removed in the next release.
         auto_hired_at:
           type: string
           format: date-time
@@ -12921,12 +12925,12 @@ components:
             can_review_agents:
               type: boolean
               description: >
-                The agent is an HR agent (ADR-0050 decision 5l): it may
+                The agent is a workforce manager (ADR-0050 decision 5l): it may
                 propose, with the propose_dismissal tool, a ladder stage for
                 another agent of the project. It never decides; a person
                 holding agents.workforce.manage does. Guards refuse a
                 proposal against itself, its hirer, a higher tier, another
-                HR agent, a critical-tier agent or one under legal hold.
+                workforce manager, a critical-tier agent or one under legal hold.
           additionalProperties: { type: boolean }
           description: >
             What the agent may do beyond its tools. Absent is none. A save
@@ -31014,7 +31018,7 @@ paths:
         The agent's place on the dismissal ladder (ADR-0050 decision 5g):
         whether it is under review (watch), suspended, retired (and until
         when it can be reinstated) or deleted, its owners, legal hold, whether
-        it is an HR agent, its latest daily scorecard, and whether the caller
+        it is a workforce manager, its latest daily scorecard, and whether the caller
         manages agents here or owns the agent. Requires
         `models.applications.applications.list`.
       tags: [applications]

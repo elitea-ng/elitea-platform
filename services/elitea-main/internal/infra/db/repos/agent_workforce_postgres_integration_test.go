@@ -1,7 +1,7 @@
 package repos
 
 // The agent workforce (shared/0236, ADR-0050 decisions 5g-5j, #1616)
-// against a REAL migrated database: one case per ladder stage, the HR-agent
+// against a REAL migrated database: one case per ladder stage, the workforce-manager
 // guards, the appeal by a different manager and the reinstatement. It SKIPS
 // without ELITEA_TEST_DATABASE_URL, and a skip prints the same `ok`, so each
 // case asserts values a skip could not have produced.
@@ -734,13 +734,13 @@ func TestWorkforceDeleteAfterRetentionAndLegalHold(t *testing.T) {
 	}
 }
 
-// seedHRRun writes a claimed run of proposer whose frozen version sets
-// can_review_agents to hr.
-func seedHRRun(t *testing.T, pool *pgxpool.Pool, executionID string, proposer int64, hr bool) {
+// seedManagerRun writes a claimed run of proposer whose frozen version sets
+// can_review_agents to wfm.
+func seedManagerRun(t *testing.T, pool *pgxpool.Pool, executionID string, proposer int64, wfm bool) {
 	t.Helper()
 	seedEgressExecution(t, pool, executionID, wfProject, proposer)
 	input := agentCapacityInput("gen-" + executionID)
-	input.Application = fmt.Appendf(nil, `{"id":%d,"version_details":{"meta":{"capabilities":{"can_review_agents":%t}}}}`, proposer, hr)
+	input.Application = fmt.Appendf(nil, `{"id":%d,"version_details":{"meta":{"capabilities":{"can_review_agents":%t}}}}`, proposer, wfm)
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
@@ -752,18 +752,18 @@ WHERE input_bundle_id = $1`, "bundle-"+executionID, encoded, digest[:], len(enco
 	wfExec(t, pool, `UPDATE elitea_runtime.execution_jobs SET actor_id = '4', principal_ref = '4' WHERE execution_id = $1`, executionID)
 }
 
-func TestWorkforceHRAgentGuards(t *testing.T) {
+func TestWorkforceWorkforceManagerGuards(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	seedCurrentAgentContinuationSchema(t, pool)
 	now := time.Now().UTC()
 	store := workforceStore(t, pool, &now)
 	ctx := context.Background()
 	const (
-		hr, target, otherHR, high, critical, held, hirer, plain int64 = 991710, 991711, 991712, 991713, 991714, 991715, 991716, 991717
+		wfm, target, otherManager, high, critical, held, hirer, plain int64 = 991710, 991711, 991712, 991713, 991714, 991715, 991716, 991717
 	)
-	seedWorkforceAgent(t, pool, hr, "medium", `{"capabilities":{"can_review_agents":true}}`)
+	seedWorkforceAgent(t, pool, wfm, "medium", `{"capabilities":{"can_review_agents":true}}`)
 	seedWorkforceAgent(t, pool, target, "low", `{}`)
-	seedWorkforceAgent(t, pool, otherHR, "low", `{"capabilities":{"can_review_agents":true}}`)
+	seedWorkforceAgent(t, pool, otherManager, "low", `{"capabilities":{"can_review_agents":true}}`)
 	seedWorkforceAgent(t, pool, high, "high", `{}`)
 	seedWorkforceAgent(t, pool, critical, "critical", `{}`)
 	seedWorkforceAgent(t, pool, held, "low", `{}`)
@@ -773,24 +773,24 @@ func TestWorkforceHRAgentGuards(t *testing.T) {
 	wfExec(t, pool, `
 INSERT INTO elitea_lifecycle.agent_proposals (project_id, proposer_application_id, proposed_for_user_id, execution_id,
     ephemeral_agent_id, spec_digest, rationale, draft, status, decided_by_user_id, decided_at, created_application_id)
-VALUES (1, $1, 4, 'exec-hire', 'a_0000abcd', repeat('a', 64), 'hire', '{}'::jsonb, 'created', 4, now(), $2)`, hirer, hr)
+VALUES (1, $1, 4, 'exec-hire', 'a_0000abcd', repeat('a', 64), 'hire', '{}'::jsonb, 'created', 4, now(), $2)`, hirer, wfm)
 
-	seedHRRun(t, pool, "exec-hr-1616", hr, true)
-	seedHRRun(t, pool, "exec-plain-1616", plain, false)
-	run, err := store.ResolveProposeDismissalRun(ctx, wfProject, "exec-hr-1616", 1)
-	if err != nil || !run.IsHRAgent || run.ApplicationID != hr || run.ActorID != 4 {
+	seedManagerRun(t, pool, "exec-wfm-1616", wfm, true)
+	seedManagerRun(t, pool, "exec-plain-1616", plain, false)
+	run, err := store.ResolveProposeDismissalRun(ctx, wfProject, "exec-wfm-1616", 1)
+	if err != nil || !run.IsWorkforceManager || run.ApplicationID != wfm || run.ActorID != 4 {
 		t.Fatalf("run = %+v %v", run, err)
 	}
-	notHR, err := store.ResolveProposeDismissalRun(ctx, wfProject, "exec-plain-1616", 1)
-	if err != nil || notHR.IsHRAgent {
-		t.Fatalf("plain run = %+v %v", notHR, err)
+	notManager, err := store.ResolveProposeDismissalRun(ctx, wfProject, "exec-plain-1616", 1)
+	if err != nil || notManager.IsWorkforceManager {
+		t.Fatalf("plain run = %+v %v", notManager, err)
 	}
 	// A draft that claims can_review_agents (the run's frozen meta says so)
-	// is not an HR agent until a published version carries it.
-	seedHRRun(t, pool, "exec-draft-hr-1616", plain, true)
-	draftHR, err := store.ResolveProposeDismissalRun(ctx, wfProject, "exec-draft-hr-1616", 1)
-	if err != nil || !draftHR.IsHRAgent {
-		t.Fatalf("draft-HR run = %+v %v", draftHR, err)
+	// is not a workforce manager until a published version carries it.
+	seedManagerRun(t, pool, "exec-draft-wfm-1616", plain, true)
+	draftManager, err := store.ResolveProposeDismissalRun(ctx, wfProject, "exec-draft-wfm-1616", 1)
+	if err != nil || !draftManager.IsWorkforceManager {
+		t.Fatalf("draft-manager run = %+v %v", draftManager, err)
 	}
 	ask := func(r storage.ProposeDismissalRun, app int64, stage string) storage.DismissalOutcome {
 		t.Helper()
@@ -806,24 +806,24 @@ VALUES (1, $1, 4, 'exec-hire', 'a_0000abcd', repeat('a', 64), 'hire', '{}'::json
 		stage string
 		want  string
 	}{
-		"not an HR agent":  {notHR, target, "retire", agentworkforce.OutcomeNotAllowed},
-		"HR only in draft": {draftHR, target, "retire", agentworkforce.OutcomeNotAllowed},
-		"self":             {run, hr, "retire", agentworkforce.OutcomeGuardRefused},
-		"hirer":            {run, hirer, "retire", agentworkforce.OutcomeGuardRefused},
-		"another HR agent": {run, otherHR, "retire", agentworkforce.OutcomeGuardRefused},
-		"higher tier":      {run, high, "suspend", agentworkforce.OutcomeGuardRefused},
-		"critical":         {run, critical, "watch", agentworkforce.OutcomeGuardRefused},
-		"legal hold":       {run, held, "retire", agentworkforce.OutcomeGuardRefused},
-		"delete":           {run, target, "delete", agentworkforce.OutcomeGuardRefused},
-		"unknown agent":    {run, 99171999, "retire", agentworkforce.OutcomeUnknownAgent},
-		"invalid stage":    {run, target, "fire", agentworkforce.OutcomeInvalid},
+		"not a workforce manager":   {notManager, target, "retire", agentworkforce.OutcomeNotAllowed},
+		"manager only in draft":     {draftManager, target, "retire", agentworkforce.OutcomeNotAllowed},
+		"self":                      {run, wfm, "retire", agentworkforce.OutcomeGuardRefused},
+		"hirer":                     {run, hirer, "retire", agentworkforce.OutcomeGuardRefused},
+		"another workforce manager": {run, otherManager, "retire", agentworkforce.OutcomeGuardRefused},
+		"higher tier":               {run, high, "suspend", agentworkforce.OutcomeGuardRefused},
+		"critical":                  {run, critical, "watch", agentworkforce.OutcomeGuardRefused},
+		"legal hold":                {run, held, "retire", agentworkforce.OutcomeGuardRefused},
+		"delete":                    {run, target, "delete", agentworkforce.OutcomeGuardRefused},
+		"unknown agent":             {run, 99171999, "retire", agentworkforce.OutcomeUnknownAgent},
+		"invalid stage":             {run, target, "fire", agentworkforce.OutcomeInvalid},
 	} {
 		if got := ask(c.run, c.app, c.stage); got.Status != c.want || got.ProposalID != 0 {
 			t.Errorf("%s: %+v, want %s", name, got, c.want)
 		}
 	}
 	var stored int
-	_ = pool.QueryRow(ctx, `SELECT count(*) FROM elitea_lifecycle.agent_workforce_proposals WHERE proposer_application_id = $1`, hr).Scan(&stored)
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM elitea_lifecycle.agent_workforce_proposals WHERE proposer_application_id = $1`, wfm).Scan(&stored)
 	if stored != 0 {
 		t.Fatalf("a refused guard stored %d proposals", stored)
 	}
@@ -836,24 +836,24 @@ VALUES (1, $1, 4, 'exec-hire', 'a_0000abcd', repeat('a', 64), 'hire', '{}'::json
 		t.Fatalf("second = %+v", again)
 	}
 	proposal, err := store.GetProposal(ctx, wfProject, proposed.ProposalID)
-	if err != nil || proposal.Source != agentworkforce.SourceHRAgent || proposal.ProposerApplicationID == nil ||
-		*proposal.ProposerApplicationID != hr || proposal.Status != agentworkforce.StatusProposed || len(proposal.EvidenceDigest) != 64 {
+	if err != nil || proposal.Source != agentworkforce.SourceWorkforceManager || proposal.ProposerApplicationID == nil ||
+		*proposal.ProposerApplicationID != wfm || proposal.Status != agentworkforce.StatusProposed || len(proposal.EvidenceDigest) != 64 {
 		t.Fatalf("proposal = %+v %v", proposal, err)
 	}
 	// Nothing applied until a person approves.
 	agent, _ := store.Agent(ctx, wfProject, target)
 	if agent.SuspensionID != 0 {
-		t.Fatal("an HR agent's proposal suspended the agent")
+		t.Fatal("a workforce manager's proposal suspended the agent")
 	}
 
 	// The guards hold at the decision too: a legal hold placed after the
-	// HR agent proposed stops the approval; nothing is applied.
+	// workforce manager proposed stops the approval; nothing is applied.
 	wfExec(t, pool, `INSERT INTO elitea_runtime.legal_holds (scope, project_id, agent_id, reason, created_by) VALUES ('agent', 1, $1, 'later', 1)`, target)
 	if _, err := store.Approve(ctx, Decision{ProjectID: wfProject, ProposalID: proposed.ProposalID, Actor: managerActor(wfManager)}); refusalCode(err) != agentworkforce.StateConflictCode {
-		t.Fatalf("approving a stale HR proposal under legal hold: %v", err)
+		t.Fatalf("approving a stale workforce-manager proposal under legal hold: %v", err)
 	}
 	if agent, _ := store.Agent(ctx, wfProject, target); agent.SuspensionID != 0 {
-		t.Fatal("the stale HR proposal suspended a held agent")
+		t.Fatal("the stale workforce-manager proposal suspended a held agent")
 	}
 	if _, err := store.Reject(ctx, Decision{ProjectID: wfProject, ProposalID: proposed.ProposalID, Actor: managerActor(wfManager)}); err != nil {
 		t.Fatalf("rejecting it: %v", err)

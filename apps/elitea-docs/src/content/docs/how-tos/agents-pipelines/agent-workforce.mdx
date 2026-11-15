@@ -1,9 +1,9 @@
 ---
 title: "Agent workforce: scorecards, the dismissal ladder and appeals"
-description: "Read an agent's daily scorecard, propose and decide watch, demote, suspend, retire or delete, let a reviewer agent propose them, appeal a decision, reinstate a retired agent, and turn on automatic hiring and dismissal."
+description: "Read an agent's daily scorecard, propose and decide watch, demote, suspend, retire or delete, let a workforce manager agent propose them, appeal a decision, reinstate a retired agent, and turn on automatic hiring and dismissal."
 ---
 
-Every agent of a project gets a daily **scorecard**. When an agent does badly, a person (or a reviewer agent) can propose a step on the **dismissal ladder**, and a person who manages agents decides it. The agent's owner can comment and appeal, and a retired agent can be reinstated for 30 days.
+Every agent of a project gets a daily **scorecard**. When an agent does badly, a person (or a workforce manager agent) can propose a step on the **dismissal ladder**, and a person who manages agents decides it. The agent's owner can comment and appeal, and a retired agent can be reinstated for 30 days.
 
 Open an agent and select the **Workforce** tab.
 
@@ -61,9 +61,9 @@ A person with `agents.workforce.manage` (or the agent's owner) can **Approve** o
 
 The `agents.workforce.manage` permission is granted to the project **admin** role on upgrade. Grant it to other roles under **Settings → Roles**.
 
-## Reviewer (HR) agents
+## Workforce manager agents
 
-An agent whose version sets the capability `can_review_agents` is a reviewer agent. It gets a `propose_dismissal` tool and can propose watch, demote, suspend or retire for another agent of the project, with its evidence. It never decides. It cannot propose a stage for itself, for the agent that hired it, for an agent of a higher risk tier or for another reviewer agent. A refused attempt is audited.
+An agent whose version sets the capability `can_review_agents` is a workforce manager agent. It gets a `propose_dismissal` tool and can propose watch, demote, suspend or retire for another agent of the project, with its evidence. It never decides. It cannot propose a stage for itself, for the agent that hired it, for an agent of a higher risk tier or for another workforce manager agent. A refused attempt is audited.
 
 ```json
 {

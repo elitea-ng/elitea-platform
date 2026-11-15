@@ -1135,7 +1135,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// agent's memory vectors (centry.agent_memory_vector_journal, issue 1657),
 	// and the one-time enqueue of the entries the tenants already hold. No
 	// permission.
-	require.EqualValues(t, 248, Head(shared))
+	//
+	// 249: shared/0249_agent_workforce_manager_source.sql, the proposal source
+	// hr_agent renamed workforce_manager (rows and the two CHECK constraints
+	// of 0237). No permission.
+	require.EqualValues(t, 249, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
