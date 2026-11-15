@@ -87,7 +87,9 @@ SELECT state, state_changed_by FROM elitea_marketplace.listing_versions WHERE li
 	}
 	// An administrator who is not the publisher may only yank. A yank by an
 	// administrator is lifted by an administrator.
-	if !isPublisher && body.State != marketplace.VersionYanked {
+	// An administrator who is not the publisher may also lift a yank.
+	liftsYank := currentState == marketplace.VersionYanked && body.State == marketplace.VersionAvailable
+	if !isPublisher && body.State != marketplace.VersionYanked && !liftsYank {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "an administrator may only yank a version"})
 		return
 	}

@@ -12,6 +12,7 @@ import { pickParams } from '../../-search/params';
 
 export const Route = createFileRoute('/_shell/marketplace/')({
   validateSearch: pickParams(
+    'agentId',
     'kind',
     'query',
     'category',

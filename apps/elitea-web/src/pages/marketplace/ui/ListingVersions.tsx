@@ -170,7 +170,8 @@ export function ListingVersions({
       <BaseModal
         open={pending !== undefined}
         onClose={() => setPending(undefined)}
-        onConfirm={() => pending !== undefined && change.mutate(pending)}
+        // One request at a time: a second click or Enter while the first is in flight is ignored.
+        onConfirm={() => pending !== undefined && !change.isPending && change.mutate(pending)}
         title={
           pending === undefined
             ? ''

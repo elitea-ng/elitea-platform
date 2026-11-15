@@ -3,7 +3,7 @@
  * and its result. Every open starts again, so a closed wizard never resumes
  * with a half-made choice.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
@@ -63,19 +63,25 @@ export function useHireWizardState(
 ): HireWizardState {
   const queryClient = useQueryClient();
   const [step, setStep] = useState<Step>('version');
-  const [versionId, setVersionId] = useState('');
+  const [versionId, setVersionIdState] = useState('');
   const [mode, setMode] = useState<HireMode>(initialMode);
   const [choices, setChoices] = useState<BindingChoices>({});
   const [result, setResult] = useState<MarketplaceHireResult>();
 
+  // The wizard starts from what the page held WHEN IT OPENED. A refetch of the listing (the success
+  // invalidates it) must not reset the wizard, or the result step would vanish after a hire.
+  const latest = useRef({ versions: detail.versions, initialMode });
+  useEffect(() => {
+    latest.current = { versions: detail.versions, initialMode };
+  });
   useEffect(() => {
     if (!open) return;
     setStep('version');
-    setVersionId(defaultVersionId(detail.versions));
-    setMode(initialMode);
+    setVersionIdState(defaultVersionId(latest.current.versions));
+    setMode(latest.current.initialMode);
     setChoices({});
     setResult(undefined);
-  }, [open, detail.versions, initialMode]);
+  }, [open]);
 
   const version = detail.versions.find((candidate) => candidate.id === versionId);
   const requirements = version?.requirements ?? NO_REQUIREMENTS;
@@ -96,6 +102,13 @@ export function useHireWizardState(
   });
 
   const index = STEPS.indexOf(step);
+
+  // A binding belongs to one version's requirements: a new version starts with none, and with no old error.
+  const setVersionId = (id: string): void => {
+    setVersionIdState(id);
+    setChoices({});
+    hire.reset();
+  };
   const versionReady = version !== undefined && isHireable(version);
   const canNext =
     (step !== 'version' || versionReady) &&
@@ -124,6 +137,9 @@ export function useHireWizardState(
     setVersionId,
     setMode,
     choose,
-    go: (offset) => setStep(STEPS[index + offset] ?? step),
+    go: (offset) => {
+      hire.reset();
+      setStep(STEPS[index + offset] ?? step);
+    },
   };
 }

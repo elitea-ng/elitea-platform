@@ -11,6 +11,7 @@ import { useMemo } from 'react';
 
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 
+import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { searchMarketplaceListings, useGetMarketplaceListing } from '@/shared/api/generated/marketplace/marketplace';
 import type { MarketplaceFacets, MarketplaceListingDetail, MarketplaceListingPage } from '@/shared/api/generated/model';
 import { unwrapBody } from '@/shared/api/unwrap';
@@ -24,6 +25,10 @@ async function fetchPage(projectId: string, params: ApiParams): Promise<Marketpl
   const response = await searchMarketplaceListings(projectId, params);
   if (response.status !== 200) throw new Error(`The Marketplace search answered ${response.status}`);
   return unwrapBody(response) as MarketplaceListingPage;
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 404;
 }
 
 export interface MarketplaceListings {
@@ -91,7 +96,11 @@ export function useMarketplaceListing(
 ): {
   readonly detail: MarketplaceListingDetail | undefined;
   readonly isPending: boolean;
+  /** The server answered 404: the listing is gone. */
   readonly isNotFound: boolean;
+  /** Any other failure: a network error or a 5xx. */
+  readonly isError: boolean;
+  readonly refetch: () => void;
 } {
   const query = useGetMarketplaceListing(projectId ?? '', listingId, {
     query: { enabled: projectId !== undefined && listingId !== '' },
@@ -100,6 +109,8 @@ export function useMarketplaceListing(
   return {
     detail,
     isPending: query.isPending && query.fetchStatus !== 'idle',
-    isNotFound: query.isError,
+    isNotFound: isNotFoundError(query.error),
+    isError: query.isError && !isNotFoundError(query.error),
+    refetch: () => void query.refetch(),
   };
 }

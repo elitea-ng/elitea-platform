@@ -65,6 +65,9 @@ describe('versions', () => {
     expect(versionActions(version('1', 'deprecated'), true, false)).toEqual(['yanked', 'available']);
     expect(versionActions(version('1', 'yanked'), true, false)).toEqual(['available']);
     expect(versionActions(version('1', 'current'), false, true)).toEqual(['yanked']);
+    // An administrator restores a YANKED version, not one the publisher deprecated.
+    expect(versionActions(version('1', 'yanked'), false, true)).toEqual(['available']);
+    expect(versionActions(version('1', 'deprecated'), false, true)).toEqual(['yanked']);
     expect(versionActions(version('1', 'current'), false, false)).toEqual([]);
   });
 });

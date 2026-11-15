@@ -37,7 +37,31 @@ import type { ListingCardData, MarketplaceKind } from './types';
 import { ListingSection } from './ui/ListingSection';
 import { MarketplaceBrowse } from './ui/MarketplaceBrowse';
 import { MarketplaceSummaryBar } from './ui/MarketplaceSummaryBar';
+import { useLegacyAgentLink } from './useLegacyAgentLink';
 import { useMarketplaceSearch, useMarketplaceShelf, type MarketplaceListings } from './useMarketplaceListings';
+
+/** An old agent link the redirect could not resolve: finished here once a project is known, with a retry when the lookup fails. */
+function LegacyLinkNotice({
+  projectId,
+  agentId,
+}: {
+  readonly projectId: string | undefined;
+  readonly agentId: string | undefined;
+}): ReactNode {
+  const link = useLegacyAgentLink(projectId, agentId);
+  if (!link.failed) return null;
+  return (
+    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }} data-testid="marketplace-legacy-link-error">
+      <BannerMessage
+        variant="error"
+        message={t('marketplace.legacyLink.error', 'The link to that agent did not open.')}
+      />
+      <Button size="small" onClick={link.retry} data-testid="marketplace-legacy-link-retry">
+        {t('marketplace.legacyLink.retry', 'Retry')}
+      </Button>
+    </Box>
+  );
+}
 
 export function Marketplace(): ReactNode {
   // Read loosely, per this codebase's convention: a page must not depend on which route file mounts it.
@@ -110,6 +134,7 @@ export function Marketplace(): ReactNode {
           onChange={change}
           onClearAll={clearAll}
         />
+        <LegacyLinkNotice projectId={projectId} agentId={search.agentId} />
         <ListingResults
           listings={listings}
           featured={featured}

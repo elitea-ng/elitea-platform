@@ -195,6 +195,20 @@ export function BindingsStep({ requirements, choices, optionsFor, onChoose }: Bi
   return (
     <StepGroup title={t('marketplace.hire.bindings.legend', 'Bind what the agent needs')}>
       {requirements.items.map((requirement) => {
+        if (requirement.kind === 'agent') {
+          return (
+            <Typography
+              key={requirement.key}
+              variant="bodySmall"
+              color="text.secondary"
+              data-testid={`hire-agent-${requirement.key}`}
+            >
+              {t('marketplace.hire.bindings.agent', 'Nested agent {{name}} comes with this agent.', {
+                name: requirement.name || requirement.type,
+              })}
+            </Typography>
+          );
+        }
         const choice = choices[requirement.key];
         const value = choice === undefined ? '' : choice.kind === 'disabled' ? DISABLED_VALUE : choice.id;
         return (

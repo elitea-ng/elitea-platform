@@ -32,8 +32,10 @@ import { useSelectedProjectId } from '@/pages/skills/lib/useSelectedProjectId';
 import { usePermissionSet } from '@/widgets/sidebar';
 
 import { defaultVersionId, isHireable } from '../hire/hireModel';
+import { useScrollToHash } from '../useScrollToHash';
 import { useMarketplaceListing } from '../useMarketplaceListings';
 
+import { ListingLoadError } from './ListingLoadError';
 import { ListingNotFound } from './ListingNotFound';
 import { DelistedBanner, ListingAdminBar, ListingFeedback, ListingUsedBy } from './ListingSections';
 import { ListingBlock, ListingShell } from './ListingShell';
@@ -165,6 +167,7 @@ function useSkillAdd(detail: MarketplaceListingDetail, projectId: string | undef
 function SkillListingView({ detail, projectId }: SkillListingViewProps): ReactNode {
   const { listing } = detail;
   const add = useSkillAdd(detail, projectId);
+  useScrollToHash();
   const [adding, setAdding] = useState(false);
   return (
     <>
@@ -212,10 +215,11 @@ function SkillListingView({ detail, projectId }: SkillListingViewProps): ReactNo
 
 export function SkillListing({ listingId }: { readonly listingId: string }): ReactNode {
   const projectId = useSelectedProjectId();
-  const { detail, isPending, isNotFound } = useMarketplaceListing(projectId, listingId);
+  const { detail, isPending, isNotFound, isError, refetch } = useMarketplaceListing(projectId, listingId);
   usePageCrumbs(detail === undefined ? [] : [{ label: detail.listing.name }]);
 
   if (isPending) return <LinearProgress />;
+  if (isError) return <ListingLoadError onRetry={refetch} />;
   if (detail === undefined || isNotFound) return <ListingNotFound />;
   return <SkillListingView detail={detail} projectId={projectId} />;
 }

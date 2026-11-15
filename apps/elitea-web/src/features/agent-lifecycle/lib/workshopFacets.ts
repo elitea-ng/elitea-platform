@@ -33,7 +33,11 @@ function originLabel(value: string): string {
   return value;
 }
 
-function optionsOf(counts: Readonly<Record<string, number>> | undefined, order: readonly string[], label: (value: string) => string): WorkshopFacet['options'] {
+function optionsOf(
+  counts: Readonly<Record<string, number>> | undefined,
+  order: readonly string[],
+  label: (value: string) => string,
+): WorkshopFacet['options'] {
   const known = order.filter((value) => (counts?.[value] ?? 0) > 0);
   const others = Object.keys(counts ?? {}).filter((value) => !order.includes(value) && (counts?.[value] ?? 0) > 0);
   return [...known, ...others].map((value) => ({ value, label: label(value), count: counts?.[value] ?? 0 }));
@@ -86,26 +90,49 @@ export function originBadgeLabel(application: Application): string {
       : t('features.agentLifecycle.badge.installedVersion', 'Installed {{version}}', { version });
   }
   if (kind === 'forked' && listing !== '') {
-    return t('features.agentLifecycle.badge.forkedFrom', 'Forked from {{listing}} {{version}}', { listing, version }).trim();
+    return t('features.agentLifecycle.badge.forkedFrom', 'Forked from {{listing}} {{version}}', {
+      listing,
+      version,
+    }).trim();
   }
   return '';
+}
+
+/**
+ * The first loaded row of each listing, in list order. One pass per rows array,
+ * kept by array identity, so a list of N rows costs O(N) and not O(N squared)
+ * (the badge is asked once per row).
+ */
+const firstHireCache = new WeakMap<readonly Application[], Map<string, Application>>();
+
+function firstHireByListing(rows: readonly Application[]): Map<string, Application> {
+  const cached = firstHireCache.get(rows);
+  if (cached !== undefined) return cached;
+  const first = new Map<string, Application>();
+  for (const row of rows) {
+    const listingId = metaText(row, 'origin_listing_id');
+    if (listingId !== '' && !first.has(listingId)) first.set(listingId, row);
+  }
+  firstHireCache.set(rows, first);
+  return first;
 }
 
 /**
  * The words a row's badge carries: the status, then the origin, then (for the
  * second hire of one listing) the name of the first hire. Text, so a screen
  * reader hears it and colour is not the only signal.
+ *
+ * "Also hired as" is computed from the rows LOADED in the list (the page in
+ * hand), not from the whole project: a first hire on another page is not seen.
  */
 export function workshopRowBadge(application: Application, rows: readonly Application[]): string | undefined {
   const parts = [statusBadgeLabel(application.status)];
   const origin = originBadgeLabel(application);
   if (origin !== '') parts.push(origin);
   const listingId = metaText(application, 'origin_listing_id');
-  if (listingId !== '') {
-    const first = rows.find((row) => metaText(row, 'origin_listing_id') === listingId);
-    if (first !== undefined && first.id !== application.id && rows.indexOf(first) < rows.indexOf(application)) {
-      parts.push(t('features.agentLifecycle.badge.alsoHiredAs', 'also hired as {{name}}', { name: first.name }));
-    }
+  const first = listingId === '' ? undefined : firstHireByListing(rows).get(listingId);
+  if (first !== undefined && first.id !== application.id) {
+    parts.push(t('features.agentLifecycle.badge.alsoHiredAs', 'also hired as {{name}}', { name: first.name }));
   }
   const text = parts.filter((part): part is string => part !== undefined && part !== '').join(' · ');
   return text === '' ? undefined : text;

@@ -28,6 +28,7 @@ import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { useSelectedProjectId } from '@/pages/skills/lib/useSelectedProjectId';
 
 import { publicApplicationOf } from '../listing';
+import { useScrollToHash } from '../useScrollToHash';
 import { useAgentVersionDetail } from '../useAgentVersionDetail';
 import { useMarketplaceListing } from '../useMarketplaceListings';
 import { useTryInChat, type TryInChat } from '../useTryInChat';
@@ -37,6 +38,7 @@ import { AgentDescription } from './AgentDescription';
 import AgentHubLike from './AgentHubLike';
 import { AgentWelcomeMessage } from './AgentWelcomeMessage';
 import { HireButton } from './HireButton';
+import { ListingLoadError } from './ListingLoadError';
 import { ListingNotFound } from './ListingNotFound';
 import { ListingRequirements } from './ListingRequirements';
 import { DelistedBanner, ListingAdminBar, ListingFeedback, ListingUsedBy } from './ListingSections';
@@ -201,6 +203,7 @@ function AgentListingView({ detail, projectId }: AgentListingViewProps): ReactNo
   const tryInChat = useTryInChat(app);
   const { versionDetails, isLoading } = useAgentVersionDetail(listing.entity_id, app.version_name);
   const [showContext, setShowContext] = useState(false);
+  useScrollToHash();
 
   // A like given here changes the count the grid shows; the grid refetches when next opened.
   useEffect(() => () => void queryClient.invalidateQueries({ queryKey: ['marketplace'] }), [queryClient]);
@@ -238,10 +241,11 @@ function AgentListingView({ detail, projectId }: AgentListingViewProps): ReactNo
 
 export function AgentListing({ listingId }: { readonly listingId: string }): ReactNode {
   const projectId = useSelectedProjectId();
-  const { detail, isPending, isNotFound } = useMarketplaceListing(projectId, listingId);
+  const { detail, isPending, isNotFound, isError, refetch } = useMarketplaceListing(projectId, listingId);
   usePageCrumbs(detail === undefined ? [] : [{ label: detail.listing.name }]);
 
   if (isPending) return <LinearProgress />;
+  if (isError) return <ListingLoadError onRetry={refetch} />;
   if (detail === undefined || isNotFound) return <ListingNotFound />;
   return <AgentListingView detail={detail} projectId={projectId} />;
 }

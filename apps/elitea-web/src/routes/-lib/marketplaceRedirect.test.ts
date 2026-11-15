@@ -66,15 +66,18 @@ describe('redirectToMarketplace', () => {
     expect(await redirectOf({ agentId: '42' })).toMatchObject({ to: '/marketplace' });
   });
 
-  it('lands on the Marketplace home when the search fails or no project is selected', async () => {
+  it('defers the link to the page, keeping agentId, when the search fails or no project is selected yet', async () => {
     configureGeneratedClient({ baseUrl: '/api/v2' });
     server.use(
       http.get('/api/v2/elitea_core/marketplace_listings/prompt_lib/:projectId', () =>
         HttpResponse.json({ error: 'boom' }, { status: 500 }),
       ),
     );
-    expect(await redirectOf({ agentId: '42' })).toMatchObject({ to: '/marketplace' });
-    expect(await redirectOf({ agentId: '42' }, undefined)).toMatchObject({ to: '/marketplace' });
+    expect(await redirectOf({ agentId: '42' })).toMatchObject({ to: '/marketplace', search: { agentId: '42' } });
+    expect(await redirectOf({ agentId: '42' }, undefined)).toMatchObject({
+      to: '/marketplace',
+      search: { agentId: '42' },
+    });
   });
 
   it('turns ?tab=skills into ?kind=skills', async () => {

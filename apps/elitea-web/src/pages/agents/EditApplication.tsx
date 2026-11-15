@@ -1,7 +1,6 @@
 import { useCallback, useMemo, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { FormProvider } from 'react-hook-form';
@@ -15,7 +14,6 @@ import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/w
 import { PageToolbar, pageSx } from '@/widgets/page-header';
 
 import { actionsSx, contentSx } from './EditApplication.styles';
-import { agentSaveErrorMessage } from './lib/agentSaveErrorMessage';
 import { applicationDetailDisplayName, toVersionSummaries } from './lib/editApplicationMappers';
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
 import { useCorrectUserNameInUrl } from './lib/useCorrectUserNameInUrl';
@@ -25,7 +23,7 @@ import { useEditApplicationForm } from './lib/useEditApplicationForm';
 import { useEditApplicationVersionControls } from './lib/useEditApplicationVersionControls';
 import { useEditApplicationVersionFields } from './lib/useEditApplicationVersionFields';
 import { useIsVersionNotFound } from './lib/useIsVersionNotFound';
-import { isInstalledOrigin, useMarketplaceOrigin } from './lib/useMarketplaceOrigin';
+import { isDefinitionLocked, useMarketplaceOrigin } from './lib/useMarketplaceOrigin';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { EditApplicationActions } from './ui/EditApplicationActions';
 import { EditApplicationAiEditSlot } from './ui/EditApplicationAiEditSlot';
@@ -35,7 +33,7 @@ import { EditApplicationEditorTabs } from './ui/EditApplicationEditorTabs';
 import { EditApplicationPersonaPanel } from './ui/EditApplicationPersonaPanel';
 import { EditApplicationSaveBar } from './ui/EditApplicationSaveBar';
 import { EditApplicationSplit, EditApplicationTestPane } from './ui/EditApplicationTestPane';
-import { MarketplaceOriginBanner } from './ui/MarketplaceOriginBanner';
+import { EditApplicationNotices } from './ui/EditApplicationNotices';
 
 interface EditApplicationParams {
   readonly tab?: string;
@@ -242,13 +240,11 @@ export function EditApplication(): ReactNode {
    * the `tags` one (#345 added the wire field and the association write).
    */
   const editor = useEditApplicationEditorBridge(form, versionFields);
-  // One expression, read twice below — the picker is disabled on exactly the
-  // same terms as the rest of the form. Named rather than repeated because a
-  // second inline `||` puts this component over the §3.5 complexity gate (12).
+  // Named once: the picker is disabled on the same terms as the form, and a second inline `||` breaks the complexity gate.
   const isEditorDisabled = isReadOnlyView || isFetching;
   // ADR-0051: an installed agent's definition is its listing version's snapshot; only project settings change.
   const origin = useMarketplaceOrigin(projectId, applicationId);
-  const definitionLocked = isInstalledOrigin(origin);
+  const definitionLocked = isDefinitionLocked(activeVersion, origin);
 
   // Routed through the same `onFieldChange` every other version-level field
   // uses, so the picked model lands in `useEditApplicationVersionFields` —
@@ -259,10 +255,7 @@ export function EditApplication(): ReactNode {
     [editor],
   );
 
-  // Confirming the discard dialog now LEAVES editing, matching the create
-  // page's Cancel — measured defect: Discard reverted the fields and left the
-  // user on the edit page with no way out. The disarm must precede the
-  // navigation or the just-reset form's blocker prompts a second time.
+  // Confirming the discard LEAVES editing; the disarm must precede the navigation or the reset form prompts again.
   const navigate = useNavigate();
   const handleDiscarded = useCallback(() => {
     disarmUnsavedChangesNavBlocker();
@@ -270,7 +263,9 @@ export function EditApplication(): ReactNode {
   }, [navigate, params.tab]);
 
   // The page's name is the shell's crumb (`Agents ▸ My agent`); the section crumb leads back to the list.
-  usePageCrumbs([{ label: detail ? applicationDetailDisplayName(detail) : t('pages.agents.editApplication.title', 'Agent') }]);
+  usePageCrumbs([
+    { label: detail ? applicationDetailDisplayName(detail) : t('pages.agents.editApplication.title', 'Agent') },
+  ]);
 
   if (isDetailNotFound) {
     return (
@@ -339,60 +334,63 @@ export function EditApplication(): ReactNode {
           }
         />
         <Box sx={contentSx}>
-          {origin !== undefined && <MarketplaceOriginBanner origin={origin} />}
-          {isError && (
-            <Typography
-              role="alert"
-              variant="bodyMedium"
-            >
-              {t('pages.agents.editApplication.error', 'Failed to load this agent.')}
-            </Typography>
-          )}
-          {saveError !== undefined && (
-            <Typography
-              role="alert"
-              variant="bodyMedium"
-            >
-              {agentSaveErrorMessage(saveError, t('pages.agents.editApplication.saveError', 'Failed to save your changes.'))}
-            </Typography>
-          )}
+          <EditApplicationNotices origin={origin} isError={isError} saveError={saveError} />
           {/* The editor tabs sit beside the test chat (#1974, #1980); a read-only public view keeps the form alone. */}
           <EditApplicationSplit
             showPane={!isReadOnlyView}
-            pane={<EditApplicationTestPane projectId={projectId} applicationId={applicationId} detail={detail} activeVersion={activeVersion} isDirty={isDirty} />}
-          >
-          <EditApplicationEditorTabs
-            projectId={projectId}
-            applicationId={applicationId}
-            /*
-             * The version an evaluation run scores. It comes from the version
-             * controls, which is the same value the Save button writes to —
-             * resolving it a second time inside the evaluation feature could
-             * disagree with what the editor thinks is open.
-             */
-            applicationVersionId={versionControls.activeVersionId}
-            versions={versionControls.versionOptions}
-            personaPanel={<EditApplicationPersonaPanel versionFields={versionFields} disabled={isEditorDisabled || definitionLocked} />}
-            avatarPanel={<EditApplicationAvatarPanel projectId={projectId} versionFields={versionFields} disabled={isEditorDisabled} />}
-            configurationPanel={
-              <EditApplicationConfigurationPanel
+            pane={
+              <EditApplicationTestPane
                 projectId={projectId}
                 applicationId={applicationId}
+                detail={detail}
                 activeVersion={activeVersion}
-                editor={editor}
-                versionFields={versionFields}
-                isEditorDisabled={isEditorDisabled}
-                definitionLocked={definitionLocked}
                 isDirty={isDirty}
-                isReadOnly={isReadOnlyView}
-                saveError={saveError}
-                onModelSettingsChange={handleModelSettingsChange}
-                instructionsAiEditSlot={
-                  <EditApplicationAiEditSlot editor={editor} projectId={projectId} disabled={isEditorDisabled} />
-                }
               />
             }
-          />
+          >
+            <EditApplicationEditorTabs
+              projectId={projectId}
+              applicationId={applicationId}
+              /*
+               * The version an evaluation run scores. It comes from the version
+               * controls, which is the same value the Save button writes to —
+               * resolving it a second time inside the evaluation feature could
+               * disagree with what the editor thinks is open.
+               */
+              applicationVersionId={versionControls.activeVersionId}
+              versions={versionControls.versionOptions}
+              personaPanel={
+                <EditApplicationPersonaPanel
+                  versionFields={versionFields}
+                  disabled={isEditorDisabled || definitionLocked}
+                />
+              }
+              avatarPanel={
+                <EditApplicationAvatarPanel
+                  projectId={projectId}
+                  versionFields={versionFields}
+                  disabled={isEditorDisabled}
+                />
+              }
+              configurationPanel={
+                <EditApplicationConfigurationPanel
+                  projectId={projectId}
+                  applicationId={applicationId}
+                  activeVersion={activeVersion}
+                  editor={editor}
+                  versionFields={versionFields}
+                  isEditorDisabled={isEditorDisabled}
+                  definitionLocked={definitionLocked}
+                  isDirty={isDirty}
+                  isReadOnly={isReadOnlyView}
+                  saveError={saveError}
+                  onModelSettingsChange={handleModelSettingsChange}
+                  instructionsAiEditSlot={
+                    <EditApplicationAiEditSlot editor={editor} projectId={projectId} disabled={isEditorDisabled} />
+                  }
+                />
+              }
+            />
           </EditApplicationSplit>
         </Box>
       </Box>

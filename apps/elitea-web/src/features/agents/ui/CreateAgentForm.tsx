@@ -14,6 +14,7 @@ import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { combineSx } from '@/shared/ui/lib/combineSx';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
+import { definitionLock } from '../lib/definitionLock';
 import { useCreateAgentFormState } from '../model/useCreateAgentFormState';
 import { advanceMetaProps, type CreateAgentMetaControls } from './CreateAgentForm.meta';
 import type { AgentDraftValues, AgentFieldChange } from '../model/types';
@@ -222,7 +223,7 @@ export interface CreateAgentFormProps {
   readonly values: AgentDraftValues;
   readonly onFieldChange: AgentFieldChange;
   readonly disabled?: boolean | undefined;
-  /** Locks instructions, welcome message and starters while name, description and tags stay editable (an installed agent). Defaults to `disabled`. */
+  /** Locks instructions, welcome message and starters only (an installed agent). Defaults to `disabled`. */
   readonly definitionDisabled?: boolean | undefined;
   readonly showInstructions?: boolean | undefined;
   readonly entityType?: 'application' | 'pipeline' | undefined;
@@ -287,18 +288,15 @@ export function CreateAgentForm({
   sx,
 }: CreateAgentFormProps): ReactNode {
   const versionDetails = values.version_details;
-  const lockDefinition = definitionDisabled ?? disabled;
+  const lockDefinition = definitionLock(definitionDisabled, disabled);
   const state = useCreateAgentFormState(values, onFieldChange);
 
   // Client-side "required" validation-error state, restored to parity with
   // the baseline's `formik.touched?.name && Boolean(formik.errors.name)` —
   // see `requiredFieldError`'s own doc comment. `*Touched` stand in for
   // Formik's own per-field `touched` map (no ambient form context here).
-  // Validated off `state.name` (this component's own optimistic local
-  // mirror of what the input shows), not `values.name`: a caller that
-  // doesn't round-trip `onFieldChange` synchronously would otherwise leave
-  // the error stale one keystroke behind. `state.description` has no such
-  // local mirror (reads straight off `values.description`), so equivalent either way.
+  // Validated off `state.name` (the optimistic local mirror), not `values.name`, so a caller that
+  // doesn't round-trip `onFieldChange` synchronously cannot leave the error one keystroke behind.
   const [nameTouched, setNameTouched] = useState(false);
   const [descriptionTouched, setDescriptionTouched] = useState(false);
   const validation = useMemo(

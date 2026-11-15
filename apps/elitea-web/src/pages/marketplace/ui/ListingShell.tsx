@@ -62,7 +62,7 @@ export function ListingBlock({
 }): React.JSX.Element {
   const headingId = `marketplace-block-${id}`;
   return (
-    <Box component="section" aria-labelledby={headingId} sx={blockSx}>
+    <Box component="section" id={id} aria-labelledby={headingId} sx={blockSx}>
       <Typography id={headingId} component="h3" variant="headingSmall" color="text.secondary">
         {title}
       </Typography>

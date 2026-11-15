@@ -29,3 +29,17 @@ export function useMarketplaceOrigin(
 export function isInstalledOrigin(origin: MarketplaceOrigin | undefined): boolean {
   return origin?.mode === 'installed';
 }
+
+/**
+ * Whether the definition is locked. The lock comes from the version row already
+ * loaded (`meta.origin_kind`), so it holds while the origin query loads and when
+ * that query fails: a failed read never unlocks an installed agent. The origin
+ * answer locks too, for a row whose meta has not loaded yet.
+ */
+export function isDefinitionLocked(
+  version: { readonly meta?: object | null | undefined } | undefined,
+  origin: MarketplaceOrigin | undefined,
+): boolean {
+  const meta = version?.meta as Record<string, unknown> | null | undefined;
+  return meta?.['origin_kind'] === 'installed' || isInstalledOrigin(origin);
+}

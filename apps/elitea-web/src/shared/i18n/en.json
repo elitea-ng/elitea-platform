@@ -6695,5 +6695,10 @@
   "skills.publish.releaseNotes": "Release notes (optional)",
   "skills.publish.releaseNotesHelp": "Say what changed. The listing page shows this text.",
   "features.agentLifecycle.publish.releaseNotes": "Release notes (optional)",
-  "features.agentLifecycle.publish.releaseNotesHelp": "Say what changed. The Marketplace listing shows this text."
+  "features.agentLifecycle.publish.releaseNotesHelp": "Say what changed. The Marketplace listing shows this text.",
+  "marketplace.legacyLink.error": "The link to that agent did not open.",
+  "marketplace.legacyLink.retry": "Retry",
+  "marketplace.listing.retry": "Retry",
+  "marketplace.listing.loadError": "The listing did not load. Try again.",
+  "marketplace.hire.bindings.agent": "Nested agent {{name}} comes with this agent."
 }

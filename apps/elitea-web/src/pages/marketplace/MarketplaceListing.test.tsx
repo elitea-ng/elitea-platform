@@ -554,3 +554,185 @@ describe('a skill listing', () => {
     expect(screen.getByRole('option', { name: 'v1.0 (yanked)' })).toHaveAttribute('aria-disabled', 'true');
   });
 });
+
+describe('listing load errors', () => {
+  afterEach(() => {
+    resetGeneratedClient();
+  });
+
+  it('shows an error with Retry for a 500, and the not-found page only for a 404', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockListing();
+    let calls = 0;
+    server.use(
+      http.get('/api/v2/elitea_core/marketplace_listing/prompt_lib/:projectId/:listingId', () => {
+        calls += 1;
+        return calls === 1 ? HttpResponse.json({ error: 'boom' }, { status: 500 }) : HttpResponse.json(detailOf());
+      }),
+    );
+    mount('/marketplace/agents/7');
+    const user = userEvent.setup();
+
+    expect(await screen.findByTestId('marketplace-listing-error')).toBeInTheDocument();
+    expect(screen.queryByTestId('marketplace-listing-not-found')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('marketplace-listing-retry'));
+    expect(await screen.findByTestId('marketplace-listing-name')).toHaveTextContent('Release Notes Writer');
+  });
+});
+
+describe('moderator restore and double submit', () => {
+  afterEach(() => {
+    resetGeneratedClient();
+  });
+
+  it('lets an administrator restore a yanked version, but not a deprecated one', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockListing(detailOf({ can_moderate: true }));
+    mount('/marketplace/agents/7');
+
+    expect(await screen.findByTestId('marketplace-version-available-250')).toBeInTheDocument();
+    expect(screen.queryByTestId('marketplace-version-available-300')).not.toBeInTheDocument();
+  });
+
+  it('sends one request however often Deprecate is confirmed while it is in flight', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockListing(detailOf({ can_manage: true }));
+    server.use(
+      http.post(
+        '/api/v2/elitea_core/marketplace_listing_version/prompt_lib/:projectId/:listingId/:versionId',
+        async ({ request, params }) => {
+          stateBodies.push({ version: params['versionId'], ...((await request.json()) as object) });
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          return HttpResponse.json(version(String(params['versionId']), 'v', 'deprecated'));
+        },
+      ),
+    );
+    mount('/marketplace/agents/7');
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByTestId('marketplace-version-deprecated-311'));
+    const confirm = within(await screen.findByTestId('marketplace-version-confirm')).getByRole('button', {
+      name: 'Deprecate',
+    });
+    await user.click(confirm);
+    // The button is off while the request is in flight, so a second click cannot send another.
+    await waitFor(() => expect(confirm).toBeDisabled());
+    await waitFor(() => expect(stateBodies).toHaveLength(1));
+  });
+});
+
+describe('the hire wizard state', () => {
+  afterEach(() => {
+    resetGeneratedClient();
+  });
+
+  async function openAt(
+    detail: MarketplaceListingDetail,
+  ): Promise<{ user: ReturnType<typeof userEvent.setup>; wizard: HTMLElement }> {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockListing(detail);
+    mount('/marketplace/agents/7');
+    await screen.findByTestId('marketplace-listing-name');
+    const user = userEvent.setup();
+    await waitFor(() => expect(screen.getByTestId('marketplace-hire')).toBeEnabled());
+    await user.click(screen.getByTestId('marketplace-hire'));
+    return { user, wizard: await screen.findByTestId('hire-wizard') };
+  }
+
+  it('keeps the result after a hire, though the listing is read again', async () => {
+    const { user, wizard } = await openAt(detailOf());
+    await user.click(within(wizard).getByTestId('hire-next'));
+    await user.click(within(wizard).getByTestId('hire-next'));
+    await user.click(within(wizard).getByRole('combobox', { name: 'github for Release bot' }));
+    await user.click(await screen.findByRole('option', { name: 'Disable for now' }));
+    await user.click(within(wizard).getByTestId('hire-next'));
+    await user.click(within(wizard).getByTestId('hire-confirm'));
+
+    expect(await within(wizard).findByTestId('hire-done')).toBeInTheDocument();
+    // The success invalidates the listing; a new `versions` array must not restart the wizard.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(within(wizard).getByTestId('hire-done')).toBeInTheDocument();
+  });
+
+  it('forgets the bindings when another version is picked, and a refusal when the person goes back', async () => {
+    const other = version('300', 'v2.0', 'available', { requirements: REQUIREMENTS });
+    const { user, wizard } = await openAt(detailOf({ versions: [version('311', 'v2.3', 'current'), other] }));
+    server.use(
+      http.post('/api/v2/elitea_core/marketplace_hire/prompt_lib/:projectId', () =>
+        HttpResponse.json({ error: 'binding_missing' }, { status: 409 }),
+      ),
+    );
+
+    await user.click(within(wizard).getByTestId('hire-next'));
+    await user.click(within(wizard).getByTestId('hire-next'));
+    await user.click(within(wizard).getByRole('combobox', { name: 'github for Release bot' }));
+    await user.click(await screen.findByRole('option', { name: 'GitHub (release bot)' }));
+    await user.click(within(wizard).getByTestId('hire-next'));
+    await user.click(within(wizard).getByTestId('hire-confirm'));
+    expect(await within(wizard).findByTestId('hire-error')).toBeInTheDocument();
+
+    // Back to the version step: the refusal is gone, and a new version starts with no binding.
+    await user.click(within(wizard).getByTestId('hire-back'));
+    expect(within(wizard).queryByTestId('hire-error')).not.toBeInTheDocument();
+    await user.click(within(wizard).getByTestId('hire-back'));
+    await user.click(within(wizard).getByTestId('hire-back'));
+    await user.click(within(wizard).getByRole('radio', { name: 'v2.0 (available)' }));
+    await user.click(within(wizard).getByTestId('hire-next'));
+    await user.click(within(wizard).getByTestId('hire-next'));
+    expect(within(wizard).getByTestId('hire-next')).toBeDisabled();
+  });
+
+  it('treats a nested agent as information, binds a skill only to a project skill, and never offers an agent-as-tool', async () => {
+    const needs = {
+      items: [
+        { key: 'agent:helper', kind: 'agent', type: 'helper', name: 'helper', tools: [], has_write_tools: false },
+        { key: 'skill:triage', kind: 'skill', type: 'triage', name: 'triage', tools: [], has_write_tools: false },
+        { key: 'toolkit:jira', kind: 'toolkit', type: 'jira', name: 'jira', tools: [], has_write_tools: false },
+      ],
+      model_class: 'chat',
+      tier: 'low',
+      has_write_tools: false,
+    };
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockListing(detailOf({ versions: [version('311', 'v2.3', 'current', { requirements: needs })] }));
+    let agentListReads = 0;
+    server.use(
+      http.get('/api/v2/elitea_core/applications/prompt_lib/:projectId', () => {
+        agentListReads += 1;
+        return HttpResponse.json({ rows: [], total: 0 });
+      }),
+      http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
+        HttpResponse.json({
+          rows: [
+            { id: '13', type: 'jira', name: 'Jira' },
+            { id: '14', type: 'application', name: 'Sub agent' },
+          ],
+          total: 2,
+        }),
+      ),
+      http.get('/api/v2/elitea_core/skills/prompt_lib/:projectId', () =>
+        HttpResponse.json({ rows: [{ id: 4, name: 'Triage skill' }], total: 1 }),
+      ),
+    );
+    mount('/marketplace/agents/7');
+    await screen.findByTestId('marketplace-listing-name');
+    const user = userEvent.setup();
+    await waitFor(() => expect(screen.getByTestId('marketplace-hire')).toBeEnabled());
+    await user.click(screen.getByTestId('marketplace-hire'));
+    const wizard = await screen.findByTestId('hire-wizard');
+    await user.click(within(wizard).getByTestId('hire-next'));
+    await user.click(within(wizard).getByTestId('hire-next'));
+
+    expect(within(wizard).getByTestId('hire-agent-agent:helper')).toHaveTextContent('comes with this agent');
+    // The skill is optional: Next stays off only for the Jira toolkit.
+    expect(within(wizard).getByTestId('hire-next')).toBeDisabled();
+    await user.click(within(wizard).getByRole('combobox', { name: 'jira for jira' }));
+    expect(screen.getByRole('option', { name: 'Jira' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Sub agent' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('option', { name: 'Jira' }));
+    expect(within(wizard).getByTestId('hire-next')).toBeEnabled();
+    await user.click(within(wizard).getByRole('combobox', { name: 'triage for triage' }));
+    expect(screen.getByRole('option', { name: 'Triage skill' })).toBeInTheDocument();
+    expect(agentListReads).toBe(0);
+  });
+});

@@ -2,8 +2,7 @@ import type { ReactNode } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
-import Link from '@mui/material/Link';
-import { useRouter } from '@tanstack/react-router';
+import { Link } from '@tanstack/react-router';
 
 import type { MarketplaceOrigin } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
@@ -20,12 +19,6 @@ export interface MarketplaceOriginBannerProps {
 }
 
 export function MarketplaceOriginBanner({ origin }: MarketplaceOriginBannerProps): ReactNode {
-  const router = useRouter();
-  const listingHref = router.buildLocation({
-    to: '/marketplace/$kind/$listingId',
-    params: { kind: 'agents', listingId: origin.listing_id },
-  }).href;
-  const versionsHref = `${listingHref}#versions`;
   const installed = origin.mode === 'installed';
   const latest = origin.latest_version;
   const line = installed
@@ -43,13 +36,16 @@ export function MarketplaceOriginBanner({ origin }: MarketplaceOriginBannerProps
       });
   return (
     <Box
-      role="group"
+      component="section"
       aria-label={t('pages.agents.origin.groupLabel', 'Where this agent came from')}
       data-testid="marketplace-origin-banner"
       sx={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}
     >
       <Alert severity="info" data-testid="marketplace-origin-line">
-        {line} <Link href={listingHref}>{t('pages.agents.origin.openListing', 'Open the listing')}</Link>
+        {line}{' '}
+        <Link to="/marketplace/$kind/$listingId" params={{ kind: 'agents', listingId: origin.listing_id }}>
+          {t('pages.agents.origin.openListing', 'Open the listing')}
+        </Link>
       </Alert>
       {origin.listing_state === 'delisted' && (
         <Alert severity="warning" data-testid="marketplace-origin-withdrawn">
@@ -72,7 +68,13 @@ export function MarketplaceOriginBanner({ origin }: MarketplaceOriginBannerProps
       {latest !== undefined && latest !== null && (
         <Alert severity="info" data-testid="marketplace-origin-update">
           {t('pages.agents.origin.updateAvailable', 'Update available: {{version}}.', { version: latest.name })}{' '}
-          <Link href={versionsHref}>{t('pages.agents.origin.seeVersions', 'See the versions')}</Link>
+          <Link
+            to="/marketplace/$kind/$listingId"
+            params={{ kind: 'agents', listingId: origin.listing_id }}
+            hash="versions"
+          >
+            {t('pages.agents.origin.seeVersions', 'See the versions')}
+          </Link>
         </Alert>
       )}
     </Box>

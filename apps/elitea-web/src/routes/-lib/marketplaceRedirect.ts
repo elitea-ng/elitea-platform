@@ -9,39 +9,48 @@
  *
  * `agentId` is the PUBLIC agent's id, and a listing page is keyed by the
  * LISTING id, so the redirect asks the search route for the listing of that
- * entity (`?entity_id=`). An agent with no listing, or a search that fails,
- * lands on the Marketplace home instead of a dead page.
+ * entity. Only "this agent has no listing" lands on the Marketplace home. When
+ * the project is not selected yet or the lookup fails, the link is NOT dropped:
+ * it goes to `/marketplace?agentId=`, and the page finishes the lookup, with a
+ * retry, once it can (`pages/marketplace/useLegacyAgentLink.ts`).
  */
 import { redirect } from '@tanstack/react-router';
 
-import { kindFromSearch } from '@/pages/marketplace';
+import { findListingIdByEntity, kindFromSearch } from '@/pages/marketplace';
 import { selectProjectId } from '@/pages/skills/lib/useSelectedProjectId';
-import { searchMarketplaceListings } from '@/shared/api/generated/marketplace/marketplace';
-import type { MarketplaceListingPage } from '@/shared/api/generated/model';
-import { unwrapBody } from '@/shared/api/unwrap';
 
 export interface LegacyCatalogSearch {
   readonly tab?: string | undefined;
   readonly agentId?: string | undefined;
 }
 
-async function listingIdOf(projectId: string | undefined, entityId: string): Promise<string | undefined> {
-  if (projectId === undefined) return undefined;
+type Lookup = { readonly found: string | null } | { readonly pending: true };
+
+async function lookup(projectId: string | undefined, entityId: string): Promise<Lookup> {
+  if (projectId === undefined) return { pending: true };
   try {
-    const response = await searchMarketplaceListings(projectId, { entity_id: entityId, kind: 'agent', limit: 1 });
-    return (unwrapBody(response) as MarketplaceListingPage).rows[0]?.id;
+    return { found: await findListingIdByEntity(projectId, entityId) };
   } catch {
-    return undefined;
+    return { pending: true };
   }
 }
 
 export async function redirectToMarketplace(search: LegacyCatalogSearch, context: unknown): Promise<never> {
   const kind = kindFromSearch(search.tab);
-  if (search.agentId !== undefined && search.agentId !== '') {
-    const listingId = await listingIdOf(selectProjectId(context), search.agentId);
-    if (listingId !== undefined) {
+  const agentId = search.agentId ?? '';
+  if (agentId !== '') {
+    const result = await lookup(selectProjectId(context), agentId);
+    if ('pending' in result) {
       // oxlint-disable-next-line typescript/only-throw-error -- TanStack Router's beforeLoad redirect contract: throw the Response redirect() returns, not an Error.
-      throw redirect({ to: '/marketplace/$kind/$listingId', params: { kind: 'agents', listingId }, replace: true });
+      throw redirect({ to: '/marketplace', search: { agentId }, replace: true });
+    }
+    if (result.found !== null) {
+      // oxlint-disable-next-line typescript/only-throw-error -- same contract as above.
+      throw redirect({
+        to: '/marketplace/$kind/$listingId',
+        params: { kind: 'agents', listingId: result.found },
+        replace: true,
+      });
     }
   }
   // oxlint-disable-next-line typescript/only-throw-error -- same contract as above.

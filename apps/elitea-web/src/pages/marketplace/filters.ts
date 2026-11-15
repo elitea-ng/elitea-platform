@@ -10,6 +10,8 @@ import type { MarketplaceKind } from './types';
 
 /** The URL's side of the filters: every value a string, as the router hands it. */
 export interface MarketplaceSearch {
+  /** An old `?agentId=` link the redirect could not resolve yet (`useLegacyAgentLink.ts`). */
+  agentId?: string;
   kind?: string;
   query?: string;
   category?: string;

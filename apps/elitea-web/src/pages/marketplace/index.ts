@@ -5,3 +5,4 @@
 export { Marketplace } from './Marketplace';
 export { MarketplaceListing } from './MarketplaceListing';
 export { kindFromSearch } from './listing';
+export { findListingIdByEntity } from './legacyLink';
