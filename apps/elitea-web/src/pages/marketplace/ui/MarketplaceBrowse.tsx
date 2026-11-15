@@ -79,8 +79,8 @@ export function MarketplaceBrowse({
             value={kind}
             onChange={(event: ChangeEvent<HTMLInputElement>) => onKindChange(event.target.value === 'skills' ? 'skills' : 'agents')}
           >
-            <FormControlLabel value="agents" sx={optionSx} control={<BaseCheckbox mode={CHECKBOX_MODES.radio} size="small" />} label={t('marketplace.kind.agents', 'Agents')} data-testid="marketplace-kind-agents" />
-            <FormControlLabel value="skills" sx={optionSx} control={<BaseCheckbox mode={CHECKBOX_MODES.radio} size="small" />} label={t('marketplace.kind.skills', 'Skills')} data-testid="marketplace-kind-skills" />
+            <FormControlLabel value="agents" sx={optionSx} control={<BaseCheckbox mode={CHECKBOX_MODES.radio} size="small" sx={controlSx} />} label={t('marketplace.kind.agents', 'Agents')} data-testid="marketplace-kind-agents" />
+            <FormControlLabel value="skills" sx={optionSx} control={<BaseCheckbox mode={CHECKBOX_MODES.radio} size="small" sx={controlSx} />} label={t('marketplace.kind.skills', 'Skills')} data-testid="marketplace-kind-skills" />
           </RadioGroup>
         </FormControl>
         {categories.length > 0 && (
@@ -98,7 +98,7 @@ export function MarketplaceBrowse({
                 <FormControlLabel
                   key={category}
                   sx={optionSx}
-                  control={<BaseCheckbox size="small" checked={selectedCategories.includes(category)} onChange={() => onToggleCategory(category)} />}
+                  control={<BaseCheckbox size="small" sx={controlSx} checked={selectedCategories.includes(category)} onChange={() => onToggleCategory(category)} />}
                   label={category}
                 />
               ))}
@@ -126,5 +126,8 @@ export function MarketplaceBrowse({
 
 /** One row for every option, Kind radios and Category checkboxes alike: the same control skin and size, indent and row height. */
 const optionSx: SxProps<Theme> = { marginLeft: 0, marginRight: 0, minHeight: '2rem' };
+
+/** The same padding and glyph size on the radio and the checkbox, so the two columns of options line up. */
+const controlSx: SxProps<Theme> = { padding: '0.375rem', '& svg': { width: '1rem', height: '1rem' } };
 
 const legendRowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', justifyContent: 'space-between' };
