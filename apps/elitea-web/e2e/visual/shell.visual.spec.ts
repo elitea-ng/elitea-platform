@@ -31,6 +31,8 @@ const AGENTS_LIST = '/app/agents/latest';
 
 /** The agents list, resolved: its empty state renders only from an answered listing. */
 async function openAgentsList(page: Page): Promise<void> {
+  // These two shots are of the sidebar CLOSED at 1280 (the persona's state keeps it open for the journeys).
+  await page.addInitScript(() => localStorage.setItem('el.sidePanel.open.list', 'false'));
   const projectName = await selectProject(page, undefined);
   await page.goto(BASE_URL + AGENTS_LIST, { waitUntil: 'domcontentloaded' });
   await shellSettled(page, projectName);
