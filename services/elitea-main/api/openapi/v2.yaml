@@ -28029,7 +28029,7 @@ paths:
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
 
-  /elitea_core/entity_folders/prompt_lib/{project_id}/{kind}/pins/{entity_id}:
+  /elitea_core/entity_pins/prompt_lib/{project_id}/{kind}/{entity_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
       - name: kind
@@ -28047,7 +28047,9 @@ paths:
       summary: Pin or unpin an entity for the caller
       description: |
         The personal Pinned group: private to the caller, never shown to another
-        member. Gated on the list permission, not on update rights. Pinning an
+        member, and deliberately not audited (a trail row per toggle would show
+        an admin what a member pinned). Gated on the list permission, not on
+        update rights. Pinning an
         entity that is not of the list's kind is a 404; unpinning is always 204.
       tags: [applications]
       requestBody:

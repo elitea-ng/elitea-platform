@@ -6320,12 +6320,14 @@ export const getSetEntityPinUrl = (
   kind: string,
   entityId: number,
 ) => {
-  return `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/pins/${entityId}`;
+  return `/elitea_core/entity_pins/prompt_lib/${projectId}/${kind}/${entityId}`;
 };
 
 /**
  * The personal Pinned group: private to the caller, never shown to another
- * member. Gated on the list permission, not on update rights. Pinning an
+ * member, and deliberately not audited (a trail row per toggle would show
+ * an admin what a member pinned). Gated on the list permission, not on
+ * update rights. Pinning an
  * entity that is not of the list's kind is a 404; unpinning is always 204.
  * @summary Pin or unpin an entity for the caller
  */
@@ -6379,7 +6381,7 @@ export const getSetEntityPinQueryKey = (
 ) => {
   return [
     "PUT",
-    `/elitea_core/entity_folders/prompt_lib/${projectId}/${kind}/pins/${entityId}`,
+    `/elitea_core/entity_pins/prompt_lib/${projectId}/${kind}/${entityId}`,
     entityFolderPinRequest,
   ] as const;
 };

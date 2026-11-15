@@ -111,7 +111,8 @@ interface FolderDragState {
  */
 export function useDragAndDrop(params: UseDragAndDropParams): UseDragAndDropResult {
   const { onReorderFolders, folders, toastSuccess, toastError } = params;
-  const policy = useMemo(() => conversationPolicy(params), [params]);
+  // Rebuilt every render on purpose: `useGroupDnd` reads the policy through its latest-ref, so its identity does not matter.
+  const policy = conversationPolicy(params);
 
   const [folderDrag, setFolderDrag] = useState<FolderDragState>({ dragging: false, folder: null });
   // The custom drag reads the CURRENT drag state and inputs synchronously from a drag event, which can fire before React re-renders.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/foldervisibility"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -36,7 +37,7 @@ const entityFolderOrder = `ORDER BY f.position DESC, f.created_at ASC, f.id ASC`
 // agent that gained a pipeline version), no longer counts as inside it.
 func entityFolderColumns(s string, kind entityfolders.Kind) string {
 	return fmt.Sprintf(`f.id::text, f.name, f.position, COALESCE(f.created_by::text, ''), f.created_at, f.updated_at,
-	COALESCE(ARRAY(SELECT i.entity_id FROM %[1]s.project_folder_items i WHERE i.folder_id = f.id AND %[2]s ORDER BY i.position DESC, i.created_at ASC, i.entity_id), '{}')::int[]`,
+	COALESCE(ARRAY(SELECT i.entity_id FROM %[1]s.project_folder_items i WHERE i.folder_id = f.id AND %[2]s ORDER BY i.position DESC, i.entity_id), '{}')::int[]`,
 		s, entityLiveSQL(s, kind, "i.entity_id"))
 }
 
@@ -252,60 +253,31 @@ func (r *EntityFoldersRepo) Move(ctx context.Context, projectID string, kind ent
 // itemPosition is the position that puts the entity where the caller dropped
 // it inside the folder: the top when no neighbour is named, otherwise between
 // the neighbours (they win over any position, as for the folders). A neighbour
-// that is not in the folder is a 400. When the two neighbours are adjacent
-// integers the folder's items are respaced by one gap first, inside the
-// caller's transaction, keeping their order.
+// that is not in the folder is a 400; the entity itself named as its own
+// neighbour (a client computing from the displayed list, where it still sits)
+// is ignored. When the neighbours are adjacent integers, or the new position
+// would leave a 32-bit integer, the folder's other items are respaced by one gap
+// first, inside the caller's transaction, keeping their order.
 func itemPosition(ctx context.Context, tx pgx.Tx, s string, kind entityfolders.Kind, folderID, entityID int, place entityfolders.Placement) (int, error) {
-	rows, err := tx.Query(ctx, fmt.Sprintf(`SELECT entity_id, position FROM %s.project_folder_items
-		WHERE folder_id = $1 AND entity_kind = $2 AND entity_id <> $3 ORDER BY position DESC, created_at ASC, entity_id ASC`, s),
-		folderID, string(kind), entityID)
+	siblings, err := folderSiblings(ctx, tx, s, kind, folderID, entityID)
 	if err != nil {
-		return 0, fmt.Errorf("entity folders: move: %w", err)
+		return 0, err
 	}
-	var siblings []folders.Folder
-	for rows.Next() {
-		var id, position int
-		if err := rows.Scan(&id, &position); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("entity folders: move: %w", err)
-		}
-		siblings = append(siblings, folders.Folder{ID: strconv.Itoa(id), Position: &position})
+	above, err := neighbourID(place.Above, entityID, siblings)
+	if err != nil {
+		return 0, err
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("entity folders: move: %w", err)
+	below, err := neighbourID(place.Below, entityID, siblings)
+	if err != nil {
+		return 0, err
 	}
-	if place.Above == nil && place.Below == nil {
-		top := 0
-		if len(siblings) > 0 {
-			top = *siblings[0].Position
-		}
-		return top + folders.PositionGap, nil
-	}
-	above, below := "", ""
-	for _, n := range []struct {
-		id   *int
-		into *string
-	}{{place.Above, &above}, {place.Below, &below}} {
-		if n.id == nil {
-			continue
-		}
-		*n.into = strconv.Itoa(*n.id)
-		found := false
-		for i := range siblings {
-			found = found || siblings[i].ID == *n.into
-		}
-		if !found {
-			return 0, apierr.BadRequest("a neighbour is not in this folder")
-		}
-	}
-	position, rebalance := folders.PositionBetween(siblings, above, below)
-	if !rebalance {
+	position, rebalance := placedPosition(siblings, above, below)
+	if !rebalance && position <= math.MaxInt32 {
 		return position, nil
 	}
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`
 		WITH ordered AS (
-			SELECT entity_id, ROW_NUMBER() OVER (ORDER BY position DESC, created_at ASC, entity_id ASC) AS rn, COUNT(*) OVER () AS n
+			SELECT entity_id, ROW_NUMBER() OVER (ORDER BY position DESC, entity_id ASC) AS rn, COUNT(*) OVER () AS n
 			FROM %[1]s.project_folder_items WHERE folder_id = $1 AND entity_kind = $2 AND entity_id <> $3
 		)
 		UPDATE %[1]s.project_folder_items i SET position = ((o.n - o.rn) + 1) * %[2]d
@@ -316,8 +288,60 @@ func itemPosition(ctx context.Context, tx pgx.Tx, s string, kind entityfolders.K
 		p := (len(siblings) - i) * folders.PositionGap
 		siblings[i].Position = &p
 	}
-	position, _ = folders.PositionBetween(siblings, above, below)
+	position, _ = placedPosition(siblings, above, below)
 	return position, nil
+}
+
+// placedPosition is the position for a drop between `above` and `below` ("" is
+// absent), or the top when both are absent. rebalance says the neighbours leave
+// no integer between them.
+func placedPosition(siblings []folders.Folder, above, below string) (int, bool) {
+	if above == "" && below == "" {
+		top := 0
+		if len(siblings) > 0 {
+			top = *siblings[0].Position
+		}
+		return top + folders.PositionGap, false
+	}
+	return folders.PositionBetween(siblings, above, below)
+}
+
+// folderSiblings is the folder's other items, in display order.
+func folderSiblings(ctx context.Context, tx pgx.Tx, s string, kind entityfolders.Kind, folderID, entityID int) ([]folders.Folder, error) {
+	rows, err := tx.Query(ctx, fmt.Sprintf(`SELECT entity_id, position FROM %s.project_folder_items
+		WHERE folder_id = $1 AND entity_kind = $2 AND entity_id <> $3 ORDER BY position DESC, entity_id ASC`, s),
+		folderID, string(kind), entityID)
+	if err != nil {
+		return nil, fmt.Errorf("entity folders: move: %w", err)
+	}
+	defer rows.Close()
+	var siblings []folders.Folder
+	for rows.Next() {
+		var id, position int
+		if err := rows.Scan(&id, &position); err != nil {
+			return nil, fmt.Errorf("entity folders: move: %w", err)
+		}
+		siblings = append(siblings, folders.Folder{ID: strconv.Itoa(id), Position: &position})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("entity folders: move: %w", err)
+	}
+	return siblings, nil
+}
+
+// neighbourID is a neighbour as the id string positions are looked up by: ""
+// when absent or the moved entity itself, a 400 when it is not in the folder.
+func neighbourID(id *int, entityID int, siblings []folders.Folder) (string, error) {
+	if id == nil || *id == entityID {
+		return "", nil
+	}
+	want := strconv.Itoa(*id)
+	for i := range siblings {
+		if siblings[i].ID == want {
+			return want, nil
+		}
+	}
+	return "", apierr.BadRequest("a neighbour is not in this folder")
 }
 
 // Pinned is the ids the caller pinned in the list, whose entities still are of
@@ -331,8 +355,12 @@ func (r *EntityFoldersRepo) Pinned(ctx context.Context, projectID string, kind e
 	if err != nil {
 		return nil, err
 	}
+	visible, args, err := r.pinVisibility(ctx, s, kind, "p.entity_id", actor, []any{actor, string(kind)})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`SELECT p.entity_id FROM %[1]s.project_entity_pins p
-		WHERE p.user_id = $1 AND p.entity_kind = $2 AND `+entityLiveSQL(s, kind, "p.entity_id")+` ORDER BY p.created_at DESC, p.entity_id`, s), actor, string(kind))
+		WHERE p.user_id = $1 AND p.entity_kind = $2 AND `+entityLiveSQL(s, kind, "p.entity_id")+visible+` ORDER BY p.created_at DESC, p.entity_id`, s), args...)
 	if err != nil {
 		return nil, fmt.Errorf("entity folders: pinned: %w", err)
 	}
@@ -365,22 +393,47 @@ func (r *EntityFoldersRepo) SetPin(ctx context.Context, projectID string, kind e
 		}
 		return nil
 	}
+	visible, args, err := r.pinVisibility(ctx, s, kind, "$3::int", actor, []any{actor, string(kind), entityID})
+	if err != nil {
+		return err
+	}
 	ct, err := r.pool.Exec(ctx, fmt.Sprintf(`INSERT INTO %[1]s.project_entity_pins (user_id, entity_kind, entity_id)
-		SELECT $1, $2::varchar, $3::int WHERE `+entityLiveSQL(s, kind, "$3::int")+`
-		ON CONFLICT DO NOTHING`, s), actor, string(kind), entityID)
+		SELECT $1, $2::varchar, $3::int WHERE `+entityLiveSQL(s, kind, "$3::int")+visible+`
+		ON CONFLICT DO NOTHING`, s), args...)
 	if err != nil {
 		return fmt.Errorf("entity folders: pin: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		var exists bool
-		if err := r.pool.QueryRow(ctx, `SELECT `+entityLiveSQL(s, kind, "$1::int"), entityID).Scan(&exists); err != nil {
+		var pinned bool
+		if err := r.pool.QueryRow(ctx, fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s.project_entity_pins WHERE user_id = $1 AND entity_kind = $2 AND entity_id = $3)`, s), actor, string(kind), entityID).Scan(&pinned); err != nil {
 			return fmt.Errorf("entity folders: pin: %w", err)
 		}
-		if !exists {
+		if !pinned {
+			// Not there, not already pinned: the entity is not of this kind, or the caller may not see it.
 			return apierr.NotFound(string(kind) + " not found")
 		}
 	}
 	return nil
+}
+
+// pinVisibility is the extra predicate that keeps a pin to what the caller may
+// see: where a deployment restricts access to agent folders (the optional access
+// overlay), a pin of an agent or pipeline the caller has no access to is neither
+// accepted nor counted, as the lists themselves apply it. `args` is `args` with
+// the placeholders of that predicate appended.
+func (r *EntityFoldersRepo) pinVisibility(ctx context.Context, s string, kind entityfolders.Kind, idExpr string, actor int64, args []any) (string, []any, error) {
+	if kind != entityfolders.KindAgent && kind != entityfolders.KindPipeline {
+		return "", args, nil
+	}
+	access, err := foldervisibility.Resolve(ctx, r.pool, s)
+	if err != nil {
+		return "", nil, fmt.Errorf("entity folders: pin visibility: %w", err)
+	}
+	if !access.FolderRestrictions {
+		return "", args, nil
+	}
+	args = append(args, []string{string(kind)}, actor)
+	return " AND " + foldervisibility.ExclusionSQL(s, idExpr, fmt.Sprintf("$%d", len(args)-1), fmt.Sprintf("$%d", len(args))), args, nil
 }
 
 func entityFolderActor(ctx context.Context) (int64, error) {

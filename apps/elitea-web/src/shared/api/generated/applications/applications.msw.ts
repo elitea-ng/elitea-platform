@@ -15616,7 +15616,7 @@ export const getSetEntityPinMockHandler = (
   options?: RequestHandlerOptions,
 ) => {
   return http.put(
-    "*/elitea_core/entity_folders/prompt_lib/:projectId/:kind/pins/:entityId",
+    "*/elitea_core/entity_pins/prompt_lib/:projectId/:kind/:entityId",
     async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
       await delay(0);
       if (typeof overrideResponse === "function") {

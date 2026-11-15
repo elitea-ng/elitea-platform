@@ -38,8 +38,15 @@ export function neighboursForStep(
   return { above: rest[target - 1]?.id ?? null, below: rest[target]?.id ?? null };
 }
 
+const PINNED_PREFIX = 'pinned-';
+
 /**
  * The personal Pinned group is not a folder: it rides the same `entity_folder`
- * search param under this reserved value, which no folder id (a decimal) can be.
+ * search param under a reserved value no folder id (a decimal) can be. It names
+ * its list, so a Pinned link carried to another list matches nothing there and
+ * is cleared like any stale folder id, instead of silently filtering that list.
  */
-export const PINNED_GROUP_ID = 'pinned';
+export const pinnedGroupId = (kind: EntityFolderKind): string => `${PINNED_PREFIX}${kind}`;
+
+/** Whether an `entity_folder` value is some list's Pinned group (the list helpers turn it into the server's `pinned` flag). */
+export const isPinnedGroupId = (value: string | undefined): boolean => value?.startsWith(PINNED_PREFIX) === true;

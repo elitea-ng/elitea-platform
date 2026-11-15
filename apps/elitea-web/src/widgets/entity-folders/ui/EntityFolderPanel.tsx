@@ -11,7 +11,8 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import {
   neighboursForStep,
-  PINNED_GROUP_ID,
+  isPinnedGroupId,
+  pinnedGroupId,
   useEntityFolderMutations,
   useEntityFolders,
   useEntityPins,
@@ -58,7 +59,7 @@ function FolderPanelBody({ projectId, kind, permissions }: Omit<EntityFolderPane
   // The param is shared by the five lists: an id from another list, or a
   // deleted folder, matches nothing here, so drop it instead of an empty list.
   const stale =
-    selectedFolderId !== undefined && selectedFolderId !== PINNED_GROUP_ID && query.isSuccess && !folders.some((folder) => folder.id === selectedFolderId);
+    selectedFolderId !== undefined && !isPinnedGroupId(selectedFolderId) && query.isSuccess && !folders.some((folder) => folder.id === selectedFolderId);
   useEffect(() => {
     if (stale) selectFolder(undefined);
   }, [stale, selectFolder]);
@@ -163,10 +164,10 @@ function PinnedRow({ projectId, kind }: { readonly projectId: string; readonly k
   const { selectedFolderId, selectFolder } = useRailFolderSelection();
   return (
     <ListItemButton
-      selected={selectedFolderId === PINNED_GROUP_ID}
+      selected={selectedFolderId === pinnedGroupId(kind)}
       data-testid="entity-folder-pinned"
       onClick={() => {
-        selectFolder(PINNED_GROUP_ID);
+        selectFolder(pinnedGroupId(kind));
       }}
     >
       <PushPinOutlinedIcon sx={pinIconSx} />

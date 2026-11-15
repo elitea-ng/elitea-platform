@@ -136,7 +136,7 @@ func TestEntityFolderRoutesRefuseBeforeTheHandlerRuns(t *testing.T) {
 		{http.MethodPut, "/entity_folders/prompt_lib/7/mcp/3", `{"name":"B"}`},
 		{http.MethodDelete, "/entity_folders/prompt_lib/7/toolkit/3", ""},
 		{http.MethodPut, "/entity_folders/prompt_lib/7/pipeline/items/5", `{}`},
-		{http.MethodPut, "/entity_folders/prompt_lib/7/skill/pins/5", `{}`},
+		{http.MethodPut, "/entity_pins/prompt_lib/7/skill/5", `{}`},
 	} {
 		if rec := serveEntityFolder(router, tc.method, tc.path, tc.body); rec.Code != http.StatusForbidden {
 			t.Fatalf("%s %s: status %d, want 403", tc.method, tc.path, rec.Code)

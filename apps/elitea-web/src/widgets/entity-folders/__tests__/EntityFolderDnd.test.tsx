@@ -21,7 +21,7 @@ const FOLDERS = [
 ];
 const ITEM: EntityListItem = { id: '11', name: 'Reviewer', onClick: vi.fn() };
 const ITEMS_URL = `${BASE}/elitea_core/entity_folders/prompt_lib/${PROJECT}/skill/items/:entityId`;
-const PINS_URL = `${BASE}/elitea_core/entity_folders/prompt_lib/${PROJECT}/skill/pins/:entityId`;
+const PINS_URL = `${BASE}/elitea_core/entity_pins/prompt_lib/${PROJECT}/skill/:entityId`;
 
 function page(permissions: readonly string[]): React.ReactElement {
   const granted = new Set(permissions);
@@ -101,15 +101,15 @@ describe('Pinned', () => {
     expect(ITEM.onClick).not.toHaveBeenCalled();
   });
 
-  it('selects the Pinned group through the same search param a folder uses', async () => {
+  it('selects the Pinned group of this list through the same search param a folder uses', async () => {
     serveFolders('skill', FOLDERS, [11]);
     const user = userEvent.setup();
     const view = renderInRouter(page([]));
     await user.click(await screen.findByTestId('entity-folder-pinned'));
-    await waitFor(() => expect(view.router.state.location.search).toMatchObject({ entity_folder: 'pinned' }));
+    await waitFor(() => expect(view.router.state.location.search).toMatchObject({ entity_folder: 'pinned-skill' }));
     // The reserved value is not a folder id: the panel must not clear it as stale.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(view.router.state.location.search).toMatchObject({ entity_folder: 'pinned' });
+    expect(view.router.state.location.search).toMatchObject({ entity_folder: 'pinned-skill' });
   });
 });
 
@@ -144,10 +144,11 @@ describe('MoveSelectionControl', () => {
     expect(options.map((option) => option.textContent)).toEqual(['Reviews', 'Archive']);
     await user.click(options[1] as HTMLElement);
     await waitFor(() => expect(onSettled).toHaveBeenCalledWith({ failed: [] }));
-    expect(moved).toEqual(['11:{"folder_id":"1"}', '12:{"folder_id":"1"}']);
+    // Reverse selection order, so the folder reads in the order the rows were selected.
+    expect(moved).toEqual(['12:{"folder_id":"1"}', '11:{"folder_id":"1"}']);
   });
 
-  it('takes every selected row out of its folder with a null folder', async () => {
+  it('takes the selected rows that sit in a folder out of it with a null folder', async () => {
     serveFolders('skill', FOLDERS);
     const bodies: unknown[] = [];
     server.use(
@@ -160,7 +161,8 @@ describe('MoveSelectionControl', () => {
     renderInRouter(control([UPDATE]));
     await user.click(await screen.findByTestId('skill-selection-move'));
     await user.click(await screen.findByTestId('move-selection-root-option'));
-    await waitFor(() => expect(bodies).toEqual([{ folder_id: null }, { folder_id: null }]));
+    // 12 sits at the root already: only 11 leaves its folder.
+    await waitFor(() => expect(bodies).toEqual([{ folder_id: null }]));
   });
 
   it('keeps only the refused rows selected', async () => {
@@ -176,6 +178,25 @@ describe('MoveSelectionControl', () => {
     await user.click(await screen.findByTestId('skill-selection-move'));
     await user.click((await screen.findAllByTestId('move-selection-option'))[0] as HTMLElement);
     await waitFor(() => expect(onSettled).toHaveBeenCalledWith({ failed: ['12'] }));
+  });
+
+  it('does not re-move a row that is already in the chosen folder', async () => {
+    serveFolders('skill', FOLDERS);
+    const moved: string[] = [];
+    server.use(
+      http.put(ITEMS_URL, ({ params }) => {
+        moved.push(String(params['entityId']));
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const onSettled = vi.fn();
+    const user = userEvent.setup();
+    renderInRouter(control([UPDATE], onSettled));
+    await user.click(await screen.findByTestId('skill-selection-move'));
+    // Reviews already holds 11.
+    await user.click((await screen.findAllByTestId('move-selection-option'))[0] as HTMLElement);
+    await waitFor(() => expect(onSettled).toHaveBeenCalledWith({ failed: [] }));
+    expect(moved).toEqual(['12']);
   });
 
   it('draws nothing without the update permission', async () => {

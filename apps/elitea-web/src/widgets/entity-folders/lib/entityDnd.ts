@@ -86,7 +86,10 @@ export function entityDndPolicy({ folders, selectedIds, nameOf, move }: PolicyIn
     groupKey: (folder) => folder.id,
     messages: {
       moveError: t('widgets.entityFolders.moveFailed', 'The item could not be moved to that folder.'),
-      moved: (count, label) => t('widgets.entityFolders.movedMany', 'Moved {{count}} items to {{target}}.', { count, target: label }),
+      moved: (count, label) =>
+        count === 1
+          ? t('widgets.entityFolders.movedOne', 'Moved 1 item to {{target}}.', { target: label })
+          : t('widgets.entityFolders.movedMany', 'Moved {{count}} items to {{target}}.', { count, target: label }),
     },
   };
 }

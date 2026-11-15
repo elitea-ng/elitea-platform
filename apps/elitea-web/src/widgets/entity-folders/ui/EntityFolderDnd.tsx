@@ -51,8 +51,7 @@ export function EntityFolderDnd({ projectId, kind, permissions, selectedIds = []
 
 function ActiveDnd({ projectId, kind, selectedIds, children }: Omit<EntityFolderDndProps, 'permissions'> & { readonly selectedIds: readonly string[] }): ReactNode {
   const folders = useEntityFolders(projectId, kind).data;
-  const { move } = useEntityFolderMutations(projectId, kind);
-  const { mutateAsync: moveAsync } = move;
+  const { moveQuiet, refreshEntities } = useEntityFolderMutations(projectId, kind);
   const names = useRef(new Map<number, string>());
   const register = useCallback((entityId: number, name: string): void => {
     names.current.set(entityId, name);
@@ -70,16 +69,19 @@ function ActiveDnd({ projectId, kind, selectedIds, children }: Omit<EntityFolder
         selectedIds,
         nameOf,
         move: async (entityId, folderId) => {
-          await moveAsync({ entityId, folderId });
+          await moveQuiet(entityId, folderId);
           moved.current += 1;
         },
       }),
-    [known, selectedIds, nameOf, moveAsync],
+    [known, selectedIds, nameOf, moveQuiet],
   );
   const labels = useMemo(() => entityAnnouncementLabels(known, nameOf), [known, nameOf]);
   const announcements = useMemo(() => buildDndAnnouncements(labels), [labels]);
   const dnd = useGroupDnd(policy, { toastError: setError, toastSuccess: setStatus });
   const { handleDragEnd } = dnd;
+  // How many items the drag in flight carries, kept for the end of the drop: the state is reset by then.
+  const carried = useRef(0);
+  carried.current = dnd.isDragging ? dnd.draggedItems.length : carried.current;
 
   const onDragEnd = useCallback(
     async (event: DragEndEvent): Promise<void> => {
@@ -87,13 +89,14 @@ function ActiveDnd({ projectId, kind, selectedIds, children }: Omit<EntityFolder
       setError(undefined);
       setStatus('');
       await handleDragEnd(event);
+      if (moved.current > 0) refreshEntities();
       const target = event.over === null ? undefined : labels.targetName(event.over.id);
-      // A drop of several items says how many moved; a single one says which.
-      if (moved.current === 1 && target !== undefined) {
+      // A drop of several items says how many moved (the hook already did); a single one says which.
+      if (carried.current === 1 && moved.current === 1 && target !== undefined) {
         setStatus(t('widgets.entityFolders.dnd.moved', 'Moved {{name}} to {{target}}.', { name: labels.itemName(event.active.id) ?? '', target }));
       }
     },
-    [handleDragEnd, labels],
+    [handleDragEnd, refreshEntities, labels],
   );
 
   const value = useMemo(

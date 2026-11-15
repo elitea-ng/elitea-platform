@@ -4,7 +4,7 @@ import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 
-import { useEntityFolderMutations, useEntityFolders, type EntityFolderKind } from '@/entities/entity-folder';
+import { folderOfEntity, useEntityFolderMutations, useEntityFolders, type EntityFolderKind } from '@/entities/entity-folder';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 
@@ -31,15 +31,25 @@ export interface MoveSelectionControlProps {
 export function MoveSelectionControl({ projectId, kind, permissions, ids, onSettled, testIdPrefix }: MoveSelectionControlProps): ReactNode {
   const allowed = entityFolderAccess(kind, permissions).canUpdate && projectId !== undefined;
   const folders = useEntityFolders(projectId, kind).data ?? [];
-  const { moveMany, move } = useEntityFolderMutations(projectId, kind);
+  const { moveMany } = useEntityFolderMutations(projectId, kind);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [busy, setBusy] = useState(false);
   if (!allowed) return null;
 
   const choose = (folderId: string | null): void => {
     setAnchor(null);
+    // A row already where it is stays put (it would only be re-topped). Each move lands at the top of the folder, so the last move
+    // goes on top: send them in reverse and the folder reads in the order the rows were selected.
+    const pending = ids
+      .map(Number)
+      .filter((id) => (folderOfEntity(folders, id)?.id ?? null) !== folderId)
+      .reverse();
+    if (pending.length === 0) {
+      onSettled({ failed: [] });
+      return;
+    }
     setBusy(true);
-    void moveMany(ids.map(Number), folderId)
+    void moveMany(pending, folderId)
       .then(({ failed }) => {
         onSettled({ failed: failed.map(String) });
       })
@@ -53,7 +63,7 @@ export function MoveSelectionControl({ projectId, kind, permissions, ids, onSett
       <BaseBtn
         variant="secondary"
         startIcon={<FolderOpenOutlinedIcon />}
-        disabled={busy || move.isPending}
+        disabled={busy}
         aria-haspopup="menu"
         aria-expanded={anchor !== null}
         onClick={(event) => {

@@ -3,7 +3,7 @@ import { useMemo } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useSearch } from '@tanstack/react-router';
 
-import { PINNED_GROUP_ID } from '@/entities/entity-folder';
+import { isPinnedGroupId } from '@/entities/entity-folder';
 import { getListApplicationsQueryKey, listApplications } from '@/shared/api/generated/applications/applications';
 import type { Application, ApplicationList, ListApplicationsParams } from '@/shared/api/generated/model';
 
@@ -49,7 +49,7 @@ function listParams(input: WorkshopListInput, search: WorkshopSearch): ListAppli
     tags: input.tags.join(','),
     status: (search.statuses ?? []).join(','),
     origin: search.origin,
-    folder_id: input.folderId === PINNED_GROUP_ID ? undefined : input.folderId,
+    folder_id: isPinnedGroupId(input.folderId) ? undefined : input.folderId,
     sort_by: search.sort_by === 'name' ? 'name' : 'created_at',
     sort_order: search.sort_order === 'asc' ? 'asc' : 'desc',
   };
@@ -58,7 +58,7 @@ function listParams(input: WorkshopListInput, search: WorkshopSearch): ListAppli
     if (value !== undefined && value !== '') Object.assign(params, { [key]: value });
   }
   // The personal Pinned group rides the folder slot; the server has a flag for it.
-  if (input.folderId === PINNED_GROUP_ID) params.pinned = true;
+  if (isPinnedGroupId(input.folderId)) params.pinned = true;
   return params;
 }
 

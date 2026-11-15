@@ -73,9 +73,6 @@ interface MoveInput {
   readonly entityId: number;
   /** The target folder, or null for the root. */
   readonly folderId: string | null;
-  /** The entities displayed around the drop inside the folder; both absent puts it at the top. The server turns them into a position. */
-  readonly above?: number | null;
-  readonly below?: number | null;
 }
 
 interface PinInput {
@@ -90,7 +87,11 @@ interface EntityFolderMutations {
   readonly reorder: UseMutationResult<unknown, Error, ReorderInput>;
   readonly move: UseMutationResult<unknown, Error, MoveInput>;
   readonly pin: UseMutationResult<unknown, Error, PinInput>;
-  /** Moves each id in turn (there is no batch endpoint) and says which ones the server refused. */
+  /** One move with no refetch: the caller makes several and calls `refreshEntities` once. It lands at the top of the folder. */
+  readonly moveQuiet: (entityId: number, folderId: string | null) => Promise<unknown>;
+  /** Refetches the folders and the entity lists, after one or several quiet moves. */
+  readonly refreshEntities: () => void;
+  /** Moves each id in turn (there is no batch endpoint), refetches once, and says which ones the server refused. */
   readonly moveMany: (entityIds: readonly number[], folderId: string | null) => Promise<{ readonly failed: readonly number[] }>;
 }
 
@@ -130,30 +131,30 @@ export function useEntityFolderMutations(projectId: string | undefined, kind: En
     onSuccess: () => refresh(false),
   });
   const move = useMutation<unknown, Error, MoveInput>({
-    mutationFn: ({ entityId, folderId, above, below }) =>
-      moveEntityToFolder(project, kind, entityId, {
-        folder_id: folderId,
-        ...(above === undefined ? {} : { neighbor_above_id: above }),
-        ...(below === undefined ? {} : { neighbor_below_id: below }),
-      }),
+    mutationFn: ({ entityId, folderId }) => moveEntityToFolder(project, kind, entityId, { folder_id: folderId }),
     onSuccess: () => refresh(true),
   });
   const pin = useMutation<unknown, Error, PinInput>({
     mutationFn: ({ entityId, pinned }) => setEntityPin(project, kind, entityId, { pinned }),
     onSuccess: () => refresh(true),
   });
-  const { mutateAsync: moveAsync } = move;
+  const moveQuiet = (entityId: number, folderId: string | null): Promise<unknown> =>
+    moveEntityToFolder(project, kind, entityId, { folder_id: folderId });
+  const refreshEntities = (): void => {
+    refresh(true);
+  };
   const moveMany = async (entityIds: readonly number[], folderId: string | null): Promise<{ readonly failed: readonly number[] }> => {
     const failed: number[] = [];
     for (const entityId of entityIds) {
       try {
         // eslint-disable-next-line no-await-in-loop -- sequential by design: there is no batch endpoint and each refusal is reported on its own.
-        await moveAsync({ entityId, folderId });
+        await moveQuiet(entityId, folderId);
       } catch {
         failed.push(entityId);
       }
     }
+    refresh(true);
     return { failed };
   };
-  return { create, rename, remove, reorder, move, pin, moveMany };
+  return { create, rename, remove, reorder, move, pin, moveQuiet, refreshEntities, moveMany };
 }

@@ -86,6 +86,12 @@ export function useGroupDnd<TItem, TGroup>(
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
+  // Everything the drag handlers read but do not own, in one ref: the policy is
+  // rebuilt by its caller on every render, and the handlers fire on a later drag
+  // event, by which point a render has always refreshed the ref.
+  const latest = useRef({ activeId, draggedItems, policy, custom, toastSuccess, toastError });
+  latest.current = { activeId, draggedItems, policy, custom, toastSuccess, toastError };
+
   const reset = useCallback((): void => {
     setActiveId(null);
     setDraggedItems([]);
@@ -102,18 +108,13 @@ export function useGroupDnd<TItem, TGroup>(
         setDraggedFrom(null);
         return;
       }
-      const drag = policy.resolveDrag(active.id);
+      const drag = latest.current.policy.resolveDrag(active.id);
       if (drag === undefined) return;
       setDraggedItems(drag.items);
       setDraggedFrom(drag.source);
     },
-    [custom, policy],
+    [custom],
   );
-
-  // Everything `handleDragEnd` reads but does not own, in one ref: it fires on a
-  // later drag event, by which point a render has always refreshed the ref.
-  const latest = useRef({ activeId, draggedItems, policy, custom, toastSuccess, toastError });
-  latest.current = { activeId, draggedItems, policy, custom, toastSuccess, toastError };
 
   const handleDragEnd = useCallback(
     async (event: DragEndEvent): Promise<void> => {
@@ -150,12 +151,13 @@ export function useGroupDnd<TItem, TGroup>(
       const customState = custom?.dropAreaState(dropAreaId);
       if (customState !== undefined) return customState;
       if (draggedItems.length === 0) return NO_DROP;
-      const drop = policy.resolveDrop(dropAreaId);
+      const current = latest.current.policy;
+      const drop = current.resolveDrop(dropAreaId);
       if (drop === undefined) return NO_DROP;
-      const valid = isValidTarget(policy, draggedFrom, drop.group);
+      const valid = isValidTarget(current, draggedFrom, drop.group);
       return { isValidDropTarget: valid, isActive: valid };
     },
-    [activeId, custom, draggedItems, draggedFrom, policy],
+    [activeId, custom, draggedItems, draggedFrom],
   );
 
   return {

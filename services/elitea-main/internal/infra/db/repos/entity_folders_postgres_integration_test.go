@@ -495,6 +495,23 @@ func TestEntityFoldersRepoPostgres_ItemsKeepTheirPlaceAndPinsArePrivate(t *testi
 		}
 	}
 
+	// The entity named as its own neighbour (a client computing from the list it
+	// shows, where the entity still sits) is ignored, not refused.
+	if err := move(704, entityfolders.Placement{Above: at(704)}); err != nil {
+		t.Fatalf("self neighbour: %v", err)
+	}
+	// A top position that would leave a 32-bit integer respaces the folder
+	// instead of failing every later move with a 500.
+	if _, err := pool.Exec(ctx, `UPDATE p_1.project_folder_items SET position = 2147483000 WHERE folder_id = $1 AND entity_id = 703`, folder.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := move(701, entityfolders.Placement{}); err != nil {
+		t.Fatalf("top beyond int32: %v", err)
+	}
+	if got := ids(); got[0] != 701 || len(got) != 4 {
+		t.Fatalf("after the overflow respace: %v, want 701 on top", got)
+	}
+
 	// Pins: the caller's own, never another member's; a missing entity is a 404.
 	if err := repo.SetPin(ctx, "1", entityfolders.KindSkill, 702, true); err != nil {
 		t.Fatal(err)

@@ -141,5 +141,5 @@ test('Move to folder in the selection section, and the personal Pinned group', a
   await page.getByTestId('entity-folder-pinned').click();
   await expect(page.getByTestId('entity-card').filter({ hasText: names[0] ?? '' })).toBeVisible();
   await expect(page.getByTestId('entity-card').filter({ hasText: names[1] ?? '' })).toHaveCount(0);
-  await expect(page).toHaveURL(/entity_folder=pinned/);
+  await expect(page).toHaveURL(/entity_folder=pinned-agent/);
 });

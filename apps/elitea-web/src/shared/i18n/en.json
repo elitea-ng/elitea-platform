@@ -6551,5 +6551,6 @@
   "widgets.entityFolders.pinShort": "Pin",
   "widgets.entityFolders.pinned": "Pinned",
   "widgets.entityFolders.unpin": "Unpin {{name}}",
-  "widgets.entityFolders.unpinShort": "Unpin"
+  "widgets.entityFolders.unpinShort": "Unpin",
+  "widgets.entityFolders.movedOne": "Moved 1 item to {{target}}."
 }
