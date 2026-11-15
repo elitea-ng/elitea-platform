@@ -448,15 +448,17 @@ const ROUTES: readonly VisualRoute[] = [
     // @covers /marketplace
     name: 'marketplace',
     path: '/app/marketplace',
-    // A category checkbox in the Browse sidebar, which comes from the API. The
-    // page's obvious landmarks all fail the experiment: the summary bar, the
-    // search box and "No listings match" are present during load (loaded YES,
-    // stalled YES), so the stalled screen is a plausible-looking Marketplace
-    // with no categories, which is exactly the kind of screenshot this suite
-    // must not accept. `Business Analyst` is one of the fetched categories
-    // (`useGetAgentCategories`): loaded YES, stalled no. The viewport is wider
-    // than 1440px, so the sidebar is open by default and the checkbox shows.
-    landmark: (page) => page.getByRole('checkbox', { name: 'Business Analyst' }),
+    // WHAT ONLY A RESOLVED LISTING SEARCH PRODUCES. Categories used to come
+    // from their own endpoint (`useGetAgentCategories`), so a category
+    // checkbox was the landmark; they are now the facet counts of the listings
+    // search itself, so a stack with no published listing has no category at
+    // all. The page's other landmarks (the summary bar, the search box) are
+    // present during load, and the empty copy and the grid's section are
+    // rendered only once the search has answered: `LinearProgress` stands in
+    // until then. So the landmark is either of the two answers: the empty
+    // state or the "All agents" section. Loaded YES, stalled no.
+    landmark: (page) =>
+      page.getByText('Nothing is published yet').or(page.getByTestId('marketplace-section-all')),
     light: true,
   },
   {
