@@ -18,4 +18,4 @@ person can approve their own Marketplace hire in a personal project.
 
 A new routine, `main.marketplace_retention`, runs once a day. It deletes withdrawn
 Marketplace snapshots that no project has installed or as a fork origin, 30 days
-after the withdrawal. It pauses in maintenance. Find it in the routines list.
+after the withdrawal. The 30 days are the platform's choice, not a number from the ADR. It pauses in maintenance. Find it in the routines list.
