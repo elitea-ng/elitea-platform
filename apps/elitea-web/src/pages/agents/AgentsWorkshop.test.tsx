@@ -89,6 +89,15 @@ describe('AgentsWorkshop (ADR-0051 M1)', () => {
     }
   });
 
+  it('names every sidebar section as a group for screen readers (Status, Origin, Sort, View)', async () => {
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/all', { projectId: '9' });
+
+    for (const name of ['Status', 'Origin', 'Sort', 'View']) {
+      expect(await screen.findByRole('group', { name })).toBeInTheDocument();
+    }
+    expect(within(screen.getByRole('group', { name: 'Status' })).getByTestId('agent-facet-statuses-draft')).toBeInTheDocument();
+  });
+
   it('asks the server for the chosen status and keeps the facet counts of the whole project', async () => {
     const seen: (string | null)[] = [];
     server.use(

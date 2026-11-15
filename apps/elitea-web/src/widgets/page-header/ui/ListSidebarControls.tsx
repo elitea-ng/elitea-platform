@@ -16,13 +16,16 @@ import { t } from '@/shared/i18n';
 
 import { facetValues, toggledFacet, type EntityListSidebarProps, type ListFacet, type SearchRecord } from './listSidebarModel';
 
-/** A titled group of controls in the List tab. */
+/** A titled group of controls in the List tab: a fieldset named by its legend, so a screen reader announces "Status, group". */
 export function Section({ label, children }: { readonly label: string; readonly children: ReactNode }): ReactNode {
   return (
-    <Box sx={sectionSx}>
+    <Box
+      component="fieldset"
+      sx={sectionSx}
+    >
       <Typography
         variant="labelSmall"
-        component="div"
+        component="legend"
         sx={sectionTitleSx}
       >
         {label}
@@ -74,11 +77,7 @@ export function FacetGroup({ facet, search, patch, testIdPrefix }: FacetGroupPro
   if (options.length === 0) return null;
   return (
     <Section label={facet.label}>
-      <Box
-        component="fieldset"
-        aria-label={facet.label}
-        sx={chipsSx}
-      >
+      <Box sx={chipsSx}>
         {options.map((option) => {
           const on = current.includes(option.value);
           return (
@@ -145,11 +144,11 @@ export function SortControl({ fields, search, patch, testIdPrefix }: SortControl
   );
 }
 
-const sectionSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.75) });
+const sectionSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', flexDirection: 'column', gap: theme.spacing(0.75), border: 0, margin: 0, padding: 0, minWidth: 0 });
 
-const sectionTitleSx: SxProps<Theme> = (theme: Theme) => ({ margin: 0, color: theme.vars.palette.text.metrics });
+const sectionTitleSx: SxProps<Theme> = (theme: Theme) => ({ margin: 0, padding: 0, color: theme.vars.palette.text.metrics });
 
-const chipsSx: SxProps<Theme> = { display: 'flex', flexWrap: 'wrap', gap: 0.75, border: 0, margin: 0, padding: 0, minWidth: 0 };
+const chipsSx: SxProps<Theme> = { display: 'flex', flexWrap: 'wrap', gap: 0.75 };
 
 const sortRowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: 1 };
 
