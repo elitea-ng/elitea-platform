@@ -60,7 +60,7 @@ import { WelcomeMessageInput } from './WelcomeMessageInput';
  *    written — no `GenerateAgentButton` itself. Rendered only outside
  *    pipeline mode (`entityType !== 'pipeline'`), matching the baseline's
  *    own conditional.
- *  - `iconSlot` — the baseline's editable `EntityIcon`
+ *  - `generalSlots.icon` — the baseline's editable `EntityIcon`
  *    (`components/EntityIcon.jsx`, `editable={true}`, `onChangeIcon`,
  *    upload flow). Sibling A1h's own scoped `EntityIcon.tsx`
  *    (`../ui/EntityIcon.tsx`) explicitly does NOT cover this: its own doc
@@ -68,7 +68,7 @@ import { WelcomeMessageInput } from './WelcomeMessageInput';
  *    always passes `editable={false}`" and that the editable/upload mode
  *    "is a separate, large feature... no owner in this sub-unit's file
  *    list." A real gap, not a naming mismatch.
- *  - `tagsSlot` — the baseline's `TagEditor`
+ *  - `generalSlots.tags` — the baseline's `TagEditor`
  *    (`pages/Common/Components/TagEditor.jsx`), consumed by three
  *    different domains (`CreateSkillForm`, this file, `ApplicationEditForm`)
  *    with no `shared/ui` port anywhere in this worktree
@@ -134,8 +134,7 @@ interface GeneralFieldsProps {
   readonly name: GeneralFieldsNameProps;
   readonly description: GeneralFieldsDescriptionProps;
   readonly disabled: boolean;
-  readonly iconSlot: ReactNode;
-  readonly tagsSlot: ReactNode;
+  readonly slots: CreateAgentFormProps['generalSlots'];
 }
 
 /**
@@ -146,7 +145,9 @@ interface GeneralFieldsProps {
  * "group into one object" answer to the §3.5 12-prop budget `BasicAccordion`
  * `slotSx` and `InputBase` `actions`/`expand` already establish.
  */
-function GeneralFields({ name, description, disabled, iconSlot, tagsSlot }: GeneralFieldsProps): ReactNode {
+function GeneralFields({ name, description, disabled, slots }: GeneralFieldsProps): ReactNode {
+  const iconSlot = slots?.icon;
+  const tagsSlot = slots?.tags;
   return (
     <Box sx={accordionContentSx}>
       <Box sx={nameContainerSx}>
@@ -235,8 +236,8 @@ export interface CreateAgentFormProps {
    * as a non-button interactive element (an MUI `Chip`, a `role="button"` `Box`).
    */
   readonly generateAgentButtonSlot?: ReactNode | undefined;
-  readonly iconSlot?: ReactNode | undefined;
-  readonly tagsSlot?: ReactNode | undefined;
+  /** The general block's editable icon and tag controls (see the module doc for both). */
+  readonly generalSlots?: { readonly icon?: ReactNode | undefined; readonly tags?: ReactNode | undefined } | undefined;
   /**
    * The model picker (`widgets/agent-model-settings`), rendered inside the
    * "Advanced" panel where the baseline puts it. Injected rather than
@@ -280,8 +281,7 @@ export function CreateAgentForm({
   showInstructions = true,
   entityType = 'application',
   generateAgentButtonSlot,
-  iconSlot,
-  tagsSlot,
+  generalSlots,
   modelSettingsSlot,
   instructionsAiEditSlot,
   metaControls,
@@ -350,8 +350,7 @@ export function CreateAgentForm({
                   error: descriptionError,
                 }}
                 disabled={disabled}
-                iconSlot={iconSlot}
-                tagsSlot={tagsSlot}
+                slots={generalSlots}
               />
             ),
           },

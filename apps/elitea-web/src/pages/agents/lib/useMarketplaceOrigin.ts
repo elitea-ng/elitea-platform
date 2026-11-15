@@ -26,7 +26,7 @@ export function useMarketplaceOrigin(
 }
 
 /** An installed agent: its definition is the listing version's snapshot and cannot be edited. */
-export function isInstalledOrigin(origin: MarketplaceOrigin | undefined): boolean {
+function isInstalledOrigin(origin: MarketplaceOrigin | undefined): boolean {
   return origin?.mode === 'installed';
 }
 

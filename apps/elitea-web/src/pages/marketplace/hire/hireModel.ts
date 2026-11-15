@@ -34,7 +34,7 @@ export function mustBind(requirement: MarketplaceRequirement): boolean {
 }
 
 /** What a person chose for one requirement: a project entity, or "disable for now". */
-export type BindingChoice = { readonly kind: 'entity'; readonly id: string } | { readonly kind: 'disabled' };
+type BindingChoice = { readonly kind: 'entity'; readonly id: string } | { readonly kind: 'disabled' };
 
 export type BindingChoices = Readonly<Record<string, BindingChoice | undefined>>;
 

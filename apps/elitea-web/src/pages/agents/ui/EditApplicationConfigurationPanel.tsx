@@ -155,27 +155,29 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
            `toVersionSaveBody`'s `tags`, which `UpdateVersion` now
            writes as association rows. */
         instructionsAiEditSlot={props.instructionsAiEditSlot}
-        iconSlot={
-          <AgentIconEditor
-            projectId={projectId}
-            applicationId={applicationId}
-            versionId={activeVersion?.id}
-            agentName={editor.values.name ?? ''}
-            iconMeta={iconMeta}
-            disabled={isEditorDisabled}
-          />
-        }
-        tagsSlot={
-          <>
-            <ApplicationMcpAccessToggle
-              checked={mcpAccessEnabled}
-              onChange={handleMcpAccessChange}
+        generalSlots={{
+          icon: (
+            <AgentIconEditor
+              projectId={projectId}
+              applicationId={applicationId}
+              versionId={activeVersion?.id}
+              agentName={editor.values.name ?? ''}
+              iconMeta={iconMeta}
               disabled={isEditorDisabled}
-              entityType="agent"
             />
-            <AgentTagEditor projectId={projectId} value={tags} onChange={setTags} />
-          </>
-        }
+          ),
+          tags: (
+            <>
+              <ApplicationMcpAccessToggle
+                checked={mcpAccessEnabled}
+                onChange={handleMcpAccessChange}
+                disabled={isEditorDisabled}
+                entityType="agent"
+              />
+              <AgentTagEditor projectId={projectId} value={tags} onChange={setTags} />
+            </>
+          ),
+        }}
         modelSettingsSlot={
           <AgentModelSettings
             projectId={projectId}

@@ -56,7 +56,7 @@ export function listingParams(card: ListingCardData): { readonly kind: Marketpla
  * the config is missing, so the `'1'` fallback is unreachable in practice and
  * exists only so this stays a total function.
  */
-export function resolvePublicProjectId(): string {
+function resolvePublicProjectId(): string {
   const config = getConfig();
   return config.status === 'ok' ? config.config.vite_public_project_id : '1';
 }

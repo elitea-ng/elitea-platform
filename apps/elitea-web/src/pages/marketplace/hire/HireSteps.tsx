@@ -24,7 +24,7 @@ import { t } from '@/shared/i18n';
 import { DISABLED_VALUE, isHireable, mustBind, needsApproval, type BindingChoices, type HireMode } from './hireModel';
 import type { BindingOption } from './useBindingTargets';
 
-export function StepGroup({ title, children }: { readonly title: string; readonly children: ReactNode }): ReactNode {
+function StepGroup({ title, children }: { readonly title: string; readonly children: ReactNode }): ReactNode {
   return (
     <Box component="fieldset" sx={fieldsetSx}>
       <Typography component="legend" variant="labelMedium">

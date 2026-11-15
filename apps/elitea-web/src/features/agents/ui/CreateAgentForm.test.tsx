@@ -245,8 +245,7 @@ describe('CreateAgentForm', () => {
       <CreateAgentForm
         values={baseValues}
         onFieldChange={vi.fn()}
-        iconSlot={<div>ICON</div>}
-        tagsSlot={<div>TAGS</div>}
+        generalSlots={{ icon: <div>ICON</div>, tags: <div>TAGS</div> }}
       />,
     );
     expect(screen.getByText('ICON')).toBeVisible();

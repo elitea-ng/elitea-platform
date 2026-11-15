@@ -330,13 +330,15 @@ export function useChatPipelineConfig({
           showInstructions={entityType === 'application'}
           values={draft}
           onFieldChange={onFieldChange}
-          tagsSlot={
-            <AgentTagEditor
-              projectId={projectId}
-              value={tagValue}
-              onChange={onTagsChange}
-            />
-          }
+          generalSlots={{
+            tags: (
+              <AgentTagEditor
+                projectId={projectId}
+                value={tagValue}
+                onChange={onTagsChange}
+              />
+            ),
+          }}
         />
       ),
     }),
