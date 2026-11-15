@@ -18,13 +18,12 @@ import FormControlLabel from '@mui/material/FormControlLabel';
 import FormGroup from '@mui/material/FormGroup';
 import FormLabel from '@mui/material/FormLabel';
 import MenuItem from '@mui/material/MenuItem';
-import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
 import TextField from '@mui/material/TextField';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
-import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
+import { BaseCheckbox, CHECKBOX_MODES } from '@/shared/ui/BaseCheckbox';
 import { filtersPanelSx } from '@/shared/ui/EntityRail';
 import { SidePanelTab } from '@/shared/ui/side-panel';
 
@@ -80,8 +79,8 @@ export function MarketplaceBrowse({
             value={kind}
             onChange={(event: ChangeEvent<HTMLInputElement>) => onKindChange(event.target.value === 'skills' ? 'skills' : 'agents')}
           >
-            <FormControlLabel value="agents" control={<Radio size="small" />} label={t('marketplace.kind.agents', 'Agents')} data-testid="marketplace-kind-agents" />
-            <FormControlLabel value="skills" control={<Radio size="small" />} label={t('marketplace.kind.skills', 'Skills')} data-testid="marketplace-kind-skills" />
+            <FormControlLabel value="agents" sx={optionSx} control={<BaseCheckbox mode={CHECKBOX_MODES.radio} size="small" />} label={t('marketplace.kind.agents', 'Agents')} data-testid="marketplace-kind-agents" />
+            <FormControlLabel value="skills" sx={optionSx} control={<BaseCheckbox mode={CHECKBOX_MODES.radio} size="small" />} label={t('marketplace.kind.skills', 'Skills')} data-testid="marketplace-kind-skills" />
           </RadioGroup>
         </FormControl>
         {categories.length > 0 && (
@@ -98,6 +97,7 @@ export function MarketplaceBrowse({
               {categories.map((category) => (
                 <FormControlLabel
                   key={category}
+                  sx={optionSx}
                   control={<BaseCheckbox size="small" checked={selectedCategories.includes(category)} onChange={() => onToggleCategory(category)} />}
                   label={category}
                 />
@@ -123,5 +123,8 @@ export function MarketplaceBrowse({
     </SidePanelTab>
   );
 }
+
+/** One row for every option, Kind radios and Category checkboxes alike: the same control skin and size, indent and row height. */
+const optionSx: SxProps<Theme> = { marginLeft: 0, marginRight: 0, minHeight: '2rem' };
 
 const legendRowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', justifyContent: 'space-between' };

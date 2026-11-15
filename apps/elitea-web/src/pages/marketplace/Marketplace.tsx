@@ -110,7 +110,7 @@ export function Marketplace(): ReactNode {
             clearCategories();
           }}
         />
-        <ListingResults listings={listings} shown={shown} featured={featured} popular={popular} kindLabel={kindLabel} />
+        <ListingResults listings={listings} shown={shown} featured={featured} popular={popular} kindLabel={kindLabel} filtered={!noFilter} />
       </Box>
     </Box>
   );
@@ -122,13 +122,23 @@ interface ListingResultsProps {
   readonly featured: readonly ListingCardData[];
   readonly popular: readonly ListingCardData[];
   readonly kindLabel: string;
+  /** A search or a category is active. */
+  readonly filtered: boolean;
 }
 
 /** What is under the summary bar: the loading, error and empty states, the two shelves and the full list. */
-function ListingResults({ listings, shown, featured, popular, kindLabel }: ListingResultsProps): ReactNode {
+function ListingResults({ listings, shown, featured, popular, kindLabel, filtered }: ListingResultsProps): ReactNode {
   if (listings.isPending) return <LinearProgress />;
   if (listings.isError) {
     return <BannerMessage variant="error" message={t('marketplace.loadError', 'The listings did not load. Reload the page to try again.')} />;
+  }
+  if (shown.length === 0 && !filtered) {
+    return (
+      <NoResultsMessage
+        title={t('marketplace.empty.title', 'Nothing is published yet')}
+        description={t('marketplace.empty.description', 'Publish an agent or a skill from its page in the Workshop and it appears here after review.')}
+      />
+    );
   }
   if (shown.length === 0) {
     return (

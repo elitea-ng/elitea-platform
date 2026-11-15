@@ -6502,5 +6502,7 @@
   "marketplace.title": "Marketplace",
   "marketplace.untitled": "Untitled",
   "widgets.sidebar.nav.marketplace": "Marketplace",
-  "marketplace.listing.tryFailed": "The conversation could not be started. Try again."
+  "marketplace.listing.tryFailed": "The conversation could not be started. Try again.",
+  "marketplace.empty.description": "Publish an agent or a skill from its page in the Workshop and it appears here after review.",
+  "marketplace.empty.title": "Nothing is published yet"
 }

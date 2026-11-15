@@ -2,7 +2,7 @@
  * The strip above the grid: what is being shown and which filters are on,
  * with a **Browse** button that opens the right sidebar.
  *
- * It is the answer to a closed sidebar (ADR-0051 risks): every active filter is
+ * It shows only while the sidebar is closed (or a drawer not yet opened). It is the answer to a closed sidebar (ADR-0051 risks): every active filter is
  * a removable chip here, so a person who closed the panel still sees why the
  * list is short and can clear it without opening anything.
  */
@@ -25,8 +25,10 @@ export interface MarketplaceSummaryBarProps {
   readonly onClearAll: () => void;
 }
 
-export function MarketplaceSummaryBar({ summary, query, categories, onClearQuery, onRemoveCategory, onClearAll }: MarketplaceSummaryBarProps): React.JSX.Element {
+export function MarketplaceSummaryBar({ summary, query, categories, onClearQuery, onRemoveCategory, onClearAll }: MarketplaceSummaryBarProps): React.JSX.Element | null {
   const slot = useSidePanelSlot();
+  // While the Browse tab is on screen it already shows every filter, so the bar has nothing to add.
+  if (slot?.targets.has('filters') === true) return null;
   const hasFilters = query.trim() !== '' || categories.length > 0;
   return (
     <Box data-testid="marketplace-summary-bar" sx={barSx}>

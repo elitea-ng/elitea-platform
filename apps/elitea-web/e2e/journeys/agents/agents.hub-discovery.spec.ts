@@ -135,14 +135,22 @@ async function publishAgent(request: APIRequestContext, name: string): Promise<P
  * Open the Marketplace's agents and open its Browse sidebar.
  *
  * The sidebar is open by default only on a window of 1440px or more; below
- * that (this suite's default viewport) it is a drawer, opened from the summary
- * bar's Browse button. Clicking the button on a wide window only re-selects
- * the tab that is already showing, so the helper does not branch on the width.
+ * that it is a drawer, opened from the summary bar's Browse button. The bar
+ * is drawn only while the sidebar is closed, so the helper opens it only when
+ * the search is not already on screen.
  */
 async function openMarketplace(page: Page): Promise<void> {
   await page.goto(`${BASE_URL}/app/marketplace?kind=agents`);
   await expect(page.getByTestId('marketplace')).toBeVisible({ timeout: 30_000 });
-  await page.getByTestId('marketplace-open-browse').click();
+  await showBrowse(page);
+}
+
+/** Opens the Browse sidebar when it is closed. */
+async function showBrowse(page: Page): Promise<void> {
+  const open = page.getByTestId('marketplace-open-browse');
+  // One of the two is on screen once the page has settled: the button (sidebar closed) or the search (open).
+  await expect(open.or(browseSearch(page))).toBeVisible({ timeout: 30_000 });
+  if (await open.isVisible()) await open.click();
   await expect(browseSearch(page)).toBeVisible({ timeout: 30_000 });
 }
 
@@ -225,7 +233,7 @@ test('a published agent is findable in the Marketplace by name and by category, 
   // ── found by its category, with the search cleared ───────────────────
   // The half the name search cannot answer: a consumer who does not know the
   // name browses the categories instead.
-  await page.getByTestId('marketplace-open-browse').click();
+  await showBrowse(page);
   await browseSearch(page).fill('');
   const category = page.getByRole('checkbox', { name: MARKETPLACE_CATEGORY, exact: true });
   await expect(category, `the Marketplace must offer the '${MARKETPLACE_CATEGORY}' category`).toBeVisible({ timeout: 20_000 });

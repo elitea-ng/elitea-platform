@@ -71,7 +71,7 @@ function mount(initial = '/marketplace'): void {
   const rootRoute = createRootRoute({
     component: () => (
       <QueryClientProvider client={queryClient}>
-        <SidePanelHarness>
+        <SidePanelHarness toggle>
           <Outlet />
         </SidePanelHarness>
       </QueryClientProvider>
@@ -138,11 +138,14 @@ describe('Marketplace', () => {
     await user.click(await within(browse).findByRole('checkbox', { name: 'Support' }));
     const all = await screen.findByTestId('marketplace-section-all');
     expect(within(all).getAllByTestId('marketplace-card')).toHaveLength(1);
-    expect(screen.getByText('Category: Support')).toBeInTheDocument();
 
     await user.click(within(browse).getByRole('checkbox', { name: 'Productivity' }));
     await waitFor(() => expect(within(all).getAllByTestId('marketplace-card')).toHaveLength(3));
 
+    // The summary bar is for a CLOSED sidebar: close it, and every active filter is a chip there.
+    await user.click(screen.getByTestId('side-panel-harness-toggle'));
+    expect(await screen.findByText('Category: Productivity')).toBeInTheDocument();
+    expect(screen.getByText('Category: Support')).toBeInTheDocument();
     await user.click(screen.getByTestId('marketplace-clear-all'));
     await waitFor(() => expect(screen.queryByText('Category: Support')).not.toBeInTheDocument());
     expect(screen.getByTestId('marketplace-section-featured')).toBeInTheDocument();
@@ -174,7 +177,24 @@ describe('Marketplace', () => {
 
     const all = await screen.findByTestId('marketplace-section-all');
     expect(within(all).getByText('PR Reviewer')).toBeInTheDocument();
-    expect(screen.getByText('Skills: 1')).toBeInTheDocument();
+    // With the Browse sidebar open the summary bar has nothing to add and is not drawn; closed, it counts.
+    expect(screen.queryByTestId('marketplace-summary-bar')).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByTestId('side-panel-harness-toggle'));
+    expect(await screen.findByText('Skills: 1')).toBeInTheDocument();
+    expect(screen.getByTestId('marketplace-open-browse')).toBeInTheDocument();
+  });
+
+  it('says nothing is published yet, not "no match", when the catalogue is empty and nothing is filtered', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    server.use(
+      getGetAgentCategoriesMockHandler({ categories: [], total: 0 }),
+      http.get('/api/v2/elitea_core/public_applications/prompt_lib', () => HttpResponse.json({ rows: [], total: 0 })),
+    );
+    mount();
+
+    expect(await screen.findByText('Nothing is published yet')).toBeInTheDocument();
+    expect(screen.getByText(/Publish an agent or a skill/)).toBeInTheDocument();
+    expect(screen.queryByText('No listings match')).not.toBeInTheDocument();
   });
 
   it('says what to do when nothing matches', async () => {
