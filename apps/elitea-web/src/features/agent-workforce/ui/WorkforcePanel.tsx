@@ -108,7 +108,7 @@ function StateHeader({ projectId, state, onPropose }: { readonly projectId: stri
 
 function StateBadges({ state }: { readonly state: AgentWorkforceAgent }): ReactNode {
   const badges: readonly (readonly [boolean, string, string])[] = [
-    [state.is_hr_agent, 'text.secondary', t('features.agentWorkforce.hrAgent', 'Reviewer (HR) agent')],
+    [state.is_workforce_manager, 'text.secondary', t('features.agentWorkforce.workforceManager', 'Workforce manager')],
     [state.legal_hold, 'warning.main', t('features.agentWorkforce.legalHold', 'Legal hold')],
     [
       state.lifecycle_state === 'retired' && state.reinstate_until !== null,

@@ -112,7 +112,7 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// as `N·TAG` with it.
     recalled_memory_tag: Option<String>,
     /// The version's `meta.capabilities.can_review_agents` (ADR-0050
-    /// decision 5l, #1616): an HR agent, bound `propose_dismissal`. Only a
+    /// decision 5l, #1616): a workforce manager, bound `propose_dismissal`. Only a
     /// root application agent has it; Main checks it again on every call.
     can_review_agents: bool,
 }
@@ -626,7 +626,7 @@ impl OrdinaryNoToolProfile {
         self.recalled_memory_tag.as_deref()
     }
 
-    /// Whether the version makes the agent an HR agent
+    /// Whether the version makes the agent a workforce manager
     /// (`meta.capabilities.can_review_agents`).
     #[must_use]
     pub(crate) const fn can_review_agents(&self) -> bool {

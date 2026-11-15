@@ -1,7 +1,7 @@
 //! The `propose_dismissal` tool (ADR-0050 decision 5l, #1616), over the
 //! claim-bound content listener.
 //!
-//! An HR agent (its version sets `meta.capabilities.can_review_agents`) may
+//! A workforce manager (its version sets `meta.capabilities.can_review_agents`) may
 //! propose a ladder stage (watch, demote with an exact narrowing, suspend or
 //! retire) for another agent of its project, with a rationale. It never
 //! decides: Main stores a proposal and a person who manages agents approves
@@ -10,7 +10,7 @@
 //! Main decides everything that authorizes a proposal: the project, the
 //! proposing agent and the person come from the claimed execution; the
 //! capability is read from the frozen version again; the guards (not
-//! itself, not its hirer, not a higher tier, not another HR agent, not a
+//! itself, not its hirer, not a higher tier, not another workforce manager, not a
 //! critical-tier agent or one under legal hold, one open proposal per
 //! agent) are Main's.
 //!

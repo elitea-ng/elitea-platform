@@ -96,7 +96,7 @@ func TestNarrowMetaNeverSwitchesMemoryOrTheHeartbeatOn(t *testing.T) {
 }
 
 func TestCheckAgentProposalGuards(t *testing.T) {
-	ok := GuardSubject{ProposerApplicationID: 1, ProposerTier: "high", ProposerIsHR: true,
+	ok := GuardSubject{ProposerApplicationID: 1, ProposerTier: "high", ProposerIsWorkforceManager: true,
 		TargetApplicationID: 2, TargetTier: "medium", TargetState: StateActive}
 	if err := CheckAgentProposal(ok, StageRetire); err != nil {
 		t.Fatalf("a valid proposal was refused: %v", err)
@@ -106,16 +106,16 @@ func TestCheckAgentProposalGuards(t *testing.T) {
 		stage Stage
 		code  string
 	}{
-		"not HR":      {func(s *GuardSubject) { s.ProposerIsHR = false }, StageWatch, OutcomeNotAllowed},
-		"low HR":      {func(s *GuardSubject) { s.ProposerTier = "low" }, StageWatch, OutcomeNotAllowed},
-		"self":        {func(s *GuardSubject) { s.TargetApplicationID = 1 }, StageWatch, OutcomeGuardRefused},
-		"hirer":       {func(s *GuardSubject) { s.TargetHiredProposer = true }, StageWatch, OutcomeGuardRefused},
-		"other HR":    {func(s *GuardSubject) { s.TargetIsHR = true }, StageWatch, OutcomeGuardRefused},
-		"higher tier": {func(s *GuardSubject) { s.TargetTier = "critical"; s.ProposerTier = "high" }, StageWatch, OutcomeGuardRefused},
-		"critical":    {func(s *GuardSubject) { s.TargetTier = "critical"; s.ProposerTier = "critical" }, StageWatch, OutcomeGuardRefused},
-		"legal hold":  {func(s *GuardSubject) { s.TargetLegalHold = true }, StageWatch, OutcomeGuardRefused},
-		"retired":     {func(s *GuardSubject) { s.TargetState = StateRetired }, StageWatch, OutcomeGuardRefused},
-		"delete":      {func(*GuardSubject) {}, StageDelete, OutcomeGuardRefused},
+		"not a manager": {func(s *GuardSubject) { s.ProposerIsWorkforceManager = false }, StageWatch, OutcomeNotAllowed},
+		"low manager":   {func(s *GuardSubject) { s.ProposerTier = "low" }, StageWatch, OutcomeNotAllowed},
+		"self":          {func(s *GuardSubject) { s.TargetApplicationID = 1 }, StageWatch, OutcomeGuardRefused},
+		"hirer":         {func(s *GuardSubject) { s.TargetHiredProposer = true }, StageWatch, OutcomeGuardRefused},
+		"other manager": {func(s *GuardSubject) { s.TargetIsWorkforceManager = true }, StageWatch, OutcomeGuardRefused},
+		"higher tier":   {func(s *GuardSubject) { s.TargetTier = "critical"; s.ProposerTier = "high" }, StageWatch, OutcomeGuardRefused},
+		"critical":      {func(s *GuardSubject) { s.TargetTier = "critical"; s.ProposerTier = "critical" }, StageWatch, OutcomeGuardRefused},
+		"legal hold":    {func(s *GuardSubject) { s.TargetLegalHold = true }, StageWatch, OutcomeGuardRefused},
+		"retired":       {func(s *GuardSubject) { s.TargetState = StateRetired }, StageWatch, OutcomeGuardRefused},
+		"delete":        {func(*GuardSubject) {}, StageDelete, OutcomeGuardRefused},
 	}
 	for name, c := range cases {
 		subject := ok
@@ -168,10 +168,10 @@ func TestScorecardFinishAndDigest(t *testing.T) {
 }
 
 func TestHasCapability(t *testing.T) {
-	if !IsHRAgent(map[string]any{"capabilities": map[string]any{"can_review_agents": true}}) {
-		t.Fatal("HR")
+	if !IsWorkforceManager(map[string]any{"capabilities": map[string]any{"can_review_agents": true}}) {
+		t.Fatal("workforce manager")
 	}
-	if IsHRAgent(map[string]any{"capabilities": map[string]any{"can_review_agents": "true"}}) || IsHRAgent(nil) {
+	if IsWorkforceManager(map[string]any{"capabilities": map[string]any{"can_review_agents": "true"}}) || IsWorkforceManager(nil) {
 		t.Fatal("a non-boolean counted")
 	}
 }

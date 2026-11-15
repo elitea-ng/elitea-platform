@@ -112,7 +112,7 @@ export function ProposeStageDialog({ open, projectId, applicationId, onClose }: 
               {flag('proactivityOff', t('features.agentWorkforce.narrowing.proactivityOff', 'Turn the heartbeat off'))}
               {flag('removeLead', t('features.agentWorkforce.narrowing.removeLead', 'Stop leading conversations'))}
               {flag('removeProposeAgents', t('features.agentWorkforce.narrowing.removePropose', 'Remove: may propose agents'))}
-              {flag('removeReviewAgents', t('features.agentWorkforce.narrowing.removeReview', 'Remove: reviews agents (HR)'))}
+              {flag('removeReviewAgents', t('features.agentWorkforce.narrowing.removeReview', 'Remove: reviews agents (workforce manager)'))}
             </Box>
           )}
           {severe && <ImpactPreview impact={impact.data} loading={impact.isLoading} />}

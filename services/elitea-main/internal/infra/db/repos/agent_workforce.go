@@ -5,7 +5,7 @@ package repos
 // the ladder stages they apply (agent_workforce_ladder.go), the appeal and
 // the reinstatement. Every change is a security audit event in the change's
 // own transaction (TypeAgentWorkforceChanged), with the actor (a person, or
-// the HR agent that proposed) and the evidence digest.
+// the workforce manager that proposed) and the evidence digest.
 
 import (
 	"context"
@@ -279,23 +279,26 @@ WHERE p.project_id = $1 AND p.id = $2`
 // WorkforceAgent is what the workforce knows about one agent: its registry
 // record's workforce columns, its owners and whether a legal hold covers it.
 type WorkforceAgent struct {
-	ProjectID        int64      `json:"project_id"`
-	ApplicationID    int64      `json:"application_id"`
-	ApplicationName  string     `json:"application_name"`
-	Tier             string     `json:"risk_tier"`
-	BusinessOwnerID  int64      `json:"business_owner_id"`
-	TechnicalOwnerID int64      `json:"technical_owner_id"`
-	UnderReview      bool       `json:"under_review"`
-	UnderReviewSince *time.Time `json:"under_review_since"`
-	State            string     `json:"lifecycle_state"`
-	RetiredAt        *time.Time `json:"retired_at"`
-	RetiredBy        *int64     `json:"retired_by"`
-	ReinstateUntil   *time.Time `json:"reinstate_until"`
-	PurgeAfter       *time.Time `json:"purge_after"`
-	SuspensionID     int64      `json:"suspension_id"`
-	SuspensionSource string     `json:"suspension_source"`
-	LegalHold        bool       `json:"legal_hold"`
-	IsHRAgent        bool       `json:"is_hr_agent"`
+	ProjectID          int64      `json:"project_id"`
+	ApplicationID      int64      `json:"application_id"`
+	ApplicationName    string     `json:"application_name"`
+	Tier               string     `json:"risk_tier"`
+	BusinessOwnerID    int64      `json:"business_owner_id"`
+	TechnicalOwnerID   int64      `json:"technical_owner_id"`
+	UnderReview        bool       `json:"under_review"`
+	UnderReviewSince   *time.Time `json:"under_review_since"`
+	State              string     `json:"lifecycle_state"`
+	RetiredAt          *time.Time `json:"retired_at"`
+	RetiredBy          *int64     `json:"retired_by"`
+	ReinstateUntil     *time.Time `json:"reinstate_until"`
+	PurgeAfter         *time.Time `json:"purge_after"`
+	SuspensionID       int64      `json:"suspension_id"`
+	SuspensionSource   string     `json:"suspension_source"`
+	LegalHold          bool       `json:"legal_hold"`
+	IsWorkforceManager bool       `json:"is_workforce_manager"`
+	// IsHRAgent is the deprecated duplicate of IsWorkforceManager that older
+	// mobile and desktop builds read. Removed one release after the rename.
+	IsHRAgent bool `json:"is_hr_agent"`
 	// AutoHiredAt: the workforce policy hired the agent (ADR-0050 decision
 	// 5c). It is on probation until an agent manager keeps it; the hire can
 	// be undone until ProbationUntil.
@@ -356,9 +359,10 @@ WHERE scope = 'agent' AND project_id = $1 AND scope_key = $2 AND resumed_at IS N
 	if agent.LegalHold, err = legalHold(ctx, q, projectID, applicationID); err != nil {
 		return WorkforceAgent{}, err
 	}
-	if agent.IsHRAgent, err = anyVersionIsHR(ctx, q, projectID, applicationID); err != nil {
+	if agent.IsWorkforceManager, err = anyVersionIsWorkforceManager(ctx, q, projectID, applicationID); err != nil {
 		return WorkforceAgent{}, err
 	}
+	agent.IsHRAgent = agent.IsWorkforceManager
 	agent.ApplicationName = applicationNames(ctx, q, projectID, []int64{applicationID})[applicationID]
 	return agent, nil
 }
@@ -399,10 +403,10 @@ SELECT EXISTS (SELECT 1 FROM elitea_runtime.legal_holds
 	return held, nil
 }
 
-// anyVersionIsHR reports whether any version of the agent sets
-// capabilities.can_review_agents: an agent that may become an HR agent on
+// anyVersionIsWorkforceManager reports whether any version of the agent sets
+// capabilities.can_review_agents: an agent that may become a workforce manager on
 // its next publish is one already.
-func anyVersionIsHR(ctx context.Context, q lifecycleQuerier, projectID, applicationID int64) (bool, error) {
+func anyVersionIsWorkforceManager(ctx context.Context, q lifecycleQuerier, projectID, applicationID int64) (bool, error) {
 	schema, err := tenantschema.QuoteInt(projectID)
 	if err != nil {
 		return false, nil
@@ -474,10 +478,10 @@ func stageAllowedFor(agent WorkforceAgent, stage agentworkforce.Stage) error {
 }
 
 type insertSource struct {
-	userID        int64
-	hrAgent       int64
-	executionID   string
-	principalHint string
+	userID           int64
+	workforceManager int64
+	executionID      string
+	principalHint    string
 	// policyRule: the workforce policy's rule (source policy).
 	policyRule string
 }
@@ -508,8 +512,8 @@ func (s *AgentWorkforce) insertProposal(ctx context.Context, tx pgx.Tx, agent Wo
 		if encodedEvidence, err = json.Marshal(evidence); err != nil {
 			return WorkforceProposal{}, fmt.Errorf("agent workforce: encode the evidence: %w", err)
 		}
-	case source.hrAgent > 0:
-		kind = agentworkforce.SourceHRAgent
+	case source.workforceManager > 0:
+		kind = agentworkforce.SourceWorkforceManager
 		execution = &source.executionID
 	}
 	proposal, err := scanWorkforceProposal(tx.QueryRow(ctx, `
@@ -519,7 +523,7 @@ INSERT INTO elitea_lifecycle.agent_workforce_proposals AS p
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13)
 RETURNING `+workforceProposalColumns,
 		agent.ProjectID, agent.ApplicationID, input.Stage.Kind(), string(input.Stage), kind,
-		nullablePositive(source.userID), nullablePositive(source.hrAgent), execution, input.Rationale,
+		nullablePositive(source.userID), nullablePositive(source.workforceManager), execution, input.Rationale,
 		string(narrowing), string(encodedEvidence), digest, rule))
 	if isUniqueViolation(err, "agent_workforce_proposals_one_open") {
 		return WorkforceProposal{}, agentworkforce.Refuse(agentworkforce.OpenProposalCode,
@@ -591,10 +595,10 @@ func (s *AgentWorkforce) Approve(ctx context.Context, decision Decision) (Workfo
 			return err
 		}
 		// 5j holds at the decision, not only at the proposal: a target
-		// raised to critical or put under legal hold since an HR agent
+		// raised to critical or put under legal hold since a workforce manager
 		// proposed it is no longer dismissed on that agent's proposal. A
 		// person proposes afresh if it should go ahead.
-		if proposal.Source == agentworkforce.SourceHRAgent && agentworkforce.ExemptFromAutomatic(agent.Tier, agent.LegalHold) {
+		if proposal.Source == agentworkforce.SourceWorkforceManager && agentworkforce.ExemptFromAutomatic(agent.Tier, agent.LegalHold) {
 			return agentworkforce.Refuse(agentworkforce.StateConflictCode,
 				"Since this reviewer agent proposed it, the agent became critical tier or came under legal hold: it is never dismissed on an agent's proposal. Reject this one; a person can propose it.")
 		}
