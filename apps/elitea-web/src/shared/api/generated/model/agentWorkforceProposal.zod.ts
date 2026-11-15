@@ -53,13 +53,13 @@ export const AgentWorkforceProposal = zod.object({
   source: zod
     .string()
     .describe(
-      "person, hr_agent or policy (the project's automatic dismissal policy).",
+      "person, workforce_manager or policy (the project's automatic dismissal policy).",
     ),
   proposed_by_user_id: zod.int().nullable(),
   proposer_application_id: zod
     .int()
     .nullable()
-    .describe("The HR agent that proposed it."),
+    .describe("The workforce manager that proposed it."),
   execution_id: zod.string().nullable(),
   rationale: zod.string(),
   narrowing: AgentWorkforceNarrowing,
