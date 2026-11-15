@@ -22,7 +22,7 @@ export function Section({ label, children }: { readonly label: string; readonly 
     <Box sx={sectionSx}>
       <Typography
         variant="labelSmall"
-        component="h3"
+        component="div"
         sx={sectionTitleSx}
       >
         {label}
