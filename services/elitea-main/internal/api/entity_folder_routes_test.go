@@ -39,7 +39,17 @@ func (s *entityFolderStub) Rebalance(context.Context, string, entityfolders.Kind
 	return nil, nil
 }
 
-func (s *entityFolderStub) Move(context.Context, string, entityfolders.Kind, int, *string) error {
+func (s *entityFolderStub) Move(context.Context, string, entityfolders.Kind, int, *string, entityfolders.Placement) error {
+	s.calls++
+	return nil
+}
+
+func (s *entityFolderStub) Pinned(context.Context, string, entityfolders.Kind) ([]int, error) {
+	s.calls++
+	return nil, nil
+}
+
+func (s *entityFolderStub) SetPin(context.Context, string, entityfolders.Kind, int, bool) error {
 	s.calls++
 	return nil
 }
@@ -126,6 +136,7 @@ func TestEntityFolderRoutesRefuseBeforeTheHandlerRuns(t *testing.T) {
 		{http.MethodPut, "/entity_folders/prompt_lib/7/mcp/3", `{"name":"B"}`},
 		{http.MethodDelete, "/entity_folders/prompt_lib/7/toolkit/3", ""},
 		{http.MethodPut, "/entity_folders/prompt_lib/7/pipeline/items/5", `{}`},
+		{http.MethodPut, "/entity_folders/prompt_lib/7/skill/pins/5", `{}`},
 	} {
 		if rec := serveEntityFolder(router, tc.method, tc.path, tc.body); rec.Code != http.StatusForbidden {
 			t.Fatalf("%s %s: status %d, want 403", tc.method, tc.path, rec.Code)

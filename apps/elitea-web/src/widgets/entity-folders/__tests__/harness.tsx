@@ -33,11 +33,11 @@ export function wireFolder(kind: string, fixture: FolderFixture): Record<string,
 }
 
 /** The folder list of one kind; every call is recorded in `requests`. */
-export function serveFolders(kind: string, folders: readonly FolderFixture[]): void {
+export function serveFolders(kind: string, folders: readonly FolderFixture[], pinnedIds: readonly number[] = []): void {
   configureGeneratedClient({ baseUrl: BASE });
   server.use(
     http.get(`${BASE}/elitea_core/entity_folders/prompt_lib/${PROJECT}/${kind}`, () =>
-      HttpResponse.json({ items: folders.map((folder) => wireFolder(kind, folder)) }),
+      HttpResponse.json({ items: folders.map((folder) => wireFolder(kind, folder)), pinned_ids: pinnedIds }),
     ),
   );
 }

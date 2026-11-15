@@ -28,6 +28,10 @@ type fakeRepo struct {
 	rebalances int
 	movedID    int
 	movedTo    *string
+	movedPlace entityfolders.Placement
+	pinned     []int
+	pinID      int
+	pinOn      bool
 	deleted    string
 }
 
@@ -55,8 +59,17 @@ func (f *fakeRepo) Rebalance(_ context.Context, _ string, _ entityfolders.Kind) 
 	return f.rebalanced, f.err
 }
 
-func (f *fakeRepo) Move(_ context.Context, _ string, _ entityfolders.Kind, id int, to *string) error {
-	f.movedID, f.movedTo = id, to
+func (f *fakeRepo) Move(_ context.Context, _ string, _ entityfolders.Kind, id int, to *string, place entityfolders.Placement) error {
+	f.movedID, f.movedTo, f.movedPlace = id, to, place
+	return f.err
+}
+
+func (f *fakeRepo) Pinned(context.Context, string, entityfolders.Kind) ([]int, error) {
+	return f.pinned, f.err
+}
+
+func (f *fakeRepo) SetPin(_ context.Context, _ string, _ entityfolders.Kind, id int, pinned bool) error {
+	f.pinID, f.pinOn = id, pinned
 	return f.err
 }
 
@@ -67,6 +80,7 @@ func serve(repo *fakeRepo, method, path, body string) *httptest.ResponseRecorder
 	r.Get(base, h.List)
 	r.Post(base, h.Create)
 	r.Put(base+"/items/{entityID}", h.Move)
+	r.Put(base+"/pins/{entityID}", h.SetPin)
 	r.Put(base+"/{folderID}", h.Update)
 	r.Delete(base+"/{folderID}", h.Delete)
 	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
@@ -219,4 +233,38 @@ func TestCreateBodyIsCappedAtOneMebibyte(t *testing.T) {
 	repo := &fakeRepo{}
 	require.Equal(t, http.StatusBadRequest, serve(repo, http.MethodPost, "/p/7/skill", huge).Code)
 	require.Empty(t, repo.createName)
+}
+
+func TestMoveCarriesTheNeighboursAndRefusesBadOnes(t *testing.T) {
+	repo := &fakeRepo{}
+	require.Equal(t, http.StatusNoContent, serve(repo, http.MethodPut, "/p/7/agent/items/5", `{"folder_id":"3","neighbor_above_id":8,"neighbor_below_id":"9"}`).Code)
+	require.Equal(t, 5, repo.movedID)
+	require.Equal(t, 8, *repo.movedPlace.Above)
+	require.Equal(t, 9, *repo.movedPlace.Below)
+
+	repo = &fakeRepo{}
+	require.Equal(t, http.StatusNoContent, serve(repo, http.MethodPut, "/p/7/agent/items/5", `{"folder_id":"3"}`).Code)
+	require.Nil(t, repo.movedPlace.Above)
+	require.Nil(t, repo.movedPlace.Below)
+
+	for _, body := range []string{`{"neighbor_above_id":"x"}`, `{"neighbor_below_id":0}`, `{"neighbor_above_id":2147483648}`} {
+		require.Equal(t, http.StatusBadRequest, serve(&fakeRepo{}, http.MethodPut, "/p/7/agent/items/5", body).Code, body)
+	}
+}
+
+func TestPinDefaultsToPinnedAndListCarriesTheCallersPins(t *testing.T) {
+	repo := &fakeRepo{}
+	require.Equal(t, http.StatusNoContent, serve(repo, http.MethodPut, "/p/7/skill/pins/4", ``).Code)
+	require.True(t, repo.pinOn)
+	require.Equal(t, 4, repo.pinID)
+	require.Equal(t, http.StatusNoContent, serve(repo, http.MethodPut, "/p/7/skill/pins/4", `{"pinned":false}`).Code)
+	require.False(t, repo.pinOn)
+	require.Equal(t, http.StatusBadRequest, serve(repo, http.MethodPut, "/p/7/skill/pins/4", `{"pinned":"yes"}`).Code)
+	require.Equal(t, http.StatusBadRequest, serve(repo, http.MethodPut, "/p/7/skill/pins/0", `{}`).Code)
+
+	rec := serve(&fakeRepo{pinned: []int{3, 1}}, http.MethodGet, "/p/7/skill", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"items":null,"pinned_ids":[3,1]}`, rec.Body.String())
+	rec = serve(&fakeRepo{}, http.MethodGet, "/p/7/skill", "")
+	require.Contains(t, rec.Body.String(), `"pinned_ids":[]`)
 }

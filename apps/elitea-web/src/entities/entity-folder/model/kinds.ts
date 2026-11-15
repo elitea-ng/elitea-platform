@@ -37,3 +37,9 @@ export function neighboursForStep(
   if (target < 0 || target > rest.length) return undefined;
   return { above: rest[target - 1]?.id ?? null, below: rest[target]?.id ?? null };
 }
+
+/**
+ * The personal Pinned group is not a folder: it rides the same `entity_folder`
+ * search param under this reserved value, which no folder id (a decimal) can be.
+ */
+export const PINNED_GROUP_ID = 'pinned';

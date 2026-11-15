@@ -12,3 +12,9 @@ export { EntityFolderScope } from './ui/EntityFolderScope';
 export type { EntityFolderScopeProps } from './ui/EntityFolderScope';
 export { folderIdParam, useFolderFilter } from './lib/useFolderFilter';
 export type { FolderFilter } from './lib/useFolderFilter';
+export { EntityFolderDnd } from './ui/EntityFolderDnd';
+/** @public */
+export type { EntityFolderDndProps } from './ui/EntityFolderDnd';
+export { MoveSelectionControl } from './ui/MoveSelectionControl';
+/** @public */
+export type { MoveSelectionControlProps } from './ui/MoveSelectionControl';

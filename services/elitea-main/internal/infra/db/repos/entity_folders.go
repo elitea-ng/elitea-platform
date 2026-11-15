@@ -36,7 +36,7 @@ const entityFolderOrder = `ORDER BY f.position DESC, f.created_at ASC, f.id ASC`
 // agent that gained a pipeline version), no longer counts as inside it.
 func entityFolderColumns(s string, kind entityfolders.Kind) string {
 	return fmt.Sprintf(`f.id::text, f.name, f.position, COALESCE(f.created_by::text, ''), f.created_at, f.updated_at,
-	COALESCE(ARRAY(SELECT i.entity_id FROM %[1]s.project_folder_items i WHERE i.folder_id = f.id AND %[2]s ORDER BY i.entity_id), '{}')::int[]`,
+	COALESCE(ARRAY(SELECT i.entity_id FROM %[1]s.project_folder_items i WHERE i.folder_id = f.id AND %[2]s ORDER BY i.position DESC, i.created_at ASC, i.entity_id), '{}')::int[]`,
 		s, entityLiveSQL(s, kind, "i.entity_id"))
 }
 
@@ -194,7 +194,7 @@ func int32RowID(raw string) (int, bool) {
 	return n, true
 }
 
-func (r *EntityFoldersRepo) Move(ctx context.Context, projectID string, kind entityfolders.Kind, entityID int, folderID *string) error {
+func (r *EntityFoldersRepo) Move(ctx context.Context, projectID string, kind entityfolders.Kind, entityID int, folderID *string, place entityfolders.Placement) error {
 	s, err := tenantSchema(projectID)
 	if err != nil {
 		return err
@@ -231,9 +231,14 @@ func (r *EntityFoldersRepo) Move(ctx context.Context, projectID string, kind ent
 	if !folderExists {
 		return apierr.NotFound("folder not found")
 	}
+	position, err := itemPosition(ctx, tx, s, kind, id, entityID, place)
+	if err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx, fmt.Sprintf(`
-		INSERT INTO %s.project_folder_items (entity_kind, entity_id, folder_id) VALUES ($1, $2, $3)
-		ON CONFLICT (entity_kind, entity_id) DO UPDATE SET folder_id = EXCLUDED.folder_id, created_at = now()`, s), string(kind), entityID, id)
+		INSERT INTO %s.project_folder_items (entity_kind, entity_id, folder_id, position) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (entity_kind, entity_id) DO UPDATE SET folder_id = EXCLUDED.folder_id, position = EXCLUDED.position, created_at = now()`, s),
+		string(kind), entityID, id, position)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -242,6 +247,140 @@ func (r *EntityFoldersRepo) Move(ctx context.Context, projectID string, kind ent
 		return fmt.Errorf("entity folders: move: %w", err)
 	}
 	return tx.Commit(ctx)
+}
+
+// itemPosition is the position that puts the entity where the caller dropped
+// it inside the folder: the top when no neighbour is named, otherwise between
+// the neighbours (they win over any position, as for the folders). A neighbour
+// that is not in the folder is a 400. When the two neighbours are adjacent
+// integers the folder's items are respaced by one gap first, inside the
+// caller's transaction, keeping their order.
+func itemPosition(ctx context.Context, tx pgx.Tx, s string, kind entityfolders.Kind, folderID, entityID int, place entityfolders.Placement) (int, error) {
+	rows, err := tx.Query(ctx, fmt.Sprintf(`SELECT entity_id, position FROM %s.project_folder_items
+		WHERE folder_id = $1 AND entity_kind = $2 AND entity_id <> $3 ORDER BY position DESC, created_at ASC, entity_id ASC`, s),
+		folderID, string(kind), entityID)
+	if err != nil {
+		return 0, fmt.Errorf("entity folders: move: %w", err)
+	}
+	var siblings []folders.Folder
+	for rows.Next() {
+		var id, position int
+		if err := rows.Scan(&id, &position); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("entity folders: move: %w", err)
+		}
+		siblings = append(siblings, folders.Folder{ID: strconv.Itoa(id), Position: &position})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("entity folders: move: %w", err)
+	}
+	if place.Above == nil && place.Below == nil {
+		top := 0
+		if len(siblings) > 0 {
+			top = *siblings[0].Position
+		}
+		return top + folders.PositionGap, nil
+	}
+	above, below := "", ""
+	for _, n := range []struct {
+		id   *int
+		into *string
+	}{{place.Above, &above}, {place.Below, &below}} {
+		if n.id == nil {
+			continue
+		}
+		*n.into = strconv.Itoa(*n.id)
+		found := false
+		for i := range siblings {
+			found = found || siblings[i].ID == *n.into
+		}
+		if !found {
+			return 0, apierr.BadRequest("a neighbour is not in this folder")
+		}
+	}
+	position, rebalance := folders.PositionBetween(siblings, above, below)
+	if !rebalance {
+		return position, nil
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`
+		WITH ordered AS (
+			SELECT entity_id, ROW_NUMBER() OVER (ORDER BY position DESC, created_at ASC, entity_id ASC) AS rn, COUNT(*) OVER () AS n
+			FROM %[1]s.project_folder_items WHERE folder_id = $1 AND entity_kind = $2 AND entity_id <> $3
+		)
+		UPDATE %[1]s.project_folder_items i SET position = ((o.n - o.rn) + 1) * %[2]d
+		FROM ordered o WHERE i.entity_kind = $2 AND i.entity_id = o.entity_id`, s, folders.PositionGap), folderID, string(kind), entityID); err != nil {
+		return 0, fmt.Errorf("entity folders: move: %w", err)
+	}
+	for i := range siblings {
+		p := (len(siblings) - i) * folders.PositionGap
+		siblings[i].Position = &p
+	}
+	position, _ = folders.PositionBetween(siblings, above, below)
+	return position, nil
+}
+
+// Pinned is the ids the caller pinned in the list, whose entities still are of
+// the kind.
+func (r *EntityFoldersRepo) Pinned(ctx context.Context, projectID string, kind entityfolders.Kind) ([]int, error) {
+	s, err := tenantSchema(projectID)
+	if err != nil {
+		return nil, err
+	}
+	actor, err := entityFolderActor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`SELECT p.entity_id FROM %[1]s.project_entity_pins p
+		WHERE p.user_id = $1 AND p.entity_kind = $2 AND `+entityLiveSQL(s, kind, "p.entity_id")+` ORDER BY p.created_at DESC, p.entity_id`, s), actor, string(kind))
+	if err != nil {
+		return nil, fmt.Errorf("entity folders: pinned: %w", err)
+	}
+	defer rows.Close()
+	ids := []int{}
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("entity folders: pinned: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// SetPin pins or unpins the entity for the caller. Pinning an entity that is
+// not of the kind is a 404; unpinning never is (a stale pin can always go).
+func (r *EntityFoldersRepo) SetPin(ctx context.Context, projectID string, kind entityfolders.Kind, entityID int, pinned bool) error {
+	s, err := tenantSchema(projectID)
+	if err != nil {
+		return err
+	}
+	actor, err := entityFolderActor(ctx)
+	if err != nil {
+		return err
+	}
+	if !pinned {
+		if _, err := r.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.project_entity_pins WHERE user_id = $1 AND entity_kind = $2 AND entity_id = $3`, s), actor, string(kind), entityID); err != nil {
+			return fmt.Errorf("entity folders: unpin: %w", err)
+		}
+		return nil
+	}
+	ct, err := r.pool.Exec(ctx, fmt.Sprintf(`INSERT INTO %[1]s.project_entity_pins (user_id, entity_kind, entity_id)
+		SELECT $1, $2::varchar, $3::int WHERE `+entityLiveSQL(s, kind, "$3::int")+`
+		ON CONFLICT DO NOTHING`, s), actor, string(kind), entityID)
+	if err != nil {
+		return fmt.Errorf("entity folders: pin: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		var exists bool
+		if err := r.pool.QueryRow(ctx, `SELECT `+entityLiveSQL(s, kind, "$1::int"), entityID).Scan(&exists); err != nil {
+			return fmt.Errorf("entity folders: pin: %w", err)
+		}
+		if !exists {
+			return apierr.NotFound(string(kind) + " not found")
+		}
+	}
+	return nil
 }
 
 func entityFolderActor(ctx context.Context) (int64, error) {

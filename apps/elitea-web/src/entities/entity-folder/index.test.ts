@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import * as entity from './index';
 
 /** Pins the slice's runtime public surface (types are erased and not listed). */
-const PUBLIC_SURFACE = ['entityIdsInFolder', 'folderOfEntity', 'neighboursForStep', 'useEntityFolderMutations', 'useEntityFolders'] as const;
+const PUBLIC_SURFACE = ['entityIdsInFolder', 'folderOfEntity', 'neighboursForStep', 'PINNED_GROUP_ID', 'useEntityFolderMutations', 'useEntityFolders', 'useEntityPins'] as const;
 
 describe('entities/entity-folder public surface', () => {
   it('exports exactly the documented runtime set', () => {
