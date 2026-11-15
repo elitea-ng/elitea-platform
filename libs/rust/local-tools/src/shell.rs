@@ -1262,7 +1262,10 @@ mod tests {
         // takes the setsid grandchild along, so nothing holds the pipes
         // open and the output is complete, not cut off.
         #[cfg(target_os = "linux")]
-        if crate::sandbox::bubblewrap::usable(&config.sandbox).is_some() {
+        let confined = crate::sandbox::bubblewrap::usable(&config.sandbox).is_some();
+        #[cfg(not(target_os = "linux"))]
+        let confined = false;
+        if confined {
             return;
         }
         assert!(output.stdout_truncated);
