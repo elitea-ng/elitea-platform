@@ -8,7 +8,7 @@
  * skills, toolkits and MCPs) — the Chats caption, the Chats list and the
  * place rows are the web sidebar's own (`widgets/chat-rail`), each place
  * with its "+" — and the account menu at the bottom (`widgets/account-menu`),
- * which also carries Credentials, Catalog and help.
+ * which also carries Credentials and help.
  *
  * A folder belongs to one project and shows under it; moving it to another
  * asks first. A folder with no project yet shows under every project.

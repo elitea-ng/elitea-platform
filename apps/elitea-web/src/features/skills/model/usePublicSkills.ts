@@ -14,11 +14,13 @@ import {
   fetchPublicSkills,
   type PublicSkillQuery,
 } from '../api/skillPublishApi';
+import type { PublicSkillSummary } from './publishTypes';
 import { skillQueryKeys } from './useSkills';
 
 const publicSkillQueryKeys = {
   list: (request: PublicSkillQuery) =>
     ['public-skills', request.query ?? '', request.category ?? ''] as const,
+  all: (query: string) => ['public-skills', 'all', query] as const,
   agentsWithSkill: (projectId: string | undefined, publicSkillId: number | undefined) =>
     ['public-skills', 'agents-with-skill', projectId ?? '', publicSkillId ?? ''] as const,
 };
@@ -27,6 +29,35 @@ export function usePublicSkills(request: PublicSkillQuery) {
   return useQuery({
     queryKey: publicSkillQueryKeys.list(request),
     queryFn: () => fetchPublicSkills(request),
+  });
+}
+
+/** The route caps a page at 100 rows. */
+const SKILL_PAGE_SIZE = 100;
+/** A runaway guard: 20 pages is 2000 skills, far past any catalogue. */
+const SKILL_PAGE_LIMIT = 20;
+
+/**
+ * EVERY published skill matching `query`, paged through 100 at a time. The
+ * Marketplace narrows by several categories at once, which the route's
+ * single-value `category` cannot do, so it filters the whole set in memory;
+ * one page would hide matches past the first 100.
+ */
+export function useAllPublicSkills(query: string, enabled: boolean) {
+  return useQuery({
+    queryKey: publicSkillQueryKeys.all(query),
+    enabled,
+    queryFn: async () => {
+      const rows: PublicSkillSummary[] = [];
+      let total = 0;
+      for (let page = 0; page < SKILL_PAGE_LIMIT; page += 1) {
+        const result = await fetchPublicSkills({ ...(query === '' ? {} : { query }), limit: SKILL_PAGE_SIZE, offset: rows.length });
+        total = result.total;
+        rows.push(...result.rows);
+        if (result.rows.length === 0 || rows.length >= total) break;
+      }
+      return { rows, total };
+    },
   });
 }
 

@@ -49,7 +49,7 @@ function mount(options: { appIpc?: AppIpc | null; path?: string; workspaces?: Wo
       createRoute({ getParentRoute: () => rootRoute, path: '/workspaces', component: page('home') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: page('thread') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: page('settings') }),
-      createRoute({ getParentRoute: () => rootRoute, path: '/elitea-catalog', component: page('catalog') }),
+      createRoute({ getParentRoute: () => rootRoute, path: '/marketplace', component: page('marketplace') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/apps', component: page('apps') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/skills', component: page('skills') }),
       createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: page('chat') }),
@@ -182,25 +182,24 @@ describe('DesktopFrame sidebar', () => {
     await user.click(within(within(sidebar).getByTestId('shell-elitea-applications')).getByRole('button'));
     expect(await screen.findByTestId('apps')).toBeInTheDocument();
     expect(screen.getByTestId('page-title')).toHaveTextContent('Applications');
-    // Catalog and Settings live in the account menu at the sidebar's foot.
+    // The Marketplace is a primary row of the sidebar (ADR-0051), not an account-menu entry; Settings lives in the account menu at the sidebar's foot.
+    await user.click(within(within(sidebar).getByTestId('shell-elitea-marketplace')).getByRole('button'));
+    expect(await screen.findByTestId('marketplace')).toBeInTheDocument();
+    expect(screen.getByTestId('page-title')).toHaveTextContent('Marketplace');
     await user.click(within(sidebar).getByTestId('shell-account'));
-    await user.click(await screen.findByRole('menuitem', { name: 'Catalog' }));
-    expect(await screen.findByTestId('catalog')).toBeInTheDocument();
-    expect(screen.getByTestId('page-title')).toHaveTextContent('Catalog');
-    expect(within(sidebar).queryByTestId('shell-elitea-catalog')).not.toBeInTheDocument();
-    await user.click(within(sidebar).getByTestId('shell-account'));
+    expect(screen.queryByRole('menuitem', { name: 'Catalog' })).not.toBeInTheDocument();
     await user.click(await screen.findByRole('menuitem', { name: /^Settings/ }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
     // Settings opens as a dialog over the page it came from, and closing goes back there.
     const dialog = await screen.findByTestId('settings-dialog');
     expect(within(dialog).getByTestId('settings')).toBeInTheDocument();
-    // Behind it, a still copy of the Catalog page: inert, without the live page's test ids.
+    // Behind it, a still copy of the Marketplace page: inert, without the live page's test ids.
     expect(document.querySelector('[inert] main')).not.toBeNull();
-    expect(screen.queryByTestId('catalog')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('marketplace')).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/elitea-catalog'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/marketplace'));
     expect(screen.queryByTestId('settings-dialog')).not.toBeInTheDocument();
-    expect(screen.getByTestId('page-title')).toHaveTextContent('Catalog');
+    expect(screen.getByTestId('page-title')).toHaveTextContent('Marketplace');
     // The sidebar is the way to everything: the title row carries no "back to Local work" button.
     const main = screen.getByRole('main');
     expect(within(main).queryByRole('button', { name: 'Local work' })).not.toBeInTheDocument();

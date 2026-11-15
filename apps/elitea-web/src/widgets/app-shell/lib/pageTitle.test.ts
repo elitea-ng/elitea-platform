@@ -36,8 +36,9 @@ describe('derivePageTitle', () => {
     expect(derivePageTitle('/agents/create', '', 'Proj')).toBe('Agents: create - Proj');
   });
 
-  it('agents-hub does not match agents prefix', () => {
-    expect(derivePageTitle('/agents-hub', '', 'Proj')).toBe('Agent HUB - Proj');
+  it('titles the Marketplace and its listing pages', () => {
+    expect(derivePageTitle('/marketplace', '', 'Proj')).toBe('Marketplace - Proj');
+    expect(derivePageTitle('/marketplace/agents/7', '', 'Proj')).toBe('Marketplace - Proj');
   });
 
   it('derives pipelines with tab', () => {
@@ -70,7 +71,7 @@ describe('derivePageTitle', () => {
 describe('pageSection', () => {
   it('names the section and links its list', () => {
     expect(pageSection('/agents/12')).toEqual({ label: 'Agents', to: '/agents' });
-    expect(pageSection('/agents-hub')).toEqual({ label: 'Agent HUB', to: '/agents-hub' });
+    expect(pageSection('/marketplace/skills/3')).toEqual({ label: 'Marketplace', to: '/marketplace' });
   });
 
   it('names the chat and the toolkits as their sidebar rows do', () => {

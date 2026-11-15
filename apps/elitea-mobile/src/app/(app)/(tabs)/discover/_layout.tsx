@@ -8,7 +8,7 @@ export default function DiscoverTabLayout() {
   const design = useDesign();
   return (
     <Stack screenOptions={workspaceHeaderOptions}>
-      <Stack.Screen name="index" options={{ title: 'Discover', ...largeTitleOptions(design) }} />
+      <Stack.Screen name="index" options={{ title: 'Marketplace', ...largeTitleOptions(design) }} />
     </Stack>
   );
 }

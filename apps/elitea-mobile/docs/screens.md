@@ -27,7 +27,7 @@ surface.
 /sign-in                 (existing)
 /(tabs)/(home)           Home, the `/` route and the first tab (shipped)
 /(tabs)/chats            the conversation list, `/chats` (shipped)
-/(tabs)/discover         NEW: agents catalogue (fetchAgents)
+/(tabs)/discover         NEW: the Marketplace tab, the workspace's published agents (fetchAgents)
 /(tabs)/settings         (existing settings, regrouped)
 /c/[id]                  chat thread: stack above the tabs, tab bar hidden
 /voice                   full-screen modal

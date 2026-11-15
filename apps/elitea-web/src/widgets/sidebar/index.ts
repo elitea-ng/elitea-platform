@@ -1,7 +1,7 @@
 /**
  * Public API — the app's left-hand navigation rail (SHELL-001..012): the
  * permission-gated places, the project switcher, the Chats, the bell, the
- * settings/catalog/help links. Consumed by `widgets/app-shell`; the desktop
+ * settings/help links. Consumed by `widgets/app-shell`; the desktop
  * sidebar (`widgets/desktop-shell`) reuses its bell, its create gate and
  * its place list.
  */

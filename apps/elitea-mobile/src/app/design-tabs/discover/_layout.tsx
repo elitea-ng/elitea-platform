@@ -7,7 +7,7 @@ export default function DesignDiscoverLayout() {
   const design = useDesign();
   return (
     <Stack>
-      <Stack.Screen name="index" options={{ title: 'Discover', ...largeTitleOptions(design) }} />
+      <Stack.Screen name="index" options={{ title: 'Marketplace', ...largeTitleOptions(design) }} />
     </Stack>
   );
 }

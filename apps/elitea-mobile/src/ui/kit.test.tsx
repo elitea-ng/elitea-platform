@@ -196,12 +196,12 @@ describe('Button alignment (S1)', () => {
     await inScheme(
       <StatusScreen mark="small" title="You're offline" body="Connect and try again.">
         <Button title="Try again" size="small" variant="tonal" onPress={() => {}} />
-        <Button title="Back to Discover" variant="tonal" block={false} onPress={() => {}} />
+        <Button title="Back to Marketplace" variant="tonal" block={false} onPress={() => {}} />
         <Button title="Get the update" onPress={() => {}} />
       </StatusScreen>,
     );
     expect(alignOf('Try again')).toBe('center');
-    expect(alignOf('Back to Discover')).toBe('center');
+    expect(alignOf('Back to Marketplace')).toBe('center');
     expect(alignOf('Get the update')).toBe('stretch');
   });
 });

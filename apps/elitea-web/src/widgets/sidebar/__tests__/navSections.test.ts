@@ -6,7 +6,7 @@ import { PERMISSION_GROUPS } from '@/shared/lib/permissions';
 import { computeIsSelectedProjectPublic, navSections, selectedNavItem, visibleNavSections } from '../lib/navSections';
 
 describe('navSections (SHELL-001..009)', () => {
-  it('lists exactly the 9 items across 3 groups, in old-app order', () => {
+  it('lists exactly the 10 items across 3 groups, in old-app order', () => {
     const sections = navSections();
     expect(sections).toHaveLength(3);
     expect(sections[0]?.items.map((i) => i.value)).toEqual(['chat', 'agents', 'pipelines']);
@@ -17,7 +17,7 @@ describe('navSections (SHELL-001..009)', () => {
       'credentials',
       'applications',
     ]);
-    expect(sections[2]?.items.map((i) => i.value)).toEqual(['artifacts']);
+    expect(sections[2]?.items.map((i) => i.value)).toEqual(['artifacts', 'marketplace']);
   });
 });
 
@@ -26,30 +26,31 @@ describe('visibleNavSections (SHELL-010)', () => {
     const all = new Set(Object.values(PERMISSION_GROUPS).flat());
     const visible = visibleNavSections(navSections(), all);
     const totalItems = visible.reduce((count, section) => count + section.items.length, 0);
-    expect(totalItems).toBe(9);
+    expect(totalItems).toBe(10);
   });
 
   it('drops a gated item whose permission is missing, without dropping ungated siblings', () => {
     // No permissions at all: chat/agents/pipelines/credentials/toolkits/artifacts/mcps
-    // are all gated (mcps reuses the toolkits group) and disappear; skills and
-    // applications have no PERMISSION_GROUPS entry and always survive.
+    // are all gated (mcps reuses the toolkits group) and disappear; skills,
+    // applications and the Marketplace have no PERMISSION_GROUPS entry and
+    // always survive.
     const visible = visibleNavSections(navSections(), new Set());
     const values = visible.flatMap((section) => section.items.map((item) => item.value));
-    expect(values).toEqual(['skills', 'applications']);
+    expect(values).toEqual(['skills', 'applications', 'marketplace']);
   });
 
   it('drops an entire EMPTY section object, not just its (already-filtered) items', () => {
     const visible = visibleNavSections(navSections(), new Set());
-    // Groups 1 (chat/agents/pipelines) and 3 (artifacts) are entirely
-    // gated; only group 2 survives, and only via its two UNGATED items
-    // (skills, applications — neither has a PERMISSION_GROUPS entry). The
-    // section itself must be removed from the array (1 section left, not 3
-    // with two holding an empty `items: []`) — proven by asserting NO
+    // Group 1 (chat/agents/pipelines) is entirely gated; group 2 survives via
+    // its two UNGATED items (skills, applications) and group 3 via the
+    // Marketplace — none has a PERMISSION_GROUPS entry. The gated section
+    // must be removed from the array (2 sections left, not 3 with one holding
+    // an empty `items: []`) — proven by asserting NO
     // section has an empty items array, not merely that 'chat' is absent
     // from the flattened item list (a mutation that drops item-level
     // filtering but leaves stray empty sections would still pass that
     // weaker check).
-    expect(visible).toHaveLength(1);
+    expect(visible).toHaveLength(2);
     expect(visible.every((section) => section.items.length > 0)).toBe(true);
     expect(visible.some((section) => section.items.some((item) => item.value === 'chat'))).toBe(false);
   });
@@ -109,21 +110,15 @@ describe('selectedNavItem', () => {
     expect(selectedNavItem('/agents/latest/agent-1', items)).toBe('agents');
   });
 
-  it('never matches /agents-hub (old app: explicit early-return)', () => {
-    const items = navSections()[0]?.items ?? [];
-    expect(selectedNavItem('/agents-hub', items)).toBeUndefined();
-  });
-
   /*
-   * `/elitea-catalog` has no nav row — it is the footer pill. Without its own
-   * early return it would fall through to the `startsWith` scan, which is
-   * prefix-based, and any future nav item at `/e...` could claim it. More
-   * immediately: the old app early-returns for BOTH paths
-   * (`SidebarBody.jsx:85`), and only one of them was ported.
+   * The Catalog (Agent HUB) is the Marketplace (ADR-0051): a primary row.
+   * Its listing pages sit under `/marketplace`, so the prefix scan keeps the
+   * row selected on them; the two old addresses redirect and match nothing.
    */
-  it('never matches /elitea-catalog either — the catalogue is a footer pill, not a nav row', () => {
-    const items = navSections()[0]?.items ?? [];
-    expect(selectedNavItem('/elitea-catalog', items)).toBeUndefined();
+  it('matches /marketplace and its listing pages to the Marketplace row', () => {
+    const items = navSections().flatMap((section) => section.items);
+    expect(selectedNavItem('/marketplace', items)).toBe('marketplace');
+    expect(selectedNavItem('/marketplace/agents/42', items)).toBe('marketplace');
   });
 
   it('returns undefined for a pathname matching no nav item', () => {

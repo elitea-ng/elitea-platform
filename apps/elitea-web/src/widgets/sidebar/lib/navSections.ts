@@ -42,6 +42,7 @@ export type NavItemValue =
   | 'credentials'
   | 'applications'
   | 'artifacts'
+  | 'marketplace'
   | 'workspaces';
 
 export interface NavItem {
@@ -85,7 +86,11 @@ export function navSections(): readonly NavSection[] {
       ],
     },
     {
-      items: [{ value: 'artifacts', label: t('widgets.sidebar.nav.artifacts', 'Artifacts'), url: '/artifacts', create: { url: '/artifacts/create-bucket', label: t('widgets.sidebar.create.bucket', 'New bucket') } }],
+      items: [
+        { value: 'artifacts', label: t('widgets.sidebar.nav.artifacts', 'Artifacts'), url: '/artifacts', create: { url: '/artifacts/create-bucket', label: t('widgets.sidebar.create.bucket', 'New bucket') } },
+        // The Catalog (Agent HUB) is the Marketplace (ADR-0051): a primary row, next to the Workshop group, not an account-menu entry.
+        { value: 'marketplace', label: t('widgets.sidebar.nav.marketplace', 'Marketplace'), url: '/marketplace' },
+      ],
     },
   ];
 }
@@ -135,11 +140,9 @@ export function computeIsSelectedProjectPublic(selectedProjectId: string | undef
 
 /**
  * SidebarBody's `selectedItem` useMemo — which nav item (if any) matches the
- * current pathname. `/agents-hub` and `/elitea-catalog` deliberately match
- * nothing (old app: explicit early return for both, `SidebarBody.jsx:85`);
- * the catalogue has its own pill in the footer, not a nav row.
+ * current pathname. `/marketplace` and its listing pages match the
+ * Marketplace row by prefix, like every other section.
  */
 export function selectedNavItem(pathname: string, items: readonly NavItem[]): NavItemValue | undefined {
-  if (pathname === '/agents-hub' || pathname === '/elitea-catalog') return undefined;
   return items.find((item) => pathname.startsWith(item.url))?.value;
 }
