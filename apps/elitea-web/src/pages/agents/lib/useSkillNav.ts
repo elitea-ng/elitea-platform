@@ -23,7 +23,10 @@ export function useSkillNav(): SkillNav {
     return {
       createNew: () => openInTab(router.buildLocation({ to: '/skills/create' })),
       // The detail route's `$tab` segment is required (`/skills/$tab/$skillId`); `all` is the list every skill is in.
-      openInNewTab: (skillId: number) => openInTab(router.buildLocation({ to: '/skills/$tab/$skillId', params: { tab: 'all', skillId: String(skillId) } })),
+      openInNewTab: (skillId: number) =>
+        openInTab(
+          router.buildLocation({ to: '/skills/$tab/$skillId', params: { tab: 'all', skillId: String(skillId) } }),
+        ),
     };
   }, [router]);
 }

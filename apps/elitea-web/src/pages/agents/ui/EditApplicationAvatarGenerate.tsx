@@ -55,7 +55,12 @@ export function EditApplicationAvatarGenerate(props: EditApplicationAvatarGenera
   const [problem, setProblem] = useState<string | undefined>(undefined);
   const busy = disabled || generate.isPending || model === '';
   const failed = (error: unknown): void =>
-    setProblem(agentMediaErrorMessage(error, t('pages.agents.editApplication.avatar.generateFailed', 'The image model could not make the avatar.')));
+    setProblem(
+      agentMediaErrorMessage(
+        error,
+        t('pages.agents.editApplication.avatar.generateFailed', 'The image model could not make the avatar.'),
+      ),
+    );
 
   const stills = (): void => {
     setProblem(undefined);
@@ -95,7 +100,13 @@ export function EditApplicationAvatarGenerate(props: EditApplicationAvatarGenera
           options={LOOP_STATES.map((value) => ({ value, label: value }))}
           disabled={busy || stillUrl === undefined}
         />
-        <Button size="small" variant="outlined" disabled={busy || stillUrl === undefined} onClick={loop} data-testid="avatar-generate-loop">
+        <Button
+          size="small"
+          variant="outlined"
+          disabled={busy || stillUrl === undefined}
+          onClick={loop}
+          data-testid="avatar-generate-loop"
+        >
           {t('pages.agents.editApplication.avatar.generateLoop', 'Generate loop')}
         </Button>
       </Box>

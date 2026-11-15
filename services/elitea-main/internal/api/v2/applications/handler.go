@@ -1819,6 +1819,14 @@ func (h *Handler) DeleteVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The one version of an installed agent is its definition (ADR-0051).
+	if h.pool != nil {
+		if schema, schemaOK := tenantSchema(projectID); schemaOK && marketplace.IsInstalledVersion(r.Context(), h.pool, schema, versionID) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": marketplace.ReadOnlyCode, "msg": marketplace.ReadOnlyMessage})
+			return
+		}
+	}
+
 	// Guard: block deletion of published/embedded versions
 	if h.pool != nil {
 		s, _ := tenantSchema(projectID)

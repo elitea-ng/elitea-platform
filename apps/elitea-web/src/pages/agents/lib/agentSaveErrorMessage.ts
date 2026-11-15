@@ -12,7 +12,10 @@ import { t } from '@/shared/i18n';
  */
 export function agentSaveErrorMessage(error: unknown, fallback: string): string {
   if (isInstalledRefusal(error)) {
-    return t('pages.agents.origin.saveRefused', 'This agent is installed from the Marketplace. Its definition is read-only. Fork it to change the definition.');
+    return t(
+      'pages.agents.origin.saveRefused',
+      'This agent is installed from the Marketplace. Its definition is read-only. Fork it to change the definition.',
+    );
   }
   return isActionableRefusal(error) ? applicationServerErrorMessage(error, fallback) : fallback;
 }

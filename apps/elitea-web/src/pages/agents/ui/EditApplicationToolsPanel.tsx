@@ -44,7 +44,14 @@ export interface EditApplicationToolsPanelProps {
   readonly isReadOnly: boolean;
 }
 
-export function EditApplicationToolsPanel({ projectId, applicationId, activeVersion, versionFields, isDirty, isReadOnly }: EditApplicationToolsPanelProps): ReactNode {
+export function EditApplicationToolsPanel({
+  projectId,
+  applicationId,
+  activeVersion,
+  versionFields,
+  isDirty,
+  isReadOnly,
+}: EditApplicationToolsPanelProps): ReactNode {
   const queryClient = useQueryClient();
 
   const onToolsChanged = useCallback(() => {
@@ -67,7 +74,9 @@ export function EditApplicationToolsPanel({ projectId, applicationId, activeVers
       applicationId,
       versionId: activeVersion === undefined ? undefined : Number(activeVersion.id),
       versionStatus: activeVersion?.status,
-      ...(typeof attachmentToolkitId === 'number' || typeof attachmentToolkitId === 'string' ? { attachmentToolkitId } : {}),
+      ...(typeof attachmentToolkitId === 'number' || typeof attachmentToolkitId === 'string'
+        ? { attachmentToolkitId }
+        : {}),
     }),
     [applicationId, activeVersion, attachmentToolkitId],
   );

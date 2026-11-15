@@ -105,6 +105,18 @@ VALUES ($1, $2, $3, decode(repeat('ab', 32), 'hex'), '{}'::jsonb, $4::timestampt
 	if n := list(applications.ListRequest{}).Facets.UpdateAvailable; n != 0 {
 		t.Errorf("update_available with the newer version yanked = %d, want 0", n)
 	}
+	// Every caller that makes or deletes a version of an installed agent ends
+	// in the repository, which refuses it (ADR-0051 decision 3).
+	if _, err := repo.CreateVersion(ctx, "1", installed.ID, applications.Version{Name: "second", AuthorID: 1, AgentType: "openai"}); apiStatus(err) != 409 {
+		t.Errorf("a new version of an installed agent: %v, want 409", err)
+	}
+	var baseVersion string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM p_1.application_versions WHERE application_id = $1`, installed.ID).Scan(&baseVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DeleteVersion(ctx, "1", installed.ID, baseVersion); apiStatus(err) != 409 {
+		t.Errorf("deleting the version of an installed agent: %v, want 409", err)
+	}
 	// An origin id that is not a number must not break the list.
 	setMeta(installed.ID, `{"origin_kind": "installed", "origin_listing_id": "x", "origin_version_id": "y"}`)
 	if n := len(list(applications.ListRequest{}).Rows); n != 3 {

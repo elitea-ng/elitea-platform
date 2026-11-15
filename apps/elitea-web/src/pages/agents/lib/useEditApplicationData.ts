@@ -1,9 +1,10 @@
-import {
-  useGetApplication,
-  useGetApplicationVersionDetail,
-} from '@/shared/api/generated/applications/applications';
+import { useGetApplication, useGetApplicationVersionDetail } from '@/shared/api/generated/applications/applications';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
-import type { ApplicationDetail, ApplicationVersionDetail, ApplicationVersionSummary } from '@/shared/api/generated/model';
+import type {
+  ApplicationDetail,
+  ApplicationVersionDetail,
+  ApplicationVersionSummary,
+} from '@/shared/api/generated/model';
 
 /** Stable empty array — `detail?.versions ?? []` would otherwise create a fresh array reference every render (`react-hooks/exhaustive-deps`: a `useMemo` depending on it would never actually memoize). */
 const EMPTY_VERSIONS: readonly ApplicationVersionSummary[] = [];
@@ -38,7 +39,10 @@ function isNotFoundApiError(error: unknown): boolean {
 }
 
 /** Split out purely to keep `useEditApplicationData`'s own branch count under the oxlint complexity budget. */
-function needsExplicitVersionFetch(requestedVersionId: string | undefined, currentVersionId: string | undefined): boolean {
+function needsExplicitVersionFetch(
+  requestedVersionId: string | undefined,
+  currentVersionId: string | undefined,
+): boolean {
   return requestedVersionId !== undefined && requestedVersionId !== currentVersionId;
 }
 

@@ -46,6 +46,25 @@ export function unboundRequirements(
   return requirements.items.filter((requirement) => mustBind(requirement) && choices[requirement.key] === undefined);
 }
 
+/** One choice changed: a blank value clears it, the disabled value turns the requirement off, anything else names a project entity. */
+export function applyChoice(choices: BindingChoices, key: string, value: string): BindingChoices {
+  const next = { ...choices };
+  if (value === '') delete next[key];
+  else next[key] = value === DISABLED_VALUE ? { kind: 'disabled' } : { kind: 'entity', id: value };
+  return next;
+}
+
+/** The choices the server holds: a binding to an entity, or "disabled". */
+export function choicesOf(bindings: readonly MarketplaceBinding[]): BindingChoices {
+  const out: Record<string, BindingChoice> = {};
+  for (const binding of bindings) {
+    if (binding.disabled === true) out[binding.requirement_key] = { kind: 'disabled' };
+    else if (binding.toolkit_id !== undefined)
+      out[binding.requirement_key] = { kind: 'entity', id: binding.toolkit_id };
+  }
+  return out;
+}
+
 /** The request's `bindings`: one per choice made. */
 export function bindingsOf(requirements: MarketplaceRequirements, choices: BindingChoices): MarketplaceBinding[] {
   const out: MarketplaceBinding[] = [];

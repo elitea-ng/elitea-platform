@@ -46,6 +46,7 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  MarketplaceBindingsState,
   MarketplaceHireResult,
   MarketplaceListingDetail,
   MarketplaceListingPage,
@@ -373,6 +374,82 @@ export const getGetMarketplaceOriginResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetMarketplaceBindingsResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceBindingsState, object>> = {},
+): MarketplaceBindingsState => ({
+  requirements: {
+    items: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      tools: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      has_write_tools: faker.datatype.boolean(),
+    })),
+    model_class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    tier: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    has_write_tools: faker.datatype.boolean(),
+  },
+  bindings: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    requirement_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    toolkit_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    disabled: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  })),
+  tools_enabled: faker.datatype.boolean(),
+  awaiting_approval: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getSetMarketplaceBindingsResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceBindingsState, object>> = {},
+): MarketplaceBindingsState => ({
+  requirements: {
+    items: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      tools: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      has_write_tools: faker.datatype.boolean(),
+    })),
+    model_class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    tier: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    has_write_tools: faker.datatype.boolean(),
+  },
+  bindings: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    requirement_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    toolkit_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    disabled: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  })),
+  tools_enabled: faker.datatype.boolean(),
+  awaiting_approval: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
 export const getSearchMarketplaceListingsMockHandler = (
   overrideResponse?:
     | MarketplaceListingPage
@@ -528,6 +605,58 @@ export const getGetMarketplaceOriginMockHandler = (
     options,
   );
 };
+
+export const getGetMarketplaceBindingsMockHandler = (
+  overrideResponse?:
+    | MarketplaceBindingsState
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MarketplaceBindingsState> | MarketplaceBindingsState),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/marketplace_bindings/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetMarketplaceBindingsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetMarketplaceBindingsMockHandler = (
+  overrideResponse?:
+    | MarketplaceBindingsState
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<MarketplaceBindingsState> | MarketplaceBindingsState),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/marketplace_bindings/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetMarketplaceBindingsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
 export const getMarketplaceMock = () => [
   getSearchMarketplaceListingsMockHandler(),
   getGetMarketplaceListingMockHandler(),
@@ -535,4 +664,6 @@ export const getMarketplaceMock = () => [
   getSetMarketplaceVersionStateMockHandler(),
   getHireMarketplaceListingMockHandler(),
   getGetMarketplaceOriginMockHandler(),
+  getGetMarketplaceBindingsMockHandler(),
+  getSetMarketplaceBindingsMockHandler(),
 ];

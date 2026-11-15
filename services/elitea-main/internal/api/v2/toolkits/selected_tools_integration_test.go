@@ -176,6 +176,34 @@ func (f *relationFixture) readBackSelectedTools(t *testing.T) []any {
 // The defect itself: the checkbox list the card sends must reach the column and
 // come back out again. Fails before the fix at the stored-row assertion — the
 // row exists (attach worked all along) with selected_tools still '[]'.
+// TestRelationPatchRefusesAnInstalledAgent pins ADR-0051 decision 3: the tools
+// of an agent installed from the Marketplace are its definition, so neither an
+// attach nor a detach nor a selection edit goes through.
+func TestRelationPatchRefusesAnInstalledAgent(t *testing.T) {
+	fixture := newRelationFixture(t)
+	if code := fixture.patchRelation(t, fixture.attachBody()).Code; code != http.StatusCreated {
+		t.Fatalf("attach before the install = %d, want 201", code)
+	}
+	if _, err := fixture.pool.Exec(context.Background(),
+		`UPDATE p_1.application_versions SET meta = COALESCE(meta, '{}'::jsonb) || '{"origin_kind":"installed"}'::jsonb WHERE id = $1`,
+		fixture.versionID); err != nil {
+		t.Fatal(err)
+	}
+	detach := `{"entity_version_id": ` + strconv.FormatInt(fixture.versionID, 10) + `, "entity_id": ` +
+		strconv.FormatInt(fixture.applicationID, 10) + `, "entity_type": "agent", "has_relation": false}`
+	for name, body := range map[string]string{
+		"attach": fixture.attachBody(), "selection": fixture.selectionBody(`["x"]`), "detach": detach,
+	} {
+		recorder := fixture.patchRelation(t, body)
+		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "installed_definition_read_only") {
+			t.Errorf("%s = %d %s, want 409 installed_definition_read_only", name, recorder.Code, recorder.Body.String())
+		}
+	}
+	if stored := fixture.storedSelectedTools(t); stored != "[]" && stored != "null" {
+		t.Errorf("selected_tools after refused edits = %s, want unchanged", stored)
+	}
+}
+
 func TestRelationPatchPersistsSelectedToolsAndReadsThemBack(t *testing.T) {
 	fixture := newRelationFixture(t)
 

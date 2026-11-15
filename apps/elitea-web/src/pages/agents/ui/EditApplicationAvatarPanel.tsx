@@ -70,17 +70,26 @@ function slotLabel(name: AvatarSlotName): string {
 
 /** The project's image generation models as select options (the gateway takes the model name); none hides Generate. */
 function useImageModels(projectId: string | undefined): readonly { readonly value: string; readonly label: string }[] {
-  const models = aiConfigurationFeature.useModelsQuery(projectId ?? '', 'image_generation', !isPublicAgentsProject(projectId)).data;
+  const models = aiConfigurationFeature.useModelsQuery(
+    projectId ?? '',
+    'image_generation',
+    !isPublicAgentsProject(projectId),
+  ).data;
   return useMemo(
-    () => [...new Set((models?.items ?? []).map((model) => model.name))].map((name) => ({
-      value: name,
-      label: models?.items.find((model) => model.name === name)?.display_name || name,
-    })),
+    () =>
+      [...new Set((models?.items ?? []).map((model) => model.name))].map((name) => ({
+        value: name,
+        label: models?.items.find((model) => model.name === name)?.display_name || name,
+      })),
     [models],
   );
 }
 
-export function EditApplicationAvatarPanel({ projectId, versionFields, disabled }: EditApplicationAvatarPanelProps): ReactNode {
+export function EditApplicationAvatarPanel({
+  projectId,
+  versionFields,
+  disabled,
+}: EditApplicationAvatarPanelProps): ReactNode {
   const imageModels = useImageModels(projectId);
   const pack = versionFields.fields.avatarPack;
   const setPack = versionFields.setAvatarPack;
@@ -98,7 +107,9 @@ export function EditApplicationAvatarPanel({ projectId, versionFields, disabled 
       // server takes a PNG, JPEG or WebP poster, never an SVG.
       const poster = isVideoUrl(media.url) ? still?.url : undefined;
       if (isVideoUrl(media.url) && poster === undefined) {
-        setProblem(t('pages.agents.editApplication.avatar.needsStill', 'Add a still first. A video uses it as its poster.'));
+        setProblem(
+          t('pages.agents.editApplication.avatar.needsStill', 'Add a still first. A video uses it as its poster.'),
+        );
         return;
       }
       if (poster !== undefined && poster.toLowerCase().endsWith('.svg')) {
@@ -124,7 +135,9 @@ export function EditApplicationAvatarPanel({ projectId, versionFields, disabled 
 
   const choose = (name: AvatarSlotName): void => {
     if (name !== 'still' && still === undefined) {
-      setProblem(t('pages.agents.editApplication.avatar.needsStill', 'Add a still first. A video uses it as its poster.'));
+      setProblem(
+        t('pages.agents.editApplication.avatar.needsStill', 'Add a still first. A video uses it as its poster.'),
+      );
       return;
     }
     setTarget(name);
@@ -142,7 +155,12 @@ export function EditApplicationAvatarPanel({ projectId, versionFields, disabled 
     upload.mutate(file, {
       onSuccess: (media) => place(name, media),
       onError: (error) =>
-        setProblem(agentMediaErrorMessage(error, t('pages.agents.editApplication.avatar.uploadFailed', 'The file could not be uploaded.'))),
+        setProblem(
+          agentMediaErrorMessage(
+            error,
+            t('pages.agents.editApplication.avatar.uploadFailed', 'The file could not be uploaded.'),
+          ),
+        ),
     });
   };
 
@@ -174,11 +192,22 @@ export function EditApplicationAvatarPanel({ projectId, versionFields, disabled 
                     : t('pages.agents.editApplication.avatar.default', 'Default motion')}
               </Typography>
               <Box sx={{ display: 'flex', gap: 0.5 }}>
-                <Button size="small" variant="outlined" disabled={locked} onClick={() => choose(name)} data-testid={`avatar-slot-${name}-upload`}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={locked}
+                  onClick={() => choose(name)}
+                  data-testid={`avatar-slot-${name}-upload`}
+                >
                   {t('pages.agents.editApplication.avatar.upload', 'Upload')}
                 </Button>
                 {slot !== undefined && (
-                  <Button size="small" disabled={locked} onClick={() => setPack(withAvatarSlot(pack, name, undefined))} data-testid={`avatar-slot-${name}-remove`}>
+                  <Button
+                    size="small"
+                    disabled={locked}
+                    onClick={() => setPack(withAvatarSlot(pack, name, undefined))}
+                    data-testid={`avatar-slot-${name}-remove`}
+                  >
                     {t('pages.agents.editApplication.avatar.remove', 'Remove')}
                   </Button>
                 )}
@@ -208,7 +237,11 @@ export function EditApplicationAvatarPanel({ projectId, versionFields, disabled 
 }
 
 const panelSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '48rem' };
-const gridSx: SxProps<Theme> = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(9rem, 1fr))', gap: '1rem' };
+const gridSx: SxProps<Theme> = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(9rem, 1fr))',
+  gap: '1rem',
+};
 const cardSx: SxProps<Theme> = (theme: Theme) => ({
   display: 'flex',
   flexDirection: 'column',

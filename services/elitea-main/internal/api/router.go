@@ -4993,6 +4993,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Post("/marketplace_hire/prompt_lib/{projectID}", coreHandler.MarketplaceHire)
 				r.With(requireMarketplaceRead).
 					Get("/marketplace_origin/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceOrigin)
+				// The bindings of a hired agent stay editable while its
+				// definition is read-only (ADR-0051 decision 3).
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_bindings/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceBindings)
+				r.With(projectPermission("models.applications.application.update")).
+					Put("/marketplace_bindings/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceBindings)
 
 				// Skill publishing (#249) — the skill-level counterpart of the
 				// application publish block above, plus the skills-parity

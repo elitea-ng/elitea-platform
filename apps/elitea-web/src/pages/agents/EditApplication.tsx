@@ -245,6 +245,7 @@ export function EditApplication(): ReactNode {
   // ADR-0051: an installed agent's definition is its listing version's snapshot; only project settings change.
   const origin = useMarketplaceOrigin(projectId, applicationId);
   const definitionLocked = isDefinitionLocked(activeVersion, origin);
+  const noticeTarget = { projectId, applicationId };
 
   // Routed through the same `onFieldChange` every other version-level field
   // uses, so the picked model lands in `useEditApplicationVersionFields` —
@@ -334,7 +335,7 @@ export function EditApplication(): ReactNode {
           }
         />
         <Box sx={contentSx}>
-          <EditApplicationNotices origin={origin} isError={isError} saveError={saveError} />
+          <EditApplicationNotices origin={origin} at={noticeTarget} isError={isError} saveError={saveError} />
           {/* The editor tabs sit beside the test chat (#1974, #1980); a read-only public view keeps the form alone. */}
           <EditApplicationSplit
             showPane={!isReadOnlyView}

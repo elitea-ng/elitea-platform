@@ -942,7 +942,8 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // folders of the agents, pipelines, skills, toolkits and MCPs lists.
 // 534 -> 540 (issue 1629, ADR-0051 M3): searchMarketplaceListings, get/updateMarketplaceListing,
 // setMarketplaceVersionState, hireMarketplaceListing and getMarketplaceOrigin.
-const GENERATED_OPERATION_COUNT = 540;
+// 540 -> 542 (issue 1629): getMarketplaceBindings and setMarketplaceBindings, the bindings editor of a hired agent.
+const GENERATED_OPERATION_COUNT = 542;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1269,8 +1270,11 @@ const GENERATED_OPERATION_COUNT = 540;
  * 377 -> 382 (issue 1629, ADR-0051 M3): the Marketplace operations the page calls
  * (marketplace.searchListings, getListing, updateListing, setVersionState and
  * hire). All generated.
+ *
+ * 382 -> 384 (issue 1629): marketplace.getBindings and marketplace.setBindings (the bindings
+ * editor on a hired agent's page). Both generated.
  */
-const MANIFEST_ENTRY_COUNT = 382;
+const MANIFEST_ENTRY_COUNT = 384;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

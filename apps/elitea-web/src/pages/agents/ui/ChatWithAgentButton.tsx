@@ -75,7 +75,13 @@ function currentAuthorOf(data: unknown): SocialAuthorProfile | undefined {
   return unwrapBody(data) as SocialAuthorProfile | undefined;
 }
 
-export function ChatWithAgentButton({ projectId, applicationId, name, activeVersion, onError }: ChatWithAgentButtonProps): ReactNode {
+export function ChatWithAgentButton({
+  projectId,
+  applicationId,
+  name,
+  activeVersion,
+  onError,
+}: ChatWithAgentButtonProps): ReactNode {
   const navigate = useNavigate();
   const { mutateAsync: createConversation } = conversationApi.useCreate();
   const { mutateAsync: addParticipants } = useAddParticipantMutation();
@@ -110,7 +116,8 @@ export function ChatWithAgentButton({ projectId, applicationId, name, activeVers
     try {
       const conversation = await createConversation({
         projectId: input.projectId,
-        name: (input.name ?? '').slice(0, MAX_CONVERSATION_NAME) || t('pages.agents.chatWithAgent.defaultName', 'New Chat'),
+        name:
+          (input.name ?? '').slice(0, MAX_CONVERSATION_NAME) || t('pages.agents.chatWithAgent.defaultName', 'New Chat'),
         is_private: true,
       });
       conversationId = String(conversation.id);

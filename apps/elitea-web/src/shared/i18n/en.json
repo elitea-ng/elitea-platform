@@ -6700,5 +6700,13 @@
   "marketplace.legacyLink.retry": "Retry",
   "marketplace.listing.retry": "Retry",
   "marketplace.listing.loadError": "The listing did not load. Try again.",
-  "marketplace.hire.bindings.agent": "Nested agent {{name}} comes with this agent."
+  "marketplace.hire.bindings.agent": "Nested agent {{name}} comes with this agent.",
+  "marketplace.bindings.error.missing": "Bind every required toolkit, or choose Disable for now.",
+  "marketplace.bindings.error.invalid": "One of the choices is not valid for this agent. Choose again.",
+  "marketplace.bindings.error.generic": "The bindings were not saved. Try again.",
+  "marketplace.bindings.title": "Bindings",
+  "marketplace.bindings.save": "Save bindings",
+  "marketplace.bindings.awaiting": "The tools stay off until a person approves the hire.",
+  "marketplace.bindings.saved": "The bindings were saved.",
+  "pages.agents.origin.editBindings": "Edit bindings"
 }

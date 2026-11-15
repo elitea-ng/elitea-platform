@@ -42,7 +42,10 @@ const VERSION: ApplicationVersionDetail = {
  * would let a save payload regression pass: #307 was precisely a bridge that
  * looked correct in isolation and routed nothing in the real composition.
  */
-function useEditApplicationFormHarness(detail: ApplicationDetail | undefined, version: ApplicationVersionDetail | undefined) {
+function useEditApplicationFormHarness(
+  detail: ApplicationDetail | undefined,
+  version: ApplicationVersionDetail | undefined,
+) {
   const versionFields = useEditApplicationVersionFields(version);
   const form = useEditApplicationForm(detail, version, '9', 42, versionFields);
   return { ...form, applyFieldChange: versionFields.applyFieldChange, versionFields };
@@ -243,7 +246,15 @@ describe('useEditApplicationForm', () => {
     // `notes` rides in the same blob (#898 — the field has no column, by
     // design), and an empty string is a real value there: it is what an
     // emptied Editor Notes box sends, and the patch merge cannot delete a key.
-    expect(versionBody['meta']).toEqual({ category: 'support', step_limit: 40, internal_tools: [], notes: '', output_contract: null, citations: null, context: null });
+    expect(versionBody['meta']).toEqual({
+      category: 'support',
+      step_limit: 40,
+      internal_tools: [],
+      notes: '',
+      output_contract: null,
+      citations: null,
+      context: null,
+    });
   });
 
   it('sends the output contract through `meta.output_contract` (#1500)', async () => {

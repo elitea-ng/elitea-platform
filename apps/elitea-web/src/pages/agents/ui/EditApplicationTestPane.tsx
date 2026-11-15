@@ -38,7 +38,13 @@ function stringsOf(values: unknown): readonly string[] {
   return Array.isArray(values) ? values.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
-export function EditApplicationTestPane({ projectId, applicationId, detail, activeVersion, isDirty }: EditApplicationTestPaneProps): ReactNode {
+export function EditApplicationTestPane({
+  projectId,
+  applicationId,
+  detail,
+  activeVersion,
+  isDirty,
+}: EditApplicationTestPaneProps): ReactNode {
   const author = authorOf(useGetCurrentAuthor().data);
   const authorId = author?.id;
   const authorName = author?.name;
@@ -47,7 +53,11 @@ export function EditApplicationTestPane({ projectId, applicationId, detail, acti
     () =>
       authorId === undefined
         ? undefined
-        : { id: String(authorId), ...(authorName !== undefined ? { name: authorName } : {}), ...(authorAvatar !== undefined ? { avatar: authorAvatar } : {}) },
+        : {
+            id: String(authorId),
+            ...(authorName !== undefined ? { name: authorName } : {}),
+            ...(authorAvatar !== undefined ? { avatar: authorAvatar } : {}),
+          },
     [authorId, authorName, authorAvatar],
   );
   const agentName = detail ? applicationDetailDisplayName(detail) : undefined;
@@ -64,16 +74,12 @@ export function EditApplicationTestPane({ projectId, applicationId, detail, acti
     }),
     [projectId, applicationId, agentName, versionId, agentType, authorId],
   );
-  const starters = useMemo(() => stringsOf(activeVersion?.conversation_starters), [activeVersion?.conversation_starters]);
-
-  return (
-    <AgentTestChat
-      identity={identity}
-      user={user}
-      isDirty={isDirty}
-      conversationStarters={starters}
-    />
+  const starters = useMemo(
+    () => stringsOf(activeVersion?.conversation_starters),
+    [activeVersion?.conversation_starters],
   );
+
+  return <AgentTestChat identity={identity} user={user} isDirty={isDirty} conversationStarters={starters} />;
 }
 
 const splitSx: SxProps<Theme> = {
@@ -91,18 +97,20 @@ const paneColumnSx: SxProps<Theme> = {
 };
 
 /** `showPane` is false for a read-only public view, which may not attach the agent to a conversation: the form keeps the full width. */
-export function EditApplicationSplit({ pane, showPane, children }: { readonly pane: ReactNode; readonly showPane: boolean; readonly children: ReactNode }): ReactNode {
+export function EditApplicationSplit({
+  pane,
+  showPane,
+  children,
+}: {
+  readonly pane: ReactNode;
+  readonly showPane: boolean;
+  readonly children: ReactNode;
+}): ReactNode {
   if (!showPane) return children;
   return (
-    <Box
-      data-testid="edit-application-split"
-      sx={splitSx}
-    >
+    <Box data-testid="edit-application-split" sx={splitSx}>
       <Box sx={formColumnSx}>{children}</Box>
-      <Box
-        data-testid="edit-application-test-pane"
-        sx={paneColumnSx}
-      >
+      <Box data-testid="edit-application-test-pane" sx={paneColumnSx}>
         {pane}
       </Box>
     </Box>

@@ -12,7 +12,15 @@ import { useCallback } from 'react';
 import Box from '@mui/material/Box';
 
 import type { Tag } from '@/entities/tag';
-import { AgentIconEditor, AgentTagEditor, ApplicationEditorNotes, ApplicationInformation, ApplicationMcpAccessToggle, contextBlockRefusal, CreateAgentForm } from '@/features/agents';
+import {
+  AgentIconEditor,
+  AgentTagEditor,
+  ApplicationEditorNotes,
+  ApplicationInformation,
+  ApplicationMcpAccessToggle,
+  contextBlockRefusal,
+  CreateAgentForm,
+} from '@/features/agents';
 import { AgentSkillsPanel } from '@/features/agent-skills';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
@@ -75,8 +83,10 @@ function forkOrigin(activeVersion: ApplicationVersionDetail | undefined): {
   const meta: Record<string, unknown> = activeVersion?.meta ?? {};
   const parentProjectId = meta['parent_project_id'];
   const parentEntityId = meta['parent_entity_id'];
-  const forkedProjectId = typeof parentProjectId === 'string' || typeof parentProjectId === 'number' ? String(parentProjectId) : undefined;
-  const forkedApplicationId = typeof parentEntityId === 'string' || typeof parentEntityId === 'number' ? String(parentEntityId) : undefined;
+  const forkedProjectId =
+    typeof parentProjectId === 'string' || typeof parentProjectId === 'number' ? String(parentProjectId) : undefined;
+  const forkedApplicationId =
+    typeof parentEntityId === 'string' || typeof parentEntityId === 'number' ? String(parentEntityId) : undefined;
   return {
     isForked: forkedProjectId !== undefined && forkedApplicationId !== undefined,
     forkedProjectId,
@@ -104,13 +114,25 @@ function applicationIconMetaOf(
 }
 
 export function EditApplicationConfigurationPanel(props: EditApplicationConfigurationPanelProps): ReactNode {
-  const { projectId, applicationId, activeVersion, editor, versionFields, isEditorDisabled, isDirty, isReadOnly, onModelSettingsChange } =
-    props;
+  const {
+    projectId,
+    applicationId,
+    activeVersion,
+    editor,
+    versionFields,
+    isEditorDisabled,
+    isDirty,
+    isReadOnly,
+    onModelSettingsChange,
+  } = props;
   const locked = props.definitionLocked === true;
   const skillNav = useSkillNav();
   const tags = versionFields.fields.tags;
   const setTags = versionFields.setTags;
-  const handleMcpAccessChange = useCallback((enabled: boolean) => setTags(withMcpExposure(tags, enabled)), [setTags, tags]);
+  const handleMcpAccessChange = useCallback(
+    (enabled: boolean) => setTags(withMcpExposure(tags, enabled)),
+    [setTags, tags],
+  );
   const mcpAccessEnabled = tags.some((tag) => tag.name === mcpTagName);
   const fork = forkOrigin(activeVersion);
   const iconMeta = applicationIconMetaOf(activeVersion);

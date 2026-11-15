@@ -742,6 +742,19 @@ JOIN elitea_marketplace.listing_versions v ON v.listing_id = l.id WHERE v.versio
 		t.Errorf("installs = %d, want 1", count)
 	}
 
+	// An installed agent keeps its skills: the attach answers a refusal per agent.
+	if _, err := pool.Exec(ctx, `UPDATE p_3.application_versions SET meta = COALESCE(meta, '{}'::jsonb) || '{"origin_kind":"installed"}'::jsonb WHERE id = $1`, agent); err != nil {
+		t.Fatal(err)
+	}
+	refused := decode(t, attach())
+	results, _ := refused["results"].([]any)
+	if first, _ := results[0].(map[string]any); first["ok"] != false || int(first["http_status"].(float64)) != http.StatusConflict {
+		t.Errorf("attach to an installed agent = %v, want a 409 result", results)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE p_3.application_versions SET meta = meta - 'origin_kind' WHERE id = $1`, agent); err != nil {
+		t.Fatal(err)
+	}
+
 	// A yanked version is not added again.
 	if _, err := pool.Exec(ctx, `UPDATE elitea_marketplace.listing_versions SET state = 'yanked' WHERE listing_id = $1`, listingID); err != nil {
 		t.Fatal(err)

@@ -275,7 +275,7 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 
 	// An agent installed from the Marketplace keeps the sub-agents its snapshot
 	// holds: attaching one changes its definition (ADR-0051 decision 3).
-	if body.HasRelation && marketplace.IsInstalledVersion(ctx, transaction, s, parentVersionID) {
+	if marketplace.IsInstalledVersion(ctx, transaction, s, parentVersionID) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": marketplace.ReadOnlyCode, "msg": marketplace.ReadOnlyMessage})
 		return
 	}

@@ -143,6 +143,10 @@ func (h *Handler) AttachPublicSkill(w http.ResponseWriter, r *http.Request) {
 			results = append(results, attachResult{AgentVersionID: agentVersionID, OK: false, HTTPStatus: http.StatusNotFound, Error: "agent not found"})
 			continue
 		}
+		if marketplace.IsInstalledVersion(ctx, h.pool, schema, agentVersionID) {
+			results = append(results, attachResult{AgentVersionID: agentVersionID, OK: false, HTTPStatus: http.StatusConflict, Error: marketplace.ReadOnlyMessage})
+			continue
+		}
 
 		// Already attached is judged across the whole lineage, not just the
 		// copy resolved above: two published versions of the same public skill

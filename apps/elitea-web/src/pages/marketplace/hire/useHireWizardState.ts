@@ -19,7 +19,7 @@ import { unwrapBody } from '@/shared/api/unwrap';
 import { invalidateMarketplace } from '../invalidate';
 
 import {
-  DISABLED_VALUE,
+  applyChoice,
   bindingsOf,
   defaultVersionId,
   isHireable,
@@ -115,12 +115,7 @@ export function useHireWizardState(
     (step !== 'bindings' || unboundRequirements(requirements, choices).length === 0);
 
   const choose = (key: string, value: string): void => {
-    setChoices((current) => {
-      const next = { ...current };
-      if (value === '') delete next[key];
-      else next[key] = value === DISABLED_VALUE ? { kind: 'disabled' } : { kind: 'entity', id: value };
-      return next;
-    });
+    setChoices((current) => applyChoice(current, key, value));
   };
 
   return {

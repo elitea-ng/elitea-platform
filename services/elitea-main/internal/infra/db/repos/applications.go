@@ -20,6 +20,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -855,6 +856,11 @@ func (r *ApplicationsRepo) CreateVersion(ctx context.Context, projectID, applica
 	if v.AuthorID <= 0 {
 		return applications.Version{}, apierr.Unauthorized("an authenticated author is required to create a version")
 	}
+	// A new version of an installed agent would let its definition drift
+	// (ADR-0051); every caller, the REST route and the internal tool, ends here.
+	if marketplace.IsInstalledApplication(ctx, r.pool, s, applicationID) {
+		return applications.Version{}, apierr.Conflict(marketplace.ReadOnlyMessage)
+	}
 	if v.CopySkillsFromVersionID <= 0 && v.CopyToolsFromVersionID <= 0 {
 		return insertVersion(ctx, r.pool, s, applicationID, v)
 	}
@@ -1346,12 +1352,16 @@ func checkStoredPipelineInstructions(ctx context.Context, q querier, schema, app
 }
 
 func (r *ApplicationsRepo) DeleteVersion(ctx context.Context, projectID, applicationID, versionID string) error {
-	_, err := tenantSchema(projectID)
+	s, err := tenantSchema(projectID)
 	if err != nil {
 		return err
 	}
 	if !isNumericRowID(applicationID) || !isNumericRowID(versionID) {
 		return apierr.NotFound("version not found")
+	}
+	// The one version of an installed agent is its definition (ADR-0051).
+	if marketplace.IsInstalledVersion(ctx, r.pool, s, versionID) {
+		return apierr.Conflict(marketplace.ReadOnlyMessage)
 	}
 	project, err := parseProjectID(projectID)
 	if err != nil {

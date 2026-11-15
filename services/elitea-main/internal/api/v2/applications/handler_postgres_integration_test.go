@@ -365,6 +365,10 @@ UPDATE p_1.application_versions SET instructions = 'pinned text',
 	if recorder.Code != http.StatusConflict || body["error"] != "installed_definition_read_only" {
 		t.Fatalf("a new version of an installed agent = %d %s, want 409", recorder.Code, recorder.Body.String())
 	}
+	recorder, body = do(t, router, http.MethodDelete, target, nil)
+	if recorder.Code != http.StatusConflict || body["error"] != "installed_definition_read_only" {
+		t.Fatalf("a delete of the installed version = %d %s, want 409", recorder.Code, recorder.Body.String())
+	}
 }
 
 // TestHandlerPostgres_UpdateVersionPersistsVariables covers #307: the agent

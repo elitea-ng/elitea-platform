@@ -1,8 +1,11 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import { Link } from '@tanstack/react-router';
+
+import { BindingsEditorDialog } from '@/pages/marketplace';
 
 import type { MarketplaceOrigin } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
@@ -16,9 +19,13 @@ import { t } from '@/shared/i18n';
  */
 export interface MarketplaceOriginBannerProps {
   readonly origin: MarketplaceOrigin;
+  /** With both, the banner offers Edit bindings: the toolkits an installed agent uses stay a project setting. */
+  readonly projectId?: string | undefined;
+  readonly applicationId?: number | undefined;
 }
 
-export function MarketplaceOriginBanner({ origin }: MarketplaceOriginBannerProps): ReactNode {
+export function MarketplaceOriginBanner({ origin, projectId, applicationId }: MarketplaceOriginBannerProps): ReactNode {
+  const [editing, setEditing] = useState(false);
   const installed = origin.mode === 'installed';
   const latest = origin.latest_version;
   const line = installed
@@ -46,6 +53,23 @@ export function MarketplaceOriginBanner({ origin }: MarketplaceOriginBannerProps
         <Link to="/marketplace/$kind/$listingId" params={{ kind: 'agents', listingId: origin.listing_id }}>
           {t('pages.agents.origin.openListing', 'Open the listing')}
         </Link>
+        {projectId !== undefined && applicationId !== undefined && (
+          <>
+            {' '}
+            <Button size="small" onClick={() => setEditing(true)} data-testid="marketplace-edit-bindings">
+              {t('pages.agents.origin.editBindings', 'Edit bindings')}
+            </Button>
+            {/* Mounted only while open: a closed editor reads nothing from the project. */}
+            {editing && (
+              <BindingsEditorDialog
+                open
+                onClose={() => setEditing(false)}
+                projectId={projectId}
+                applicationId={applicationId}
+              />
+            )}
+          </>
+        )}
       </Alert>
       {origin.listing_state === 'delisted' && (
         <Alert severity="warning" data-testid="marketplace-origin-withdrawn">

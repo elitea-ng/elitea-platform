@@ -14969,6 +14969,33 @@ components:
       description: >
         What the hire created (internal/api/v2/eliteacore/marketplace_hire.go).
 
+    MarketplaceBindingsRequest:
+      type: object
+      required: [bindings]
+      properties:
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceBinding' }
+      description: >
+        The bindings of an installed or forked agent after the person edits them
+        (internal/api/v2/eliteacore/marketplace_bindings.go).
+
+    MarketplaceBindingsState:
+      type: object
+      required: [requirements, bindings, tools_enabled, awaiting_approval]
+      properties:
+        requirements: { $ref: '#/components/schemas/MarketplaceRequirements' }
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceBinding' }
+        tools_enabled: { type: boolean }
+        awaiting_approval:
+          type: boolean
+          description: The hire change request is still open, so the tools are not attached yet.
+      description: >
+        The requirements of the pinned version and what each is bound to now
+        (internal/api/v2/eliteacore/marketplace_bindings.go).
+
     MarketplaceOrigin:
       type: object
       required: [mode, listing_id, listing_name, listing_state, version_id, version_name, digest, version_state]
@@ -39060,6 +39087,61 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
+
+  /elitea_core/marketplace_bindings/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      operationId: getMarketplaceBindings
+      summary: Read the bindings of an installed or forked agent
+      description: |
+        The requirements of the pinned listing version and what each is bound
+        to in the project (internal/api/v2/eliteacore/marketplace_bindings.go).
+      tags: [marketplace]
+      responses:
+        '200':
+          description: The bindings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceBindingsState' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+    put:
+      operationId: setMarketplaceBindings
+      summary: Re-bind an installed or forked agent
+      description: |
+        Replaces what each requirement is bound to. The definition stays
+        read-only. The same checks as the hire apply: a toolkit or MCP
+        requirement needs a project toolkit of its type, or `disabled`. While a
+        hire change request is open the bindings are stored and the tools stay
+        off until approval. A binding that widens nothing is applied at once
+        (internal/api/v2/eliteacore/marketplace_bindings.go).
+      tags: [marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceBindingsRequest' }
+      responses:
+        '200':
+          description: The bindings after the change
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceBindingsState' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: A required toolkit is unbound (`binding_missing`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /elitea_core/public_applications/prompt_lib:
     get:

@@ -33,7 +33,7 @@ function renderBridge(version: ApplicationVersionDetail | undefined) {
 }
 
 describe('useEditApplicationEditorBridge — llm_settings', () => {
-  it('exposes the version\'s settings on values so the picker can render them', () => {
+  it("exposes the version's settings on values so the picker can render them", () => {
     const { result } = renderBridge(VERSION);
     expect(result.current.bridge.values.version_details.llm_settings).toEqual({
       model_name: 'qwen3.5',

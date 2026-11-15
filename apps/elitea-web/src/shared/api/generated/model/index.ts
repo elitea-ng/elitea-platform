@@ -672,6 +672,8 @@ export * from "./markNotificationSeenHeaders.zod";
 export * from "./markNotificationsSeen200.zod";
 export * from "./markNotificationsSeenHeaders.zod";
 export * from "./marketplaceBinding.zod";
+export * from "./marketplaceBindingsRequest.zod";
+export * from "./marketplaceBindingsState.zod";
 export * from "./marketplaceFacetCount.zod";
 export * from "./marketplaceFacets.zod";
 export * from "./marketplaceHireRequest.zod";

@@ -4486,6 +4486,32 @@
       "usedBy": [
         "pages/marketplace"
       ]
+    },
+    {
+      "$comment": "READ. The requirements of a hired agent's pinned version and what each is bound to now.",
+      "id": "marketplace.getBindings",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_bindings/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "getMarketplaceBindings",
+      "source": "generated",
+      "responseSchema": "MarketplaceBindingsState",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. Change what a hired agent's requirements are bound to; the definition stays read-only.",
+      "id": "marketplace.setBindings",
+      "method": "PUT",
+      "path": "/elitea_core/marketplace_bindings/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "setMarketplaceBindings",
+      "source": "generated",
+      "responseSchema": "MarketplaceBindingsState",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
     }
   ]
 }

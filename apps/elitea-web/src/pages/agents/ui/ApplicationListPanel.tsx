@@ -29,7 +29,12 @@ export interface ApplicationListRow {
   readonly id: string;
   readonly name: string;
   readonly description: string;
-  readonly authors?: readonly { readonly id?: string; readonly name: string; readonly avatar?: string; readonly deleted?: boolean }[];
+  readonly authors?: readonly {
+    readonly id?: string;
+    readonly name: string;
+    readonly avatar?: string;
+    readonly deleted?: boolean;
+  }[];
   readonly tags?: readonly string[];
   readonly createdAt?: string;
   /** The status as a word (Draft, Published): the card's badge and the table's Status column. */
@@ -85,13 +90,7 @@ export function ApplicationListPanel({
           row.iconUrl === undefined ? (
             entityTypeIcon('agent')
           ) : (
-            <Box
-              component="img"
-              src={row.iconUrl}
-              alt=""
-              data-testid="application-card-icon"
-              sx={iconImageSx}
-            />
+            <Box component="img" src={row.iconUrl} alt="" data-testid="application-card-icon" sx={iconImageSx} />
           ),
         authors: row.authors ?? [],
         tags: (row.tags ?? []).map((tag) => ({ id: tag, name: tag })),
@@ -123,11 +122,7 @@ export function ApplicationListPanel({
       />
       {hasMore && (
         <Box sx={loadMoreSx}>
-          <BaseBtn
-            variant="secondary"
-            disabled={isLoadingMore}
-            onClick={onLoadMore}
-          >
+          <BaseBtn variant="secondary" disabled={isLoadingMore} onClick={onLoadMore}>
             {t('pages.agents.list.loadMore', 'Load more')}
           </BaseBtn>
         </Box>
@@ -143,4 +138,8 @@ const iconImageSx: SxProps<Theme> = (theme: Theme) => ({
   borderRadius: theme.vars.shape.radiusPill,
 });
 
-const loadMoreSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', justifyContent: 'center', padding: theme.spacing(2) });
+const loadMoreSx: SxProps<Theme> = (theme: Theme) => ({
+  display: 'flex',
+  justifyContent: 'center',
+  padding: theme.spacing(2),
+});

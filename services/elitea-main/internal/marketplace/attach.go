@@ -153,3 +153,53 @@ WHERE project_id = $1 AND entity_kind = 'agent' AND entity_id = $2`, projectID, 
 	}
 	return nil
 }
+
+// DetachTools removes the tool and skill mappings a set of bindings wrote, on
+// the version and on the nested agents wired under it. A re-binding runs it
+// with the old bindings, then AttachTools with the new ones.
+func DetachTools(ctx context.Context, db DB, schema string, versionID int64, node DefinitionNode, bindings map[string]Binding) error {
+	for _, tool := range node.Tools {
+		binding, ok := bindings[tool.Key]
+		if !ok || binding.Disabled || binding.ToolkitID <= 0 {
+			continue
+		}
+		if _, err := db.Exec(ctx, fmt.Sprintf(
+			`DELETE FROM %s.entity_tool_mapping WHERE entity_version_id = $1 AND tool_id = $2 AND entity_type = 'agent'`, schema),
+			versionID, binding.ToolkitID); err != nil {
+			return fmt.Errorf("marketplace: detach the toolkit %d: %w", binding.ToolkitID, err)
+		}
+	}
+	for _, skill := range node.Skills {
+		binding, ok := bindings[skill.Key]
+		if !ok || binding.Disabled || binding.ToolkitID <= 0 {
+			continue
+		}
+		if _, err := db.Exec(ctx, fmt.Sprintf(
+			`DELETE FROM %s.entity_skill_mapping WHERE entity_version_id = $1 AND skill_id = $2 AND entity_type = 'agent'`, schema),
+			versionID, binding.ToolkitID); err != nil {
+			return fmt.Errorf("marketplace: detach the skill %d: %w", binding.ToolkitID, err)
+		}
+	}
+	for _, nested := range node.NestedAgents {
+		var versionText string
+		err := db.QueryRow(ctx, fmt.Sprintf(`
+SELECT COALESCE(t.settings->>'application_version_id', '')
+FROM %[1]s.entity_tool_mapping m JOIN %[1]s.elitea_tools t ON t.id = m.tool_id
+WHERE m.entity_version_id = $1 AND t.type = 'application' AND t.name = $2
+ORDER BY m.id DESC LIMIT 1`, schema), versionID, nested.ToolName).Scan(&versionText)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("marketplace: find the nested agent %q: %w", nested.ToolName, err)
+		}
+		childVersion, parseErr := strconv.ParseInt(versionText, 10, 64)
+		if parseErr != nil {
+			continue
+		}
+		if err := DetachTools(ctx, db, schema, childVersion, nested.Node, bindings); err != nil {
+			return err
+		}
+	}
+	return nil
+}

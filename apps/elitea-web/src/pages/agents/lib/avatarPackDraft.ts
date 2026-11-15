@@ -25,7 +25,11 @@ export function avatarPackDraftOf(stored: unknown): AvatarPack | null {
  * The pack with `slot` set (or removed, for `undefined`). Removing the still
  * removes the whole pack: the server refuses a pack without one.
  */
-export function withAvatarSlot(pack: AvatarPack | null, name: AvatarSlotName, slot: AvatarPackSlot | undefined): AvatarPack | null {
+export function withAvatarSlot(
+  pack: AvatarPack | null,
+  name: AvatarSlotName,
+  slot: AvatarPackSlot | undefined,
+): AvatarPack | null {
   if (name === 'still' && slot === undefined) return null;
   if (pack === null && name !== 'still') return null;
   const slots: Partial<Record<AvatarSlotName, AvatarPackSlot>> = { ...pack?.slots };

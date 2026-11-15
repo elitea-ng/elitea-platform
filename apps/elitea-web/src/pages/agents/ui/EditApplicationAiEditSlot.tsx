@@ -61,8 +61,10 @@ export function EditApplicationAiEditSlot({ editor, projectId, disabled }: EditA
     if (patch.name !== undefined) editor.onFieldChange('name', patch.name);
     if (patch.description !== undefined) editor.onFieldChange('description', patch.description);
     if (patch.instructions !== undefined) editor.onFieldChange('version_details.instructions', patch.instructions);
-    if (patch.welcome_message !== undefined) editor.onFieldChange('version_details.welcome_message', patch.welcome_message);
-    if (patch.conversation_starters !== undefined) editor.onFieldChange('version_details.conversation_starters', patch.conversation_starters);
+    if (patch.welcome_message !== undefined)
+      editor.onFieldChange('version_details.welcome_message', patch.welcome_message);
+    if (patch.conversation_starters !== undefined)
+      editor.onFieldChange('version_details.conversation_starters', patch.conversation_starters);
   };
   return (
     <EditInstructionsWithAiButton

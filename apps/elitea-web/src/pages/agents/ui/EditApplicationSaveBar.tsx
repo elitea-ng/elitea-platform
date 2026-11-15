@@ -37,7 +37,12 @@ export interface EditApplicationSaveBarProps {
  * budget) to make room for the model picker, alongside the two components
  * that page already keeps in this directory.
  */
-export function EditApplicationSaveBar({ onSave, canSave, isSaving, onDiscarded }: EditApplicationSaveBarProps): ReactNode {
+export function EditApplicationSaveBar({
+  onSave,
+  canSave,
+  isSaving,
+  onDiscarded,
+}: EditApplicationSaveBarProps): ReactNode {
   const { discardApplicationChanges } = useDiscardApplicationChanges(onDiscarded);
   return (
     <CreateApplicationTabBar

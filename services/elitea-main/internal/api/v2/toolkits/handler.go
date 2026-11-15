@@ -1511,8 +1511,8 @@ func (h *Handler) updateToolRelation(w http.ResponseWriter, r *http.Request, pro
 
 	// An agent installed from the Marketplace keeps the tools its snapshot
 	// holds: attaching another one changes its definition (ADR-0051 decision 3).
-	// Detaching stays possible, as the permission trimming report's removals are.
-	if hasRelation && marketplace.IsInstalledVersion(ctx, h.pool, s, entityVersionID) {
+	// The permission trimming report removes through its own path.
+	if marketplace.IsInstalledVersion(ctx, h.pool, s, entityVersionID) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": marketplace.ReadOnlyCode, "msg": marketplace.ReadOnlyMessage})
 		return
 	}

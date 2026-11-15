@@ -1,7 +1,12 @@
 import type { ApplicationCreationInput, ApplicationVersionDraft } from '@/entities/application-form';
 import type { VersionSummary } from '@/entities/version';
 import { toAgentLlmSettings, toLlmSettingsBody, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
-import type { ApplicationDetail, ApplicationVersionDetail, ApplicationVersionSummary, VersionWriteRequest } from '@/shared/api/generated/model';
+import type {
+  ApplicationDetail,
+  ApplicationVersionDetail,
+  ApplicationVersionSummary,
+  VersionWriteRequest,
+} from '@/shared/api/generated/model';
 import { soulWriteField } from '@/shared/lib/agentSoulDraft';
 
 import { avatarPackWriteField } from './avatarPackDraft';
@@ -91,13 +96,13 @@ function readIsDefault(version: ApplicationVersionSummary): boolean {
  * the response ahead of the generated schema.
  */
 function readAuthor(version: ApplicationVersionSummary): EditApplicationVersionOption['author'] {
-  const author = (version as { readonly author?: { readonly id?: string; readonly email?: string; readonly name?: string } }).author;
+  const author = (
+    version as { readonly author?: { readonly id?: string; readonly email?: string; readonly name?: string } }
+  ).author;
   return author === undefined ? undefined : author;
 }
 
-export function toVersionOptions(
-  versions: readonly ApplicationVersionSummary[],
-): EditApplicationVersionOption[] {
+export function toVersionOptions(versions: readonly ApplicationVersionSummary[]): EditApplicationVersionOption[] {
   return versions.map((version) => ({
     // `ApplicationVersionSummary.id` is "numeric id serialized as string
     // (strconv.Itoa)" per the generated schema's own description, while the
@@ -173,7 +178,10 @@ function toVersionMetaBody(
   // The update path folds on key PRESENCE and so was never exposed; dropping
   // the key is correct for both, because both rebuild it from the list.
   const { variables: _storedVariables, ...storedMeta } = (version.meta ?? {}) as Record<string, unknown>;
-  const soul = { ...soulWriteField(version.soul, edits?.soul), ...avatarPackWriteField(version.avatar_pack, edits?.avatarPack) };
+  const soul = {
+    ...soulWriteField(version.soul, edits?.soul),
+    ...avatarPackWriteField(version.avatar_pack, edits?.avatarPack),
+  };
   if (edits === undefined) return { meta: { ...storedMeta }, ...soul };
   return {
     ...soul,
@@ -386,9 +394,7 @@ export function toVersionDraft(
     // key, leaving that version on the catalogue-default fallback it works on
     // today rather than pinning it to a model this mapper guessed.
     llmSettings: toAgentLlmSettings(version.llm_settings),
-    tags: (version.tags ?? [])
-      .map((tag) => tag.name)
-      .filter((name): name is string => typeof name === 'string'),
+    tags: (version.tags ?? []).map((tag) => tag.name).filter((name): name is string => typeof name === 'string'),
     tools: version.tools ?? [],
     // Never a pipeline's layout here: the pipelines domain (A2) has its own edit page.
     pipelineSettings: undefined,

@@ -55,6 +55,8 @@ import type {
 
 import type {
   ErrorResponse,
+  MarketplaceBindingsRequest,
+  MarketplaceBindingsState,
   MarketplaceHireRequest,
   MarketplaceHireResult,
   MarketplaceListingDetail,
@@ -1691,6 +1693,543 @@ export function useGetMarketplaceOrigin<
   const queryOptions = getGetMarketplaceOriginQueryOptions(
     projectId,
     applicationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getMarketplaceBindingsResponse200 = {
+  data: MarketplaceBindingsState;
+  status: 200;
+};
+
+export type getMarketplaceBindingsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getMarketplaceBindingsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getMarketplaceBindingsResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getMarketplaceBindingsResponseSuccess =
+  getMarketplaceBindingsResponse200 & {
+    headers: Headers;
+  };
+export type getMarketplaceBindingsResponseError = (
+  | getMarketplaceBindingsResponse401
+  | getMarketplaceBindingsResponse403
+  | getMarketplaceBindingsResponse404
+) & {
+  headers: Headers;
+};
+
+export type getMarketplaceBindingsResponse =
+  getMarketplaceBindingsResponseSuccess | getMarketplaceBindingsResponseError;
+
+export const getGetMarketplaceBindingsUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/marketplace_bindings/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * The requirements of the pinned listing version and what each is bound
+ * to in the project (internal/api/v2/eliteacore/marketplace_bindings.go).
+ * @summary Read the bindings of an installed or forked agent
+ */
+export const getMarketplaceBindings = async (
+  projectId: string,
+  applicationId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getMarketplaceBindingsResponse> => {
+  return eliteaFetch<getMarketplaceBindingsResponse>(
+    getGetMarketplaceBindingsUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetMarketplaceBindingsQueryKey = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return [
+    `/elitea_core/marketplace_bindings/prompt_lib/${projectId}/${applicationId}`,
+  ] as const;
+};
+
+export const getGetMarketplaceBindingsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMarketplaceBindings>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceBindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetMarketplaceBindingsQueryKey(projectId, applicationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMarketplaceBindings>>
+  > = ({ signal }) =>
+    getMarketplaceBindings(projectId, applicationId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMarketplaceBindings>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetMarketplaceBindingsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMarketplaceBindings>>
+>;
+export type GetMarketplaceBindingsQueryError =
+  N401Response | N403Response | N404Response;
+
+export function useGetMarketplaceBindings<
+  TData = Awaited<ReturnType<typeof getMarketplaceBindings>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceBindings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMarketplaceBindings>>,
+          TError,
+          Awaited<ReturnType<typeof getMarketplaceBindings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMarketplaceBindings<
+  TData = Awaited<ReturnType<typeof getMarketplaceBindings>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceBindings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMarketplaceBindings>>,
+          TError,
+          Awaited<ReturnType<typeof getMarketplaceBindings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMarketplaceBindings<
+  TData = Awaited<ReturnType<typeof getMarketplaceBindings>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceBindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the bindings of an installed or forked agent
+ */
+
+export function useGetMarketplaceBindings<
+  TData = Awaited<ReturnType<typeof getMarketplaceBindings>>,
+  TError = N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceBindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetMarketplaceBindingsQueryOptions(
+    projectId,
+    applicationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setMarketplaceBindingsResponse200 = {
+  data: MarketplaceBindingsState;
+  status: 200;
+};
+
+export type setMarketplaceBindingsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type setMarketplaceBindingsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setMarketplaceBindingsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setMarketplaceBindingsResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type setMarketplaceBindingsResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type setMarketplaceBindingsResponseSuccess =
+  setMarketplaceBindingsResponse200 & {
+    headers: Headers;
+  };
+export type setMarketplaceBindingsResponseError = (
+  | setMarketplaceBindingsResponse400
+  | setMarketplaceBindingsResponse401
+  | setMarketplaceBindingsResponse403
+  | setMarketplaceBindingsResponse404
+  | setMarketplaceBindingsResponse409
+) & {
+  headers: Headers;
+};
+
+export type setMarketplaceBindingsResponse =
+  setMarketplaceBindingsResponseSuccess | setMarketplaceBindingsResponseError;
+
+export const getSetMarketplaceBindingsUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/marketplace_bindings/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Replaces what each requirement is bound to. The definition stays
+ * read-only. The same checks as the hire apply: a toolkit or MCP
+ * requirement needs a project toolkit of its type, or `disabled`. While a
+ * hire change request is open the bindings are stored and the tools stay
+ * off until approval. A binding that widens nothing is applied at once
+ * (internal/api/v2/eliteacore/marketplace_bindings.go).
+ * @summary Re-bind an installed or forked agent
+ */
+export const setMarketplaceBindings = async (
+  projectId: string,
+  applicationId: number,
+  marketplaceBindingsRequest: MarketplaceBindingsRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setMarketplaceBindingsResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setMarketplaceBindingsResponse>(
+    getSetMarketplaceBindingsUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(marketplaceBindingsRequest),
+    },
+  );
+};
+
+export const getSetMarketplaceBindingsQueryKey = (
+  projectId: string,
+  applicationId: number,
+  marketplaceBindingsRequest?: MarketplaceBindingsRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/marketplace_bindings/prompt_lib/${projectId}/${applicationId}`,
+    marketplaceBindingsRequest,
+  ] as const;
+};
+
+export const getSetMarketplaceBindingsQueryOptions = <
+  TData = Awaited<ReturnType<typeof setMarketplaceBindings>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceBindingsRequest: MarketplaceBindingsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMarketplaceBindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetMarketplaceBindingsQueryKey(
+      projectId,
+      applicationId,
+      marketplaceBindingsRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setMarketplaceBindings>>
+  > = ({ signal }) =>
+    setMarketplaceBindings(
+      projectId,
+      applicationId,
+      marketplaceBindingsRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setMarketplaceBindings>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetMarketplaceBindingsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setMarketplaceBindings>>
+>;
+export type SetMarketplaceBindingsQueryError =
+  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
+
+export function useSetMarketplaceBindings<
+  TData = Awaited<ReturnType<typeof setMarketplaceBindings>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceBindingsRequest: MarketplaceBindingsRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMarketplaceBindings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setMarketplaceBindings>>,
+          TError,
+          Awaited<ReturnType<typeof setMarketplaceBindings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetMarketplaceBindings<
+  TData = Awaited<ReturnType<typeof setMarketplaceBindings>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceBindingsRequest: MarketplaceBindingsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMarketplaceBindings>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setMarketplaceBindings>>,
+          TError,
+          Awaited<ReturnType<typeof setMarketplaceBindings>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetMarketplaceBindings<
+  TData = Awaited<ReturnType<typeof setMarketplaceBindings>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceBindingsRequest: MarketplaceBindingsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMarketplaceBindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Re-bind an installed or forked agent
+ */
+
+export function useSetMarketplaceBindings<
+  TData = Awaited<ReturnType<typeof setMarketplaceBindings>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceBindingsRequest: MarketplaceBindingsRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMarketplaceBindings>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetMarketplaceBindingsQueryOptions(
+    projectId,
+    applicationId,
+    marketplaceBindingsRequest,
     options,
   );
 

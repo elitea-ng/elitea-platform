@@ -10,7 +10,11 @@
 import { useMutation, type UseMutationResult } from '@tanstack/react-query';
 
 import { generateAgentMedia, uploadAgentMedia } from '@/shared/api/generated/applications/applications';
-import type { AgentMediaGenerateRequest, AgentMediaGenerateResponse, AgentMediaObject } from '@/shared/api/generated/model';
+import type {
+  AgentMediaGenerateRequest,
+  AgentMediaGenerateResponse,
+  AgentMediaObject,
+} from '@/shared/api/generated/model';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 
 function bodyOf<T>(envelope: unknown): T {
@@ -23,7 +27,10 @@ async function uploadAgentMediaFile(projectId: string, file: File): Promise<Agen
 }
 
 /* manifest: applications.generateAgentMedia */
-async function generateAgentMediaFiles(projectId: string, request: AgentMediaGenerateRequest): Promise<readonly AgentMediaObject[]> {
+async function generateAgentMediaFiles(
+  projectId: string,
+  request: AgentMediaGenerateRequest,
+): Promise<readonly AgentMediaObject[]> {
   return bodyOf<AgentMediaGenerateResponse>(await generateAgentMedia(projectId, request)).media;
 }
 
