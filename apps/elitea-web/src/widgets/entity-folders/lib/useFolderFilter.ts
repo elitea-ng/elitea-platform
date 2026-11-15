@@ -31,6 +31,8 @@ export function useFolderFilter(projectId: string | undefined, kind: EntityFolde
   const pinnedOpen = selectedFolderId === pinnedGroupId(kind);
   const known = folders?.some((folder) => folder.id === selectedFolderId) === true;
   const stale = selectedFolderId !== undefined && !pinnedOpen && query.isSuccess && !known;
+  // A folder is open but the folders are not known yet: a page must not show an "empty" state for it.
+  const pendingFolder = selectedFolderId !== undefined && !pinnedOpen && query.isPending && query.fetchStatus !== 'idle';
   useEffect(() => {
     if (stale) selectFolder(undefined);
   }, [stale, selectFolder]);
@@ -40,11 +42,11 @@ export function useFolderFilter(projectId: string | undefined, kind: EntityFolde
       return { active: true, pinned: true, folderId: pinnedGroupId(kind), includes: (entityId) => ids.has(Number(entityId)), pending: pins === undefined };
     }
     if (selectedFolderId === undefined || !known) {
-      return { active: false, pinned: false, folderId: undefined, includes: () => true, pending: selectedFolderId !== undefined && !pinnedOpen && query.isPending && query.fetchStatus !== 'idle' };
+      return { active: false, pinned: false, folderId: undefined, includes: () => true, pending: pendingFolder };
     }
     const ids = entityIdsInFolder(folders ?? [], selectedFolderId);
     return { active: true, pinned: false, folderId: selectedFolderId, includes: (entityId) => ids?.has(Number(entityId)) === true, pending: false };
-  }, [folders, pins, pinnedOpen, kind, projectId, selectedFolderId, known, query.isPending, query.fetchStatus]);
+  }, [folders, pins, pinnedOpen, kind, projectId, selectedFolderId, known, pendingFolder]);
 }
 
 /** The `folder_id` (or, for the personal Pinned group, `pinned`) request param of the agents and pipelines lists, for a spread; empty with no valid open folder. */
