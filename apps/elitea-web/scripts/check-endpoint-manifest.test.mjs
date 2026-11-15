@@ -943,7 +943,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 534 -> 540 (issue 1629, ADR-0051 M3): searchMarketplaceListings, get/updateMarketplaceListing,
 // setMarketplaceVersionState, hireMarketplaceListing and getMarketplaceOrigin.
 // 540 -> 542 (issue 1629): getMarketplaceBindings and setMarketplaceBindings, the bindings editor of a hired agent.
-const GENERATED_OPERATION_COUNT = 542;
+
+// 534 -> 535 (issue 1628): setEntityPin, the personal Pinned group.
+// 535 -> 543 (issue 1629): the eight Marketplace operations above.
+const GENERATED_OPERATION_COUNT = 543;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

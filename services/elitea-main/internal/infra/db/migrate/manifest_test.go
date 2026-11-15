@@ -1459,7 +1459,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// writes the shared agent memory vector journal when an entry changes,
 	// and the one-time enqueue of the active entries (issue 1657). No
 	// permission.
-	require.EqualValues(t, 248, Head(tenant))
+	//
+	// 249: tenant/0249_project_folder_item_order_and_pins.sql, the order of an
+	// entity inside its project folder and the personal Pinned group of the
+	// Agents, Pipelines, Skills, Toolkits and MCPs lists (issue 1628). No
+	// permission.
+	require.EqualValues(t, 249, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

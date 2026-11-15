@@ -12,7 +12,7 @@ import { PERMISSIONS } from '@/shared/lib/permissions';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { EntitySelectionProvider } from '@/shared/ui/EntityCardList';
 import { EntityListFiltersBody, useRailTagSelection } from '@/shared/ui/EntityRail';
-import { EntityFolderPanel, EntityFolderScope, useFolderFilter } from '@/widgets/entity-folders';
+import { EntityFolderDnd, EntityFolderPanel, EntityFolderScope, MoveSelectionControl, useFolderFilter } from '@/widgets/entity-folders';
 import { EntityListSidebar, ListSelectionSection, pageBodySx, pageSx, useListSearchQuery, useListSelection } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
@@ -197,7 +197,12 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
   const open = (id: string): void => void navigate({ to: '/agents/$tab/$agentId', params: { tab: AGENTS_MODE, agentId: id } });
 
   return (
-    <>
+    <EntityFolderDnd
+      projectId={projectId}
+      kind="agent"
+      permissions={permissions}
+      selectedIds={selected.ids}
+    >
       <EntityListSidebar
         {...base}
         facets={facets}
@@ -228,6 +233,16 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
               onAddTag={(tag) => void bulk.addTag(selected.ids, tag).then(selected.settle)}
               onExport={() => void bulk.exportMany(selected.ids).then(selected.settle)}
               onDelete={() => setConfirmingDelete(true)}
+              extra={
+                <MoveSelectionControl
+                  projectId={projectId}
+                  kind="agent"
+                  permissions={permissions}
+                  ids={selected.ids}
+                  onSettled={selected.settle}
+                  testIdPrefix="agent"
+                />
+              }
               busy={bulk.busy}
               error={bulk.error}
             />
@@ -272,6 +287,6 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
           });
         }}
       />
-    </>
+    </EntityFolderDnd>
   );
 }

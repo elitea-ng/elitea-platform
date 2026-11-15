@@ -239,6 +239,9 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		}
 		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.project_folder_items pfi WHERE pfi.entity_id=a.id AND pfi.entity_kind=ANY(%s::text[]) AND pfi.folder_id=%s::integer)", s, bind(kinds), bind(req.FolderID)))
 	}
+	if req.Pinned {
+		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM %s.project_entity_pins pp WHERE pp.entity_id=a.id AND pp.entity_kind=ANY(%s::text[]) AND pp.user_id=%s)", s, bind(kinds), bind(access.ActorID)))
+	}
 	if access.FolderRestrictions {
 		conditions = append(conditions, foldervisibility.ExclusionSQL(s, "a.id", bind(kinds), bind(access.ActorID)))
 	}

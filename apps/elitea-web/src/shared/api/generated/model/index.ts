@@ -392,6 +392,7 @@ export * from "./entityFolder.zod";
 export * from "./entityFolderCreateRequest.zod";
 export * from "./entityFolderList.zod";
 export * from "./entityFolderMoveRequest.zod";
+export * from "./entityFolderPinRequest.zod";
 export * from "./entityFolderUpdateRequest.zod";
 export * from "./entitySettingsUpdateResponse.zod";
 export * from "./eraseWorkspaceHandoffHeaders.zod";

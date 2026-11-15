@@ -22,6 +22,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
@@ -65,7 +66,19 @@ type Repository interface {
 	// display order, for a drop between two folders with no integer between.
 	Rebalance(ctx context.Context, projectID string, kind Kind) ([]Folder, error)
 	// Move puts the entity into the folder, or at the root when folderID is nil.
-	Move(ctx context.Context, projectID string, kind Kind, entityID int, folderID *string) error
+	// Inside a folder it lands at the top, or between the two named neighbour
+	// entities when either is set (neighbour ids win, as for the folders).
+	Move(ctx context.Context, projectID string, kind Kind, entityID int, folderID *string, place Placement) error
+	// Pinned is the ids the CALLER pinned in this list (private to them).
+	Pinned(ctx context.Context, projectID string, kind Kind) ([]int, error)
+	// SetPin pins or unpins the entity for the caller only.
+	SetPin(ctx context.Context, projectID string, kind Kind, entityID int, pinned bool) error
+}
+
+// Placement is where a moved entity sits inside its target folder: between the
+// entity displayed above and the one displayed below. Both nil means the top.
+type Placement struct {
+	Above, Below *int
 }
 
 type Handler struct{ repo Repository }
@@ -95,7 +108,15 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	pinned, err := h.repo.Pinned(r.Context(), chi.URLParam(r, "projectID"), kind)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	if pinned == nil {
+		pinned = []int{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "pinned_ids": pinned})
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
@@ -253,15 +274,14 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // Move answers PUT .../items/{entityID} with {"folder_id": "<id>" | null}. A
 // null (or absent) folder_id puts the entity back at the root.
+//
+// Inside a folder the entity lands at the top, or between `neighbor_above_id`
+// and `neighbor_below_id` (entity ids, the ones displayed around the drop) when
+// either is sent. The neighbours are ignored at the root.
 func (h *Handler) Move(w http.ResponseWriter, r *http.Request) {
-	kind, err := KindOf(r)
+	kind, entityID, err := kindAndEntity(r)
 	if err != nil {
 		apierr.Write(w, err)
-		return
-	}
-	entityID, err := strconv.Atoi(chi.URLParam(r, "entityID"))
-	if err != nil || entityID <= 0 || entityID > math.MaxInt32 {
-		apierr.Write(w, apierr.BadRequest("entity id must be a positive 32-bit integer"))
 		return
 	}
 	raw, err := readObject(r.Body)
@@ -273,11 +293,74 @@ func (h *Handler) Move(w http.ResponseWriter, r *http.Request) {
 	if id, ok := optionalID(raw["folder_id"]); ok {
 		folderID = &id
 	}
-	if err := h.repo.Move(r.Context(), chi.URLParam(r, "projectID"), kind, entityID, folderID); err != nil {
+	place := Placement{}
+	for field, slot := range map[string]**int{"neighbor_above_id": &place.Above, "neighbor_below_id": &place.Below} {
+		if id, ok := optionalID(raw[field]); ok {
+			n, convErr := strconv.Atoi(id)
+			if convErr != nil || n <= 0 || n > math.MaxInt32 {
+				apierr.Write(w, apierr.BadRequest(field+" must be a positive 32-bit integer"))
+				return
+			}
+			*slot = &n
+		}
+	}
+	if err := h.repo.Move(r.Context(), chi.URLParam(r, "projectID"), kind, entityID, folderID, place); err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	annotateMove(r.Context(), kind, entityID, folderID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// SetPin answers PUT .../pins/{entityID} with {"pinned": true | false}; absent
+// means true. The pin is the caller's own: it is gated on the list permission,
+// not on update rights, because it changes nothing the project sees.
+func (h *Handler) SetPin(w http.ResponseWriter, r *http.Request) {
+	kind, entityID, err := kindAndEntity(r)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	raw, err := readObject(r.Body)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	pinned := true
+	if v, ok := raw["pinned"]; ok && string(v) != "null" {
+		if json.Unmarshal(v, &pinned) != nil {
+			apierr.Write(w, apierr.BadRequest("pinned must be a boolean"))
+			return
+		}
+	}
+	if err := h.repo.SetPin(r.Context(), chi.URLParam(r, "projectID"), kind, entityID, pinned); err != nil {
 		apierr.Write(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func kindAndEntity(r *http.Request) (Kind, int, error) {
+	kind, err := KindOf(r)
+	if err != nil {
+		return "", 0, err
+	}
+	entityID, err := strconv.Atoi(chi.URLParam(r, "entityID"))
+	if err != nil || entityID <= 0 || entityID > math.MaxInt32 {
+		return "", 0, apierr.BadRequest("entity id must be a positive 32-bit integer")
+	}
+	return kind, entityID, nil
+}
+
+// annotateMove gives the audit row of a move its meaning: which entity went to
+// which folder (the middleware only knows the route). The surface is audited
+// as a whole (middleware.auditedSurfaces), so every successful write is a row.
+func annotateMove(ctx context.Context, kind Kind, entityID int, folderID *string) {
+	action := "Moved " + string(kind) + " to the root"
+	if folderID != nil {
+		action = "Moved " + string(kind) + " into folder " + *folderID
+	}
+	audit.Annotate(ctx, audit.Annotation{Action: action, EntityType: string(kind), EntityID: audit.ID(int64(entityID))})
 }
 
 func cleanName(raw string) (string, error) {

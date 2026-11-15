@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 import { t } from '@/shared/i18n';
-import { EntityFolderPanel } from '@/widgets/entity-folders';
+import { EntityFolderPanel, MoveSelectionControl } from '@/widgets/entity-folders';
 import { EntityListSidebar, ListSelectionSection, type PageToolbarPrimaryAction } from '@/widgets/page-header';
 import type { usePermissionSet } from '@/widgets/sidebar';
 
@@ -76,6 +76,16 @@ export function ToolkitsSidebar({ isMCP, projectId, isPublic, canDelete, permiss
             noun={isMCP ? t('pages.toolkits.toolkits.selectionNounMcp', 'MCPs') : t('pages.toolkits.toolkits.selectionNoun', 'toolkits')}
             onClear={selected.clear}
             onDelete={canDelete ? () => setConfirmingDelete(true) : undefined}
+            extra={
+              <MoveSelectionControl
+                projectId={projectId}
+                kind={kind}
+                permissions={permissions}
+                ids={selected.ids}
+                onSettled={selected.settle}
+                testIdPrefix={kind}
+              />
+            }
             busy={deleting}
             error={deleteError}
           />

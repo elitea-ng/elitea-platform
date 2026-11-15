@@ -27,7 +27,8 @@ var entityFolderPermissions = map[entityfolders.Kind]entityFolderPerms{
 //	POST   /entity_folders/prompt_lib/{projectID}/{kind}                    create
 //	PUT    /entity_folders/prompt_lib/{projectID}/{kind}/{folderID}         rename / reorder
 //	DELETE /entity_folders/prompt_lib/{projectID}/{kind}/{folderID}         delete, items return to the root
-//	PUT    /entity_folders/prompt_lib/{projectID}/{kind}/items/{entityID}   move into / out of a folder
+//	PUT    /entity_folders/prompt_lib/{projectID}/{kind}/items/{entityID}   move into / out of a folder, with its place
+//	PUT    /entity_pins/prompt_lib/{projectID}/{kind}/{entityID}            pin / unpin for the caller only (not audited)
 //
 // `{kind}` is one segment, so the spec describes five operations and not
 // twenty-five. The permission depends on the kind, so the gate is chosen per
@@ -38,6 +39,12 @@ func registerEntityFolderRoutes(r chi.Router, h *entityfolders.Handler, gate fun
 	base := "/entity_folders/prompt_lib/{projectID}/{kind}"
 	r.With(kindGate(gate, func(p entityFolderPerms) string { return p.list })).Get(base, h.List)
 	r.With(kindGate(gate, func(p entityFolderPerms) string { return p.create })).Post(base, h.Create)
+	// A pin is the caller's own and changes nothing the project sees, so it needs
+	// only what reading the list needs. It lives under its OWN prefix, outside
+	// the audited /entity_folders/ surface: an audit row per pin toggle would
+	// tell project admins what a member pinned, which is private.
+	r.With(kindGate(gate, func(p entityFolderPerms) string { return p.list })).
+		Put("/entity_pins/prompt_lib/{projectID}/{kind}/{entityID}", h.SetPin)
 	update := kindGate(gate, func(p entityFolderPerms) string { return p.update })
 	r.With(update).Put(base+"/items/{entityID}", h.Move)
 	r.With(update).Put(base+"/{folderID}", h.Update)

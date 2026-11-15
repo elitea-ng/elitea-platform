@@ -6396,6 +6396,11 @@
             "type": "string"
           }
         },
+        "query:pinned": {
+          "schema": {
+            "type": "boolean"
+          }
+        },
         "query:query": {
           "schema": {
             "type": "string"

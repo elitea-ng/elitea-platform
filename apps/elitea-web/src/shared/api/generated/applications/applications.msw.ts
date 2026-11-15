@@ -1681,6 +1681,10 @@ export const getListEntityFoldersResponseMock = (
     created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   })),
+  pinned_ids: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.number.int()),
   ...overrideResponse,
 });
 
@@ -15607,6 +15611,28 @@ export const getMoveEntityToFolderMockHandler = (
   );
 };
 
+export const getSetEntityPinMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/entity_pins/prompt_lib/:projectId/:kind/:entityId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getListEvalHumanScoresMockHandler = (
   overrideResponse?:
     | EvalHumanScoreList
@@ -19146,6 +19172,7 @@ export const getApplicationsMock = () => [
   getUpdateEntityFolderMockHandler(),
   getDeleteEntityFolderMockHandler(),
   getMoveEntityToFolderMockHandler(),
+  getSetEntityPinMockHandler(),
   getListEvalHumanScoresMockHandler(),
   getRecordEvalHumanScoreMockHandler(),
   getEnhanceEvalRunMockHandler(),

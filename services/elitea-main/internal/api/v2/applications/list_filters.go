@@ -16,6 +16,7 @@ func parseApplicationList(values url.Values) (applications.ListRequest, error) {
 	case "1", "true":
 		req.UpdateAvailable = true
 	}
+	req.Pinned = values.Get("pinned") == "true"
 	if req.Search == "" {
 		req.Search = values.Get("search")
 	}

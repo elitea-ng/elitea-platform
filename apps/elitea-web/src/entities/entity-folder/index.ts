@@ -3,7 +3,7 @@
  * The project folders of the Agents, Pipelines, Skills, Toolkits and MCPs
  * lists (issue 2048).
  */
-export { entityIdsInFolder, folderOfEntity, neighboursForStep } from './model/kinds';
+export { entityIdsInFolder, folderOfEntity, isPinnedGroupId, neighboursForStep, pinnedGroupId } from './model/kinds';
 export type { EntityFolderKind } from './model/kinds';
-export { useEntityFolderMutations, useEntityFolders } from './model/useEntityFolders';
+export { useEntityFolderMutations, useEntityFolders, useEntityPins } from './model/useEntityFolders';
 export type { EntityFolder } from '@/shared/api/generated/model';

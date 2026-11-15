@@ -131,6 +131,7 @@ import type {
   EntityFolderCreateRequest,
   EntityFolderList,
   EntityFolderMoveRequest,
+  EntityFolderPinRequest,
   EntityFolderUpdateRequest,
   ErrorResponse,
   EvalDataset,
@@ -6016,7 +6017,9 @@ export const getMoveEntityToFolderUrl = (
 
 /**
  * The entity and the folder must belong to the same list, else 404. An
- * entity is in one folder, so this replaces its place. Gated on the list's
+ * entity is in one folder, so this replaces its place. Inside the folder
+ * it lands at the top, or between the named neighbours. The move is
+ * audited with the entity. Gated on the list's
  * update permission.
  * @summary Put an entity into a folder, or back at the root
  */
@@ -6255,6 +6258,289 @@ export function useMoveEntityToFolder<
     kind,
     entityId,
     entityFolderMoveRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setEntityPinResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type setEntityPinResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type setEntityPinResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setEntityPinResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setEntityPinResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type setEntityPinResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type setEntityPinResponseSuccess = setEntityPinResponse204 & {
+  headers: Headers;
+};
+export type setEntityPinResponseError = (
+  | setEntityPinResponse400
+  | setEntityPinResponse401
+  | setEntityPinResponse403
+  | setEntityPinResponse404
+  | setEntityPinResponse500
+) & {
+  headers: Headers;
+};
+
+export type setEntityPinResponse =
+  setEntityPinResponseSuccess | setEntityPinResponseError;
+
+export const getSetEntityPinUrl = (
+  projectId: string,
+  kind: string,
+  entityId: number,
+) => {
+  return `/elitea_core/entity_pins/prompt_lib/${projectId}/${kind}/${entityId}`;
+};
+
+/**
+ * The personal Pinned group: private to the caller, never shown to another
+ * member, and deliberately not audited (a trail row per toggle would show
+ * an admin what a member pinned). Gated on the list permission, not on
+ * update rights. Pinning an
+ * entity that is not of the list's kind is a 404; unpinning is always 204.
+ * @summary Pin or unpin an entity for the caller
+ */
+export const setEntityPin = async (
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setEntityPinResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setEntityPinResponse>(
+    getSetEntityPinUrl(projectId, kind, entityId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(entityFolderPinRequest),
+    },
+  );
+};
+
+export const getSetEntityPinQueryKey = (
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/entity_pins/prompt_lib/${projectId}/${kind}/${entityId}`,
+    entityFolderPinRequest,
+  ] as const;
+};
+
+export const getSetEntityPinQueryOptions = <
+  TData = Awaited<ReturnType<typeof setEntityPin>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof setEntityPin>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetEntityPinQueryKey(projectId, kind, entityId, entityFolderPinRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof setEntityPin>>> = ({
+    signal,
+  }) =>
+    setEntityPin(projectId, kind, entityId, entityFolderPinRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      kind !== null &&
+      kind !== undefined &&
+      entityId !== null &&
+      entityId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setEntityPin>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetEntityPinQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setEntityPin>>
+>;
+export type SetEntityPinQueryError =
+  N400Response | N401Response | N403Response | N404Response | N500Response;
+
+export function useSetEntityPin<
+  TData = Awaited<ReturnType<typeof setEntityPin>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest: undefined | EntityFolderPinRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof setEntityPin>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setEntityPin>>,
+          TError,
+          Awaited<ReturnType<typeof setEntityPin>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetEntityPin<
+  TData = Awaited<ReturnType<typeof setEntityPin>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof setEntityPin>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setEntityPin>>,
+          TError,
+          Awaited<ReturnType<typeof setEntityPin>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetEntityPin<
+  TData = Awaited<ReturnType<typeof setEntityPin>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof setEntityPin>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Pin or unpin an entity for the caller
+ */
+
+export function useSetEntityPin<
+  TData = Awaited<ReturnType<typeof setEntityPin>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | N500Response,
+>(
+  projectId: string,
+  kind: string,
+  entityId: number,
+  entityFolderPinRequest?: EntityFolderPinRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof setEntityPin>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetEntityPinQueryOptions(
+    projectId,
+    kind,
+    entityId,
+    entityFolderPinRequest,
     options,
   );
 

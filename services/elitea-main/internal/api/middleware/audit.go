@@ -168,6 +168,10 @@ var auditedSurfaces = []string{
 	// decision 5): each removes a tool, a toolkit, a credential use grant
 	// or an egress allowlist entry. The report read is a GET.
 	"/api/v2/elitea_core/permission_trimming/",
+	// Project folders of the entity lists (ADR-0051 decision Q2, issue 1628):
+	// any member with update rights can move another member's agent, so every
+	// move, rename, reorder and delete is recorded, with the moved entity.
+	"/api/v2/elitea_core/entity_folders/",
 }
 
 // AuditedSurfaces returns a copy of the prefix list, so a router-level test can

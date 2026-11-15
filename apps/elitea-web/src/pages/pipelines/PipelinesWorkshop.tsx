@@ -12,7 +12,7 @@ import { PERMISSIONS } from '@/shared/lib/permissions';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { EntitySelectionProvider } from '@/shared/ui/EntityCardList';
 import { EntityListFiltersBody, useRailTagSelection } from '@/shared/ui/EntityRail';
-import { EntityFolderPanel, EntityFolderScope, useFolderFilter } from '@/widgets/entity-folders';
+import { EntityFolderDnd, EntityFolderPanel, EntityFolderScope, MoveSelectionControl, useFolderFilter } from '@/widgets/entity-folders';
 import { EntityListSidebar, ListSelectionSection, pageBodySx, pageSx, useListSearchQuery, useListSelection } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
@@ -99,6 +99,12 @@ export function PipelinesWorkshop(): ReactNode {
     : undefined;
 
   return (
+    <EntityFolderDnd
+      projectId={projectId}
+      kind="pipeline"
+      permissions={permissions}
+      selectedIds={selected.ids}
+    >
     <Box sx={pageSx}>
       <EntityListSidebar
         subject={t('pages.pipelines.pipelines.tabsAriaLabel', 'Pipelines')}
@@ -135,6 +141,16 @@ export function PipelinesWorkshop(): ReactNode {
               onAddTag={(tag) => void bulk.addTag(selected.ids, tag).then(selected.settle)}
               onExport={() => void bulk.exportMany(selected.ids).then(selected.settle)}
               onDelete={() => setConfirmingDelete(true)}
+              extra={
+                <MoveSelectionControl
+                  projectId={projectId}
+                  kind="pipeline"
+                  permissions={permissions}
+                  ids={selected.ids}
+                  onSettled={selected.settle}
+                  testIdPrefix="pipeline"
+                />
+              }
               busy={bulk.busy}
               error={bulk.error}
             />
@@ -180,5 +196,6 @@ export function PipelinesWorkshop(): ReactNode {
         }}
       />
     </Box>
+    </EntityFolderDnd>
   );
 }
