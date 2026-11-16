@@ -206,7 +206,12 @@ test('a published agent is findable in the Marketplace by name and by category, 
   // The rows come back already filtered by the server's `?query=`
   // (`useMarketplaceListings`' own note), so this is a round trip and not a
   // client-side filter over whatever page happened to be loaded.
+  // Armed before the fill: the debounced search is applied once the server has answered the query, and a click made while the
+  // list is still swapping from the unfiltered rows to the filtered ones lands on a card that is replaced under the pointer.
+  const searched = page.waitForResponse((r) => r.url().includes(encodeURIComponent(name)) && r.request().method() === 'GET', { timeout: 30_000 });
   await browseSearch(page).fill(name);
+  await searched;
+  await expect(page).toHaveURL(new RegExp(`query=${name}`));
   // `.first()`, and the reason is worth keeping: a freshly published agent is
   // rendered in MORE THAN ONE section at once — the full list and the
   // "Featured" row (newest first) — so an unqualified locator is a
@@ -224,6 +229,7 @@ test('a published agent is findable in the Marketplace by name and by category, 
   // like count, version) and a real link to `/marketplace/agents/{id}`. The
   // full description lives on the listing page, together with Try in chat, so
   // the identity assertion is made where the product puts it.
+  await expect(card).toBeEnabled();
   await card.click();
   await expect(page, 'clicking the card must open the listing page, not a dialog').toHaveURL(
     new RegExp(`/marketplace/agents/${agent.listingId}$`),
