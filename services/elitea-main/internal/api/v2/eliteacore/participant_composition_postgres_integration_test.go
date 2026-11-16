@@ -246,10 +246,12 @@ FROM participant, p_1.chat_conversations c WHERE c.uuid::text = $3`, first.app, 
 		}
 		tiers[name+fmt.Sprint(participant.EntityMeta["id"])] = participant.Meta["agent_subtree_tiers"]
 	}
+	// The read serves each agent's CURRENT application name (#2096), so the
+	// participants are keyed by the names the fixtures gave their applications.
 	key := func(name string, version composedVersion) string { return name + fmt.Sprint(float64(version.app)) }
 	want := map[string]any{
-		key("agent", first): 2, key("agent", second): 2, key("agent", third): applicationcomposition.MaxAgentTiers,
-		key("agent", small): 1, key("Catalogue", first): nil,
+		key("First", first): 2, key("Second", second): 2, key("Third", third): applicationcomposition.MaxAgentTiers,
+		key("Small", small): 1, key("Catalogue", first): nil,
 	}
 	for name, value := range want {
 		if tiers[name] != value {
