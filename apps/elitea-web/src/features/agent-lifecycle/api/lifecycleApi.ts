@@ -281,6 +281,14 @@ function sourceApplicationId(document: EntityExportDocument): number | undefined
   return positiveInteger((document.applications?.[0] as { id?: unknown } | undefined)?.id);
 }
 
+/** Records the agent a fork created under the source agent's id, and returns it. */
+function rememberCreated(created: Map<number, ForkedAgent>, document: EntityExportDocument, outcome: ForkOutcome): ForkedAgent {
+  const agent = firstForkedAgent(outcome);
+  const sourceId = sourceApplicationId(document);
+  if (sourceId !== undefined && agent.applicationId !== undefined) created.set(sourceId, agent);
+  return agent;
+}
+
 function hasEntries(channels: Channels): boolean {
   return channels.agents.length + channels.toolkits.length + channels.skills.length > 0;
 }
@@ -309,9 +317,7 @@ export async function forkEntityWithNested(
   depth = 0,
 ): Promise<ForkOutcome> {
   const outcome = await forkEntity(targetProjectId, document);
-  const { applicationId, versionId } = firstForkedAgent(outcome);
-  const sourceId = sourceApplicationId(document);
-  if (sourceId !== undefined && applicationId !== undefined) created.set(sourceId, { applicationId, versionId });
+  const { applicationId, versionId } = rememberCreated(created, document, outcome);
   const refs = nestedAgentRefs(document);
   if (refs.length === 0 || applicationId === undefined || versionId === undefined) return outcome;
 
