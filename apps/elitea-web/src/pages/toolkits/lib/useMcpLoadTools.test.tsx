@@ -1,7 +1,10 @@
+import { ThemeProvider } from '@mui/material/styles';
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { SocketClientContext } from '@/shared/api/socket/client';
 import { createTestSocketClient } from '@/shared/api/socket/testing';
@@ -243,6 +246,25 @@ describe('useMcpLoadTools', () => {
 
     act(() => release?.());
     await waitFor(() => expect(result.current?.isLoadingTools).toBe(false));
+  });
+
+  it('answers a click on Login with a message: the reason when the server refuses (#2125)', async () => {
+    server.use(http.post(PATH, () => HttpResponse.json({ success: false, error: 'Unauthorized' })));
+    const detailWithHeader = detail({ id: 7, settings: { url: 'https://mcp-mock:8443/mcp', headers: { Authorization: 'Bearer {{secret.token}}' } } });
+    function Probe() {
+      const slot = useMcpLoadTools({ projectId: '1', editToolDetail: detailWithHeader, onChangeToolDetail: vi.fn() });
+      return <>{slot?.mcpAuthStatus}</>;
+    }
+    render(
+      <ThemeProvider theme={buildEliteaTheme(DEFAULT_BRAND_PACK)} defaultMode={DEFAULT_COLOR_SCHEME}>
+        <Probe />
+      </ThemeProvider>,
+      { wrapper },
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Login' }));
+
+    expect(await screen.findByText('Authorization failed. Please try logging in again.')).toBeInTheDocument();
   });
 
   it('carries the real MCP authorization modal in its slot', () => {
