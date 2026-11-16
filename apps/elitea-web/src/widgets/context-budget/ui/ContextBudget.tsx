@@ -16,7 +16,7 @@ import {
   selectBudgetMode,
   type AuthorContextProfile,
 } from '../lib/authorContextUpdate';
-import { estimateForMode, toContextBudgetStats } from '../lib/contextStatus';
+import { toContextBudgetStats } from '../lib/contextStatus';
 import { ContextBudgetEditDialog } from './ContextBudgetEditDialog';
 import { ContextBudgetCollapsed, ContextBudgetPanel } from './ContextBudgetPanel';
 
@@ -36,28 +36,17 @@ export interface ContextBudgetProps {
   readonly collapsed?: boolean;
 }
 
-/**
- * The panel's figures. A window saved after the latest reply is shown now,
- * estimated from that reply's measurement, until the next reply replaces it
- * (#2123).
- */
-function statsWithPendingMode(wire: unknown, pendingMode: ContextBudgetMode | undefined) {
-  const measured = toContextBudgetStats(wire);
-  if (measured === undefined || pendingMode === undefined) return measured;
-  return estimateForMode(measured, pendingMode) ?? measured;
-}
-
 export function ContextBudget({ conversationId, projectId, collapsed = false }: ContextBudgetProps): ReactNode {
   const enabled = conversationId !== undefined && conversationId !== '' && projectId !== undefined && projectId !== '';
   const { data, isPending, isError } = contextManagementApi.useGetStatus(
     { projectId: projectId ?? '', conversationId: conversationId ?? '' },
     { enabled },
   );
-  const edit = useContextBudgetEdit({ projectId, conversationId });
+  const edit = useContextBudgetEdit();
 
   if (!enabled || isPending || isError) return null;
 
-  const stats = statsWithPendingMode(data, edit.pendingMode);
+  const stats = toContextBudgetStats(data);
   if (!stats) return null;
 
   if (collapsed) return <ContextBudgetCollapsed stats={stats} />;
@@ -66,7 +55,6 @@ export function ContextBudget({ conversationId, projectId, collapsed = false }: 
       <ContextBudgetPanel
         stats={stats}
         onEdit={edit.open}
-        pendingMode={edit.pendingMode}
       />
       <ContextBudgetEditDialog
         open={edit.isOpen}
@@ -86,8 +74,6 @@ interface ContextBudgetEdit {
   readonly errorMessage: string | undefined;
   /** The reader's OWN default, or `undefined` when they have never saved one. */
   readonly storedMode: ContextBudgetMode;
-  /** The mode saved in this session, until the status reports it back. */
-  readonly pendingMode: ContextBudgetMode | undefined;
   readonly open: () => void;
   readonly close: () => void;
   readonly save: (budgetMode: ContextBudgetMode) => void;
@@ -118,18 +104,13 @@ interface ContextBudgetEdit {
  * had just replaced until the next reload — the "two query-key namespaces over
  * one resource" defect, with the write side holding the namespace nobody reads.
  */
-function useContextBudgetEdit(target: {
-  readonly projectId: string | number | undefined;
-  readonly conversationId: string | number | undefined;
-}): ContextBudgetEdit {
+function useContextBudgetEdit(): ContextBudgetEdit {
   const queryClient = useQueryClient();
   const { data: authorData } = useGetCurrentAuthor();
   const author = authorData?.data as AuthorContextProfile | undefined;
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
-  const [pending, setPending] = useState<{ readonly conversation: string; readonly mode: ContextBudgetMode } | undefined>(undefined);
-  const { projectId, conversationId } = target;
 
   const save = useCallback(
     (budgetMode: ContextBudgetMode) => {
@@ -137,16 +118,7 @@ function useContextBudgetEdit(target: {
         setIsSaving(true);
         setErrorMessage(undefined);
         try {
-          // A conversation keeps the strategy it was created with: the default
-          // saved below reaches only conversations that do not exist yet. The
-          // reader is editing the panel of THIS one, so it takes the mode too
-          // (#2123); without it the panel went on showing, and the next reply
-          // went on using, the old window.
-          if (projectId !== undefined && conversationId !== undefined) {
-            await contextManagementApi.updateStrategy({ projectId, conversationId, budget_mode: budgetMode });
-          }
           await updateCurrentAuthor(buildContextBudgetUpdate(author, budgetMode));
-          setPending({ conversation: String(conversationId), mode: budgetMode });
           await queryClient.invalidateQueries({ queryKey: getGetCurrentAuthorQueryKey() });
           await queryClient.invalidateQueries({ queryKey: contextManagementApi.statusQueryKey() });
           setIsOpen(false);
@@ -160,7 +132,7 @@ function useContextBudgetEdit(target: {
       };
       void write();
     },
-    [author, queryClient, projectId, conversationId],
+    [author, queryClient],
   );
 
   return {
@@ -168,7 +140,6 @@ function useContextBudgetEdit(target: {
     isSaving,
     errorMessage,
     storedMode: selectBudgetMode(author),
-    pendingMode: pending !== undefined && pending.conversation === String(conversationId) ? pending.mode : undefined,
     open: useCallback(() => {
       setErrorMessage(undefined);
       setIsOpen(true);

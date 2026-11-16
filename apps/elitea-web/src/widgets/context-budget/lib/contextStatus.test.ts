@@ -7,7 +7,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   deriveUtilizationPercentage,
-  estimateForMode,
   formatNumberWithSpaces,
   formatTokensDisplay,
   toContextBudgetStats,
@@ -168,33 +167,4 @@ it('keeps the admitted runtime window, reservations and inactive compaction phas
     runtime_context:{active:false, measurement:{version:1, phase:'compacting', budget_mode:'legacy', total_tokens:272000, reserved_output_tokens:64000, safety_margin_tokens:2720}} });
   expect(stats?.utilizationPercentage).toBe(93);
   expect(stats?.runtime).toEqual({autoOutput:false,phase:'compacting',active:false,legacy:true,totalTokens:272000,reservedOutputTokens:64000,safetyMarginTokens:2720});
-});
-
-describe('estimateForMode', () => {
-  const measuredFull = (total: number) =>
-    toContextBudgetStats({
-      budget_mode: 'full',
-      current_tokens: 20000,
-      max_tokens: total - 10000,
-      context_analytics_available: true,
-      runtime_context: {
-        measurement: { version: 1, phase: 'measured', budget_mode: 'full', total_tokens: total, reserved_output_tokens: 8000, safety_margin_tokens: 2000 },
-      },
-    })!;
-
-  it('caps a Full window at the Balanced limit', () => {
-    const next = estimateForMode(measuredFull(400000), 'balanced')!;
-    expect(next.runtime?.totalTokens).toBe(272000);
-    expect(next.maxTokens).toBe(262000);
-    expect(next.utilizationPercentage).toBe(8);
-  });
-
-  it('keeps a smaller model window under Balanced', () => {
-    expect(estimateForMode(measuredFull(128000), 'balanced')!.runtime?.totalTokens).toBe(128000);
-  });
-
-  it('answers nothing when the model window cannot be known', () => {
-    const balancedAtCap = { ...measuredFull(272000), budgetMode: 'balanced' as const };
-    expect(estimateForMode(balancedAtCap, 'full')).toBeUndefined();
-  });
 });
