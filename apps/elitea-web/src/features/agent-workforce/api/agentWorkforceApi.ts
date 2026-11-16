@@ -23,6 +23,7 @@ import {
   rejectAgentWorkforceProposal,
   reinstateAgent,
 } from '@/shared/api/generated/applications/applications';
+import { saveMarketplaceWorkforceReport } from '@/shared/api/generated/marketplace/marketplace';
 import type {
   AgentAutomaticAction,
   AgentWorkforceAgent,
@@ -66,6 +67,19 @@ export async function reinstate(projectId: string, applicationId: number, note: 
 /* manifest: agentWorkforce.list */
 export async function fetchProposals(projectId: string, params: ListAgentWorkforceProposalsParams): Promise<ListAgentWorkforceProposals200> {
   return bodyOf<ListAgentWorkforceProposals200>(await listAgentWorkforceProposals(projectId, params));
+}
+
+/** The Marketplace proposals of workforce managers (hire_listing and feedback_report), agent managers only. */
+export async function fetchMarketplaceProposals(projectId: string): Promise<ListAgentWorkforceProposals200> {
+  return fetchProposals(projectId, { kind: 'marketplace', limit: 50 });
+}
+
+/* manifest: marketplace.saveWorkforceReport */
+export async function publishWorkforceReport(projectId: string, listingId: number, proposalId: number, text: string | undefined): Promise<void> {
+  await saveMarketplaceWorkforceReport(projectId, String(listingId), {
+    proposal_id: String(proposalId),
+    ...(text === undefined ? {} : { text }),
+  });
 }
 
 /* manifest: agentWorkforce.propose */

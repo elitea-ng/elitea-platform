@@ -99,6 +99,17 @@ describe('WorkforcePanel', () => {
     await waitFor(() => expect(body).toEqual({ confirm_nested: true }));
   });
 
+  it('badges an automatically hired agent on probation, until a manager keeps it', async () => {
+    mock(workforceAgent({ auto_hired_at: '2026-11-10T00:00:00Z', probation_until: '2026-11-24T00:00:00Z' }), []);
+    const first = renderWithQueryAndTheme(<WorkforcePanel projectId="1" applicationId={41} />);
+    expect(await screen.findByText(/On probation until/)).toBeInTheDocument();
+    first.unmount();
+    mock(workforceAgent({ auto_hired_at: '2026-11-10T00:00:00Z', probation_until: '2026-11-24T00:00:00Z', probation_reviewed_at: '2026-11-12T00:00:00Z' }), []);
+    renderWithQueryAndTheme(<WorkforcePanel projectId="1" applicationId={41} />);
+    await screen.findByTestId('agent-workforce-state');
+    expect(screen.queryByText(/On probation until/)).toBeNull();
+  });
+
   it('a manager reinstates a retired agent', async () => {
     let called = false;
     mock(workforceAgent({ lifecycle_state: 'retired', reinstate_until: '2099-01-01T00:00:00Z' }), []);

@@ -76,6 +76,8 @@
     "deleteAgentMemoryEntry",
     "setAgentMemoryOptOut",
     "searchMarketplaceListings",
-    "getMarketplaceFeedback"
+    "getMarketplaceFeedback",
+    "listAgentWorkforceProposals",
+    "getAgentWorkforce"
   ]
 }

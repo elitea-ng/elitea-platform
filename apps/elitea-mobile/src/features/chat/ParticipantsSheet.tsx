@@ -17,6 +17,7 @@ import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { floorOf } from '@elitea/client-core/conversation';
 import { useModalAnimation } from '@/features/a11y/motion';
 import { participantAgentId, participantName, participantUserId } from '@/features/chat/messageModel';
+import { ProbationBadge } from '@/features/workforce/ProbationBadge';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
 import { Avatar, Button, hitTarget, Icon, ListRow, ListSection, maxScale, ramp, Text } from '@/ui';
 
@@ -199,8 +200,10 @@ function SheetBody({
                   subtitle={isLead ? `${kind} · ${TURN_TAKING_COPY.lead}` : kind}
                   leading={<Avatar name={name} kind={p.entity_name === 'user' ? 'person' : 'agent'} size={36} decorative />}
                   trailing={
-                    leadable || isRemovable(p, selfUserId) || remembers ? (
+                    leadable || isRemovable(p, selfUserId) || remembers || (!offline && participantAgentId(p) !== null) ? (
                       <View style={styles.trailing}>
+                        {/* Draws only for an agent hired automatically and not kept yet (client contract 1.56). */}
+                        {!offline ? <ProbationBadge projectId={projectId} agentId={participantAgentId(p)} /> : null}
                         {remembers ? (
                           <Button
                             title="What it remembers"

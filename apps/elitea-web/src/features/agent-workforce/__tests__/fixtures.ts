@@ -83,6 +83,9 @@ export function workforceProposal(overrides: Partial<AgentWorkforceProposal> = {
     appeal_note: null,
     created_at: '2026-11-09T04:00:00Z',
     policy_rule: null,
+    listing_id: null,
+    listing_version_id: null,
+    payload: {},
     ...overrides,
   };
 }

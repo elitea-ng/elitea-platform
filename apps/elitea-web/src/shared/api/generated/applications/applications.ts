@@ -12565,6 +12565,11 @@ export type getAgentWorkforceResponse200 = {
   status: 200;
 };
 
+export type getAgentWorkforceResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
 export type getAgentWorkforceResponse401 = {
   data: N401Response;
   status: 401;
@@ -12580,13 +12585,20 @@ export type getAgentWorkforceResponse404 = {
   status: 404;
 };
 
+export type getAgentWorkforceResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type getAgentWorkforceResponseSuccess = getAgentWorkforceResponse200 & {
   headers: Headers;
 };
 export type getAgentWorkforceResponseError = (
+  | getAgentWorkforceResponse400
   | getAgentWorkforceResponse401
   | getAgentWorkforceResponse403
   | getAgentWorkforceResponse404
+  | getAgentWorkforceResponse426
 ) & {
   headers: Headers;
 };
@@ -12602,7 +12614,7 @@ export const getGetAgentWorkforceUrl = (
 };
 
 /**
- * The agent's place on the dismissal ladder (ADR-0050 decision 5g): whether it is under review (watch), suspended, retired (and until when it can be reinstated) or deleted, its owners, legal hold, whether it is a workforce manager, its latest daily scorecard, and whether the caller manages agents here or owns the agent. Requires `models.applications.applications.list`.
+ * The agent's place on the dismissal ladder (ADR-0050 decision 5g): whether it is under review (watch), suspended, retired (and until when it can be reinstated) or deleted, its owners, legal hold, whether it is a workforce manager, its latest daily scorecard, and whether the caller manages agents here or owns the agent. Requires `models.applications.applications.list`. The mobile app reads it for the probation badge of an automatically hired agent (contract 1.56).
  * @summary Read an agent's workforce state and latest scorecard
  */
 export const getAgentWorkforce = async (
@@ -12630,7 +12642,12 @@ export const getGetAgentWorkforceQueryKey = (
 
 export const getGetAgentWorkforceQueryOptions = <
   TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
-  TError = N401Response | N403Response | AgentWorkforceRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | AgentWorkforceRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -12676,11 +12693,20 @@ export type GetAgentWorkforceQueryResult = NonNullable<
   Awaited<ReturnType<typeof getAgentWorkforce>>
 >;
 export type GetAgentWorkforceQueryError =
-  N401Response | N403Response | AgentWorkforceRefusal;
+  | N400Response
+  | N401Response
+  | N403Response
+  | AgentWorkforceRefusal
+  | ClientUpgradeRequiredResponse;
 
 export function useGetAgentWorkforce<
   TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
-  TError = N401Response | N403Response | AgentWorkforceRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | AgentWorkforceRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -12708,7 +12734,12 @@ export function useGetAgentWorkforce<
 };
 export function useGetAgentWorkforce<
   TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
-  TError = N401Response | N403Response | AgentWorkforceRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | AgentWorkforceRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -12736,7 +12767,12 @@ export function useGetAgentWorkforce<
 };
 export function useGetAgentWorkforce<
   TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
-  TError = N401Response | N403Response | AgentWorkforceRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | AgentWorkforceRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -12760,7 +12796,12 @@ export function useGetAgentWorkforce<
 
 export function useGetAgentWorkforce<
   TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
-  TError = N401Response | N403Response | AgentWorkforceRefusal,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | AgentWorkforceRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -13573,6 +13614,11 @@ export type listAgentWorkforceProposalsResponse403 = {
   status: 403;
 };
 
+export type listAgentWorkforceProposalsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listAgentWorkforceProposalsResponseSuccess =
   listAgentWorkforceProposalsResponse200 & {
     headers: Headers;
@@ -13581,6 +13627,7 @@ export type listAgentWorkforceProposalsResponseError = (
   | listAgentWorkforceProposalsResponse400
   | listAgentWorkforceProposalsResponse401
   | listAgentWorkforceProposalsResponse403
+  | listAgentWorkforceProposalsResponse426
 ) & {
   headers: Headers;
 };
@@ -13609,8 +13656,8 @@ export const getListAgentWorkforceProposalsUrl = (
 };
 
 /**
- * The project's workforce proposals, newest first: open ones (proposed or asked_owner) unless status names proposed, asked_owner, approved, rejected or all. application_id narrows them to one agent. Requires `models.applications.applications.list`.
- * @summary List dismissal and demotion proposals
+ * The project's workforce proposals, newest first: open ones (proposed or asked_owner) unless status names proposed, asked_owner, approved, rejected or all. application_id narrows them to one agent. kind picks the ladder's dismiss and demote (the default) or the Marketplace's hire_listing and feedback_report (ADR-0051 decision 6). Requires `models.applications.applications.list`. The mobile app reads the Marketplace kinds, read-only (contract 1.56).
+ * @summary List workforce proposals
  */
 export const listAgentWorkforceProposals = async (
   projectId: string,
@@ -13638,7 +13685,8 @@ export const getListAgentWorkforceProposalsQueryKey = (
 
 export const getListAgentWorkforceProposalsQueryOptions = <
   TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListAgentWorkforceProposalsParams,
@@ -13683,11 +13731,12 @@ export type ListAgentWorkforceProposalsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listAgentWorkforceProposals>>
 >;
 export type ListAgentWorkforceProposalsQueryError =
-  N400Response | N401Response | N403Response;
+  N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse;
 
 export function useListAgentWorkforceProposals<
   TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params: undefined | ListAgentWorkforceProposalsParams,
@@ -13715,7 +13764,8 @@ export function useListAgentWorkforceProposals<
 };
 export function useListAgentWorkforceProposals<
   TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListAgentWorkforceProposalsParams,
@@ -13743,7 +13793,8 @@ export function useListAgentWorkforceProposals<
 };
 export function useListAgentWorkforceProposals<
   TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListAgentWorkforceProposalsParams,
@@ -13762,12 +13813,13 @@ export function useListAgentWorkforceProposals<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary List dismissal and demotion proposals
+ * @summary List workforce proposals
  */
 
 export function useListAgentWorkforceProposals<
   TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: ListAgentWorkforceProposalsParams,
@@ -14377,7 +14429,7 @@ export const getApproveAgentWorkforceProposalUrl = (
 };
 
 /**
- * Applies the stage. Retiring an agent that other agents nest needs confirm_nested. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+ * Applies the stage. Retiring an agent that other agents nest needs confirm_nested. A feedback_report proposal is published to its listing version (an agent manager only). A hire_listing proposal is approved by hiring (the hire wizard settles it), so it is refused here. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
  * @summary Approve a workforce proposal and apply its stage
  */
 export const approveAgentWorkforceProposal = async (
@@ -14674,7 +14726,7 @@ export const getRejectAgentWorkforceProposalUrl = (
 };
 
 /**
- * Keeps the agent; a watch flag the proposal raised is cleared. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+ * Keeps the agent; a watch flag the proposal raised is cleared. For a hire_listing or feedback_report proposal it discards the proposal (an agent manager only). Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
  * @summary Reject a workforce proposal
  */
 export const rejectAgentWorkforceProposal = async (

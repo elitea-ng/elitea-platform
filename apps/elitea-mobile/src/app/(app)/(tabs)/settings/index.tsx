@@ -11,6 +11,7 @@ import { displayHost } from '@/features/connect/connectFlow';
 import { useProjectLabel } from '@/features/projects/ProjectChip';
 import { useActiveWorkspace } from '@/features/workspaces/activeWorkspace';
 import { SettingsList } from '@/features/settings/SettingsList';
+import { useWorkforceAvailable } from '@/features/workforce/useWorkforceAvailable';
 import { UsageCard } from '@/features/usage/UsageCard';
 import { usePolicy } from '@/security/policy';
 import { useSelfProfile } from '@/state/selfIdentity';
@@ -37,6 +38,8 @@ export default function SettingsScreen() {
   const supportContact = useSupportContact();
   // Client contract 1.3: memory and usage.
   const contract13 = speaksContract(useWorkspaceInfo()?.discovery, 1, 3);
+  // Client contract 1.56: the workforce proposals of the project.
+  const workforceAvailable = useWorkforceAvailable();
 
   const onLogOut = () => {
     Alert.alert(
@@ -92,6 +95,7 @@ export default function SettingsScreen() {
         securityFooter={`${POLICY_SOURCE_TEXT[source]}${managed ? ' ' + MANAGED_TEXT : ''}`}
         usage={contract13 && projectId !== null ? <UsageCard projectId={projectId} /> : null}
         onMemory={contract13 && projectId !== null ? () => router.push('/memory') : null}
+        onWorkforce={workforceAvailable && projectId !== null ? () => router.push('/workforce-proposals') : null}
         // A developer token is no device session: only a native sign-in lists devices.
         onDevices={credentialKind !== null && credentialKind !== 'pat' ? () => router.push('/devices') : null}
         onAbout={() => router.push('/about')}

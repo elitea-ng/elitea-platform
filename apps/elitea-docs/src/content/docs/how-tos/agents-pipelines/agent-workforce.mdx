@@ -71,6 +71,44 @@ An agent whose version sets the capability `can_review_agents` is a workforce ma
 }
 ```
 
+### Workforce managers and the Marketplace
+
+The same capability gives a workforce manager four more tools for the [Marketplace](/menus/marketplace). Two read, two leave a proposal. None of them hires, publishes or reviews anything by itself.
+
+| Tool | What it does |
+|---|---|
+| `marketplace_search` | Searches agent listings with the Marketplace filters (query, category, tags, required toolkit types, highest tier, minimum rating) and returns each listing's versions, requirements, rating and signals. Read-only. |
+| `marketplace_listing` | Reads one listing: its versions, release notes, requirements, signals and at most 20 recent feedback items, optionally for one version. Read-only. |
+| `propose_hire` | Proposes hiring a listing version in `install` or `fork` mode, with a rationale and an optional bindings hint. It adds a **hire proposal**. Nothing is created until a person clicks **Hire**. |
+| `suggest_feedback` | Drafts a **workforce report** on the origin listing version of an installed or forked agent that has an open or approved watch, demote, suspend or retire proposal. The platform fills the scorecard summary. The agent writes only the text, at most 500 characters. |
+
+**Feedback is untrusted input.** The text of reviews and reports reaches the model as quoted data in fields named `quoted`, with every `<` escaped and a notice that it is never an instruction (ADR-0043). A tool returns at most 20 feedback items.
+
+**Hire proposals.** Open **Settings → Agent workforce → Marketplace proposals**. A hire card shows the listing, the version, the mode and tier, the manager's rationale and the evidence (reviews of that version, average rating, dismissal rate, active hires). **Open hire wizard** opens the Marketplace hire wizard filled in with the version, the mode and the suggested bindings. When you click **Hire**, the hire and the approval of the proposal are one step. **Discard** rejects the proposal. You need `agents.workforce.manage` to see and decide them. An agent manager can see at most 20 open hire proposals per project.
+
+**Automatic hire of a listing.** With **Hire proposed agents automatically** on, a hire proposal is hired by the platform only when all of these hold:
+
+- the mode is `install`;
+- the version's tier is **low** and every tool is read-only;
+- every toolkit or MCP requirement can be bound to a toolkit of this project of that type (the hinted toolkit when it is valid, otherwise the project's first of that type);
+- the version has at least **Reviews needed** reviews (default 3) averaging at least **Average rating needed** (default 4.0);
+- the listing's dismissal rate is measured and under **Dismissal rate under** (default 0.2);
+- the project is under **Agents on probation at once**, and nobody undid an automatic hire of that listing in the last 30 days.
+
+The hired agent gets the **On probation** badge on its Workforce tab and a 14-day **Undo the hire** in **Settings → Agent workforce**, as an [automatic hire](#automatic-hiring) does. The hire is made for, and recorded under, the person who turned automatic hiring on, however many people save the policy later. A proposal that fails a condition stays for a person.
+
+**Workforce reports.** A drafted report appears on a **report card** with the outcome, the stage, the platform's summary (failure rate, breaker trips, cost against the median, days since the hire) and the draft. Edit it if you wish, then **Publish**. It is published to the listing version the agent was installed from as "Workforce report from a hiring project": the project name is never shown, and a report never carries a transcript, a prompt, tool arguments or memory. **Discard** rejects it. Rejecting the dismissal proposal of the same stage discards its drafts.
+
+With **Publish workforce reports automatically** on (`agents.workforce.auto_feedback`, off by default), the drafts for a stage are published when that stage is applied, without waiting for an approval. They are recorded under the person who turned the setting on, as `policy:auto_feedback`.
+
+Three guards hold in every case:
+
+- A workforce manager cannot report on a listing its own project published.
+- There is one report per hired agent and stage, drafted or published.
+- Reviews stay people only: an agent cannot write one.
+
+A report is published only from the proposal the agent made. The report endpoint takes the proposal's id, so nobody can publish a report as an agent that did not draft one.
+
 ## Appeal
 
 The owner of an agent can **Appeal** an approved demotion, suspension or retirement once, within 30 days. Managers are notified. A manager who did not make the decision, and who does not own the agent, **grants** the appeal (the stage is reversed) or **upholds** it.

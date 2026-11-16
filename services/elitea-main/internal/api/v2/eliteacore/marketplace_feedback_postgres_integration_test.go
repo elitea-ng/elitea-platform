@@ -45,6 +45,21 @@ func (moderatorResolver) ResolvePermissions(_ context.Context, principal auth.Us
 	return auth.PermissionResolution{UserID: 1, Permissions: nil}, nil
 }
 
+// managesAgents is the agent manager check of the fixture's handler: the
+// reviewers 11 and 12, the publisher 7 and the administrator hold
+// agents.workforce.manage; the reader 13 does not.
+func managesAgents(r *http.Request, _ string) (bool, error) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		return false, nil
+	}
+	switch user.ID {
+	case "7", "11", "12", strconv.Itoa(moderatorUser):
+		return true, nil
+	}
+	return false, nil
+}
+
 type feedbackFixture struct {
 	*marketplaceHarness
 	listing  string
@@ -99,7 +114,8 @@ ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`, id, fmt.Sprintf("u%d@examp
 	if f.v1 == "" || f.v2 == "" {
 		t.Fatalf("versions = %v", versionsOf(h.detail(f.listing)))
 	}
-	f.handler = eliteacore.NewHandler(h.pool, eliteacore.WithPermissionResolver(moderatorResolver{}))
+	f.handler = eliteacore.NewHandler(h.pool, eliteacore.WithPermissionResolver(moderatorResolver{}),
+		eliteacore.WithWorkforceManagerCheck(managesAgents))
 	return f
 }
 
@@ -152,6 +168,28 @@ VALUES ($1, 'a seeded agent', $2) RETURNING id`, project), name, project).Scan(&
 	if _, err := f.pool.Exec(ctx, fmt.Sprintf(`INSERT INTO p_%d.application_versions (application_id, name, status, author_id, meta)
 VALUES ($1, 'v1', 'published', 1, $2::jsonb)`, project), id, meta); err != nil {
 		f.t.Fatalf("seed the agent version: %v", err)
+	}
+	return id
+}
+
+// draftReport stores the feedback_report proposal a workforce manager's
+// suggest_feedback leaves (shared 0253), for the tests that start at the
+// publish. It answers the proposal id the report endpoint takes.
+func (f *feedbackFixture) draftReport(project int, manager, hired int64, version, stage, outcome, text string) int64 {
+	f.t.Helper()
+	versionID, _ := strconv.ParseInt(version, 10, 64)
+	payload, _ := json.Marshal(map[string]any{
+		"outcome": outcome, "reason_code": "stage:" + stage,
+		"scorecard": map[string]any{"failure_rate": 0.9, "breaker_trips": 2, "cost_vs_median": 1.5, "active_days": 12},
+	})
+	var id int64
+	if err := f.pool.QueryRow(context.Background(), `
+INSERT INTO elitea_lifecycle.agent_workforce_proposals
+    (project_id, application_id, kind, stage, source, proposer_application_id, execution_id, rationale, narrowing,
+     evidence, evidence_digest, listing_id, listing_version_id, payload)
+VALUES ($1, $2, 'feedback_report', $3, 'workforce_manager', $4, 'exec-test', $5, '{}'::jsonb, '{}'::jsonb, $6, $7, $8, $9::jsonb)
+RETURNING id`, project, hired, stage, manager, text, strings.Repeat("a", 64), f.listingN, versionID, string(payload)).Scan(&id); err != nil {
+		f.t.Fatalf("draft the report: %v", err)
 	}
 	return id
 }
@@ -298,10 +336,8 @@ func TestNoOtherProjectNameIsReturned(t *testing.T) {
 	if status, body := f.post(11, 3, "marketplace_feedback", map[string]any{"rating": 4, "body": "Good."}); status != http.StatusCreated {
 		t.Fatalf("review = %d %v", status, body)
 	}
-	if status, body := f.post(11, 3, "marketplace_feedback_report", map[string]any{
-		"hired_agent_id": 501, "agent_id": manager, "outcome": "dismissed", "stage": "dismissal",
-		"reason_code": "too_many_failures", "text": "It kept failing on large repositories.",
-	}); status != http.StatusCreated {
+	draft := f.draftReport(3, manager, 501, f.v1, "retire", "dismissed", "It kept failing on large repositories.")
+	if status, body := f.post(11, 3, "marketplace_feedback_report", map[string]any{"proposal_id": strconv.FormatInt(draft, 10)}); status != http.StatusCreated {
 		t.Fatalf("report = %d %v", status, body)
 	}
 
@@ -364,15 +400,14 @@ func TestWorkforceReportAuthorPaths(t *testing.T) {
 	f.hire(3, 502, f.v1)
 	manager := f.workforceManager(3, "Warden", true)
 	plain := f.workforceManager(3, "Plain helper", false)
-	report := func(user int, agent int64, hired int, stage string) (int, map[string]any) {
-		return f.post(user, 3, "marketplace_feedback_report", map[string]any{
-			"hired_agent_id": hired, "agent_id": agent, "outcome": "dismissed", "stage": stage, "text": "It failed.",
-			"scorecard": map[string]any{"failure_rate": 0.9},
-		})
+	// A report publishes only from the proposal the agent drafted (ADR-0051
+	// decision 6, #1632): the request names the proposal, never the agent.
+	report := func(user int, proposal int64) (int, map[string]any) {
+		return f.post(user, 3, "marketplace_feedback_report", map[string]any{"proposal_id": strconv.FormatInt(proposal, 10)})
 	}
 
 	// An agent and the approving person.
-	status, body := report(11, manager, 501, "dismissal")
+	status, body := report(11, f.draftReport(3, manager, 501, f.v1, "retire", "dismissed", "It failed."))
 	if status != http.StatusCreated {
 		t.Fatalf("agent report = %d %v", status, body)
 	}
@@ -386,27 +421,32 @@ FROM elitea_marketplace.listing_feedback WHERE id = $1`, body["id"]).Scan(&kind,
 	if kind != "agent" || label != "" || author != 11 || agentID != manager || strconv.FormatInt(version, 10) != f.v1 {
 		t.Errorf("agent report row = %s %q %d %d %d, want agent, the approver 11, the manager and the hired version", kind, label, author, agentID, version)
 	}
-	// The scorecard is the platform's, never the request's.
+	// The scorecard is the platform's, from the proposal, never the request's.
 	var scorecard string
-	if err := f.pool.QueryRow(ctx, `SELECT scorecard::text FROM elitea_marketplace.listing_feedback WHERE id = $1`, body["id"]).Scan(&scorecard); err != nil || scorecard != "{}" {
-		t.Errorf("scorecard = %q (%v), want the empty summary the request cannot fill", scorecard, err)
+	if err := f.pool.QueryRow(ctx, `SELECT scorecard::text FROM elitea_marketplace.listing_feedback WHERE id = $1`, body["id"]).Scan(&scorecard); err != nil ||
+		!strings.Contains(scorecard, "failure_rate") || !strings.Contains(scorecard, "active_days") {
+		t.Errorf("scorecard = %q (%v), want the platform's summary of the proposal", scorecard, err)
 	}
 
-	// One report per hired agent and stage.
-	if status, body = report(11, manager, 501, "dismissal"); status != http.StatusConflict || body["code"] != "already_done" {
-		t.Errorf("a second report for the stage = %d %v, want 409", status, body)
+	// One report per hired agent and stage (the store holds it; the proposals
+	// table holds it too, so a second draft for the stage cannot even be made).
+	if _, err := marketplace.SaveWorkforceReport(ctx, f.pool, marketplace.ReportInput{
+		ListingID: f.listingN, ProjectID: 3, HiredEntityID: 501, AgentID: manager, ApprovedBy: 11,
+		Outcome: marketplace.OutcomeDismissed, Stage: "retire", Body: "Again.",
+	}); err != marketplace.ErrAlreadyDone {
+		t.Errorf("a second report for the stage = %v, want ErrAlreadyDone", err)
 	}
-	if status, _ = report(11, manager, 501, "demotion"); status != http.StatusCreated {
+	if status, _ = report(11, f.draftReport(3, manager, 501, f.v1, "demote", "demoted", "Another stage.")); status != http.StatusCreated {
 		t.Errorf("another stage = %d, want 201", status)
 	}
 	// An agent that is not a workforce manager, a hired agent the project does not have.
-	if status, body = report(11, plain, 502, "dismissal"); status != http.StatusForbidden || body["code"] != "not_workforce_manager" {
+	if status, body = report(11, f.draftReport(3, plain, 502, f.v1, "retire", "dismissed", "x")); status != http.StatusForbidden || body["code"] != "not_workforce_manager" {
 		t.Errorf("a plain agent = %d %v, want 403 not_workforce_manager", status, body)
 	}
-	if status, body = report(11, manager, 999, "dismissal"); status != http.StatusForbidden || body["code"] != "not_verified_hire" {
+	if status, body = report(11, f.draftReport(3, manager, 999, f.v1, "retire", "dismissed", "x")); status != http.StatusForbidden || body["code"] != "not_verified_hire" {
 		t.Errorf("an agent that was not hired = %d %v, want 403 not_verified_hire", status, body)
 	}
-	if status, _ = f.post(11, 3, "marketplace_feedback_report", map[string]any{"hired_agent_id": 502, "agent_id": manager, "outcome": "fired", "stage": "x"}); status != http.StatusBadRequest {
+	if status, _ = report(11, f.draftReport(3, manager, 502, f.v1, "watch", "fired", "x")); status != http.StatusBadRequest {
 		t.Errorf("an unknown outcome = %d, want 400", status)
 	}
 

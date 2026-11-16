@@ -1153,7 +1153,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 252: shared/0252_marketplace_feedback.sql, the feedback per listing version,
 	// its moderation audit trail, the daily listing signals and the dismissal
 	// column of installs (ADR-0051 M5, issue 1631). No permission.
-	require.EqualValues(t, 252, Head(shared))
+	//
+	// 253: shared/0253_marketplace_workforce.sql, the hire_listing and
+	// feedback_report kinds of workforce proposals (a workforce manager's
+	// Marketplace tools), the auto_feedback switch and the auto_hire numbers of
+	// a listing on the workforce policy (ADR-0051 M6, issue 1632). No
+	// permission: deciding them is agents.workforce.manage, granted by 0236.
+	require.EqualValues(t, 253, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

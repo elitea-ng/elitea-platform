@@ -42,26 +42,23 @@
  */
 import * as zod from "zod";
 
-export const marketplaceReportRequestStageMax = 64;
-
-export const marketplaceReportRequestReasonCodeMax = 64;
-
 export const marketplaceReportRequestTextMax = 500;
 
 export const MarketplaceReportRequest = zod
   .object({
-    hired_agent_id: zod.int().describe("The hired agent the report is about."),
-    agent_id: zod.int().describe("The workforce manager that wrote it."),
-    outcome: zod.string().describe("`kept`, `demoted` or `dismissed`."),
-    stage: zod.string().max(marketplaceReportRequestStageMax),
-    reason_code: zod
+    proposal_id: zod
       .string()
-      .max(marketplaceReportRequestReasonCodeMax)
-      .optional(),
-    text: zod.string().max(marketplaceReportRequestTextMax).optional(),
+      .describe(
+        "The feedback_report proposal a workforce manager drafted with suggest_feedback. The agent, the hired agent, the outcome, the stage and the scorecard summary come from it, never from this request.\n",
+      ),
+    text: zod
+      .string()
+      .max(marketplaceReportRequestTextMax)
+      .optional()
+      .describe("Replaces the agent's draft: the approving person edited it."),
   })
   .describe(
-    "A workforce report that the caller approves. The scorecard summary is filled by the platform, not by the request (internal/api/v2/eliteacore/marketplace_feedback.go).\n",
+    "A workforce report that the caller publishes by approving the proposal it came from (internal/api/v2/eliteacore/marketplace_feedback.go).\n",
   );
 
 export type MarketplaceReportRequest = zod.input<

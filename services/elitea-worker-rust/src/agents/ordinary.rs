@@ -925,6 +925,7 @@ impl OrdinaryNativeAgentAssembler {
             super::hand_floor_tool::TOOLSET_NAME.to_owned(),
             super::propose_agent_tool::TOOLSET_NAME.to_owned(),
             super::propose_dismissal_tool::TOOLSET_NAME.to_owned(),
+            super::marketplace_workforce_tool::TOOLSET_NAME.to_owned(),
         ]);
         let mut frozen = freeze_toolsets(toolsets, "elitea_ordinary_tool_binding")
             .await
@@ -1011,6 +1012,21 @@ impl OrdinaryNativeAgentAssembler {
         ) {
             frozen.extend(
                 freeze_toolsets(vec![workforce], "elitea_ordinary_tool_binding")
+                    .await
+                    .map_err(tool_binding_error)?,
+            );
+        }
+        // The Marketplace tools of the same workforce manager (ADR-0051
+        // decision 6, #1632): search and read a listing, propose a hire,
+        // draft a workforce report. Bound the same way and on the same
+        // capability; they hire and publish nothing, a person decides.
+        if let Some(marketplace) = super::marketplace_workforce_tool::toolset(
+            profile.can_review_agents(),
+            &self.platform,
+            runtime_context,
+        ) {
+            frozen.extend(
+                freeze_toolsets(vec![marketplace], "elitea_ordinary_tool_binding")
                     .await
                     .map_err(tool_binding_error)?,
             );

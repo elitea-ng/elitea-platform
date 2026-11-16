@@ -27,7 +27,7 @@ import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { BindingsStep, ModeStep, ReviewStep, VersionStep } from './HireSteps';
-import { hireErrorMessage, type HireMode } from './hireModel';
+import { hireErrorMessage, type HireMode, type HireProposalPrefill } from './hireModel';
 import { STEPS, useHireWizardState, type HireWizardState, type Step } from './useHireWizardState';
 import { useBindingTargets } from './useBindingTargets';
 
@@ -50,6 +50,10 @@ export interface HireWizardProps {
   readonly projectId: string | undefined;
   readonly detail: MarketplaceListingDetail;
   readonly initialMode: HireMode;
+  /** A workforce manager's hire proposal this hire fills in and settles (ADR-0051 decision 6). */
+  readonly proposal?: HireProposalPrefill;
+  /** Called once the hire went through, for a caller that shows proposals. */
+  readonly onHired?: () => void;
 }
 
 function Actions({
@@ -147,9 +151,9 @@ function Body({ state, detail, optionsFor }: BodyProps): ReactNode {
   );
 }
 
-export function HireWizard({ open, onClose, projectId, detail, initialMode }: HireWizardProps): ReactNode {
+export function HireWizard({ open, onClose, projectId, detail, initialMode, proposal, onHired }: HireWizardProps): ReactNode {
   const navigate = useNavigate();
-  const state = useHireWizardState(open, projectId, detail, initialMode);
+  const state = useHireWizardState(open, projectId, detail, initialMode, proposal, onHired);
   const targets = useBindingTargets(projectId, open);
 
   const openAgent = (): void => {

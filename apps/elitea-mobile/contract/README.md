@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.56
+
+| Area | What |
+|---|---|
+| Workforce managers on the Marketplace (issue 1632, ADR-0051 M6) | `listAgentWorkforceProposals` with `kind=marketplace` answers the open hire proposals and drafted reports of the project (agent managers only; others get 403); `getAgentWorkforce` answers an agent's probation (`auto_hired_at`, `probation_reviewed_at`). The app shows both read-only (`src/api/queries/workforce.ts`): a Marketplace proposals screen and a Probation badge. Hiring and publishing stay on web and desktop. Text an agent wrote is untrusted and shown as plain text. A server before 1.56 has neither; they are left out. |
+
 ## Client contract 1.55
 
 | Area | What |

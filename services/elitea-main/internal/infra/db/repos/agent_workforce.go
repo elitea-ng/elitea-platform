@@ -36,6 +36,8 @@ type AgentWorkforce struct {
 	// suspensionChanged is the kill switch gate's invalidation, told every
 	// suspension the ladder wrote or resumed.
 	suspensionChanged func(id int64)
+	// hirer hires a Marketplace listing for the auto_hire policy (#1632).
+	hirer ListingHirer
 }
 
 // NewAgentWorkforce builds the store. A nil appender is refused.
@@ -120,26 +122,44 @@ type WorkforceProposal struct {
 	AppealDecidedAt       *time.Time               `json:"appeal_decided_at"`
 	AppealNote            *string                  `json:"appeal_note"`
 	CreatedAt             time.Time                `json:"created_at"`
+	// ListingID and ListingVersionID name the Marketplace listing version of a
+	// hire_listing or feedback_report proposal (shared 0253, ADR-0051
+	// decision 6); nil for the ladder's kinds. A hire_listing proposal has no
+	// agent yet (ApplicationID 0, empty Stage). Payload holds what the kind
+	// carries: the hire's mode, bindings hint and listing evidence, or the
+	// report's outcome, reason code and platform-filled scorecard summary.
+	ListingID        *int64         `json:"listing_id"`
+	ListingVersionID *int64         `json:"listing_version_id"`
+	Payload          map[string]any `json:"payload"`
 }
 
 const workforceProposalColumns = `
-p.id, p.project_id, p.application_id, p.kind, p.stage, p.source, p.proposed_by_user_id,
+p.id, p.project_id, COALESCE(p.application_id, 0), p.kind, COALESCE(p.stage, ''), p.source, p.proposed_by_user_id,
 p.proposer_application_id, p.execution_id, p.rationale, p.narrowing, p.evidence, p.evidence_digest,
 p.status, p.owner_comment, p.decided_by_user_id, p.decided_at, p.decision_note, p.applied,
 p.appeal_state, p.appeal_reason, p.appealed_by_user_id, p.appealed_at, p.appeal_decided_by_user_id,
-p.appeal_decided_at, p.appeal_note, p.created_at, p.policy_rule`
+p.appeal_decided_at, p.appeal_note, p.created_at, p.policy_rule, p.listing_id, p.listing_version_id, p.payload`
 
 func scanWorkforceProposal(row pgx.Row) (WorkforceProposal, error) {
 	var (
-		p                            WorkforceProposal
-		narrowing, evidence, applied []byte
+		p                                     WorkforceProposal
+		narrowing, evidence, applied, payload []byte
 	)
 	if err := row.Scan(&p.ID, &p.ProjectID, &p.ApplicationID, &p.Kind, &p.Stage, &p.Source, &p.ProposedByUserID,
 		&p.ProposerApplicationID, &p.ExecutionID, &p.Rationale, &narrowing, &evidence, &p.EvidenceDigest,
 		&p.Status, &p.OwnerComment, &p.DecidedByUserID, &p.DecidedAt, &p.DecisionNote, &applied,
 		&p.AppealState, &p.AppealReason, &p.AppealedByUserID, &p.AppealedAt, &p.AppealDecidedByUserID,
-		&p.AppealDecidedAt, &p.AppealNote, &p.CreatedAt, &p.PolicyRule); err != nil {
+		&p.AppealDecidedAt, &p.AppealNote, &p.CreatedAt, &p.PolicyRule, &p.ListingID, &p.ListingVersionID,
+		&payload); err != nil {
 		return WorkforceProposal{}, err
+	}
+	if len(payload) > 0 {
+		if err := json.Unmarshal(payload, &p.Payload); err != nil {
+			return WorkforceProposal{}, fmt.Errorf("agent workforce: decode the payload: %w", err)
+		}
+	}
+	if p.Payload == nil {
+		p.Payload = map[string]any{}
 	}
 	if err := json.Unmarshal(narrowing, &p.Narrowing); err != nil {
 		return WorkforceProposal{}, fmt.Errorf("agent workforce: decode the narrowing: %w", err)
@@ -160,7 +180,33 @@ type WorkforceFilter struct {
 	// Status: "" is the open ones (proposed, asked_owner); all is every one.
 	Status        string
 	ApplicationID int64
+	// Kind: "" is the ladder's proposals (dismiss and demote); hire_listing
+	// or feedback_report is that kind; marketplace is both of those; all is
+	// every kind.
+	Kind          string
 	Limit, Offset int
+}
+
+// kindWhere is the SQL condition of a list's Kind filter.
+func kindWhere(kind string) (string, error) {
+	switch kind {
+	case "":
+		return ` AND p.kind IN ('dismiss', 'demote')`, nil
+	case "all":
+		return "", nil
+	case "marketplace":
+		return ` AND p.kind IN ('hire_listing', 'feedback_report')`, nil
+	case agentworkforce.KindHireListing:
+		return ` AND p.kind = 'hire_listing'`, nil
+	case agentworkforce.KindFeedbackReport:
+		return ` AND p.kind = 'feedback_report'`, nil
+	case "dismiss":
+		return ` AND p.kind = 'dismiss'`, nil
+	case "demote":
+		return ` AND p.kind = 'demote'`, nil
+	}
+	return "", agentworkforce.Refuse(agentworkforce.InvalidCode,
+		"kind is dismiss, demote, hire_listing, feedback_report, marketplace or all.")
 }
 
 // ListProposals answers a project's proposals, newest first.
@@ -170,6 +216,11 @@ func (s *AgentWorkforce) ListProposals(ctx context.Context, projectID int64, fil
 		limit = 50
 	}
 	where := `p.project_id = $1 AND ($2::bigint = 0 OR p.application_id = $2)`
+	kindCondition, err := kindWhere(filter.Kind)
+	if err != nil {
+		return nil, 0, err
+	}
+	where += kindCondition
 	switch filter.Status {
 	case "":
 		where += ` AND p.status IN ('proposed', 'asked_owner')`
@@ -220,7 +271,9 @@ func (s *AgentWorkforce) nameProposals(ctx context.Context, projectID int64, pro
 	}
 	ids := make([]int64, 0, len(proposals))
 	for _, p := range proposals {
-		ids = append(ids, p.ApplicationID)
+		if p.ApplicationID > 0 {
+			ids = append(ids, p.ApplicationID)
+		}
 	}
 	names := applicationNames(ctx, s.pool, projectID, ids)
 	for i := range proposals {
@@ -571,6 +624,11 @@ func (s *AgentWorkforce) Approve(ctx context.Context, decision Decision) (Workfo
 	if err != nil {
 		return WorkforceProposal{}, err
 	}
+	if marketplaceKind, err := s.proposalKind(ctx, decision.ProjectID, decision.ProposalID); err != nil {
+		return WorkforceProposal{}, err
+	} else if agentworkforce.IsMarketplaceKind(marketplaceKind) {
+		return s.approveMarketplace(ctx, decision, marketplaceKind, note)
+	}
 	var (
 		decided  WorkforceProposal
 		affected []int64
@@ -629,6 +687,9 @@ RETURNING `+workforceProposalColumns, decision.ProjectID, proposal.ID, decision.
 	}
 	s.notify(affected...)
 	s.notifyOwners(ctx, decided, "approved")
+	// Under agents.workforce.auto_feedback the reports drafted for this stage
+	// publish now (ADR-0051 decision 6).
+	s.publishAutoReports(ctx, decided.ProjectID, decided.ApplicationID, decided.Stage)
 	return decided, nil
 }
 
@@ -644,6 +705,9 @@ func (s *AgentWorkforce) AskOwner(ctx context.Context, decision Decision) (Workf
 		proposal, err := readWorkforceProposal(ctx, tx, decision.ProjectID, decision.ProposalID, true)
 		if err != nil {
 			return err
+		}
+		if agentworkforce.IsMarketplaceKind(proposal.Kind) {
+			return errLadderOnly
 		}
 		if proposal.Status != agentworkforce.StatusProposed {
 			return agentworkforce.Refuse(agentworkforce.StateConflictCode, "Only a new proposal can be routed to the owner.")
@@ -681,6 +745,9 @@ func (s *AgentWorkforce) OwnerComment(ctx context.Context, projectID, proposalID
 		if err != nil {
 			return err
 		}
+		if agentworkforce.IsMarketplaceKind(proposal.Kind) {
+			return errLadderOnly
+		}
 		if proposal.Status != agentworkforce.StatusAskedOwner {
 			return agentworkforce.Refuse(agentworkforce.StateConflictCode, "The proposal is not waiting for the owner.")
 		}
@@ -709,6 +776,11 @@ func (s *AgentWorkforce) close(ctx context.Context, decision Decision, status, a
 	if err != nil {
 		return WorkforceProposal{}, err
 	}
+	if marketplaceKind, err := s.proposalKind(ctx, decision.ProjectID, decision.ProposalID); err != nil {
+		return WorkforceProposal{}, err
+	} else if agentworkforce.IsMarketplaceKind(marketplaceKind) {
+		return s.rejectMarketplace(ctx, decision, note)
+	}
 	var updated WorkforceProposal
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
 		proposal, err := readWorkforceProposal(ctx, tx, decision.ProjectID, decision.ProposalID, true)
@@ -734,6 +806,11 @@ RETURNING `+workforceProposalColumns, decision.ProjectID, proposal.ID, status, d
 		if err != nil {
 			return fmt.Errorf("agent workforce: record the decision: %w", err)
 		}
+		if status == agentworkforce.StatusRejected {
+			if err := discardReports(ctx, tx, proposal, decision.Actor.UserID); err != nil {
+				return err
+			}
+		}
 		return s.append(ctx, tx, decision.ProjectID, action, personRef(decision.Actor.UserID), proposalRef(proposal.ID), "",
 			"stage:"+proposal.Stage, "evidence:"+proposal.EvidenceDigest)
 	})
@@ -752,6 +829,9 @@ func (s *AgentWorkforce) Appeal(ctx context.Context, projectID, proposalID, user
 		proposal, err := readWorkforceProposal(ctx, tx, projectID, proposalID, true)
 		if err != nil {
 			return err
+		}
+		if agentworkforce.IsMarketplaceKind(proposal.Kind) {
+			return errLadderOnly
 		}
 		agent, err := readWorkforceAgent(ctx, tx, projectID, proposal.ApplicationID, false)
 		if err != nil {
@@ -815,6 +895,9 @@ func (s *AgentWorkforce) DecideAppeal(ctx context.Context, decision AppealDecisi
 		proposal, err := readWorkforceProposal(ctx, tx, decision.ProjectID, decision.ProposalID, true)
 		if err != nil {
 			return err
+		}
+		if agentworkforce.IsMarketplaceKind(proposal.Kind) {
+			return errLadderOnly
 		}
 		if proposal.AppealState == nil || *proposal.AppealState != agentworkforce.AppealOpen {
 			return agentworkforce.Refuse(agentworkforce.AppealClosedCode, "There is no open appeal on this proposal.")
@@ -946,6 +1029,9 @@ func (s *AgentWorkforce) append(ctx context.Context, tx pgx.Tx, projectID int64,
 
 // notifyOwners tells the agent's owners about a change. Best effort.
 func (s *AgentWorkforce) notifyOwners(ctx context.Context, proposal WorkforceProposal, what string) {
+	if proposal.ApplicationID <= 0 {
+		return
+	}
 	agent, err := readWorkforceAgent(ctx, s.pool, proposal.ProjectID, proposal.ApplicationID, false)
 	if err != nil {
 		return

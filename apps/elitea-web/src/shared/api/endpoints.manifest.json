@@ -4509,7 +4509,9 @@
       "source": "generated",
       "responseSchema": "MarketplaceFeedbackSaved",
       "fixture": null,
-      "usedBy": []
+      "usedBy": [
+        "features/agent-workforce"
+      ]
     },
     {
       "$comment": "WRITE. The publisher replies to or flags an item; an administrator flags, hides and shows it again. Every change writes an audit event.",

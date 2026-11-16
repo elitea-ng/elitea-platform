@@ -138,6 +138,10 @@ type Handler struct {
 	// administrator asks (marketplace_yank.go, ADR-0051 decision 4). nil
 	// answers that the suspension is unavailable.
 	suspender ListingSuspender
+	// holdsWorkforceManage answers whether the caller holds
+	// agents.workforce.manage in a project (marketplace_feedback.go). nil
+	// refuses every caller.
+	holdsWorkforceManage func(r *http.Request, projectID string) (bool, error)
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so
@@ -283,6 +287,13 @@ func WithDelegatedAuthToolkitSettingsResolver(resolver DelegatedAuthToolkitSetti
 			handler.delegatedAuth = resolver
 		}
 	}
+}
+
+// WithWorkforceManagerCheck sets the check that the caller manages agents in a
+// project (agents.workforce.manage). The publish of a workforce report takes it
+// (ADR-0051 decision 6); without it the route refuses every caller.
+func WithWorkforceManagerCheck(check func(r *http.Request, projectID string) (bool, error)) Option {
+	return func(handler *Handler) { handler.holdsWorkforceManage = check }
 }
 
 // WithObjectStore wires S20b's icon byte path (UploadIcon/DeleteIcon) onto

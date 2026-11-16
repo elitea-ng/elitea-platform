@@ -50,6 +50,8 @@ func writeFeedbackError(w http.ResponseWriter, err error) bool {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "feedback on your own listing is not allowed", "code": "own_listing"})
 	case errors.Is(err, marketplace.ErrNotWorkforceManager):
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "the agent is not a workforce manager of this project", "code": "not_workforce_manager"})
+	case errors.Is(err, marketplace.ErrProposalNotOpen):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "the proposal was decided already", "code": "proposal_not_open"})
 	case errors.Is(err, marketplace.ErrAlreadyDone):
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "already done", "code": "already_done"})
 	case errors.Is(err, marketplace.ErrInvalidRequest):
@@ -231,19 +233,21 @@ func (h *Handler) MarketplaceFeedbackReview(w http.ResponseWriter, r *http.Reque
 }
 
 type reportBody struct {
-	HiredAgentID int64  `json:"hired_agent_id"`
-	AgentID      int64  `json:"agent_id"`
-	Outcome      string `json:"outcome"`
-	Stage        string `json:"stage"`
-	ReasonCode   string `json:"reason_code"`
-	Text         string `json:"text"`
+	// ProposalID is the feedback_report proposal a workforce manager drafted
+	// with suggest_feedback. The agent, the hired agent, the outcome, the stage
+	// and the scorecard summary all come from it, never from this request.
+	ProposalID string `json:"proposal_id"`
+	// Text, when present, replaces the agent's draft: the person edited it.
+	Text *string `json:"text"`
 }
 
 // MarketplaceFeedbackReport answers POST
 // /elitea_core/marketplace_feedback_report/prompt_lib/{projectID}/{listingID}:
-// a workforce manager's report on a hired agent, published by the person who
-// approves it (ADR-0051 decision 6). The scorecard summary is filled by the
-// platform, never by the request, and the auto_feedback policy path is not
+// a person who manages agents publishes a workforce manager's drafted report
+// (ADR-0051 decision 6). The report originates from the proposal the agent made
+// with suggest_feedback: a caller cannot name an agent, a hired agent, a stage
+// or a scorecard, so cannot publish as an agent that did not draft one. The
+// route takes agents.workforce.manage. The auto_feedback policy path is not
 // reachable from here: it is a call of the store by the platform.
 func (h *Handler) MarketplaceFeedbackReport(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
@@ -260,20 +264,38 @@ func (h *Handler) MarketplaceFeedbackReport(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
 	}
+	if h.holdsWorkforceManage == nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "only an agent manager publishes a workforce report", "code": "workforce_forbidden"})
+		return
+	}
+	manages, err := h.holdsWorkforceManage(r, strconv.FormatInt(projectID, 10))
+	if err != nil {
+		slog.ErrorContext(ctx, "marketplace: resolve the agent manager permission failed", "project_id", projectID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to check the permission"})
+		return
+	}
+	if !manages {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "only an agent manager publishes a workforce report", "code": "workforce_forbidden"})
+		return
+	}
+	proposalID, err := strconv.ParseInt(body.ProposalID, 10, 64)
+	if err != nil || proposalID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "proposal_id must be the id of a feedback_report proposal", "code": "proposal_required"})
+		return
+	}
 	caller := callerUserID(ctx)
 	if caller <= 0 {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "a signed-in person is required"})
 		return
 	}
-	id, err := marketplace.SaveWorkforceReport(ctx, h.pool, marketplace.ReportInput{
-		ListingID: listingID, ProjectID: projectID, HiredEntityID: body.HiredAgentID, AgentID: body.AgentID,
-		ApprovedBy: caller, Outcome: body.Outcome, Stage: body.Stage, ReasonCode: body.ReasonCode, Body: body.Text,
+	id, err := marketplace.PublishReportProposal(ctx, h.pool, marketplace.PublishReportInput{
+		ProjectID: projectID, ProposalID: proposalID, ListingID: listingID, ApprovedBy: caller, Text: body.Text,
 	})
 	if writeFeedbackError(w, err) {
 		return
 	}
 	if err != nil {
-		slog.ErrorContext(ctx, "marketplace: save the workforce report failed", "listing_id", listingID, "error", err)
+		slog.ErrorContext(ctx, "marketplace: publish the workforce report failed", "listing_id", listingID, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to save the report"})
 		return
 	}
