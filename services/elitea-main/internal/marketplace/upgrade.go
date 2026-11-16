@@ -228,7 +228,7 @@ func NewerVersion(ctx context.Context, db DB, listingID, versionID int64) (Store
 	err := db.QueryRow(ctx, `
 SELECT cv.version_id FROM elitea_marketplace.listing_versions cv
 JOIN elitea_marketplace.listings l ON l.id = cv.listing_id
-WHERE cv.listing_id = $1 AND cv.withdrawn_at IS NULL AND cv.state <> 'yanked' AND l.state = 'listed'
+WHERE cv.listing_id = $1 AND cv.withdrawn_at IS NULL AND cv.state = 'available' AND l.state = 'listed'
   AND (cv.published_at, cv.version_id) > (SELECT pv.published_at, pv.version_id FROM elitea_marketplace.listing_versions pv
                                           WHERE pv.listing_id = $1 AND pv.version_id = $2)
 ORDER BY cv.published_at DESC, cv.version_id DESC LIMIT 1`, listingID, versionID).Scan(&newest)

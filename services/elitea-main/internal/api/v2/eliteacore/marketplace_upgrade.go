@@ -560,9 +560,13 @@ func (h *Handler) settleInstall(ctx context.Context, projectID, appID int64) {
 			fmt.Sprintf("%s %s needs a person to approve the upgrade.%s", newer.ListingName, newer.Name, why))
 		return
 	}
+	installer := installerOf(ctx, h.pool, held)
+	if installer <= 0 {
+		return
+	}
 	result, _, code, msg := h.recordAndApplyUpgrade(ctx, upgradeRequest{
 		ProjectID: projectID, ApplicationID: appID, Held: held, Target: newer,
-		Bindings: held.Bindings, UserID: installerOf(ctx, h.pool, held), ApprovalReason: "marketplace_auto_upgrade", Automatic: true,
+		Bindings: boundFrom(carriedBindings(held.Bindings, newer.Requirements, nil)), UserID: installer, ApprovalReason: "marketplace_auto_upgrade", Automatic: true,
 	})
 	if code != "" {
 		slog.WarnContext(ctx, "marketplace settle: the automatic upgrade was refused", "application_id", appID, "code", code, "msg", msg)

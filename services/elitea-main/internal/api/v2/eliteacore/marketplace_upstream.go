@@ -238,7 +238,7 @@ SELECT id, name, COALESCE(agent_type, ''), COALESCE(instructions, ''), COALESCE(
        conversation_starters::text, llm_settings::text, pipeline_settings::text, soul::text, avatar_pack::text, COALESCE(meta::text, '{}')
 FROM %s.application_versions
 WHERE application_id = $1 AND COALESCE(status, '') <> 'embedded'
-ORDER BY (status = 'draft') DESC, id DESC LIMIT 1`, schema), applicationID).
+ORDER BY (COALESCE(status, '') = 'draft') DESC, id DESC LIMIT 1`, schema), applicationID).
 		Scan(&out.id, &out.name, &out.def.AgentType, &out.def.Instructions, &out.def.WelcomeMessage,
 			&starters, &llm, &pipeline, &soul, &avatar, &out.meta)
 	if err != nil {

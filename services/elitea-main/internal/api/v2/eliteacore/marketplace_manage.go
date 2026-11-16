@@ -127,7 +127,7 @@ SELECT state, state_changed_by FROM elitea_marketplace.listing_versions WHERE li
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
 		return
 	}
-	if body.State == marketplace.VersionYanked && !wasYanked {
+	if body.State == marketplace.VersionYanked && (!wasYanked || body.Suspend) {
 		h.announceYank(ctx, listingID, versionID, body.Reason, caller, body.Suspend)
 	}
 	slog.InfoContext(ctx, "marketplace: version state changed",
