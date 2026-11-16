@@ -1868,6 +1868,7 @@
   "pages.agents.latest.emptyFound.title": "No agents found.",
   "pages.agents.latest.error": "Failed to load agents.",
   "pages.agents.list.loadMore": "Load more",
+  "pages.agents.list.undoHire": "Undo hire",
   "pages.agents.myLiked.unavailable.description": "The public agents API does not yet support filtering by liked status.",
   "pages.agents.myLiked.unavailable.title": "Liked agents are not available yet.",
   "pages.agents.privateList.empty.description": "Create your first agent to get started. Agents combine a prompt, a model and the toolkits they are allowed to call.",
