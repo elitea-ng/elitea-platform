@@ -101,12 +101,6 @@ interface ToolCatalogueReadArgs {
 }
 
 /**
- * The catalogue tier of the "Tools" section (#440). It runs only for a
- * toolkit type that declares no tools of its own, which is the type that
- * publishes them at run time. Split out of `useToolkitFormCore` to keep that
- * function under the §3.5 complexity budget.
- */
-/**
  * A toolkit still being created has no id, so the read falls to the TYPE route,
  * and that route answers with the project's saved toolkits OF THAT TYPE. For an
  * MCP type those rows are other MCPs, not tools: they showed up as chips on the
@@ -117,6 +111,12 @@ function readsTypeRouteOfMcp(toolkitId: string | number | undefined, toolkitType
   return toolkitId === undefined && (toolkitType === 'mcp' || toolkitType.startsWith('mcp_'));
 }
 
+/**
+ * The catalogue tier of the "Tools" section (#440). It runs only for a
+ * toolkit type that declares no tools of its own, which is the type that
+ * publishes them at run time. Split out of `useToolkitFormCore` to keep that
+ * function under the §3.5 complexity budget.
+ */
 function useToolCatalogueRead(args: ToolCatalogueReadArgs): ToolCatalogueRead {
   const { projectId, toolkitId, toolkitType, staticToolNames, schemasAreFetching, schemasReadFailed, retrySchemasRead } = args;
 

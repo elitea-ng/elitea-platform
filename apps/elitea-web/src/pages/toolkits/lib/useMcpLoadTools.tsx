@@ -301,5 +301,9 @@ export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail 
       </Snackbar>
     </>
   ) : undefined;
-  return { onLoadTools: fetchTools, isLoadingTools: isLoading, canLoadTools, mcpAuthModal, mcpAuthStatus };
+  const onLoadTools = () => {
+    loginRequested.current = false;
+    fetchTools();
+  };
+  return { onLoadTools, isLoadingTools: isLoading, canLoadTools, mcpAuthModal, mcpAuthStatus };
 }

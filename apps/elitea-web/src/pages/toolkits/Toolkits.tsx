@@ -152,7 +152,7 @@ function usePagedToolkitRows(projectId: string | undefined, isMCP: boolean): Use
   // or a refetch on re-entry reads as an empty project and sends the person to Create (#2000).
   // While a later page is in flight `wire` is undefined and `totalCount` reads 0: that is "not known yet",
   // never "no more rows", or the redirect gate sends the person to Create mid load-more (#2092).
-  const nextPageUnknown = resolvedPage > 0 && wire === undefined;
+  const nextPageUnknown = resolvedPage > 0 && wire === undefined && !query.isError;
   const hasMoreRawPages = nextPageUnknown || (resolvedPage + 1) * PAGE_SIZE < totalCount;
   const hasMore = !query.isFetching && hasMoreRawPages;
   const onLoadMore = useCallback(() => setPage((prev) => prev + 1), []);

@@ -1922,6 +1922,11 @@ func redactSettings(value any) any {
 			// A `{{secret.NAME}}` reference POINTS at a secret; it is not one. Dropping it
 			// hid a saved Authorization header and a saved Client Secret from the edit
 			// form, which then re-saved the toolkit without them (#2116, #2126).
+			// The discovered tool schemas hold tool and argument NAMES (`token`, `password`), never values.
+			if key == mcpToolSchemasSetting {
+				out[key] = nested
+				continue
+			}
 			if isSensitiveSettingKey(key) && !isSecretReferenceValue(nested) {
 				continue
 			}
@@ -1938,6 +1943,9 @@ func redactSettings(value any) any {
 		return value
 	}
 }
+
+// mcpToolSchemasSetting is the settings key the web "Load Tools" stores each discovered MCP tool's input schema under.
+const mcpToolSchemasSetting = "available_mcp_tool_schemas"
 
 // secretReferencePattern matches one `{{secret.NAME}}` reference.
 var secretReferencePattern = regexp.MustCompile(`\{\{secret\.[A-Za-z0-9_]+\}\}`)

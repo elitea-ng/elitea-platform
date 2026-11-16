@@ -38,7 +38,7 @@ export function mcpToolOptionsFromSettings(settings: Readonly<Record<string, unk
     typeof schemas === 'object' && schemas !== null && !Array.isArray(schemas)
       ? Object.entries(schemas).map(([value, schema]) => ({ value, args_schema: schema as JsonSchemaLike }))
       : [];
-  const merged = [...fromObjects, ...fromSchemas];
+  const merged = [...fromSchemas, ...fromObjects];
   return merged.length > 0 ? merged : undefined;
 }
 
