@@ -25,7 +25,7 @@ describe('useAgentVersionDetail (adversarial-review fix, cluster A13-agents-hub,
     configureGeneratedClient({ baseUrl: '/api/v2' });
     let requestedPath: string | undefined;
     server.use(
-      getGetPublicApplicationMockHandler(info => {
+      getGetPublicApplicationMockHandler((info) => {
         requestedPath = new URL(info.request.url).pathname;
         return {
           id: '42',
@@ -67,7 +67,7 @@ describe('useAgentVersionDetail (adversarial-review fix, cluster A13-agents-hub,
 
     const { result } = renderHook(() => useAgentVersionDetail('42', ''), { wrapper });
 
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
     expect(called).toBe(false);
     expect(result.current.versionDetails).toBeUndefined();
   });

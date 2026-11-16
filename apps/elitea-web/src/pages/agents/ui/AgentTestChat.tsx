@@ -51,14 +51,26 @@ const paneSx: SxProps<Theme> = (theme: Theme) => ({
   borderRadius: theme.vars.shape.radiusLg,
   overflow: 'hidden',
 });
-const headerSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', padding: '0.5rem 0.75rem' };
+const headerSx: SxProps<Theme> = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '0.5rem',
+  padding: '0.5rem 0.75rem',
+};
 const noticeSx: SxProps<Theme> = { paddingX: '0.75rem', paddingBottom: '0.5rem' };
 const NO_STARTERS: readonly string[] = [];
 const editorTestExtensions = { editorTest: {} };
 /** The pane's header and the model picker with its menu: touching them is not talking to the agent. */
-const NOT_A_CHAT_INTERACTION = '[data-testid="agent-test-chat-header"], [data-testid^="model-selector"], [role="listbox"], [role="option"], [role="menu"], [role="menuitem"], [role="dialog"], [aria-hidden="true"]';
+const NOT_A_CHAT_INTERACTION =
+  '[data-testid="agent-test-chat-header"], [data-testid^="model-selector"], [role="listbox"], [role="option"], [role="menu"], [role="menuitem"], [role="dialog"], [aria-hidden="true"]';
 
-export function AgentTestChat({ identity, user, isDirty, conversationStarters = NO_STARTERS }: AgentTestChatProps): ReactNode {
+export function AgentTestChat({
+  identity,
+  user,
+  isDirty,
+  conversationStarters = NO_STARTERS,
+}: AgentTestChatProps): ReactNode {
   const test = useAgentTestConversation(identity);
   const chatBoxRef = useRef<ChatBoxHandle | null>(null);
   const { ensure, clear, scopeKey } = test;
@@ -103,14 +115,8 @@ export function AgentTestChat({ identity, user, isDirty, conversationStarters = 
       onFocusCapture={ensureOnChatInteraction}
       onKeyDownCapture={ensureOnChatInteraction}
     >
-      <Box
-        sx={headerSx}
-        data-testid="agent-test-chat-header"
-      >
-        <Typography
-          variant="subtitle"
-          component="h2"
-        >
+      <Box sx={headerSx} data-testid="agent-test-chat-header">
+        <Typography variant="subtitle" component="h2">
           {t('pages.agents.testChat.title', 'Chat with this agent')}
         </Typography>
         <Button
@@ -123,25 +129,18 @@ export function AgentTestChat({ identity, user, isDirty, conversationStarters = 
         </Button>
       </Box>
       {isDirty && (
-        <Typography
-          variant="bodySmall"
-          color="text.secondary"
-          data-testid="agent-test-chat-dirty"
-          sx={noticeSx}
-        >
+        <Typography variant="bodySmall" color="text.secondary" data-testid="agent-test-chat-dirty" sx={noticeSx}>
           {t('pages.agents.testChat.unsaved', 'This chat runs the saved version. Save to try your latest changes.')}
         </Typography>
       )}
       {test.hasFailed && (
-        <Typography
-          role="alert"
-          variant="bodySmall"
-          data-testid="agent-test-chat-error"
-          sx={noticeSx}
-        >
+        <Typography role="alert" variant="bodySmall" data-testid="agent-test-chat-error" sx={noticeSx}>
           {applicationServerErrorMessage(
             test.failure,
-            t('pages.agents.testChat.error', 'Could not start a chat with this agent. Click the message box to try again.'),
+            t(
+              'pages.agents.testChat.error',
+              'Could not start a chat with this agent. Click the message box to try again.',
+            ),
           )}
         </Typography>
       )}

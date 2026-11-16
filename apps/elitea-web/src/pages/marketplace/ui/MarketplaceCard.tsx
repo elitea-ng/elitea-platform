@@ -6,13 +6,15 @@
  * in a new tab, copies as an address and is reached by the keyboard with the
  * browser's own focus ring. The name is the link's text, which is what a
  * screen reader announces; the like count is read as text, not as an icon.
- * Publisher, rating and hire count come with the feedback phase (M5), and the
- * "Hired" badge with hiring (M3): none is on the wire yet, so none is drawn.
+ * It also shows the publisher, the rating as text ("No ratings yet" until
+ * reviews exist), the hire count, the tier, what the agent requires and a
+ * "Hired v2.3" badge when this project hired it.
  */
 import { memo, type CSSProperties } from 'react';
 
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
+import Chip from '@mui/material/Chip';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -21,7 +23,7 @@ import { Link } from '@tanstack/react-router';
 import { t } from '@/shared/i18n';
 import { cardGradientSx } from '@/shared/lib/cardGradient';
 
-import { listingParams } from '../listing';
+import { listingParams, ratingText } from '../listing';
 import type { ListingCardData } from '../types';
 
 export interface MarketplaceCardProps {
@@ -42,7 +44,6 @@ function CardAvatar({ card }: { readonly card: ListingCardData }): React.JSX.Ele
 }
 
 export const MarketplaceCard = memo(function MarketplaceCard({ card }: MarketplaceCardProps) {
-  const likes = card.likes ?? 0;
   return (
     <Card data-testid="marketplace-card" sx={styles.card}>
       <Link
@@ -53,22 +54,53 @@ export const MarketplaceCard = memo(function MarketplaceCard({ card }: Marketpla
       >
         <Box sx={styles.header}>
           <CardAvatar card={card} />
-          <Typography variant="headingSmall" sx={styles.title}>
-            {card.name || t('marketplace.untitled', 'Untitled')}
-          </Typography>
+          <Box sx={styles.titles}>
+            <Typography variant="headingSmall" sx={styles.title}>
+              {card.name || t('marketplace.untitled', 'Untitled')}
+            </Typography>
+            {card.publisher !== undefined && (
+              <Typography variant="bodySmall" color="text.secondary" sx={styles.title}>
+                {t('marketplace.card.publisher', 'by {{name}}', { name: card.publisher })}
+              </Typography>
+            )}
+          </Box>
+          {card.hiredVersion !== undefined && (
+            <Chip
+              size="small"
+              color="primary"
+              label={t('marketplace.card.hired', 'Hired {{version}}', { version: card.hiredVersion })}
+              data-testid="marketplace-card-hired"
+            />
+          )}
         </Box>
         <Typography variant="bodySmall" color="text.secondary" sx={styles.description}>
           {card.description}
         </Typography>
+        <Box sx={styles.chips}>
+          {card.requiredTypes.slice(0, 2).map((type) => (
+            <Chip
+              key={type}
+              size="small"
+              variant="outlined"
+              label={t('marketplace.card.requires', 'Requires {{type}}', { type })}
+            />
+          ))}
+          <Chip
+            size="small"
+            variant="outlined"
+            label={t('marketplace.card.tier', 'Tier {{tier}}', { tier: card.tier })}
+          />
+        </Box>
         <Box sx={styles.footer}>
           <Typography variant="bodySmall" color="text.secondary">
-            {card.version === undefined ? '' : card.version}
+            {card.version ?? ''}
           </Typography>
-          {card.likes !== undefined && (
-            <Typography variant="bodySmall" color="text.secondary">
-              {t('marketplace.card.likes', '{{count}} likes', { count: likes })}
-            </Typography>
-          )}
+          <Typography variant="bodySmall" color="text.secondary">
+            {ratingText(card)}
+          </Typography>
+          <Typography variant="bodySmall" color="text.secondary">
+            {t('marketplace.card.hires', '{{count}} hires', { count: card.hires })}
+          </Typography>
         </Box>
       </Link>
     </Card>
@@ -95,7 +127,7 @@ const styles: Record<string, SxProps<Theme>> = {
   card: (theme: Theme) => ({
     ...cardGradientSx(theme),
     boxShadow: 'none',
-    height: '9rem',
+    height: '12rem',
     boxSizing: 'border-box',
   }),
   header: { display: 'flex', alignItems: 'center', gap: '0.75rem', width: '100%' },
@@ -112,6 +144,8 @@ const styles: Record<string, SxProps<Theme>> = {
     color: theme.vars.palette.text.secondary,
     fontWeight: 600,
   }),
+  titles: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' },
+  chips: { display: 'flex', flexWrap: 'wrap', gap: '0.25rem' },
   title: {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -126,5 +160,12 @@ const styles: Record<string, SxProps<Theme>> = {
     WebkitLineClamp: 2,
     WebkitBoxOrient: 'vertical',
   },
-  footer: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', minHeight: '1.25rem' },
+  footer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: '0.5rem',
+    minHeight: '1.25rem',
+  },
 };

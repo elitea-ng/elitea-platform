@@ -12,7 +12,15 @@ import { useCallback } from 'react';
 import Box from '@mui/material/Box';
 
 import type { Tag } from '@/entities/tag';
-import { AgentIconEditor, AgentTagEditor, ApplicationEditorNotes, ApplicationInformation, ApplicationMcpAccessToggle, contextBlockRefusal, CreateAgentForm } from '@/features/agents';
+import {
+  AgentIconEditor,
+  AgentTagEditor,
+  ApplicationEditorNotes,
+  ApplicationInformation,
+  ApplicationMcpAccessToggle,
+  contextBlockRefusal,
+  CreateAgentForm,
+} from '@/features/agents';
 import { AgentSkillsPanel } from '@/features/agent-skills';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
@@ -40,6 +48,8 @@ export interface EditApplicationConfigurationPanelProps {
   readonly editor: EditApplicationEditorBridge;
   readonly versionFields: EditApplicationVersionFieldsState;
   readonly isEditorDisabled: boolean;
+  /** An installed agent (ADR-0051): the definition shows but cannot change; name, description, icon, tags stay editable. */
+  readonly definitionLocked?: boolean;
   readonly isDirty: boolean;
   readonly isReadOnly: boolean;
   readonly onModelSettingsChange: (next: AgentLlmSettings) => void;
@@ -73,8 +83,10 @@ function forkOrigin(activeVersion: ApplicationVersionDetail | undefined): {
   const meta: Record<string, unknown> = activeVersion?.meta ?? {};
   const parentProjectId = meta['parent_project_id'];
   const parentEntityId = meta['parent_entity_id'];
-  const forkedProjectId = typeof parentProjectId === 'string' || typeof parentProjectId === 'number' ? String(parentProjectId) : undefined;
-  const forkedApplicationId = typeof parentEntityId === 'string' || typeof parentEntityId === 'number' ? String(parentEntityId) : undefined;
+  const forkedProjectId =
+    typeof parentProjectId === 'string' || typeof parentProjectId === 'number' ? String(parentProjectId) : undefined;
+  const forkedApplicationId =
+    typeof parentEntityId === 'string' || typeof parentEntityId === 'number' ? String(parentEntityId) : undefined;
   return {
     isForked: forkedProjectId !== undefined && forkedApplicationId !== undefined,
     forkedProjectId,
@@ -102,12 +114,25 @@ function applicationIconMetaOf(
 }
 
 export function EditApplicationConfigurationPanel(props: EditApplicationConfigurationPanelProps): ReactNode {
-  const { projectId, applicationId, activeVersion, editor, versionFields, isEditorDisabled, isDirty, isReadOnly, onModelSettingsChange } =
-    props;
+  const {
+    projectId,
+    applicationId,
+    activeVersion,
+    editor,
+    versionFields,
+    isEditorDisabled,
+    isDirty,
+    isReadOnly,
+    onModelSettingsChange,
+  } = props;
+  const locked = props.definitionLocked === true;
   const skillNav = useSkillNav();
   const tags = versionFields.fields.tags;
   const setTags = versionFields.setTags;
-  const handleMcpAccessChange = useCallback((enabled: boolean) => setTags(withMcpExposure(tags, enabled)), [setTags, tags]);
+  const handleMcpAccessChange = useCallback(
+    (enabled: boolean) => setTags(withMcpExposure(tags, enabled)),
+    [setTags, tags],
+  );
   const mcpAccessEnabled = tags.some((tag) => tag.name === mcpTagName);
   const fork = forkOrigin(activeVersion);
   const iconMeta = applicationIconMetaOf(activeVersion);
@@ -124,38 +149,41 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         values={editor.values}
         onFieldChange={editor.onFieldChange}
         disabled={isEditorDisabled}
+        definitionDisabled={isEditorDisabled || locked}
         metaControls={{ contextHistoryError: contextBlockRefusal(props.saveError) }}
         /* #345 — the tag control. It reaches the wire through
            `toVersionSaveBody`'s `tags`, which `UpdateVersion` now
            writes as association rows. */
         instructionsAiEditSlot={props.instructionsAiEditSlot}
-        iconSlot={
-          <AgentIconEditor
-            projectId={projectId}
-            applicationId={applicationId}
-            versionId={activeVersion?.id}
-            agentName={editor.values.name ?? ''}
-            iconMeta={iconMeta}
-            disabled={isEditorDisabled}
-          />
-        }
-        tagsSlot={
-          <>
-            <ApplicationMcpAccessToggle
-              checked={mcpAccessEnabled}
-              onChange={handleMcpAccessChange}
+        generalSlots={{
+          icon: (
+            <AgentIconEditor
+              projectId={projectId}
+              applicationId={applicationId}
+              versionId={activeVersion?.id}
+              agentName={editor.values.name ?? ''}
+              iconMeta={iconMeta}
               disabled={isEditorDisabled}
-              entityType="agent"
             />
-            <AgentTagEditor projectId={projectId} value={tags} onChange={setTags} />
-          </>
-        }
+          ),
+          tags: (
+            <>
+              <ApplicationMcpAccessToggle
+                checked={mcpAccessEnabled}
+                onChange={handleMcpAccessChange}
+                disabled={isEditorDisabled}
+                entityType="agent"
+              />
+              <AgentTagEditor projectId={projectId} value={tags} onChange={setTags} />
+            </>
+          ),
+        }}
         modelSettingsSlot={
           <AgentModelSettings
             projectId={projectId}
             value={editor.values.version_details.llm_settings}
             onChange={onModelSettingsChange}
-            disabled={isEditorDisabled}
+            disabled={isEditorDisabled || locked}
           />
         }
       />
@@ -174,7 +202,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         activeVersion={activeVersion}
         versionFields={versionFields}
         isDirty={isDirty}
-        isReadOnly={isReadOnly}
+        isReadOnly={isReadOnly || locked}
       />
       {/*
        * The SKILLS section (gap 11). Skills could be created, versioned,
@@ -191,7 +219,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
       <AgentSkillsPanel
         projectId={projectId}
         appVersionId={activeVersion?.id}
-        disabled={isReadOnly}
+        disabled={isReadOnly || locked}
         onCreateNew={skillNav.createNew}
         onOpenSkill={skillNav.openInNewTab}
       />

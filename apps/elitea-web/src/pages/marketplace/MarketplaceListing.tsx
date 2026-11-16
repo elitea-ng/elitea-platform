@@ -19,5 +19,9 @@ interface ListingParams {
 export function MarketplaceListing(): ReactNode {
   const params = useParams({ strict: false }) as ListingParams;
   const listingId = params.listingId ?? '';
-  return kindFromSearch(params.kind) === 'skills' ? <SkillListing listingId={listingId} /> : <AgentListing listingId={listingId} />;
+  return kindFromSearch(params.kind) === 'skills' ? (
+    <SkillListing listingId={listingId} />
+  ) : (
+    <AgentListing listingId={listingId} />
+  );
 }

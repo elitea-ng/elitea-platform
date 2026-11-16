@@ -2,11 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 
 import type { Tag } from '@/entities/tag';
 import { areContextBlocksEqual, contextBlockForSave, readContextBlock, type ContextBlock } from '@/features/agents';
-import {
-  areAgentLlmSettingsEqual,
-  toAgentLlmSettings,
-  type AgentLlmSettings,
-} from '@/shared/api/agentLlmSettings';
+import { areAgentLlmSettingsEqual, toAgentLlmSettings, type AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail, OutputContract } from '@/shared/api/generated/model';
 import { areSoulDraftsEqual, soulDraftProblems, soulToDraft, type AgentSoulDraft } from '@/shared/lib/agentSoulDraft';
 import { areOutputContractsEqual, readOutputContract } from '@/shared/ui/OutputContractField';
@@ -145,7 +141,9 @@ function toStringArray(value: unknown): readonly string[] {
  */
 function toTags(version: ApplicationVersionDetail | undefined): readonly Tag[] {
   return (version?.tags ?? [])
-    .filter((tag): tag is { id?: number; name: string; data?: unknown } => typeof tag.name === 'string' && tag.name !== '')
+    .filter(
+      (tag): tag is { id?: number; name: string; data?: unknown } => typeof tag.name === 'string' && tag.name !== '',
+    )
     .map((tag) => ({ id: tag.id ?? 0, name: tag.name, data: tag.data ?? null }));
 }
 
@@ -171,7 +169,9 @@ function fromVersion(version: ApplicationVersionDetail | undefined): EditApplica
 }
 
 /** The Persona tab's soul and the Avatar tab's pack (ADR-0050 decisions 1a and 6). */
-function personaDraftsOf(version: ApplicationVersionDetail | undefined): Pick<EditApplicationVersionFields, 'soul' | 'avatarPack'> {
+function personaDraftsOf(
+  version: ApplicationVersionDetail | undefined,
+): Pick<EditApplicationVersionFields, 'soul' | 'avatarPack'> {
   return { soul: soulToDraft(version?.soul), avatarPack: avatarPackDraftOf(version?.avatar_pack) };
 }
 

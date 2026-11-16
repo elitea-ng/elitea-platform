@@ -15,6 +15,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/foldervisibility"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -412,6 +413,11 @@ func guardEntityVersion(
 	if status == "published" || status == "embedded" {
 		return apierr.Conflict(fmt.Sprintf(
 			"Agent version %s is %s and can not be updated", relation.EntityVersionID, status))
+	}
+	// An agent installed from the Marketplace keeps the skills its snapshot
+	// holds (ADR-0051 decision 3).
+	if marketplace.IsInstalledVersion(ctx, tx, schema, relation.EntityVersionID) {
+		return apierr.Conflict(marketplace.ReadOnlyMessage)
 	}
 	return nil
 }

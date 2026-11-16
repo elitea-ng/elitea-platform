@@ -694,6 +694,16 @@ impl GitCheckpoints {
             if newest || (index >= excess && info.created_unix >= cutoff) {
                 continue;
             }
+            // A loose ref is removed directly: `update-ref -d` also locks
+            // `packed-refs`, which does not exist in a fresh repository, so
+            // the sandbox cannot bind it writable and git refuses. A packed
+            // one (after `gc`) still goes through git.
+            let loose = self.repo.common_dir().join(self.ref_name(info.seq));
+            if std::fs::read_to_string(&loose).is_ok_and(|content| content.trim() == info.id)
+                && std::fs::remove_file(&loose).is_ok()
+            {
+                continue;
+            }
             let deleted = self.repo.git(self.top()).writes(&writes).run(&[
                 "update-ref",
                 "-d",

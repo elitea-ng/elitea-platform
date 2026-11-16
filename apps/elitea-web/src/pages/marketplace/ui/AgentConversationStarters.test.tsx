@@ -35,6 +35,8 @@ describe('AgentConversationStarters', () => {
 
     renderWithTheme(<AgentConversationStarters conversation_starters={starters} />);
 
-    expect(screen.getByText('No predefined conversation starters – just type your request to begin.')).toBeInTheDocument();
+    expect(
+      screen.getByText('No predefined conversation starters – just type your request to begin.'),
+    ).toBeInTheDocument();
   });
 });

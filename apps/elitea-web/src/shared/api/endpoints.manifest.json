@@ -4407,6 +4407,111 @@
       "usedBy": [
         "entities/entity-folder"
       ]
+    },
+    {
+      "$comment": "READ. Where a hired agent came from: listing, pinned version, digest, states and a newer hireable version. 404 for an agent the project owns.",
+      "id": "marketplace.getOrigin",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_origin/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "getMarketplaceOrigin",
+      "source": "generated",
+      "responseSchema": "MarketplaceOrigin",
+      "fixture": null,
+      "usedBy": [
+        "pages/agents"
+      ]
+    },
+    {
+      "$comment": "READ. The Marketplace facet search: kind, category, tag, publisher, tier, required types, rating, hired here, sort and paging, with the facet counts. The old agents-hub links resolve their listing through entity_id.",
+      "id": "marketplace.searchListings",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_listings/prompt_lib/{projectId}",
+      "operationId": "searchMarketplaceListings",
+      "source": "generated",
+      "responseSchema": "MarketplaceListingPage",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace",
+        "routes/-lib/marketplaceRedirect.ts"
+      ]
+    },
+    {
+      "$comment": "READ. One listing with its versions, release notes, requirements and the hires of the project.",
+      "id": "marketplace.getListing",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_listing/prompt_lib/{projectId}/{listingId}",
+      "operationId": "getMarketplaceListing",
+      "source": "generated",
+      "responseSchema": "MarketplaceListingDetail",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. A platform administrator features or delists a listing.",
+      "id": "marketplace.updateListing",
+      "method": "PATCH",
+      "path": "/elitea_core/marketplace_listing/prompt_lib/{projectId}/{listingId}",
+      "operationId": "updateMarketplaceListing",
+      "source": "generated",
+      "responseSchema": "MarketplaceListingSummary",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. The publisher deprecates, yanks or restores a version; an administrator yanks.",
+      "id": "marketplace.setVersionState",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_listing_version/prompt_lib/{projectId}/{listingId}/{versionId}",
+      "operationId": "setMarketplaceVersionState",
+      "source": "generated",
+      "responseSchema": "MarketplaceVersion",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. The hire wizard: Install or Fork a listing version with its bindings.",
+      "id": "marketplace.hire",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_hire/prompt_lib/{projectId}",
+      "operationId": "hireMarketplaceListing",
+      "source": "generated",
+      "responseSchema": "MarketplaceHireResult",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "READ. The requirements of a hired agent's pinned version and what each is bound to now.",
+      "id": "marketplace.getBindings",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_bindings/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "getMarketplaceBindings",
+      "source": "generated",
+      "responseSchema": "MarketplaceBindingsState",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. Change what a hired agent's requirements are bound to; the definition stays read-only.",
+      "id": "marketplace.setBindings",
+      "method": "PUT",
+      "path": "/elitea_core/marketplace_bindings/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "setMarketplaceBindings",
+      "source": "generated",
+      "responseSchema": "MarketplaceBindingsState",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
     }
   ]
 }

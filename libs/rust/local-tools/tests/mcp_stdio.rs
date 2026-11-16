@@ -245,6 +245,16 @@ fn text(result: &Value) -> &str {
         .unwrap_or_else(|| panic!("{result}"))
 }
 
+/// Under bubblewrap the server runs in its own PID namespace, so the pid it
+/// reports is not a host pid and `kill -0` cannot tell anything about it.
+fn namespaced() -> bool {
+    cfg!(target_os = "linux")
+        && elitea_local_tools::sandbox::bubblewrap::usable(
+            &elitea_local_tools::sandbox::SandboxConfig::default(),
+        )
+        .is_some()
+}
+
 fn running(pid: u32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
@@ -254,6 +264,9 @@ fn running(pid: u32) -> bool {
 }
 
 async fn wait_gone(pid: u32) -> bool {
+    if namespaced() {
+        return true;
+    }
     for _ in 0..100 {
         if !running(pid) {
             return true;
@@ -341,7 +354,7 @@ async fn a_server_starts_lists_and_answers_its_tools_and_stops_with_the_session(
     assert_eq!(failed["code"], "local_tools.mcp_tool_error");
 
     let pid = pid_of(&hello);
-    assert!(running(pid));
+    assert!(namespaced() || running(pid));
     // Every tool holds the session: none may outlive this part.
     drop(tools);
     fixture.session.stop_processes().await;

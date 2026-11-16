@@ -12,10 +12,13 @@
 import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, waitFor } from '@testing-library/react';
+import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthContext, RouterContext } from '@/app/router-context';
+import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
+import { server } from '@/test/setup';
 
 import { routeTree } from '../../routeTree.gen';
 
@@ -56,6 +59,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetGeneratedClient();
   vi.unstubAllEnvs();
   resetConfigForTests();
 });
@@ -100,18 +104,39 @@ describe.each(['/elitea-catalog', '/agents-hub'])('%s redirects to the Marketpla
     expect((router.state.location.search as { kind?: string }).kind).toBeUndefined();
   });
 
-  it('turns the shared ?agentId= deep link into the agent listing page', async () => {
+  /** The search route's answer for an entity: the listing that wraps it, or none. */
+  function mockListingOf(entityId: string, listingId: string | undefined): void {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    server.use(
+      http.get('/api/v2/elitea_core/marketplace_listings/prompt_lib/:projectId', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        const found = params.get('entity_id') === entityId && listingId !== undefined;
+        return HttpResponse.json({ rows: found ? [{ id: listingId }] : [], total: found ? 1 : 0, facets: {} });
+      }),
+    );
+  }
+
+  it('turns the shared ?agentId= deep link into the LISTING page of that agent', async () => {
+    mockListingOf('app-1', '31');
     const router = await loadAt(`${legacy}?agentId=app-1`);
-    expect(router.state.location.pathname).toBe('/marketplace/agents/app-1');
+    expect(router.state.location.pathname).toBe('/marketplace/agents/31');
   });
 
   it('treats agentId as an agent id whatever the tab says', async () => {
+    mockListingOf('7', '12');
     const router = await loadAt(`${legacy}?tab=skills&agentId=7`);
-    expect(router.state.location.pathname).toBe('/marketplace/agents/7');
+    expect(router.state.location.pathname).toBe('/marketplace/agents/12');
   });
 
   it('keeps the legacy tab=agents deep link shape (?tab=agents&agentId=)', async () => {
+    mockListingOf('42', '5');
     const router = await loadAt(`${legacy}?tab=agents&agentId=42`);
-    expect(router.state.location.pathname).toBe('/marketplace/agents/42');
+    expect(router.state.location.pathname).toBe('/marketplace/agents/5');
+  });
+
+  it('lands on the Marketplace when the agent has no listing', async () => {
+    mockListingOf('42', undefined);
+    const router = await loadAt(`${legacy}?agentId=42`);
+    expect(router.state.location.pathname).toBe('/marketplace');
   });
 });

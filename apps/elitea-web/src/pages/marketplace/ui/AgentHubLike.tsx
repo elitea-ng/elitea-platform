@@ -22,10 +22,10 @@ import { HeartIcon } from '@/shared/ui/icons/heart-icon';
 import { HeartActiveIcon } from '@/shared/ui/icons/heart-active-icon';
 import { useCardLike } from '@/entities/application';
 
-import type { ApplicationData } from '../types';
+import type { PublicApplicationSummary } from '@/shared/api/generated/model';
 
 interface AgentHubLikeProps {
-  data: ApplicationData;
+  data: PublicApplicationSummary;
 }
 
 const AgentHubLike = memo(({ data }: AgentHubLikeProps) => {
@@ -46,8 +46,21 @@ const AgentHubLike = memo(({ data }: AgentHubLikeProps) => {
       aria-pressed={isLiked}
       disabled={isToggling}
       // The card is a button that opens the agent; a like must not open it (issue 2028).
-      onClick={(event) => { event.stopPropagation(); void toggleLike(); }}
-      sx={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 0.5, background: 'none', border: 0, padding: 0, color: 'inherit', font: 'inherit' }}
+      onClick={(event) => {
+        event.stopPropagation();
+        void toggleLike();
+      }}
+      sx={{
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0.5,
+        background: 'none',
+        border: 0,
+        padding: 0,
+        color: 'inherit',
+        font: 'inherit',
+      }}
     >
       {isLiked ? <HeartActiveIcon /> : <HeartIcon />}
       <Typography variant="bodySmall">{likeCount}</Typography>

@@ -332,6 +332,45 @@ func TestHandlerPostgres_UpdateVersionPersists(t *testing.T) {
 	}
 }
 
+// TestHandlerPostgres_InstalledAgentDefinitionIsReadOnly pins ADR-0051
+// decision 3: the definition of an agent installed from the Marketplace is
+// read-only. A save that changes it, and a new version, answer 409; a save that
+// repeats the stored values, as the editor sends, goes through.
+func TestHandlerPostgres_InstalledAgentDefinitionIsReadOnly(t *testing.T) {
+	pool := newHandlerTestPool(t)
+	seedHandlerUser(t, pool, 1, "one@elitea.ai")
+	router := newHandlerTestServer(t, pool, auth.User{ID: "1", UserID: "1", Email: "one@elitea.ai"})
+
+	_, created := do(t, router, http.MethodPost, "/applications/prompt_lib/1", j14CreateBody("installed-agent"))
+	applicationID := created["id"].(string)
+	versionID := created["version_details"].(map[string]any)["id"].(string)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := pool.Exec(ctx, `
+UPDATE p_1.application_versions SET instructions = 'pinned text',
+    meta = COALESCE(meta, '{}'::jsonb) || '{"origin_kind": "installed"}'::jsonb WHERE id = $1`, versionID); err != nil {
+		t.Fatalf("mark the agent installed: %v", err)
+	}
+	target := fmt.Sprintf("/version/prompt_lib/1/%s/%s", applicationID, versionID)
+
+	recorder, body := do(t, router, http.MethodPut, target, map[string]any{"instructions": "changed text"})
+	if recorder.Code != http.StatusConflict || body["error"] != "installed_definition_read_only" {
+		t.Fatalf("a changed instruction = %d %s, want 409 installed_definition_read_only", recorder.Code, recorder.Body.String())
+	}
+	recorder, _ = do(t, router, http.MethodPut, target, map[string]any{"instructions": "pinned text", "name": "base"})
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("a save that repeats the stored definition = %d %s, want 201", recorder.Code, recorder.Body.String())
+	}
+	recorder, body = do(t, router, http.MethodPost, fmt.Sprintf("/versions/prompt_lib/1/%s", applicationID), map[string]any{"name": "second"})
+	if recorder.Code != http.StatusConflict || body["error"] != "installed_definition_read_only" {
+		t.Fatalf("a new version of an installed agent = %d %s, want 409", recorder.Code, recorder.Body.String())
+	}
+	recorder, body = do(t, router, http.MethodDelete, target, nil)
+	if recorder.Code != http.StatusConflict || body["error"] != "installed_definition_read_only" {
+		t.Fatalf("a delete of the installed version = %d %s, want 409", recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestHandlerPostgres_UpdateVersionPersistsVariables covers #307: the agent
 // editor sends `variables` on every save and UpdateVersion had no branch for
 // the key, so the PUT answered 201 and the edit was gone. Asserted by

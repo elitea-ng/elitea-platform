@@ -42,6 +42,7 @@ export const commonSearchSchema = pickParams(
   'tags[]',
   'toolkit_type',
   'tour',
+  'update_available',
   'view',
   'viewMode',
   'page_size',

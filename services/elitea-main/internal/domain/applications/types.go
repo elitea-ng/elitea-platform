@@ -250,14 +250,18 @@ type ListRequest struct {
 	// Status narrows the list to agents in ONE publish state, `draft` or
 	// `published`, the state the row itself reports (`Application.Status`).
 	Status string `json:"status,omitempty"`
-	// Origin narrows the list to agents the project `own`s or that are `forked`.
-	Origin      string     `json:"origin,omitempty"`
-	MyLiked     bool       `json:"my_liked,omitempty"`
-	WithoutTags bool       `json:"without_tags,omitempty"`
-	TrendStart  *time.Time `json:"trend_start_period,omitempty"`
-	TrendEnd    *time.Time `json:"trend_end_period,omitempty"`
-	SortBy      string     `json:"sort_by,omitempty"`
-	SortOrder   string     `json:"sort_order,omitempty"`
+	// Origin narrows the list to agents the project `own`s, that are `installed`
+	// from the Marketplace, or that are `forked`.
+	Origin string `json:"origin,omitempty"`
+	// UpdateAvailable keeps installed and forked agents whose listing has a
+	// newer hireable version.
+	UpdateAvailable bool       `json:"update_available,omitempty"`
+	MyLiked         bool       `json:"my_liked,omitempty"`
+	WithoutTags     bool       `json:"without_tags,omitempty"`
+	TrendStart      *time.Time `json:"trend_start_period,omitempty"`
+	TrendEnd        *time.Time `json:"trend_end_period,omitempty"`
+	SortBy          string     `json:"sort_by,omitempty"`
+	SortOrder       string     `json:"sort_order,omitempty"`
 	// Offset preserves arbitrary HTTP offsets. Nil uses Page and PageSize.
 	Offset *int `json:"-"`
 }
@@ -280,6 +284,9 @@ type ListResponse struct {
 type ListFacets struct {
 	Statuses map[string]int `json:"statuses"`
 	Origins  map[string]int `json:"origins"`
+	// UpdateAvailable counts the installed and forked agents whose listing has a
+	// newer hireable version.
+	UpdateAvailable int `json:"update_available"`
 }
 
 type CreateRequest struct {

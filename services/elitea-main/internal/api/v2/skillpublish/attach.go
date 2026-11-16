@@ -14,11 +14,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 )
 
 type attachRequest struct {
@@ -89,6 +92,20 @@ func (h *Handler) AttachPublicSkill(w http.ResponseWriter, r *http.Request) {
 	publicQuoted := publicSchema()
 	userID := actingUserID(ctx, 1)
 
+	// A yanked, withdrawn or delisted version is not added (ADR-0051
+	// decision 2). A version the Marketplace has no record of is added as
+	// before: the listings of older publishes are built on the first read.
+	listingID, listingDigest, listed := h.marketplaceVersion(ctx, int64(body.PublicVersionID))
+	if listed {
+		if version, err := marketplace.LoadVersion(ctx, h.pool, listingID, int64(body.PublicVersionID)); err == nil && !version.Hireable() {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": "version_not_hireable",
+				"msg":   "This version was yanked, withdrawn or delisted. Choose another version.",
+			})
+			return
+		}
+	}
+
 	localSkillID, localVersionID, ok := h.resolveOrForkLocalSkill(ctx, schema, publicQuoted, publicID, body, userID)
 	if !ok {
 		results := make([]attachResult, 0, len(agentVersionIDs))
@@ -97,6 +114,18 @@ func (h *Handler) AttachPublicSkill(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"results": results})
 		return
+	}
+
+	if listed {
+		// The project holds the version: its snapshot stays while it does.
+		project, _ := strconv.ParseInt(projectID, 10, 64)
+		if err := marketplace.RecordInstall(ctx, h.pool, marketplace.Install{
+			ProjectID: project, EntityKind: marketplace.KindSkill, EntityID: int64(localSkillID),
+			ListingID: listingID, VersionID: int64(body.PublicVersionID), Digest: listingDigest,
+			Mode: marketplace.ModeFork, ToolsOn: true, InstalledBy: int64(userID),
+		}); err != nil {
+			slog.WarnContext(ctx, "attach public skill: the marketplace record failed", "error", err)
+		}
 	}
 
 	lineageSkillIDs := h.lineageSkillIDs(ctx, schema, publicID, body.PublicSkillID)
@@ -112,6 +141,10 @@ func (h *Handler) AttachPublicSkill(w http.ResponseWriter, r *http.Request) {
 			agentVersionID).Scan(&owned) // a failed check leaves owned=false → reported as not found
 		if !owned {
 			results = append(results, attachResult{AgentVersionID: agentVersionID, OK: false, HTTPStatus: http.StatusNotFound, Error: "agent not found"})
+			continue
+		}
+		if marketplace.IsInstalledVersion(ctx, h.pool, schema, agentVersionID) {
+			results = append(results, attachResult{AgentVersionID: agentVersionID, OK: false, HTTPStatus: http.StatusConflict, Error: marketplace.ReadOnlyMessage})
 			continue
 		}
 
@@ -297,4 +330,13 @@ func (h *Handler) AgentsWithSkill(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"total": len(items), "rows": items})
+}
+
+// marketplaceVersion finds the listing version of a catalogue skill version.
+func (h *Handler) marketplaceVersion(ctx context.Context, publicVersionID int64) (int64, [32]byte, bool) {
+	match, found, err := marketplace.LookupByCatalogueVersion(ctx, h.pool, marketplace.KindSkill, publicVersionID)
+	if err != nil || !found {
+		return 0, [32]byte{}, false
+	}
+	return match.ListingID, match.Digest, true
 }

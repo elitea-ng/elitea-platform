@@ -15,6 +15,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 )
 
 // The agent-as-tool relation, stored where every reader joins it: a row in
@@ -269,6 +270,13 @@ func (h *Handler) UpdateApplicationRelation(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"error": "Cannot change relation on a published version. Unpublish first.",
 		})
+		return
+	}
+
+	// An agent installed from the Marketplace keeps the sub-agents its snapshot
+	// holds: attaching one changes its definition (ADR-0051 decision 3).
+	if marketplace.IsInstalledVersion(ctx, transaction, s, parentVersionID) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": marketplace.ReadOnlyCode, "msg": marketplace.ReadOnlyMessage})
 		return
 	}
 

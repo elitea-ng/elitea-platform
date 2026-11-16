@@ -1,7 +1,7 @@
 import { useApplicationBulkActions } from '../model/useApplicationBulkActions';
 import { useWorkshopListData } from '../model/useWorkshopListData';
 
-import { statusBadgeLabel, workshopFacets } from './workshopFacets';
+import { statusBadgeLabel, workshopFacets, workshopRowBadge } from './workshopFacets';
 
 /**
  * What the Workshop's agents and pipelines lists take from this slice
@@ -15,5 +15,6 @@ export const workshopList = {
   useListData: useWorkshopListData,
   facets: workshopFacets,
   statusBadge: statusBadgeLabel,
+  rowBadge: workshopRowBadge,
   useBulkActions: useApplicationBulkActions,
 } as const;

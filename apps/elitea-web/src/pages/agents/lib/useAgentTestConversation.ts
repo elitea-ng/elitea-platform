@@ -66,7 +66,13 @@ interface State {
   readonly failure?: unknown;
 }
 
-const EMPTY: State = { key: '', conversation: undefined, activeParticipant: undefined, isCreating: false, hasFailed: false };
+const EMPTY: State = {
+  key: '',
+  conversation: undefined,
+  activeParticipant: undefined,
+  isCreating: false,
+  hasFailed: false,
+};
 const MAX_NAME = 50;
 const LIVE_TEST_CONVERSATIONS = new Map<string, State>();
 
@@ -80,7 +86,14 @@ function toState(detail: ConversationWire, key: string, groups: MessageGroups): 
     ...EMPTY,
     key,
     activeParticipant: participants.find((row) => row.entity_name === 'application'),
-    conversation: { id: detail.id, uuid: detail.uuid ?? '', name: detail.name, participants, message_groups: groups, meta: detail.meta ?? {} },
+    conversation: {
+      id: detail.id,
+      uuid: detail.uuid ?? '',
+      name: detail.name,
+      participants,
+      message_groups: groups,
+      meta: detail.meta ?? {},
+    },
   };
 }
 

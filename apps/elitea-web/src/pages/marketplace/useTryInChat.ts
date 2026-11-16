@@ -17,7 +17,7 @@ import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { ChatParticipantType } from '@/shared/lib/chat';
 import { useSelectedProjectId } from '@/pages/skills/lib/useSelectedProjectId';
 
-import type { ApplicationData } from './types';
+import type { PublicApplicationSummary } from '@/shared/api/generated/model';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' } as const;
 
@@ -32,18 +32,21 @@ export interface TryInChat {
   readonly isError: boolean;
 }
 
-export function useTryInChat(app: ApplicationData): TryInChat {
+export function useTryInChat(app: PublicApplicationSummary): TryInChat {
   const projectId = useSelectedProjectId();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: async (project: string): Promise<string> => {
-      const created = await eliteaFetch<{ data: CreatedConversationBody }>(`/elitea_core/conversations/prompt_lib/${project}`, {
-        method: 'POST',
-        body: JSON.stringify({ name: app.name, participants: [] }),
-        headers: JSON_HEADERS,
-      });
+      const created = await eliteaFetch<{ data: CreatedConversationBody }>(
+        `/elitea_core/conversations/prompt_lib/${project}`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ name: app.name, participants: [] }),
+          headers: JSON_HEADERS,
+        },
+      );
       const conversationId = created.data.id;
       if (conversationId === undefined) throw new Error('The conversation was not created');
       await eliteaFetch(`/elitea_core/participants/prompt_lib/${project}/${String(conversationId)}`, {

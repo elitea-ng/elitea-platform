@@ -43,6 +43,7 @@
 import * as zod from "zod";
 
 export const publishRequestVersionNameRegExp = new RegExp("^[a-zA-Z0-9._-]+$");
+export const publishRequestReleaseNotesMax = 4000;
 
 export const PublishRequest = zod
   .object({
@@ -66,6 +67,13 @@ export const PublishRequest = zod
         "Other",
       ])
       .optional(),
+    release_notes: zod
+      .string()
+      .max(publishRequestReleaseNotesMax)
+      .optional()
+      .describe(
+        "What changed in this version. The listing page shows it per version (ADR-0051). A publish through a change request uses the request summary.\n",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/eliteacore/handler.go:446-450; category whitelist at :512-516.\n",

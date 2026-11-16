@@ -10,5 +10,5 @@ import { redirectToMarketplace } from '../-lib/marketplaceRedirect';
 
 export const Route = createFileRoute('/_shell/elitea-catalog')({
   validateSearch: pickParams('tab', 'agentId'),
-  beforeLoad: ({ search }) => redirectToMarketplace(search),
+  beforeLoad: ({ search, context }) => redirectToMarketplace(search, context),
 });

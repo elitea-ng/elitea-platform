@@ -160,10 +160,10 @@ export function EntityLifecycleControls({
           if (versionId === undefined) return;
           lifecycle.validate.mutate({ versionId, versionName, category });
         }}
-        onPublish={(versionName, category, validationToken) => {
+        onPublish={(versionName, category, validationToken, releaseNotes) => {
           if (versionId === undefined) return;
           lifecycle.publish.mutate(
-            { versionId, versionName, category, validationToken },
+            { versionId, versionName, category, validationToken, releaseNotes },
             {
               onSuccess: (outcome) => {
                 setPublishOpen(false);
@@ -173,7 +173,10 @@ export function EntityLifecycleControls({
                 setNotice(
                   outcome.catalogVersionId === undefined
                     ? t('features.agentLifecycle.notice.published', 'This version is published.')
-                    : t('features.agentLifecycle.notice.publishedToCatalog', 'This version is published to the Catalog.'),
+                    : t(
+                        'features.agentLifecycle.notice.publishedToCatalog',
+                        'This version is published to the Catalog.',
+                      ),
                 );
               },
               onError: (cause) => {
@@ -232,7 +235,10 @@ export function EntityLifecycleControls({
                 // success hides the errors channel the server just sent.
                 setNotice(
                   outcome.status === 207
-                    ? t('features.agentLifecycle.notice.forkedPartly', 'The copy was created, but part of it was not copied.')
+                    ? t(
+                        'features.agentLifecycle.notice.forkedPartly',
+                        'The copy was created, but part of it was not copied.',
+                      )
                     : t('features.agentLifecycle.notice.forked', 'A copy was created in the chosen project.'),
                 );
               },
@@ -283,20 +289,12 @@ function LifecycleMessages({
   return (
     <>
       {notice !== undefined && (
-        <Typography
-          component="output"
-          variant="bodySmall"
-          data-testid="lifecycle-notice"
-        >
+        <Typography component="output" variant="bodySmall" data-testid="lifecycle-notice">
           {notice}
         </Typography>
       )}
       {error !== undefined && (
-        <Typography
-          role="alert"
-          variant="bodySmall"
-          data-testid="lifecycle-error"
-        >
+        <Typography role="alert" variant="bodySmall" data-testid="lifecycle-error">
           {error}
         </Typography>
       )}

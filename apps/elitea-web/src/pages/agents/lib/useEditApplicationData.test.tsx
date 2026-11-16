@@ -59,7 +59,7 @@ describe('useEditApplicationData', () => {
     expect(result.current.versions).toEqual([]);
   });
 
-  it('fetches the explicit version when the URL :version differs from the detail response\'s default version', async () => {
+  it("fetches the explicit version when the URL :version differs from the detail response's default version", async () => {
     server.use(
       getGetApplicationMockHandler(detail()),
       getGetApplicationVersionDetailMockHandler({
@@ -76,7 +76,7 @@ describe('useEditApplicationData', () => {
     expect(result.current.activeVersion?.instructions).toBe('Explicit version instructions.');
   });
 
-  it('does NOT issue a second fetch when the URL :version matches the detail response\'s own default version', async () => {
+  it("does NOT issue a second fetch when the URL :version matches the detail response's own default version", async () => {
     server.use(getGetApplicationMockHandler(detail()));
     const { result } = renderHook(() => useEditApplicationData('9', 42, '1'), { wrapper });
 

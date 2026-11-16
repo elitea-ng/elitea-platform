@@ -6425,6 +6425,11 @@
           "schema": {
             "type": "string"
           }
+        },
+        "query:update_available": {
+          "schema": {
+            "type": "boolean"
+          }
         }
       },
       "responses": {
@@ -6454,6 +6459,10 @@
                     "statuses": {
                       "type": "object",
                       "open": true
+                    },
+                    "update_available": {
+                      "type": "integer",
+                      "minimum": 0
                     }
                   }
                 },

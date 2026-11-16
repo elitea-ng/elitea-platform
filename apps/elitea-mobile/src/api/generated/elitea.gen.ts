@@ -2555,7 +2555,7 @@ export interface components {
         };
         /** @description The counts behind the Workshop's status and origin filters. Each count honours every list filter except the status and origin filters themselves (internal/domain/applications/types.go ListFacets). */
         ApplicationListFacets: {
-            /** @description Agents per origin (`own`, `forked`); only origins that occur are keys. */
+            /** @description Agents per origin (`own`, `installed`, `forked`); only origins that occur are keys. `installed` is an agent hired from the Marketplace with a read-only definition (ADR-0051). */
             origins: {
                 [key: string]: number;
             };
@@ -2563,6 +2563,8 @@ export interface components {
             statuses: {
                 [key: string]: number;
             };
+            /** @description Installed and forked agents whose listing has a newer hireable version than the one they came from. */
+            update_available?: number;
         };
         /** @description NOTE(W2): internal/api/v2/applicationskills/handler.go:45-51, CurrentApplicationSkill. */
         ApplicationSkillAttachment: {
@@ -5938,7 +5940,7 @@ export interface operations {
                 limit?: components["parameters"]["Limit"];
                 /** @description Number of items to skip before starting to collect results */
                 offset?: components["parameters"]["Offset"];
-                /** @description Narrows the list to agents the project owns (`own`) or that came from a fork (`forked`). The `facets.origins` counts ignore this filter. */
+                /** @description Narrows the list to agents the project owns (`own`), hired from the Marketplace as installed (`installed`) or that came from a fork (`forked`). The `facets.origins` counts ignore this filter. */
                 origin?: string;
                 /** @description `true` narrows the list to the agents or pipelines the caller pinned (the personal Pinned group, tenant/0249). Private to them. */
                 pinned?: boolean;
@@ -5952,6 +5954,8 @@ export interface operations {
                 status?: string;
                 /** @description Comma-separated tag filter. Each entry matches a tag NAME or a tag ID. The entries combine with AND: a listed application carries every named tag on one of its versions. Blank entries are ignored (repos/applications.go splitTagFilter). */
                 tags?: string;
+                /** @description Keeps only installed and forked agents whose listing has a newer hireable version. The `facets.update_available` count ignores it. */
+                update_available?: boolean;
             };
             header?: {
                 /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */

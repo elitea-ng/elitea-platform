@@ -166,6 +166,14 @@ export const paramSchemas = {
    * agents" (`pages/marketplace`'s `kindFromSearch`).
    */
   kind: text(),
+  /** The Marketplace facets (ADR-0051 M3), each a comma-joined list or one value, read by `pages/marketplace/filters.ts`. */
+  category: text(),
+  tag: text(),
+  publisher_id: text(),
+  max_tier: text(),
+  requires: text(),
+  min_rating: text(),
+  hired_here: flag(),
 
   // ── apps (PARAM-022/023) + every entity list page ────────────────────────
   //
@@ -262,8 +270,10 @@ export const paramSchemas = {
   project_id: text(),
   save_toolkit: flag(),
   statuses: list(),
-  /** The Workshop's origin facet (ADR-0051): `own` or `forked`. Agents and pipelines lists. */
+  /** The Workshop's origin facet (ADR-0051): `own`, `installed` or `forked`. Agents and pipelines lists. */
   origin: text(),
+  /** The Workshop's `Update available` quick filter (ADR-0051): `true` keeps hired agents with a newer listing version. */
+  update_available: text(),
   'tags[]': list(),
   /** The open project folder of an entity list (issue 2048): agents, pipelines, skills, toolkits, MCPs. */
   entity_folder: text(),

@@ -78,6 +78,10 @@ func (executor *postgresInternalApplicationExecutor) updateVersion(
 			"Version id %d is %s and can not be updated", versionID, state.status,
 		))
 	}
+	if kind, _ := state.meta["origin_kind"].(string); kind == "installed" {
+		// ADR-0051: the definition of an installed agent is read-only.
+		return internalApplicationConflict("This agent was installed from the Marketplace. Its definition is read-only. Fork it to change it.")
+	}
 
 	update, problem := parseInternalVersionUpdate(arguments, state)
 	if problem != nil {
@@ -168,6 +172,10 @@ func (executor *postgresInternalApplicationExecutor) patchInstructions(
 		return internalApplicationConflict(fmt.Sprintf(
 			"Version id %d is %s and can not be updated", versionID, state.status,
 		))
+	}
+	if kind, _ := state.meta["origin_kind"].(string); kind == "installed" {
+		// ADR-0051: the definition of an installed agent is read-only.
+		return internalApplicationConflict("This agent was installed from the Marketplace. Its definition is read-only. Fork it to change it.")
 	}
 	if !strings.EqualFold(expected, instructionsSHA256(state.instructions)) {
 		return internalApplicationConflict("Instructions changed after they were read. Read the version again and retry.")

@@ -1,5 +1,6 @@
 import { applicationServerErrorMessage } from '@/features/agents';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
+import { t } from '@/shared/i18n';
 
 /**
  * The text of a save banner (the agent create and edit pages). A 422 is a
@@ -10,10 +11,30 @@ import { EliteaApiError } from '@/shared/api/generated/mutator';
  * Any other failure shows `fallback`: a 5xx body is a diagnostic, not advice.
  */
 export function agentSaveErrorMessage(error: unknown, fallback: string): string {
+  if (isInstalledRefusal(error)) {
+    return t(
+      'pages.agents.origin.saveRefused',
+      'This agent is installed from the Marketplace. Its definition is read-only. Fork it to change the definition.',
+    );
+  }
   return isActionableRefusal(error) ? applicationServerErrorMessage(error, fallback) : fallback;
 }
 
 const SOUL_REFUSAL_CODES: ReadonlySet<string> = new Set(['soul_capability_key', 'soul_too_large', 'soul_invalid']);
+
+/** The `error` key of an installed-agent refusal (ADR-0051): the definition is the listing version's and cannot be saved. */
+function errorCode(body: unknown): unknown {
+  return typeof body === 'object' && body !== null ? (body as Record<string, unknown>)['error'] : undefined;
+}
+
+function isInstalledRefusal(error: unknown): boolean {
+  return (
+    error instanceof EliteaApiError &&
+    error.failure.kind === 'http' &&
+    error.failure.status === 409 &&
+    errorCode(error.failure.body) === 'installed_definition_read_only'
+  );
+}
 
 function isActionableRefusal(error: unknown): boolean {
   if (!(error instanceof EliteaApiError) || error.failure.kind !== 'http') return false;

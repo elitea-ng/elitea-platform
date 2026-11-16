@@ -11,5 +11,5 @@ import { redirectToMarketplace } from '../-lib/marketplaceRedirect';
 
 export const Route = createFileRoute('/_shell/agents-hub')({
   validateSearch: pickParams('agentId', 'tab'),
-  beforeLoad: ({ search }) => redirectToMarketplace(search),
+  beforeLoad: ({ search, context }) => redirectToMarketplace(search, context),
 });

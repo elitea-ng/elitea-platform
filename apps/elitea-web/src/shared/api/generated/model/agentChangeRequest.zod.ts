@@ -49,7 +49,14 @@ export const AgentChangeRequest = zod
   .object({
     id: zod.int(),
     application_id: zod.int(),
-    kind: zod.enum(["release", "recertification", "legacy_unreviewed"]),
+    kind: zod.enum([
+      "release",
+      "recertification",
+      "legacy_unreviewed",
+      "hire",
+      "upgrade",
+      "upstream_merge",
+    ]),
     state: zod.enum([
       "draft",
       "submitted",

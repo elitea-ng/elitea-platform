@@ -5523,6 +5523,10 @@ export const getListApplicationsResponseMock = (
       origins: {
         [faker.string.alphanumeric(5)]: faker.number.int(),
       },
+      update_available: faker.helpers.arrayElement([
+        faker.number.int({ min: 0 }),
+        undefined,
+      ]),
     },
     undefined,
   ]),

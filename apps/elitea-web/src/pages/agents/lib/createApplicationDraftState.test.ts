@@ -52,7 +52,9 @@ describe('areExtraFieldsEqual', () => {
     // The picker hands back a fresh object every time, so an identity check
     // here would keep the guard armed forever.
     const settings = { model_name: 'qwen3.5', model_project_id: 9, max_tokens: -1 };
-    expect(areExtraFieldsEqual({ ...BASE, llmSettings: settings }, { ...BASE, llmSettings: { ...settings } })).toBe(true);
+    expect(areExtraFieldsEqual({ ...BASE, llmSettings: settings }, { ...BASE, llmSettings: { ...settings } })).toBe(
+      true,
+    );
   });
 
   /*
@@ -62,7 +64,10 @@ describe('areExtraFieldsEqual', () => {
    * create page's leave guard stayed armed after an undo.
    */
   it('does not see a change in a context block built in another key order, or with activity_notes absent', () => {
-    const a = { ...BASE, contextBlock: { history: 'none' as const, include_side_talk: 'none' as const, activity_notes: false } };
+    const a = {
+      ...BASE,
+      contextBlock: { history: 'none' as const, include_side_talk: 'none' as const, activity_notes: false },
+    };
     const b = { ...BASE, contextBlock: { include_side_talk: 'none' as const, history: 'none' as const } };
     expect(areExtraFieldsEqual(a, b)).toBe(true);
   });
@@ -74,8 +79,14 @@ describe('areExtraFieldsEqual', () => {
   });
 
   it('sees a change of temperature alone', () => {
-    const a = { ...BASE, llmSettings: { model_name: 'qwen3.5', model_project_id: 9, max_tokens: -1, temperature: 0.6 } };
-    const b = { ...BASE, llmSettings: { model_name: 'qwen3.5', model_project_id: 9, max_tokens: -1, temperature: 0.2 } };
+    const a = {
+      ...BASE,
+      llmSettings: { model_name: 'qwen3.5', model_project_id: 9, max_tokens: -1, temperature: 0.6 },
+    };
+    const b = {
+      ...BASE,
+      llmSettings: { model_name: 'qwen3.5', model_project_id: 9, max_tokens: -1, temperature: 0.2 },
+    };
     expect(areExtraFieldsEqual(a, b)).toBe(false);
   });
 });
@@ -98,14 +109,20 @@ describe('mapCreateErrorToFieldErrors', () => {
 
 describe('meta.context on the create page (ADR-0050 decision 9)', () => {
   it('holds a chosen block, reports the draft dirty and sends it', () => {
-    const next = applyContentControlField(BASE, 'version_details.meta.context', { history: 'since_joined', include_side_talk: 'party' });
+    const next = applyContentControlField(BASE, 'version_details.meta.context', {
+      history: 'since_joined',
+      include_side_talk: 'party',
+    });
     expect(next.contextBlock).toEqual({ history: 'since_joined', include_side_talk: 'party' });
     expect(areExtraFieldsEqual(BASE, next)).toBe(false);
     expect(createMetaControls(next)).toEqual({ context: { history: 'since_joined', include_side_talk: 'party' } });
   });
 
   it('sends no block for the default', () => {
-    const next = applyContentControlField(BASE, 'version_details.meta.context', { history: 'full', include_side_talk: 'party' });
+    const next = applyContentControlField(BASE, 'version_details.meta.context', {
+      history: 'full',
+      include_side_talk: 'party',
+    });
     expect(next.contextBlock).toBeNull();
     expect(createMetaControls(next)).toEqual({});
   });

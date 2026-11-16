@@ -45,6 +45,7 @@ import * as zod from "zod";
 export const publishSkillBodyVersionNameRegExp = new RegExp(
   "^[a-zA-Z0-9._-]{1,50}$",
 );
+export const publishSkillBodyReleaseNotesMax = 4000;
 
 export const PublishSkillBody = zod.object({
   version_name: zod.string().regex(publishSkillBodyVersionNameRegExp),
@@ -59,6 +60,13 @@ export const PublishSkillBody = zod.object({
     .optional()
     .describe(
       'One of /skill_categories; an omitted category falls back to "Other".',
+    ),
+  release_notes: zod
+    .string()
+    .max(publishSkillBodyReleaseNotesMax)
+    .optional()
+    .describe(
+      "What changed in this version. The listing page shows it (ADR-0051).",
     ),
 });
 

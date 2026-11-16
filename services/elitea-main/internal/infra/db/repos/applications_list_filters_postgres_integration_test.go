@@ -8,7 +8,121 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
+
+// TestApplicationsRepoPostgres_ListOriginInstalledAndUpdateAvailable covers the
+// Marketplace half of the Workshop facets (ADR-0051 decisions 3 and 7): an
+// installed agent is its own origin, a fork with an origin is still a fork, and
+// "update available" reads the listing's newest hireable version.
+func TestApplicationsRepoPostgres_ListOriginInstalledAndUpdateAvailable(t *testing.T) {
+	repo, pool := newApplicationsTestRepo(t)
+	ctx := testContext(t)
+	// The list reads the Marketplace listings: this test needs shared 0250.
+	if err := migrate.New(pool, platformmigrations.Files).ApplyShared(ctx); err != nil {
+		t.Fatalf("apply the shared migrations: %v", err)
+	}
+	seedUser(t, pool, 1, "first@example.com")
+	own := createTestApplication(t, repo, "Own", 1, &applications.Version{Name: "base", AgentType: "openai"})
+	installed := createTestApplication(t, repo, "Installed", 1, &applications.Version{Name: "base", AgentType: "openai"})
+	forked := createTestApplication(t, repo, "Forked", 1, &applications.Version{Name: "base", AgentType: "openai"})
+	_ = own
+
+	var listingID int64
+	if err := pool.QueryRow(ctx, `
+INSERT INTO elitea_marketplace.listings (kind, source_project_id, source_entity_id, entity_id, name)
+VALUES ('agent', 2, 5, 5, 'Listing') RETURNING id`).Scan(&listingID); err != nil {
+		t.Fatalf("seed the listing: %v", err)
+	}
+	for _, v := range []struct {
+		id   int
+		name string
+		at   string
+	}{{101, "v1", "2026-10-01"}, {102, "v2", "2026-10-02"}} {
+		if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_marketplace.listing_versions (listing_id, version_id, name, digest, definition, published_at)
+VALUES ($1, $2, $3, decode(repeat('ab', 32), 'hex'), '{}'::jsonb, $4::timestamptz)`, listingID, v.id, v.name, v.at); err != nil {
+			t.Fatalf("seed the listing version: %v", err)
+		}
+	}
+	setMeta := func(id, meta string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `UPDATE p_1.application_versions SET meta = $2::jsonb WHERE application_id = $1`, id, meta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pinned := `"origin_listing_id": "` + strconv.FormatInt(listingID, 10) + `", "origin_version_id": "101"`
+	setMeta(installed.ID, `{"origin_kind": "installed", `+pinned+`, "origin_version_name": "v1", "origin_listing_name": "Listing"}`)
+	setMeta(forked.ID, `{"origin_kind": "forked", "parent_entity_id": "5", "parent_project_id": "1", `+pinned+`}`)
+
+	names := func(rows []applications.Application) []string {
+		out := []string{}
+		for _, row := range rows {
+			out = append(out, row.Name)
+		}
+		return out
+	}
+	list := func(req applications.ListRequest) applications.ListResponse {
+		t.Helper()
+		req.ProjectID, req.SortBy, req.SortOrder = "1", "name", "asc"
+		result, err := repo.List(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	if got := names(list(applications.ListRequest{Origin: "installed"}).Rows); !reflect.DeepEqual(got, []string{"Installed"}) {
+		t.Errorf("origin=installed = %v", got)
+	}
+	if got := names(list(applications.ListRequest{Origin: "forked"}).Rows); !reflect.DeepEqual(got, []string{"Forked"}) {
+		t.Errorf("origin=forked = %v", got)
+	}
+	if got := names(list(applications.ListRequest{Origin: "own"}).Rows); !reflect.DeepEqual(got, []string{"Own"}) {
+		t.Errorf("origin=own = %v", got)
+	}
+	all := list(applications.ListRequest{})
+	if got := all.Facets.Origins; got["own"] != 1 || got["installed"] != 1 || got["forked"] != 1 {
+		t.Errorf("origin facets = %v, want one of each", got)
+	}
+	if all.Facets.UpdateAvailable != 2 {
+		t.Errorf("update_available facet = %d, want 2: v2 is newer than the pinned v1", all.Facets.UpdateAvailable)
+	}
+	if got := names(list(applications.ListRequest{UpdateAvailable: true}).Rows); !reflect.DeepEqual(got, []string{"Forked", "Installed"}) {
+		t.Errorf("update_available = %v", got)
+	}
+	var markers []string
+	for _, row := range list(applications.ListRequest{Origin: "installed"}).Rows {
+		markers = append(markers, row.Meta["origin_kind"].(string)+" "+row.Meta["origin_version_name"].(string))
+	}
+	if !reflect.DeepEqual(markers, []string{"installed v1"}) {
+		t.Errorf("the list row carries the origin as %v", markers)
+	}
+	// A yanked newest version is not an update.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_marketplace.listing_versions SET state = 'yanked' WHERE version_id = 102`); err != nil {
+		t.Fatal(err)
+	}
+	if n := list(applications.ListRequest{}).Facets.UpdateAvailable; n != 0 {
+		t.Errorf("update_available with the newer version yanked = %d, want 0", n)
+	}
+	// Every caller that makes or deletes a version of an installed agent ends
+	// in the repository, which refuses it (ADR-0051 decision 3).
+	if _, err := repo.CreateVersion(ctx, "1", installed.ID, applications.Version{Name: "second", AuthorID: 1, AgentType: "openai"}); apiStatus(err) != 409 {
+		t.Errorf("a new version of an installed agent: %v, want 409", err)
+	}
+	var baseVersion string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM p_1.application_versions WHERE application_id = $1`, installed.ID).Scan(&baseVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DeleteVersion(ctx, "1", installed.ID, baseVersion); apiStatus(err) != 409 {
+		t.Errorf("deleting the version of an installed agent: %v, want 409", err)
+	}
+	// An origin id that is not a number must not break the list.
+	setMeta(installed.ID, `{"origin_kind": "installed", "origin_listing_id": "x", "origin_version_id": "y"}`)
+	if n := len(list(applications.ListRequest{}).Rows); n != 3 {
+		t.Errorf("rows with a malformed origin = %d, want 3", n)
+	}
+}
 
 func TestApplicationsRepoPostgres_ListExtendedFiltersAndFolderIsolation(t *testing.T) {
 	repo, pool := newApplicationsTestRepo(t)

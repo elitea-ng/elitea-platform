@@ -1257,8 +1257,18 @@ mod tests {
             "the drain is bounded"
         );
         assert!(output.stdout.starts_with("before\n"), "{:?}", output.stdout);
-        assert!(output.stdout_truncated);
         assert!(output.stderr.starts_with("oops\n"), "{:?}", output.stderr);
+        // Under bubblewrap the command's PID namespace ends with it and
+        // takes the setsid grandchild along, so nothing holds the pipes
+        // open and the output is complete, not cut off.
+        #[cfg(target_os = "linux")]
+        let confined = crate::sandbox::bubblewrap::usable(&config.sandbox).is_some();
+        #[cfg(not(target_os = "linux"))]
+        let confined = false;
+        if confined {
+            return;
+        }
+        assert!(output.stdout_truncated);
         assert!(output.stderr_truncated);
     }
 

@@ -69,6 +69,12 @@ export function changeRequestKindLabel(kind: string): string {
       return t('features.agentLifecycle.changeRequest.kind.release', 'Release');
     case 'recertification':
       return t('features.agentLifecycle.changeRequest.kind.recertification', 'Recertification');
+    case 'hire':
+      return t('features.agentLifecycle.changeRequest.kind.hire', 'Hire');
+    case 'upgrade':
+      return t('features.agentLifecycle.changeRequest.kind.upgrade', 'Upgrade');
+    case 'upstream_merge':
+      return t('features.agentLifecycle.changeRequest.kind.upstreamMerge', 'Upstream update');
     case 'legacy_unreviewed':
       return t('features.agentLifecycle.changeRequest.kind.legacy', 'Earlier publish (not reviewed)');
     default:

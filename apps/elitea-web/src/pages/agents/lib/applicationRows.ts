@@ -28,7 +28,11 @@ function iconUrlOf(application: Application): string | undefined {
 }
 
 /** One list row from the wire; `badge` is the status as a word (ADR-0051: status is a badge, not a tab). */
-export function toApplicationRow(application: Application, onSelectForkedFrom: (id: string) => void, badge?: string): ApplicationListRow {
+export function toApplicationRow(
+  application: Application,
+  onSelectForkedFrom: (id: string) => void,
+  badge?: string,
+): ApplicationListRow {
   const forkedFrom = forkedFromId(application);
   const iconUrl = iconUrlOf(application);
   return {
@@ -37,7 +41,9 @@ export function toApplicationRow(application: Application, onSelectForkedFrom: (
     description: application.description ?? '',
     // A deleted author's account answers no name or email (#6702).
     authors: (application.authors ?? []).map((author) => ({
-      id: author.id, name: authorDisplayName(author), deleted: isDeletedAuthor(author),
+      id: author.id,
+      name: authorDisplayName(author),
+      deleted: isDeletedAuthor(author),
     })),
     tags: application.tags ?? [],
     createdAt: application.created_at,

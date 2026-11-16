@@ -8,7 +8,12 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { useNavigate } from '@tanstack/react-router';
 
 import { EntityLifecycleControls } from '@/features/agent-lifecycle';
-import { DeleteApplicationButton, ExportApplicationButton, applicationServerErrorMessage, useApplicationsStore } from '@/features/agents';
+import {
+  DeleteApplicationButton,
+  ExportApplicationButton,
+  applicationServerErrorMessage,
+  useApplicationsStore,
+} from '@/features/agents';
 import { StopAgentButton } from '@/features/kill-switch';
 
 import { ChatWithAgentButton } from './ChatWithAgentButton';
@@ -95,7 +100,13 @@ export function EditApplicationActions({
   const handleChatError = useCallback(
     // The server's own refusal when it gave one (an agent or pipeline whose
     // attachments break the composition rule, FU-244), else the generic text.
-    (error?: unknown) => setError(applicationServerErrorMessage(error, t('pages.agents.editApplication.chatError', 'Failed to open a chat with this agent.'))),
+    (error?: unknown) =>
+      setError(
+        applicationServerErrorMessage(
+          error,
+          t('pages.agents.editApplication.chatError', 'Failed to open a chat with this agent.'),
+        ),
+      ),
     [],
   );
 
@@ -116,7 +127,13 @@ export function EditApplicationActions({
         onError={handleExportError}
       />
       {/* ADR-0050 decision 1: a personal agent's independent copy in a team project. */}
-      <PersonalAgentCopyButton projectId={projectId} applicationId={applicationId} name={name} projects={forkTargets} onNotice={setNotice} />
+      <PersonalAgentCopyButton
+        projectId={projectId}
+        applicationId={applicationId}
+        name={name}
+        projects={forkTargets}
+        onNotice={setNotice}
+      />
       {/* ADR-0041 decision 1: the project admin's kill switch for this agent. */}
       <StopAgentButton projectId={projectId} applicationId={applicationId} onError={setError} />
       <DeleteApplicationButton
@@ -159,19 +176,12 @@ function ActionMessages({
   return (
     <>
       {error !== undefined && (
-        <Typography
-          role="alert"
-          variant="bodySmall"
-        >
+        <Typography role="alert" variant="bodySmall">
           {error}
         </Typography>
       )}
       {notice !== undefined && (
-        <Typography
-          component="output"
-          variant="bodySmall"
-          data-testid="agent-copy-notice"
-        >
+        <Typography component="output" variant="bodySmall" data-testid="agent-copy-notice">
           {notice}
         </Typography>
       )}

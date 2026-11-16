@@ -20,6 +20,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -299,6 +300,31 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	// An agent is forked when its stable version records where it came from
 	// (`applications.IsForkedFromMeta`).
 	forkedSQL := "(COALESCE(av.meta, '{}'::jsonb) ?& ARRAY['parent_entity_id','parent_project_id'])"
+	// An agent hired from the Marketplace as an install records its origin on
+	// the stable version (ADR-0051 decision 3). It is not a fork.
+	installedSQL := "(COALESCE(av.meta->>'origin_kind', '') = 'installed')"
+	originExpr := "CASE WHEN " + installedSQL + " THEN 'installed' WHEN " + forkedSQL + " THEN 'forked' ELSE 'own' END"
+	// A newer hireable version of the listing the agent came from. The CASE
+	// keeps the casts away from rows whose origin ids are not numbers.
+	updateSQL := `(CASE WHEN COALESCE(av.meta->>'origin_listing_id', '') ~ '^[0-9]{1,18}$'
+		AND COALESCE(av.meta->>'origin_version_id', '') ~ '^[0-9]{1,18}$' THEN EXISTS (
+			SELECT 1 FROM elitea_marketplace.listing_versions cv
+			WHERE cv.listing_id = (av.meta->>'origin_listing_id')::bigint
+			  AND cv.withdrawn_at IS NULL AND cv.state <> 'yanked'
+			  AND (cv.published_at, cv.version_id) > (
+				SELECT pv.published_at, pv.version_id FROM elitea_marketplace.listing_versions pv
+				WHERE pv.listing_id = cv.listing_id AND pv.version_id = (av.meta->>'origin_version_id')::bigint))
+		ELSE false END)`
+	// A database that has not run shared 0250 has no listings to compare with,
+	// and a statement that names a missing table fails at parse time even when
+	// its branch is never taken, so the comparison is left out there.
+	var hasListings bool
+	if err := r.pool.QueryRow(ctx, `SELECT to_regclass('elitea_marketplace.listing_versions') IS NOT NULL`).Scan(&hasListings); err != nil {
+		return empty, fmt.Errorf("applications: list marketplace probe: %w", err)
+	}
+	if !hasListings {
+		updateSQL = "false"
+	}
 	// Status and origin are facets: the page of rows is narrowed by them, the
 	// facet counts are not (each count honours every OTHER filter).
 	facetConditions := []string{}
@@ -310,9 +336,14 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	}
 	switch req.Origin {
 	case "forked":
-		facetConditions = append(facetConditions, forkedSQL)
+		facetConditions = append(facetConditions, "NOT "+installedSQL+" AND "+forkedSQL)
+	case "installed":
+		facetConditions = append(facetConditions, installedSQL)
 	case "own":
-		facetConditions = append(facetConditions, "NOT "+forkedSQL)
+		facetConditions = append(facetConditions, "NOT "+installedSQL+" AND NOT "+forkedSQL)
+	}
+	if req.UpdateAvailable {
+		facetConditions = append(facetConditions, updateSQL)
 	}
 	where := ""
 	if len(conditions) > 0 {
@@ -340,26 +371,25 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	}
 
 	facets := applications.ListFacets{Statuses: map[string]int{}, Origins: map[string]int{}}
-	facetRows, err := tx.Query(ctx, `SELECT `+statusExpr+`, `+forkedSQL+`, COUNT(*) FROM `+s+`.applications a`+join+facetBase+` GROUP BY 1, 2`, args...)
+	facetRows, err := tx.Query(ctx, `SELECT `+statusExpr+`, `+originExpr+`, `+updateSQL+`, COUNT(*) FROM `+s+`.applications a`+join+facetBase+` GROUP BY 1, 2, 3`, args...)
 	if err != nil {
 		return empty, fmt.Errorf("applications: list facets: %w", err)
 	}
 	for facetRows.Next() {
 		var (
-			status string
-			forked bool
-			n      int
+			status, origin string
+			update         bool
+			n              int
 		)
-		if err := facetRows.Scan(&status, &forked, &n); err != nil {
+		if err := facetRows.Scan(&status, &origin, &update, &n); err != nil {
 			facetRows.Close()
 			return empty, fmt.Errorf("applications: list facets scan: %w", err)
 		}
 		facets.Statuses[status] += n
-		origin := "own"
-		if forked {
-			origin = "forked"
-		}
 		facets.Origins[origin] += n
+		if update {
+			facets.UpdateAvailable += n
+		}
 	}
 	facetRows.Close()
 	if err := facetRows.Err(); err != nil {
@@ -448,6 +478,13 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		// the source agent without a second round-trip.
 		versionMeta := decodeJSONObject(versionMetaStr)
 		app.IsForked = applications.IsForkedFromMeta(versionMeta)
+		// The Marketplace origin (ADR-0051): the keys the Workshop badge and the
+		// second-hire marker read.
+		for _, key := range []string{"origin_kind", "origin_listing_id", "origin_version_id", "origin_version_name", "origin_listing_name"} {
+			if value, ok := versionMeta[key]; ok {
+				app.Meta[key] = value
+			}
+		}
 		if entityID, projectID, ok := applications.ForkOrigin(versionMeta); ok {
 			app.Meta["parent_entity_id"] = entityID
 			app.Meta["parent_project_id"] = projectID
@@ -821,6 +858,11 @@ func (r *ApplicationsRepo) CreateVersion(ctx context.Context, projectID, applica
 	}
 	if v.AuthorID <= 0 {
 		return applications.Version{}, apierr.Unauthorized("an authenticated author is required to create a version")
+	}
+	// A new version of an installed agent would let its definition drift
+	// (ADR-0051); every caller, the REST route and the internal tool, ends here.
+	if marketplace.IsInstalledApplication(ctx, r.pool, s, applicationID) {
+		return applications.Version{}, apierr.Conflict(marketplace.ReadOnlyMessage)
 	}
 	if v.CopySkillsFromVersionID <= 0 && v.CopyToolsFromVersionID <= 0 {
 		return insertVersion(ctx, r.pool, s, applicationID, v)
@@ -1313,12 +1355,16 @@ func checkStoredPipelineInstructions(ctx context.Context, q querier, schema, app
 }
 
 func (r *ApplicationsRepo) DeleteVersion(ctx context.Context, projectID, applicationID, versionID string) error {
-	_, err := tenantSchema(projectID)
+	s, err := tenantSchema(projectID)
 	if err != nil {
 		return err
 	}
 	if !isNumericRowID(applicationID) || !isNumericRowID(versionID) {
 		return apierr.NotFound("version not found")
+	}
+	// The one version of an installed agent is its definition (ADR-0051).
+	if marketplace.IsInstalledVersion(ctx, r.pool, s, versionID) {
+		return apierr.Conflict(marketplace.ReadOnlyMessage)
 	}
 	project, err := parseProjectID(projectID)
 	if err != nil {

@@ -4972,6 +4972,34 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.Get("/public_application/prompt_lib/{applicationID}", coreHandler.PublicApplications)
 				r.Get("/public_application/prompt_lib/{applicationID}/{versionName}", coreHandler.PublicApplications)
 
+				// The Marketplace (ADR-0051, issue 1629): facet search over the
+				// listings, the listing page, the publisher and administrator
+				// actions, the hire and the origin of a hired agent. They take
+				// the caller's project, so the project gate runs before any
+				// read: the hired-here facet is that project's. Reads take the
+				// agent list permission. A hire takes the permission that
+				// creates an agent. A version state change is the publisher's
+				// or an administrator's, and the handler decides which.
+				requireMarketplaceRead := projectPermission("models.applications.applications.list")
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_listings/prompt_lib/{projectID}", coreHandler.MarketplaceSearch)
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_listing/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceListing)
+				r.With(requireMarketplaceRead).
+					Patch("/marketplace_listing/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceListingUpdate)
+				r.With(requireMarketplaceRead).
+					Post("/marketplace_listing_version/prompt_lib/{projectID}/{listingID}/{versionID}", coreHandler.MarketplaceVersionState)
+				r.With(projectPermission("models.applications.applications.create")).
+					Post("/marketplace_hire/prompt_lib/{projectID}", coreHandler.MarketplaceHire)
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_origin/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceOrigin)
+				// The bindings of a hired agent stay editable while its
+				// definition is read-only (ADR-0051 decision 3).
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_bindings/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceBindings)
+				r.With(projectPermission("models.applications.application.update")).
+					Put("/marketplace_bindings/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceBindings)
+
 				// Skill publishing (#249) — the skill-level counterpart of the
 				// application publish block above, plus the skills-parity
 				// extras that live in the same domain. Registered here rather

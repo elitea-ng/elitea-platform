@@ -30,33 +30,25 @@ describe('useHasAdminPermission', () => {
   });
 
   it('is false when the permission set does not include the applications-list permission', async () => {
-    server.use(
-      getPermissionListMockHandler([{ name: 'models.chat.conversations.list', enabled: true }]),
-    );
+    server.use(getPermissionListMockHandler([{ name: 'models.chat.conversations.list', enabled: true }]));
     const { result } = renderHook(() => useHasAdminPermission('1'), { wrapper });
     await waitFor(() => expect(result.current).toBe(false));
   });
 
   it('is true when the permission set includes the applications-list permission and it is enabled', async () => {
-    server.use(
-      getPermissionListMockHandler([{ name: 'models.applications.applications.list', enabled: true }]),
-    );
+    server.use(getPermissionListMockHandler([{ name: 'models.applications.applications.list', enabled: true }]));
     const { result } = renderHook(() => useHasAdminPermission('1'), { wrapper });
     await waitFor(() => expect(result.current).toBe(true));
   });
 
   it('is false when the permission is present but disabled', async () => {
-    server.use(
-      getPermissionListMockHandler([{ name: 'models.applications.applications.list', enabled: false }]),
-    );
+    server.use(getPermissionListMockHandler([{ name: 'models.applications.applications.list', enabled: false }]));
     const { result } = renderHook(() => useHasAdminPermission('1'), { wrapper });
     await waitFor(() => expect(result.current).toBe(false));
   });
 
   it('is false when only the PUBLIC agents-feed list permission is present — the admin tab needs the private-listing permission, not this one', async () => {
-    server.use(
-      getPermissionListMockHandler([{ name: 'models.applications.public_applications.list', enabled: true }]),
-    );
+    server.use(getPermissionListMockHandler([{ name: 'models.applications.public_applications.list', enabled: true }]));
     const { result } = renderHook(() => useHasAdminPermission('1'), { wrapper });
     await waitFor(() => expect(result.current).toBe(false));
   });

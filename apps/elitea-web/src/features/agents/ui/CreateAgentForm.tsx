@@ -14,6 +14,7 @@ import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { combineSx } from '@/shared/ui/lib/combineSx';
 import { StyledInputEnhancer } from '@/shared/ui/StyledInputEnhancer';
 
+import { definitionLock } from '../lib/definitionLock';
 import { useCreateAgentFormState } from '../model/useCreateAgentFormState';
 import { advanceMetaProps, type CreateAgentMetaControls } from './CreateAgentForm.meta';
 import type { AgentDraftValues, AgentFieldChange } from '../model/types';
@@ -59,7 +60,7 @@ import { WelcomeMessageInput } from './WelcomeMessageInput';
  *    written — no `GenerateAgentButton` itself. Rendered only outside
  *    pipeline mode (`entityType !== 'pipeline'`), matching the baseline's
  *    own conditional.
- *  - `iconSlot` — the baseline's editable `EntityIcon`
+ *  - `generalSlots.icon` — the baseline's editable `EntityIcon`
  *    (`components/EntityIcon.jsx`, `editable={true}`, `onChangeIcon`,
  *    upload flow). Sibling A1h's own scoped `EntityIcon.tsx`
  *    (`../ui/EntityIcon.tsx`) explicitly does NOT cover this: its own doc
@@ -67,7 +68,7 @@ import { WelcomeMessageInput } from './WelcomeMessageInput';
  *    always passes `editable={false}`" and that the editable/upload mode
  *    "is a separate, large feature... no owner in this sub-unit's file
  *    list." A real gap, not a naming mismatch.
- *  - `tagsSlot` — the baseline's `TagEditor`
+ *  - `generalSlots.tags` — the baseline's `TagEditor`
  *    (`pages/Common/Components/TagEditor.jsx`), consumed by three
  *    different domains (`CreateSkillForm`, this file, `ApplicationEditForm`)
  *    with no `shared/ui` port anywhere in this worktree
@@ -133,8 +134,7 @@ interface GeneralFieldsProps {
   readonly name: GeneralFieldsNameProps;
   readonly description: GeneralFieldsDescriptionProps;
   readonly disabled: boolean;
-  readonly iconSlot: ReactNode;
-  readonly tagsSlot: ReactNode;
+  readonly slots: CreateAgentFormProps['generalSlots'];
 }
 
 /**
@@ -145,7 +145,9 @@ interface GeneralFieldsProps {
  * "group into one object" answer to the §3.5 12-prop budget `BasicAccordion`
  * `slotSx` and `InputBase` `actions`/`expand` already establish.
  */
-function GeneralFields({ name, description, disabled, iconSlot, tagsSlot }: GeneralFieldsProps): ReactNode {
+function GeneralFields({ name, description, disabled, slots }: GeneralFieldsProps): ReactNode {
+  const iconSlot = slots?.icon;
+  const tagsSlot = slots?.tags;
   return (
     <Box sx={accordionContentSx}>
       <Box sx={nameContainerSx}>
@@ -222,6 +224,8 @@ export interface CreateAgentFormProps {
   readonly values: AgentDraftValues;
   readonly onFieldChange: AgentFieldChange;
   readonly disabled?: boolean | undefined;
+  /** Locks instructions, welcome message and starters only (an installed agent). Defaults to `disabled`. */
+  readonly definitionDisabled?: boolean | undefined;
   readonly showInstructions?: boolean | undefined;
   readonly entityType?: 'application' | 'pipeline' | undefined;
   /**
@@ -232,8 +236,8 @@ export interface CreateAgentFormProps {
    * as a non-button interactive element (an MUI `Chip`, a `role="button"` `Box`).
    */
   readonly generateAgentButtonSlot?: ReactNode | undefined;
-  readonly iconSlot?: ReactNode | undefined;
-  readonly tagsSlot?: ReactNode | undefined;
+  /** The general block's editable icon and tag controls (see the module doc for both). */
+  readonly generalSlots?: { readonly icon?: ReactNode | undefined; readonly tags?: ReactNode | undefined } | undefined;
   /**
    * The model picker (`widgets/agent-model-settings`), rendered inside the
    * "Advanced" panel where the baseline puts it. Injected rather than
@@ -273,28 +277,26 @@ export function CreateAgentForm({
   values,
   onFieldChange,
   disabled = false,
+  definitionDisabled,
   showInstructions = true,
   entityType = 'application',
   generateAgentButtonSlot,
-  iconSlot,
-  tagsSlot,
+  generalSlots,
   modelSettingsSlot,
   instructionsAiEditSlot,
   metaControls,
   sx,
 }: CreateAgentFormProps): ReactNode {
   const versionDetails = values.version_details;
+  const lockDefinition = definitionLock(definitionDisabled, disabled);
   const state = useCreateAgentFormState(values, onFieldChange);
 
   // Client-side "required" validation-error state, restored to parity with
   // the baseline's `formik.touched?.name && Boolean(formik.errors.name)` —
   // see `requiredFieldError`'s own doc comment. `*Touched` stand in for
   // Formik's own per-field `touched` map (no ambient form context here).
-  // Validated off `state.name` (this component's own optimistic local
-  // mirror of what the input shows), not `values.name`: a caller that
-  // doesn't round-trip `onFieldChange` synchronously would otherwise leave
-  // the error stale one keystroke behind. `state.description` has no such
-  // local mirror (reads straight off `values.description`), so equivalent either way.
+  // Validated off `state.name` (the optimistic local mirror), not `values.name`, so a caller that
+  // doesn't round-trip `onFieldChange` synchronously cannot leave the error one keystroke behind.
   const [nameTouched, setNameTouched] = useState(false);
   const [descriptionTouched, setDescriptionTouched] = useState(false);
   const validation = useMemo(
@@ -348,8 +350,7 @@ export function CreateAgentForm({
                   error: descriptionError,
                 }}
                 disabled={disabled}
-                iconSlot={iconSlot}
-                tagsSlot={tagsSlot}
+                slots={generalSlots}
               />
             ),
           },
@@ -361,7 +362,7 @@ export function CreateAgentForm({
           <InstructionsInput
             instructions={versionDetails?.instructions}
             onInstructionsChange={state.onInstructionsChange}
-            disabled={disabled}
+            disabled={lockDefinition}
             lineNumbers={entityType === 'pipeline'}
           />
         </Box>
@@ -375,13 +376,13 @@ export function CreateAgentForm({
           welcomeMessage={versionDetails?.welcome_message}
           onWelcomeMessageChange={state.onWelcomeMessageChange}
           versionId={versionDetails?.id}
-          disabled={disabled}
+          disabled={lockDefinition}
         />
       </Box>
       <ConversationStartersEditor
         starters={versionDetails?.conversation_starters}
         onStartersChange={state.onConversationStartersChange}
-        disabled={disabled}
+        disabled={lockDefinition}
         sx={conversationStartersSx}
       />
       <Box sx={advanceSettingsSx}>

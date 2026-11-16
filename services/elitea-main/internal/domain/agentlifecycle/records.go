@@ -135,6 +135,9 @@ type PublishCandidate struct {
 	// PublisherID is the proposer: the published row and the release name
 	// them, and the approvals name the approvers.
 	PublisherID int64
+	// ReleaseNotes is the request's summary: the Marketplace listing shows it
+	// as the release notes of the published version.
+	ReleaseNotes string
 }
 
 // PublishedCandidate is what the publish of a candidate wrote.
@@ -170,4 +173,26 @@ type Attestation struct {
 // expired.
 func (a Attestation) Valid(now time.Time) bool {
 	return a.RevokedAt == nil && (a.ValidUntil == nil || a.ValidUntil.After(now))
+}
+
+// NewMarketplaceChange is the record of a hire in the registry and, when the
+// hire needs a person, its change request (ADR-0051 decision 3).
+type NewMarketplaceChange struct {
+	ProjectID     int64
+	ApplicationID int64
+	// Tier is the tier of the listing: the agent's registry row takes it.
+	Tier       Tier
+	ProposedBy int64
+	// NeedsChange asks for a change request of kind Kind. A hire of a low-tier
+	// agent with no write tool needs none, and only the registry row is set.
+	NeedsChange bool
+	Kind        ChangeKind
+	Summary     string
+	ListingID   int64
+	VersionID   int64
+	Digest      [32]byte
+	// SelfApprove records the request as approved by its proposer, for a
+	// personal project under the platform policy
+	// marketplace_personal_self_approve. The audit event names the policy.
+	SelfApprove bool
 }

@@ -44,9 +44,8 @@ import {
  *
  * MEASURED, and not what the source case's word "tag" suggests: the checkboxes
  * are the deployment's agent CATEGORIES (`useGetAgentCategories`), and a row is
- * filed by `meta.category` (`getCategoryForApplication`,
- * `src/pages/marketplace/helpers.ts`, whose own note records that reading a
- * flat `category` put every agent in "Other"). A version's `tags` are the
+ * filed by `meta.category` (the listing's own `category`, which the
+ * facet search counts, so the checkbox reads "Development (3)"). A version's `tags` are the
  * publish GATE's requirement (#913) and are not what the Marketplace groups
  * by, so the fixture below sets both and this constant names the one the
  * checkbox carries.
@@ -66,6 +65,8 @@ interface PublishedAgent {
   readonly id: string;
   readonly versionId: string;
   readonly name: string;
+  /** The Marketplace LISTING id: the card's and the listing page's key (the agent id is the public copy's). */
+  listingId: string;
 }
 
 /**
@@ -105,6 +106,7 @@ async function publishAgent(request: APIRequestContext, name: string): Promise<P
     id: String(body.id ?? ''),
     versionId: String(body.version_details?.id ?? ''),
     name,
+    listingId: '',
   };
   expect(agent.id).not.toBe('');
 
@@ -114,20 +116,28 @@ async function publishAgent(request: APIRequestContext, name: string): Promise<P
   );
   expect(published.status(), `the publish was refused: ${(await published.text()).slice(0, 300)}`).toBe(200);
 
-  // The catalogue route the Marketplace reads, polled BEFORE the browser is pointed
+  // The search route the Marketplace reads, polled BEFORE the browser is pointed
   // at it: a page that renders no card because the publish has not landed yet is a
-  // race, and it would read as "the search box is broken".
+  // race, and it would read as "the search box is broken". The listing id it
+  // answers is the key of the card and of the listing page.
   await expect
     .poll(
       async () => {
-        const catalogue = await request.get(`${API_BASE}/elitea_core/public_applications/prompt_lib?query=${name}`);
-        if (!catalogue.ok()) return false;
-        const rows = ((await catalogue.json()) as { rows?: readonly { name?: string }[] }).rows ?? [];
-        return rows.some((row) => row.name === name);
+        const search = await request.get(
+          `${API_BASE}/elitea_core/marketplace_listings/prompt_lib/${DEFAULT_PROJECT_ID}?kind=agent&query=${name}`,
+        );
+        if (!search.ok()) return '';
+        const rows = ((await search.json()) as { rows?: readonly { id?: string; name?: string }[] }).rows ?? [];
+        return rows.find((row) => row.name === name)?.id ?? '';
       },
-      { timeout: 30_000, message: 'the published agent never reached the catalogue route the Marketplace reads' },
+      { timeout: 30_000, message: 'the published agent never reached the search route the Marketplace reads' },
     )
-    .toBe(true);
+    .not.toBe('');
+  const found = await request.get(
+    `${API_BASE}/elitea_core/marketplace_listings/prompt_lib/${DEFAULT_PROJECT_ID}?kind=agent&query=${name}`,
+  );
+  const rows = ((await found.json()) as { rows?: readonly { id?: string; name?: string }[] }).rows ?? [];
+  agent.listingId = rows.find((row) => row.name === name)?.id ?? '';
   return agent;
 }
 
@@ -204,7 +214,7 @@ test('a published agent is findable in the Marketplace by name and by category, 
   // correct behaviour; the assertion is that it is findable, not that it
   // appears once. With a search typed the shelves are hidden, so in practice
   // the list holds the one card.
-  const card = page.getByTestId(`marketplace-card-link-agents-${agent.id}`).first();
+  const card = page.getByTestId(`marketplace-card-link-agents-${agent.listingId}`).first();
   await expect(card, 'the published agent must be findable by its exact name').toBeVisible({ timeout: 30_000 });
   await expect(card, 'the card must name the agent').toContainText(name);
 
@@ -216,7 +226,7 @@ test('a published agent is findable in the Marketplace by name and by category, 
   // the identity assertion is made where the product puts it.
   await card.click();
   await expect(page, 'clicking the card must open the listing page, not a dialog').toHaveURL(
-    new RegExp(`/marketplace/agents/${agent.id}$`),
+    new RegExp(`/marketplace/agents/${agent.listingId}$`),
     { timeout: 20_000 },
   );
   await expect(page.getByTestId('marketplace-listing-name'), 'the listing page must name the agent').toHaveText(name, {
@@ -235,13 +245,16 @@ test('a published agent is findable in the Marketplace by name and by category, 
   // name browses the categories instead.
   await showBrowse(page);
   await browseSearch(page).fill('');
-  const category = page.getByRole('checkbox', { name: MARKETPLACE_CATEGORY, exact: true });
-  await expect(category, `the Marketplace must offer the '${MARKETPLACE_CATEGORY}' category`).toBeVisible({ timeout: 20_000 });
+  // The label carries the server's count: "Development (3)".
+  const category = page.getByRole('checkbox', { name: new RegExp(`^${MARKETPLACE_CATEGORY} \\(\\d+\\)$`) });
+  await expect(category, `the Marketplace must offer the '${MARKETPLACE_CATEGORY}' category`).toBeVisible({
+    timeout: 20_000,
+  });
   await category.check();
   await expect(category, 'the checkbox must report itself checked').toBeChecked();
   // The summary bar's chips are for a CLOSED sidebar (unit-tested); with Browse open the checkbox is the filter's state.
   await expect(
-    page.getByTestId(`marketplace-card-link-agents-${agent.id}`).first(),
+    page.getByTestId(`marketplace-card-link-agents-${agent.listingId}`).first(),
     'the published agent must be reachable through its category with no search term',
   ).toBeVisible({ timeout: 30_000 });
 });

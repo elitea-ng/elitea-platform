@@ -64,7 +64,10 @@ export interface CreateAgentFormExtraFields {
  */
 /** `meta.citations` and `meta.context`, out of `areExtraFieldsEqual` for the complexity budget. */
 function areMetaControlsEqual(a: CreateAgentFormExtraFields, b: CreateAgentFormExtraFields): boolean {
-  return (a.citations ?? null) === (b.citations ?? null) && areContextBlocksEqual(a.contextBlock ?? null, b.contextBlock ?? null);
+  return (
+    (a.citations ?? null) === (b.citations ?? null) &&
+    areContextBlocksEqual(a.contextBlock ?? null, b.contextBlock ?? null)
+  );
 }
 
 /**
@@ -151,8 +154,11 @@ export function applyContentControlField(
   path: string,
   value: unknown,
 ): CreateAgentFormExtraFields {
-  if (path === 'version_details.meta.output_contract') return { ...previous, outputContract: readOutputContract(value) };
-  if (path === 'version_details.meta.citations') return { ...previous, citations: value === 'required' ? 'required' : null };
-  if (path === 'version_details.meta.context') return { ...previous, contextBlock: contextBlockForSave(readContextBlock(value)) };
+  if (path === 'version_details.meta.output_contract')
+    return { ...previous, outputContract: readOutputContract(value) };
+  if (path === 'version_details.meta.citations')
+    return { ...previous, citations: value === 'required' ? 'required' : null };
+  if (path === 'version_details.meta.context')
+    return { ...previous, contextBlock: contextBlockForSave(readContextBlock(value)) };
   return previous;
 }

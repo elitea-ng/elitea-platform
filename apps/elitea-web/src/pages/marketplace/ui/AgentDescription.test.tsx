@@ -41,12 +41,7 @@ afterEach(() => {
 
 describe('AgentDescription', () => {
   it('offers "Show more" when the clamp cuts the text, and opens the full text', async () => {
-    renderWithTheme(
-      <AgentDescription
-        description={'A long description. '.repeat(40)}
-        isSmallHeight={false}
-      />,
-    );
+    renderWithTheme(<AgentDescription description={'A long description. '.repeat(40)} isSmallHeight={false} />);
     const button = await screen.findByRole('button', { name: 'Show more' });
     const text = screen.getByTestId('agent-modal-description');
     expect(text).toHaveStyle({ WebkitLineClamp: '2' });
@@ -64,12 +59,7 @@ describe('AgentDescription', () => {
     // The modal content clips (`overflow: hidden`) on a normal-height window:
     // an unbounded opened description pushed its own tail and the "Show less"
     // button past the clipped edge, where nothing scrolled them back.
-    renderWithTheme(
-      <AgentDescription
-        description={'A long description. '.repeat(115)}
-        isSmallHeight={false}
-      />,
-    );
+    renderWithTheme(<AgentDescription description={'A long description. '.repeat(115)} isSmallHeight={false} />);
     const text = screen.getByTestId('agent-modal-description');
     fireEvent.click(await screen.findByRole('button', { name: 'Show more' }));
     expect(text).toHaveStyle({ maxHeight: remToPx('10rem'), overflowY: 'auto' });
@@ -83,35 +73,20 @@ describe('AgentDescription', () => {
   });
 
   it('leaves the description unbounded on a short window, whose content box already scrolls', () => {
-    renderWithTheme(
-      <AgentDescription
-        description={'A long description. '.repeat(115)}
-        isSmallHeight
-      />,
-    );
+    renderWithTheme(<AgentDescription description={'A long description. '.repeat(115)} isSmallHeight />);
     expect(screen.getByTestId('agent-modal-description')).not.toHaveStyle({ maxHeight: remToPx('10rem') });
   });
 
   it('offers no button when the text fits', async () => {
     cutText = false;
-    renderWithTheme(
-      <AgentDescription
-        description="Short."
-        isSmallHeight={false}
-      />,
-    );
+    renderWithTheme(<AgentDescription description="Short." isSmallHeight={false} />);
     // Wait past the hook's settle delays (50 and 200 ms).
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
   });
 
   it('offers no button on a short window, where the text is never clamped', async () => {
-    renderWithTheme(
-      <AgentDescription
-        description={'A long description. '.repeat(40)}
-        isSmallHeight
-      />,
-    );
+    renderWithTheme(<AgentDescription description={'A long description. '.repeat(40)} isSmallHeight />);
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
   });

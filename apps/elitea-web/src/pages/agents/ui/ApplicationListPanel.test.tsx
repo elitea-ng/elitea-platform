@@ -21,39 +21,20 @@ const ROWS: readonly ApplicationListRow[] = [
 
 describe('ApplicationListPanel', () => {
   it('shows card skeletons while loading', () => {
-    const { container } = renderWithTheme(
-      <ApplicationListPanel
-        {...BASE_PROPS}
-        rows={[]}
-        isLoading
-        isError={false}
-      />,
-    );
+    const { container } = renderWithTheme(<ApplicationListPanel {...BASE_PROPS} rows={[]} isLoading isError={false} />);
     // The grid shows card-shaped skeletons while the first page loads — the
     // "Loading…" text line it used to render belonged to the plain <List>.
     expect(container.querySelectorAll('[data-testid="entity-card-skeleton"]').length).toBeGreaterThan(0);
   });
 
   it('shows an alert with the error message on error', () => {
-    const { getByRole } = renderWithTheme(
-      <ApplicationListPanel
-        {...BASE_PROPS}
-        rows={[]}
-        isLoading={false}
-        isError
-      />,
-    );
+    const { getByRole } = renderWithTheme(<ApplicationListPanel {...BASE_PROPS} rows={[]} isLoading={false} isError />);
     expect(getByRole('alert')).toHaveTextContent('Something went wrong.');
   });
 
   it('shows the empty state when there are no rows', () => {
     const { getByText } = renderWithTheme(
-      <ApplicationListPanel
-        {...BASE_PROPS}
-        rows={[]}
-        isLoading={false}
-        isError={false}
-      />,
+      <ApplicationListPanel {...BASE_PROPS} rows={[]} isLoading={false} isError={false} />,
     );
     expect(getByText('Nothing found.')).toBeInTheDocument();
   });
@@ -61,13 +42,7 @@ describe('ApplicationListPanel', () => {
   it('renders each row and calls onSelect with its id when clicked', () => {
     const onSelect = vi.fn();
     const { getByText } = renderWithTheme(
-      <ApplicationListPanel
-        {...BASE_PROPS}
-        rows={ROWS}
-        isLoading={false}
-        isError={false}
-        onSelect={onSelect}
-      />,
+      <ApplicationListPanel {...BASE_PROPS} rows={ROWS} isLoading={false} isError={false} onSelect={onSelect} />,
     );
     expect(getByText('My Agent')).toBeInTheDocument();
     // The card face shows the NAME only (the description rides in its tooltip),
@@ -80,13 +55,7 @@ describe('ApplicationListPanel', () => {
 
   it('does not render "Load more" when hasMore is false', () => {
     const { queryByText } = renderWithTheme(
-      <ApplicationListPanel
-        {...BASE_PROPS}
-        rows={ROWS}
-        isLoading={false}
-        isError={false}
-        hasMore={false}
-      />,
+      <ApplicationListPanel {...BASE_PROPS} rows={ROWS} isLoading={false} isError={false} hasMore={false} />,
     );
     expect(queryByText('Load more')).not.toBeInTheDocument();
   });
@@ -109,14 +78,7 @@ describe('ApplicationListPanel', () => {
 
   it('disables "Load more" while isLoadingMore is true', () => {
     const { getByText } = renderWithTheme(
-      <ApplicationListPanel
-        {...BASE_PROPS}
-        rows={ROWS}
-        isLoading={false}
-        isError={false}
-        hasMore
-        isLoadingMore
-      />,
+      <ApplicationListPanel {...BASE_PROPS} rows={ROWS} isLoading={false} isError={false} hasMore isLoadingMore />,
     );
     expect(getByText('Load more').closest('button')).toBeDisabled();
   });
