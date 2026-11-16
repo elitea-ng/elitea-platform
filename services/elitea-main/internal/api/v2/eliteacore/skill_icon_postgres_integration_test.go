@@ -153,7 +153,7 @@ func TestSkillIconUploadWithAVersionIsReadableOnTheSkill(t *testing.T) {
 	skillID, versionID := seedSkillIconSkill(t, pool, "iconned")
 
 	rec := httptest.NewRecorder()
-	req := skillIconUploadRequest(t, "1", "logo.png", []byte("bytes"), nil)
+	req := skillIconUploadRequest(t, "1", "logo.png", pngBytes("bytes"), nil)
 	setURLParam(req, "versionId", versionID)
 	h.UploadSkillIcon(rec, req)
 	assertStatus(t, rec, http.StatusOK)
@@ -170,7 +170,7 @@ func TestSkillIconUploadWithAVersionIsReadableOnTheSkill(t *testing.T) {
 	downloadRec := httptest.NewRecorder()
 	eliteacore.DownloadIcon(store).ServeHTTP(downloadRec,
 		newRequest(http.MethodGet, "/", map[string]string{"projectID": "1", "filename": name}, nil))
-	if downloadRec.Code != http.StatusOK || downloadRec.Body.String() != "bytes" {
+	if downloadRec.Code != http.StatusOK || downloadRec.Body.String() != string(pngBytes("bytes")) {
 		t.Fatalf("download of the skill's own icon = %d %q", downloadRec.Code, downloadRec.Body.String())
 	}
 }
@@ -182,7 +182,7 @@ func TestSkillIconUpdateBindsAnAlreadyUploadedIcon(t *testing.T) {
 	skillID, versionID := seedSkillIconSkill(t, pool, "picked")
 
 	// The picker's two-step flow: upload with no version, then PUT the meta.
-	uploaded := uploadOneSkillIcon(t, h, "1", "picked.png", []byte("bytes"))
+	uploaded := uploadOneSkillIcon(t, h, "1", "picked.png", pngBytes("bytes"))
 	if got := readSkillIconMeta(t, pool, skillID); got != nil {
 		t.Fatalf("upload without a version bound an icon anyway: %v", got)
 	}
@@ -227,8 +227,8 @@ func TestSkillIconDeleteUnlinksEverySkillWearingIt(t *testing.T) {
 	secondSkill, secondVersion := seedSkillIconSkill(t, pool, "second")
 	keptSkill, keptVersion := seedSkillIconSkill(t, pool, "kept")
 
-	shared := uploadOneSkillIcon(t, h, "1", "shared.png", []byte("bytes"))
-	other := uploadOneSkillIcon(t, h, "1", "other.png", []byte("bytes"))
+	shared := uploadOneSkillIcon(t, h, "1", "shared.png", pngBytes("bytes"))
+	other := uploadOneSkillIcon(t, h, "1", "other.png", pngBytes("bytes"))
 	for _, binding := range []struct {
 		versionID string
 		meta      map[string]any

@@ -29,7 +29,24 @@ describe('SkillForm', () => {
     await user.clear(screen.getByTestId('skill-name-input'));
     await user.type(screen.getByTestId('skill-name-input'), 'New');
     expect(onChange).toHaveBeenCalled();
-    expect(screen.getByTestId('skill-tags-input')).toHaveValue('quality');
+    expect(screen.getByText('quality')).toBeInTheDocument();
+  });
+
+  // #2101: the old comma-joined text field parsed the comma away as it was
+  // typed and had no Enter handler, so no tag could be added.
+  it('adds a tag on Enter and on a comma', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderWithProviders(
+      <SkillForm
+        value={value}
+        onChange={onChange}
+      />,
+    );
+    await user.type(screen.getByTestId('skill-tags-input'), 'review{Enter}');
+    expect(onChange).toHaveBeenLastCalledWith({ ...value, tags: ['quality', 'review'] });
+    await user.type(screen.getByTestId('skill-tags-input'), 'ops,');
+    expect(onChange).toHaveBeenLastCalledWith({ ...value, tags: ['quality', 'ops'] });
   });
 
   it('switches between Markdown edit and preview', async () => {

@@ -23,6 +23,7 @@ import {
 } from '../lib/skillValidation';
 import type { SkillWriteInput } from '../model/types';
 import { SkillIconDialog } from './SkillIconDialog';
+import { SkillTagsInput } from './SkillTagsInput';
 
 /**
  * The icon control's binding. Absent means the skill has no version to bind an
@@ -43,37 +44,36 @@ export interface SkillFormProps {
   readonly disabled?: boolean;
   readonly showErrors?: boolean;
   readonly onGenerate?: () => void;
+  /** "Edit with AI" trigger (#2104), rendered beside Generate. The slot gates itself. */
+  readonly aiEditSlot?: ReactNode;
   readonly icon?: SkillIconControl | undefined;
 }
 
 type FieldName = 'name' | 'description' | 'instructions';
 
-function toTags(value: string): readonly string[] {
-  return value
-    .split(',')
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-}
-
 interface SkillFormHeaderProps {
   readonly disabled: boolean;
   readonly onGenerate: (() => void) | undefined;
+  readonly aiEditSlot: ReactNode;
 }
 
-function SkillFormHeader({ disabled, onGenerate }: SkillFormHeaderProps): ReactNode {
+function SkillFormHeader({ disabled, onGenerate, aiEditSlot }: SkillFormHeaderProps): ReactNode {
   return (
     <Box sx={headingRowSx}>
       <Typography variant="headingSmall">{t('skills.form.general', 'General')}</Typography>
-      {onGenerate && (
-        <BaseBtn
-          variant="secondary"
-          startIcon={<AutoAwesomeIcon />}
-          disabled={disabled}
-          onClick={onGenerate}
-        >
-          {t('skills.form.generate', 'Generate with AI')}
-        </BaseBtn>
-      )}
+      <Box sx={headerActionsSx}>
+        {aiEditSlot}
+        {onGenerate && (
+          <BaseBtn
+            variant="secondary"
+            startIcon={<AutoAwesomeIcon />}
+            disabled={disabled}
+            onClick={onGenerate}
+          >
+            {t('skills.form.generate', 'Generate with AI')}
+          </BaseBtn>
+        )}
+      </Box>
     </Box>
   );
 }
@@ -148,6 +148,7 @@ export function SkillForm({
   disabled = false,
   showErrors = false,
   onGenerate,
+  aiEditSlot,
   icon,
 }: SkillFormProps): ReactNode {
   const [preview, setPreview] = useState(false);
@@ -162,6 +163,7 @@ export function SkillForm({
       <SkillFormHeader
         disabled={disabled}
         onGenerate={onGenerate}
+        aiEditSlot={aiEditSlot}
       />
       <Box sx={nameRowSx}>
         <SkillIconButton
@@ -204,16 +206,12 @@ export function SkillForm({
         value={value.description}
         maxLength={SKILL_DESCRIPTION_MAX_LENGTH}
       />
-      <TextField
-        fullWidth
-        label={t('skills.form.tags', 'Tags')}
-        value={value.tags.join(', ')}
-        onChange={(event) => {
-          onChange({ ...value, tags: toTags(event.target.value) });
+      <SkillTagsInput
+        value={value.tags}
+        onChange={(tags) => {
+          onChange({ ...value, tags });
         }}
         disabled={disabled}
-        helperText={t('skills.form.tagsHint', 'Separate tags with commas.')}
-        slotProps={{ htmlInput: { 'data-testid': 'skill-tags-input' } }}
       />
       <Box sx={headingRowSx}>
         <Typography variant="headingSmall">{t('skills.form.instructions', 'Instructions')}</Typography>
@@ -282,6 +280,7 @@ const headingRowSx: SxProps<Theme> = {
   justifyContent: 'space-between',
   gap: 1,
 };
+const headerActionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: 1 };
 const nameRowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: 1 };
 const previewSx: SxProps<Theme> = (theme: Theme) => ({
   minHeight: '12rem',

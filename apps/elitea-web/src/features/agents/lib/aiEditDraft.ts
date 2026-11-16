@@ -96,10 +96,16 @@ export function aiEditPatch(snapshot: AiEditFields, proposed: AiEditFields): Par
   return patch;
 }
 
+/** Appended for a skill: the shared prompt describes an agent, and a skill has three fields. */
+const SKILL_NOTE =
+  '\n\nThis is a SKILL (a reusable Markdown instruction set), not an agent. Return ONLY a JSON object with the keys "name", "description" and "instructions". Do not include welcome_message, conversation_starters or any suggested_* key.';
+
 /** The prompt sent to the model: placeholders filled and escapes resolved in ONE pass, then the request. */
-export function buildAiEditInput(basePrompt: string, current: AiEditFields, request: string): string {
+export function buildAiEditInput(basePrompt: string, current: AiEditFields, request: string, agentFields = true): string {
+  const config = agentFields ? current : { name: current.name, description: current.description, instructions: current.instructions };
+  const note = agentFields ? '' : SKILL_NOTE;
   if (!basePrompt.includes('{current_config}')) {
-    return `${basePrompt}\n\nCURRENT INSTRUCTIONS:\n${current.instructions}\n\nREQUESTED CHANGE:\n${request}`;
+    return `${basePrompt}\n\nCURRENT INSTRUCTIONS:\n${current.instructions}\n\nREQUESTED CHANGE:\n${request}${note}`;
   }
   // The prompt is a Python format string: `{{`/`}}` are literal braces. One regex
   // pass, so an escaped `{{skills}}` stays literal and the agent's own text is
@@ -108,7 +114,7 @@ export function buildAiEditInput(basePrompt: string, current: AiEditFields, requ
   const filled = basePrompt.replace(/\{\{|\}\}|\{(current_config|toolkits|agents|skills)\}/g, (match, name: string | undefined) => {
     if (match === '{{') return '{';
     if (match === '}}') return '}';
-    return name === 'current_config' ? JSON.stringify(current, null, 2) : '(not provided)';
+    return name === 'current_config' ? JSON.stringify(config, null, 2) : '(not provided)';
   });
-  return `${filled}\n\nREQUESTED CHANGE:\n${request}`;
+  return `${filled}\n\nREQUESTED CHANGE:\n${request}${note}`;
 }
