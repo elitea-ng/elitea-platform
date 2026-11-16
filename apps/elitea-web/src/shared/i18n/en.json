@@ -3870,6 +3870,7 @@
   "pages.admin.toolkitTypes.bulk.title": "Apply to the listed types",
   "pages.admin.toolkitTypes.error.bulk": "The toolkit types could not be changed.",
   "chatMessages.fileList.removeAttachment": "Remove attachment",
+  "pages.toolkits.mcpLoadTools.loginSuccess": "Connected. {{count}} tools are available.",
   "pages.toolkits.mcpLoadTools.error": "Could not load the tools of this MCP server: ",
   "inventory.ask.empty": "Ask a question about this knowledge graph. The answer names the entities it came from.",
   "inventory.ask.open": "Ask this inventory",

@@ -25,8 +25,7 @@ import type { ToolkitChatModel } from '../../lib/hooks/useToolkitChat.types';
 
 import { getMessageContentForCopy, resolveDefaultValue } from './TestTools.helpers';
 import type { TestToolsProps } from './TestTools.types';
-import type { McpToolOption } from './useGetSelectedToolSchema';
-import { useGetSelectedToolSchema } from './useGetSelectedToolSchema';
+import { mcpToolOptionsFromSettings, useGetSelectedToolSchema } from './useGetSelectedToolSchema';
 import { TestToolSettings } from './TestToolSettings';
 
 /**
@@ -154,8 +153,9 @@ export function TestTools(props: TestToolsProps): ReactNode {
   const [selectedTool, setSelectedTool] = useState<string | null>(null);
   const [toolInputVariables, setToolInputVariables] = useState<Record<string, unknown>>({});
 
+  const availableMcpTools = useMemo(() => mcpToolOptionsFromSettings(values.settings), [values.settings]);
   // #440: `isError`/`refetch` come with the schema now. The static tier is a server read, so a lost read used to draw an argument form with no fields — the screen a tool that takes no arguments draws.
-  const { toolSchema, isError: toolSchemaReadFailed, refetch: retryToolSchemaRead } = useGetSelectedToolSchema({ toolkitId, toolkitType: values.type, toolOptionType: selectedTool, availableMcpTools: values.settings?.['available_mcp_tools'] as readonly McpToolOption[] | undefined });
+  const { toolSchema, isError: toolSchemaReadFailed, refetch: retryToolSchemaRead } = useGetSelectedToolSchema({ toolkitId, toolkitType: values.type, toolOptionType: selectedTool, availableMcpTools });
 
   const selectedToolSchema = useMemo(() => {
     if (selectedTool === IndexesToolsEnum.indexData) {
