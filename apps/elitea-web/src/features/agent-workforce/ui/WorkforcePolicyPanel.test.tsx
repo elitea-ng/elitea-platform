@@ -37,6 +37,11 @@ function policy(overrides: Partial<AgentWorkforcePolicy> = {}): AgentWorkforcePo
     grace_days: 7,
     updated_by: null,
     updated_at: null,
+    auto_feedback_enabled: false,
+    auto_feedback_by: null,
+    listing_min_reviews: 3,
+    listing_min_rating: 4,
+    listing_max_dismissal_rate: 0.2,
     default_rules: RULES,
     open_auto_hired: 0,
     can_manage: true,
@@ -116,6 +121,34 @@ describe('WorkforcePolicyPanel', () => {
       auto_dismiss_enabled: false,
       auto_dismiss_rules: RULES,
       grace_days: 14,
+      auto_feedback_enabled: false,
+      listing_min_reviews: 3,
+      listing_min_rating: 4,
+      listing_max_dismissal_rate: 0.2,
+    });
+  });
+
+  it('sends the whole policy with auto_feedback and the listing numbers (M6)', async () => {
+    const record = mock(policy());
+    renderWithQueryAndTheme(<WorkforcePolicyPanel projectId="7" />);
+    const feedback = await screen.findByTestId('agent-workforce-policy-auto-feedback');
+    expect((feedback.querySelector('input') as HTMLInputElement).checked).toBe(false);
+    await userEvent.click(feedback.querySelector('input') as HTMLInputElement);
+    const reviews = screen.getByTestId('agent-workforce-policy-listing-min-reviews');
+    await userEvent.clear(reviews);
+    await userEvent.type(reviews, '5');
+    const rating = screen.getByTestId('agent-workforce-policy-listing-min-rating');
+    await userEvent.clear(rating);
+    await userEvent.type(rating, '4.5');
+    await userEvent.click(screen.getByTestId('agent-workforce-policy-save'));
+    await waitFor(() => expect(record.saved).toHaveLength(1));
+    expect(record.saved[0]).toMatchObject({
+      auto_feedback_enabled: true,
+      listing_min_reviews: 5,
+      listing_min_rating: 4.5,
+      listing_max_dismissal_rate: 0.2,
+      min_successful_runs: 3,
+      grace_days: 7,
     });
   });
 
@@ -182,6 +215,9 @@ describe('policy form helpers', () => {
     expect(inputOf({ ...form, graceDays: '91' })).toBeUndefined();
     expect(inputOf({ ...form, maxAutoHired: '51' })).toBeUndefined();
     expect(inputOf({ ...form, minSuccessfulRuns: '2.5' })).toBeUndefined();
+    expect(inputOf({ ...form, listingMinRating: '5.5' })).toBeUndefined();
+    expect(inputOf({ ...form, listingMaxDismissalRate: '0' })).toBeUndefined();
+    expect(inputOf({ ...form, listingMinReviews: '' })).toBeUndefined();
     expect(inputOf({ ...form, rules: withThreshold(form.rules, 0, 0, -1) })).toBeUndefined();
     expect(inputOf(typeThreshold(form, 1, 0, ''))).toBeUndefined();
     expect(inputOf(typeThreshold(form, 1, 0, '120'))?.auto_dismiss_rules[1]?.conditions[0]?.value).toBe(120);

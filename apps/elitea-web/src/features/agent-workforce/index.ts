@@ -6,3 +6,6 @@
  */
 export { WorkforcePanel } from './ui/WorkforcePanel';
 export { WorkforcePolicyPanel } from './ui/WorkforcePolicyPanel';
+export { MarketplaceProposals } from './ui/MarketplaceProposals';
+export { useWorkforcePolicy } from './model/useWorkforcePolicy';
+export { hireView } from './lib/marketplaceProposal';

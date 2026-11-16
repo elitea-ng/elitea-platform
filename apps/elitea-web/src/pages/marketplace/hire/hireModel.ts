@@ -14,6 +14,32 @@ import { t } from '@/shared/i18n';
 
 export type HireMode = 'install' | 'fork';
 
+/**
+ * What a workforce manager's hire proposal fills in (ADR-0051 decision 6): the
+ * proposal to settle, the version and mode it names and its suggested bindings
+ * (requirement key to project toolkit id). Nothing is created until the person
+ * clicks Hire.
+ */
+export interface HireProposalPrefill {
+  readonly proposalId: string;
+  readonly versionId: string;
+  readonly mode: HireMode;
+  readonly bindings: Readonly<Record<string, string>>;
+}
+
+/** The binding choices a proposal suggests, for the requirements of the version it names. */
+export function prefillChoices(
+  requirements: MarketplaceRequirements,
+  bindings: Readonly<Record<string, string>>,
+): BindingChoices {
+  let out: BindingChoices = {};
+  for (const requirement of requirements.items) {
+    const id = bindings[requirement.key];
+    if (id !== undefined && mustBind(requirement)) out = applyChoice(out, requirement.key, id);
+  }
+  return out;
+}
+
 /** The binding select's value for "Disable for now". */
 export const DISABLED_VALUE = '__disabled__';
 

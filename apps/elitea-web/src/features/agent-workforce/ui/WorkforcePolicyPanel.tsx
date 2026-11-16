@@ -173,6 +173,35 @@ function PolicyEditor({ projectId, policy }: { readonly projectId: string; reado
             onChange={(value) => edit({ ...form, maxAutoHired: value })}
           />
         </Box>
+        <Typography variant="bodySmall" color="text.secondary">
+          {t(
+            'features.agentWorkforce.policy.listingHelp',
+            'A workforce manager can propose hiring a Marketplace listing. It is hired automatically only in Install mode, at low tier, with read-only tools, every requirement bindable to a toolkit of this project, and the numbers below.',
+          )}
+        </Typography>
+        <Box sx={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+          <NumberField
+            label={t('features.agentWorkforce.policy.listingMinReviews', 'Listing: reviews needed (1–1000)')}
+            value={form.listingMinReviews}
+            disabled={disabled}
+            testId="agent-workforce-policy-listing-min-reviews"
+            onChange={(value) => edit({ ...form, listingMinReviews: value })}
+          />
+          <NumberField
+            label={t('features.agentWorkforce.policy.listingMinRating', 'Listing: average rating needed (1–5)')}
+            value={form.listingMinRating}
+            disabled={disabled}
+            testId="agent-workforce-policy-listing-min-rating"
+            onChange={(value) => edit({ ...form, listingMinRating: value })}
+          />
+          <NumberField
+            label={t('features.agentWorkforce.policy.listingMaxDismissal', 'Listing: dismissal rate under (0.01–1)')}
+            value={form.listingMaxDismissalRate}
+            disabled={disabled}
+            testId="agent-workforce-policy-listing-max-dismissal"
+            onChange={(value) => edit({ ...form, listingMaxDismissalRate: value })}
+          />
+        </Box>
         <Typography variant="bodySmall" color="text.secondary" data-testid="agent-workforce-policy-open-hired">
           {t('features.agentWorkforce.policy.openHired', 'On probation now: {{count}}', { count: policy.open_auto_hired })}
         </Typography>
@@ -205,6 +234,27 @@ function PolicyEditor({ projectId, policy }: { readonly projectId: string; reado
           onChange={(value) => edit({ ...form, graceDays: value })}
         />
         <RulesEditor form={form} disabled={disabled} onChange={edit} />
+      </Box>
+
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        <FormControlLabel
+          control={
+            <BaseSwitch
+              checked={form.autoFeedbackEnabled}
+              disabled={disabled}
+              onChange={(event) => edit({ ...form, autoFeedbackEnabled: event.target.checked })}
+              aria-label={t('features.agentWorkforce.policy.autoFeedback', 'Publish workforce reports automatically')}
+              data-testid="agent-workforce-policy-auto-feedback"
+            />
+          }
+          label={t('features.agentWorkforce.policy.autoFeedback', 'Publish workforce reports automatically')}
+        />
+        <Typography variant="bodySmall" color="text.secondary">
+          {t(
+            'features.agentWorkforce.policy.autoFeedbackHelp',
+            'When a dismissal or demotion of an installed or forked agent is applied, the report a workforce manager drafted is published to the listing version without waiting for approval. It is recorded under you as the person who set this policy. Off by default.',
+          )}
+        </Typography>
       </Box>
 
       {error !== undefined && (

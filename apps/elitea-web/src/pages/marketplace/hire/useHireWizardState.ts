@@ -23,9 +23,11 @@ import {
   bindingsOf,
   defaultVersionId,
   isHireable,
+  prefillChoices,
   unboundRequirements,
   type BindingChoices,
   type HireMode,
+  type HireProposalPrefill,
 } from './hireModel';
 
 export const STEPS = ['version', 'mode', 'bindings', 'review'] as const;
@@ -60,6 +62,8 @@ export function useHireWizardState(
   projectId: string | undefined,
   detail: MarketplaceListingDetail,
   initialMode: HireMode,
+  prefill?: HireProposalPrefill,
+  onHired?: () => void,
 ): HireWizardState {
   const queryClient = useQueryClient();
   const [step, setStep] = useState<Step>('version');
@@ -70,16 +74,19 @@ export function useHireWizardState(
 
   // The wizard starts from what the page held WHEN IT OPENED. A refetch of the listing (the success
   // invalidates it) must not reset the wizard, or the result step would vanish after a hire.
-  const latest = useRef({ versions: detail.versions, initialMode });
+  const latest = useRef({ versions: detail.versions, initialMode, prefill });
   useEffect(() => {
-    latest.current = { versions: detail.versions, initialMode };
+    latest.current = { versions: detail.versions, initialMode, prefill };
   });
   useEffect(() => {
     if (!open) return;
+    const { versions, prefill: proposed } = latest.current;
+    const named = proposed === undefined ? undefined : versions.find((candidate) => candidate.id === proposed.versionId);
+    const usable = named !== undefined && isHireable(named) ? named : undefined;
     setStep('version');
-    setVersionIdState(defaultVersionId(latest.current.versions));
-    setMode(latest.current.initialMode);
-    setChoices({});
+    setVersionIdState(usable?.id ?? defaultVersionId(versions));
+    setMode(proposed?.mode ?? latest.current.initialMode);
+    setChoices(proposed === undefined || usable === undefined ? {} : prefillChoices(usable.requirements, proposed.bindings));
     setResult(undefined);
   }, [open]);
 
@@ -92,12 +99,14 @@ export function useHireWizardState(
         version_id: versionId,
         mode,
         bindings: bindingsOf(requirements, choices),
+        ...(prefill === undefined ? {} : { proposal_id: prefill.proposalId }),
       });
       return unwrapBody(response) as MarketplaceHireResult;
     },
     onSuccess: (created) => {
       setResult(created);
       invalidateMarketplace(queryClient);
+      onHired?.();
     },
   });
 

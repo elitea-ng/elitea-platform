@@ -6,6 +6,8 @@ export { Marketplace } from './Marketplace';
 export { MarketplaceListing } from './MarketplaceListing';
 export { kindFromSearch } from './listing';
 export { findListingIdByEntity } from './legacyLink';
+export { HireProposalWizard } from './ui/HireProposalWizard';
+export type { HireProposalPrefill } from './hire/hireModel';
 export { BindingsEditorDialog } from './ui/BindingsEditorDialog';
 export { UpgradeDialog } from './upgrade/UpgradeDialog';
 export { UpstreamReviewDialog } from './upgrade/UpstreamReviewDialog';
