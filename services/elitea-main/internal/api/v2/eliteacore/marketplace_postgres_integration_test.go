@@ -857,6 +857,13 @@ VALUES ('skill', 2, $1, $2, $3, lower($3), $4) RETURNING id`,
 		sourceEntity, twin, name, marketplacePublisher).Scan(&id); err != nil {
 		h.t.Fatalf("seed a skill listing: %v", err)
 	}
+	// A listing is browsable only with a version that is neither yanked nor withdrawn.
+	if _, err := h.pool.Exec(context.Background(), `
+INSERT INTO elitea_marketplace.listing_versions (listing_id, version_id, name, digest, definition)
+VALUES ($1, $2, 'v1', decode(repeat('ab', 32), 'hex'), jsonb_build_object('name', $3::text, 'instructions', 'steps'))`,
+		id, twin, name); err != nil {
+		h.t.Fatalf("seed a skill listing version: %v", err)
+	}
 	return strconv.FormatInt(id, 10)
 }
 
