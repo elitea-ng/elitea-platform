@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Indexing results, Artifacts storage and rename, and Applications
+
+An index run that ends with nothing indexed, for example every document failed to fetch, is now reported as **Failed** with the reason in the message, not as **Partially indexed** with 0 documents. A run the embedding model stopped after it had indexed documents is reported as **Partially indexed** with the counts, not as failed. The result message names the ignored chunking settings only for the file types the run listed. An Artifacts index over a Google Cloud Storage bucket no longer skips every file as `fetch_failed`: the worker pins each download to the listed modified time when the store sends no entity tag. In Artifacts, the **Storage** menu always offers **Platform storage**, and renaming a file keeps its extension: the dialog shows it beside the name and Main refuses a rename that changes it. The **Applications** tab lists the Wikis and Inventory you created (they are toolkits of those types), and the App Catalog marks them **Configured**. Upgrade Main, the worker and the web app together.
+
 ## Chat fixes: renamed agents, tagged people, the X button and Save
 
 A renamed agent now shows its current name in the participants panel and on its messages, not the name it had when it joined the conversation. After you tag a person with `@` and send, the next message to the model no longer fails with "The execution input is invalid." (upgrade the worker with Main). The **X** next to the agent or pipeline in the message bar now switches the conversation back to the model. In the agent and pipeline editor opened from a chat, **Save** is enabled only while there is something to save, and a save refreshes the panel.

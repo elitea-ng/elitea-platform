@@ -422,6 +422,10 @@ struct Tally {
     /// How many of the skips lost work (see [`skip_loses_document`]) and so
     /// make the run `PARTLY_INDEXED`.
     lost_skips: u64,
+    /// The run stopped itself because the embedding gateway kept failing
+    /// (see `MAX_CONSECUTIVE_EMBEDDING_FAILURES`): what it wrote before
+    /// that is kept, so with documents written it ends `PARTLY_INDEXED`.
+    gateway_outage: bool,
     /// Pictures EMBEDDED in an indexed document that were not described, by
     /// reason. The document itself was indexed (without that description),
     /// so these are not `skipped` documents and do not make the run
@@ -1483,6 +1487,7 @@ impl Runner<'_> {
         self.tally.skip(SKIP_EMBEDDING_FAILED);
         self.consecutive_embedding_failures += 1;
         if self.consecutive_embedding_failures >= MAX_CONSECUTIVE_EMBEDDING_FAILURES {
+            self.tally.gateway_outage = true;
             return Err(halt(&format!(
                 "the embedding gateway failed for {} documents in a row ({cause}); the run stopped rather than skip every document, retry once the gateway is healthy",
                 self.consecutive_embedding_failures
@@ -2004,7 +2009,16 @@ impl Runner<'_> {
     /// totals and record, the stamp.
     fn summary(self, plan: &RunPlan) -> IndexIngestSummaryV1 {
         let partial = self.tally.failed_chunks > 0 || self.tally.lost_skips > 0;
-        let (status, state) = if partial {
+        // Work was lost and the index holds nothing at all (every document
+        // failed, none was kept from an earlier run): there is no part of it
+        // to call partial, so the run is a failure (#2106).
+        let nothing_indexed = partial && self.store_record(plan).total_documents == 0;
+        let (status, state) = if nothing_indexed {
+            (
+                IndexIngestStatusV1::Error,
+                IndexIngestTerminalStateV1::Failed,
+            )
+        } else if partial {
             (
                 IndexIngestStatusV1::PartlyIndexed,
                 IndexIngestTerminalStateV1::PartlyIndexed,
@@ -2069,6 +2083,14 @@ impl Runner<'_> {
         if tally.failed_chunks > 0 {
             let _ = write!(message, " {} chunks failed to embed.", tally.failed_chunks);
         }
+        if nothing_indexed {
+            message.push_str(" No document could be indexed, so the run is reported as failed.");
+            if tally.skipped.contains_key(SKIP_FETCH_FAILED) {
+                message.push_str(
+                    " fetch_failed means the source did not return the document's content; the worker log (index_document_fetch_failed) names the cause.",
+                );
+            }
+        }
         if self.parameters.clean_index && tally.indexed_documents == 0 {
             message.push_str(
                 " clean_index replaced the index and nothing was indexed (the source lists no document the filters keep, or every one was skipped), so the index is now empty.",
@@ -2081,11 +2103,31 @@ impl Runner<'_> {
                 plan.out_of_scope.0
             );
         }
-        if !self.ignored_loader_keys.is_empty() {
+        // Only the settings of file types this run listed: the form sends a
+        // default for every extension, and naming settings of types the
+        // source does not hold is noise the user did not ask for.
+        let listed: BTreeSet<String> = plan
+            .to_write
+            .iter()
+            .map(|(reference, _)| elitea_doc_chunk::extension_of(&reference.key))
+            .filter(|extension| !extension.is_empty())
+            .collect();
+        let ignored: Vec<&str> = self
+            .ignored_loader_keys
+            .iter()
+            .map(String::as_str)
+            .filter(|key| {
+                listed.iter().any(|extension| {
+                    key.strip_prefix(extension.as_str())
+                        .is_some_and(|rest| rest.starts_with('.'))
+                })
+            })
+            .collect();
+        if !ignored.is_empty() {
             let _ = write!(
                 message,
                 " Ignored chunking settings this worker does not read: {}.",
-                self.ignored_loader_keys.join(", ")
+                ignored.join(", ")
             );
         }
         self.with_record(status, state, message, plan)
@@ -2099,6 +2141,24 @@ impl Runner<'_> {
         let bare = failure(self.parameters, reason);
         if !self.tally.store_touched {
             return bare;
+        }
+        // Documents were written before the gateway gave out: the index
+        // holds them and a re-run continues, so this is a partial index, not
+        // a failed one (#2105).
+        if self.tally.gateway_outage && self.tally.indexed_documents > 0 {
+            let message = format!(
+                "Index '{}' of toolkit '{}' stopped early: {} documents indexed ({} chunks) before the run stopped. {reason}",
+                self.parameters.index_name,
+                self.toolkit_name,
+                self.tally.indexed_documents,
+                self.tally.indexed_chunks,
+            );
+            return self.with_record(
+                IndexIngestStatusV1::PartlyIndexed,
+                IndexIngestTerminalStateV1::PartlyIndexed,
+                message,
+                plan,
+            );
         }
         self.with_record(
             IndexIngestStatusV1::Error,

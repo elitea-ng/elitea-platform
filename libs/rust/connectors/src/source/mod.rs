@@ -627,6 +627,10 @@ pub struct Listed {
     pub handle: String,
     /// What `reference.version` is.
     pub kind: VersionKind,
+    /// The listed modification time, when the version is an entity tag: a
+    /// store whose download answer carries no entity tag (GCS reads) is
+    /// then pinned by this instead of refusing every fetch.
+    pub fallback_modified_at: Option<String>,
 }
 
 impl Listed {
@@ -643,7 +647,16 @@ impl Listed {
             },
             handle,
             kind: VersionKind::Handle,
+            fallback_modified_at: None,
         }
+    }
+
+    /// The modification time to pin by when a fetch answer has no entity
+    /// tag to compare.
+    #[must_use]
+    pub fn with_fallback_modified_at(mut self, modified_at: Option<String>) -> Self {
+        self.fallback_modified_at = modified_at;
+        self
     }
 
     /// Say what the version is (default: pinned by the handle).

@@ -123,10 +123,6 @@ export function Artifacts(): ReactNode {
   }, [hasUnsavedChanges]);
 
   useEffect(() => {
-    if (selectedStorage === undefined && storage.data?.[0] !== undefined) setSelectedStorage(storage.data[0].id);
-  }, [selectedStorage, storage.data]);
-
-  useEffect(() => {
     if (search.bucket || buckets.data?.[0] === undefined) return;
     setSearch({ bucket: buckets.data[0].name });
   }, [buckets.data, search.bucket, setSearch]);

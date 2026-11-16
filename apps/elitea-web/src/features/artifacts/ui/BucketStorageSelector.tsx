@@ -34,7 +34,16 @@ interface BucketStorageSelectorProps {
  */
 export function BucketStorageSelector(props: BucketStorageSelectorProps): ReactNode {
   const [anchor, setAnchor] = useState<HTMLElement>();
-  const current = props.configurations.find((configuration) => configuration.id === props.selected);
+  const platformStorage: ArtifactStorageConfiguration = {
+    id: PLATFORM_STORAGE_ID,
+    title: t('artifacts.buckets.platformStorage', 'Platform storage'),
+    shared: false,
+  };
+  // The platform's own store always exists, so the menu is never empty (#2094) and, with
+  // nothing chosen, names where the buckets actually are rather than "Select Storage".
+  const entries = [platformStorage, ...props.configurations];
+  const selectedId = props.selected ?? PLATFORM_STORAGE_ID;
+  const current = entries.find((configuration) => configuration.id === selectedId);
   const label = current?.title ?? t('artifacts.buckets.selectStorage', 'Select Storage');
 
   return (
@@ -81,10 +90,10 @@ export function BucketStorageSelector(props: BucketStorageSelectorProps): ReactN
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         slotProps={{ paper: { sx: { minWidth: anchor?.offsetWidth } } }}
       >
-        {props.configurations.map((configuration) => (
+        {entries.map((configuration) => (
           <MenuItem
             key={configuration.id}
-            selected={configuration.id === props.selected}
+            selected={configuration.id === selectedId}
             onClick={() => {
               props.onChange(configuration.id);
               setAnchor(undefined);
@@ -101,19 +110,26 @@ export function BucketStorageSelector(props: BucketStorageSelectorProps): ReactN
                 variant="bodySmall"
                 sx={subtitleSx}
               >
-                {configuration.shared
-                  ? t('artifacts.buckets.sharedStorage', 'Shared S3 storage')
-                  : t('artifacts.buckets.s3Storage', 'S3 storage')}
+                {storageKind(configuration)}
               </Typography>
             </Box>
             <ListItemIcon sx={checkSx}>
-              {configuration.id === props.selected && <CheckedIcon style={iconStyle} />}
+              {configuration.id === selectedId && <CheckedIcon style={iconStyle} />}
             </ListItemIcon>
           </MenuItem>
         ))}
       </Menu>
     </>
   );
+}
+
+const PLATFORM_STORAGE_ID = '__platform__';
+
+function storageKind(configuration: ArtifactStorageConfiguration): string {
+  if (configuration.id === PLATFORM_STORAGE_ID) return t('artifacts.buckets.platformStorageKind', 'Built-in storage');
+  return configuration.shared
+    ? t('artifacts.buckets.sharedStorage', 'Shared S3 storage')
+    : t('artifacts.buckets.s3Storage', 'S3 storage');
 }
 
 const iconStyle = { width: '1.25rem', height: '1.25rem' };

@@ -588,7 +588,10 @@ async fn the_summary_names_the_ignored_loader_settings_once() {
     let harness = harness(4, None).await;
     let summary = run(
         &harness,
-        vec![document("a.md", "v1", "# A\n\nalpha text\n")],
+        vec![
+            document("a.md", "v1", "# A\n\nalpha text\n"),
+            document("sheet.xlsx", "v1", "not a workbook"),
+        ],
         &command(NS, None),
         &parameters(
             false,
@@ -614,8 +617,9 @@ async fn the_summary_names_the_ignored_loader_settings_once() {
         "{}",
         summary.message
     );
+    // #2106: the run listed no PDF, so its setting is not named.
     assert!(
-        summary.message.contains(".pdf.extract_images"),
+        !summary.message.contains(".pdf.extract_images"),
         "{}",
         summary.message
     );

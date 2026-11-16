@@ -794,6 +794,18 @@ func (h *Handler) copyObjectBytes(ctx context.Context, src, dst storage.ObjectRe
 	return h.store.Put(ctx, dst, &capReader{ctx: ctx, r: body, limit: maxBytes}, storage.PutOptions{ContentType: contentType, ContentLength: -1})
 }
 
+// keyExtension is the extension of a key's file name, with its dot, or "" for
+// a name with none (a leading dot alone, ".env", is a name, not an extension).
+// The web client's rename dialog applies the same rule.
+func keyExtension(key string) string {
+	name := key[strings.LastIndex(key, "/")+1:]
+	dot := strings.LastIndex(name, ".")
+	if dot <= 0 {
+		return ""
+	}
+	return name[dot:]
+}
+
 // MoveObject renames or moves one object inside its bucket (#2015). The
 // order is what keeps it safe:
 //
@@ -839,6 +851,13 @@ func (h *Handler) MoveObject(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.From == req.To {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "from and to are the same key")
+		return
+	}
+	// A rename keeps the file's type: the extension is what the preview, the
+	// indexer and the media type read, so changing it silently changes how
+	// the file is treated (#2119). Moving a file never changes it either.
+	if keyExtension(req.From) != keyExtension(req.To) {
+		writeError(w, http.StatusBadRequest, "InvalidArgument", "the file extension cannot be changed")
 		return
 	}
 	srcRef, err := storage.NewObjectRef(projectIDStr, bucket, req.From)

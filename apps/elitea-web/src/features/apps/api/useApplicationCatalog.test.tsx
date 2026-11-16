@@ -3,7 +3,7 @@ import { waitFor } from '@testing-library/react';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { getListApplicationsMockHandler } from '@/shared/api/generated/applications/applications.msw';
-import { getListToolkitsMockHandler } from '@/shared/api/generated/toolkits/toolkits.msw';
+import { getListToolkitInstancesMockHandler, getListToolkitsMockHandler } from '@/shared/api/generated/toolkits/toolkits.msw';
 import { server } from '@/test/setup';
 
 import { renderHookWithRouter } from '../__tests__/testUtils';
@@ -27,7 +27,11 @@ function application(overrides: Record<string, unknown>) {
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
-  server.use(getListToolkitsMockHandler({}), getListApplicationsMockHandler({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 0 }));
+  server.use(
+    getListToolkitsMockHandler({}),
+    getListToolkitInstancesMockHandler({ rows: [], total: 0 }),
+    getListApplicationsMockHandler({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 0 }),
+  );
 });
 
 afterEach(() => {
@@ -126,5 +130,30 @@ describe('useApplicationCatalog', () => {
     // rewritten to fetch every page.
     const inventory = result.current.applications.find((app) => app.type === 'inventory');
     expect(inventory?.availability).not.toBe('configured');
+  });
+
+  // #2113: a created Wiki or Inventory is a toolkit instance, not a row of the applications list.
+  it('marks a type with an existing toolkit instance as configured', async () => {
+    server.use(
+      getListToolkitInstancesMockHandler({
+        rows: [
+          {
+            id: 'tk-1',
+            type: 'wikis_Wikis',
+            name: 'Docs wiki',
+            description: '',
+            settings: {},
+            meta: {},
+            created_at: '2026-01-01T00:00:00Z',
+            author_id: 1,
+          },
+        ],
+        total: 1,
+      }),
+    );
+
+    const { result } = renderHookWithRouter(() => useApplicationCatalog(), { projectId: 'proj-1' });
+
+    await waitFor(() => expect(result.current.applications.find((app) => app.type === 'wikis_Wikis')?.availability).toBe('configured'));
   });
 });
