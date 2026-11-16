@@ -51,7 +51,7 @@ it('lists the pinned skills in their own section, with an untrusted note, and ke
     body: { rows: [pin(1, 'Triage'), pin(2, 'Forked', { trust: { state: 'untrusted' } })], total: 2, max: 5 },
   });
   await render(withQueries(sheet()));
-  expect(await screen.findByText('Skills (2)')).toBeTruthy();
+  expect(await screen.findByText(/^skills \(2\)/i)).toBeTruthy();
   expect(screen.getByText('Triage')).toBeTruthy();
   expect(screen.getByText(/Untrusted/)).toBeTruthy();
   // The participant list holds the person only.
@@ -61,7 +61,7 @@ it('lists the pinned skills in their own section, with an untrusted note, and ke
 it('leaves the section out when the workspace has no conversation skills', async () => {
   await render(withQueries(sheet()));
   await waitFor(() => expect(server.requests.some((r) => r.url.pathname.endsWith('/conversation_skills/prompt_lib/7/3'))).toBe(true));
-  expect(screen.queryByText(/^Skills \(/)).toBeNull();
+  expect(screen.queryByText(/^skills \(/i)).toBeNull();
 });
 
 it('removes a pin', async () => {
