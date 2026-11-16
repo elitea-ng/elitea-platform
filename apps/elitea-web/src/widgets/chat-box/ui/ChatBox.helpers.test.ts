@@ -15,6 +15,7 @@ import {
   toParticipant,
   toParticipants,
 } from './ChatBox.helpers';
+import { switchToModel } from './switchToModel';
 
 const PARTICIPANT: Participant = { id: '1', entityName: 'application' };
 
@@ -71,6 +72,17 @@ describe('buildAgentEditorProps', () => {
   });
 });
 
+
+describe('switchToModel', () => {
+  it('clears the active participant, then picks the model', () => {
+    const calls: string[] = [];
+    switchToModel(
+      (next) => calls.push(`participant:${String(next)}`),
+      () => calls.push('model'),
+    )();
+    expect(calls).toEqual(['participant:undefined', 'model']);
+  });
+});
 
 describe('buildUserParticipant', () => {
   it('includes all defined fields', () => {

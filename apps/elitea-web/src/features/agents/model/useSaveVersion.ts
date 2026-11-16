@@ -108,6 +108,8 @@ import { useApplicationsStore } from './applicationsStore';
  * does not reach into a cache key it doesn't own conventions for.
  */
 
+const NO_CACHE = { query: { staleTime: 0 } } as const;
+
 export interface SaveVersionInput {
   readonly projectId: string;
   readonly applicationId: number;
@@ -167,6 +169,13 @@ export function useSaveVersion(onSaveTools?: () => Promise<boolean>): UseSaveVer
           input.applicationId,
           input.versionId,
           input.version,
+          // A write is never answered from cache. The app-wide `staleTime` is
+          // 30 s and this call runs through `queryClient.query`, which serves a
+          // fresh entry for the same key (the same body) without sending
+          // anything: saving the same edit twice inside that window — an edit,
+          // a revert and the same edit again — reported success and wrote
+          // nothing (#2118).
+          NO_CACHE,
         );
         const versionResponse = await queryClient.query(versionOptions);
         const versionDetail = (versionResponse as { data: ApplicationVersionDetail }).data;
@@ -180,7 +189,7 @@ export function useSaveVersion(onSaveTools?: () => Promise<boolean>): UseSaveVer
           ...(input.applicationDescription !== undefined ? { description: input.applicationDescription } : {}),
           ...(input.applicationIcon !== undefined ? { icon: input.applicationIcon } : {}),
         };
-        const appOptions = getEditApplicationQueryOptions(input.projectId, input.applicationId, body);
+        const appOptions = getEditApplicationQueryOptions(input.projectId, input.applicationId, body, NO_CACHE);
         const appResponse = await queryClient.query(appOptions);
         const application = (appResponse as { data: ApplicationUpdatedResponse }).data;
 

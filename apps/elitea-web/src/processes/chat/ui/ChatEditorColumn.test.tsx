@@ -37,7 +37,7 @@ function baseProps(overrides: Partial<ChatEditorColumnProps> = {}): ChatEditorCo
       agentForEditor: undefined,
       editAgent: { isCreateMode: false, onCloseAgentEditor: vi.fn() },
       agentCreation: { onAgentCreated: vi.fn() },
-      config: { renderConfigurationForm: () => null, onSaveVersion: undefined, isSavingVersion: false },
+      config: { renderConfigurationForm: () => null, onSaveVersion: undefined, isSavingVersion: false, isConfigurationDirty: false },
     },
     pipeline: {
       isEditing: false,
@@ -105,7 +105,7 @@ describe('ChatEditorColumn', () => {
           agentForEditor: undefined,
           editAgent: { isCreateMode: false, onCloseAgentEditor: vi.fn() },
           agentCreation: { onAgentCreated: vi.fn() },
-          config: { renderConfigurationForm: () => null, onSaveVersion: undefined, isSavingVersion: false },
+          config: { renderConfigurationForm: () => null, onSaveVersion: undefined, isSavingVersion: false, isConfigurationDirty: false },
         },
       }),
     );
@@ -125,7 +125,7 @@ describe('ChatEditorColumn', () => {
           agentForEditor: { id: '1', entity_meta: { id: '1' }, entity_settings: { version_id: '10' }, meta: { name: 'Clarifier' } },
           editAgent: { isCreateMode: false, onCloseAgentEditor: vi.fn() },
           agentCreation: { onAgentCreated: vi.fn() },
-          config: { renderConfigurationForm: () => <div data-testid="agent-config-form" />, onSaveVersion: vi.fn(), isSavingVersion: false },
+          config: { renderConfigurationForm: () => <div data-testid="agent-config-form" />, onSaveVersion: vi.fn(), isSavingVersion: false, isConfigurationDirty: false },
         },
       }),
     );
@@ -185,7 +185,7 @@ describe('ChatEditorColumn', () => {
           agentForEditor: undefined,
           editAgent: { isCreateMode: false, onCloseAgentEditor: vi.fn() },
           agentCreation: { onAgentCreated: vi.fn() },
-          config: { renderConfigurationForm: () => null, onSaveVersion: undefined, isSavingVersion: false },
+          config: { renderConfigurationForm: () => null, onSaveVersion: undefined, isSavingVersion: false, isConfigurationDirty: false },
         },
         pipeline: {
           isEditing: true,

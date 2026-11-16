@@ -130,6 +130,25 @@ export function matchers(identifiers) {
   ];
 }
 
+/**
+ * Whether the match at `[index, index + length)` lies inside a bundler content
+ * hash: the 8-character token of an asset name, `name-BCePam0p.js`, or of a
+ * reference to one. Such a token is a hash of the file's bytes, so any term of
+ * four letters turns up in one now and then (`BCePam0p` holds `epam`); it is
+ * not text. Only a token of exactly eight URL-safe characters, set off by `-`
+ * and followed by a file extension, counts: `Epam.js` or `x-EPAM.js` is still
+ * a finding.
+ */
+export function insideContentHash(text, index, length) {
+  const from = Math.max(0, index - 12);
+  const window = text.slice(from, index + length + 12);
+  for (const m of window.matchAll(/-([A-Za-z0-9_]{8})(?=\.[a-z0-9]{2,5}(?![A-Za-z0-9]))/g)) {
+    const start = from + m.index + 1;
+    if (index >= start && index + length <= start + 8) return true;
+  }
+  return false;
+}
+
 const printableByte = (b) => (b >= 0x20 && b < 0x7f) || b === 0x09;
 
 /**
@@ -188,6 +207,7 @@ export function scanText(text, { file, lane, identifiers, allowed = ALLOWED, com
   const findings = [];
   for (const { kind, re } of compiled) {
     for (const m of text.matchAll(re)) {
+      if (kind === 'epam' && insideContentHash(text, m.index, m[0].length)) continue;
       const context = text.slice(Math.max(0, m.index - 30), m.index + m[0].length + 30).replace(/\s+/g, ' ');
       const allow = allowed.find((a) => (a.lane === '*' || a.lane === lane) && (a.re ? a.re.test(context) : context.includes(a.text)));
       if (!allow) findings.push({ file, kind, match: m[0], context });

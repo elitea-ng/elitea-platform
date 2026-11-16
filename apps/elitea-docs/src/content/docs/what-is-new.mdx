@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Chat fixes: renamed agents, tagged people, the X button and Save
+
+A renamed agent now shows its current name in the participants panel and on its messages, not the name it had when it joined the conversation. After you tag a person with `@` and send, the next message to the model no longer fails with "The execution input is invalid." (upgrade the worker with Main). The **X** next to the agent or pipeline in the message bar now switches the conversation back to the model. In the agent and pipeline editor opened from a chat, **Save** is enabled only while there is something to save, and a save refreshes the panel.
+
 ## Skills: versions, tags, AI edit and a tidier list
 
 A skill saved as a new version proposes the next version name and warns about a duplicate one. Tags accept a comma or Enter, **Edit with AI** is available on a skill, and a failed publish check no longer reports a bogus invalid token. The icon picker rejects a file that is not a PNG, JPG, GIF, WEBP, BMP or ICO image, and you can delete an icon you uploaded. In the table view the Skills list has an **Actions** column with a three-dot menu (Export, Delete), and the side panel no longer paints **Trending Authors** over the tags. See [Skills](/menus/skills).
