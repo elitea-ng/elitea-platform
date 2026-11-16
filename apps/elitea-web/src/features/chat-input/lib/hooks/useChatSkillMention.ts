@@ -33,6 +33,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 
+import { useConversationSkills } from '@/entities/conversation-skill';
 import { normaliseSkills } from '@/entities/skill';
 import type { Skill, SkillWire } from '@/entities/skill';
 import type { Participant } from '@/entities/participant';
@@ -96,21 +97,31 @@ function toSkillMentionItems(skills: readonly Skill[]): SkillMentionItem[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-interface DetectedMention {
+export interface DetectedMention {
   readonly anchor: number;
   readonly query: string;
 }
 
-/** `useChatSkillMention.hooks.js`'s own `detectMention` — a "~" trigger must be preceded by start-of-text or whitespace, and the fragment up to the cursor must be whitespace-free. */
-function detectMention(text: string, cursorPos: number): DetectedMention | null {
+/**
+ * The `/skill` command (ADR-0050 amendment 1, A1.5): `/skill`, optionally followed by a space and the start of a
+ * name, at the start of the text or after whitespace, with the cursor at its end. It opens the same skill list `~`
+ * does, and a pick writes the canonical `~name` token in its place, so the stored message never carries `/skill`.
+ */
+const SKILL_COMMAND_PATTERN = /(^|\s)(\/skill)(?:[ \t]+(\S*))?$/i;
+
+/** `useChatSkillMention.hooks.js`'s own `detectMention` — a "~" trigger must be preceded by start-of-text or whitespace, and the fragment up to the cursor must be whitespace-free. `/skill <name>` is the same trigger spelled as a command. */
+export function detectMention(text: string, cursorPos: number): DetectedMention | null {
   const upToCursor = text.slice(0, cursorPos);
   const anchor = upToCursor.lastIndexOf(SKILL_TRIGGER);
-  if (anchor === -1) return null;
-  const prevChar = anchor > 0 ? text[anchor - 1] : '';
-  if (prevChar !== '' && prevChar !== undefined && !/\s/.test(prevChar)) return null;
-  const fragment = upToCursor.slice(anchor + SKILL_TRIGGER.length);
-  if (/\s/.test(fragment)) return null;
-  return { anchor, query: fragment };
+  if (anchor !== -1) {
+    const prevChar = anchor > 0 ? text[anchor - 1] : '';
+    const startsMention = prevChar === '' || prevChar === undefined || /\s/.test(prevChar);
+    const fragment = upToCursor.slice(anchor + SKILL_TRIGGER.length);
+    if (startsMention && !/\s/.test(fragment)) return { anchor, query: fragment };
+  }
+  const command = SKILL_COMMAND_PATTERN.exec(upToCursor);
+  if (command === null) return null;
+  return { anchor: command.index + (command[1] ?? '').length, query: command[3] ?? '' };
 }
 
 export interface UseChatSkillMentionParams {
@@ -122,16 +133,23 @@ export interface UseChatSkillMentionParams {
   readonly fallbackAppVersionId?: string | number | undefined;
   /** Fallback project id when `activeParticipant.entityMeta.projectId` is unpopulated. */
   readonly projectId?: string | undefined;
+  /** The saved conversation, so the skills pinned to it are offered first (ADR-0050 amendment 1). */
+  readonly conversationId?: string | undefined;
 }
 
 /** The agent version's skills first, then the project's other skills (not named like one of the version's, ignoring case), each group alphabetical. */
-function withProjectSkills(versionItems: readonly SkillMentionItem[], project: readonly ProjectSkillEntry[]): readonly SkillMentionItem[] {
+export function withProjectSkills(
+  versionItems: readonly SkillMentionItem[],
+  project: readonly ProjectSkillEntry[],
+  pinnedIds: ReadonlySet<string> = new Set(),
+): readonly SkillMentionItem[] {
   if (project.length === 0) return versionItems;
   const taken = new Set(versionItems.map((item) => item.name.trim().toLowerCase()));
   const extra = project
     .filter((skill) => !taken.has(skill.name.trim().toLowerCase()))
     .map((skill): SkillMentionItem => ({ name: skill.name, skillId: skill.id, isToolkit: false, isProject: true, ...(skill.description !== undefined ? { description: skill.description } : {}) }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    // The conversation's pinned skills first (ADR-0050 amendment 1), then the rest, each group alphabetical.
+    .sort((a, b) => Number(pinnedIds.has(String(b.skillId))) - Number(pinnedIds.has(String(a.skillId))) || a.name.localeCompare(b.name));
   return [...versionItems, ...extra];
 }
 
@@ -196,7 +214,7 @@ function useProjectSkillIds(
   return { projectSkillIdsFor, resolveProjectSkillIds };
 }
 
-export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppVersionId, projectId }: UseChatSkillMentionParams): UseChatSkillMentionResult {
+export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppVersionId, projectId, conversationId }: UseChatSkillMentionParams): UseChatSkillMentionResult {
   const [inputContent, setInputContent] = useState('');
   const [phase, setPhase] = useState<MentionPhaseValue>(MentionPhase.Idle);
   const [itemQuery, setItemQuery] = useState('');
@@ -204,6 +222,9 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
   const mentionAnchorRef = useRef<number | null>(null);
 
   const isAgent = activeParticipant?.entityName === 'application';
+  // A model chat takes project skills too (ADR-0050 amendment 1, A1.4): the project's skills are offered for an
+  // agent and for a participant that is only a model, never for a toolkit or a person.
+  const canUseProjectSkills = isAgent || activeParticipant?.entityName === 'llm' || activeParticipant?.entityName === 'dummy';
   // entitySettings.versionId is not always populated (e.g. the agent editor's
   // test chat), so fall back to the caller-supplied fallbackAppVersionId.
   const appVersionId = toVersionIdNumber(activeParticipant?.entitySettings?.versionId) ?? toVersionIdNumber(fallbackAppVersionId);
@@ -216,7 +237,12 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
   // or pasted `~Name` resolves without the menu ever opening. They belong to
   // the CONVERSATION's project, which is the one the send's route reads them
   // from, not to the agent's own (possibly public) project.
-  const projectSkills = useProjectSkillList(projectId, isAgent);
+  const projectSkills = useProjectSkillList(projectId, canUseProjectSkills);
+  const pins = useConversationSkills(projectId, conversationId);
+  const pinnedIds = useMemo(
+    () => new Set((pins.data ?? []).flatMap((pin) => (pin.skill_id === undefined ? [] : [String(pin.skill_id)]))),
+    [pins.data],
+  );
 
   const versionItems = useMemo<readonly SkillMentionItem[]>(() => {
     // See `applicationParticipants.ts`'s header (this app's established
@@ -233,7 +259,7 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
   }, [applicationSkillsQuery.data]);
 
   const projectEntries = projectSkills.entries;
-  const mentionableItems = useMemo(() => withProjectSkills(versionItems, projectEntries), [versionItems, projectEntries]);
+  const mentionableItems = useMemo(() => withProjectSkills(versionItems, projectEntries, pinnedIds), [versionItems, projectEntries, pinnedIds]);
 
   const resetSkill = useCallback(() => {
     mentionAnchorRef.current = null;
@@ -308,7 +334,7 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
     [phase, filteredItems, highlightedIndex, onSelectSkill, resetSkill],
   );
 
-  const { projectSkillIdsFor, resolveProjectSkillIds } = useProjectSkillIds(isAgent, projectSkills, versionItems, mentionableItems);
+  const { projectSkillIdsFor, resolveProjectSkillIds } = useProjectSkillIds(canUseProjectSkills, projectSkills, versionItems, mentionableItems);
 
   const skillHighlightRanges = useMemo(() => parseMentionRanges(inputContent, mentionableItems, SKILL_TRIGGER), [inputContent, mentionableItems]);
 
@@ -319,7 +345,7 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
 
   return {
     skillPhase: phase,
-    hasMentionableSkills: canMentionSkills(isAgent, mentionableItems),
+    hasMentionableSkills: canMentionSkills(canUseProjectSkills, mentionableItems),
     filteredItems,
     committedMentions,
     highlightedIndex,
@@ -334,6 +360,6 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
 }
 
 /** An agent is active and at least one skill can be mentioned. */
-function canMentionSkills(isAgent: boolean, items: readonly SkillMentionItem[]): boolean {
-  return isAgent && items.length > 0;
+function canMentionSkills(canUse: boolean, items: readonly SkillMentionItem[]): boolean {
+  return canUse && items.length > 0;
 }

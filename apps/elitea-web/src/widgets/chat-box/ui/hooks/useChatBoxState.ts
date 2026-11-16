@@ -103,6 +103,8 @@ export interface UseChatBoxStateParams {
   readonly projectId: string | undefined;
   /** `activeParticipant`'s resolved version list (composition root's own `useActiveParticipantDetails` call) — drives the broken/version-missing guards below. */
   readonly activeParticipantVersions: readonly VersionSummary[] | undefined;
+  /** The saved conversation, so the skills pinned to it lead the skill list (ADR-0050 amendment 1). */
+  readonly conversationId?: string | undefined;
 }
 
 export interface UseChatBoxStateResult {
@@ -173,6 +175,7 @@ export function useResetRecommendationsOnParticipantChange(
  */
 export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateResult {
   const { activeParticipant, participants, userId, conversationStarters, isAgentsPage, chatInput, projectId, activeParticipantVersions } = params;
+  const conversationIdForSkills = params.conversationId;
 
   // -- Local state --
   const [selectedUsers, setSelectedUsers] = useState<readonly ResolvedUserMention[]>([]);
@@ -206,6 +209,7 @@ export function useChatBoxState(params: UseChatBoxStateParams): UseChatBoxStateR
     chatInput,
     activeParticipant: activeParticipant ?? null,
     ...(projectId !== undefined ? { projectId } : {}),
+    ...(conversationIdForSkills !== undefined ? { conversationId: conversationIdForSkills } : {}),
   });
 
   const isSkillPhaseActive = skill.skillPhase !== 'idle';

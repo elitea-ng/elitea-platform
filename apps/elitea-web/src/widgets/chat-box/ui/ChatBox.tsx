@@ -120,6 +120,7 @@ const ChatBoxInner = memo(function ChatBox({
     chatInput: chatInputRef,
     projectId,
     activeParticipantVersions,
+    conversationId: typeof conversationUuid === 'string' ? conversationUuid : undefined,
   }));
 
   // Socket client + read-aloud (TTS)

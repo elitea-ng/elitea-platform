@@ -15,6 +15,7 @@ import {
   NewSkillVersionModal,
   SkillForm,
   SkillPublishControls,
+  SkillTrustPanel,
   useBindSkillIconMutation,
   useSkill,
   useSkillMutations,
@@ -24,7 +25,6 @@ import {
   type SkillWriteInput,
 } from '@/features/skills';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
-import { hasBackendCapability } from '@/shared/config';
 import { usePermissionSet } from '@/widgets/sidebar';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
@@ -36,7 +36,6 @@ import { useEditSkillVersionControls } from './lib/useEditSkillVersionControls';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { SkillAiEditButton } from './SkillAiEditButton';
 import { SkillEditorHeader } from './SkillEditorHeader';
-import { SkillTestPanel } from './SkillTestPanel';
 
 interface EditSkillParams {
   readonly tab?: string;
@@ -172,12 +171,6 @@ export function EditSkill(): ReactNode {
     },
   });
 
-  // The test run POSTs `predict_llm` in its STREAMING mode
-  // (`await_task_timeout: 0`, output over an `application_predict` socket
-  // event). The route is served now, but that socket transport is not, so the
-  // pane stays hidden — see `shared/config/backendCapabilities`.
-  const canTestSkill = hasBackendCapability('llmPredictStreaming');
-
   const isDirty = JSON.stringify(value) !== JSON.stringify(initialValue);
   const { versions, goToVersion } = versionControls;
 
@@ -267,6 +260,12 @@ export function EditSkill(): ReactNode {
           />
         }
       />
+      <SkillTrustPanel
+        projectId={projectId}
+        skillId={params.skillId}
+        canEdit={permissions.has('models.applications.skills.update')}
+        revisionHint={detail.dataUpdatedAt.toString()}
+      />
       {error && <Typography role="alert">{error}</Typography>}
       <Box sx={contentSx}>
         <Box sx={formPaneSx}>
@@ -286,15 +285,6 @@ export function EditSkill(): ReactNode {
             }
           />
         </Box>
-        {projectId && canTestSkill && (
-          <Box sx={testPaneSx}>
-            <SkillTestPanel
-              projectId={projectId}
-              instructions={value.instructions}
-              skillName={value.name}
-            />
-          </Box>
-        )}
       </Box>
       <DeleteEntityModal
         open={deleteOpen}
@@ -351,10 +341,5 @@ export function EditSkill(): ReactNode {
   );
 }
 
-const contentSx: SxProps<Theme> = { flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr 1fr' };
+const contentSx: SxProps<Theme> = { flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr' };
 const formPaneSx: SxProps<Theme> = (theme: Theme) => ({ overflowY: 'auto', padding: theme.spacing(3) });
-const testPaneSx: SxProps<Theme> = (theme: Theme) => ({
-  minWidth: 0,
-  padding: theme.spacing(3),
-  borderLeft: `0.0625rem solid ${theme.vars.palette.border.lines}`,
-});

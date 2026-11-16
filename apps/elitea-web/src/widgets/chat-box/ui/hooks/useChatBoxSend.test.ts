@@ -184,12 +184,12 @@ describe('buildStartBody', () => {
     ]);
   });
 
-  it('sends no skills key when none was picked, and none on a model chat', () => {
+  it('sends no skills key when none was picked, and the picks on a model chat too (skills epic 2169)', () => {
     const none = buildStartBody({ ...commonBody, isApplicationTurn: true, participantId: 42 });
     expect(Object.hasOwn(startPayload(none), 'skills')).toBe(false);
     const payload = { ...commonBody.payload, projectSkillIds: ['9'] };
     const adhoc = buildStartBody({ ...commonBody, payload, isApplicationTurn: false, participantId: undefined });
-    expect(Object.hasOwn(startPayload(adhoc), 'skills')).toBe(false);
+    expect(startPayload(adhoc)['skills']).toEqual([{ source: 'project', id: 9 }]);
   });
 
   it('refuses to build an application body with no addressable participant', () => {

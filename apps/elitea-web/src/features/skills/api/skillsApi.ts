@@ -5,7 +5,6 @@ import type {
   SkillDraft,
   SkillListPage,
   SkillRecord,
-  SkillTestRequest,
   SkillWriteInput,
 } from '../model/types';
 
@@ -202,27 +201,3 @@ export async function exportSkill(
   return fetchData<string>(`/elitea_core/skill_export/prompt_lib/${projectId}/${skillId}${suffix}`);
 }
 
-export function testSkill(projectId: string, request: SkillTestRequest): Promise<{ readonly task_id?: string }> {
-  return fetchData<{ readonly task_id?: string }>(
-    `/elitea_core/predict_llm/prompt_lib/${projectId}`,
-    jsonOptions('POST', {
-      sid: request.sid,
-      message_id: request.messageId,
-      stream_id: request.streamId,
-      await_task_timeout: 0,
-      instructions: request.instructions,
-      user_input: request.userInput,
-      chat_history: request.chatHistory,
-      llm_settings: {
-        model_name: request.modelName,
-        ...(request.modelProjectId ? { model_project_id: request.modelProjectId } : {}),
-        temperature: request.temperature,
-        max_tokens: request.maxTokens,
-      },
-    }),
-  );
-}
-
-export async function cancelSkillTest(projectId: string, taskId: string): Promise<void> {
-  await fetchData<unknown>(`/elitea_core/task/prompt_lib/${projectId}/${taskId}`, { method: 'DELETE' });
-}

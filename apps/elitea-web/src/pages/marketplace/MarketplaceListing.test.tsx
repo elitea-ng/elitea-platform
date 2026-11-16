@@ -593,6 +593,49 @@ describe('a skill listing', () => {
   });
 });
 
+describe('Try on a skill listing (skills epic 2169)', () => {
+  afterEach(() => {
+    resetGeneratedClient();
+  });
+
+  it('starts a conversation and pins the listing version by reference, forking nothing', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const calls: { url: string; body: unknown }[] = [];
+    mockListing(
+      detailOf({
+        listing: { ...LISTING, id: '7', kind: 'skill', entity_id: '41', name: 'PR Reviewer' },
+        versions: [version('6', 'v1.1', 'current', { requirements: NO_REQUIREMENTS })],
+      }),
+      ['models.applications.fork.post'],
+    );
+    server.use(
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/:projectId', async ({ request }) => {
+        calls.push({ url: new URL(request.url).pathname, body: await request.json() });
+        return HttpResponse.json({ id: 55 }, { status: 201 });
+      }),
+      http.post('/api/v2/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId', async ({ request }) => {
+        calls.push({ url: new URL(request.url).pathname, body: await request.json() });
+        return HttpResponse.json({}, { status: 201 });
+      }),
+      http.post('/api/v2/elitea_core/attach_public_skill/prompt_lib/:projectId', () => {
+        calls.push({ url: 'attach', body: null });
+        return HttpResponse.json({});
+      }),
+      http.get('/api/v2/elitea_core/public_skill/prompt_lib/41', () =>
+        HttpResponse.json({ id: 41, name: 'PR Reviewer', description: 'd', versions: [], version_details: null }),
+      ),
+    );
+    mount('/marketplace/skills/7');
+
+    await userEvent.setup().click(await screen.findByTestId('marketplace-try-skill'));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[0]?.body).toMatchObject({ participants: [], meta: { origin: 'skill_try' } });
+    expect(calls[1]?.url).toMatch(/conversation_skills\/prompt_lib\/[^/]+\/55$/);
+    expect(calls[1]?.body).toEqual({ listing_id: 7, listing_version_id: 6 });
+    expect(calls.some((call) => call.url === 'attach')).toBe(false);
+  });
+});
+
 describe('listing load errors', () => {
   afterEach(() => {
     resetGeneratedClient();
