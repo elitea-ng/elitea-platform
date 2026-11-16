@@ -27,8 +27,12 @@ import (
 const (
 	RuntimeMarketplaceWorkforceSchemaVersion = "elitea.runtime.marketplace-workforce.v1"
 
-	maxRuntimeMarketplaceWorkforceRequestBytes  = 16 * 1024
-	maxRuntimeMarketplaceWorkforceResponseBytes = 128 * 1024
+	maxRuntimeMarketplaceWorkforceRequestBytes = 16 * 1024
+	// The worker reads at most 32 KiB of a runtime-context answer; the sink
+	// keeps a listing under MarketplaceWorkforceBudgetBytes by dropping the
+	// oldest feedback items.
+	maxRuntimeMarketplaceWorkforceResponseBytes = 32 * 1024
+	MarketplaceWorkforceBudgetBytes             = 28 * 1024
 
 	runtimeContextStageMarketplaceWorkforceRun  = "marketplace_workforce_run"
 	runtimeContextStageMarketplaceWorkforceTool = "marketplace_workforce_tool"

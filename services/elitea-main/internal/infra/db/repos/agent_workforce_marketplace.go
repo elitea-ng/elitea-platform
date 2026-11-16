@@ -116,6 +116,9 @@ type searchArguments struct {
 
 const (
 	searchToolLimit = 10
+	// maxToolVersions bounds the versions marketplace_listing answers (newest
+	// first).
+	maxToolVersions = 10
 	// quotedTextRunes bounds each quoted text the model reads.
 	quotedTextRunes  = 500
 	descriptionRunes = 300
@@ -216,7 +219,10 @@ func (s *AgentWorkforce) toolListing(ctx context.Context, run storage.ProposeDis
 		return nil, err
 	}
 	versions := make([]map[string]any, 0, len(detail.Versions))
-	for _, version := range detail.Versions {
+	for i, version := range detail.Versions {
+		if i >= maxToolVersions {
+			break
+		}
 		requirements := make([]map[string]any, 0, len(version.Requirements.Items))
 		for _, item := range version.Requirements.Items {
 			requirements = append(requirements, map[string]any{
@@ -265,11 +271,26 @@ func (s *AgentWorkforce) toolListing(ctx context.Context, run storage.ProposeDis
 		"rating_avg": listing.RatingAvg, "rating_count": listing.RatingCount, "required_types": listing.RequiredTypes,
 		"has_write_tools": listing.HasWriteTools, "hired_here": len(listing.Hired) > 0,
 	}
-	result["versions"] = versions
-	result["signals"] = signals.Listing
-	result["feedback"] = map[string]any{"items": items, "total": page.Total, "shown": len(items)}
-	result["notice"] = untrustedNotice
-	return result, nil
+	// The worker reads at most 32 KiB: older versions, then the oldest
+	// feedback items, are dropped until the answer fits.
+	for {
+		result["versions"] = versions
+		result["signals"] = signals.Listing
+		result["feedback"] = map[string]any{"items": items, "total": page.Total, "shown": len(items)}
+		result["notice"] = untrustedNotice
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return nil, err
+		}
+		if len(encoded) <= storage.MarketplaceWorkforceBudgetBytes || (len(items) == 0 && len(versions) <= 1) {
+			return result, nil
+		}
+		if len(items) > 0 {
+			items = items[:len(items)-1]
+		} else {
+			versions = versions[:len(versions)-1]
+		}
+	}
 }
 
 /* ── propose_hire ──────────────────────────────────────────────────────── */
@@ -513,6 +534,8 @@ func (s *AgentWorkforce) toolSuggestFeedback(ctx context.Context, run storage.Pr
 		outcome  map[string]any
 		proposal WorkforceProposal
 		listing  string
+		// stageApplied: the stage the report is about was approved already.
+		stageApplied bool
 	)
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
 		var (
@@ -541,7 +564,7 @@ WHERE i.project_id = $1 AND i.entity_kind = 'agent' AND i.entity_id = $2`, run.P
 				"This project published the listing: a workforce manager does not report on its own project's listing.")
 			return nil
 		}
-		stage, _, err := reportStage(ctx, tx, run.ProjectID, args.HiredAgentID)
+		stage, stageStatus, err := reportStage(ctx, tx, run.ProjectID, args.HiredAgentID)
 		if err != nil {
 			return err
 		}
@@ -550,6 +573,7 @@ WHERE i.project_id = $1 AND i.entity_kind = 'agent' AND i.entity_id = $2`, run.P
 				"The agent has no open or approved watch, demote, suspend or retire proposal. Propose the stage first.")
 			return nil
 		}
+		stageApplied = stageStatus == agentworkforce.StatusApproved
 		var reported bool
 		if err := tx.QueryRow(ctx, `
 SELECT EXISTS (SELECT 1 FROM elitea_marketplace.listing_feedback
@@ -603,7 +627,9 @@ RETURNING `+workforceProposalColumns, run.ProjectID, args.HiredAgentID, stage, r
 	}
 	// The dismissal stage may be applied already: the policy then publishes at
 	// once, as it would have when the stage was applied.
-	s.publishAutoReports(ctx, run.ProjectID, args.HiredAgentID, proposal.Stage)
+	if stageApplied {
+		s.publishAutoReports(ctx, run.ProjectID, args.HiredAgentID, proposal.Stage)
+	}
 	result := toolResult(agentworkforce.OutcomeProposed,
 		"Drafted. It is published to the listing only after a person who manages agents approves it, or by the project's auto_feedback policy when the stage is applied. Tell the person you drafted it.")
 	result["proposal_id"] = strconv.FormatInt(proposal.ID, 10)
