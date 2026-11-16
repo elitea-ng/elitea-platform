@@ -37,7 +37,7 @@ export function SkillTrustPanel({ projectId, skillId, canEdit, revisionHint }: S
   const queryClient = useQueryClient();
   const status = useQuery({
     queryKey: [...key(projectId ?? '', id), revisionHint ?? ''],
-    queryFn: async (): Promise<SkillTrustStatus> => unwrapBody<SkillTrustStatus>(await getSkillTrust(projectId ?? '', id)),
+    queryFn: async (): Promise<SkillTrustStatus> => unwrapBody(await getSkillTrust(projectId ?? '', id)) as SkillTrustStatus,
     enabled,
     retry: false,
   });

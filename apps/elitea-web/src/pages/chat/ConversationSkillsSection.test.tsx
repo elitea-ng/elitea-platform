@@ -17,9 +17,9 @@ import { ConversationSkillsSection, type ConversationSkillsSectionProps } from '
 interface Pin {
   id: number;
   kind: 'project' | 'listing';
-  skill_id?: number;
-  listing_id?: number;
-  listing_version_id?: number;
+  skill_id?: number | undefined;
+  listing_id?: number | undefined;
+  listing_version_id?: number | undefined;
   name: string;
   description: string;
   version_name?: string;

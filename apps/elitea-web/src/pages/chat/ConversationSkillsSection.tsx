@@ -26,7 +26,7 @@ import Typography from '@mui/material/Typography';
 import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
 
-import { Link } from '@tanstack/react-router';
+import { useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 
 import {
@@ -156,6 +156,7 @@ function PinRow({
 
 export function ConversationSkillsSection({ projectId, conversationId, readOnly = false, personName }: ConversationSkillsSectionProps): ReactNode {
   const currentUserId = (useGetCurrentAuthor().data?.data as { readonly id?: string } | undefined)?.id;
+  const navigate = useNavigate();
   const list = useConversationSkills(projectId, conversationId);
   const { pin, unpin } = useConversationSkillMutations(projectId, conversationId);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
@@ -244,7 +245,12 @@ export function ConversationSkillsSection({ projectId, conversationId, readOnly 
             {skill.name}
           </MenuItem>
         ))}
-        <MenuItem component={Link} to="/marketplace" search={{ kind: 'skills' }} onClick={() => setAnchor(null)}>
+        <MenuItem
+          onClick={() => {
+            setAnchor(null);
+            void navigate({ to: '/marketplace', search: { kind: 'skills' } });
+          }}
+        >
           {t('chat.skills.browse', 'Find more skills in the Marketplace')}
         </MenuItem>
       </Menu>
