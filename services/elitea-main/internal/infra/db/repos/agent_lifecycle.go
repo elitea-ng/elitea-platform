@@ -77,6 +77,8 @@ type AgentLifecycle struct {
 	policy    PolicySource
 	gate      agentlifecycle.ReleaseGate
 	publisher CandidatePublisher
+	// marketplaceApplier applies an approved upgrade or upstream merge.
+	marketplaceApplier MarketplaceApplier
 	// digester takes the candidate digest at submit and the final
 	// approval. Without it only the version's revisions are compared.
 	digester CandidateDigester

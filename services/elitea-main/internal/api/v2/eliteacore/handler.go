@@ -134,6 +134,10 @@ type Handler struct {
 	// change request (publish_core.go, ADR-0040 decision 3). nil governs
 	// nothing.
 	governor PublishGovernor
+	// suspender stops the agents that hold a yanked listing version when an
+	// administrator asks (marketplace_yank.go, ADR-0051 decision 4). nil
+	// answers that the suspension is unavailable.
+	suspender ListingSuspender
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so

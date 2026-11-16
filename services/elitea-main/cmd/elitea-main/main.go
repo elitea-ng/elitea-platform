@@ -3096,6 +3096,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CredentialConsent:             credentialConsentHandler,
 		ExternalAgentIdentityAdmin:    agentIdentity.ExternalAdmin,
 		ExecutionSuspensions:          executionSuspensions.handler,
+		SuspensionService:             executionSuspensions.service,
 		MandateAttachments:            governedTriggers.Attachments,
 		AgentHeartbeatMandates:        governedTriggers.Runs,
 		CredentialReferencesAdmin:     credentialReferencesHandler,
