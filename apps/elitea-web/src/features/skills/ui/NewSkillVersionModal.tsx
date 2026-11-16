@@ -43,16 +43,34 @@ export function NewSkillVersionModal({
   onConfirm,
 }: NewSkillVersionModalProps): ReactNode {
   const [name, setName] = useState('');
+  const [touched, setTouched] = useState(false);
+  const [serverErrorShown, setServerErrorShown] = useState(true);
+  const namesKey = existingNames.join('\u0000');
 
   useEffect(() => {
-    // Re-seeded only when the dialog opens: a refetch while the user types must not overwrite their edit.
-    if (open) setName(nextVersionName(existingNames));
-    // oxlint-disable-next-line react/exhaustive-deps -- seeded on open only.
+    // A fresh dialog starts untouched, with no leftover refusal from the last attempt.
+    if (open) {
+      setTouched(false);
+      setServerErrorShown(true);
+    }
   }, [open]);
+
+  useEffect(() => {
+    // Seeded on open and again when the versions list arrives or changes, until
+    // the user types: their edit is never overwritten, and a name taken by the
+    // list that was still loading is not offered.
+    if (open && !touched) setName(nextVersionName(existingNames));
+    // oxlint-disable-next-line react/exhaustive-deps -- namesKey stands for existingNames.
+  }, [open, touched, namesKey]);
+
+  useEffect(() => {
+    // A new refusal from the server shows again, even after the name was edited.
+    if (error !== undefined) setServerErrorShown(true);
+  }, [error]);
 
   const trimmed = name.trim();
   const problem = nameProblem(trimmed, existingNames);
-  const helper = problem ?? error;
+  const helper = problem ?? (serverErrorShown ? error : undefined);
   const invalid = trimmed === '' || problem !== undefined;
 
   return (
@@ -70,7 +88,12 @@ export function NewSkillVersionModal({
           autoFocus
           label={t('skills.edit.versionName', 'Version name')}
           value={name}
-          onChange={(event) => setName(event.target.value)}
+          onChange={(event) => {
+            setName(event.target.value);
+            setTouched(true);
+            // The refusal belonged to the old name.
+            setServerErrorShown(false);
+          }}
           error={helper !== undefined}
           helperText={helper}
           slotProps={{ htmlInput: { 'data-testid': 'skill-version-name-input' } }}

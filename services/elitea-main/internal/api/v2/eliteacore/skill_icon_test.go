@@ -13,6 +13,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -333,10 +336,22 @@ func TestSkillIconUploadStoresOnlyAllowlistedExtensions(t *testing.T) {
 	}
 }
 
-// pngBytes is a payload that sniffs as a PNG: the 8-byte signature followed by
-// whatever the test wants to recognise later.
+// pngBytes is a real 1x1 PNG followed by whatever the test wants to recognise
+// later (trailing bytes after IEND do not stop a decoder).
 func pngBytes(rest string) []byte {
-	return append([]byte("\x89PNG\r\n\x1a\n"), rest...)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		panic(err)
+	}
+	return append(buf.Bytes(), rest...)
+}
+
+func jpegBytes() []byte {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, image.NewRGBA(image.Rect(0, 0, 4, 4)), nil); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
 }
 
 // #2107: the format is validated from the bytes, with a message the picker can
@@ -374,6 +389,46 @@ func TestSkillIconUploadRefusesAnUnsupportedFormatAndStoresNothing(t *testing.T)
 	}
 }
 
+// A valid signature is not a valid image: the whole file is decoded.
+func TestSkillIconUploadRefusesAFileThatOnlyStartsLikeAnImage(t *testing.T) {
+	whole := pngBytes("")
+	cases := map[string][]byte{
+		"png signature then markup":  append([]byte("\x89PNG\r\n\x1a\n"), []byte("<script>alert(1)</script>")...),
+		"truncated png":              whole[:len(whole)/2],
+		"jpeg header then garbage":   append([]byte("\xff\xd8\xff\xe0\x00\x10JFIF"), make([]byte, 32)...),
+		"ico entry past end of file": {0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 0xff, 0, 0, 0, 22, 0, 0, 0},
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := newListableIconStore()
+			h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(store))
+			rec := httptest.NewRecorder()
+			h.UploadSkillIcon(rec, skillIconUploadRequest(t, "7", "icon.png", content, nil))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			if msg, _ := decodeObj(t, rec)["error"].(string); !strings.Contains(msg, "could not be read") {
+				t.Fatalf("error = %q, want the unreadable-image message", msg)
+			}
+			listRec := httptest.NewRecorder()
+			h.ListSkillIcons(listRec, newRequest(http.MethodGet, "/", map[string]string{"projectID": "7"}, nil))
+			if total, _ := decodeObj(t, listRec)["total"].(float64); total != 0 {
+				t.Fatalf("a refused upload left an object behind: total = %v", total)
+			}
+		})
+	}
+}
+
+func TestSkillIconUploadAcceptsAWellFormedIco(t *testing.T) {
+	img := pngBytes("")
+	ico := append([]byte{0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 32, 0, byte(len(img)), byte(len(img) >> 8), 0, 0, 22, 0, 0, 0}, img...)
+	h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(newListableIconStore()))
+	meta := uploadOneSkillIcon(t, h, "7", "favicon.ico", ico)
+	if name, _ := meta["name"].(string); !strings.HasSuffix(name, ".ico") {
+		t.Fatalf("stored name = %v, want .ico", meta["name"])
+	}
+}
+
 func TestSkillIconUploadRefusesAnEmptyFile(t *testing.T) {
 	h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(newListableIconStore()))
 	rec := httptest.NewRecorder()
@@ -385,8 +440,7 @@ func TestSkillIconUploadRefusesAnEmptyFile(t *testing.T) {
 
 func TestSkillIconUploadStoresTheExtensionOfWhatTheBytesAre(t *testing.T) {
 	h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(newListableIconStore()))
-	jpeg := append([]byte("\xff\xd8\xff\xe0\x00\x10JFIF"), make([]byte, 32)...)
-	meta := uploadOneSkillIcon(t, h, "7", "photo.png", jpeg)
+	meta := uploadOneSkillIcon(t, h, "7", "photo.png", jpegBytes())
 	if name, _ := meta["name"].(string); !strings.HasSuffix(name, ".jpg") {
 		t.Fatalf("stored name = %v, want .jpg for JPEG bytes sent as photo.png", meta["name"])
 	}

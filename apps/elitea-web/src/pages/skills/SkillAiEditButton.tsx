@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useMemo } from 'react';
 
 import { EditInstructionsWithAiButton } from '@/features/agents';
-import type { SkillWriteInput } from '@/features/skills';
+import { isSkillValid, type SkillWriteInput } from '@/features/skills';
 
 export interface SkillAiEditButtonProps {
   readonly projectId: string | undefined;
@@ -16,11 +16,20 @@ export interface SkillAiEditButtonProps {
  * (`EditInstructionsWithAiButton`), so a skill gets the same availability gate,
  * model resolution, Service Prompt, review diff and Apply as an agent. The
  * agent-only fields (welcome message, starters) are left out of the review, and
- * Apply writes back only the three fields a skill has.
+ * Apply writes back only the three fields a skill has, each only if it passes
+ * the skill's own limits (a returned name that is blank or too long is dropped).
+ * The prompt itself is told it is editing a skill, not an agent.
  *
  * A skill version carries no model of its own, so the project's default model
  * is used (`llmSettings: null`).
  */
+/** A proposed field value, applied only when the skill's own rules accept it; the field keeps its text otherwise. */
+function accepted(field: 'name' | 'description' | 'instructions', proposed: string | undefined, current: string): string {
+  if (proposed === undefined) return current;
+  const probe = { name: 'n', description: 'd', instructions: 'i', tags: [] as readonly string[], [field]: proposed };
+  return isSkillValid(probe) ? proposed : current;
+}
+
 export function SkillAiEditButton({ projectId, value, onChange, disabled = false }: SkillAiEditButtonProps): ReactNode {
   const current = useMemo(
     () => ({
@@ -42,9 +51,9 @@ export function SkillAiEditButton({ projectId, value, onChange, disabled = false
       onApply={(patch) =>
         onChange({
           ...value,
-          name: patch.name ?? value.name,
-          description: patch.description ?? value.description,
-          instructions: patch.instructions ?? value.instructions,
+          name: accepted('name', patch.name, value.name),
+          description: accepted('description', patch.description, value.description),
+          instructions: accepted('instructions', patch.instructions, value.instructions),
         })
       }
     />

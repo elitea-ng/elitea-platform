@@ -100,7 +100,7 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
       const result = await generateContentBlocking(
         projectId,
         {
-          user_input: buildAiEditInput(basePrompt, base, request.trim()),
+          user_input: buildAiEditInput(basePrompt, base, request.trim(), agentFields),
           chat_history: [],
           llm_settings: llmSettings,
         },
@@ -128,7 +128,7 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
     } finally {
       abortRef.current = undefined;
     }
-  }, [basePrompt, current, llmSettings, projectId, request]);
+  }, [agentFields, basePrompt, current, llmSettings, projectId, request]);
 
   const handleApply = useCallback(() => {
     onApply(aiEditPatch(snapshot, proposed));

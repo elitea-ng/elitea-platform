@@ -95,6 +95,29 @@ describe('SkillAiEditButton', () => {
     });
   });
 
+  it('does not apply a proposed name that breaks the skill rules, and sends a skill-specific prompt', async () => {
+    const user = userEvent.setup();
+    serveConfigurations();
+    let sent = '';
+    server.use(
+      http.post(`${BASE}/elitea_core/predict_llm/prompt_lib/7`, async ({ request }) => {
+        sent = JSON.stringify(await request.json());
+        return HttpResponse.json({
+          content: JSON.stringify({ name: 'x'.repeat(200), description: 'Reviews code carefully.', instructions: 'Be very careful.' }),
+        });
+      }),
+    );
+    const onChange = renderButton();
+    await user.click(await screen.findByRole('button', { name: 'Edit with AI' }));
+    await user.type(screen.getByLabelText('What should change?'), 'stricter');
+    await user.click(screen.getByRole('button', { name: 'Generate draft' }));
+    await waitFor(() => expect(screen.getByLabelText('Instructions')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(sent).toContain('This is a SKILL');
+    expect(sent).not.toContain('welcome_message\": \"');
+    expect(onChange).toHaveBeenCalledWith({ ...value, description: 'Reviews code carefully.', instructions: 'Be very careful.' });
+  });
+
   it('renders nothing when the AI routes are not served', async () => {
     setBackendCapabilityForTests('llmPredictBlocking', false);
     renderButton();

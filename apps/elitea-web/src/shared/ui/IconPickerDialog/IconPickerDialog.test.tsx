@@ -62,4 +62,11 @@ describe('IconPickerDialog upload validation (#2107)', () => {
       expect(screen.getByTestId('icon-picker-upload-error')).toHaveTextContent('Unsupported file format. Upload a PNG image.'),
     );
   });
+
+  it('says a non-HTTP failure is a connection problem, not a refusal', async () => {
+    const onUpload = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    renderPicker({ onUpload, acceptedExtensions: ['.png'], maxFileBytes: undefined });
+    await user().upload(screen.getByTestId('icon-picker-file-input'), new File(['x'], 'icon.png', { type: 'image/tiff' }));
+    await waitFor(() => expect(screen.getByTestId('icon-picker-upload-error')).toHaveTextContent('Check your connection'));
+  });
 });

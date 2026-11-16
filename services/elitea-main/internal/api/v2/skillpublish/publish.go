@@ -105,19 +105,18 @@ func (h *Handler) Publish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The validation gate. A caller who has just validated presents the token
-	// and skips it; anyone else — and anyone whose token this process cannot
-	// verify — validates inline and is refused on FAIL.
-	//
-	// A token that does not verify is NOT an error by itself. The signing key
-	// is per process (see Handler.validationSecret), so with more than one
-	// replica, or a restart between the two calls, a perfectly good token
-	// arrives at a process that never issued it (#2100: "Validation token is
-	// invalid" on a skill that met every requirement). The token only exists to
-	// skip work, so the safe answer to one we cannot verify is to do the work.
+	// and skips it; anyone else validates inline and is refused on FAIL.
 	if !isAdminPublish {
-		tokenOK := body.ValidationToken != "" && h.verifyValidationToken(body.ValidationToken, strconv.Itoa(row.VersionID),
-			contentHash(row.SkillName, row.SkillDescription, row.Instructions))
-		if !tokenOK {
+		if body.ValidationToken != "" {
+			if !h.verifyValidationToken(body.ValidationToken, strconv.Itoa(row.VersionID),
+				contentHash(row.SkillName, row.SkillDescription, row.Instructions)) {
+				writeJSON(w, http.StatusBadRequest, map[string]any{
+					"error": "validation_token_invalid",
+					"msg":   "Validation token is invalid or the skill changed after it was issued. Re-run /publish_skill_validate.",
+				})
+				return
+			}
+		} else {
 			result := h.validate(ctx, schema, row, body.VersionName, body.Category, activeCategories)
 			if result.Status == "FAIL" {
 				writeJSON(w, http.StatusBadRequest, map[string]any{

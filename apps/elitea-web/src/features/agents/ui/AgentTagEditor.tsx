@@ -1,5 +1,5 @@
 import type { ReactNode, SyntheticEvent } from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 
 import Autocomplete from '@mui/material/Autocomplete';
 import TextField from '@mui/material/TextField';
@@ -71,33 +71,15 @@ export function AgentTagEditor({ projectId, value, onChange }: AgentTagEditorPro
 
   const handleChange = useCallback(
     (_event: SyntheticEvent, newValue: readonly (Tag | string)[]) => {
-      const stamp = Date.now();
-      const resolved = newValue.map((entry, index): Tag | undefined => {
+      const resolved = newValue.map((entry): Tag | undefined => {
         if (typeof entry !== 'string') return entry;
         if (!isValidTagName(entry)) return undefined;
         const existing = availableTags.find((tag) => tag.name === entry.trim());
-        return existing ?? { id: -(stamp + index), name: entry.trim(), data: null };
+        return existing ?? { id: -Date.now(), name: entry.trim(), data: null };
       });
       onChange(dedupeTagsByName(resolved.filter((tag): tag is Tag => tag !== undefined)));
     },
     [availableTags, onChange],
-  );
-
-  // A comma ends the tag being typed, like Enter does (#2101). MUI's freeSolo
-  // Autocomplete only commits on Enter/blur, so the comma used to stay in the box.
-  const [input, setInput] = useState('');
-  const handleInputChange = useCallback(
-    (event: SyntheticEvent, next: string, reason: string) => {
-      if (reason !== 'input' || !next.includes(',')) {
-        setInput(next);
-        return;
-      }
-      const parts = next.split(',');
-      const rest = parts.pop() ?? '';
-      handleChange(event, [...value, ...parts]);
-      setInput(rest);
-    },
-    [handleChange, value],
   );
 
   return (
@@ -105,8 +87,6 @@ export function AgentTagEditor({ projectId, value, onChange }: AgentTagEditorPro
       multiple
       freeSolo
       autoSelect
-      inputValue={input}
-      onInputChange={handleInputChange}
       options={availableTags}
       value={value as Tag[]}
       onChange={handleChange}

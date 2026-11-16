@@ -13,18 +13,29 @@ export interface SkillTagsInputProps {
   readonly disabled?: boolean;
 }
 
+interface NormalisedTags {
+  readonly tags: readonly string[];
+  /** True when a tag over the length cap was refused (never truncated: a cut tag can collide with another). */
+  readonly refusedTooLong: boolean;
+}
+
 /** Trimmed, non-empty, within the tag length cap, and unique ignoring case. */
-function normaliseTags(tags: readonly string[]): readonly string[] {
+function normaliseTags(tags: readonly string[]): NormalisedTags {
   const seen = new Set<string>();
   const result: string[] = [];
+  let refusedTooLong = false;
   for (const raw of tags) {
-    const tag = raw.trim().slice(0, TAG_NAME_MAX_LENGTH);
+    const tag = raw.trim();
+    if (tag.length > TAG_NAME_MAX_LENGTH) {
+      refusedTooLong = true;
+      continue;
+    }
     const key = tag.toLowerCase();
     if (tag === '' || seen.has(key)) continue;
     seen.add(key);
     result.push(tag);
   }
-  return result;
+  return { tags: result, refusedTooLong };
 }
 
 /**
@@ -37,6 +48,13 @@ function normaliseTags(tags: readonly string[]): readonly string[] {
  */
 export function SkillTagsInput({ value, onChange, disabled = false }: SkillTagsInputProps): ReactNode {
   const [input, setInput] = useState('');
+  const [tooLong, setTooLong] = useState(false);
+
+  const commit = (candidates: readonly string[]): void => {
+    const { tags, refusedTooLong } = normaliseTags(candidates);
+    setTooLong(refusedTooLong);
+    onChange(tags);
+  };
 
   const handleInput = (next: string): void => {
     if (!next.includes(',')) {
@@ -46,7 +64,7 @@ export function SkillTagsInput({ value, onChange, disabled = false }: SkillTagsI
     // A comma ends the tag(s) before it; whatever follows the last comma stays in the box.
     const parts = next.split(',');
     const rest = parts.pop() ?? '';
-    onChange(normaliseTags([...value, ...parts]));
+    commit([...value, ...parts]);
     setInput(rest);
   };
 
@@ -63,12 +81,17 @@ export function SkillTagsInput({ value, onChange, disabled = false }: SkillTagsI
         if (reason === 'input') handleInput(next);
         else setInput(next);
       }}
-      onChange={(_event, next) => onChange(normaliseTags(next))}
+      onChange={(_event, next) => commit(next)}
       renderInput={(params) => (
         <TextField
           {...params}
           label={t('skills.form.tags', 'Tags')}
-          helperText={t('skills.form.tagsHint', 'Press Enter or type a comma to add a tag.')}
+          error={tooLong}
+          helperText={
+            tooLong
+              ? t('skills.form.tagTooLong', 'A tag can be at most {{max}} characters. That tag was not added.', { max: TAG_NAME_MAX_LENGTH })
+              : t('skills.form.tagsHint', 'Press Enter or type a comma to add a tag.')
+          }
           slotProps={{
             ...params.slotProps,
             htmlInput: { ...params.slotProps.htmlInput, 'data-testid': 'skill-tags-input' },

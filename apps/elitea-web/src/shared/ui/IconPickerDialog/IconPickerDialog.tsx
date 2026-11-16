@@ -102,9 +102,23 @@ function uploadProblem(file: File, extensions: readonly string[], maxFileBytes: 
   return undefined;
 }
 
-/** The server's own sentence for a refused upload, else a generic one. */
+/** The file itself could not be read or decoded in the browser, before any upload. */
+class UnreadableImageError extends Error {}
+
+/**
+ * What the dialog says about a failure. The server's own sentence for a refused
+ * upload; a specific line for a file the browser cannot decode; a network-shaped
+ * line for a failure that never reached the server; else a generic one. This
+ * dialog is the only place the failure is shown: no mutation toasts it.
+ */
 function uploadFailureMessage(error: unknown): string {
-  if (error instanceof EliteaApiError && error.failure.kind === 'http') {
+  if (error instanceof UnreadableImageError) {
+    return t('shared.iconPicker.errorUnreadable', 'The image could not be read. It may be corrupted or not a real image file.');
+  }
+  if (!(error instanceof EliteaApiError)) {
+    return t('shared.iconPicker.errorNetwork', 'The icon could not be uploaded. Check your connection and try again.');
+  }
+  if (error.failure.kind === 'http') {
     const body = error.failure.body;
     if (typeof body === 'object' && body !== null) {
       const message = (body as { error?: unknown; msg?: unknown }).error ?? (body as { msg?: unknown }).msg;
@@ -130,10 +144,10 @@ function readImageDimensions(file: File): Promise<UploadDimensions> {
           height: Math.min(image.height, MAX_ICON_EDGE),
         });
       };
-      image.onerror = () => { reject(new Error(`icon picker: failed to decode image "${file.name}"`)); };
+      image.onerror = () => { reject(new UnreadableImageError(`icon picker: failed to decode image "${file.name}"`)); };
       image.src = (event.target?.result as string | null) ?? '';
     };
-    reader.onerror = () => { reject(new Error(`icon picker: failed to read file "${file.name}"`)); };
+    reader.onerror = () => { reject(new UnreadableImageError(`icon picker: failed to read file "${file.name}"`)); };
     reader.readAsDataURL(file);
   });
 }

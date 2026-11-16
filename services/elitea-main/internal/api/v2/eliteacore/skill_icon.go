@@ -39,6 +39,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log/slog"
 	"mime"
@@ -48,6 +52,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/webp"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
@@ -82,6 +88,44 @@ const sniffLength = 512
 // unsupportedSkillIconMessage is what the picker shows for a format the
 // service will not store. It names the formats so the user can fix the file.
 const unsupportedSkillIconMessage = "Unsupported file format. Upload a PNG, JPG, GIF, WEBP, BMP or ICO image."
+
+// corruptSkillIconMessage is what the picker shows for a file whose signature
+// is an accepted format but whose content does not decode as one.
+const corruptSkillIconMessage = "The image could not be read. It may be corrupted or not a real image file."
+
+// skillIconDecodes reports whether data, stored under extension, is a whole
+// image of that format. Raster formats are decoded; ICO has no decoder in the
+// standard library or x/image, so its directory is checked for structure and
+// for entries that stay inside the file.
+func skillIconDecodes(data []byte, extension string) bool {
+	if extension == ".ico" {
+		return icoWellFormed(data)
+	}
+	_, _, err := image.Decode(bytes.NewReader(data))
+	return err == nil
+}
+
+// icoWellFormed checks an ICO header (reserved 0, type 1), its directory
+// entries, and that each image's bytes lie within the file.
+func icoWellFormed(data []byte) bool {
+	const headerLen, entryLen = 6, 16
+	if len(data) < headerLen || data[0] != 0 || data[1] != 0 || data[2] != 1 || data[3] != 0 {
+		return false
+	}
+	count := int(data[4]) | int(data[5])<<8
+	if count == 0 || len(data) < headerLen+count*entryLen {
+		return false
+	}
+	for i := 0; i < count; i++ {
+		entry := data[headerLen+i*entryLen:]
+		size := int(entry[8]) | int(entry[9])<<8 | int(entry[10])<<16 | int(entry[11])<<24
+		offset := int(entry[12]) | int(entry[13])<<8 | int(entry[14])<<16 | int(entry[15])<<24
+		if size <= 0 || offset < headerLen+count*entryLen || offset > len(data) || size > len(data)-offset {
+			return false
+		}
+	}
+	return true
+}
 
 // skillIconExtensionForContent maps the sniffed content type of an upload to
 // the extension it is stored under. SVG is not accepted: it is markup that the
@@ -330,7 +374,25 @@ func (h *Handler) UploadSkillIcon(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": unsupportedSkillIconMessage})
 		return
 	}
-	body := io.MultiReader(bytes.NewReader(head[:headLen]), file)
+	// The whole file is read (capped, so a part that lies about its size cannot
+	// balloon memory) and DECODED: a valid signature in front of garbage or markup
+	// is refused rather than stored under an image extension.
+	whole, err := io.ReadAll(io.LimitReader(io.MultiReader(bytes.NewReader(head[:headLen]), file), maxSkillIconBytes+1))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "Could not read the uploaded file."})
+		return
+	}
+	if len(whole) > maxSkillIconBytes {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("File size exceeds %d KB", maxSkillIconBytes/1024),
+		})
+		return
+	}
+	if !skillIconDecodes(whole, extension) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": corruptSkillIconMessage})
+		return
+	}
+	body := bytes.NewReader(whole)
 
 	filename := skillIconPrefix + generateID() + extension
 	ref, err := storage.NewObjectRef(projectID, iconBucket, filename)
