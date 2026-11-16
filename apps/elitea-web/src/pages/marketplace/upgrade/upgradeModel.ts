@@ -66,10 +66,7 @@ const REFUSALS: Readonly<Record<string, () => string>> = {
   unresolved_conflicts: () =>
     t('marketplace.upstream.error.conflicts', 'Choose theirs, ours or an edit for every conflict.'),
   change_request_open: () =>
-    t(
-      'marketplace.upgrade.error.open',
-      'The agent already has an open change request. Finish or withdraw it first.',
-    ),
+    t('marketplace.upgrade.error.open', 'The agent already has an open change request. Finish or withdraw it first.'),
 };
 
 /** One sentence for a failed upgrade or merge. A code we know gets its own words. */

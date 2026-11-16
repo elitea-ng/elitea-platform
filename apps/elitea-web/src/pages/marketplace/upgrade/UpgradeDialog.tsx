@@ -137,9 +137,16 @@ function Body({
   const planned = flow.plan.data;
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: { xs: 0, sm: 480 } }}>
-      {flow.listing.isPending ? (
-        <LinearProgress />
-      ) : (
+      {flow.listing.isPending && <LinearProgress />}
+      {!flow.listing.isPending && flow.versions.length === 0 && (
+        <Typography variant="bodySmall" data-testid="upgrade-no-versions">
+          {t(
+            'marketplace.upgrade.noVersions',
+            'This listing has no other version to move to. Open the listing to see its versions.',
+          )}
+        </Typography>
+      )}
+      {flow.versions.length > 0 && (
         <VersionStep versions={flow.versions} value={flow.versionId} onChange={flow.choose} />
       )}
       {flow.plan.isPending && flow.versionId !== '' && <LinearProgress />}
@@ -187,7 +194,9 @@ export function UpgradeDialog({
           : t('marketplace.upgrade.confirm', 'Upgrade'),
         confirming: flow.upgrade.isPending || flow.blocked,
         cancelText:
-          flow.result === undefined ? t('shared.ui.baseModal.cancel', 'Cancel') : t('marketplace.upgrade.close', 'Close'),
+          flow.result === undefined
+            ? t('shared.ui.baseModal.cancel', 'Cancel')
+            : t('marketplace.upgrade.close', 'Close'),
       }}
       content={<Body flow={flow} targets={targets} />}
     />

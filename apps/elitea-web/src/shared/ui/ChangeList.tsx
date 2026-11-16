@@ -14,19 +14,13 @@ import { t } from '@/shared/i18n';
 export function ChangeList({ changes }: { readonly changes: readonly ApplicationReleaseChange[] }): ReactNode {
   if (changes.length === 0) {
     return (
-      <Typography
-        variant="bodySmall"
-        color="text.secondary"
-      >
+      <Typography variant="bodySmall" color="text.secondary">
         {t('features.agentLifecycle.releases.noChanges', 'No changes.')}
       </Typography>
     );
   }
   return (
-    <Box
-      component="ul"
-      sx={{ margin: 0, paddingLeft: '1.25rem' }}
-    >
+    <Box component="ul" sx={{ margin: 0, paddingLeft: '1.25rem' }}>
       {changes.map((change) => (
         <Typography
           key={`${change.op}:${change.path}`}

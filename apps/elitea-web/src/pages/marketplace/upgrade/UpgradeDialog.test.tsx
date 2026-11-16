@@ -28,7 +28,14 @@ function version(id: string, name: string, state = 'available'): MarketplaceVers
 
 function plan(overrides: Partial<MarketplaceUpgradePlan> = {}): MarketplaceUpgradePlan {
   return {
-    current_version: { id: '1', name: 'v1', state: 'available', state_reason: '', release_notes: '', published_at: '2026-10-01T00:00:00Z' },
+    current_version: {
+      id: '1',
+      name: 'v1',
+      state: 'available',
+      state_reason: '',
+      release_notes: '',
+      published_at: '2026-10-01T00:00:00Z',
+    },
     target_version: {
       id: '3',
       name: 'v3',
@@ -54,7 +61,11 @@ function plan(overrides: Partial<MarketplaceUpgradePlan> = {}): MarketplaceUpgra
 let posts: unknown[] = [];
 let planUrls: string[] = [];
 
-function mock(planned: MarketplaceUpgradePlan, post?: () => Response): void {
+function mock(
+  planned: MarketplaceUpgradePlan,
+  post?: () => Response,
+  listed: MarketplaceVersion[] = [version('3', 'v3', 'current'), version('2', 'v2'), version('1', 'v1')],
+): void {
   posts = [];
   planUrls = [];
   configureGeneratedClient({ baseUrl: '/api/v2' });
@@ -62,7 +73,7 @@ function mock(planned: MarketplaceUpgradePlan, post?: () => Response): void {
     http.get('/api/v2/elitea_core/marketplace_listing/prompt_lib/:projectId/:listingId', () =>
       HttpResponse.json({
         listing: { id: '7', kind: 'agent', name: 'Writer' },
-        versions: [version('3', 'v3', 'current'), version('2', 'v2'), version('1', 'v1')],
+        versions: listed,
       }),
     ),
     http.get('/api/v2/elitea_core/marketplace_upgrade/prompt_lib/:projectId/:applicationId', ({ request }) => {
@@ -107,6 +118,13 @@ describe('UpgradeDialog', () => {
     resetGeneratedClient();
   });
 
+  it('says so when the listing has no other version, with the way on', async () => {
+    mock(plan(), undefined, [version('1', 'v1')]);
+    const dialog = await screen.findByTestId('upgrade-dialog');
+    expect(await within(dialog).findByTestId('upgrade-no-versions')).toHaveTextContent('no other version');
+    expect(within(dialog).getByRole('button', { name: 'Upgrade' })).toBeDisabled();
+  });
+
   it('shows the diff, the release notes and the rating, and upgrades in one click at low tier', async () => {
     mock(plan());
     const user = userEvent.setup();
@@ -144,9 +162,8 @@ describe('UpgradeDialog', () => {
   });
 
   it('says a downgrade is a downgrade, and shows the server refusal in words', async () => {
-    mock(
-      plan({ direction: 'down', target_version: { ...plan().target_version, name: 'v0' } }),
-      () => HttpResponse.json({ error: 'version_not_hireable' }, { status: 409 }),
+    mock(plan({ direction: 'down', target_version: { ...plan().target_version, name: 'v0' } }), () =>
+      HttpResponse.json({ error: 'version_not_hireable' }, { status: 409 }),
     );
     const user = userEvent.setup();
     const dialog = await screen.findByTestId('upgrade-dialog');
@@ -156,7 +173,19 @@ describe('UpgradeDialog', () => {
   });
 
   it('cannot confirm while a requirement the target adds is unbound', async () => {
-    const needs = { ...NO_REQUIREMENTS, items: [{ key: 'toolkit:jira', kind: 'toolkit', type: 'jira', name: 'Jira', tools: ['get_issue'], has_write_tools: false }] };
+    const needs = {
+      ...NO_REQUIREMENTS,
+      items: [
+        {
+          key: 'toolkit:jira',
+          kind: 'toolkit',
+          type: 'jira',
+          name: 'Jira',
+          tools: ['get_issue'],
+          has_write_tools: false,
+        },
+      ],
+    };
     mock(plan({ requirements: needs, new_requirements: needs.items }));
     const dialog = await screen.findByTestId('upgrade-dialog');
     await within(dialog).findByTestId('upgrade-plan');

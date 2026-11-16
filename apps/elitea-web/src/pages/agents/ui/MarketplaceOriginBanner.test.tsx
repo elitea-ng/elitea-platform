@@ -64,7 +64,12 @@ describe('MarketplaceOriginBanner', () => {
 
   it('offers Upgrade to... and the upgrade policy to an installed agent', async () => {
     const { getByTestId, queryByTestId } = await renderBanner(
-      { ...ORIGIN, upgrade_policy: 'auto', latest_version: { id: '400', name: 'v2.4', published_at: '2026-11-01T00:00:00Z' }, update_widening: [{ kind: 'tool_added', detail: 'github: create_issue' }] },
+      {
+        ...ORIGIN,
+        upgrade_policy: 'auto',
+        latest_version: { id: '400', name: 'v2.4', published_at: '2026-11-01T00:00:00Z' },
+        update_widening: [{ kind: 'tool_added', detail: 'github: create_issue' }],
+      },
       { projectId: '5', applicationId: 88 },
     );
     expect(getByTestId('marketplace-upgrade-to').textContent).toBe('Upgrade to...');
@@ -91,7 +96,10 @@ describe('MarketplaceOriginBanner', () => {
 });
 
 /** The banner inside a real router with the listing route, so its links build real hrefs. */
-async function renderBanner(origin: MarketplaceOrigin, ids?: { readonly projectId: string; readonly applicationId: number }) {
+async function renderBanner(
+  origin: MarketplaceOrigin,
+  ids?: { readonly projectId: string; readonly applicationId: number },
+) {
   const root = createRootRoute({ component: Outlet });
   const index = createRoute({
     getParentRoute: () => root,

@@ -205,7 +205,9 @@ export function ListingVersions({
             />
             {pending?.action === 'yanked' && canModerate && (
               <FormControlLabel
-                control={<BaseCheckbox size="small" checked={suspend} onChange={(event) => setSuspend(event.target.checked)} />}
+                control={
+                  <BaseCheckbox size="small" checked={suspend} onChange={(event) => setSuspend(event.target.checked)} />
+                }
                 label={t(
                   'marketplace.versions.suspend',
                   'Also suspend the agents installed from this version (reason: listing_yanked)',

@@ -41,7 +41,9 @@ function review(fields: MarketplaceMergeField[]): MarketplaceUpstreamReview {
 
 describe('wideningText', () => {
   it('says what each kind of widening adds', () => {
-    expect(wideningText({ kind: 'tool_added', detail: 'github: create_issue' })).toBe('A new tool: github: create_issue');
+    expect(wideningText({ kind: 'tool_added', detail: 'github: create_issue' })).toBe(
+      'A new tool: github: create_issue',
+    );
     expect(wideningText({ kind: 'tier_raised', detail: 'low to medium' })).toBe('A higher risk tier: low to medium');
     expect(wideningText({ kind: 'capability_added', detail: 'write tools' })).toBe('A new capability: write tools');
     expect(wideningText({ kind: 'requirement_added', detail: 'toolkit jira' })).toBe('A new requirement: toolkit jira');

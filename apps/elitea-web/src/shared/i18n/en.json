@@ -6809,5 +6809,6 @@
   "pages.agents.origin.yankedForkNext": "Review the upstream update when a new version is out.",
   "pages.agents.origin.yankedNext": "Upgrade it to another version.",
   "pages.agents.origin.yankedPlain": "This version was yanked. Your agent keeps running. {{next}}",
-  "pages.agents.origin.yankedReason": "This version was yanked: {{reason}} Your agent keeps running. {{next}}"
+  "pages.agents.origin.yankedReason": "This version was yanked: {{reason}} Your agent keeps running. {{next}}",
+  "marketplace.upgrade.noVersions": "This listing has no other version to move to. Open the listing to see its versions."
 }

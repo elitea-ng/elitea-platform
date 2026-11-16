@@ -17,12 +17,50 @@ function review(overrides: Partial<MarketplaceUpstreamReview> = {}): Marketplace
     mode: 'three_way',
     listing_id: '7',
     listing_name: 'Writer',
-    base: { id: '1', name: 'v1', state: 'available', state_reason: '', release_notes: '', published_at: '2026-10-01T00:00:00Z' },
-    theirs: { id: '2', name: 'v2', state: 'current', state_reason: '', release_notes: 'New wording.', published_at: '2026-11-01T00:00:00Z' },
+    base: {
+      id: '1',
+      name: 'v1',
+      state: 'available',
+      state_reason: '',
+      release_notes: '',
+      published_at: '2026-10-01T00:00:00Z',
+    },
+    theirs: {
+      id: '2',
+      name: 'v2',
+      state: 'current',
+      state_reason: '',
+      release_notes: 'New wording.',
+      published_at: '2026-11-01T00:00:00Z',
+    },
     fields: [
-      { key: 'instructions', label: 'Instructions', status: 'conflict', default: 'ours', base: 'base text', theirs: 'their text', ours: 'our text' },
-      { key: 'welcome_message', label: 'Welcome message', status: 'theirs_only', default: 'theirs', base: 'hi', theirs: 'hello', ours: 'hi' },
-      { key: 'agent_type', label: 'Agent type', status: 'same', default: 'ours', base: 'agent', theirs: 'agent', ours: 'agent' },
+      {
+        key: 'instructions',
+        label: 'Instructions',
+        status: 'conflict',
+        default: 'ours',
+        base: 'base text',
+        theirs: 'their text',
+        ours: 'our text',
+      },
+      {
+        key: 'welcome_message',
+        label: 'Welcome message',
+        status: 'theirs_only',
+        default: 'theirs',
+        base: 'hi',
+        theirs: 'hello',
+        ours: 'hi',
+      },
+      {
+        key: 'agent_type',
+        label: 'Agent type',
+        status: 'same',
+        default: 'ours',
+        base: 'agent',
+        theirs: 'agent',
+        ours: 'agent',
+      },
     ],
     changes: [{ path: '/definition/version/instructions', op: 'replace', before: 'base text', after: 'their text' }],
     widening: [],
@@ -40,7 +78,9 @@ function mock(served: MarketplaceUpstreamReview): void {
   posts = [];
   configureGeneratedClient({ baseUrl: '/api/v2' });
   server.use(
-    http.get('/api/v2/elitea_core/marketplace_upstream/prompt_lib/:projectId/:applicationId', () => HttpResponse.json(served)),
+    http.get('/api/v2/elitea_core/marketplace_upstream/prompt_lib/:projectId/:applicationId', () =>
+      HttpResponse.json(served),
+    ),
     http.post('/api/v2/elitea_core/marketplace_upstream/prompt_lib/:projectId/:applicationId', async ({ request }) => {
       posts.push(await request.json());
       return HttpResponse.json(
@@ -96,7 +136,9 @@ describe('UpstreamReviewDialog', () => {
     await user.type(box, 'merged text');
     await user.click(within(dialog).getByRole('button', { name: 'Propose the merge' }));
     await waitFor(() =>
-      expect(posts).toEqual([{ version_id: '2', resolutions: { instructions: { choice: 'edit', value: 'merged text' } } }]),
+      expect(posts).toEqual([
+        { version_id: '2', resolutions: { instructions: { choice: 'edit', value: 'merged text' } } },
+      ]),
     );
   });
 
@@ -107,12 +149,22 @@ describe('UpstreamReviewDialog', () => {
         base: null,
         changes: [],
         fields: [
-          { key: 'instructions', label: 'Instructions', status: 'differs', default: 'ours', base: null, theirs: 'their text', ours: 'our text' },
+          {
+            key: 'instructions',
+            label: 'Instructions',
+            status: 'differs',
+            default: 'ours',
+            base: null,
+            theirs: 'their text',
+            ours: 'our text',
+          },
         ],
       }),
     );
     const dialog = await screen.findByTestId('upstream-dialog');
-    expect(await within(dialog).findByTestId('upstream-review')).toHaveTextContent('does not know which version it came from');
+    expect(await within(dialog).findByTestId('upstream-review')).toHaveTextContent(
+      'does not know which version it came from',
+    );
     expect(within(dialog).queryByTestId('upstream-base-instructions')).toBeNull();
     // A two-way difference has a default, so the merge can go ahead without a choice.
     expect(within(dialog).getByRole('button', { name: 'Propose the merge' })).toBeEnabled();

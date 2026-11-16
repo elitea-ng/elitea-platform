@@ -19,7 +19,10 @@ import Typography from '@mui/material/Typography';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { getMarketplaceUpstreamReview, proposeMarketplaceUpstreamMerge } from '@/shared/api/generated/marketplace/marketplace';
+import {
+  getMarketplaceUpstreamReview,
+  proposeMarketplaceUpstreamMerge,
+} from '@/shared/api/generated/marketplace/marketplace';
 import type {
   MarketplaceMergeField,
   MarketplaceUpstreamResult,
@@ -51,7 +54,15 @@ export interface UpstreamReviewDialogProps {
   readonly applicationId: number;
 }
 
-function Side({ label, value, testId }: { readonly label: string; readonly value: unknown; readonly testId: string }): ReactNode {
+function Side({
+  label,
+  value,
+  testId,
+}: {
+  readonly label: string;
+  readonly value: unknown;
+  readonly testId: string;
+}): ReactNode {
   const text = fieldText(value);
   return (
     <Box sx={{ flex: '1 1 0', minWidth: 0 }} data-testid={testId}>
@@ -78,18 +89,39 @@ function FieldRow({ field, threeWay, pick, invalid, onPick }: FieldRowProps): Re
   return (
     <Box
       component="li"
-      sx={{ display: 'flex', flexDirection: 'column', gap: 1, paddingBottom: 1.5, borderBottom: 1, borderColor: 'divider' }}
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 1,
+        paddingBottom: 1.5,
+        borderBottom: 1,
+        borderColor: 'divider',
+      }}
       data-testid={`upstream-field-${field.key}`}
     >
       <Typography variant="labelMedium" component="h4">
         {field.label}{' '}
-        <Typography component="span" variant="bodySmall" color={field.status === 'conflict' ? 'error.main' : 'text.secondary'}>
+        <Typography
+          component="span"
+          variant="bodySmall"
+          color={field.status === 'conflict' ? 'error.main' : 'text.secondary'}
+        >
           {statusText(field.status)}
         </Typography>
       </Typography>
       <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-        {threeWay && <Side label={t('marketplace.upstream.base', 'Base')} value={field.base} testId={`upstream-base-${field.key}`} />}
-        <Side label={t('marketplace.upstream.theirs', 'Theirs')} value={field.theirs} testId={`upstream-theirs-${field.key}`} />
+        {threeWay && (
+          <Side
+            label={t('marketplace.upstream.base', 'Base')}
+            value={field.base}
+            testId={`upstream-base-${field.key}`}
+          />
+        )}
+        <Side
+          label={t('marketplace.upstream.theirs', 'Theirs')}
+          value={field.theirs}
+          testId={`upstream-theirs-${field.key}`}
+        />
         <Side label={t('marketplace.upstream.ours', 'Ours')} value={field.ours} testId={`upstream-ours-${field.key}`} />
       </Box>
       <RadioGroup
@@ -98,13 +130,29 @@ function FieldRow({ field, threeWay, pick, invalid, onPick }: FieldRowProps): Re
         aria-label={t('marketplace.upstream.choose', 'Choose for {{field}}', { field: field.label })}
         onChange={(event) => {
           const next = event.target.value;
-          if (next === 'edit') onPick({ choice: 'edit', text: fieldText(field.status === 'theirs_only' ? field.theirs : field.ours) });
+          if (next === 'edit')
+            onPick({ choice: 'edit', text: fieldText(field.status === 'theirs_only' ? field.theirs : field.ours) });
           else if (next === 'theirs' || next === 'ours') onPick({ choice: next });
         }}
       >
-        <FormControlLabel value="theirs" control={<Radio size="small" />} label={t('marketplace.upstream.keepTheirs', 'Keep theirs')} data-testid={`upstream-keep-theirs-${field.key}`} />
-        <FormControlLabel value="ours" control={<Radio size="small" />} label={t('marketplace.upstream.keepOurs', 'Keep ours')} data-testid={`upstream-keep-ours-${field.key}`} />
-        <FormControlLabel value="edit" control={<Radio size="small" />} label={t('marketplace.upstream.edit', 'Edit')} data-testid={`upstream-edit-${field.key}`} />
+        <FormControlLabel
+          value="theirs"
+          control={<Radio size="small" />}
+          label={t('marketplace.upstream.keepTheirs', 'Keep theirs')}
+          data-testid={`upstream-keep-theirs-${field.key}`}
+        />
+        <FormControlLabel
+          value="ours"
+          control={<Radio size="small" />}
+          label={t('marketplace.upstream.keepOurs', 'Keep ours')}
+          data-testid={`upstream-keep-ours-${field.key}`}
+        />
+        <FormControlLabel
+          value="edit"
+          control={<Radio size="small" />}
+          label={t('marketplace.upstream.edit', 'Edit')}
+          data-testid={`upstream-edit-${field.key}`}
+        />
       </RadioGroup>
       {pick?.choice === 'edit' && (
         <TextField
@@ -122,7 +170,15 @@ function FieldRow({ field, threeWay, pick, invalid, onPick }: FieldRowProps): Re
   );
 }
 
-function ReviewBody({ review, picks, onPick }: { readonly review: MarketplaceUpstreamReview; readonly picks: FieldPicks; readonly onPick: (key: string, pick: FieldPick | undefined) => void }): ReactNode {
+function ReviewBody({
+  review,
+  picks,
+  onPick,
+}: {
+  readonly review: MarketplaceUpstreamReview;
+  readonly picks: FieldPicks;
+  readonly onPick: (key: string, pick: FieldPick | undefined) => void;
+}): ReactNode {
   const threeWay = review.mode === 'three_way';
   const bad = new Set(blockingFields(review, picks));
   const open = review.fields.filter((field) => field.status !== 'same');
@@ -136,10 +192,14 @@ function ReviewBody({ review, picks, onPick }: { readonly review: MarketplaceUps
               theirs: review.theirs.name,
               ours: review.our_version_name,
             })
-          : t('marketplace.upstream.twoWay', 'This fork does not know which version it came from, so you see theirs ({{theirs}}) against ours ({{ours}}).', {
-              theirs: review.theirs.name,
-              ours: review.our_version_name,
-            })}
+          : t(
+              'marketplace.upstream.twoWay',
+              'This fork does not know which version it came from, so you see theirs ({{theirs}}) against ours ({{ours}}).',
+              {
+                theirs: review.theirs.name,
+                ours: review.our_version_name,
+              },
+            )}
       </Typography>
       {review.theirs.release_notes !== '' && (
         <Typography variant="bodySmall" sx={{ whiteSpace: 'pre-wrap' }}>
@@ -148,7 +208,10 @@ function ReviewBody({ review, picks, onPick }: { readonly review: MarketplaceUps
       )}
       {review.widening.length > 0 && (
         <Alert severity="info" data-testid="upstream-widening">
-          {t('marketplace.upstream.widening', 'Upstream now also asks for these. Your fork keeps its own tools, so add them by hand if you want them:')}
+          {t(
+            'marketplace.upstream.widening',
+            'Upstream now also asks for these. Your fork keeps its own tools, so add them by hand if you want them:',
+          )}
           <Box component="ul" sx={{ margin: 0, paddingLeft: '1.25rem' }}>
             {review.widening.map((item) => (
               <li key={`${item.kind}:${item.detail}`}>{wideningText(item)}</li>
@@ -157,16 +220,30 @@ function ReviewBody({ review, picks, onPick }: { readonly review: MarketplaceUps
         </Alert>
       )}
       {open.length === 0 && (
-        <Typography variant="bodySmall">{t('marketplace.upstream.nothing', 'Nothing differs. Merging only records the new version.')}</Typography>
+        <Typography variant="bodySmall">
+          {t('marketplace.upstream.nothing', 'Nothing differs. Merging only records the new version.')}
+        </Typography>
       )}
-      <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <Box
+        component="ul"
+        sx={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 1.5 }}
+      >
         {open.map((field) => (
-          <FieldRow key={field.key} field={field} threeWay={threeWay} pick={picks[field.key]} invalid={bad.has(field.key) && picks[field.key] !== undefined} onPick={(pick) => onPick(field.key, pick)} />
+          <FieldRow
+            key={field.key}
+            field={field}
+            threeWay={threeWay}
+            pick={picks[field.key]}
+            invalid={bad.has(field.key) && picks[field.key] !== undefined}
+            onPick={(pick) => onPick(field.key, pick)}
+          />
         ))}
       </Box>
       {same.length > 0 && (
         <Typography variant="bodySmall" color="text.secondary">
-          {t('marketplace.upstream.sameFields', 'Same on both sides: {{fields}}.', { fields: same.map((field) => field.label).join(', ') })}
+          {t('marketplace.upstream.sameFields', 'Same on both sides: {{fields}}.', {
+            fields: same.map((field) => field.label).join(', '),
+          })}
         </Typography>
       )}
       {threeWay && review.changes.length > 0 && (
@@ -179,17 +256,31 @@ function ReviewBody({ review, picks, onPick }: { readonly review: MarketplaceUps
       )}
       <Alert severity="info">
         {review.needs_approval
-          ? t('marketplace.upstream.needsApproval', 'The merge becomes a new draft and a change request. A person approves it before the fork moves to this version.')
-          : t('marketplace.upstream.oneClick', 'The merge becomes a new draft. It is recorded as approved by you, and the fork moves to this version.')}
+          ? t(
+              'marketplace.upstream.needsApproval',
+              'The merge becomes a new draft and a change request. A person approves it before the fork moves to this version.',
+            )
+          : t(
+              'marketplace.upstream.oneClick',
+              'The merge becomes a new draft. It is recorded as approved by you, and the fork moves to this version.',
+            )}
       </Alert>
       {review.open_change_request && (
-        <Alert severity="warning">{t('marketplace.upstream.open', 'This agent already has an open change request. Finish it before you merge.')}</Alert>
+        <Alert severity="warning">
+          {t('marketplace.upstream.open', 'This agent already has an open change request. Finish it before you merge.')}
+        </Alert>
       )}
     </Box>
   );
 }
 
-function Outcome({ merge, result }: { readonly merge: { readonly isError: boolean; readonly error: unknown }; readonly result: MarketplaceUpstreamResult | undefined }): ReactNode {
+function Outcome({
+  merge,
+  result,
+}: {
+  readonly merge: { readonly isError: boolean; readonly error: unknown };
+  readonly result: MarketplaceUpstreamResult | undefined;
+}): ReactNode {
   if (result !== undefined) {
     return (
       <Alert severity="success" data-testid="upstream-result">
@@ -210,7 +301,12 @@ function Outcome({ merge, result }: { readonly merge: { readonly isError: boolea
   );
 }
 
-export function UpstreamReviewDialog({ open, onClose, projectId, applicationId }: UpstreamReviewDialogProps): ReactNode {
+export function UpstreamReviewDialog({
+  open,
+  onClose,
+  projectId,
+  applicationId,
+}: UpstreamReviewDialogProps): ReactNode {
   const queryClient = useQueryClient();
   const [picks, setPicks] = useState<FieldPicks>({});
   const [result, setResult] = useState<MarketplaceUpstreamResult>();

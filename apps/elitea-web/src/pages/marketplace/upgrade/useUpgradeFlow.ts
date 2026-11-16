@@ -5,7 +5,13 @@
  */
 import { useEffect, useState } from 'react';
 
-import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from '@tanstack/react-query';
 
 import {
   getMarketplaceListing,
@@ -46,25 +52,25 @@ export interface UpgradeFlow {
   readonly blocked: boolean;
 }
 
-export function useUpgradeFlow(input: UpgradeFlowInput): UpgradeFlow {
-  const { open, projectId, applicationId, listingId, pinnedVersionId, initialVersionId } = input;
-  const queryClient = useQueryClient();
-  const [versionId, setVersionId] = useState(initialVersionId ?? '');
-  const [choices, setChoices] = useState<BindingChoices>({});
-  const [result, setResult] = useState<MarketplaceUpgradeResult>();
-
+/** The listing's versions, minus the pinned one, and the one that is chosen (the first offered when the choice is not offered). */
+function useOfferedVersions(input: UpgradeFlowInput) {
+  const { open, projectId, listingId, pinnedVersionId, initialVersionId } = input;
+  const [chosen, setChosen] = useState(initialVersionId ?? '');
   const listing = useQuery({
     queryKey: ['marketplace', 'upgrade-listing', projectId, listingId],
     enabled: open && projectId !== undefined,
-    queryFn: async () => unwrapBody(await getMarketplaceListing(projectId ?? '', listingId)) as MarketplaceListingDetail,
+    queryFn: async () =>
+      unwrapBody(await getMarketplaceListing(projectId ?? '', listingId)) as MarketplaceListingDetail,
   });
   const versions = (listing.data?.versions ?? []).filter((version) => version.id !== pinnedVersionId);
-  const firstId = versions[0]?.id;
-  useEffect(() => {
-    if (open && versionId === '' && firstId !== undefined) setVersionId(initialVersionId ?? firstId);
-  }, [open, versionId, firstId, initialVersionId]);
+  const offered = versions.some((version) => version.id === chosen);
+  const versionId = listing.isPending || offered ? chosen : (versions[0]?.id ?? '');
+  return { listing, versions, versionId, setChosen };
+}
 
-  const plan = useQuery({
+function useUpgradePlan(input: UpgradeFlowInput, versionId: string) {
+  const { open, projectId, applicationId } = input;
+  return useQuery({
     queryKey: ['marketplace', 'upgrade-plan', projectId, applicationId, versionId],
     enabled: open && projectId !== undefined && versionId !== '',
     retry: false,
@@ -73,6 +79,15 @@ export function useUpgradeFlow(input: UpgradeFlowInput): UpgradeFlow {
         await getMarketplaceUpgradePlan(projectId ?? '', applicationId, { version_id: Number(versionId) }, { signal }),
       ) as MarketplaceUpgradePlan,
   });
+}
+
+export function useUpgradeFlow(input: UpgradeFlowInput): UpgradeFlow {
+  const { projectId, applicationId } = input;
+  const queryClient = useQueryClient();
+  const { listing, versions, versionId, setChosen } = useOfferedVersions(input);
+  const [choices, setChoices] = useState<BindingChoices>({});
+  const [result, setResult] = useState<MarketplaceUpgradeResult>();
+  const plan = useUpgradePlan(input, versionId);
   const planned = plan.data;
   // The choices start from the bindings the pinned version already covers for this target.
   useEffect(() => {
@@ -93,21 +108,29 @@ export function useUpgradeFlow(input: UpgradeFlowInput): UpgradeFlow {
       invalidateMarketplace(queryClient);
     },
   });
-
-  const unbound = planned === undefined ? [] : unboundRequirements({ ...planned.requirements, items: planned.new_requirements }, choices);
   return {
     listing,
     versions,
     versionId,
     choose: (id) => {
       setResult(undefined);
-      setVersionId(id);
+      setChosen(id);
     },
     plan,
     choices,
     bind: (key, value) => setChoices((now) => applyChoice(now, key, value)),
     upgrade,
     result,
-    blocked: planned === undefined || !planned.hireable || unbound.length > 0 || result !== undefined,
+    blocked: isBlocked(planned, choices, result),
   };
+}
+
+/** The upgrade cannot be confirmed: no plan yet, a version that cannot be used, a toolkit still unbound, or it is done. */
+function isBlocked(
+  planned: MarketplaceUpgradePlan | undefined,
+  choices: BindingChoices,
+  result: MarketplaceUpgradeResult | undefined,
+): boolean {
+  if (planned === undefined || !planned.hireable || result !== undefined) return true;
+  return unboundRequirements({ ...planned.requirements, items: planned.new_requirements }, choices).length > 0;
 }

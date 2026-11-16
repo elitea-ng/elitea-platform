@@ -32,7 +32,13 @@ function yankedNext(installed: boolean): string {
     : t('pages.agents.origin.yankedForkNext', 'Review the upstream update when a new version is out.');
 }
 
-function OriginLine({ origin, children }: { readonly origin: MarketplaceOrigin; readonly children?: ReactNode }): ReactNode {
+function OriginLine({
+  origin,
+  children,
+}: {
+  readonly origin: MarketplaceOrigin;
+  readonly children?: ReactNode;
+}): ReactNode {
   const installed = origin.mode === 'installed';
   const line = installed
     ? t(
@@ -64,10 +70,14 @@ function YankedNotice({ origin }: { readonly origin: MarketplaceOrigin }): React
   return (
     <Alert severity="warning" data-testid="marketplace-origin-yanked">
       {reason !== ''
-        ? t('pages.agents.origin.yankedReason', 'This version was yanked: {{reason}} Your agent keeps running. {{next}}', {
-            reason,
-            next,
-          })
+        ? t(
+            'pages.agents.origin.yankedReason',
+            'This version was yanked: {{reason}} Your agent keeps running. {{next}}',
+            {
+              reason,
+              next,
+            },
+          )
         : t('pages.agents.origin.yankedPlain', 'This version was yanked. Your agent keeps running. {{next}}', { next })}
     </Alert>
   );
@@ -146,11 +156,21 @@ function ForkActions({ projectId, applicationId }: Omit<ActionProps, 'origin'>):
   const [reviewing, setReviewing] = useState(false);
   return (
     <Box sx={{ display: 'flex', gap: '0.75rem' }}>
-      <Button variant="outlined" size="small" onClick={() => setReviewing(true)} data-testid="marketplace-review-update">
+      <Button
+        variant="outlined"
+        size="small"
+        onClick={() => setReviewing(true)}
+        data-testid="marketplace-review-update"
+      >
         {t('pages.agents.origin.reviewUpdate', 'Review update')}
       </Button>
       {reviewing && (
-        <UpstreamReviewDialog open onClose={() => setReviewing(false)} projectId={projectId} applicationId={applicationId} />
+        <UpstreamReviewDialog
+          open
+          onClose={() => setReviewing(false)}
+          projectId={projectId}
+          applicationId={applicationId}
+        />
       )}
     </Box>
   );
@@ -173,7 +193,12 @@ function EditBindings({ projectId, applicationId }: Omit<ActionProps, 'origin'>)
       </Button>
       {/* Mounted only while open: a closed editor reads nothing from the project. */}
       {editing && (
-        <BindingsEditorDialog open onClose={() => setEditing(false)} projectId={projectId} applicationId={applicationId} />
+        <BindingsEditorDialog
+          open
+          onClose={() => setEditing(false)}
+          projectId={projectId}
+          applicationId={applicationId}
+        />
       )}
     </>
   );
