@@ -25,18 +25,21 @@ func TestApplicationsRepoPostgres_ListCarriesTheProbationOfAnAutomaticHire(t *te
 
 	if _, err := pool.Exec(ctx, `
 INSERT INTO elitea_lifecycle.agent_registry (tenant_project_id, application_id, auto_hired_at, probation_until)
-VALUES (1, $1::bigint, '2026-11-01T00:00:00Z', '2026-11-15T00:00:00Z')`, probation.ID); err != nil {
+VALUES (1, $1::bigint, '2026-11-01T00:00:00Z', '2026-11-15T00:00:00Z')
+ON CONFLICT (tenant_project_id, application_id) DO UPDATE SET auto_hired_at = EXCLUDED.auto_hired_at, probation_until = EXCLUDED.probation_until`, probation.ID); err != nil {
 		t.Fatalf("seed the probation: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO elitea_lifecycle.agent_registry (tenant_project_id, application_id, auto_hired_at, probation_until, probation_reviewed_at)
-VALUES (1, $1::bigint, '2026-11-01T00:00:00Z', '2026-11-15T00:00:00Z', '2026-11-05T00:00:00Z')`, kept.ID); err != nil {
+VALUES (1, $1::bigint, '2026-11-01T00:00:00Z', '2026-11-15T00:00:00Z', '2026-11-05T00:00:00Z')
+ON CONFLICT (tenant_project_id, application_id) DO UPDATE SET auto_hired_at = EXCLUDED.auto_hired_at, probation_until = EXCLUDED.probation_until, probation_reviewed_at = EXCLUDED.probation_reviewed_at`, kept.ID); err != nil {
 		t.Fatalf("seed the kept agent: %v", err)
 	}
 	// The same application id in ANOTHER project must not leak in.
 	if _, err := pool.Exec(ctx, `
 INSERT INTO elitea_lifecycle.agent_registry (tenant_project_id, application_id, auto_hired_at, probation_until)
-VALUES (2, $1::bigint, '2026-11-01T00:00:00Z', '2026-11-15T00:00:00Z')`, person.ID); err != nil {
+VALUES (2, $1::bigint, '2026-11-01T00:00:00Z', '2026-11-15T00:00:00Z')
+ON CONFLICT (tenant_project_id, application_id) DO UPDATE SET auto_hired_at = EXCLUDED.auto_hired_at, probation_until = EXCLUDED.probation_until`, person.ID); err != nil {
 		t.Fatalf("seed the other project: %v", err)
 	}
 
