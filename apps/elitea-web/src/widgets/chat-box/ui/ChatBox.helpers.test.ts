@@ -73,7 +73,7 @@ describe('buildAgentEditorProps', () => {
 });
 
 
-describe('switchToModel (#2121)', () => {
+describe('switchToModel', () => {
   it('clears the active participant, then picks the model', () => {
     const calls: string[] = [];
     switchToModel(

@@ -451,7 +451,7 @@ describe('useChatPipelineConfig — onSaveVersion', () => {
     expect(saved?.versionDetail).toBeDefined();
   });
 
-  it('refreshes the conversation participants after a save so a rename reaches the rail (#2096, #2118)', async () => {
+  it('refreshes the conversation participants after a save so a rename reaches the rail', async () => {
     const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
     server.use(
       getGetApplicationVersionDetailMockHandler({ id: '10', application_id: '1', name: 'latest', status: 'draft' }),

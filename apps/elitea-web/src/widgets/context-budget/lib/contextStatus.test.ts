@@ -170,7 +170,7 @@ it('keeps the admitted runtime window, reservations and inactive compaction phas
   expect(stats?.runtime).toEqual({autoOutput:false,phase:'compacting',active:false,legacy:true,totalTokens:272000,reservedOutputTokens:64000,safetyMarginTokens:2720});
 });
 
-describe('estimateForMode (#2123)', () => {
+describe('estimateForMode', () => {
   const measuredFull = (total: number) =>
     toContextBudgetStats({
       budget_mode: 'full',
