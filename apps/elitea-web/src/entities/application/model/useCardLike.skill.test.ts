@@ -72,4 +72,53 @@ describe('useCardLike for a skill', () => {
     expect(agent.result.current.isLiked).toBe(false);
     expect(agent.result.current.likeCount).toBe(0);
   });
+
+  it('lets a later read with other server values win over the local entry', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    server.use(
+      http.post('*/social/like/prompt_lib/:projectId/skill/:entityId', () => HttpResponse.json({ ok: true })),
+    );
+    const { result, rerender } = renderHook(
+      ({ liked, count }: { liked: boolean; count: number }) =>
+        useCardLike({ applicationId: '888', entityType: 'skill', projectId: 'pub-1', initialLiked: liked, initialCount: count }),
+      { initialProps: { liked: false, count: 1 } },
+    );
+    await act(async () => {
+      await result.current.toggleLike();
+    });
+    expect(result.current.likeCount).toBe(2);
+
+    // The list is refetched: the server now counts our like and another one.
+    rerender({ liked: true, count: 3 });
+    expect(result.current.isLiked).toBe(true);
+    expect(result.current.likeCount).toBe(3);
+  });
+
+  it('reverts and calls onError when the server refuses the like', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    server.use(
+      http.post('*/social/like/prompt_lib/:projectId/skill/:entityId', () =>
+        HttpResponse.json({ ok: false, error: 'no' }, { status: 403 }),
+      ),
+    );
+    let refused = 0;
+    const { result } = renderHook(() =>
+      useCardLike({
+        applicationId: '999',
+        entityType: 'skill',
+        projectId: 'pub-1',
+        initialLiked: false,
+        initialCount: 2,
+        onError: () => {
+          refused += 1;
+        },
+      }),
+    );
+    await act(async () => {
+      await result.current.toggleLike();
+    });
+    expect(result.current.isLiked).toBe(false);
+    expect(result.current.likeCount).toBe(2);
+    expect(refused).toBe(1);
+  });
 });

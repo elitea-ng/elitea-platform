@@ -10,7 +10,7 @@
  * On a card it sits BESIDE the card's link, not inside it: a button inside an
  * anchor is invalid, and a like must not open the listing (issue 2028).
  */
-import { memo } from 'react';
+import { memo, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -33,13 +33,26 @@ export interface ListingLikeProps {
   readonly name: string;
 }
 
-export const ListingLike = memo(function ListingLike({ kind, entityId, likes, isLiked, name }: ListingLikeProps) {
+/** A listing whose public twin was deleted (an unpublish) has no id to like. */
+export function hasLikeTarget(entityId: string): boolean {
+  return /^[1-9][0-9]*$/.test(entityId);
+}
+
+export const ListingLike = memo(function ListingLike(props: ListingLikeProps) {
+  // The check sits outside the hook's component so a listing without a twin
+  // renders no heart at all instead of a control that can only fail.
+  return hasLikeTarget(props.entityId) ? <LikeButton {...props} /> : null;
+});
+
+function LikeButton({ kind, entityId, likes, isLiked, name }: ListingLikeProps) {
+  const [failed, setFailed] = useState(false);
   const { isLiked: liked, likeCount, isToggling, toggleLike } = useCardLike({
     applicationId: entityId,
     entityType: kind === 'skills' ? 'skill' : 'application',
     projectId: resolvePublicProjectId(),
     initialLiked: isLiked,
     initialCount: likes,
+    onError: () => setFailed(true),
   });
   return (
     <Box
@@ -47,21 +60,28 @@ export const ListingLike = memo(function ListingLike({ kind, entityId, likes, is
       type="button"
       aria-pressed={liked}
       aria-label={t('marketplace.like.label', 'Like {{name}}', { name })}
+      aria-invalid={failed || undefined}
       disabled={isToggling}
       data-testid={`marketplace-like-${kind}-${entityId}`}
       onClick={(event) => {
         event.stopPropagation();
+        setFailed(false);
         void toggleLike();
       }}
-      sx={styles.button}
+      sx={failed ? { ...styles.button, ...styles.failed } : styles.button}
     >
       {liked ? <HeartActiveIcon /> : <HeartIcon />}
       <Typography variant="bodySmall" data-testid="marketplace-like-count">
         {likeCount}
       </Typography>
+      {failed && (
+        <Box component="span" role="alert" sx={styles.visuallyHidden}>
+          {t('marketplace.like.failed', 'Your like could not be saved.')}
+        </Box>
+      )}
     </Box>
   );
-});
+}
 
 const styles = {
   button: {
@@ -71,8 +91,21 @@ const styles = {
     gap: 0.5,
     background: 'none',
     border: 0,
-    padding: 0,
+    // A 24px target at least (WCAG 2.2 target size), with the icon and count unchanged.
+    minHeight: '1.5rem',
+    minWidth: '1.5rem',
+    padding: '0 0.25rem',
     color: 'inherit',
     font: 'inherit',
+  },
+  // A refused like snaps back; the heart says so beyond the screen reader.
+  failed: { color: 'error.main' },
+  visuallyHidden: {
+    position: 'absolute',
+    width: '1px',
+    height: '1px',
+    overflow: 'hidden',
+    clip: 'rect(0 0 0 0)',
+    whiteSpace: 'nowrap',
   },
 } as const;

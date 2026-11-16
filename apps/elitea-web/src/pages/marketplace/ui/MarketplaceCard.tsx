@@ -27,7 +27,7 @@ import { cardGradientSx } from '@/shared/lib/cardGradient';
 import { listingParams, ratingText } from '../listing';
 import type { ListingCardData } from '../types';
 
-import { ListingLike } from './ListingLike';
+import { ListingLike, hasLikeTarget } from './ListingLike';
 
 export interface MarketplaceCardProps {
   readonly card: ListingCardData;
@@ -107,9 +107,11 @@ export const MarketplaceCard = memo(function MarketplaceCard({ card }: Marketpla
         </Box>
       </Link>
       {/* Beside the link, not inside it: a button in an anchor is invalid, and a like must not open the listing. */}
-      <Box sx={styles.like}>
-        <ListingLike kind={card.kind} entityId={card.entityId} likes={card.likes} isLiked={card.isLiked} name={card.name} />
-      </Box>
+      {hasLikeTarget(card.entityId) && (
+        <Box sx={styles.like}>
+          <ListingLike kind={card.kind} entityId={card.entityId} likes={card.likes} isLiked={card.isLiked} name={card.name} />
+        </Box>
+      )}
     </Card>
   );
 });

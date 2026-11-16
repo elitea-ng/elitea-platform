@@ -178,15 +178,13 @@ function SkillListingView({ detail, projectId }: SkillListingViewProps): ReactNo
         iconUrl={listing.icon_url ?? undefined}
         version={listing.current_version?.name}
         meta={
-          listing.entity_id === '' || listing.entity_id === '0' ? undefined : (
-            <ListingLike
-              kind="skills"
-              entityId={listing.entity_id}
-              likes={listing.likes}
-              isLiked={listing.is_liked}
-              name={listing.name}
-            />
-          )
+          <ListingLike
+            kind="skills"
+            entityId={listing.entity_id}
+            likes={listing.likes}
+            isLiked={listing.is_liked}
+            name={listing.name}
+          />
         }
         actions={
           <>

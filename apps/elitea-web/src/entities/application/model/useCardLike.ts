@@ -47,24 +47,30 @@ import { EliteaApiError } from '@/shared/api/generated/mutator';
 
 /* ── Store ──────────────────────────────────────────────────────────── */
 
+/**
+ * One like the user toggled, with the server's own values it was toggled FROM.
+ * A later read that carries different server values (another person liked it,
+ * or the list was refetched after this like) wins over the local entry: the
+ * entry only stands while the server still says what it said then.
+ */
+interface LikeEntry {
+  readonly liked: boolean;
+  readonly count: number;
+  readonly baseLiked: boolean;
+  readonly baseCount: number;
+}
+
 interface LikeState {
-  likedStates: Record<string, boolean>;
-  likeCounts: Record<string, number>;
-  setLikeState: (id: string, liked: boolean) => void;
-  setLikeCount: (id: string, count: number) => void;
+  entries: Record<string, LikeEntry>;
+  setEntry: (id: string, entry: LikeEntry) => void;
+  clearEntry: (id: string) => void;
 }
 
 const useLikeStore = create<LikeState>(set => ({
-  likedStates: {},
-  likeCounts: {},
-  setLikeState: (id, liked) =>
-    set(state => ({
-      likedStates: { ...state.likedStates, [id]: liked },
-    })),
-  setLikeCount: (id, count) =>
-    set(state => ({
-      likeCounts: { ...state.likeCounts, [id]: count },
-    })),
+  entries: {},
+  setEntry: (id, entry) => set(state => ({ entries: { ...state.entries, [id]: entry } })),
+  clearEntry: id =>
+    set(state => ({ entries: Object.fromEntries(Object.entries(state.entries).filter(([key]) => key !== id)) })),
 }));
 
 /* ── Hook ───────────────────────────────────────────────────────────── */
@@ -95,6 +101,8 @@ export interface UseCardLikeOptions {
   initialLiked?: boolean;
   initialCount?: number;
   onLikeSuccess?: (applicationId: string, isLiked: boolean, likeCount: number) => void;
+  /** Called when the server refused the like or unlike and the optimistic change was reverted, so the caller can say so. */
+  onError?: () => void;
 }
 
 export function useCardLike({
@@ -104,16 +112,19 @@ export function useCardLike({
   initialLiked = false,
   initialCount = 0,
   onLikeSuccess,
+  onError,
 }: UseCardLikeOptions) {
-  const likedStates = useLikeStore(state => state.likedStates);
-  const likeCounts = useLikeStore(state => state.likeCounts);
-  const setLikeState = useLikeStore(state => state.setLikeState);
-  const setLikeCount = useLikeStore(state => state.setLikeCount);
+  const entry = useLikeStore(state => state.entries[`${entityType}:${applicationId}`]);
+  const setEntry = useLikeStore(state => state.setEntry);
+  const clearEntry = useLikeStore(state => state.clearEntry);
 
   // An agent and a skill can share a numeric id: key the store by both.
   const storeKey = `${entityType}:${applicationId}`;
-  const isLiked = likedStates[storeKey] ?? initialLiked;
-  const likeCount = likeCounts[storeKey] ?? initialCount;
+  // The local entry stands only while the server still says what it said when
+  // the entry was made; a refetch with other values wins.
+  const current = entry !== undefined && entry.baseLiked === initialLiked && entry.baseCount === initialCount ? entry : undefined;
+  const isLiked = current?.liked ?? initialLiked;
+  const likeCount = current?.count ?? initialCount;
   const [isToggling, setIsToggling] = useState(false);
   // A ref as well as the state: two clicks in one tick both read the state as false.
   const inFlight = useRef(false);
@@ -123,14 +134,11 @@ export function useCardLike({
     inFlight.current = true;
     setIsToggling(true);
 
-    const wasLiked = isLiked;
-    const newLiked = !wasLiked;
-    const previousCount = likeCount;
-    const newCount = newLiked ? previousCount + 1 : Math.max(0, previousCount - 1);
+    const newLiked = !isLiked;
+    const newCount = newLiked ? likeCount + 1 : Math.max(0, likeCount - 1);
 
     // Optimistic update — reverted below if the server call fails.
-    setLikeState(storeKey, newLiked);
-    setLikeCount(storeKey, newCount);
+    setEntry(storeKey, { liked: newLiked, count: newCount, baseLiked: initialLiked, baseCount: initialCount });
 
     const numericApplicationId = Number(applicationId);
     try {
@@ -150,16 +158,16 @@ export function useCardLike({
     } catch (error) {
       // Revert the optimistic update — the like did not actually persist
       // (see this file's module doc comment for the known backend defect).
-      setLikeState(storeKey, wasLiked);
-      setLikeCount(storeKey, previousCount);
+      clearEntry(storeKey);
       // Only the documented API-failure path is swallowed; anything else
       // (a programmer error, e.g. the NaN guard above) still surfaces.
       if (!(error instanceof EliteaApiError)) throw error;
+      onError?.();
     } finally {
       inFlight.current = false;
       setIsToggling(false);
     }
-  }, [isLiked, likeCount, applicationId, entityType, storeKey, projectId, setLikeState, setLikeCount, onLikeSuccess]);
+  }, [isLiked, likeCount, applicationId, entityType, storeKey, projectId, initialLiked, initialCount, setEntry, clearEntry, onLikeSuccess, onError]);
 
   return { isLiked, likeCount, isToggling, toggleLike };
 }

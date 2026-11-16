@@ -51,4 +51,28 @@ describe('ListingLike', () => {
     await waitFor(() => expect(paths).toHaveLength(1));
     expect(paths[0]).toMatch(/\/application\/602$/);
   });
+
+  it('draws no heart for a listing whose public twin is gone', () => {
+    renderWithTheme(
+      <>
+        <ListingLike kind="skills" entityId="" likes={1} isLiked={false} name="Gone" />
+        <ListingLike kind="agents" entityId="0" likes={1} isLiked={false} name="Gone too" />
+      </>,
+    );
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('says so when the like is refused, instead of snapping back silently', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    server.use(
+      http.post('*/social/like/prompt_lib/:projectId/skill/:entityId', () =>
+        HttpResponse.json({ ok: false, error: 'no' }, { status: 500 }),
+      ),
+    );
+    renderWithTheme(<ListingLike kind="skills" entityId="603" likes={2} isLiked={false} name="Triage" />);
+    await userEvent.click(screen.getByRole('button', { name: 'Like Triage' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your like could not be saved.');
+    expect(screen.getByRole('button', { name: 'Like Triage' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('marketplace-like-count')).toHaveTextContent('2');
+  });
 });
