@@ -1478,7 +1478,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// entity inside its project folder and the personal Pinned group of the
 	// Agents, Pipelines, Skills, Toolkits and MCPs lists (issue 1628). No
 	// permission.
-	require.EqualValues(t, 249, Head(tenant))
+	//
+	// 250: tenant/0250_skill_trust.sql, skill_trust: a project's trust in one
+	// revision of a skill written in another project, so its text reaches the
+	// model as an instruction and not as quoted untrusted data (ADR-0051
+	// amendment 1, skills epic 2169 story S1). No permission.
+	require.EqualValues(t, 250, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

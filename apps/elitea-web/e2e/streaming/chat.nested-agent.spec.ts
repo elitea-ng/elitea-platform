@@ -102,6 +102,7 @@ import {
   AUTOTEST_PREFIX,
   createAgentThroughForm,
   expectStoredAssistantAnswer,
+  TURN_ADMISSION_TIMEOUT_MS,
 } from '../fixtures/api';
 
 /** Matched WITHOUT a project id: the chat persona works inside its own personal project (#290). */
@@ -230,7 +231,7 @@ test('a parent agent with a different child agent attached completes a turn', as
   // tool-calling model exercises the delegation without editing the file.
   const started = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
-    { timeout: 45_000 },
+    { timeout: TURN_ADMISSION_TIMEOUT_MS },
   );
   const input = page.getByTestId('chat-message-input');
   await expect(input).toBeEditable({ timeout: 20_000 });

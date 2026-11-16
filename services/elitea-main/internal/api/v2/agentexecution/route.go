@@ -318,18 +318,15 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 		return
 	}
 
-	// Project skills: an application turn only (a model chat has no skills),
-	// and only for a caller who may read the project's skills.
+	// Project skills: an application turn or a model chat (a model chat takes
+	// them since skills S2, ADR-0050 amendment 1), and only for a caller who
+	// may read the project's skills.
 	projectSkillIDs, ok := parseProjectSkillPicks(body.Payload.Skills)
 	if !ok {
 		writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
 		return
 	}
 	if len(projectSkillIDs) > 0 {
-		if contract != CurrentApplicationStartContract {
-			writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
-			return
-		}
 		if !callerMayReadProjectSkills(request, chi.URLParam(request, "projectID")) {
 			writeJSON(writer, http.StatusForbidden, map[string]string{
 				"error":   "project_skills_forbidden",
@@ -437,6 +434,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				MentionedUserIDs: mentioned,
 				MentionsEveryone: body.SendingToEveryone,
 				TriggerOrigin:    origin,
+				ProjectSkillIDs:  projectSkillIDs,
 				Unattended:       body.Unattended.request(),
 			},
 		)

@@ -226,6 +226,14 @@ pub fn violations(sdk_type: &str, tools: &[Arc<dyn Tool>]) -> BTreeSet<String> {
 /// and that each of those exemptions still matches something.
 pub fn assert_sdk_conformance(sdk_type: &str, tools: &[Arc<dyn Tool>]) {
     assert!(!tools.is_empty(), "{sdk_type}: no tools to check");
+    // The schema inventory (#2145, #2155): every tool a family serves must
+    // normalise to a schema each provider family accepts.
+    for tool in tools {
+        let schema = tool
+            .parameters_schema()
+            .unwrap_or_else(|| serde_json::json!({}));
+        crate::tool_schema::assert_wire_valid(&format!("{sdk_type}/{}", tool.name()), &schema);
+    }
     let found = violations(sdk_type, tools);
     let prefix = format!("{sdk_type}/");
     let listed: BTreeSet<&String> = exemptions()

@@ -102,6 +102,11 @@ type CurrentAdhocStartRequest struct {
 	InteractionUUID     string
 	LLMSettings         json.RawMessage
 	MCPTokens           json.RawMessage
+	// ProjectSkillIDs are the project skills this message picked (`~name`,
+	// `/skill`, the conversation's pins): read and frozen by the service under
+	// the caller's visibility, applied to this turn through the worker's
+	// skill loading, exactly as on an agent turn (ADR-0050 amendment 1).
+	ProjectSkillIDs []int64
 	// Attachments carries `payload.attachments` from the start body: the
 	// files the composer uploaded before sending, already split into
 	// (bucket, name) by the route. #606.
@@ -143,6 +148,7 @@ func (request CurrentAdhocStartRequest) Validate() error {
 		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
 		!validJSONObject(request.LLMSettings) || !validCurrentMCPTokens(request.MCPTokens) ||
+		!validProjectSkillIDs(request.ProjectSkillIDs) ||
 		!request.ThreadRun.valid(request.TriggerOrigin) {
 		return ErrInvalidCurrentAgentStart
 	}
@@ -168,6 +174,16 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 		!validJSONObject(target.LLMSettings) || !validJSONArray(target.Tools) ||
 		!validJSONArray(target.ChatHistory) || !validJSONObject(target.ConversationMeta) {
 		return CurrentApplicationStartOutcome{}, ErrUnsupportedCurrentAgentStart
+	}
+	// Project skills the message picked: read here, by id, under the
+	// caller's visibility; a pick the caller cannot read refuses the turn.
+	picks, err := service.resolveProjectSkillIDs(ctx, request.ProjectID, request.ProjectSkillIDs)
+	if err != nil {
+		return CurrentApplicationStartOutcome{}, err
+	}
+	skills, err := projectAdhocSkills(request.UserInput, picks)
+	if err != nil {
+		return CurrentApplicationStartOutcome{}, err
 	}
 	snapshot, err := currentAdhocSnapshot(request.LLMSettings, target)
 	if err != nil {
@@ -215,13 +231,18 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	// replaced refused ResolveCurrentAdhocTurn exactly as it refused the
 	// selected-application path.
 	projectContextText := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
+	// The worker reads the de-sigiled text; the stored question keeps what the
+	// person typed (skills.go projectAdhocSkills).
+	inputRequest := request
+	inputRequest.UserInput = skills.userInput
 	input, view, err := currentAdhocInputWithView(
-		request, target, frozen, toolkitGuardrails, attachments, memoryRecall.Text,
+		inputRequest, target, frozen, toolkitGuardrails, attachments, memoryRecall.Text,
 		projectContextText,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("build current ad-hoc execution input: %w", err)
 	}
+	input.InvokedSkills, input.AppliedSkills = skills.invoked, skills.applied
 	input.ContextSettings = contextSettings
 	// #1831: this turn writes its question under QuestionID.
 	questionMessageID := request.QuestionID
