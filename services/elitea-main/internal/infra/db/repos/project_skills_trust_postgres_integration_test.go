@@ -15,7 +15,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/skilltrust"
 	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
@@ -169,31 +168,42 @@ func TestSkillTrustMigrationBackfillsExistingForksOnce(t *testing.T) {
 	}
 }
 
-// A person in the project who saves new text on a forked skill wrote and read
-// it, so that revision is trusted; a metadata-only save, or one that leaves the
-// text as it was, must not trust text nobody reviewed.
-func TestEditingAForkedSkillTrustsTheNewRevisionOnly(t *testing.T) {
+// A person in the project who saves new text on a forked skill wrote and read it,
+// so that revision is trusted (trustEditedForeignBase runs in the update's
+// transaction when the base text changed). The helper trusts the CURRENT base
+// text of a foreign skill, once, by the caller, and nothing for a skill made here.
+func TestTrustingAnEditedForeignBaseRecordsTheCallerOnce(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
-	skillsRepo := NewSkillsRepo(pool)
 	repo := NewProjectSkillsRepo(pool)
 	seedTrustSkill(t, pool, 821, "forked", "Original steps", `{"parent_project_id": 2}`)
+	seedTrustSkill(t, pool, 822, "own", "Own steps", `{}`)
 	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{ID: "7", UserID: "7"}), 30*time.Second)
 	defer cancel()
+	schema, err := tenantSchema("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := func(id string, text string) {
+		t.Helper()
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE p_1.skill_versions SET instructions = $1 WHERE skill_id = $2::int`, text, id); err != nil {
+			t.Fatal(err)
+		}
+		if err := trustEditedForeignBase(ctx, tx, schema, "1", id); err != nil {
+			t.Fatalf("trustEditedForeignBase: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	if got := resolveTrust(t, repo, 821); !got[821] {
 		t.Fatal("a fresh fork is untrusted")
 	}
-	// Same text, new description: still untrusted.
-	if _, err := skillsRepo.Update(ctx, "1", "821", skills.Skill{Name: "forked", Description: "new description", Instructions: "Original steps"}); err != nil {
-		t.Fatalf("update with unchanged text: %v", err)
-	}
-	if got := resolveTrust(t, repo, 821); !got[821] {
-		t.Fatal("a save that leaves the text alone must not trust it")
-	}
-	// New text by a member of this project: that revision is trusted, by them.
-	if _, err := skillsRepo.Update(ctx, "1", "821", skills.Skill{Name: "forked", Description: "new description", Instructions: "Edited steps"}); err != nil {
-		t.Fatalf("update with new text: %v", err)
-	}
+	edit("821", "Edited steps")
 	if got := resolveTrust(t, repo, 821); got[821] {
 		t.Fatal("text a member of the project saved must be trusted")
 	}
@@ -201,5 +211,16 @@ func TestEditingAForkedSkillTrustsTheNewRevisionOnly(t *testing.T) {
 	var source string
 	if err := pool.QueryRow(context.Background(), `SELECT trusted_by, source FROM p_1.skill_trust WHERE skill_id = 821 AND revoked_at IS NULL`).Scan(&by, &source); err != nil || by != 7 || source != "user" {
 		t.Fatalf("trust row: by=%d source=%q err=%v", by, source, err)
+	}
+	// The same text again adds no second active row.
+	edit("821", "Edited steps")
+	var rows int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM p_1.skill_trust WHERE skill_id = 821`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("rows = %d err=%v", rows, err)
+	}
+	// A skill made in this project gets no row.
+	edit("822", "Own steps, edited")
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM p_1.skill_trust WHERE skill_id = 822`).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("an own skill got %d trust rows (err=%v)", rows, err)
 	}
 }
