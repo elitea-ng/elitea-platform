@@ -1923,6 +1923,63 @@ export async function expectStoredTurnRefusal(
     .toBe(true);
 }
 
+/**
+ * How long a turn's START POST may wait to be admitted.
+ *
+ * The execution plane is single-consumer (the worker admits two invocations
+ * at a time, one llama.cpp slot behind it in the real-model lane), so a start
+ * POST queues behind every turn an earlier journey left unsettled. A fixed
+ * 45s bound measured the queue, not the turn: in the nightly real-model lane
+ * one failed journey held its turn open and the three journeys after it timed
+ * out waiting for admission (#2155). The bound is the queue's drain time; the
+ * journeys now also settle their own turns (`settleStoredTurn`) so the queue
+ * is empty when the next one starts.
+ */
+export const TURN_ADMISSION_TIMEOUT_MS = 150_000;
+
+/**
+ * Wait for a turn to SETTLE, whatever its outcome: the stored assistant row
+ * carries `metadata.is_error` (written only by a terminal projection, see
+ * `expectStoredAssistantAnswer`) and is no longer streaming. Answered and
+ * refused turns both settle; a journey that failed an assertion mid-turn
+ * calls this in its `finally` so the turn does not run on behind the next
+ * journey. Returns whether the turn settled inside `timeout`; it never
+ * throws on a timeout, so cleanup cannot mask the failure that led there.
+ */
+export async function settleStoredTurn(
+  page: Page,
+  projectId: string,
+  conversationId: string | number,
+  options: { readonly timeout?: number } = {},
+): Promise<boolean> {
+  const { timeout = 120_000 } = options;
+  try {
+    await expect
+      .poll(
+        async () => {
+          const stored = await page.request.get(
+            `${BASE_URL}/api/v2/elitea_core/messages/prompt_lib/${projectId}/${String(conversationId)}`,
+          );
+          if (!stored.ok()) return false;
+          const body = (await stored.json()) as {
+            items?: readonly {
+              role?: string;
+              is_streaming?: boolean;
+              metadata?: { is_error?: boolean };
+            }[];
+          };
+          const assistant = body.items?.find((item) => item.role === 'assistant');
+          return assistant?.is_streaming !== true && typeof assistant?.metadata?.is_error === 'boolean';
+        },
+        { timeout },
+      )
+      .toBe(true);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** One persisted `chat_message_group`, as the transcript route serves it. */
 export interface StoredTranscriptRow {
   /** `chat_message_group.id` — the numeric key. */

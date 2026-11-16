@@ -95,6 +95,7 @@ import {
   expectStoredTurnRefusal,
   readAttachedToolkits,
   readStoredTranscript,
+  TURN_ADMISSION_TIMEOUT_MS,
 } from '../fixtures/api';
 import { readsPlatformFlags } from '../fixtures/platformFlags';
 
@@ -213,7 +214,7 @@ async function chatWithOpenAgent(page: Page, prompt: string): Promise<string> {
 
   const started = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
-    { timeout: 45_000 },
+    { timeout: TURN_ADMISSION_TIMEOUT_MS },
   );
   const input = page.getByTestId('chat-message-input');
   await expect(input).toBeEditable({ timeout: 20_000 });

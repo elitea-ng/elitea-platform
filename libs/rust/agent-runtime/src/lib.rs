@@ -98,6 +98,7 @@ pub mod thinking;
 pub mod tool_category;
 pub mod tool_envelope;
 pub mod tool_namespacing;
+pub mod tool_schema;
 pub mod toolkits;
 pub mod untrusted;
 pub mod workspace_archive;

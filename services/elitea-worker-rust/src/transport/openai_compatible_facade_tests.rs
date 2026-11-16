@@ -2962,3 +2962,42 @@ async fn an_earlier_turns_reasoning_is_not_replayed_but_the_loops_is() {
     assert!(assistants[0].get("reasoning_content").is_none());
     assert_eq!(assistants[1]["reasoning_content"], "new reasoning");
 }
+
+/// #2145/#2155: a selected tool's schema reaches the provider in the form
+/// its family accepts, not as the tool built it. The model name picks the
+/// family; an unknown one gets the strictest portable form.
+#[test]
+fn tool_schemas_reach_the_provider_in_its_accepted_form() {
+    use super::openai_compatible_facade::openai_tools;
+    use elitea_agent_runtime::tool_schema::SchemaProfile;
+
+    let mut tools = std::collections::HashMap::new();
+    tools.insert(
+        "lookup".to_owned(),
+        serde_json::json!({
+            "description": "Look one up.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"$ref": "#/$defs/kind"},
+                    "q": {"type": ["string", "null"], "default": null}
+                },
+                "required": ["kind"],
+                "$defs": {"kind": {"const": "x", "maxLength": 99_999}}
+            }
+        }),
+    );
+    let local = openai_tools(&tools, SchemaProfile::for_model("qwen3-0.6b")).expect("tools");
+    let parameters = &local[0]["function"]["parameters"];
+    assert!(!parameters.to_string().contains("$ref"), "{parameters}");
+    assert_eq!(
+        parameters["properties"]["kind"]["enum"],
+        serde_json::json!(["x"])
+    );
+    assert!(parameters["properties"]["kind"].get("maxLength").is_none());
+    assert_eq!(parameters["required"], serde_json::json!(["kind"]));
+
+    let gemini = openai_tools(&tools, SchemaProfile::for_model("gemini-2.5-pro")).expect("tools");
+    let q = &gemini[0]["function"]["parameters"]["properties"]["q"];
+    assert_eq!(q, &serde_json::json!({"nullable": true, "type": "string"}));
+}

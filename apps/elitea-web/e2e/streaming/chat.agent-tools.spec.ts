@@ -43,6 +43,8 @@ import {
   createAgentWithVersion,
   expectStoredAssistantAnswer,
   fillComposer,
+  settleStoredTurn,
+  TURN_ADMISSION_TIMEOUT_MS,
 } from '../fixtures/api';
 
 const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/;
@@ -179,7 +181,7 @@ test('internal tools all on, agent-as-tool attached — and the agent still answ
   const sendButton = await fillComposer(page, `autotest tools ${Date.now()}`);
   const started = page.waitForResponse(
     (r) => START_RE.test(r.url()) && r.request().method() === 'POST',
-    { timeout: 45_000 },
+    { timeout: TURN_ADMISSION_TIMEOUT_MS },
   );
   await sendButton.click();
 
@@ -193,10 +195,17 @@ test('internal tools all on, agent-as-tool attached — and the agent still answ
   // and why nothing on screen can stand in for it are in
   // `expectStoredAssistantAnswer`. This spec's own first draft went green
   // against the error card it rules out.
-  await expectStoredAssistantAnswer(page, projectId, conversation.id ?? '', {
-    timeout: 90_000,
-    message: 'no stored answer — the runtime refused a profile the admission gates let through',
-  });
-
-  await page.request.delete(`${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${agentId}`);
+  //
+  // The turn is settled whatever the assertion decides (#2155): a failure here
+  // used to leave it running, and the next journeys' start POSTs queued behind
+  // it until their own fixed timeouts expired.
+  try {
+    await expectStoredAssistantAnswer(page, projectId, conversation.id ?? '', {
+      timeout: 90_000,
+      message: 'no stored answer — the runtime refused a profile the admission gates let through',
+    });
+  } finally {
+    await settleStoredTurn(page, projectId, conversation.id ?? '');
+    await page.request.delete(`${BASE_URL}/api/v2/elitea_core/application/prompt_lib/${projectId}/${agentId}`);
+  }
 });
