@@ -26,11 +26,15 @@ package eliteacore
 // it cannot tell them apart from two zeroes.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 )
 
 // PublishedAgentsListPermission is the permission the legacy original declares.
@@ -186,7 +190,35 @@ LIMIT $1 OFFSET $2`, schema, publishedPredicate, orderColumn), limit, offset)
 		agent.Adoption = readAdoption(metaJSON)
 		agents = append(agents, agent)
 	}
-	return agents, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	h.fillMarketplaceAdoption(ctx, agents)
+	return agents, nil
+}
+
+// fillMarketplaceAdoption sets the project counter from the Marketplace: the
+// number of projects with an active hire of the agent's listing. An agent with a
+// listing and no hire reads 0, because that is measured; an agent with no
+// listing keeps whatever `meta.adoption` said, usually null. The conversation
+// counter stays null: nothing counts conversations per published agent. A read
+// failure leaves the counters as they were rather than failing the listing.
+func (h *Handler) fillMarketplaceAdoption(ctx context.Context, agents []publishedAgent) {
+	ids := make([]int64, 0, len(agents))
+	for _, agent := range agents {
+		ids = append(ids, int64(agent.PublicAgentID))
+	}
+	counts, err := marketplace.ActiveProjectCounts(ctx, h.pool, ids)
+	if err != nil {
+		slog.WarnContext(ctx, "admin published agents: the project counters could not be read", "error", err)
+		return
+	}
+	for i := range agents {
+		if count, ok := counts[int64(agents[i].PublicAgentID)]; ok {
+			number := json.Number(strconv.Itoa(count))
+			agents[i].Adoption.ProjectCount = &number
+		}
+	}
 }
 
 // readAdoption pulls `meta.adoption` without inventing zeroes for it.

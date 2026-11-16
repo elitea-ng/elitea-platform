@@ -4993,6 +4993,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Post("/marketplace_hire/prompt_lib/{projectID}", coreHandler.MarketplaceHire)
 				r.With(requireMarketplaceRead).
 					Get("/marketplace_origin/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceOrigin)
+				// Feedback per listing version (ADR-0051 decision 5, issue
+				// 1631). A review needs a hire by the caller's project, which
+				// the store checks; a report is a person approving a workforce
+				// manager's account of a hired agent, so it takes the permission
+				// that updates an agent. Reply, flag and hide are the
+				// publisher's or an administrator's, and the handler decides.
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_feedback/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceFeedback)
+				r.With(requireMarketplaceRead).
+					Post("/marketplace_feedback/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceFeedbackReview)
+				r.With(projectPermission("models.applications.application.update")).
+					Post("/marketplace_feedback_report/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceFeedbackReport)
+				r.With(requireMarketplaceRead).
+					Post("/marketplace_feedback_action/prompt_lib/{projectID}/{listingID}/{feedbackID}", coreHandler.MarketplaceFeedbackAction)
 				// The bindings of a hired agent stay editable while its
 				// definition is read-only (ADR-0051 decision 3).
 				r.With(requireMarketplaceRead).

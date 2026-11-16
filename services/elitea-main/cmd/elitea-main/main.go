@@ -435,6 +435,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The Marketplace snapshot purge (ADR-0051, ADR-0042): the
 	// main.marketplace_retention routine, daily, paused in maintenance.
 	startMarketplaceRetention(ctx, pool, logger)
+	// main.marketplace_signals routine, daily: the listing signals (active
+	// hires, retention, dismissal rate, upgrade adoption) and the ratings.
+	startMarketplaceSignals(ctx, pool, logger)
 	// The workforce policy pass (ADR-0050 decisions 5c and 5k, #1617): the
 	// main.agent_workforce_policy routine, paused in maintenance; a project
 	// with no policy (the default) is never touched.

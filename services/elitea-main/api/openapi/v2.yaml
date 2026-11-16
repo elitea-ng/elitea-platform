@@ -15016,6 +15016,215 @@ components:
         Where an installed or forked agent came from
         (internal/marketplace/origin.go).
 
+    MarketplaceFeedbackScorecard:
+      type: object
+      description: >
+        The platform-computed summary of a workforce report
+        (internal/marketplace/feedback.go CleanScorecard). Four numbers and
+        nothing else: never a transcript, a prompt, tool arguments or memory.
+      properties:
+        failure_rate: { type: number }
+        breaker_trips: { type: number }
+        cost_vs_median: { type: number }
+        active_days: { type: number }
+
+    MarketplaceFeedbackAuthor:
+      type: object
+      required: [kind, name]
+      properties:
+        kind: { type: string, description: '`person` for a review; `agent` or `policy` for a workforce report.' }
+        name:
+          type: string
+          description: >
+            A person's name for a review. For a workforce report it is the
+            label "Workforce report from a hiring project". It is never a
+            project's name.
+      description: >
+        Who an item is from, as a reader may see it (internal/marketplace/feedback.go).
+
+    MarketplaceFeedbackReply:
+      type: object
+      required: [body, created_at]
+      properties:
+        body: { type: string }
+        created_at: { type: string, format: date-time }
+      description: >
+        The publisher's one reply to an item (internal/marketplace/feedback.go).
+
+    MarketplaceFeedbackItem:
+      type: object
+      required: [id, kind, version_id, version_name, rating, body, author, state, flagged, reply, mine, created_at, updated_at]
+      properties:
+        id: { type: string }
+        kind: { type: string, description: '`review`, `workforce_report` or `signal`.' }
+        version_id: { type: string }
+        version_name: { type: string }
+        rating:
+          type: integer
+          nullable: true
+          description: 1 to 5 for a review; null for a workforce report.
+        body: { type: string }
+        outcome: { type: string, description: 'A report: `kept`, `demoted` or `dismissed`.' }
+        stage: { type: string }
+        reason_code: { type: string }
+        scorecard: { $ref: '#/components/schemas/MarketplaceFeedbackScorecard' }
+        author: { $ref: '#/components/schemas/MarketplaceFeedbackAuthor' }
+        state: { type: string, description: '`visible`, or `hidden` (shown to a moderator and to the author only).' }
+        flagged: { type: boolean }
+        flag_reason: { type: string, description: Shown to the publisher and to a moderator. }
+        hide_reason: { type: string, description: Shown to a moderator. }
+        reply:
+          allOf: [{ $ref: '#/components/schemas/MarketplaceFeedbackReply' }]
+          nullable: true
+        mine:
+          type: boolean
+          description: A review the caller wrote, or a report the caller's project wrote.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      description: >
+        One item of feedback. It never carries a project id or a project name
+        (internal/marketplace/feedback.go FeedbackItem).
+
+    MarketplaceRatingBucket:
+      type: object
+      required: [version_id, version_name, rating_avg, rating_count, distribution, report_count]
+      properties:
+        version_id: { type: string, description: '`0` for every version together.' }
+        version_name: { type: string }
+        rating_avg: { type: number, nullable: true }
+        rating_count: { type: integer }
+        distribution:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items: { type: integer }
+          description: The number of reviews with one star, two, three, four and five.
+        report_count: { type: integer, description: Visible workforce reports. }
+      description: >
+        The rating distribution of one version, from the visible reviews
+        (internal/marketplace/feedback.go RatingBucket).
+
+    MarketplaceSignals:
+      type: object
+      required: [day, active_hires, hires_total, dismissed, dismissal_rate, retention_cohort, retention_30d,
+                 upgrade_eligible, upgrade_adoption, live]
+      properties:
+        day: { type: string }
+        active_hires: { type: integer }
+        hires_total: { type: integer }
+        dismissed: { type: integer }
+        dismissal_rate: { type: number, nullable: true, description: Dismissed over every hire; null with no hire. }
+        retention_cohort: { type: integer, description: Hires at least 30 days old. }
+        retention_30d: { type: number, nullable: true, description: Of the cohort, the share still active on day 30; null with an empty cohort. }
+        upgrade_eligible: { type: integer, description: Active hires made before the current version was published. }
+        upgrade_adoption: { type: number, nullable: true, description: Of those, the share now on the current version. }
+        live:
+          type: boolean
+          description: True when the daily routine has not written a row yet and the figures were computed at the request.
+      description: >
+        The daily signals of a listing or a version (internal/marketplace/signals.go).
+
+    MarketplaceSignalsSet:
+      type: object
+      required: [listing, versions]
+      properties:
+        listing: { $ref: '#/components/schemas/MarketplaceSignals' }
+        versions:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/MarketplaceSignals' }
+          description: By version id. A version that was never hired has no entry.
+      description: >
+        The signals of a listing and of each version (internal/marketplace/signals.go).
+
+    MarketplaceReviewVersion:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+      description: >
+        A version the caller's project hired (internal/marketplace/feedback.go ReviewableVersions).
+
+    MarketplaceFeedback:
+      type: object
+      required: [items, total, versions, overall, signals, review_versions, can_review, can_reply, can_flag, can_moderate]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceFeedbackItem' }
+        total: { type: integer }
+        versions:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceRatingBucket' }
+          description: One bucket per version, newest first.
+        overall: { $ref: '#/components/schemas/MarketplaceRatingBucket' }
+        signals: { $ref: '#/components/schemas/MarketplaceSignalsSet' }
+        review_versions:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceReviewVersion' }
+          description: The versions the caller's project hired. Empty when it never hired the listing.
+        can_review: { type: boolean, description: The caller's project hired the listing and the caller is not its publisher. }
+        can_reply: { type: boolean, description: The caller is the publisher. }
+        can_flag: { type: boolean, description: The caller is the publisher or an administrator. }
+        can_moderate: { type: boolean, description: The caller is a platform administrator and may hide an item. }
+      description: >
+        The Feedback section of a listing (internal/api/v2/eliteacore/marketplace_feedback.go).
+
+    MarketplaceReviewRequest:
+      type: object
+      required: [rating]
+      properties:
+        version_id: { type: string, description: A version the project hired. Omitted means the newest one it hired. }
+        rating: { type: integer, minimum: 1, maximum: 5 }
+        body: { type: string, maxLength: 2000 }
+      description: >
+        A person's review of a listing their project hired. A second request edits it
+        (internal/api/v2/eliteacore/marketplace_feedback.go).
+
+    MarketplaceFeedbackSaved:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        created: { type: boolean }
+      description: >
+        The saved item (internal/api/v2/eliteacore/marketplace_feedback.go).
+
+    MarketplaceReportRequest:
+      type: object
+      required: [hired_agent_id, agent_id, outcome, stage]
+      properties:
+        hired_agent_id: { type: integer, description: The hired agent the report is about. }
+        agent_id: { type: integer, description: The workforce manager that wrote it. }
+        outcome: { type: string, description: '`kept`, `demoted` or `dismissed`.' }
+        stage: { type: string, maxLength: 64 }
+        reason_code: { type: string, maxLength: 64 }
+        text: { type: string, maxLength: 500 }
+      description: >
+        A workforce report that the caller approves. The scorecard summary is
+        filled by the platform, not by the request
+        (internal/api/v2/eliteacore/marketplace_feedback.go).
+
+    MarketplaceFeedbackActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, description: '`reply` (publisher), `flag` or `unflag` (publisher or administrator), `hide` or `unhide` (administrator).' }
+        text: { type: string, maxLength: 2000, description: The reply. }
+        reason: { type: string, maxLength: 500 }
+      description: >
+        A reply, a flag or a moderation step on one item
+        (internal/api/v2/eliteacore/marketplace_feedback.go).
+
+    MarketplaceFeedbackActionResult:
+      type: object
+      required: [id, action]
+      properties:
+        id: { type: string }
+        action: { type: string }
+      description: >
+        The step that was applied (internal/api/v2/eliteacore/marketplace_feedback.go).
+
     PublicApplicationSummary:
       type: object
       required: [project_id, id, name, description, version_id, version_name,
@@ -20511,10 +20720,13 @@ components:
       required: [conversation_count, project_count]
       description: >
         NOTE(W2): internal/api/v2/eliteacore/admin_published_agents.go:47-54.
-        Both counters are NULL when the agent's `meta.adoption` is absent —
-        nothing in this stack writes that key. The reference defaults them to
-        0, which renders as "nobody uses this" rather than "this platform does
-        not measure that".
+        `project_count` is the number of projects with an active hire of the
+        agent's Marketplace listing (0 when it has a listing and no hire). It is
+        NULL for an agent with no listing and no `meta.adoption`. The
+        conversation counter is NULL when the agent's `meta.adoption` is absent
+        — nothing in this stack writes that key. The reference defaults them
+        to 0, which renders as "nobody uses this" rather than "this platform
+        does not measure that".
       properties:
         conversation_count:
           type: integer
@@ -39207,6 +39419,167 @@ paths:
         '404': { $ref: '#/components/responses/404' }
         '409':
           description: A required toolkit is unbound (`binding_missing`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /elitea_core/marketplace_feedback/prompt_lib/{project_id}/{listing_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: listing_id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getMarketplaceFeedback
+      summary: The Feedback section of a listing
+      description: |
+        A page of reviews and workforce reports, newest first, the rating
+        distribution of each version and the signals beside it. `version_id`
+        filters the items to one version and `kind` to one kind. A hidden item
+        is shown only to a platform administrator and to its author. No item
+        carries a project id or a project name: a review names its author, and
+        a workforce report reads "Workforce report from a hiring project"
+        (internal/api/v2/eliteacore/marketplace_feedback.go).
+      tags: [marketplace]
+      parameters:
+        - name: version_id
+          in: query
+          schema: { type: string }
+        - name: kind
+          in: query
+          schema: { type: string }
+          description: '`review`, `workforce_report` or `signal`.'
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: The feedback
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceFeedback' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+    post:
+      operationId: saveMarketplaceReview
+      summary: Review a listing the project hired
+      description: |
+        Only a person in a project that hired the listing may review it, once
+        per listing; a second request edits the review and keeps the
+        publisher's reply. The publisher cannot review their own listing
+        (internal/api/v2/eliteacore/marketplace_feedback.go).
+      tags: [marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceReviewRequest' }
+      responses:
+        '200':
+          description: The review was edited
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceFeedbackSaved' }
+        '201':
+          description: The review was created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceFeedbackSaved' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The project did not hire the listing (`not_verified_hire`) or the caller published it (`own_listing`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404': { $ref: '#/components/responses/404' }
+
+  /elitea_core/marketplace_feedback_report/prompt_lib/{project_id}/{listing_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: listing_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: saveMarketplaceWorkforceReport
+      summary: Publish a workforce report on a hired agent
+      description: |
+        The caller approves and publishes a workforce manager's report on the
+        listing version a hired agent was installed from. The agent must be a
+        workforce manager of the project, the project must have hired the
+        listing and not published it, and there is one report per hired agent
+        and stage. The scorecard summary is filled by the platform
+        (internal/api/v2/eliteacore/marketplace_feedback.go).
+      tags: [marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceReportRequest' }
+      responses:
+        '201':
+          description: The report was published
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceFeedbackSaved' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: The project did not hire the listing, published it, or the agent is not a workforce manager.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: This hired agent already has a report for the stage (`already_done`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /elitea_core/marketplace_feedback_action/prompt_lib/{project_id}/{listing_id}/{feedback_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: listing_id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: feedback_id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: actOnMarketplaceFeedback
+      summary: Reply to, flag or hide an item of feedback
+      description: |
+        The publisher replies once per item and may flag it. A platform
+        administrator flags, unflags, hides and unhides; a hidden review leaves
+        the rating. Every change writes an audit event
+        (internal/api/v2/eliteacore/marketplace_feedback.go).
+      tags: [marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceFeedbackActionRequest' }
+      responses:
+        '200':
+          description: The step was applied
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceFeedbackActionResult' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: The item already has a reply (`already_done`).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

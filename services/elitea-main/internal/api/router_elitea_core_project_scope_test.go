@@ -155,6 +155,10 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodGet, "/api/v2/elitea_core/marketplace_bindings/prompt_lib/7/1", "/api/v2/elitea_core/marketplace_bindings/prompt_lib/8/1", "models.applications.applications.list"},
 	{http.MethodPut, "/api/v2/elitea_core/marketplace_bindings/prompt_lib/7/1", "/api/v2/elitea_core/marketplace_bindings/prompt_lib/8/1", "models.applications.application.update"},
 	{http.MethodGet, "/api/v2/elitea_core/marketplace_origin/prompt_lib/7/1", "/api/v2/elitea_core/marketplace_origin/prompt_lib/8/1", "models.applications.applications.list"},
+	{http.MethodGet, "/api/v2/elitea_core/marketplace_feedback/prompt_lib/7/1", "/api/v2/elitea_core/marketplace_feedback/prompt_lib/8/1", "models.applications.applications.list"},
+	{http.MethodPost, "/api/v2/elitea_core/marketplace_feedback/prompt_lib/7/1", "/api/v2/elitea_core/marketplace_feedback/prompt_lib/8/1", "models.applications.applications.list"},
+	{http.MethodPost, "/api/v2/elitea_core/marketplace_feedback_report/prompt_lib/7/1", "/api/v2/elitea_core/marketplace_feedback_report/prompt_lib/8/1", "models.applications.application.update"},
+	{http.MethodPost, "/api/v2/elitea_core/marketplace_feedback_action/prompt_lib/7/1/3", "/api/v2/elitea_core/marketplace_feedback_action/prompt_lib/8/1/3", "models.applications.applications.list"},
 	// Project folders of the entity lists: each kind is gated by ITS list's permissions.
 	{http.MethodGet, "/api/v2/elitea_core/entity_folders/prompt_lib/7/agent", "/api/v2/elitea_core/entity_folders/prompt_lib/8/agent", "models.applications.applications.list"},
 	{http.MethodPost, "/api/v2/elitea_core/entity_folders/prompt_lib/7/agent", "/api/v2/elitea_core/entity_folders/prompt_lib/8/agent", "models.applications.applications.create"},

@@ -1145,7 +1145,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// the hire, upgrade and upstream_merge kinds of change requests. No
 	// backfill in SQL (the service builds the listings on first read), no
 	// permission.
-	require.EqualValues(t, 250, Head(shared))
+	//
+	// 252: shared/0252_marketplace_feedback.sql, the feedback per listing version,
+	// its moderation audit trail, the daily listing signals and the dismissal
+	// column of installs (ADR-0051 M5, issue 1631). No permission.
+	require.EqualValues(t, 252, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

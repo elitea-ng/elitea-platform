@@ -131,3 +131,53 @@ VALUES ('maintenance', 'maintenance_enabled', 'true'::jsonb, now())`); err != ni
 		t.Errorf("after the purge: %d snapshots and %d listings, want only the held one of each", versions, listings)
 	}
 }
+
+// TestMarketplaceSignalsRoutineWritesTheDailyRows runs the signals routine's own
+// function: it writes the listing and version rows from the installs and
+// refreshes the ratings, and a pass in maintenance does nothing.
+func TestMarketplaceSignalsRoutineWritesTheDailyRows(t *testing.T) {
+	pool := newMarketplaceRetentionPool(t)
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	var listing int64
+	if err := pool.QueryRow(ctx, `
+INSERT INTO elitea_marketplace.listings (kind, source_project_id, source_entity_id, name)
+VALUES ('agent', 2, 1, 'L') RETURNING id`).Scan(&listing); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_marketplace.listing_versions (listing_id, version_id, name, digest, definition)
+VALUES ($1, 100, 'v1', decode(repeat('ab', 32), 'hex'), '{}'::jsonb)`, listing); err != nil {
+		t.Fatal(err)
+	}
+	for entity, dismissed := range map[int]string{9: "NULL", 10: "now()"} {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`
+INSERT INTO elitea_marketplace.installs (project_id, entity_kind, entity_id, listing_id, version_id, digest, mode, installed_by, dismissed_at)
+VALUES (3, 'agent', $1, $2, 100, decode(repeat('ab', 32), 'hex'), 'install', 1, %s)`, dismissed), entity, listing); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_marketplace.listing_feedback (listing_id, version_id, kind, rating, author_kind, author_user_id, project_id)
+VALUES ($1, 100, 'review', 4, 'person', 5, 3)`, listing); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := marketplaceSignalsRun(ctx, pool, logger)
+	if err != nil || outcome != routines.OutcomeOK {
+		t.Fatalf("pass = %q %v", outcome, err)
+	}
+	var active, total, dismissed int
+	if err := pool.QueryRow(ctx, `
+SELECT active_hires, hires_total, dismissed FROM elitea_marketplace.listing_signals_daily
+WHERE listing_id = $1 AND version_id = 0`, listing).Scan(&active, &total, &dismissed); err != nil {
+		t.Fatal(err)
+	}
+	if active != 1 || total != 2 || dismissed != 1 {
+		t.Errorf("signals = %d active of %d with %d dismissed, want 1 of 2 with 1", active, total, dismissed)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT rating_count FROM elitea_marketplace.listings WHERE id = $1`, listing).Scan(&count); err != nil || count != 1 {
+		t.Errorf("rating_count = %d (%v), want the routine to refresh it to 1", count, err)
+	}
+}
