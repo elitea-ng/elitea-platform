@@ -53,7 +53,7 @@ export interface ContextBudgetStats {
 }
 
 /** Balanced caps the combined window here; Full uses the model window (the contract's wording). */
-export const BALANCED_WINDOW_TOKENS = 272_000;
+const BALANCED_WINDOW_TOKENS = 272_000;
 
 /**
  * The latest measurement, restated for another window mode (#2123).
