@@ -26,7 +26,7 @@
 //! * infers a missing `type` where the keywords imply it.
 //!
 //! On top of that, the restricted profiles ([`SchemaProfile::Gemini`], an
-//! OpenAPI subset, and [`SchemaProfile::LlamaCpp`], whose JSON-schema to GBNF
+//! `OpenAPI` subset, and [`SchemaProfile::LlamaCpp`], whose JSON-schema to GBNF
 //! converter is stricter still) drop or rewrite what those providers refuse:
 //! `const` becomes a single-value `enum`, `type` arrays and `anyOf` with
 //! `null` become `nullable` for Gemini, patterns llama.cpp cannot convert and
@@ -87,11 +87,11 @@ pub enum SchemaProfile {
     /// Anthropic `input_schema`: a full JSON Schema, but the root must be a
     /// plain object (no root combinator) and a reference must be local.
     Anthropic,
-    /// OpenAI function calling (non-strict): the same structural rules.
+    /// `OpenAI` function calling (non-strict): the same structural rules.
     OpenAi,
     /// Bedrock Converse `toolSpec.inputSchema`: the same structural rules.
     Bedrock,
-    /// Google Gemini / Vertex: an OpenAPI subset. No `$ref`, `const`,
+    /// Google Gemini / Vertex: an `OpenAPI` subset. No `$ref`, `const`,
     /// `oneOf`, `additionalProperties`, `default`, type arrays or non-string
     /// enums, a type on every node, a short list of formats.
     Gemini,
@@ -112,7 +112,7 @@ impl SchemaProfile {
         Self::LlamaCpp,
     ];
 
-    /// The profile for a model name, for the OpenAI-compatible gateway path
+    /// The profile for a model name, for the `OpenAI`-compatible gateway path
     /// where the provider behind the gateway is not otherwise known. An
     /// unknown name gets the strictest portable form ([`Self::LlamaCpp`]):
     /// local and self-hosted servers sit behind names nothing can recognise,
@@ -425,9 +425,29 @@ impl Normalizer<'_> {
     /// Every other keyword: bounds, formats, patterns, annotations and the
     /// keywords a restricted profile cannot carry.
     fn other(&self, key: &str, value: Value, out: &mut Object, notes: &mut Vec<String>) {
+        // Dropped without a trace: markers that only name the draft or a
+        // definition this pass removed, and, for the restricted profiles,
+        // annotations the model gains nothing from.
+        let silent = matches!(
+            key,
+            "$schema"
+                | "$id"
+                | "$anchor"
+                | "$comment"
+                | "$defs"
+                | "definitions"
+                | "$dynamicAnchor"
+                | "$dynamicRef"
+                | "$vocabulary"
+        ) || (self.profile.restricted()
+            && (matches!(
+                key,
+                "examples" | "deprecated" | "readOnly" | "writeOnly" | "contentSchema"
+            ) || key.starts_with("x-")));
+        if silent {
+            return;
+        }
         let keep = match key {
-            "$schema" | "$id" | "$anchor" | "$comment" | "$defs" | "definitions"
-            | "$dynamicAnchor" | "$dynamicRef" | "$vocabulary" => return,
             "format" => self.format_ok(&value),
             "pattern" => self.pattern_ok(&value),
             "minLength" | "maxLength" | "minItems" | "maxItems" | "minProperties"
@@ -439,10 +459,7 @@ impl Normalizer<'_> {
             // A schema-valued keyword is never kept when it points at a
             // definition this pass removed.
             _ if contains_ref(&value) => false,
-            _ if !self.profile.restricted() => true,
-            "examples" | "deprecated" | "readOnly" | "writeOnly" | "contentSchema" => return,
-            _ if key.starts_with("x-") => return,
-            _ => false,
+            _ => !self.profile.restricted(),
         };
         if keep {
             out.insert(key.to_owned(), value);
