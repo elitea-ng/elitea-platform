@@ -42,17 +42,40 @@ func TestRealtime_DegradedSessionIsNotRefusedByItsOwnReservation(t *testing.T) {
 	conn := f.dial(t)
 	waitHeld(t, degraded, degradedShare)
 
-	// Many re-check ticks (25 ms each). The session must stay open.
+	// Many re-check ticks (25 ms each). The session must stay open. The read
+	// context expiring closes the connection, which gives the reservation back,
+	// so the held amount is sampled WHILE the context is live and never after
+	// it (read after the timeout it is 0 on a fast machine: a race of the test,
+	// not a second reservation).
 	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancel()
+	samples := make(chan int64, 64)
+	go func() {
+		defer close(samples)
+		for ctx.Err() == nil {
+			held := degraded.Held(degradedSubject())
+			if ctx.Err() != nil {
+				return // the timeout may have closed the session between the read and the check
+			}
+			samples <- held
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
 	_, _, err := conn.Read(ctx)
 	if err == nil || ctx.Err() == nil {
 		t.Fatalf("the session received a frame or closed during the re-checks (err=%v, close=%v); "+
 			"its own reservation must not refuse it", err, websocket.CloseStatus(err))
 	}
-	if got := degraded.Held(degradedSubject()); got != degradedShare {
-		t.Fatalf("held = %d during the session, want exactly one reservation (%d): a re-check must not reserve",
-			got, int64(degradedShare))
+	count := 0
+	for got := range samples {
+		count++
+		if got != degradedShare {
+			t.Fatalf("held = %d during the session, want exactly one reservation (%d): a re-check must not reserve",
+				got, int64(degradedShare))
+		}
+	}
+	if count == 0 {
+		t.Fatal("no sample of the held amount was taken during the session")
 	}
 
 	// The session ends: its reservation goes back.
