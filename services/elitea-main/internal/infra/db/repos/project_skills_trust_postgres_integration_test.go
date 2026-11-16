@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/skilltrust"
 	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
@@ -165,5 +166,40 @@ func TestSkillTrustMigrationBackfillsExistingForksOnce(t *testing.T) {
 	if len(got) != 1 || got[0].skill != 811 || got[0].publisher != 2 || got[0].source != "migration" ||
 		got[0].revision != skilltrust.Revision("Old fork steps") {
 		t.Fatalf("backfill = %+v, want one migration row for skill 811 only", got)
+	}
+}
+
+// A person in the project who saves new text on a forked skill wrote and read
+// it, so that revision is trusted; a metadata-only save, or one that leaves the
+// text as it was, must not trust text nobody reviewed.
+func TestEditingAForkedSkillTrustsTheNewRevisionOnly(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	skillsRepo := NewSkillsRepo(pool)
+	repo := NewProjectSkillsRepo(pool)
+	seedTrustSkill(t, pool, 821, "forked", "Original steps", `{"parent_project_id": 2}`)
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), auth.User{ID: "7", UserID: "7"}), 30*time.Second)
+	defer cancel()
+
+	if got := resolveTrust(t, repo, 821); !got[821] {
+		t.Fatal("a fresh fork is untrusted")
+	}
+	// Same text, new description: still untrusted.
+	if _, err := skillsRepo.Update(ctx, "1", "821", skills.Skill{Name: "forked", Description: "new description", Instructions: "Original steps"}); err != nil {
+		t.Fatalf("update with unchanged text: %v", err)
+	}
+	if got := resolveTrust(t, repo, 821); !got[821] {
+		t.Fatal("a save that leaves the text alone must not trust it")
+	}
+	// New text by a member of this project: that revision is trusted, by them.
+	if _, err := skillsRepo.Update(ctx, "1", "821", skills.Skill{Name: "forked", Description: "new description", Instructions: "Edited steps"}); err != nil {
+		t.Fatalf("update with new text: %v", err)
+	}
+	if got := resolveTrust(t, repo, 821); got[821] {
+		t.Fatal("text a member of the project saved must be trusted")
+	}
+	var by int
+	var source string
+	if err := pool.QueryRow(context.Background(), `SELECT trusted_by, source FROM p_1.skill_trust WHERE skill_id = 821 AND revoked_at IS NULL`).Scan(&by, &source); err != nil || by != 7 || source != "user" {
+		t.Fatalf("trust row: by=%d source=%q err=%v", by, source, err)
 	}
 }

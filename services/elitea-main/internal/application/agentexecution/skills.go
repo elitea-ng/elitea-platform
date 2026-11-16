@@ -56,15 +56,7 @@ func projectAdhocSkills(userInput string, picks []map[string]any) (currentSkillP
 	if strings.TrimSpace(cleanedInput) == "" {
 		cleanedInput = "continue"
 	}
-	applied := make([]map[string]any, 0, len(invoked))
-	for _, skill := range invoked {
-		applied = append(applied, currentSkillAuthorityProjection(map[string]any{
-			"skill_id":         skill["skill_id"],
-			"skill_version_id": skill["skill_version_id"],
-			"name":             skill["name"],
-			"icon_meta":        skill["icon_meta"],
-		}, skill))
-	}
+	applied := currentAppliedSkillProjections(invoked)
 	encodedInvoked, err := json.Marshal(invoked)
 	if err != nil {
 		return currentSkillProjection{}, ErrUnsupportedCurrentAgentStart
@@ -114,15 +106,7 @@ func projectCurrentApplicationSkills(
 	if strings.TrimSpace(cleanedInput) == "" {
 		cleanedInput = "continue"
 	}
-	applied := make([]map[string]any, 0, len(invoked))
-	for _, skill := range invoked {
-		applied = append(applied, currentSkillAuthorityProjection(map[string]any{
-			"skill_id":         skill["skill_id"],
-			"skill_version_id": skill["skill_version_id"],
-			"name":             skill["name"],
-			"icon_meta":        skill["icon_meta"],
-		}, skill))
-	}
+	applied := currentAppliedSkillProjections(invoked)
 
 	disclosable := make([]map[string]any, 0, len(attached))
 	if version["agent_type"] != "pipeline" {
@@ -291,6 +275,21 @@ func consumeCurrentInvokedSkills(
 		}
 	}
 	return string(cleaned), invoked
+}
+
+// currentAppliedSkillProjections is the `applied` channel of the execution
+// input for the skills a turn invoked: identity and icon only, never the text.
+func currentAppliedSkillProjections(invoked []map[string]any) []map[string]any {
+	applied := make([]map[string]any, 0, len(invoked))
+	for _, skill := range invoked {
+		applied = append(applied, currentSkillAuthorityProjection(map[string]any{
+			"skill_id":         skill["skill_id"],
+			"skill_version_id": skill["skill_version_id"],
+			"name":             skill["name"],
+			"icon_meta":        skill["icon_meta"],
+		}, skill))
+	}
+	return applied
 }
 
 func currentSkillNameRune(value rune) bool {

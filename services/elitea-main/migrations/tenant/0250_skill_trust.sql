@@ -51,7 +51,8 @@ BEGIN
     -- Forks that exist today keep behaving as before: trust their current
     -- text once. A fork whose base version records a parent project other
     -- than this schema's project is foreign; the project id is the schema's
-    -- own `p_<id>` suffix.
+    -- own `p_<id>` suffix. A schema not named that way is left alone (its
+    -- forks start untrusted) rather than guessed at.
     INSERT INTO skill_trust (skill_id, revision, publisher_project_id, source)
     SELECT sv.skill_id,
            encode(sha256(convert_to(COALESCE(sv.instructions, ''), 'UTF8')), 'hex'),
@@ -60,6 +61,7 @@ BEGIN
            'migration'
     FROM skill_versions sv
     WHERE sv.name = 'base'
+      AND current_schema() ~ '^p_[0-9]+$'
       AND COALESCE(sv.meta ->> 'parent_project_id', '') <> ''
       AND sv.meta ->> 'parent_project_id' IS DISTINCT FROM
           substring(current_schema() FROM '^p_([0-9]+)$')

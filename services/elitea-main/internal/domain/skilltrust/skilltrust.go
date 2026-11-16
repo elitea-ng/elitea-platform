@@ -53,19 +53,15 @@ func Foreign(parentProjectID string, projectID int64) (publisherProjectID int64,
 	return id, true
 }
 
-// Untrusted reports whether a skill's current text needs this project's trust
-// and does not have it: it is foreign and none of activeRevisions (the
-// revisions this project trusts for the skill, not revoked) is the revision of
-// its instructions.
-func Untrusted(foreign bool, instructions string, activeRevisions []string) bool {
-	if !foreign {
-		return false
-	}
+// Trusted reports whether one of activeRevisions (the revisions this project
+// trusts for a FOREIGN skill, not revoked) is the revision of its current
+// instructions. The caller asks only for a skill Foreign reported as foreign.
+func Trusted(instructions string, activeRevisions []string) bool {
 	revision := Revision(instructions)
 	for _, trusted := range activeRevisions {
 		if trusted == revision {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }

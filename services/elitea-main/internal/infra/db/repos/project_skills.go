@@ -91,7 +91,7 @@ WHERE sk.id = ANY($1::int[])%[2]s`, schema, predicate), args...)
 		// revision of it (ADR-0051 amendment 1, A1.6).
 		if publisher, foreign := skilltrust.Foreign(parentProject, projectID); foreign {
 			skill.PublisherProjectID = publisher
-			skill.Untrusted = skilltrust.Untrusted(true, skill.Instructions, trusted)
+			skill.Untrusted = !skilltrust.Trusted(skill.Instructions, trusted)
 		}
 		found[skill.SkillID] = skill
 	}

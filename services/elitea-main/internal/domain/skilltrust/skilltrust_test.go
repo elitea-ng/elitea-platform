@@ -29,21 +29,18 @@ func TestForeign(t *testing.T) {
 	}
 }
 
-func TestUntrustedIsPerRevision(t *testing.T) {
+func TestTrustedIsPerRevision(t *testing.T) {
 	t.Parallel()
 	const text = "Review the diff."
 	trusted := []string{Revision(text)}
 
-	if Untrusted(false, text, nil) {
-		t.Fatal("a skill made in the project is never untrusted")
+	if Trusted(text, nil) {
+		t.Fatal("a foreign skill with no trust record is not trusted")
 	}
-	if !Untrusted(true, text, nil) {
-		t.Fatal("a foreign skill with no trust record is untrusted")
-	}
-	if Untrusted(true, text, trusted) {
+	if !Trusted(text, trusted) {
 		t.Fatal("a foreign skill whose current revision is trusted is trusted")
 	}
-	if !Untrusted(true, text+" Then merge it.", trusted) {
+	if Trusted(text+" Then merge it.", trusted) {
 		t.Fatal("a changed text is a new revision and is untrusted again")
 	}
 }
