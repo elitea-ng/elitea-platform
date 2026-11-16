@@ -1366,3 +1366,19 @@ async fn a_context_dependent_toolset_is_not_frozen_by_the_spawn() {
 
 #[path = "depth_model_tests.rs"]
 mod depth_model;
+
+/// #2145/#2155 inventory: every sub-agent tool declaration normalises to a
+/// schema each provider family accepts (the spawn schema carries the nested
+/// `context` brief and the bounded lists llama.cpp cannot expand).
+#[tokio::test]
+async fn sub_agent_tool_schemas_are_valid_for_every_provider_family() {
+    let host = TestHost::new();
+    let children = subagents(&host);
+    let ctx: Arc<dyn adk_core::ReadonlyContext> = Arc::new(NoContext);
+    let tools = children.toolset().tools(ctx).await.unwrap();
+    assert!(tools.len() >= 4, "spawn, send, wait and close");
+    for tool in tools {
+        let schema = tool.parameters_schema().unwrap_or_else(|| json!({}));
+        crate::tool_schema::assert_wire_valid(tool.name(), &schema);
+    }
+}

@@ -1776,3 +1776,35 @@ async fn a_steering_message_keeps_the_loops_signed_thinking() {
         .expect("the loop's signed thinking block");
     assert_eq!(thinking["signature"], "loop-signature");
 }
+
+/// #2145: a selected tool's schema reaches Anthropic with its references
+/// inlined and a plain object at the root.
+#[test]
+fn tool_schemas_reach_anthropic_without_references_or_a_root_union() {
+    use super::anthropic_facade::anthropic_tools;
+
+    let mut declarations = std::collections::HashMap::new();
+    declarations.insert(
+        "pick".to_owned(),
+        serde_json::json!({
+            "description": "Pick one.",
+            "parameters": {
+                "anyOf": [
+                    {"type": "object", "properties": {"a": {"$ref": "#/$defs/s"}}, "required": ["a"]},
+                    {"type": "object", "properties": {"b": {"type": "integer"}}, "required": ["b"]}
+                ],
+                "$defs": {"s": {"type": "string"}}
+            }
+        }),
+    );
+    let tools = anthropic_tools(&declarations)
+        .expect("tools")
+        .expect("some");
+    let encoded = serde_json::to_value(&tools).expect("encoded");
+    let schema = &encoded[0]["input_schema"];
+    assert_eq!(schema["type"], "object");
+    assert!(schema.get("anyOf").is_none(), "{schema}");
+    assert_eq!(schema["properties"]["a"]["type"], "string");
+    assert_eq!(schema["properties"]["b"]["type"], "integer");
+    assert!(!schema.to_string().contains("$ref"));
+}
