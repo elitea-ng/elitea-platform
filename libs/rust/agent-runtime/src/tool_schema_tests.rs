@@ -431,3 +431,52 @@ async fn the_planner_tools_are_valid_for_every_profile() {
         assert_wire_valid(tool.name(), &schema);
     }
 }
+
+#[test]
+fn a_percent_encoded_reference_resolves() {
+    let raw = json!({
+        "type": "object",
+        "properties": {"t": {"$ref": "#/$defs/My%20Type"}},
+        "$defs": {"My Type": {"type": "string"}}
+    });
+    let out = normalize_tool_schema(&raw, SchemaProfile::OpenAi);
+    assert_eq!(property(&out, "t")["type"], "string");
+}
+
+#[test]
+fn all_of_enums_intersect() {
+    let raw = json!({"type": "object", "properties": {"e": {"allOf": [
+        {"type": "string", "enum": ["a", "b"]},
+        {"enum": ["b", "c"]}
+    ]}}});
+    let out = normalize_tool_schema(&raw, SchemaProfile::OpenAi);
+    assert_eq!(property(&out, "e")["enum"], json!(["b"]));
+}
+
+#[test]
+fn a_folded_constraint_survives_a_single_member_union() {
+    let raw = json!({"type": "object", "properties": {"u": {
+        "description": "A link.",
+        "anyOf": [{"type": "string", "format": "uri"}, {"type": "null"}]
+    }}});
+    let out = normalize_tool_schema(&raw, SchemaProfile::Gemini);
+    let text = property(&out, "u")["description"].as_str().expect("text");
+    assert!(text.starts_with("A link."), "{text}");
+    assert!(text.contains("format \"uri\""), "{text}");
+}
+
+#[test]
+fn a_provider_prefixed_model_name_picks_the_provider() {
+    assert_eq!(
+        SchemaProfile::for_model("openai/gpt-4o"),
+        SchemaProfile::OpenAi
+    );
+    assert_eq!(
+        SchemaProfile::for_model("azure/gpt-4.1"),
+        SchemaProfile::OpenAi
+    );
+    assert_eq!(
+        SchemaProfile::for_model("vertex_ai/gemini-2.5-flash"),
+        SchemaProfile::Gemini
+    );
+}

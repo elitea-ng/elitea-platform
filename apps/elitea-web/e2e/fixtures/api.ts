@@ -1952,7 +1952,7 @@ export async function settleStoredTurn(
   conversationId: string | number,
   options: { readonly timeout?: number } = {},
 ): Promise<boolean> {
-  const { timeout = 120_000 } = options;
+  const { timeout = 60_000 } = options;
   try {
     await expect
       .poll(

@@ -119,7 +119,9 @@ impl SchemaProfile {
     /// and the tool still validates a call against its own full schema.
     #[must_use]
     pub fn for_model(model_name: &str) -> Self {
-        let name = model_name.to_ascii_lowercase();
+        // `openai/gpt-4o`, `azure/gpt-4.1`: the model is the last path segment.
+        let lowered = model_name.to_ascii_lowercase();
+        let name = lowered.rsplit('/').next().unwrap_or(lowered.as_str());
         if name.contains("gemini") {
             Self::Gemini
         } else if name.contains("claude") {
@@ -505,7 +507,7 @@ impl Normalizer<'_> {
         }
         if members.len() == 1 && (self.profile.gemini() || !nullable) {
             if let Some(Value::Object(member)) = members.pop() {
-                merge(&mut out, member, false);
+                merge(&mut out, member, true);
             }
             return out;
         }
@@ -537,7 +539,7 @@ impl Normalizer<'_> {
                 out.insert("type".to_owned(), json!(kind));
             } else if self.profile.gemini() && !out.contains_key("enum") {
                 out.insert("type".to_owned(), json!("string"));
-                notes.push("any JSON value".to_owned());
+                notes.push("any JSON value; write it as JSON text".to_owned());
             }
         }
         // Gemini refuses an array that does not say what it holds.
@@ -703,6 +705,23 @@ fn merge(target: &mut Object, other: Object, join_descriptions: bool) {
                     target.insert(key, json!(names));
                 }
             }
+            "enum" if join_descriptions => {
+                // `allOf` is an intersection: only a value both lists allow.
+                if let (Some(Value::Array(mine)), Value::Array(theirs)) =
+                    (target.get("enum"), &value)
+                {
+                    let shared: Vec<Value> = mine
+                        .iter()
+                        .filter(|candidate| theirs.contains(candidate))
+                        .cloned()
+                        .collect();
+                    if !shared.is_empty() {
+                        target.insert(key, Value::Array(shared));
+                    }
+                } else {
+                    target.entry(key).or_insert(value);
+                }
+            }
             "description" if join_descriptions => {
                 let joined = match (target.get("description").and_then(Value::as_str), &value) {
                     (Some(mine), Value::String(theirs)) if mine != theirs => {
@@ -741,7 +760,30 @@ fn lookup<'a>(root: &'a Value, reference: &str) -> Option<&'a Value> {
     if pointer.is_empty() {
         return Some(root);
     }
-    root.pointer(pointer)
+    root.pointer(&percent_decode(pointer))
+}
+
+/// A URI fragment's `%XX` escapes (`#/$defs/My%20Type`) as the pointer's text.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let decoded = if bytes[index] == b'%' {
+            text.get(index + 1..index + 3)
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        } else {
+            None
+        };
+        if let Some(byte) = decoded {
+            out.push(byte);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn take_list(object: &mut Object, key: &str) -> Vec<Value> {
