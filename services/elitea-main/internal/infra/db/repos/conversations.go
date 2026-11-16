@@ -493,6 +493,12 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 			items[i].Meta["version_status"] = state.status
 			items[i].Meta["version_withdrawn"] = state.withdrawn
 			if state.name != "" && participantOwnsVersion(items[i], s, state.application) {
+				if items[i].Meta == nil {
+					items[i].Meta = map[string]any{}
+				}
+				if items[i].EntityMeta == nil {
+					items[i].EntityMeta = map[string]any{}
+				}
 				items[i].Meta["name"] = state.name
 				items[i].EntityMeta["name"] = state.name
 			}

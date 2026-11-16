@@ -178,10 +178,6 @@ function asValidatorId(value: string | number | undefined): number | undefined {
 }
 
 /** `isCreateMode ? value : fallback` — this component only owns CREATE-mode state (module doc comment), so several values are only real in that mode. Extracted purely to keep `AgentEditor` under the complexity budget, same reason as `asValidatorId` above. */
-function editModeDirty(deps: AgentEditorDeps): boolean {
-  return deps.isConfigurationDirty === true;
-}
-
 function whenCreateMode<T>(isCreateMode: boolean, value: T, fallback: T): T {
   return isCreateMode ? value : fallback;
 }
@@ -318,7 +314,7 @@ export function AgentEditor({
   const validateProjectId = resolveValidateProjectId(entityProjectId, projectId);
 
   const create = useAgentEditorCreate(projectId);
-  const isDirty = whenCreateMode(isCreateMode, create.isDirty, editModeDirty(deps));
+  const isDirty = whenCreateMode(isCreateMode, create.isDirty, deps.isConfigurationDirty === true);
 
   const handleClose = useCallback(() => {
     onCloseAgentEditor?.();

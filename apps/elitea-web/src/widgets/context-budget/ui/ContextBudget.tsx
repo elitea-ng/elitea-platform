@@ -126,15 +126,15 @@ function useContextBudgetEdit(target: {
         setIsSaving(true);
         setErrorMessage(undefined);
         try {
-          await updateCurrentAuthor(buildContextBudgetUpdate(author, budgetMode));
           // A conversation keeps the strategy it was created with: the default
-          // saved above reaches only conversations that do not exist yet. The
+          // saved below reaches only conversations that do not exist yet. The
           // reader is editing the panel of THIS one, so it takes the mode too
           // (#2123); without it the panel went on showing, and the next reply
           // went on using, the old window.
           if (projectId !== undefined && conversationId !== undefined) {
             await contextManagementApi.updateStrategy({ projectId, conversationId, budget_mode: budgetMode });
           }
+          await updateCurrentAuthor(buildContextBudgetUpdate(author, budgetMode));
           setPending({ conversation: String(conversationId), mode: budgetMode });
           await queryClient.invalidateQueries({ queryKey: getGetCurrentAuthorQueryKey() });
           await queryClient.invalidateQueries({ queryKey: contextManagementApi.statusQueryKey() });

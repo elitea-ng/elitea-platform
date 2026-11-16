@@ -247,17 +247,6 @@ function resolveEditorCallbacks(editorCallbacks: ChatBoxEditorCallbacks | undefi
 }
 
 /**
- * Builds `NewChatInput`'s `agentEditor` prop group — extracted to keep
- * `ChatBox`'s own complexity down. `onShowAgentEditor`/`onShowPipelineEditor`/
- * `onCloseAgentEditor`/`onClosePipelineEditor` fall back to their previous
- * literal no-ops when `editorCallbacks` (or an individual field within it)
- * isn't supplied — this keeps every existing `ChatBox` consumer/test working
- * unchanged (these were never required props) while routing to the real
- * `processes/chat/ui/ChatWithEditors.tsx`-supplied handlers once a caller
- * wires them. See that file's own module doc comment for the composition
- * root that actually supplies non-no-op callbacks.
- */
-/**
  * The panel's "X" (#2121): leave the agent or pipeline and talk to the model.
  *
  * It used to be `selectSavedOrDefaultModel` alone, which only picks the model
@@ -274,6 +263,17 @@ export function switchToModel(
   };
 }
 
+/**
+ * Builds `NewChatInput`'s `agentEditor` prop group — extracted to keep
+ * `ChatBox`'s own complexity down. `onShowAgentEditor`/`onShowPipelineEditor`/
+ * `onCloseAgentEditor`/`onClosePipelineEditor` fall back to their previous
+ * literal no-ops when `editorCallbacks` (or an individual field within it)
+ * isn't supplied — this keeps every existing `ChatBox` consumer/test working
+ * unchanged (these were never required props) while routing to the real
+ * `processes/chat/ui/ChatWithEditors.tsx`-supplied handlers once a caller
+ * wires them. See that file's own module doc comment for the composition
+ * root that actually supplies non-no-op callbacks.
+ */
 export function buildAgentEditorProps(params: {
   readonly participantForEditor: Participant | undefined;
   readonly activeParticipantDetails: NewChatInputAgentEditorProps['activeParticipantDetails'];
