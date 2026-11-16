@@ -77,6 +77,11 @@ interface ModalActionsProps {
   onConfirm?: (() => void) | undefined;
 }
 
+/** The confirm button is off while a confirm is in flight or the content is not yet valid. */
+function isConfirmBlocked(actions: ModalActionsOptions | undefined): boolean {
+  return actions?.confirming === true || actions?.confirmDisabled === true;
+}
+
 /**
  * The default Cancel/Confirm pair, split out of `BaseModal` to keep that
  * function under the §3.5 cyclomatic-complexity budget. Only the six
@@ -101,7 +106,7 @@ function ModalActions({ actions, onClose, onConfirm }: ModalActionsProps): React
           variant="contained"
           color={actions?.alarm ? 'error' : 'primary'}
           onClick={onConfirm}
-          disabled={actions?.confirming === true || actions?.confirmDisabled === true}
+          disabled={isConfirmBlocked(actions)}
         >
           {actions?.confirmText ?? t('shared.ui.baseModal.confirm', 'Confirm')}
         </BaseBtn>

@@ -120,6 +120,12 @@ function buildSkillIconControl(args: {
   };
 }
 
+/** A published version is frozen server-side, so there is nothing for the AI to edit. */
+function aiEditDisabled(saving: boolean, skill: SkillRecord, versionId: string | undefined): boolean {
+  const shown = versionId === undefined ? skill.version_details : skill.versions?.find((version) => String(version.id) === versionId);
+  return saving || shown?.status === 'published';
+}
+
 function isConflict(error: unknown): boolean {
   return error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 409;
 }
@@ -227,10 +233,6 @@ export function EditSkill(): ReactNode {
     return <Typography role="alert">{t('skills.edit.loadError', 'Failed to load this skill.')}</Typography>;
   }
 
-  // A published version is frozen server-side, so there is nothing for the AI to edit.
-  const shownVersion = params.version === undefined ? detail.data.version_details : detail.data.versions?.find((version) => String(version.id) === params.version);
-  const isPublishedVersion = shownVersion?.status === 'published';
-
   return (
     <Box sx={pageSx}>
       <SkillEditorHeader
@@ -279,7 +281,7 @@ export function EditSkill(): ReactNode {
                 projectId={projectId}
                 value={value}
                 onChange={setValue}
-                disabled={mutations.update.isPending || isPublishedVersion}
+                disabled={aiEditDisabled(mutations.update.isPending, detail.data, params.version)}
               />
             }
           />

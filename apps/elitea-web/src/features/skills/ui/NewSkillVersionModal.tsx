@@ -85,7 +85,6 @@ export function NewSkillVersionModal({
       content={
         <TextField
           fullWidth
-          autoFocus
           label={t('skills.edit.versionName', 'Version name')}
           value={name}
           onChange={(event) => {

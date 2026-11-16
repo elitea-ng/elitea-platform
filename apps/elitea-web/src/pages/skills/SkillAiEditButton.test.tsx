@@ -114,7 +114,7 @@ describe('SkillAiEditButton', () => {
     await waitFor(() => expect(screen.getByLabelText('Instructions')).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     expect(sent).toContain('This is a SKILL');
-    expect(sent).not.toContain('welcome_message\": \"');
+    expect(sent).not.toContain('Hi!');
     expect(onChange).toHaveBeenCalledWith({ ...value, description: 'Reviews code carefully.', instructions: 'Be very careful.' });
   });
 
