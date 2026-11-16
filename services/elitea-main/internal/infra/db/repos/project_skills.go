@@ -10,6 +10,7 @@ import (
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/foldervisibility"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/skilltrust"
 )
 
 // ProjectSkillsRepo reads the project skills a chat turn picked by id, for
@@ -62,7 +63,10 @@ func (r *ProjectSkillsRepo) ResolveCurrentProjectSkills(
 	}
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
 SELECT sk.id, sv.id, sk.name, COALESCE(sk.description, ''), COALESCE(sv.instructions, ''),
-       COALESCE(sv.meta -> 'icon_meta', 'null'::jsonb)
+       COALESCE(sv.meta -> 'icon_meta', 'null'::jsonb),
+       COALESCE(sv.meta ->> 'parent_project_id', ''),
+       COALESCE((SELECT array_agg(st.revision) FROM %[1]s.skill_trust st
+                 WHERE st.skill_id = sk.id AND st.revoked_at IS NULL), '{}'::text[])
 FROM %[1]s.skills sk
 JOIN %[1]s.skill_versions sv ON sv.skill_id = sk.id AND sv.name = 'base'
 WHERE sk.id = ANY($1::int[])%[2]s`, schema, predicate), args...)
@@ -75,11 +79,20 @@ WHERE sk.id = ANY($1::int[])%[2]s`, schema, predicate), args...)
 		var skill agentexecutionapp.CurrentProjectSkill
 		var skillID, versionID int32
 		var icon []byte
-		if err := rows.Scan(&skillID, &versionID, &skill.Name, &skill.Description, &skill.Instructions, &icon); err != nil {
+		var parentProject string
+		var trusted []string
+		if err := rows.Scan(&skillID, &versionID, &skill.Name, &skill.Description, &skill.Instructions, &icon,
+			&parentProject, &trusted); err != nil {
 			return nil, fmt.Errorf("project skills: scan: %w", err)
 		}
 		skill.SkillID, skill.BaseVersionID = int64(skillID), int64(versionID)
 		skill.IconMeta = json.RawMessage(icon)
+		// Foreign text is untrusted until this project has trusted this exact
+		// revision of it (ADR-0051 amendment 1, A1.6).
+		if publisher, foreign := skilltrust.Foreign(parentProject, projectID); foreign {
+			skill.PublisherProjectID = publisher
+			skill.Untrusted = !skilltrust.Trusted(skill.Instructions, trusted)
+		}
 		found[skill.SkillID] = skill
 	}
 	if err := rows.Err(); err != nil {

@@ -2,13 +2,12 @@ package agentexecution
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/skilltrust"
 )
 
 // CurrentProjectContextResolver reads project-owned content after the caller
@@ -25,8 +24,9 @@ type CurrentAgentProjectContext struct {
 }
 
 func currentInstructionRevision(content string) string {
-	digest := sha256.Sum256([]byte(content))
-	return hex.EncodeToString(digest[:])
+	// One digest for the frozen snapshot and for a project's trust record of a
+	// skill's text (domain/skilltrust).
+	return skilltrust.Revision(content)
 }
 
 func (service *CurrentApplicationToolSnapshotService) freezeCurrentInstructionSnapshots(ctx context.Context, request CurrentApplicationVersionFreezeRequest, version map[string]any) error {
