@@ -47,4 +47,21 @@ describe('DeletableIconTile', () => {
 
     expect(screen.queryByLabelText('Delete the icon')).not.toBeInTheDocument();
   });
+
+  // #2108: the button was `visibility: hidden` with a reveal rule keyed on a
+  // class it never carried, so it was never visible and had no accessible role.
+  it('keeps the delete control reachable and wired to the wrapper reveal rule', () => {
+    renderWithTheme(
+      <DeletableIconTile
+        isSelected={false}
+        onDelete={vi.fn()}
+      >
+        <span>icon</span>
+      </DeletableIconTile>,
+    );
+
+    const button = screen.getByRole('button', { name: 'Delete the icon' });
+    expect(button).toHaveClass('deleteButton');
+    expect(getComputedStyle(button).visibility).not.toBe('hidden');
+  });
 });

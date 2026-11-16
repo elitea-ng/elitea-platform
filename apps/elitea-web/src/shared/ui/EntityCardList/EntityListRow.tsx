@@ -19,10 +19,12 @@ interface TableRowProps {
   readonly showType: boolean;
   readonly showStatus: boolean;
   readonly slot: EntityRowSlot | undefined;
+  /** The Actions column's cell content (a menu); absent means no such column. */
+  readonly renderActions?: ((item: EntityListItem) => ReactNode) | undefined;
 }
 
 /** One row of the table: the selection checkbox, the name cell, then the columns the list has. */
-export function TableRow({ item, columns, showType, showStatus, slot }: TableRowProps): ReactNode {
+export function TableRow({ item, columns, showType, showStatus, slot, renderActions }: TableRowProps): ReactNode {
   const row = useSelectableRow(item.id, item.onClick);
   return (
     <Box
@@ -112,6 +114,18 @@ export function TableRow({ item, columns, showType, showStatus, slot }: TableRow
           }}
         >
           {slot.renderCell(item)}
+        </Box>
+      )}
+      {renderActions !== undefined && (
+        <Box
+          component="td"
+          data-testid="entity-row-actions"
+          sx={cellSx}
+          onClick={(event) => {
+            event.stopPropagation();
+          }}
+        >
+          {renderActions(item)}
         </Box>
       )}
     </Box>

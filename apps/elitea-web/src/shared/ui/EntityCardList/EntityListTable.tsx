@@ -24,7 +24,7 @@ import { useEntitySelection } from './selection';
  * `background.userInputBackground`.
  *
  * DISCLOSED NARROWING vs. the baseline's `DataTable`: no per-row checkbox,
- * no `StatusBar`/`Like`/`Rate` column, no kebab actions cell, and no
+ * no `StatusBar`/`Like`/`Rate` column, a kebab actions cell only when the page supplies `renderRowActions`, and no
  * server-side sort round-trip — the header sorts the rows this component
  * was handed. Those all hang off cross-cutting widgets (`widgets/pin-
  * toggler`, `Like`, `DataTableActionsCell`) with no port in this app.
@@ -33,9 +33,11 @@ type SortField = 'name' | 'createdAt';
 
 export interface EntityListTableProps {
   readonly items: readonly EntityListItem[];
+  /** The row's three-dot menu content. Absent means the list has no Actions column. */
+  readonly renderRowActions?: ((item: EntityListItem) => ReactNode) | undefined;
 }
 
-export function EntityListTable({ items }: EntityListTableProps): ReactNode {
+export function EntityListTable({ items, renderRowActions }: EntityListTableProps): ReactNode {
   const [sortField, setSortField] = useState<SortField>('createdAt');
   const [descending, setDescending] = useState(true);
   const slot = useEntityRowSlot();
@@ -61,7 +63,8 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
     setDescending(true);
   };
 
-  const columns = gridTemplateColumns(showType, slot !== undefined, selection !== undefined, showStatus);
+  const showActions = renderRowActions !== undefined;
+  const columns = gridTemplateColumns(showType, slot !== undefined, selection !== undefined, showStatus, showActions);
   const ids = items.map((item) => item.id);
   const selectedCount = selection === undefined ? 0 : ids.filter((id) => selection.selected.has(id)).length;
 
@@ -113,6 +116,7 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
             }}
           />
           {slot !== undefined && <HeaderCell label={slot.columnLabel} />}
+          {showActions && <HeaderCell label={t('shared.entityList.table.actions', 'Actions')} />}
         </Box>
       </Box>
       <Box
@@ -127,6 +131,7 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
             showType={showType}
             showStatus={showStatus}
             slot={slot}
+            {...(renderRowActions === undefined ? {} : { renderActions: renderRowActions })}
           />
         ))}
       </Box>
@@ -135,8 +140,8 @@ export function EntityListTable({ items }: EntityListTableProps): ReactNode {
 }
 
 /** `DataTable.jsx`'s `gridTemplateColumns` — `minmax(<minWidth>, 1fr)` for the name column, fixed rem widths for the rest. */
-function gridTemplateColumns(showType: boolean, showSlot: boolean, showSelect: boolean, showStatus: boolean): string {
-  return [...(showSelect ? ['2.5rem'] : []), 'minmax(12.5rem, 1fr)', ...(showStatus ? ['6.5rem'] : []), ...(showType ? ['9.375rem'] : []), '15rem', '8.75rem', ...(showSlot ? ['11rem'] : [])].join(' ');
+function gridTemplateColumns(showType: boolean, showSlot: boolean, showSelect: boolean, showStatus: boolean, showActions: boolean): string {
+  return [...(showSelect ? ['2.5rem'] : []), 'minmax(12.5rem, 1fr)', ...(showStatus ? ['6.5rem'] : []), ...(showType ? ['9.375rem'] : []), '15rem', '8.75rem', ...(showSlot ? ['11rem'] : []), ...(showActions ? ['5rem'] : [])].join(' ');
 }
 
 const tableSx: SxProps<Theme> = {

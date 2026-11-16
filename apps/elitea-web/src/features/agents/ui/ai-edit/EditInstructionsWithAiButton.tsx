@@ -36,10 +36,12 @@ export interface EditInstructionsWithAiButtonProps {
   readonly llmSettings: AgentLlmSettings | null | undefined;
   readonly onApply: (patch: Partial<AiEditFields>) => void;
   readonly disabled?: boolean | undefined;
+  /** False for a skill: no welcome message / conversation starters in the review. Default true. */
+  readonly agentFields?: boolean | undefined;
 }
 
 export function EditInstructionsWithAiButton(props: EditInstructionsWithAiButtonProps): ReactNode {
-  const { projectId, current, llmSettings, onApply, disabled = false } = props;
+  const { projectId, current, llmSettings, onApply, disabled = false, agentFields = true } = props;
   const [open, setOpen] = useState(false);
 
   const availability = useAiEditAvailability({ projectId, modelSettings: llmSettings });
@@ -77,6 +79,7 @@ export function EditInstructionsWithAiButton(props: EditInstructionsWithAiButton
             max_tokens: llmSettings?.max_tokens ?? 1024,
           }}
           onApply={onApply}
+          agentFields={agentFields}
         />
       )}
     </>

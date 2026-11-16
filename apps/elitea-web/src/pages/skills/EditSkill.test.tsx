@@ -150,18 +150,40 @@ describe('EditSkill', () => {
 
   it('creates a named version from the current instructions', async () => {
     const user = userEvent.setup();
-    let created = false;
+    let created: unknown;
     server.use(
-      http.post(`${BASE}/elitea_core/skill/prompt_lib/:projectId/:skillId`, () => {
-        created = true;
+      http.post(`${BASE}/elitea_core/skill/prompt_lib/:projectId/:skillId`, async ({ request }) => {
+        created = await request.json();
         return HttpResponse.json(detail);
       }),
     );
     renderSkillsRoute(<EditSkill />, '/skills/all/skill-1');
     await user.click(await screen.findByRole('button', { name: 'New version' }));
-    await user.type(screen.getByLabelText('Version name'), 'v3');
+    const input = screen.getByLabelText('Version name');
+    await user.clear(input);
+    await user.type(input, 'v3');
     await user.click(screen.getByRole('button', { name: 'Confirm' }));
-    await waitFor(() => expect(created).toBe(true));
+    await waitFor(() => expect(created).toMatchObject({ name: 'v3' }));
+  });
+
+  // #2102: the dialog offers the next free number instead of an empty field.
+  it('offers the next free version name when saving as a new version', async () => {
+    const user = userEvent.setup();
+    renderSkillsRoute(<EditSkill />, '/skills/all/skill-1');
+    await user.click(await screen.findByRole('button', { name: 'New version' }));
+    expect(screen.getByLabelText('Version name')).toHaveValue('v1');
+  });
+
+  // #2103: a name the skill already has is refused in the dialog and Save stays off.
+  it('warns about a duplicate version name and disables Confirm', async () => {
+    const user = userEvent.setup();
+    renderSkillsRoute(<EditSkill />, '/skills/all/skill-1');
+    await user.click(await screen.findByRole('button', { name: 'New version' }));
+    const input = screen.getByLabelText('Version name');
+    await user.clear(input);
+    await user.type(input, 'second');
+    expect(screen.getByText('Version name already exists. Please choose a different name.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
   });
 
   it('sets the route-selected version as default', async () => {

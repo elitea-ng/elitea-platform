@@ -3,6 +3,7 @@ export { PublicSkillsCatalog, publishedVersionIdOf } from './ui/PublicSkillsCata
 export { AttachPublicSkillDialog } from './ui/AttachPublicSkillDialog';
 export { SkillCompareModal } from './ui/SkillCompareModal';
 export { SkillEditorToolbar } from './ui/SkillEditorToolbar';
+export { NewSkillVersionModal } from './ui/NewSkillVersionModal';
 export { SkillForm } from './ui/SkillForm';
 export type { SkillIconControl } from './ui/SkillForm';
 export { SkillImportButton } from './ui/SkillImportButton';

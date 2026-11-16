@@ -9,6 +9,7 @@ import { t } from '@/shared/i18n';
 import { EntityCardList, EntityEmptyState, entityTypeIcon, type EntityListItem } from '@/shared/ui/EntityCardList';
 
 import type { SkillRecord } from '../model/types';
+import { SkillRowMenu } from './SkillRowMenu';
 
 /**
  * The skills list — a grid of `shared/ui/EntityCardList` cards (icon tile,
@@ -70,6 +71,17 @@ export function SkillsList({ items, isLoading, isError, query, onSelect, onDelet
           {...(onCreate === undefined ? {} : { onCreateClick: onCreate })}
         />
       }
+      renderRowActions={(item) => {
+        const skill = bySkillId.get(item.id);
+        if (skill === undefined) return null;
+        return (
+          <SkillRowMenu
+            skill={skill}
+            onDelete={onDelete}
+            onExport={onExport}
+          />
+        );
+      }}
       renderCardActions={(item) => {
         const skill = bySkillId.get(item.id);
         if (skill === undefined) return null;
