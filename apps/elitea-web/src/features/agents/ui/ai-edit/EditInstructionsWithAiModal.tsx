@@ -53,12 +53,14 @@ export interface EditInstructionsWithAiModalProps {
   readonly llmSettings: AiEditLlmSettings;
   /** Only the fields the review changed, relative to what the prompt was built from. */
   readonly onApply: (patch: Partial<AiEditFields>) => void;
+  /** Review the agent-only fields too (welcome message, starters). Default true; skills pass false. */
+  readonly agentFields?: boolean;
 }
 
 type Phase = 'prompt' | 'loading' | 'review';
 
 export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalProps): ReactNode {
-  const { open, onClose, projectId, current, basePrompt, llmSettings, onApply } = props;
+  const { open, onClose, projectId, current, basePrompt, llmSettings, onApply, agentFields = true } = props;
 
   const [phase, setPhase] = useState<Phase>('prompt');
   const [request, setRequest] = useState('');
@@ -149,6 +151,7 @@ export function EditInstructionsWithAiModal(props: EditInstructionsWithAiModalPr
         current={snapshot}
         draft={proposed}
         onChange={setProposed}
+        agentFields={agentFields}
       />
     ) : (
       <Box sx={promptSx}>

@@ -26,6 +26,14 @@ import {
   type SkillIconMeta,
 } from '../api/skillIconApi';
 
+/**
+ * What the server stores for a skill icon (`eliteacore/skill_icon.go`): the
+ * raster formats below, at most 512 KB. The picker refuses anything else with a
+ * message instead of sending it (#2107); the server enforces the same rules.
+ */
+const SKILL_ICON_EXTENSIONS: readonly string[] = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico'];
+const SKILL_ICON_MAX_BYTES = 512 * 1024;
+
 export interface SkillIconDialogProps {
   readonly open: boolean;
   readonly onClose: () => void;
@@ -113,6 +121,8 @@ export function SkillIconDialog({
       onSelectIcon={handleSelect}
       onUpload={handleUpload}
       onDeleteIcon={handleDelete}
+      acceptedExtensions={SKILL_ICON_EXTENSIONS}
+      maxFileBytes={SKILL_ICON_MAX_BYTES}
     />
   );
 }

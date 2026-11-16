@@ -1,5 +1,5 @@
 import type { ReactNode, SyntheticEvent } from 'react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 
 import Autocomplete from '@mui/material/Autocomplete';
 import TextField from '@mui/material/TextField';
@@ -82,11 +82,30 @@ export function AgentTagEditor({ projectId, value, onChange }: AgentTagEditorPro
     [availableTags, onChange],
   );
 
+  // A comma ends the tag being typed, like Enter does (#2101). MUI's freeSolo
+  // Autocomplete only commits on Enter/blur, so the comma used to stay in the box.
+  const [input, setInput] = useState('');
+  const handleInputChange = useCallback(
+    (event: SyntheticEvent, next: string, reason: string) => {
+      if (reason !== 'input' || !next.includes(',')) {
+        setInput(next);
+        return;
+      }
+      const parts = next.split(',');
+      const rest = parts.pop() ?? '';
+      handleChange(event, [...value, ...parts]);
+      setInput(rest);
+    },
+    [handleChange, value],
+  );
+
   return (
     <Autocomplete
       multiple
       freeSolo
       autoSelect
+      inputValue={input}
+      onInputChange={handleInputChange}
       options={availableTags}
       value={value as Tag[]}
       onChange={handleChange}

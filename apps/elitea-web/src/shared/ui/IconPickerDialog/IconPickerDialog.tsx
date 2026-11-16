@@ -23,16 +23,18 @@
  *    component, so the identifier resolved to nothing at run time and the
  *    dialog threw as soon as it had one icon to draw.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import IconButton from '@mui/material/IconButton';
 import Typography from '@mui/material/Typography';
 import { useTheme } from '@mui/material/styles';
 
+import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
@@ -67,12 +69,50 @@ export interface IconPickerDialogProps {
   readonly onSelectIcon: (name: string | null) => void;
   readonly onUpload: (file: File, dimensions: UploadDimensions) => Promise<void>;
   readonly onDeleteIcon: (name: string) => Promise<void>;
+  /**
+   * File extensions an upload may have (lower case, with the dot). Defaults to
+   * the browser-drawable set below. A caller whose server stores fewer formats
+   * passes its own, so the picker refuses the rest before sending them.
+   */
+  readonly acceptedExtensions?: readonly string[] | undefined;
+  /** Largest upload in bytes. Absent means the picker does not check. */
+  readonly maxFileBytes?: number | undefined;
 }
 
 /** The maximum icon edge the server stores; the client measures against it. */
 const MAX_ICON_EDGE = 64;
 
-const ACCEPTED_TYPES = '.jpg,.jpeg,.png,.tiff,.webp,.gif,.bmp,.ico';
+const DEFAULT_EXTENSIONS: readonly string[] = ['.jpg', '.jpeg', '.png', '.tiff', '.webp', '.gif', '.bmp', '.ico'];
+
+function fileExtension(name: string): string {
+  const dot = name.lastIndexOf('.');
+  return dot < 0 ? '' : name.slice(dot).toLowerCase();
+}
+
+/** The reason an upload cannot be sent (#2107), or `undefined` when it can. */
+function uploadProblem(file: File, extensions: readonly string[], maxFileBytes: number | undefined): string | undefined {
+  if (!extensions.includes(fileExtension(file.name))) {
+    const formats = extensions.map((extension) => extension.slice(1).toUpperCase()).join(', ');
+    return t('shared.iconPicker.errorFormat', 'Unsupported file format. Upload one of: {{formats}}.', { formats });
+  }
+  if (maxFileBytes !== undefined && file.size > maxFileBytes) {
+    const limit = `${Math.round(maxFileBytes / 1024)} KB`;
+    return t('shared.iconPicker.errorSize', 'File size exceeds {{limit}}.', { limit });
+  }
+  return undefined;
+}
+
+/** The server's own sentence for a refused upload, else a generic one. */
+function uploadFailureMessage(error: unknown): string {
+  if (error instanceof EliteaApiError && error.failure.kind === 'http') {
+    const body = error.failure.body;
+    if (typeof body === 'object' && body !== null) {
+      const message = (body as { error?: unknown; msg?: unknown }).error ?? (body as { msg?: unknown }).msg;
+      if (typeof message === 'string' && message !== '') return message;
+    }
+  }
+  return t('shared.iconPicker.errorUpload', 'The icon could not be uploaded.');
+}
 
 /**
  * Decodes `file` through `Image()` to get its real (capped) pixel dimensions.
@@ -110,9 +150,16 @@ export function IconPickerDialog({
   onSelectIcon,
   onUpload,
   onDeleteIcon,
+  acceptedExtensions = DEFAULT_EXTENSIONS,
+  maxFileBytes,
 }: IconPickerDialogProps): ReactNode {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!open) setUploadError(undefined);
+  }, [open]);
 
   const handleSelectIcon = useCallback(
     (name: string | null) => {
@@ -126,6 +173,13 @@ export function IconPickerDialog({
     (event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
       if (!file) return;
+      const problem = uploadProblem(file, acceptedExtensions, maxFileBytes);
+      if (problem !== undefined) {
+        setUploadError(problem);
+        event.target.value = '';
+        return;
+      }
+      setUploadError(undefined);
       setIsUploading(true);
       const dimensions =
         file.type === 'image/tiff'
@@ -133,17 +187,17 @@ export function IconPickerDialog({
           : readImageDimensions(file);
       void dimensions
         .then((measured) => onUpload(file, measured))
+        .catch((error: unknown) => {
+          // Said in the dialog, not swallowed: a refused upload used to leave
+          // the user looking at a dialog where nothing had happened (#2107).
+          setUploadError(uploadFailureMessage(error));
+        })
         .finally(() => {
           setIsUploading(false);
           if (fileInputRef.current) fileInputRef.current.value = '';
-        })
-        .catch(() => {
-          // The mutation surfaces its own error; an unreadable file must not
-          // leave the dialog stuck in its uploading state, which the finally
-          // above already prevents.
         });
     },
-    [onUpload],
+    [onUpload, acceptedExtensions, maxFileBytes],
   );
 
   const handleDeleteIcon = useCallback(
@@ -182,10 +236,18 @@ export function IconPickerDialog({
             onSelectIcon={handleSelectIcon}
             onDeleteIcon={handleDeleteIcon}
           />
+          {uploadError !== undefined && (
+            <Alert
+              severity="error"
+              data-testid="icon-picker-upload-error"
+            >
+              {uploadError}
+            </Alert>
+          )}
           <input
             ref={fileInputRef}
             type="file"
-            accept={ACCEPTED_TYPES}
+            accept={acceptedExtensions.join(',')}
             style={{ display: 'none' }}
             data-testid="icon-picker-file-input"
             onChange={handleFileSelect}

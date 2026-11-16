@@ -68,8 +68,10 @@ export function DeletableIconTile({
         {onDelete && (
           <IconButton
             color="error"
+            size="small"
             aria-label={t('shared.iconPicker.tile.deleteAriaLabel', 'Delete the icon')}
             onClick={handleDeleteClick}
+            className="deleteButton"
             sx={sx.deleteButton}
           >
             <CloseIcon />
@@ -95,13 +97,28 @@ export function DeletableIconTile({
   );
 }
 
+/*
+ * The wrapper reveals the button through the `.deleteButton` class, which the
+ * button itself never carried: it stayed `visibility: hidden` for good and no
+ * uploaded icon could be removed (#2108). It is now opacity-hidden (so it stays
+ * in the accessibility tree and keyboard-focusable), revealed on hover, on
+ * keyboard focus, and always on touch screens where there is no hover.
+ */
 const sx: Record<string, SxProps<Theme>> = {
   wrapper: {
     position: 'relative' as const,
     overflow: 'visible' as const,
-    '&:hover .deleteButton': { visibility: 'visible' as const },
+    '&:hover .deleteButton, &:focus-within .deleteButton': { opacity: 1 },
   },
   deleteButton: {
-    visibility: 'hidden' as const,
+    position: 'absolute' as const,
+    top: '-0.5rem',
+    right: '-0.5rem',
+    padding: '0.125rem',
+    opacity: 0,
+    transition: 'opacity 120ms',
+    backgroundColor: 'background.paper',
+    '&:hover': { backgroundColor: 'background.paper' },
+    '@media (hover: none)': { opacity: 1 },
   },
 };

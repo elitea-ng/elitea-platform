@@ -35,6 +35,7 @@ package eliteacore
 // allowlist for the part that IS a security boundary and is enforced.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,6 +75,36 @@ const maxSkillIconBytes = 512 * 1024
 
 // maxSkillIconDimension is the legacy MAX_ICON_DIMENSION.
 const maxSkillIconDimension = 64
+
+// sniffLength is how much of an upload http.DetectContentType reads.
+const sniffLength = 512
+
+// unsupportedSkillIconMessage is what the picker shows for a format the
+// service will not store. It names the formats so the user can fix the file.
+const unsupportedSkillIconMessage = "Unsupported file format. Upload a PNG, JPG, GIF, WEBP, BMP or ICO image."
+
+// skillIconExtensionForContent maps the sniffed content type of an upload to
+// the extension it is stored under. SVG is not accepted: it is markup that the
+// public download route would serve from the app's origin, and TIFF cannot be
+// drawn by a browser. ok is false for anything that is not one of the
+// accepted raster formats.
+func skillIconExtensionForContent(head []byte) (string, bool) {
+	switch http.DetectContentType(head) {
+	case "image/png":
+		return ".png", true
+	case "image/jpeg":
+		return ".jpg", true
+	case "image/gif":
+		return ".gif", true
+	case "image/webp":
+		return ".webp", true
+	case "image/bmp":
+		return ".bmp", true
+	case "image/x-icon":
+		return ".ico", true
+	}
+	return "", false
+}
 
 // defaultSkillIconPageSize is the legacy `limit` default for the listing.
 const defaultSkillIconPageSize = 200
@@ -278,7 +309,29 @@ func (h *Handler) UploadSkillIcon(w http.ResponseWriter, r *http.Request) {
 	width := clampIconDimension(safeIntOr(r.FormValue("width"), maxSkillIconDimension))
 	height := clampIconDimension(safeIntOr(r.FormValue("height"), maxSkillIconDimension))
 
-	extension := safeIconExtension(header.Filename)
+	// The format is judged from the BYTES, not from the filename the client
+	// chose. Before this check an upload of any kind was accepted and silently
+	// stored as ".png" (#2107): a TIFF or a text file "succeeded" and then drew a
+	// broken image, and the picker showed no error. The sniffed type also picks
+	// the stored extension, so the public download route serves the right
+	// Content-Type for what the bytes really are.
+	head := make([]byte, sniffLength)
+	headLen, readErr := io.ReadFull(file, head)
+	if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "Could not read the uploaded file."})
+		return
+	}
+	if headLen == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "The uploaded file is empty."})
+		return
+	}
+	extension, ok := skillIconExtensionForContent(head[:headLen])
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": unsupportedSkillIconMessage})
+		return
+	}
+	body := io.MultiReader(bytes.NewReader(head[:headLen]), file)
+
 	filename := skillIconPrefix + generateID() + extension
 	ref, err := storage.NewObjectRef(projectID, iconBucket, filename)
 	if err != nil {
@@ -290,7 +343,7 @@ func (h *Handler) UploadSkillIcon(w http.ResponseWriter, r *http.Request) {
 	// part declared, and the cap has to hold against a part that lies. The
 	// extra byte is what makes an over-cap body detectable rather than
 	// silently truncated into storage.
-	limited := io.LimitReader(file, maxSkillIconBytes+1)
+	limited := io.LimitReader(body, maxSkillIconBytes+1)
 	info, err := h.store.Put(r.Context(), ref, limited, storage.PutOptions{
 		ContentType:   mime.TypeByExtension(extension),
 		ContentLength: -1,

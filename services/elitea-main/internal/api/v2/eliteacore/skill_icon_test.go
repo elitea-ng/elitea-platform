@@ -176,7 +176,7 @@ func TestSkillIconUploadIsReadableThroughTheListingAndTheDownloadRoute(t *testin
 	store := newListableIconStore()
 	h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(store))
 
-	content := []byte("PNG-ish bytes")
+	content := pngBytes("PNG-ish bytes")
 	meta := uploadOneSkillIcon(t, h, "7", "my-icon.png", content)
 
 	name, _ := meta["name"].(string)
@@ -226,7 +226,7 @@ func TestSkillIconListingIsScopedToSkillIconsAndToTheProject(t *testing.T) {
 	store := newListableIconStore()
 	h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(store))
 
-	skillIcon := uploadOneSkillIcon(t, h, "7", "skill.png", []byte("a"))
+	skillIcon := uploadOneSkillIcon(t, h, "7", "skill.png", pngBytes("a"))
 	// An AGENT icon in the same project lands in the same bucket without the
 	// prefix. It must not appear in the skill gallery — that separation is the
 	// entire reason the prefix exists.
@@ -234,7 +234,7 @@ func TestSkillIconListingIsScopedToSkillIconsAndToTheProject(t *testing.T) {
 	h.UploadIcon(agentRec, iconUploadRequest(t, "7", "agent.png", []byte("b")))
 	assertStatus(t, agentRec, http.StatusOK)
 	// A skill icon in a DIFFERENT project must not appear either.
-	uploadOneSkillIcon(t, h, "8", "other.png", []byte("c"))
+	uploadOneSkillIcon(t, h, "8", "other.png", pngBytes("c"))
 
 	listRec := httptest.NewRecorder()
 	h.ListSkillIcons(listRec, newRequest(http.MethodGet, "/", map[string]string{"projectID": "7"}, nil))
@@ -254,7 +254,7 @@ func TestSkillIconListingPaginatesLikeTheLegacySlice(t *testing.T) {
 	store := newListableIconStore()
 	h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(store))
 	for range 3 {
-		uploadOneSkillIcon(t, h, "7", "icon.png", []byte("x"))
+		uploadOneSkillIcon(t, h, "7", "icon.png", pngBytes("x"))
 	}
 
 	for _, testCase := range []struct {
@@ -327,9 +327,68 @@ func TestSkillIconUploadStoresOnlyAllowlistedExtensions(t *testing.T) {
 	// The stored-XSS boundary the agent family already established: an .html
 	// part is stored as .png, so the public download route can never serve it
 	// as script in the app's own origin.
-	meta := uploadOneSkillIcon(t, h, "7", "payload.html", []byte("<script>alert(1)</script>"))
+	meta := uploadOneSkillIcon(t, h, "7", "payload.html", pngBytes("<script>alert(1)</script>"))
 	if name, _ := meta["name"].(string); !strings.HasSuffix(name, ".png") {
 		t.Fatalf("stored name = %v, want the .png fallback", meta["name"])
+	}
+}
+
+// pngBytes is a payload that sniffs as a PNG: the 8-byte signature followed by
+// whatever the test wants to recognise later.
+func pngBytes(rest string) []byte {
+	return append([]byte("\x89PNG\r\n\x1a\n"), rest...)
+}
+
+// #2107: the format is validated from the bytes, with a message the picker can
+// show, and nothing is stored for a refused upload.
+func TestSkillIconUploadRefusesAnUnsupportedFormatAndStoresNothing(t *testing.T) {
+	cases := map[string]struct {
+		filename string
+		content  []byte
+	}{
+		"text named as png": {"icon.png", []byte("not an image at all")},
+		"html":              {"payload.html", []byte("<script>alert(1)</script>")},
+		"svg markup":        {"icon.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`)},
+		"tiff":              {"icon.tiff", []byte("II*\x00\x08\x00\x00\x00")},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := newListableIconStore()
+			h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(store))
+
+			rec := httptest.NewRecorder()
+			h.UploadSkillIcon(rec, skillIconUploadRequest(t, "7", tc.filename, tc.content, nil))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+			}
+			if msg, _ := decodeObj(t, rec)["error"].(string); !strings.Contains(msg, "Unsupported file format") {
+				t.Fatalf("error = %q, want the unsupported-format message", msg)
+			}
+
+			listRec := httptest.NewRecorder()
+			h.ListSkillIcons(listRec, newRequest(http.MethodGet, "/", map[string]string{"projectID": "7"}, nil))
+			if total, _ := decodeObj(t, listRec)["total"].(float64); total != 0 {
+				t.Fatalf("a refused upload left an object behind: total = %v", total)
+			}
+		})
+	}
+}
+
+func TestSkillIconUploadRefusesAnEmptyFile(t *testing.T) {
+	h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(newListableIconStore()))
+	rec := httptest.NewRecorder()
+	h.UploadSkillIcon(rec, skillIconUploadRequest(t, "7", "icon.png", nil, nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestSkillIconUploadStoresTheExtensionOfWhatTheBytesAre(t *testing.T) {
+	h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(newListableIconStore()))
+	jpeg := append([]byte("\xff\xd8\xff\xe0\x00\x10JFIF"), make([]byte, 32)...)
+	meta := uploadOneSkillIcon(t, h, "7", "photo.png", jpeg)
+	if name, _ := meta["name"].(string); !strings.HasSuffix(name, ".jpg") {
+		t.Fatalf("stored name = %v, want .jpg for JPEG bytes sent as photo.png", meta["name"])
 	}
 }
 
@@ -338,7 +397,7 @@ func TestSkillIconUploadDeclaresTheClampedBox(t *testing.T) {
 	h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(store))
 
 	rec := httptest.NewRecorder()
-	h.UploadSkillIcon(rec, skillIconUploadRequest(t, "7", "icon.png", []byte("x"),
+	h.UploadSkillIcon(rec, skillIconUploadRequest(t, "7", "icon.png", pngBytes("x"),
 		map[string]string{"width": "512", "height": "0"}))
 	assertStatus(t, rec, http.StatusOK)
 	if size := decodeObj(t, rec)["size"]; size != "64x1" {
@@ -375,7 +434,7 @@ func TestSkillIconDeleteRemovesTheObjectAndTheListingEntry(t *testing.T) {
 	store := newListableIconStore()
 	h := eliteacore.NewHandler(nil, eliteacore.WithObjectStore(store))
 
-	meta := uploadOneSkillIcon(t, h, "7", "icon.png", []byte("bytes"))
+	meta := uploadOneSkillIcon(t, h, "7", "icon.png", pngBytes("bytes"))
 	name, _ := meta["name"].(string)
 
 	rec := httptest.NewRecorder()

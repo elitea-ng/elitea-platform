@@ -46,6 +46,8 @@ export interface ModalActionsOptions {
   alarm?: boolean;
   /** Disables the confirm button while a confirm action is in flight. */
   confirming?: boolean;
+  /** Disables the confirm button because the content is not yet valid (e.g. a duplicate name). */
+  confirmDisabled?: boolean;
 }
 
 /** @public shared/ui component API — consumed once a features/widgets/pages caller exists (none does yet in this pass). */
@@ -99,7 +101,7 @@ function ModalActions({ actions, onClose, onConfirm }: ModalActionsProps): React
           variant="contained"
           color={actions?.alarm ? 'error' : 'primary'}
           onClick={onConfirm}
-          disabled={actions?.confirming}
+          disabled={actions?.confirming === true || actions?.confirmDisabled === true}
         >
           {actions?.confirmText ?? t('shared.ui.baseModal.confirm', 'Confirm')}
         </BaseBtn>

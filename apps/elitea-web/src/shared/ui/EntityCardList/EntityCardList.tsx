@@ -55,6 +55,8 @@ export interface EntityCardListProps {
   };
   /** Per-card top-right slot (publish/pin/status affordances). */
   readonly renderCardActions?: (item: EntityListItem) => ReactNode;
+  /** The table view's Actions column: a three-dot menu per row. Absent means no such column. */
+  readonly renderRowActions?: (item: EntityListItem) => ReactNode;
 }
 
 /**
@@ -120,14 +122,17 @@ function ListStates({ items, isLoading = false, isError = false, errorMessage, e
 type ListRowsProps = Omit<EntityCardListProps, 'isLoading' | 'isError' | 'errorMessage' | 'emptyState'>;
 
 /** The populated list itself: the `?view=`-selected rendering plus the optional pagination footer. */
-function ListRows({ items, view, onTagClick, pagination, renderCardActions }: ListRowsProps): ReactNode {
+function ListRows({ items, view, onTagClick, pagination, renderCardActions, renderRowActions }: ListRowsProps): ReactNode {
   const searchView = useSearchView();
   const isTable = (view ?? searchView) === ENTITY_LIST_VIEW.table;
   return (
     <>
       {isTable ? (
         <Box sx={tableScrollSx}>
-          <EntityListTable items={items} />
+          <EntityListTable
+            items={items}
+            {...(renderRowActions === undefined ? {} : { renderRowActions })}
+          />
         </Box>
       ) : (
         <Box sx={gridSx}>
