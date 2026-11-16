@@ -133,17 +133,32 @@ async function listVersions(github, org, name) {
   }
 }
 
-async function deleteVersion(github, org, name, id) {
-  try {
-    await github.rest.packages.deletePackageVersionForOrg({
-      package_type: "container",
-      package_name: name,
-      org,
-      package_version_id: id,
-    });
-  } catch (error) {
-    if (error && error.status === 404) return;
-    throw new Error(`DELETE /orgs/${org}/packages/container/${encodeURIComponent(name)}/versions/${id} failed: ${error && error.message}`);
+const DELETE_ATTEMPTS = 4;
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The packages API answers a DELETE with a 502 now and then (a run on
+// 2026-11-16 died on one after 10 s). The same DELETE succeeds a moment
+// later, and a version already gone is a 404, so a server-side or rate-limit
+// failure is retried before it fails the run.
+async function deleteVersion(github, org, name, id, sleep = defaultSleep) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await github.rest.packages.deletePackageVersionForOrg({
+        package_type: "container",
+        package_name: name,
+        org,
+        package_version_id: id,
+      });
+      return;
+    } catch (error) {
+      if (error && error.status === 404) return;
+      const transient = error && (error.status === 429 || error.status >= 500);
+      if (transient && attempt < DELETE_ATTEMPTS) {
+        await sleep(2000 * attempt);
+        continue;
+      }
+      throw new Error(`DELETE /orgs/${org}/packages/container/${encodeURIComponent(name)}/versions/${id} failed: ${error && error.message}`);
+    }
   }
 }
 
@@ -152,7 +167,7 @@ async function deleteVersion(github, org, name, id) {
  * returns the exit code the Python script had: 0, 1 (too few package names),
  * 2 (a bad --days). A failed API call throws.
  */
-export async function main({ github, org, days = 7, dryRun = false, now = new Date(), root = ROOT, log = console.log }) {
+export async function main({ github, org, days = 7, dryRun = false, now = new Date(), root = ROOT, log = console.log, sleep = defaultSleep }) {
   const text = String(days).trim();
   if (!/^[-+]?\d+$/.test(text)) {
     log(`::error::--days: invalid int value: ${pyRepr(String(days))}`);
@@ -193,7 +208,7 @@ export async function main({ github, org, days = 7, dryRun = false, now = new Da
         log(`  would delete ${label}`);
         continue;
       }
-      await deleteVersion(github, org, name, version.id);
+      await deleteVersion(github, org, name, version.id, sleep);
       log(`  deleted ${label}`);
       deleted += 1;
     }
