@@ -6810,5 +6810,7 @@
   "pages.agents.origin.yankedNext": "Upgrade it to another version.",
   "pages.agents.origin.yankedPlain": "This version was yanked. Your agent keeps running. {{next}}",
   "pages.agents.origin.yankedReason": "This version was yanked: {{reason}} Your agent keeps running. {{next}}",
-  "marketplace.upgrade.noVersions": "This listing has no other version to move to. Open the listing to see its versions."
+  "marketplace.upgrade.noVersions": "This listing has no other version to move to. Open the listing to see its versions.",
+  "features.agentLifecycle.changeRequest.upgradeNote": "The agent keeps running on its current version until this upgrade is approved.",
+  "features.agentLifecycle.changeRequest.upstreamNote": "The fork keeps its current origin until this upstream merge is approved. The merge is saved as a draft of the fork."
 }
