@@ -2005,6 +2005,36 @@ impl Runner<'_> {
             .collect()
     }
 
+    /// The sentence naming the ignored chunking settings of the file types
+    /// this run listed. The form sends a default for every extension, and
+    /// naming settings of types the source does not hold is noise the user
+    /// did not ask for (#2106).
+    fn ignored_settings_sentence(&self, plan: &RunPlan) -> Option<String> {
+        let listed: BTreeSet<String> = plan
+            .to_write
+            .iter()
+            .map(|(reference, _)| elitea_doc_chunk::extension_of(&reference.key))
+            .filter(|extension| !extension.is_empty())
+            .collect();
+        let ignored: Vec<&str> = self
+            .ignored_loader_keys
+            .iter()
+            .map(String::as_str)
+            .filter(|key| {
+                listed.iter().any(|extension| {
+                    key.strip_prefix(extension.as_str())
+                        .is_some_and(|rest| rest.starts_with('.'))
+                })
+            })
+            .collect();
+        (!ignored.is_empty()).then(|| {
+            format!(
+                " Ignored chunking settings this worker does not read: {}.",
+                ignored.join(", ")
+            )
+        })
+    }
+
     /// The summary of a run that went through: the counts, the store's
     /// totals and record, the stamp.
     fn summary(self, plan: &RunPlan) -> IndexIngestSummaryV1 {
@@ -2103,32 +2133,8 @@ impl Runner<'_> {
                 plan.out_of_scope.0
             );
         }
-        // Only the settings of file types this run listed: the form sends a
-        // default for every extension, and naming settings of types the
-        // source does not hold is noise the user did not ask for.
-        let listed: BTreeSet<String> = plan
-            .to_write
-            .iter()
-            .map(|(reference, _)| elitea_doc_chunk::extension_of(&reference.key))
-            .filter(|extension| !extension.is_empty())
-            .collect();
-        let ignored: Vec<&str> = self
-            .ignored_loader_keys
-            .iter()
-            .map(String::as_str)
-            .filter(|key| {
-                listed.iter().any(|extension| {
-                    key.strip_prefix(extension.as_str())
-                        .is_some_and(|rest| rest.starts_with('.'))
-                })
-            })
-            .collect();
-        if !ignored.is_empty() {
-            let _ = write!(
-                message,
-                " Ignored chunking settings this worker does not read: {}.",
-                ignored.join(", ")
-            );
+        if let Some(sentence) = self.ignored_settings_sentence(plan) {
+            message.push_str(&sentence);
         }
         self.with_record(status, state, message, plan)
     }
