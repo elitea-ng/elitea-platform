@@ -1131,10 +1131,19 @@ fn history_author(
     NativeAgentAssemblyError,
 > {
     use elitea_agent_runtime::untrusted::MessageAuthorKind;
-    match additional.len() {
-        0 => return Ok(None),
-        1 => {}
-        _ => return Err(invalid_profile()),
+    if additional.is_empty() {
+        return Ok(None);
+    }
+    // #2122: a message the asker wrote to PEOPLE (a people-only post) carries
+    // `elitea_addressed: "people"` beside its author. Refusing the second key
+    // failed every later turn of a conversation holding one with "The execution
+    // input is invalid.". It is admitted in the one shape Main writes, and only
+    // beside an author; the marker itself changes nothing the model reads.
+    let marker = additional.get("elitea_addressed");
+    if additional.len() != 1 + usize::from(marker.is_some())
+        || marker.is_some_and(|marker| marker.as_str() != Some("people"))
+    {
+        return Err(invalid_profile());
     }
     let author = additional
         .get("elitea_author")

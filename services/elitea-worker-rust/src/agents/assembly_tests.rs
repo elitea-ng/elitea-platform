@@ -594,6 +594,50 @@ fn unsupported_and_malformed_effect_surfaces_are_rejected_before_redemption() {
     }
 }
 
+/// #2122: a people-only post (`@Sam hi`) reaches the next turn's history with
+/// `elitea_addressed: "people"` beside its author. The worker used to refuse
+/// the second key, so every later turn answered "The execution input is
+/// invalid.".
+#[test]
+fn people_only_history_message_is_admitted_with_its_addressed_marker() {
+    let people = |marker: Value| {
+        json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "@Sam hi"}],
+            "additional_kwargs": {
+                "elitea_author": {"kind": "person", "name": "Alex"},
+                "elitea_addressed": marker
+            }
+        })
+    };
+    for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
+        let mut request = ordinary_request(kind);
+        request.payload.chat_history = vec![people(json!("people"))];
+        let profile = OrdinaryNoToolProfile::validate(&request).expect("people-only history");
+        assert_eq!(profile.chat_history().len(), 1);
+        assert_eq!(profile.chat_history()[0].role, "user");
+    }
+    // Only the one value Main writes, and only beside an author.
+    for history in [
+        vec![people(json!("everyone"))],
+        vec![people(json!(true))],
+        vec![json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "earlier"}],
+            "additional_kwargs": {"elitea_addressed": "people"}
+        })],
+    ] {
+        let mut request = ordinary_request(AgentExecutionKind::Application);
+        request.payload.chat_history = history;
+        assert_eq!(
+            OrdinaryNoToolProfile::validate(&request)
+                .expect_err("a marker outside the frozen shape")
+                .code(),
+            NativeAgentAssemblyErrorCode::InvalidInput
+        );
+    }
+}
+
 #[test]
 fn current_main_text_history_is_normalized_before_credential_redemption() {
     for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {

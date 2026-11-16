@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Chat fixes: renamed agents, tagged people, the X button and Save
+
+A renamed agent now shows its current name in the participants panel and on its messages, not the name it had when it joined the conversation. After you tag a person with `@` and send, the next message to the model no longer fails with "The execution input is invalid." (upgrade the worker with Main). The **X** next to the agent or pipeline in the message bar now switches the conversation back to the model. In the agent and pipeline editor opened from a chat, **Save** is enabled only while there is something to save, and a save refreshes the panel.
+
 ## Likes on skills, and Most liked
 
 Skill cards and skill listings now have the heart that agents have, with the count and your own like. On a card the heart sits beside the card's link, so liking never opens the listing. The Marketplace sort has a new **Most liked** option that orders agents and skills together by their likes. A like on a skill is not a like on an agent, even when they share a number. See [Marketplace](/menus/marketplace).
