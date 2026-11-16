@@ -334,6 +334,16 @@ describe('client contract 1.52', () => {
   });
 });
 
+describe('client contract 1.55', () => {
+  it('reads the feedback of a Marketplace listing (issue 1631)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 55), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.55`);
+    assert.ok(doc.paths['/elitea_core/marketplace_feedback/prompt_lib/{project_id}/{listing_id}'].get);
+    assert.ok(doc.paths['/elitea_core/marketplace_listings/prompt_lib/{project_id}'].get);
+  });
+});
+
 describe('client contract 1.54', () => {
   it('renames an artifact file with moveObject (issue 2015)', () => {
     const { doc } = buildContract();

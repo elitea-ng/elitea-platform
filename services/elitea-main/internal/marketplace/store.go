@@ -287,6 +287,17 @@ func PublisherOf(ctx context.Context, db DB, listingID int64) (int64, error) {
 // publisher withdrew more than olderThanDays ago, and the listings
 // left with no version at all (ADR-0051 decision 2: the retention of ADR-0042).
 func PurgeUnheld(ctx context.Context, db DB, olderThanDays int) (int64, error) {
+	// A dismissed hire holds nothing: its agent is gone. Drop those rows first, or
+	// the restricting foreign key would keep the snapshot for ever.
+	if _, err := db.Exec(ctx, `
+DELETE FROM elitea_marketplace.installs AS d
+USING elitea_marketplace.listing_versions AS v
+WHERE d.dismissed_at IS NOT NULL AND d.listing_id = v.listing_id AND d.version_id = v.version_id
+  AND v.withdrawn_at < clock_timestamp() - make_interval(days => $1)
+  AND NOT EXISTS (SELECT 1 FROM elitea_marketplace.installs a
+                  WHERE a.listing_id = v.listing_id AND a.version_id = v.version_id AND a.dismissed_at IS NULL)`, olderThanDays); err != nil {
+		return 0, fmt.Errorf("marketplace: drop the dismissed hires: %w", err)
+	}
 	tag, err := db.Exec(ctx, `
 DELETE FROM elitea_marketplace.listing_versions AS v
 WHERE (v.withdrawn_at < clock_timestamp() - make_interval(days => $1))

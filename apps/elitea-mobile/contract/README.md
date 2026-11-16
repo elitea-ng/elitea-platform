@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.55
+
+| Area | What |
+|---|---|
+| Listing feedback (issue 1631, ADR-0051 M5) | `searchMarketplaceListings` finds the listing of a public agent (`entity_id`); `getMarketplaceFeedback` answers its reviews and workforce reports, the rating distribution per version and the signals. The Discover agent sheet shows the rating, the signals and the newest items, read-only (`src/api/queries/marketplaceFeedback.ts`). No item carries a project id or name. A server before 1.55 has no feedback; the section is left out. |
+
 ## Client contract 1.54
 
 | Area | What |

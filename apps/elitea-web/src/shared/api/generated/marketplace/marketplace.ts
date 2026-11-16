@@ -54,11 +54,17 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  ClientUpgradeRequiredResponse,
   ErrorResponse,
+  GetMarketplaceFeedbackParams,
   GetMarketplaceUpgradePlanParams,
   GetMarketplaceUpstreamReviewParams,
   MarketplaceBindingsRequest,
   MarketplaceBindingsState,
+  MarketplaceFeedback,
+  MarketplaceFeedbackActionRequest,
+  MarketplaceFeedbackActionResult,
+  MarketplaceFeedbackSaved,
   MarketplaceHireRequest,
   MarketplaceHireResult,
   MarketplaceListingDetail,
@@ -66,6 +72,8 @@ import type {
   MarketplaceListingSummary,
   MarketplaceListingUpdateRequest,
   MarketplaceOrigin,
+  MarketplaceReportRequest,
+  MarketplaceReviewRequest,
   MarketplaceUpgradePlan,
   MarketplaceUpgradePolicy,
   MarketplaceUpgradeRequest,
@@ -124,6 +132,11 @@ export type searchMarketplaceListingsResponse403 = {
   status: 403;
 };
 
+export type searchMarketplaceListingsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type searchMarketplaceListingsResponseSuccess =
   searchMarketplaceListingsResponse200 & {
     headers: Headers;
@@ -132,6 +145,7 @@ export type searchMarketplaceListingsResponseError = (
   | searchMarketplaceListingsResponse400
   | searchMarketplaceListingsResponse401
   | searchMarketplaceListingsResponse403
+  | searchMarketplaceListingsResponse426
 ) & {
   headers: Headers;
 };
@@ -197,7 +211,8 @@ export const getSearchMarketplaceListingsQueryKey = (
 
 export const getSearchMarketplaceListingsQueryOptions = <
   TData = Awaited<ReturnType<typeof searchMarketplaceListings>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: SearchMarketplaceListingsParams,
@@ -239,11 +254,12 @@ export type SearchMarketplaceListingsQueryResult = NonNullable<
   Awaited<ReturnType<typeof searchMarketplaceListings>>
 >;
 export type SearchMarketplaceListingsQueryError =
-  N400Response | N401Response | N403Response;
+  N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse;
 
 export function useSearchMarketplaceListings<
   TData = Awaited<ReturnType<typeof searchMarketplaceListings>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params: undefined | SearchMarketplaceListingsParams,
@@ -271,7 +287,8 @@ export function useSearchMarketplaceListings<
 };
 export function useSearchMarketplaceListings<
   TData = Awaited<ReturnType<typeof searchMarketplaceListings>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: SearchMarketplaceListingsParams,
@@ -299,7 +316,8 @@ export function useSearchMarketplaceListings<
 };
 export function useSearchMarketplaceListings<
   TData = Awaited<ReturnType<typeof searchMarketplaceListings>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: SearchMarketplaceListingsParams,
@@ -323,7 +341,8 @@ export function useSearchMarketplaceListings<
 
 export function useSearchMarketplaceListings<
   TData = Awaited<ReturnType<typeof searchMarketplaceListings>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: SearchMarketplaceListingsParams,
@@ -2239,6 +2258,1210 @@ export function useSetMarketplaceBindings<
     projectId,
     applicationId,
     marketplaceBindingsRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getMarketplaceFeedbackResponse200 = {
+  data: MarketplaceFeedback;
+  status: 200;
+};
+
+export type getMarketplaceFeedbackResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type getMarketplaceFeedbackResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getMarketplaceFeedbackResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getMarketplaceFeedbackResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getMarketplaceFeedbackResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getMarketplaceFeedbackResponseSuccess =
+  getMarketplaceFeedbackResponse200 & {
+    headers: Headers;
+  };
+export type getMarketplaceFeedbackResponseError = (
+  | getMarketplaceFeedbackResponse400
+  | getMarketplaceFeedbackResponse401
+  | getMarketplaceFeedbackResponse403
+  | getMarketplaceFeedbackResponse404
+  | getMarketplaceFeedbackResponse426
+) & {
+  headers: Headers;
+};
+
+export type getMarketplaceFeedbackResponse =
+  getMarketplaceFeedbackResponseSuccess | getMarketplaceFeedbackResponseError;
+
+export const getGetMarketplaceFeedbackUrl = (
+  projectId: string,
+  listingId: string,
+  params?: GetMarketplaceFeedbackParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/marketplace_feedback/prompt_lib/${projectId}/${listingId}?${stringifiedParams}`
+    : `/elitea_core/marketplace_feedback/prompt_lib/${projectId}/${listingId}`;
+};
+
+/**
+ * A page of reviews and workforce reports, newest first, the rating
+ * distribution of each version and the signals beside it. `version_id`
+ * filters the items to one version and `kind` to one kind. A hidden item
+ * is shown only to a platform administrator and to its author. No item
+ * carries a project id or a project name: a review names its author, and
+ * a workforce report reads "Workforce report from a hiring project"
+ * (internal/api/v2/eliteacore/marketplace_feedback.go).
+ * @summary The Feedback section of a listing
+ */
+export const getMarketplaceFeedback = async (
+  projectId: string,
+  listingId: string,
+  params?: GetMarketplaceFeedbackParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getMarketplaceFeedbackResponse> => {
+  return eliteaFetch<getMarketplaceFeedbackResponse>(
+    getGetMarketplaceFeedbackUrl(projectId, listingId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetMarketplaceFeedbackQueryKey = (
+  projectId: string,
+  listingId: string,
+  params?: GetMarketplaceFeedbackParams,
+) => {
+  return [
+    `/elitea_core/marketplace_feedback/prompt_lib/${projectId}/${listingId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetMarketplaceFeedbackQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  listingId: string,
+  params?: GetMarketplaceFeedbackParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetMarketplaceFeedbackQueryKey(projectId, listingId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMarketplaceFeedback>>
+  > = ({ signal }) =>
+    getMarketplaceFeedback(projectId, listingId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      listingId !== null &&
+      listingId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetMarketplaceFeedbackQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMarketplaceFeedback>>
+>;
+export type GetMarketplaceFeedbackQueryError =
+  | N400Response
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse;
+
+export function useGetMarketplaceFeedback<
+  TData = Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  listingId: string,
+  params: undefined | GetMarketplaceFeedbackParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof getMarketplaceFeedback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMarketplaceFeedback<
+  TData = Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  listingId: string,
+  params?: GetMarketplaceFeedbackParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof getMarketplaceFeedback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMarketplaceFeedback<
+  TData = Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  listingId: string,
+  params?: GetMarketplaceFeedbackParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The Feedback section of a listing
+ */
+
+export function useGetMarketplaceFeedback<
+  TData = Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  listingId: string,
+  params?: GetMarketplaceFeedbackParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetMarketplaceFeedbackQueryOptions(
+    projectId,
+    listingId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type saveMarketplaceReviewResponse200 = {
+  data: MarketplaceFeedbackSaved;
+  status: 200;
+};
+
+export type saveMarketplaceReviewResponse201 = {
+  data: MarketplaceFeedbackSaved;
+  status: 201;
+};
+
+export type saveMarketplaceReviewResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type saveMarketplaceReviewResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type saveMarketplaceReviewResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type saveMarketplaceReviewResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type saveMarketplaceReviewResponseSuccess = (
+  saveMarketplaceReviewResponse200 | saveMarketplaceReviewResponse201
+) & {
+  headers: Headers;
+};
+export type saveMarketplaceReviewResponseError = (
+  | saveMarketplaceReviewResponse400
+  | saveMarketplaceReviewResponse401
+  | saveMarketplaceReviewResponse403
+  | saveMarketplaceReviewResponse404
+) & {
+  headers: Headers;
+};
+
+export type saveMarketplaceReviewResponse =
+  saveMarketplaceReviewResponseSuccess | saveMarketplaceReviewResponseError;
+
+export const getSaveMarketplaceReviewUrl = (
+  projectId: string,
+  listingId: string,
+) => {
+  return `/elitea_core/marketplace_feedback/prompt_lib/${projectId}/${listingId}`;
+};
+
+/**
+ * Only a person in a project that hired the listing may review it, once
+ * per listing; a second request edits the review and keeps the
+ * publisher's reply. The publisher cannot review their own listing
+ * (internal/api/v2/eliteacore/marketplace_feedback.go).
+ * @summary Review a listing the project hired
+ */
+export const saveMarketplaceReview = async (
+  projectId: string,
+  listingId: string,
+  marketplaceReviewRequest: MarketplaceReviewRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<saveMarketplaceReviewResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<saveMarketplaceReviewResponse>(
+    getSaveMarketplaceReviewUrl(projectId, listingId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(marketplaceReviewRequest),
+    },
+  );
+};
+
+export const getSaveMarketplaceReviewQueryKey = (
+  projectId: string,
+  listingId: string,
+  marketplaceReviewRequest?: MarketplaceReviewRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/marketplace_feedback/prompt_lib/${projectId}/${listingId}`,
+    marketplaceReviewRequest,
+  ] as const;
+};
+
+export const getSaveMarketplaceReviewQueryOptions = <
+  TData = Awaited<ReturnType<typeof saveMarketplaceReview>>,
+  TError = N400Response | N401Response | ErrorResponse | N404Response,
+>(
+  projectId: string,
+  listingId: string,
+  marketplaceReviewRequest: MarketplaceReviewRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMarketplaceReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSaveMarketplaceReviewQueryKey(
+      projectId,
+      listingId,
+      marketplaceReviewRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof saveMarketplaceReview>>
+  > = ({ signal }) =>
+    saveMarketplaceReview(projectId, listingId, marketplaceReviewRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      listingId !== null &&
+      listingId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof saveMarketplaceReview>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SaveMarketplaceReviewQueryResult = NonNullable<
+  Awaited<ReturnType<typeof saveMarketplaceReview>>
+>;
+export type SaveMarketplaceReviewQueryError =
+  N400Response | N401Response | ErrorResponse | N404Response;
+
+export function useSaveMarketplaceReview<
+  TData = Awaited<ReturnType<typeof saveMarketplaceReview>>,
+  TError = N400Response | N401Response | ErrorResponse | N404Response,
+>(
+  projectId: string,
+  listingId: string,
+  marketplaceReviewRequest: MarketplaceReviewRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMarketplaceReview>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveMarketplaceReview>>,
+          TError,
+          Awaited<ReturnType<typeof saveMarketplaceReview>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveMarketplaceReview<
+  TData = Awaited<ReturnType<typeof saveMarketplaceReview>>,
+  TError = N400Response | N401Response | ErrorResponse | N404Response,
+>(
+  projectId: string,
+  listingId: string,
+  marketplaceReviewRequest: MarketplaceReviewRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMarketplaceReview>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveMarketplaceReview>>,
+          TError,
+          Awaited<ReturnType<typeof saveMarketplaceReview>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveMarketplaceReview<
+  TData = Awaited<ReturnType<typeof saveMarketplaceReview>>,
+  TError = N400Response | N401Response | ErrorResponse | N404Response,
+>(
+  projectId: string,
+  listingId: string,
+  marketplaceReviewRequest: MarketplaceReviewRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMarketplaceReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Review a listing the project hired
+ */
+
+export function useSaveMarketplaceReview<
+  TData = Awaited<ReturnType<typeof saveMarketplaceReview>>,
+  TError = N400Response | N401Response | ErrorResponse | N404Response,
+>(
+  projectId: string,
+  listingId: string,
+  marketplaceReviewRequest: MarketplaceReviewRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMarketplaceReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSaveMarketplaceReviewQueryOptions(
+    projectId,
+    listingId,
+    marketplaceReviewRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type saveMarketplaceWorkforceReportResponse201 = {
+  data: MarketplaceFeedbackSaved;
+  status: 201;
+};
+
+export type saveMarketplaceWorkforceReportResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type saveMarketplaceWorkforceReportResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type saveMarketplaceWorkforceReportResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type saveMarketplaceWorkforceReportResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type saveMarketplaceWorkforceReportResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type saveMarketplaceWorkforceReportResponseSuccess =
+  saveMarketplaceWorkforceReportResponse201 & {
+    headers: Headers;
+  };
+export type saveMarketplaceWorkforceReportResponseError = (
+  | saveMarketplaceWorkforceReportResponse400
+  | saveMarketplaceWorkforceReportResponse401
+  | saveMarketplaceWorkforceReportResponse403
+  | saveMarketplaceWorkforceReportResponse404
+  | saveMarketplaceWorkforceReportResponse409
+) & {
+  headers: Headers;
+};
+
+export type saveMarketplaceWorkforceReportResponse =
+  | saveMarketplaceWorkforceReportResponseSuccess
+  | saveMarketplaceWorkforceReportResponseError;
+
+export const getSaveMarketplaceWorkforceReportUrl = (
+  projectId: string,
+  listingId: string,
+) => {
+  return `/elitea_core/marketplace_feedback_report/prompt_lib/${projectId}/${listingId}`;
+};
+
+/**
+ * The caller approves and publishes a workforce manager's report on the
+ * listing version a hired agent was installed from. The agent must be a
+ * workforce manager of the project, the project must have hired the
+ * listing and not published it, and there is one report per hired agent
+ * and stage. The scorecard summary is filled by the platform
+ * (internal/api/v2/eliteacore/marketplace_feedback.go).
+ * @summary Publish a workforce report on a hired agent
+ */
+export const saveMarketplaceWorkforceReport = async (
+  projectId: string,
+  listingId: string,
+  marketplaceReportRequest: MarketplaceReportRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<saveMarketplaceWorkforceReportResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<saveMarketplaceWorkforceReportResponse>(
+    getSaveMarketplaceWorkforceReportUrl(projectId, listingId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(marketplaceReportRequest),
+    },
+  );
+};
+
+export const getSaveMarketplaceWorkforceReportQueryKey = (
+  projectId: string,
+  listingId: string,
+  marketplaceReportRequest?: MarketplaceReportRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/marketplace_feedback_report/prompt_lib/${projectId}/${listingId}`,
+    marketplaceReportRequest,
+  ] as const;
+};
+
+export const getSaveMarketplaceWorkforceReportQueryOptions = <
+  TData = Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+  TError = N400Response | N401Response | ErrorResponse | N404Response,
+>(
+  projectId: string,
+  listingId: string,
+  marketplaceReportRequest: MarketplaceReportRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSaveMarketplaceWorkforceReportQueryKey(
+      projectId,
+      listingId,
+      marketplaceReportRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>
+  > = ({ signal }) =>
+    saveMarketplaceWorkforceReport(
+      projectId,
+      listingId,
+      marketplaceReportRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      listingId !== null &&
+      listingId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SaveMarketplaceWorkforceReportQueryResult = NonNullable<
+  Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>
+>;
+export type SaveMarketplaceWorkforceReportQueryError =
+  N400Response | N401Response | ErrorResponse | N404Response;
+
+export function useSaveMarketplaceWorkforceReport<
+  TData = Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+  TError = N400Response | N401Response | ErrorResponse | N404Response,
+>(
+  projectId: string,
+  listingId: string,
+  marketplaceReportRequest: MarketplaceReportRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+          TError,
+          Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveMarketplaceWorkforceReport<
+  TData = Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+  TError = N400Response | N401Response | ErrorResponse | N404Response,
+>(
+  projectId: string,
+  listingId: string,
+  marketplaceReportRequest: MarketplaceReportRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+          TError,
+          Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSaveMarketplaceWorkforceReport<
+  TData = Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+  TError = N400Response | N401Response | ErrorResponse | N404Response,
+>(
+  projectId: string,
+  listingId: string,
+  marketplaceReportRequest: MarketplaceReportRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Publish a workforce report on a hired agent
+ */
+
+export function useSaveMarketplaceWorkforceReport<
+  TData = Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+  TError = N400Response | N401Response | ErrorResponse | N404Response,
+>(
+  projectId: string,
+  listingId: string,
+  marketplaceReportRequest: MarketplaceReportRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof saveMarketplaceWorkforceReport>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSaveMarketplaceWorkforceReportQueryOptions(
+    projectId,
+    listingId,
+    marketplaceReportRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type actOnMarketplaceFeedbackResponse200 = {
+  data: MarketplaceFeedbackActionResult;
+  status: 200;
+};
+
+export type actOnMarketplaceFeedbackResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type actOnMarketplaceFeedbackResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type actOnMarketplaceFeedbackResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type actOnMarketplaceFeedbackResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type actOnMarketplaceFeedbackResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type actOnMarketplaceFeedbackResponseSuccess =
+  actOnMarketplaceFeedbackResponse200 & {
+    headers: Headers;
+  };
+export type actOnMarketplaceFeedbackResponseError = (
+  | actOnMarketplaceFeedbackResponse400
+  | actOnMarketplaceFeedbackResponse401
+  | actOnMarketplaceFeedbackResponse403
+  | actOnMarketplaceFeedbackResponse404
+  | actOnMarketplaceFeedbackResponse409
+) & {
+  headers: Headers;
+};
+
+export type actOnMarketplaceFeedbackResponse =
+  | actOnMarketplaceFeedbackResponseSuccess
+  | actOnMarketplaceFeedbackResponseError;
+
+export const getActOnMarketplaceFeedbackUrl = (
+  projectId: string,
+  listingId: string,
+  feedbackId: string,
+) => {
+  return `/elitea_core/marketplace_feedback_action/prompt_lib/${projectId}/${listingId}/${feedbackId}`;
+};
+
+/**
+ * The publisher replies once per item and may flag it. A platform
+ * administrator flags, unflags, hides and unhides; a hidden review leaves
+ * the rating. Every change writes an audit event
+ * (internal/api/v2/eliteacore/marketplace_feedback.go).
+ * @summary Reply to, flag or hide an item of feedback
+ */
+export const actOnMarketplaceFeedback = async (
+  projectId: string,
+  listingId: string,
+  feedbackId: string,
+  marketplaceFeedbackActionRequest: MarketplaceFeedbackActionRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<actOnMarketplaceFeedbackResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<actOnMarketplaceFeedbackResponse>(
+    getActOnMarketplaceFeedbackUrl(projectId, listingId, feedbackId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(marketplaceFeedbackActionRequest),
+    },
+  );
+};
+
+export const getActOnMarketplaceFeedbackQueryKey = (
+  projectId: string,
+  listingId: string,
+  feedbackId: string,
+  marketplaceFeedbackActionRequest?: MarketplaceFeedbackActionRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/marketplace_feedback_action/prompt_lib/${projectId}/${listingId}/${feedbackId}`,
+    marketplaceFeedbackActionRequest,
+  ] as const;
+};
+
+export const getActOnMarketplaceFeedbackQueryOptions = <
+  TData = Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  listingId: string,
+  feedbackId: string,
+  marketplaceFeedbackActionRequest: MarketplaceFeedbackActionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getActOnMarketplaceFeedbackQueryKey(
+      projectId,
+      listingId,
+      feedbackId,
+      marketplaceFeedbackActionRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof actOnMarketplaceFeedback>>
+  > = ({ signal }) =>
+    actOnMarketplaceFeedback(
+      projectId,
+      listingId,
+      feedbackId,
+      marketplaceFeedbackActionRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      listingId !== null &&
+      listingId !== undefined &&
+      feedbackId !== null &&
+      feedbackId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ActOnMarketplaceFeedbackQueryResult = NonNullable<
+  Awaited<ReturnType<typeof actOnMarketplaceFeedback>>
+>;
+export type ActOnMarketplaceFeedbackQueryError =
+  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
+
+export function useActOnMarketplaceFeedback<
+  TData = Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  listingId: string,
+  feedbackId: string,
+  marketplaceFeedbackActionRequest: MarketplaceFeedbackActionRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof actOnMarketplaceFeedback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useActOnMarketplaceFeedback<
+  TData = Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  listingId: string,
+  feedbackId: string,
+  marketplaceFeedbackActionRequest: MarketplaceFeedbackActionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+          TError,
+          Awaited<ReturnType<typeof actOnMarketplaceFeedback>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useActOnMarketplaceFeedback<
+  TData = Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  listingId: string,
+  feedbackId: string,
+  marketplaceFeedbackActionRequest: MarketplaceFeedbackActionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Reply to, flag or hide an item of feedback
+ */
+
+export function useActOnMarketplaceFeedback<
+  TData = Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  listingId: string,
+  feedbackId: string,
+  marketplaceFeedbackActionRequest: MarketplaceFeedbackActionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof actOnMarketplaceFeedback>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getActOnMarketplaceFeedbackQueryOptions(
+    projectId,
+    listingId,
+    feedbackId,
+    marketplaceFeedbackActionRequest,
     options,
   );
 

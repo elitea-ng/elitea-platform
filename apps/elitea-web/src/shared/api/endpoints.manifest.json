@@ -4475,6 +4475,56 @@
       ]
     },
     {
+      "$comment": "READ. The Feedback section: reviews and workforce reports, the rating distribution per version, the signals, and what the caller may do. No item carries a project id or name.",
+      "id": "marketplace.getFeedback",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_feedback/prompt_lib/{projectId}/{listingId}",
+      "operationId": "getMarketplaceFeedback",
+      "source": "generated",
+      "responseSchema": "MarketplaceFeedback",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. A person whose project hired the listing posts or edits their one review.",
+      "id": "marketplace.saveReview",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_feedback/prompt_lib/{projectId}/{listingId}",
+      "operationId": "saveMarketplaceReview",
+      "source": "generated",
+      "responseSchema": "MarketplaceFeedbackSaved",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. A person approves and publishes a workforce manager's report on a hired agent. Called by the agent's approval card, not by the listing page.",
+      "id": "marketplace.saveWorkforceReport",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_feedback_report/prompt_lib/{projectId}/{listingId}",
+      "operationId": "saveMarketplaceWorkforceReport",
+      "source": "generated",
+      "responseSchema": "MarketplaceFeedbackSaved",
+      "fixture": null,
+      "usedBy": []
+    },
+    {
+      "$comment": "WRITE. The publisher replies to or flags an item; an administrator flags, hides and shows it again. Every change writes an audit event.",
+      "id": "marketplace.actOnFeedback",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_feedback_action/prompt_lib/{projectId}/{listingId}/{feedbackId}",
+      "operationId": "actOnMarketplaceFeedback",
+      "source": "generated",
+      "responseSchema": "MarketplaceFeedbackActionResult",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
       "$comment": "WRITE. The hire wizard: Install or Fork a listing version with its bindings.",
       "id": "marketplace.hire",
       "method": "POST",

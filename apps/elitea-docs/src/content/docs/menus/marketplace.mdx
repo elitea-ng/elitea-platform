@@ -32,10 +32,22 @@ Select a card to open its page at `/marketplace/{kind}/{listing}`. The page has 
 
 - **Overview**: the description, the conversation starters, and the requirements.
 - **Versions**: newest first. Each version shows its state, its publish date, its release notes, and a short digest.
-- **Feedback**: likes show as "Saved by N". Reviews arrive with a later phase.
+- **Feedback**: the rating of a version as text, with its distribution, the signals beside it, and the newest reviews and workforce reports. See [Feedback](#feedback).
 - **Used by this project**: the hires your project already has, with links.
 
 **Try in chat** starts a conversation with the published copy. **Show context** reads the instructions.
+
+### Feedback
+
+Feedback belongs to a version and comes from three places, each labelled by kind.
+
+- **Review**: a rating from 1 to 5 and optional text, from a person whose project hired the listing. A person has one review per listing and can edit it. The review form shows only for people whose project hired it, and never for the publisher.
+- **Workforce report**: a workforce manager's account of a dismissal or demotion of a hired agent, published after a person approves it (or by the project policy `agents.workforce.auto_feedback`). It carries the outcome, the stage, a reason, short text and a platform-computed summary (failure rate, breaker trips, cost against the median, active days). It reads "Workforce report from a hiring project".
+- **Signals**: active hires, 30-day retention, dismissal rate and upgrade adoption, computed daily. A dash means nothing was measured yet. They sit beside the rating, so a high rating with a high dismissal rate shows.
+
+Use **Feedback for** to pick one version, and **All**, **Reviews** or **Workforce reports** to filter by kind. A review shows its author's name. **No project name is ever shown**, and a report never contains a transcript, a prompt, tool arguments or memory.
+
+The publisher can **Reply** once to an item and **Flag** it. A platform administrator can flag, **Hide** (with a reason) and **Show again**. A hidden review leaves the rating, and every hide is written to an audit trail. On mobile, the agent sheet in Discover shows the rating, the signals and the newest items, read-only.
 
 ### Version states
 

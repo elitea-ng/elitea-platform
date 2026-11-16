@@ -2,6 +2,8 @@ import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 
 import type { PublicAgent } from '@/api/queries/discover';
 import { useDesign } from '@/design/DesignProvider';
+import type { ListingFeedbackView } from '@/api/queries/marketplaceFeedback';
+import { AgentFeedback } from '@/features/discover/AgentFeedback';
 import { AgentIcon } from '@/features/discover/AgentIcon';
 import { TagList } from '@/features/discover/TagList';
 import { Button, Icon, ListRow, ListSection, Text } from '@/ui';
@@ -23,6 +25,8 @@ export interface PublicAgentViewProps {
    * left out when not given.
    */
   onMemory?: () => void;
+  /** The listing's feedback, read-only (ADR-0051 decision 5); the section is left out when null. */
+  feedback?: ListingFeedbackView | null;
 }
 
 /** "Agent · version v1" / "Pipeline". */
@@ -36,7 +40,7 @@ export function agentMetaLine(agent: Pick<PublicAgent, 'agentType' | 'versionNam
  * description and welcome message, ONE filled "Start chat" and the conversation starters as list
  * rows. The route and the `__DEV__` preview both render this (D2).
  */
-export function PublicAgentView({ agent, projectId, projectLabel, welcome, starters, busy, error, onStart, onStarter, onMemory }: PublicAgentViewProps) {
+export function PublicAgentView({ agent, projectId, projectLabel, welcome, starters, busy, error, onStart, onStarter, onMemory, feedback }: PublicAgentViewProps) {
   const { colors, space, radius } = useDesign();
   return (
     <ScrollView
@@ -111,6 +115,7 @@ export function PublicAgentView({ agent, projectId, projectLabel, welcome, start
           ))}
         </ListSection>
       ) : null}
+      {feedback ? <AgentFeedback feedback={feedback} /> : null}
       {onMemory ? (
         <ListSection footer={`What ${agent.name} keeps across conversations in ${projectLabel}.`}>
           <ListRow testID="public-agent-memory" icon="memory" title="What it remembers" disabled={busy !== null} onPress={onMemory} />

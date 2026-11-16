@@ -156,3 +156,7 @@ brand/elitea/assets/*.icns
 brand/sample/assets/*.png
 brand/sample/assets/*.ico
 brand/sample/assets/*.icns
+
+# The client contract lock is generated text (go test ./internal/api/clientcontract -update)
+# and grows with every client operation; it passed 1 MiB with contract 1.55.
+services/elitea-main/api/openapi/client-contract/v1.lock.json

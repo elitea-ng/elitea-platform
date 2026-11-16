@@ -1153,9 +1153,31 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	// Detach the deleted agent from every parent that used it as a sub-agent.
 	if h.pool != nil {
 		h.detachSubAgentReferences(r.Context(), s, applicationID)
+		h.recordMarketplaceDismissal(r.Context(), projectID, applicationID)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// recordMarketplaceDismissal tells the Marketplace that a hired agent left its
+// project, so the active hires and the dismissal rate of its listing stay true
+// (ADR-0051 decision 5). It changes nothing for an agent that was not hired. A
+// failure is logged: the delete has already happened and the next daily signals
+// pass is not wrong enough to undo it.
+func (h *Handler) recordMarketplaceDismissal(ctx context.Context, projectID, applicationID string) {
+	project, projectErr := strconv.ParseInt(projectID, 10, 64)
+	application, applicationErr := strconv.ParseInt(applicationID, 10, 64)
+	if projectErr != nil || applicationErr != nil {
+		return
+	}
+	var by int64
+	if user, ok := auth.UserFromContext(ctx); ok {
+		by, _ = strconv.ParseInt(user.ID, 10, 64)
+	}
+	if err := marketplace.MarkDismissed(ctx, h.pool, project, marketplace.KindAgent, application, by); err != nil {
+		slog.WarnContext(ctx, "marketplace: could not record the dismissal of a deleted agent",
+			"project_id", project, "application_id", application, "error", err)
+	}
 }
 
 // detachSubAgentReferences removes every sub-agent reference that points at a

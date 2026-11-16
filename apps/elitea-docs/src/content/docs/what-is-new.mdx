@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Marketplace feedback: reviews, workforce reports and signals
+
+A listing page now has a **Feedback** section. People whose project hired the listing can post one review per listing (1 to 5 and optional text) and edit it. The section shows the rating and its distribution per version, **signals** beside it (active hires, 30-day retention, dismissal rate, upgrade adoption, computed daily), and the newest reviews and **workforce reports**, with a version filter. A review shows its author's name; a project name is never shown. The publisher can reply once to an item and flag it, and an administrator can hide it, with an audit event. The admin published agents view now fills its project counter. The mobile agent sheet in Discover shows the rating and feedback, read-only. **Run the migrations** (shared `0252`) and upgrade Main and the clients together. See [Marketplace](/menus/marketplace#feedback).
+
 ## Marketplace: upgrade installed agents and update forks
 
 An installed agent gets **Upgrade to...**, which shows the difference, the release notes, the rating and what a version adds before you choose any version, up, down or across. At low tier it is one click, and above it a change request of kind `upgrade` waits for an approver. An **Upgrade policy** (pinned, notify, auto) says whether the platform may move the agent by itself. Auto works only at low tier and never takes a version that adds a tool, a capability or a requirement, or raises the tier. A fork shows **Upstream update available** and a three-way view (base, theirs, ours) with conflicts first; the merge is a new draft and a change request of kind `upstream_merge`, never applied without a person. A yanked version raises a banner and a notification for every project that holds it, and an administrator can also suspend those agents. **Run the migrations** (shared `0251`) and upgrade Main and the web app together. See [Marketplace](/menus/marketplace#upgrade-an-installed-agent).

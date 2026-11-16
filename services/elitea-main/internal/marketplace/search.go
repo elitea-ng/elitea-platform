@@ -224,7 +224,7 @@ func (p SearchParams) where(args *argList, exclude string) string {
 		conds = append(conds, "l.rating_avg >= "+args.add(p.MinRating))
 	}
 	if p.HiredHere {
-		conds = append(conds, "EXISTS (SELECT 1 FROM elitea_marketplace.installs hi WHERE hi.listing_id = l.id AND hi.project_id = "+args.add(p.ProjectID)+")")
+		conds = append(conds, "EXISTS (SELECT 1 FROM elitea_marketplace.installs hi WHERE hi.listing_id = l.id AND hi.dismissed_at IS NULL AND hi.project_id = "+args.add(p.ProjectID)+")")
 	}
 	if p.FeaturedOnly {
 		conds = append(conds, "l.featured")
@@ -290,7 +290,7 @@ func Search(ctx context.Context, db DB, p SearchParams) (Page, error) {
 	sql := fmt.Sprintf(`
 SELECT l.id, l.kind, COALESCE(l.entity_id, 0), l.name, l.description, l.icon, l.category, l.tags,
        l.publisher_id, COALESCE(au.name, ''), l.risk_tier, %s,
-       (SELECT count(DISTINCT i.project_id) FROM elitea_marketplace.installs i WHERE i.listing_id = l.id) AS hires,
+       (SELECT count(DISTINCT i.project_id) FROM elitea_marketplace.installs i WHERE i.listing_id = l.id AND i.dismissed_at IS NULL) AS hires,
        l.rating_avg::float8, l.rating_count, (%s)::int, %s, l.featured, l.required_types,
        l.has_write_tools, l.state
 FROM elitea_marketplace.listings l
@@ -380,7 +380,7 @@ func hiredIn(ctx context.Context, db DB, projectID int64, listingIDs []int64) (m
 SELECT i.listing_id, i.entity_id, i.mode, i.version_id, v.name
 FROM elitea_marketplace.installs i
 JOIN elitea_marketplace.listing_versions v ON v.listing_id = i.listing_id AND v.version_id = i.version_id
-WHERE i.project_id = $1 AND i.listing_id = ANY($2::bigint[])
+WHERE i.project_id = $1 AND i.dismissed_at IS NULL AND i.listing_id = ANY($2::bigint[])
 ORDER BY i.created_at, i.entity_id`, projectID, listingIDs)
 	if err != nil {
 		return nil, fmt.Errorf("marketplace: read the hires: %w", err)
@@ -452,7 +452,7 @@ AND %s <> '' GROUP BY 1, 2 ORDER BY 3 DESC, 2 LIMIT %d`, valueExpr, labelExpr, j
 		hiredFilter.HiredHere = false
 		where := hiredFilter.where(args, facetNone)
 		if err := db.QueryRow(ctx, `SELECT count(*) FROM elitea_marketplace.listings l`+where+
-			` AND EXISTS (SELECT 1 FROM elitea_marketplace.installs hi WHERE hi.listing_id = l.id AND hi.project_id = `+args.add(p.ProjectID)+`)`,
+			` AND EXISTS (SELECT 1 FROM elitea_marketplace.installs hi WHERE hi.listing_id = l.id AND hi.dismissed_at IS NULL AND hi.project_id = `+args.add(p.ProjectID)+`)`,
 			args.values...).Scan(&facets.HiredHere); err != nil {
 			return Facets{}, fmt.Errorf("marketplace: facet hired here: %w", err)
 		}
@@ -536,7 +536,7 @@ func Get(ctx context.Context, db DB, p GetParams) (Detail, error) {
 	err = db.QueryRow(ctx, fmt.Sprintf(`
 SELECT l.id, l.kind, COALESCE(l.entity_id, 0), l.name, l.description, l.icon, l.category, l.tags,
        l.publisher_id, COALESCE(au.name, ''), l.risk_tier, %s,
-       (SELECT count(DISTINCT i.project_id) FROM elitea_marketplace.installs i WHERE i.listing_id = l.id),
+       (SELECT count(DISTINCT i.project_id) FROM elitea_marketplace.installs i WHERE i.listing_id = l.id AND i.dismissed_at IS NULL),
        l.rating_avg::float8, l.rating_count, (%s)::int, %s, l.featured, l.required_types,
        l.has_write_tools, l.state
 FROM elitea_marketplace.listings l LEFT JOIN auth_core__user au ON au.id = l.publisher_id

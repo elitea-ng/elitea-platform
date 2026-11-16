@@ -47,6 +47,9 @@ import type { RequestHandlerOptions } from "msw";
 
 import type {
   MarketplaceBindingsState,
+  MarketplaceFeedback,
+  MarketplaceFeedbackActionResult,
+  MarketplaceFeedbackSaved,
   MarketplaceHireResult,
   MarketplaceListingDetail,
   MarketplaceListingPage,
@@ -474,6 +477,277 @@ export const getSetMarketplaceBindingsResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetMarketplaceFeedbackResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceFeedback, object>> = {},
+): MarketplaceFeedback => ({
+  items: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    version_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    rating: faker.helpers.arrayElement([faker.number.int(), null]),
+    body: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    outcome: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    stage: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    reason_code: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    scorecard: faker.helpers.arrayElement([
+      {
+        failure_rate: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
+        breaker_trips: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
+        cost_vs_median: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
+        active_days: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          undefined,
+        ]),
+      },
+      undefined,
+    ]),
+    author: {
+      kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    },
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    flagged: faker.datatype.boolean(),
+    flag_reason: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    hide_reason: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    reply: faker.helpers.arrayElement([
+      {
+        body: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      },
+      null,
+    ]),
+    mine: faker.datatype.boolean(),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  total: faker.number.int(),
+  versions: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    version_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    rating_avg: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      null,
+    ]),
+    rating_count: faker.number.int(),
+    distribution: Array.from(
+      { length: faker.number.int({ min: 5, max: 5 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.number.int()),
+    report_count: faker.number.int(),
+  })),
+  overall: {
+    version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    version_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    rating_avg: faker.helpers.arrayElement([
+      faker.number.float({ fractionDigits: 2 }),
+      null,
+    ]),
+    rating_count: faker.number.int(),
+    distribution: Array.from(
+      { length: faker.number.int({ min: 5, max: 5 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.number.int()),
+    report_count: faker.number.int(),
+  },
+  signals: {
+    listing: {
+      day: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      active_hires: faker.number.int(),
+      hires_total: faker.number.int(),
+      dismissed: faker.number.int(),
+      dismissal_rate: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        null,
+      ]),
+      retention_cohort: faker.number.int(),
+      retention_30d: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        null,
+      ]),
+      upgrade_eligible: faker.number.int(),
+      upgrade_adoption: faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        null,
+      ]),
+      live: faker.datatype.boolean(),
+    },
+    versions: {
+      [faker.string.alphanumeric(5)]: {
+        day: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        active_hires: faker.number.int(),
+        hires_total: faker.number.int(),
+        dismissed: faker.number.int(),
+        dismissal_rate: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        retention_cohort: faker.number.int(),
+        retention_30d: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        upgrade_eligible: faker.number.int(),
+        upgrade_adoption: faker.helpers.arrayElement([
+          faker.number.float({ fractionDigits: 2 }),
+          null,
+        ]),
+        live: faker.datatype.boolean(),
+      },
+    },
+  },
+  review_versions: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  can_review: faker.datatype.boolean(),
+  my_review: faker.helpers.arrayElement([
+    {
+      id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      version_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      rating: faker.helpers.arrayElement([faker.number.int(), null]),
+      body: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      outcome: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      stage: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      reason_code: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      scorecard: faker.helpers.arrayElement([
+        {
+          failure_rate: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          breaker_trips: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          cost_vs_median: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+          active_days: faker.helpers.arrayElement([
+            faker.number.float({ fractionDigits: 2 }),
+            undefined,
+          ]),
+        },
+        undefined,
+      ]),
+      author: {
+        kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      },
+      state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      flagged: faker.datatype.boolean(),
+      flag_reason: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      hide_reason: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      reply: faker.helpers.arrayElement([
+        {
+          body: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+        },
+        null,
+      ]),
+      mine: faker.datatype.boolean(),
+      created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    },
+    null,
+  ]),
+  can_reply: faker.datatype.boolean(),
+  can_flag: faker.datatype.boolean(),
+  can_moderate: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getSaveMarketplaceReviewResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceFeedbackSaved, object>> = {},
+): MarketplaceFeedbackSaved =>
+  faker.helpers.arrayElement([
+    {
+      id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      created: faker.helpers.arrayElement([
+        faker.datatype.boolean(),
+        undefined,
+      ]),
+      ...overrideResponse,
+    },
+    {
+      id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      created: faker.helpers.arrayElement([
+        faker.datatype.boolean(),
+        undefined,
+      ]),
+      ...overrideResponse,
+    },
+  ]);
+
+export const getSaveMarketplaceWorkforceReportResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceFeedbackSaved, object>> = {},
+): MarketplaceFeedbackSaved => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  created: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  ...overrideResponse,
+});
+
+export const getActOnMarketplaceFeedbackResponseMock = (
+  overrideResponse: Partial<
+    Extract<MarketplaceFeedbackActionResult, object>
+  > = {},
+): MarketplaceFeedbackActionResult => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  action: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
 export const getGetMarketplaceUpgradePlanResponseMock = (
   overrideResponse: Partial<Extract<MarketplaceUpgradePlan, object>> = {},
 ): MarketplaceUpgradePlan => ({
@@ -877,6 +1151,112 @@ export const getSetMarketplaceBindingsMockHandler = (
   );
 };
 
+export const getGetMarketplaceFeedbackMockHandler = (
+  overrideResponse?:
+    | MarketplaceFeedback
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MarketplaceFeedback> | MarketplaceFeedback),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/marketplace_feedback/prompt_lib/:projectId/:listingId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetMarketplaceFeedbackResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSaveMarketplaceReviewMockHandler = (
+  overrideResponse?:
+    | MarketplaceFeedbackSaved
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MarketplaceFeedbackSaved> | MarketplaceFeedbackSaved),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/marketplace_feedback/prompt_lib/:projectId/:listingId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSaveMarketplaceReviewResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSaveMarketplaceWorkforceReportMockHandler = (
+  overrideResponse?:
+    | MarketplaceFeedbackSaved
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MarketplaceFeedbackSaved> | MarketplaceFeedbackSaved),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/marketplace_feedback_report/prompt_lib/:projectId/:listingId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSaveMarketplaceWorkforceReportResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getActOnMarketplaceFeedbackMockHandler = (
+  overrideResponse?:
+    | MarketplaceFeedbackActionResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) =>
+        | Promise<MarketplaceFeedbackActionResult>
+        | MarketplaceFeedbackActionResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/marketplace_feedback_action/prompt_lib/:projectId/:listingId/:feedbackId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getActOnMarketplaceFeedbackResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetMarketplaceUpgradePlanMockHandler = (
   overrideResponse?:
     | MarketplaceUpgradePlan
@@ -1015,6 +1395,10 @@ export const getMarketplaceMock = () => [
   getGetMarketplaceOriginMockHandler(),
   getGetMarketplaceBindingsMockHandler(),
   getSetMarketplaceBindingsMockHandler(),
+  getGetMarketplaceFeedbackMockHandler(),
+  getSaveMarketplaceReviewMockHandler(),
+  getSaveMarketplaceWorkforceReportMockHandler(),
+  getActOnMarketplaceFeedbackMockHandler(),
   getGetMarketplaceUpgradePlanMockHandler(),
   getUpgradeMarketplaceAgentMockHandler(),
   getSetMarketplaceUpgradePolicyMockHandler(),
