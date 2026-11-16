@@ -12,6 +12,14 @@ import {
   type Participant,
 } from '@/api/queries/participants';
 import { setConversationLead } from '@/api/queries/conversationActions';
+import {
+  CONVERSATION_SKILL_LIMIT,
+  pinConversationSkill,
+  skillPinErrorText,
+  unpinConversationSkill,
+  useConversationSkills,
+  useProjectSkills,
+} from '@/api/queries/conversationSkills';
 import { useDesign } from '@/design/DesignProvider';
 import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { floorOf } from '@elitea/client-core/conversation';
@@ -85,7 +93,7 @@ export function ParticipantsSheet(props: ParticipantsSheetProps) {
   );
 }
 
-type Mode = 'list' | 'people' | 'agents';
+type Mode = 'list' | 'people' | 'agents' | 'skills';
 
 function SheetBody({
   onClose,
@@ -109,6 +117,25 @@ function SheetBody({
   const candidates = useParticipantCandidates(projectId, conversationId, mode === 'people' ? query : '', !offline);
   const agents = useAgents(mode === 'agents' && !offline ? projectId : null, query);
   const peopleAvailable = candidates.data !== null;
+  // ADR-0050 amendment 1, A1.3: the skills pinned to the conversation, in their own section below the
+  // participants. null = this workspace has none (before client contract 1.57), so the section is left out.
+  const pins = useConversationSkills(projectId, conversationId, !offline);
+  const skillOptions = useProjectSkills(projectId, mode === 'skills' && !offline);
+  const pinList = pins.data ?? null;
+  const pinnedSkillIds = new Set((pinList ?? []).flatMap((pin) => (pin.skill_id === undefined ? [] : [pin.skill_id])));
+  const runSkills = (work: () => Promise<unknown>) => {
+    if (busy || offline) return;
+    setBusy(true);
+    setError(null);
+    work()
+      .then(() => pins.refetch())
+      .then(() => {
+        setMode('list');
+        setQuery('');
+      })
+      .catch((e: unknown) => setError(skillPinErrorText(e)))
+      .finally(() => setBusy(false));
+  };
 
   const run = (work: () => Promise<void>) => {
     if (busy || offline) return;
@@ -149,7 +176,7 @@ function SheetBody({
     participants.filter((p) => p.entity_name === 'application' || p.entity_name === 'pipeline').map((p) => Number(p.entity_meta?.id)),
   );
 
-  const title = mode === 'people' ? 'Add people' : mode === 'agents' ? 'Add agent' : 'Participants';
+  const title = mode === 'people' ? 'Add people' : mode === 'agents' ? 'Add agent' : mode === 'skills' ? 'Add skill' : 'Participants';
   const back = () => {
     setMode('list');
     setQuery('');
@@ -249,13 +276,47 @@ function SheetBody({
               <ListRow icon="info" title="Agents can't join a conversation with toolkits." />
             )}
           </ListSection>
+          {pinList !== null ? (
+            <ListSection
+              title={`Skills (${pinList.length})`}
+              footer="Applied to every reply here, whichever agent or model answers."
+            >
+              {pinList.map((pin) => {
+                const name = pin.name === '' ? 'A skill that is no longer available' : pin.name;
+                const untrusted = pin.trust.state === 'untrusted';
+                const origin = pin.kind === 'listing' ? `Marketplace ${pin.version_name ?? ''}`.trim() : 'Project skill';
+                return (
+                  <ListRow
+                    key={pin.id}
+                    title={name}
+                    subtitle={untrusted ? `${origin} · Untrusted: the model gets its text as quoted data` : origin}
+                    trailing={
+                      <Button
+                        title="Remove"
+                        variant="destructivePlain"
+                        size="small"
+                        accessibilityLabel={`Remove ${name} from this conversation`}
+                        disabled={offline || busy}
+                        onPress={() => runSkills(() => unpinConversationSkill(projectId, conversationId, pin.id))}
+                      />
+                    }
+                  />
+                );
+              })}
+              {pinList.length < CONVERSATION_SKILL_LIMIT ? (
+                <ListRow icon="plus" title="Add skill" disabled={offline} onPress={() => setMode('skills')} />
+              ) : (
+                <ListRow icon="info" title="This conversation holds five skills." />
+              )}
+            </ListSection>
+          ) : null}
         </ScrollView>
       ) : (
         <>
           <View style={[styles.search, { backgroundColor: colors.surfaceSunken, borderColor: colors.separatorStrong, borderRadius: radius.md }]}>
             <Icon name="search" size={18} tone="secondary" />
             <TextInput
-              accessibilityLabel={mode === 'people' ? 'Search people' : 'Search agents'}
+              accessibilityLabel={mode === 'people' ? 'Search people' : mode === 'skills' ? 'Search skills' : 'Search agents'}
               placeholder="Search"
               placeholderTextColor={colors.textTertiary}
               autoFocus
@@ -269,7 +330,22 @@ function SheetBody({
           </View>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.list, { paddingBottom: Math.max(insets.bottom, 16) }]}>
             <ListSection>
-              {mode === 'people'
+              {mode === 'skills'
+                ? (skillOptions.data ?? [])
+                    .filter((skill) => !pinnedSkillIds.has(skill.id) && skill.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+                    .map((skill) => (
+                      <ListRow
+                        key={skill.id}
+                        title={skill.name}
+                        subtitle={skill.description || null}
+                        trailing={<Icon name="plus" size={20} tone="accent" />}
+                        accessibilityLabel={`Add ${skill.name}`}
+                        disabled={busy}
+                        chevron={false}
+                        onPress={() => runSkills(() => pinConversationSkill(projectId, conversationId, skill.id))}
+                      />
+                    ))
+                : mode === 'people'
                 ? (candidates.data?.rows ?? []).map((c) => (
                     <ListRow
                       key={c.userId}
@@ -307,7 +383,7 @@ function SheetBody({
                     );
                   })}
             </ListSection>
-            {(mode === 'people' ? candidates.isLoading : agents.isLoading) ? <ActivityIndicator color={colors.accent} /> : null}
+            {(mode === 'people' ? candidates.isLoading : mode === 'skills' ? skillOptions.isLoading : agents.isLoading) ? <ActivityIndicator color={colors.accent} /> : null}
           </ScrollView>
         </>
       )}

@@ -78,6 +78,10 @@
     "searchMarketplaceListings",
     "getMarketplaceFeedback",
     "listAgentWorkforceProposals",
-    "getAgentWorkforce"
+    "getAgentWorkforce",
+    "listSkills",
+    "listConversationSkills",
+    "pinConversationSkill",
+    "unpinConversationSkill"
   ]
 }
