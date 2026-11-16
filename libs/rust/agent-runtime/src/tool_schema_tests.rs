@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use adk_core::Toolset;
 use adk_tool::SimpleToolContext;
 use serde_json::{Value, json};
 
@@ -141,7 +140,7 @@ fn a_recursive_reference_ends_in_a_bare_object() {
     });
     for profile in SchemaProfile::ALL {
         let out = normalize_tool_schema(&raw, profile);
-        let inner = &property(&property(&out, "tree"), "kids")["items"];
+        let inner = &property(property(&out, "tree"), "kids")["items"];
         assert_eq!(inner["type"], "object", "{profile:?}");
         assert!(inner.get("properties").is_none(), "{profile:?}");
         assert!(!out.to_string().contains("$ref"));
@@ -290,7 +289,10 @@ fn gemini_drops_what_its_subset_refuses() {
     );
     assert!(property(&out, "e").get("enum").is_none());
     assert_eq!(property(&out, "any")["type"], "string");
-    assert!(wire_violations(&out, SchemaProfile::Gemini).is_empty());
+    assert_eq!(
+        wire_violations(&out, SchemaProfile::Gemini),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
