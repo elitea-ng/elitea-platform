@@ -55,6 +55,11 @@ import type {
   MarketplaceListingPage,
   MarketplaceListingSummary,
   MarketplaceOrigin,
+  MarketplaceUpgradePlan,
+  MarketplaceUpgradePolicy,
+  MarketplaceUpgradeResult,
+  MarketplaceUpstreamResult,
+  MarketplaceUpstreamReview,
   MarketplaceVersion,
 } from "../model";
 
@@ -372,6 +377,25 @@ export const getGetMarketplaceOriginResponseMock = (
       },
       null,
     ]),
+    undefined,
+  ]),
+  version_state_reason: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  upgrade_policy: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  base_known: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  update_widening: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      detail: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
     undefined,
   ]),
   ...overrideResponse,
@@ -724,6 +748,201 @@ export const getActOnMarketplaceFeedbackResponseMock = (
   ...overrideResponse,
 });
 
+export const getGetMarketplaceUpgradePlanResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceUpgradePlan, object>> = {},
+): MarketplaceUpgradePlan => ({
+  current_version: {
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    release_notes: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    published_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  },
+  target_version: {
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    release_notes: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    published_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  },
+  direction: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  changes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    path: "/definition/instructions",
+    op: "replace",
+    before: "Answer briefly.",
+    after: "Answer briefly and cite sources.",
+  })),
+  widening: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    detail: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  requirements: {
+    items: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      tools: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      has_write_tools: faker.datatype.boolean(),
+    })),
+    model_class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    tier: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    has_write_tools: faker.datatype.boolean(),
+  },
+  bindings: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    requirement_key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    toolkit_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    disabled: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  })),
+  new_requirements: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    tools: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    has_write_tools: faker.datatype.boolean(),
+  })),
+  needs_approval: faker.datatype.boolean(),
+  auto_eligible: faker.datatype.boolean(),
+  hireable: faker.datatype.boolean(),
+  feedback: {
+    rating_avg: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        faker.number.float({ fractionDigits: 2 }),
+        null,
+      ]),
+      undefined,
+    ]),
+    rating_count: faker.number.int(),
+  },
+  ...overrideResponse,
+});
+
+export const getUpgradeMarketplaceAgentResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceUpgradeResult, object>> = {},
+): MarketplaceUpgradeResult => ({
+  application_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  applied: faker.datatype.boolean(),
+  awaiting_approval: faker.datatype.boolean(),
+  change_request_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getSetMarketplaceUpgradePolicyResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceUpgradePolicy, object>> = {},
+): MarketplaceUpgradePolicy => ({
+  policy: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getGetMarketplaceUpstreamReviewResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceUpstreamReview, object>> = {},
+): MarketplaceUpstreamReview => ({
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  listing_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  listing_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  base: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        state_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        release_notes: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        published_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      },
+      null,
+    ]),
+    undefined,
+  ]),
+  theirs: {
+    id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    state_reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    release_notes: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    published_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  },
+  fields: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    label: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    default: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    base: {},
+    theirs: {},
+    ours: {},
+  })),
+  changes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    path: "/definition/instructions",
+    op: "replace",
+    before: "Answer briefly.",
+    after: "Answer briefly and cite sources.",
+  })),
+  widening: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    detail: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  needs_approval: faker.datatype.boolean(),
+  hireable: faker.datatype.boolean(),
+  our_version_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  open_change_request: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getProposeMarketplaceUpstreamMergeResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceUpstreamResult, object>> = {},
+): MarketplaceUpstreamResult => ({
+  application_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  draft_version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  applied: faker.datatype.boolean(),
+  awaiting_approval: faker.datatype.boolean(),
+  change_request_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
 export const getSearchMarketplaceListingsMockHandler = (
   overrideResponse?:
     | MarketplaceListingPage
@@ -1037,6 +1256,136 @@ export const getActOnMarketplaceFeedbackMockHandler = (
     options,
   );
 };
+
+export const getGetMarketplaceUpgradePlanMockHandler = (
+  overrideResponse?:
+    | MarketplaceUpgradePlan
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MarketplaceUpgradePlan> | MarketplaceUpgradePlan),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/marketplace_upgrade/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetMarketplaceUpgradePlanResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpgradeMarketplaceAgentMockHandler = (
+  overrideResponse?:
+    | MarketplaceUpgradeResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MarketplaceUpgradeResult> | MarketplaceUpgradeResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/marketplace_upgrade/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpgradeMarketplaceAgentResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetMarketplaceUpgradePolicyMockHandler = (
+  overrideResponse?:
+    | MarketplaceUpgradePolicy
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<MarketplaceUpgradePolicy> | MarketplaceUpgradePolicy),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/marketplace_upgrade_policy/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetMarketplaceUpgradePolicyResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetMarketplaceUpstreamReviewMockHandler = (
+  overrideResponse?:
+    | MarketplaceUpstreamReview
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<MarketplaceUpstreamReview> | MarketplaceUpstreamReview),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/marketplace_upstream/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetMarketplaceUpstreamReviewResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getProposeMarketplaceUpstreamMergeMockHandler = (
+  overrideResponse?:
+    | MarketplaceUpstreamResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MarketplaceUpstreamResult> | MarketplaceUpstreamResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/marketplace_upstream/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getProposeMarketplaceUpstreamMergeResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
 export const getMarketplaceMock = () => [
   getSearchMarketplaceListingsMockHandler(),
   getGetMarketplaceListingMockHandler(),
@@ -1050,4 +1399,9 @@ export const getMarketplaceMock = () => [
   getSaveMarketplaceReviewMockHandler(),
   getSaveMarketplaceWorkforceReportMockHandler(),
   getActOnMarketplaceFeedbackMockHandler(),
+  getGetMarketplaceUpgradePlanMockHandler(),
+  getUpgradeMarketplaceAgentMockHandler(),
+  getSetMarketplaceUpgradePolicyMockHandler(),
+  getGetMarketplaceUpstreamReviewMockHandler(),
+  getProposeMarketplaceUpstreamMergeMockHandler(),
 ];

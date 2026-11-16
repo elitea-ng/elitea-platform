@@ -416,6 +416,9 @@ func publishResponse(appID int, versionID, versionName string, outcome publishOu
 
 // announcePublished emits agent.version.published after the commit.
 func (h *Handler) announcePublished(ctx context.Context, projectID string, appID, cloneID int, versionID, versionName string) {
+	// A new listing version is what the upgrade policies of the installs that
+	// hold an older one react to (ADR-0051 decision 4).
+	h.settleListingHolders(ctx, projectID, appID)
 	if h.events == nil {
 		return
 	}

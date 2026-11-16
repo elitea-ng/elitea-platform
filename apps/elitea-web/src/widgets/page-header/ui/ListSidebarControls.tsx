@@ -131,6 +131,7 @@ export function SortControl({ fields, search, patch, testIdPrefix }: SortControl
             </MenuItem>
           ))}
         </Select>
+        {fields.items.find((item) => item.value === field)?.directionless !== true && (
         <IconButton
           size="small"
           aria-label={directionLabel}
@@ -139,6 +140,7 @@ export function SortControl({ fields, search, patch, testIdPrefix }: SortControl
         >
           {ascending ? <ArrowUpwardIcon fontSize="small" /> : <ArrowDownwardIcon fontSize="small" />}
         </IconButton>
+        )}
       </Box>
     </Section>
   );

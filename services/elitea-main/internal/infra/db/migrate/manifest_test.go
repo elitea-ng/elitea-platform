@@ -1146,6 +1146,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// backfill in SQL (the service builds the listings on first read), no
 	// permission.
 	//
+	// 251: shared/0251_marketplace_upgrades.sql, the upgrade policy of an
+	// install and the payload of a Marketplace change request (ADR-0051
+	// decision 4, issue 1630). No backfill, no permission.
+	//
 	// 252: shared/0252_marketplace_feedback.sql, the feedback per listing version,
 	// its moderation audit trail, the daily listing signals and the dismissal
 	// column of installs (ADR-0051 M5, issue 1631). No permission.

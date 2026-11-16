@@ -1,6 +1,9 @@
 package agentlifecycle
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Registry is one agent's registry record (decision 1).
 type Registry struct {
@@ -195,4 +198,30 @@ type NewMarketplaceChange struct {
 	// personal project under the platform policy
 	// marketplace_personal_self_approve. The audit event names the policy.
 	SelfApprove bool
+	// ApprovalReason replaces that policy in the audit event of a request
+	// recorded as approved: an upgrade of a low-tier agent is one click and
+	// names the rule (direct_low_tier), and an automatic upgrade names its
+	// policy (marketplace_auto_upgrade).
+	ApprovalReason string
+	// Payload is what the approved request applies and its other columns
+	// cannot hold: the bindings of an upgrade, the draft of an upstream merge.
+	Payload json.RawMessage
+}
+
+// MarketplaceApply is one approved Marketplace change, read back by the final
+// approval (or by the upgrade that is recorded already approved) and handed to
+// the component that owns the tenant schema, which applies it in the same
+// transaction.
+type MarketplaceApply struct {
+	ProjectID     int64
+	ApplicationID int64
+	Kind          ChangeKind
+	ListingID     int64
+	VersionID     int64
+	Digest        [32]byte
+	Payload       json.RawMessage
+	// ActorID is the person who approved, or proposed a direct change.
+	ActorID int64
+	// Tier is the tier the request was recorded at.
+	Tier Tier
 }

@@ -25,6 +25,10 @@ import (
 type versionStateBody struct {
 	State  string `json:"state"`
 	Reason string `json:"reason"`
+	// Suspend also suspends the installed agents that hold the version, with
+	// the reason listing_yanked (ADR-0041). Only a platform administrator may
+	// ask, and only together with a yank.
+	Suspend bool `json:"suspend"`
 }
 
 // MarketplaceVersionState answers POST
@@ -98,6 +102,21 @@ SELECT state, state_changed_by FROM elitea_marketplace.listing_versions WHERE li
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "an administrator yanked this version; only an administrator may restore it"})
 		return
 	}
+	if body.Suspend {
+		if body.State != marketplace.VersionYanked {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "suspend goes with a yank"})
+			return
+		}
+		if !moderator {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "only a platform administrator may suspend the agents that hold a version"})
+			return
+		}
+		if h.suspender == nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "the kill switch is not available on this deployment"})
+			return
+		}
+	}
+	wasYanked := currentState == marketplace.VersionYanked
 	found, err := marketplace.SetVersionState(ctx, h.pool, listingID, versionID, body.State, body.Reason, caller)
 	if err != nil {
 		slog.ErrorContext(ctx, "marketplace: set the version state failed", "listing_id", listingID, "error", err)
@@ -107,6 +126,9 @@ SELECT state, state_changed_by FROM elitea_marketplace.listing_versions WHERE li
 	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
 		return
+	}
+	if body.State == marketplace.VersionYanked && (!wasYanked || body.Suspend) {
+		h.announceYank(ctx, listingID, versionID, body.Reason, caller, body.Suspend)
 	}
 	slog.InfoContext(ctx, "marketplace: version state changed",
 		"listing_id", listingID, "version_id", versionID, "state", body.State, "by", caller, "moderator", moderator && !isPublisher)

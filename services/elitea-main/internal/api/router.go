@@ -814,6 +814,11 @@ type RouterConfig struct {
 	// composition root builds it over the same gate the runtime admission
 	// checks. The routes are always mounted; nil answers 503 on each.
 	ExecutionSuspensions *v2safety.Handler
+	// SuspensionService is the kill switch service behind it. The Marketplace
+	// yank uses it to suspend the agents that hold a yanked version when a
+	// platform administrator asks (ADR-0051 decision 4). nil leaves the yank
+	// without suspension.
+	SuspensionService *safetyapp.Service
 	// MandateAttachments serves the routes that attach a mandate to a
 	// pipeline schedule, pipeline trigger or index schedule (ADR-0039, issue
 	// 1122). Set only with the credential governance flag on; nil mounts
@@ -2236,6 +2241,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		cfg.Pool,
 		v2core.WithReleases(agentReleases),
 		v2core.WithPublishGovernor(agentLifecycle),
+		v2core.WithListingSuspender(v2core.NewListingSuspender(cfg.SuspensionService)),
 		v2core.WithMemoryUserJournal(memoryUserJournal),
 		v2core.WithPermissionResolver(permissionResolver),
 		v2core.WithObjectStore(cfg.ObjectStore),
@@ -2252,6 +2258,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithConnectorGate(connectorGate),
 	)
 	agentLifecycle.ComposePublisher(coreHandler)
+	// An approved upgrade or upstream merge is applied by the handler that owns
+	// the tenant schema (ADR-0051 decision 4).
+	agentLifecycle.ComposeMarketplaceApplier(coreHandler)
 
 	// The MCP server (issue 252). Outside the /api/v2 group for the reasons in
 	// mountMCPServerRoutes.
@@ -5013,6 +5022,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/marketplace_bindings/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceBindings)
 				r.With(projectPermission("models.applications.application.update")).
 					Put("/marketplace_bindings/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceBindings)
+				// Upgrades of an installed agent and the upstream update of a
+				// fork (ADR-0051 decision 4, issue 1630). The plan and the
+				// review are reads; the upgrade, the policy and the merge
+				// change the agent, so they take its update permission.
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_upgrade/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceUpgradePlan)
+				r.With(projectPermission("models.applications.application.update")).
+					Post("/marketplace_upgrade/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceUpgrade)
+				r.With(projectPermission("models.applications.application.update")).
+					Put("/marketplace_upgrade_policy/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceUpgradePolicy)
+				r.With(requireMarketplaceRead).
+					Get("/marketplace_upstream/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceUpstream)
+				r.With(projectPermission("models.applications.application.update")).
+					Post("/marketplace_upstream/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceUpstream)
 
 				// Skill publishing (#249) — the skill-level counterpart of the
 				// application publish block above, plus the skills-parity

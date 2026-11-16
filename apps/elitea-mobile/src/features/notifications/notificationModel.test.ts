@@ -103,6 +103,15 @@ describe('icons, details and labels', () => {
     expect(describeNotification({ event_type: 'x', meta: { message: 7 } }).detail).toBeNull();
   });
 
+  it('shows the Marketplace yank and update notices by their title and message', () => {
+    expect(
+      describeNotification({ event_type: 'marketplace_version_yanked', meta: { message: 'Writer v2 was yanked. Upgrade it.' } }),
+    ).toMatchObject({ title: 'Marketplace version yanked', detail: 'Writer v2 was yanked. Upgrade it.', icon: 'bell' });
+    expect(
+      describeNotification({ event_type: 'marketplace_update_available', meta: { message: 'Writer v3 is available.' } }).title,
+    ).toBe('Marketplace update available');
+  });
+
   it('reads title, detail, age and unread', () => {
     expect(notificationLabel({ title: 'T', detail: 'D' }, '5m', true)).toBe('T, D, 5m, unread');
     expect(notificationLabel({ title: 'T', detail: null }, '', false)).toBe('T');

@@ -946,9 +946,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 
 // 534 -> 535 (issue 1628): setEntityPin, the personal Pinned group.
 // 535 -> 543 (issue 1629): the eight Marketplace operations above.
-// 543 -> 547 (issue 1631, ADR-0051 M5): getMarketplaceFeedback, saveMarketplaceReview,
+// 543 -> 548 (issue 1630, ADR-0051 M4): getMarketplaceUpgradePlan, upgradeMarketplaceAgent,
+// setMarketplaceUpgradePolicy, getMarketplaceUpstreamReview and proposeMarketplaceUpstreamMerge.
+// 548 -> 552 (issue 1631, ADR-0051 M5): getMarketplaceFeedback, saveMarketplaceReview,
 // saveMarketplaceWorkforceReport and actOnMarketplaceFeedback.
-const GENERATED_OPERATION_COUNT = 547;
+const GENERATED_OPERATION_COUNT = 552;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1279,10 +1281,14 @@ const GENERATED_OPERATION_COUNT = 547;
  * 382 -> 384 (issue 1629): marketplace.getBindings and marketplace.setBindings (the bindings
  * editor on a hired agent's page). Both generated.
  *
- * 384 -> 388 (issue 1631, ADR-0051 M5): marketplace.getFeedback, saveReview, saveWorkforceReport and
+ * 384 -> 389 (issue 1630, ADR-0051 M4): marketplace.getUpgradePlan, upgrade, setUpgradePolicy,
+ * getUpstreamReview and proposeUpstreamMerge (the Upgrade to... dialog, the policy and the
+ * fork's three-way review). All generated.
+ *
+ * 389 -> 393 (issue 1631, ADR-0051 M5): marketplace.getFeedback, saveReview, saveWorkforceReport and
  * actOnFeedback, the Feedback section of a listing. All generated.
  */
-const MANIFEST_ENTRY_COUNT = 388;
+const MANIFEST_ENTRY_COUNT = 393;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

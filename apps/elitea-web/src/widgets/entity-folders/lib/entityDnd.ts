@@ -6,6 +6,8 @@ import { folderOfEntity, type EntityFolder } from '@/entities/entity-folder';
 import { t } from '@/shared/i18n';
 import type { DndAnnouncementLabels, DndPolicy, DropAreaState } from '@/shared/lib/dnd';
 
+import { positionLabel, type FolderReorder } from './useFolderReorder';
+
 /** The draggable id of an entity, and the droppable ids of a folder and of "no folder". */
 const ENTITY_PREFIX = 'entity-';
 const FOLDER_DROP_PREFIX = 'folder-drop-';
@@ -37,6 +39,8 @@ interface EntityFolderDndState {
   readonly getDropAreaState: (dropAreaId: string) => DropAreaState;
   /** Rows tell the scope their name, for the overlay and the announcements. */
   readonly register: (entityId: number, name: string) => void;
+  /** Set while the list shows the open folder's own order: cards are then sortable, and their menu has Move up / Move down. */
+  readonly reorder: FolderReorder | undefined;
 }
 
 export const EntityFolderDndContext = createContext<EntityFolderDndState | undefined>(undefined);
@@ -94,16 +98,34 @@ export function entityDndPolicy({ folders, selectedIds, nameOf, move }: PolicyIn
   };
 }
 
-/** The screen reader's words for a drag of an entity: picked up, over a folder, dropped, cancelled. */
-export function entityAnnouncementLabels(folders: readonly EntityFolder[], nameOf: (entityId: number) => string): DndAnnouncementLabels {
+/** A place in the open folder's order a drag is over ("position 2 of 5"), or undefined for an id that is not a card there. */
+function placeNameOf(reorder: FolderReorder | undefined, dropId: UniqueIdentifier): string | undefined {
+  const entityId = entityIdOfDragId(dropId);
+  if (reorder === undefined || entityId === undefined) return undefined;
+  const index = reorder.indexOf(entityId);
+  return index === -1 ? undefined : positionLabel(index, reorder.count);
+}
+
+/** What a picked-up entity's screen reader hears: with a sortable folder open, the arrows also choose a place in it. */
+function pickedUpText(name: string, sortable: boolean): string {
+  return sortable
+    ? t('widgets.entityFolders.order.pickedUp', 'Picked up {{name}}. Use the arrow keys to choose a place in this folder or another folder, Space to drop it, Escape to cancel.', { name })
+    : t('widgets.entityFolders.dnd.pickedUp', 'Picked up {{name}}. Use the arrow keys to choose a folder, Space to drop it, Escape to cancel.', { name });
+}
+
+/** The screen reader's words for a drag of an entity: picked up, over a folder (or a place in the open one), dropped, cancelled. */
+export function entityAnnouncementLabels(
+  folders: readonly EntityFolder[],
+  nameOf: (entityId: number) => string,
+  reorder?: FolderReorder,
+): DndAnnouncementLabels {
   return {
     itemName: (id) => {
       const entityId = entityIdOfDragId(id);
       return entityId === undefined ? undefined : nameOf(entityId);
     },
-    targetName: (id) => folderNameOf(folders, id),
-    pickedUp: (name) =>
-      t('widgets.entityFolders.dnd.pickedUp', 'Picked up {{name}}. Use the arrow keys to choose a folder, Space to drop it, Escape to cancel.', { name }),
+    targetName: (id) => folderNameOf(folders, id) ?? placeNameOf(reorder, id),
+    pickedUp: (name) => pickedUpText(name, reorder !== undefined),
     over: (name, target) => t('widgets.entityFolders.dnd.over', '{{name}} is over {{target}}.', { name, target }),
     overNothing: (name) => t('widgets.entityFolders.dnd.overNothing', '{{name}} is not over a folder.', { name }),
     dropped: (name, target) => t('widgets.entityFolders.dnd.dropped', '{{name}} dropped on {{target}}.', { name, target }),
