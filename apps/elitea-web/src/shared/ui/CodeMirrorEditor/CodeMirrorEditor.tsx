@@ -204,7 +204,8 @@ export function CodeMirrorEditor({
     // lastNotified guard; if the screen still differs and nothing is in flight, it must land too (PJC03a).
     const view = cmRef.current?.view;
     const onScreen = view?.state.doc.toString();
-    const staleOnScreen = !changePendingRef.current && onScreen !== undefined && onScreen !== value;
+    // Only when `value` is the one already notified: a `value` that merely lags a newer keystroke must not overwrite it.
+    const staleOnScreen = !changePendingRef.current && value === lastNotifiedValueRef.current && onScreen !== undefined && onScreen !== value;
     if (staleOnScreen && view !== undefined) {
       // `code` may equal `value` already: write the document directly.
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
