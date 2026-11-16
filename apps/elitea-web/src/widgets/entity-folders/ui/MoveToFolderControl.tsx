@@ -1,7 +1,10 @@
 import { useState, type MouseEvent, type ReactNode } from 'react';
 
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import CheckIcon from '@mui/icons-material/Check';
 import FolderOpenOutlinedIcon from '@mui/icons-material/FolderOpenOutlined';
+import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import Menu from '@mui/material/Menu';
@@ -19,6 +22,14 @@ interface MoveToFolderControlProps {
   readonly current: EntityFolder | undefined;
   /** The chosen folder id, or null for the root. */
   readonly onMove: (folderId: string | null) => void;
+  /** Inside the open folder in its own order: Move up / Move down, the keyboard-free twin of a drag. */
+  readonly step?: StepControl | undefined;
+}
+
+export interface StepControl {
+  readonly canUp: boolean;
+  readonly canDown: boolean;
+  readonly onStep: (direction: 'up' | 'down') => void;
 }
 
 /**
@@ -26,7 +37,7 @@ interface MoveToFolderControlProps {
  * this list, the current one ticked, plus a way back to the root. It sits
  * inside a clickable card or row, so its clicks never reach the card.
  */
-export function MoveToFolderControl({ entityName, folders, current, onMove }: MoveToFolderControlProps): ReactNode {
+export function MoveToFolderControl({ entityName, folders, current, onMove, step }: MoveToFolderControlProps): ReactNode {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const label = t('widgets.entityFolders.moveTo', 'Move {{name}} to a folder', { name: entityName });
   const close = (): void => {
@@ -62,6 +73,7 @@ export function MoveToFolderControl({ entityName, folders, current, onMove }: Mo
         }}
         slotProps={{ list: { 'aria-label': label } }}
       >
+        {step !== undefined && stepItems(step, close)}
         {folders.length === 0 && (
           <MenuItem disabled>
             {t('widgets.entityFolders.noneYet', 'No folders yet. Create one in the Filters panel.')}
@@ -97,4 +109,41 @@ export function MoveToFolderControl({ entityName, folders, current, onMove }: Mo
       </Menu>
     </>
   );
+}
+
+/** Move up and Move down, then a divider before the folders: an array, as the Menu walks its direct children (no fragment, no wrapper). */
+function stepItems(step: StepControl, onDone: () => void): ReactNode[] {
+  const choose = (direction: 'up' | 'down'): void => {
+    onDone();
+    step.onStep(direction);
+  };
+  return [
+    <MenuItem
+      key="up"
+      disabled={!step.canUp}
+      data-testid="move-up-option"
+      onClick={() => {
+        choose('up');
+      }}
+    >
+      <ListItemIcon>
+        <ArrowUpwardIcon fontSize="small" />
+      </ListItemIcon>
+      {t('widgets.entityFolders.moveUp', 'Move up')}
+    </MenuItem>,
+    <MenuItem
+      key="down"
+      disabled={!step.canDown}
+      data-testid="move-down-option"
+      onClick={() => {
+        choose('down');
+      }}
+    >
+      <ListItemIcon>
+        <ArrowDownwardIcon fontSize="small" />
+      </ListItemIcon>
+      {t('widgets.entityFolders.moveDown', 'Move down')}
+    </MenuItem>,
+    <Divider key="divider" />,
+  ];
 }

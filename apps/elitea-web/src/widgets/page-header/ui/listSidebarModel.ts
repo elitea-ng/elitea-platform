@@ -49,7 +49,7 @@ export interface EntityListSidebarProps {
   readonly modes?: { readonly items: readonly ListMode[]; readonly active: string; readonly onSelect: (value: string) => void } | undefined;
   readonly facets?: readonly ListFacet[];
   /** Sort fields (`sort_by`); absent where the page cannot sort. */
-  readonly sortFields?: { readonly items: readonly { readonly value: string; readonly label: string }[]; readonly defaultField: string };
+  readonly sortFields?: { readonly items: readonly ListSortField[]; readonly defaultField: string };
   /** The page lists rows to search, filter and switch to a table: false on a mode that has none (Teams, Public). */
   readonly listControls?: boolean;
   readonly extraChips?: readonly ListFilterChip[];
@@ -95,4 +95,11 @@ export function useListSearch(): { readonly search: SearchRecord; readonly patch
     [navigate],
   );
   return { search, patch };
+}
+
+/** One sort field. A `directionless` one (a folder's own order) has no ascending/descending switch. */
+interface ListSortField {
+  readonly value: string;
+  readonly label: string;
+  readonly directionless?: boolean;
 }

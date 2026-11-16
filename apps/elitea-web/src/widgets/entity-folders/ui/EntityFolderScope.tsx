@@ -20,9 +20,11 @@ import { t } from '@/shared/i18n';
 import { EntityRowSlotProvider, type EntityListItem, type EntityRowSlot } from '@/shared/ui/EntityCardList';
 
 import { entityFolderAccess } from '../lib/access';
+import { useEntityFolderDnd } from '../lib/entityDnd';
+import type { FolderReorder } from '../lib/useFolderReorder';
 
 import { DragHandle } from './DragHandle';
-import { MoveToFolderControl } from './MoveToFolderControl';
+import { MoveToFolderControl, type StepControl } from './MoveToFolderControl';
 import { PinToggle } from './PinToggle';
 
 export interface EntityFolderScopeProps {
@@ -47,6 +49,7 @@ export function EntityFolderScope({ projectId, kind, permissions, children }: En
   const { mutate: moveEntity } = move;
   const { mutate: pinEntity } = pin;
   const pinnedIds = useEntityPins(projectId, kind).data;
+  const reorder = useEntityFolderDnd()?.reorder;
   const slot = useMemo<EntityRowSlot>(() => {
     const known = folders ?? [];
     const pinned = new Set(pinnedIds ?? []);
@@ -73,6 +76,7 @@ export function EntityFolderScope({ projectId, kind, permissions, children }: En
               onMove={(folderId) => {
                 moveEntity({ entityId, folderId });
               }}
+              step={stepOf(reorder, entityId)}
             />
           )}
         </Box>
@@ -96,7 +100,7 @@ export function EntityFolderScope({ projectId, kind, permissions, children }: En
         );
       },
     };
-  }, [folders, pinnedIds, projectId, canUpdate, moveEntity, pinEntity]);
+  }, [folders, pinnedIds, projectId, canUpdate, moveEntity, pinEntity, reorder]);
   return (
     <EntityRowSlotProvider value={slot}>
       {children}
@@ -121,6 +125,19 @@ export function EntityFolderScope({ projectId, kind, permissions, children }: En
       </Snackbar>
     </EntityRowSlotProvider>
   );
+}
+
+/** Move up / Move down for a card of the open folder in its own order; undefined otherwise. */
+function stepOf(reorder: FolderReorder | undefined, entityId: number): StepControl | undefined {
+  const index = reorder?.indexOf(entityId) ?? -1;
+  if (reorder === undefined || index === -1) return undefined;
+  return {
+    canUp: index > 0,
+    canDown: index < reorder.count - 1,
+    onStep: (direction) => {
+      reorder.step(entityId, direction);
+    },
+  };
 }
 
 const controlsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center' };
