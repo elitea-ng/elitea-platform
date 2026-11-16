@@ -179,7 +179,7 @@ describe('import size limits (#2032)', () => {
     const file = new File([await zip.generateAsync({ type: 'arraybuffer' })], 'multi.zip');
     const { document } = await readImportFile(file);
     const entries = document.applications as unknown as Entry[];
-    expect(entries.map((e) => e.name).sort()).toEqual(['Bot', 'Other']);
+    expect(entries.map((e) => e.name ?? '').sort((a, b) => a.localeCompare(b))).toEqual(['Bot', 'Other']);
     const bot = entries.find((e) => e.name === 'Bot') as Entry;
     // base first: the first version of an entry becomes the default one.
     expect(bot.versions.map((v) => v.name)).toEqual(['base', 'v1']);

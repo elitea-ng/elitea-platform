@@ -13,10 +13,9 @@ import type { Toolkit } from '@/entities/toolkit';
 import {
   getGetApplicationQueryKey,
   getGetApplicationVersionDetailQueryKey,
-  useGetApplication,
   useListApplications,
 } from '@/shared/api/generated/applications/applications';
-import type { Application, ApplicationDetail } from '@/shared/api/generated/model';
+import type { Application } from '@/shared/api/generated/model';
 import { getToolkit } from '@/shared/api/generated/toolkits/toolkits';
 import { unwrapBody, unwrapList } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
@@ -30,6 +29,7 @@ import { setToolkitRelation } from '../lib/toolRelation';
 import { useFilterAddedItems } from '../lib/useFilterAddedItems';
 import type { AgentToolAssociation } from '../lib/types';
 
+import { useToolMenuEntityDetail } from './useToolMenuEntityDetail';
 import { EntityAddSection, InstanceAddSection, useEntityAssociationItems } from './ToolMenuSections';
 
 /**
@@ -152,22 +152,6 @@ const containerSx: SxProps<Theme> = { display: 'flex', gap: 1, alignItems: 'cent
 /** Not in `SearchParams` (`@/shared/lib/params`) — the baseline never put it in `constants.js` either (`ToolMenu.jsx:217`'s `searchParams.get('newToolkitId')` is a raw literal), only `src/routes/-search/params.ts`'s `paramSchemas.newToolkitId` registers it. */
 const NEW_TOOLKIT_ID_PARAM = 'newToolkitId';
 
-function toApplicationTool(tool: unknown): AgentToolAssociation {
-  return tool as AgentToolAssociation;
-}
-
-function computeAddedToolkitIds(currentTools: readonly AgentToolAssociation[]): ReadonlySet<string | number> {
-  const ids = currentTools
-    .filter((tool) => tool.type !== 'application')
-    .map((tool) => tool.id)
-    .filter((id): id is string | number => id !== undefined);
-  return new Set(ids);
-}
-
-function resolveEntityLabel(agentType: string | undefined): 'agent' | 'pipeline' {
-  return agentType === 'pipeline' ? 'pipeline' : 'agent';
-}
-
 /**
  * `PATCH /elitea_core/tool/prompt_lib/{project_id}/{toolkit_id}` — attaches a toolkit instance
  * as a tool on the given version. See this module's own doc comment ("REAL GAPS" bullet) for
@@ -185,44 +169,6 @@ async function associateToolkitInstance(projectId: string, applicationId: number
   } catch {
     return false;
   }
-}
-
-/* ── the application/version this ToolMenu is attached to ─────────────────── */
-
-interface ToolMenuEntityDetail {
-  readonly numericApplicationId: number | undefined;
-  readonly versionId: number | undefined;
-  readonly isEntityUnsaved: boolean;
-  readonly entityLabel: 'agent' | 'pipeline';
-  readonly currentTools: readonly AgentToolAssociation[];
-  readonly addedToolkitIds: ReadonlySet<string | number>;
-}
-
-function useToolMenuEntityDetail(
-  applicationId: number | string | undefined,
-  projectId: string | undefined,
-  pinned: { readonly versionId?: number | string | undefined; readonly currentTools?: readonly AgentToolAssociation[] | undefined },
-): ToolMenuEntityDetail {
-  const numericApplicationId = applicationId === undefined ? undefined : Number(applicationId);
-  const applicationQuery = useGetApplication(projectId ?? '', numericApplicationId ?? 0, {
-    query: { enabled: projectId !== undefined && numericApplicationId !== undefined },
-  });
-  // Same error-envelope-unreachable cast as every other Wave-2 generated-client caller (eliteaFetch throws instead of resolving with the error variant).
-  const versionDetails = (applicationQuery.data as { data: ApplicationDetail } | undefined)?.data.version_details;
-  const defaultVersionId = versionDetails === undefined || versionDetails.id === undefined ? undefined : Number(versionDetails.id);
-  const versionId = pinned.versionId === undefined ? defaultVersionId : Number(pinned.versionId);
-  const detailTools = useMemo(() => (versionDetails?.tools ?? []).map(toApplicationTool), [versionDetails?.tools]);
-  const currentTools = pinned.currentTools ?? detailTools;
-  const addedToolkitIds = useMemo(() => computeAddedToolkitIds(currentTools), [currentTools]);
-
-  return {
-    numericApplicationId,
-    versionId,
-    isEntityUnsaved: numericApplicationId === undefined || versionId === undefined,
-    entityLabel: resolveEntityLabel(versionDetails?.agent_type),
-    currentTools,
-    addedToolkitIds,
-  };
 }
 
 export function ToolMenu({ applicationId, versionId: pinnedVersionId, currentTools: pinnedTools, onToolsChanged, onAttachToolkit, onAttachMcp }: ToolMenuProps): ReactNode {

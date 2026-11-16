@@ -248,6 +248,43 @@ function addChannels(into: Channels, from: Channels): void {
   into.skills.push(...from.skills);
 }
 
+interface NestedForkContext {
+  readonly sourceProjectId: string;
+  readonly targetProjectId: string;
+  /** Source agent id to the agent created for it, so an agent reached twice is created once. */
+  readonly created: Map<number, ForkedAgent>;
+  readonly depth: number;
+}
+
+/** Creates one nested agent (unless it already was) and links it under `parent`. Reports what it made on `added` and what went wrong on `failed`. */
+async function forkNestedRef(context: NestedForkContext, ref: NestedAgentRef, parent: { readonly applicationId: number; readonly versionId: number }, added: Channels, failed: Channels): Promise<void> {
+  let child = context.created.get(ref.applicationId);
+  if (child === undefined) {
+    if (context.depth >= MAX_NESTED_DEPTH) throw new Error('it is nested too deeply');
+    const nestedDocument = await fetchForkDocument(context.sourceProjectId, ref.applicationId, ref.versionId);
+    const nested = await forkEntityWithNested(context.sourceProjectId, context.targetProjectId, nestedDocument, context.created, context.depth + 1);
+    // Recorded before the link, so a child that was created but not linked is reported.
+    addChannels(added, channelsOf(nested.result));
+    addChannels(failed, channelsOf(nested.errors));
+    child = firstForkedAgent(nested);
+    context.created.set(ref.applicationId, child);
+  }
+  if (child.applicationId === undefined || child.versionId === undefined) throw new Error('the nested agent was not created');
+  await updateApplicationRelation(context.targetProjectId, child.applicationId, child.versionId, {
+    application_id: parent.applicationId,
+    version_id: parent.versionId,
+    has_relation: true,
+  });
+}
+
+function sourceApplicationId(document: EntityExportDocument): number | undefined {
+  return positiveInteger((document.applications?.[0] as { id?: unknown } | undefined)?.id);
+}
+
+function hasEntries(channels: Channels): boolean {
+  return channels.agents.length + channels.toolkits.length + channels.skills.length > 0;
+}
+
 /**
  * Forks an agent into another project WITH everything it nests (#2109).
  *
@@ -272,39 +309,24 @@ export async function forkEntityWithNested(
   depth = 0,
 ): Promise<ForkOutcome> {
   const outcome = await forkEntity(targetProjectId, document);
-  const parent = firstForkedAgent(outcome);
-  const sourceId = positiveInteger((document.applications?.[0] as { id?: unknown } | undefined)?.id);
-  if (sourceId !== undefined && parent.applicationId !== undefined) created.set(sourceId, parent);
+  const { applicationId, versionId } = firstForkedAgent(outcome);
+  const sourceId = sourceApplicationId(document);
+  if (sourceId !== undefined && applicationId !== undefined) created.set(sourceId, { applicationId, versionId });
   const refs = nestedAgentRefs(document);
-  if (refs.length === 0 || parent.applicationId === undefined || parent.versionId === undefined) return outcome;
+  if (refs.length === 0 || applicationId === undefined || versionId === undefined) return outcome;
 
+  const context: NestedForkContext = { sourceProjectId, targetProjectId, created, depth };
   const added = emptyChannels();
   const failed = emptyChannels();
   for (const ref of refs) {
     try {
-      let child = created.get(ref.applicationId);
-      if (child === undefined) {
-        if (depth >= MAX_NESTED_DEPTH) throw new Error('it is nested too deeply');
-        const nestedDocument = await fetchForkDocument(sourceProjectId, ref.applicationId, ref.versionId);
-        const nested = await forkEntityWithNested(sourceProjectId, targetProjectId, nestedDocument, created, depth + 1);
-        // Recorded before the link, so a child that was created but not linked is reported.
-        addChannels(added, channelsOf(nested.result));
-        addChannels(failed, channelsOf(nested.errors));
-        child = firstForkedAgent(nested);
-        created.set(ref.applicationId, child);
-      }
-      if (child.applicationId === undefined || child.versionId === undefined) throw new Error('the nested agent was not created');
-      await updateApplicationRelation(targetProjectId, child.applicationId, child.versionId, {
-        application_id: parent.applicationId,
-        version_id: parent.versionId,
-        has_relation: true,
-      });
+      await forkNestedRef(context, ref, { applicationId, versionId }, added, failed);
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : 'unknown error';
       failed.agents.push({ index: 0, name: String(ref.applicationId), msg: `Nested agent ${String(ref.applicationId)} was not forked or linked: ${reason}` });
     }
   }
-  const hasFailures = failed.agents.length + failed.toolkits.length + failed.skills.length > 0;
+  const hasFailures = hasEntries(failed);
   return {
     status: hasFailures ? 207 : outcome.status,
     result: withChannels(outcome.result, added),
