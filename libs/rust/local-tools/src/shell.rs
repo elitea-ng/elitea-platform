@@ -1232,44 +1232,60 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(10));
     }
 
+    const STUCK_PIPE: &str = "echo before; echo oops >&2; /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); sleep 6' & sleep 1";
+
     /// A grandchild that leaves the process group and keeps stdout open
     /// does not cost the output read before it: the readers are cut off
-    /// after the drain, what they read is kept and marked truncated.
+    /// after the drain, what they read is kept and marked truncated. The
+    /// command runs unconfined (full access, network on), so the drain is
+    /// exercised on every host, bubblewrap or not.
     #[tokio::test]
     async fn output_read_before_a_stuck_pipe_is_kept() {
         if !std::path::Path::new("/usr/bin/perl").is_file() {
             return;
         }
         let (_dir, workspace, config) = setup();
+        let mut stuck = spec(STUCK_PIPE, SandboxMode::FullAccess);
+        stuck.network = true;
         let started = std::time::Instant::now();
-        let output = run(
-            &workspace,
-            &config,
-            &spec(
-                "echo before; echo oops >&2; /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); sleep 6' & sleep 1",
-                SandboxMode::FullAccess,
-            ),
-        )
-        .await
-        .expect("run");
+        let output = run(&workspace, &config, &stuck).await.expect("run");
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "the drain is bounded"
         );
         assert!(output.stdout.starts_with("before\n"), "{:?}", output.stdout);
         assert!(output.stderr.starts_with("oops\n"), "{:?}", output.stderr);
-        // Under bubblewrap the command's PID namespace ends with it and
-        // takes the setsid grandchild along, so nothing holds the pipes
-        // open and the output is complete, not cut off.
-        #[cfg(target_os = "linux")]
-        let confined = crate::sandbox::bubblewrap::usable(&config.sandbox).is_some();
-        #[cfg(not(target_os = "linux"))]
-        let confined = false;
-        if confined {
-            return;
-        }
         assert!(output.stdout_truncated);
         assert!(output.stderr_truncated);
+    }
+
+    /// Under bubblewrap the command's PID namespace ends with it and takes
+    /// the setsid grandchild along, so nothing holds the pipes open: the
+    /// call returns at once with the complete output, not cut off.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_stuck_pipe_dies_with_the_pid_namespace_under_bubblewrap() {
+        let (_dir, workspace, config) = setup();
+        if !std::path::Path::new("/usr/bin/perl").is_file()
+            || crate::sandbox::bubblewrap::usable(&config.sandbox).is_none()
+        {
+            return;
+        }
+        let started = std::time::Instant::now();
+        let output = run(
+            &workspace,
+            &config,
+            &spec(STUCK_PIPE, SandboxMode::FullAccess),
+        )
+        .await
+        .expect("run");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the namespace ends the grandchild"
+        );
+        assert_eq!(output.stdout, "before\n");
+        assert_eq!(output.stderr, "oops\n");
+        assert!(!output.stdout_truncated && !output.stderr_truncated);
     }
 
     #[tokio::test]

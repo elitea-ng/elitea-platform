@@ -255,7 +255,28 @@ fn namespaced() -> bool {
         .is_some()
 }
 
-fn running(pid: u32) -> bool {
+/// Whether a host process (bubblewrap and its namespace included) still runs
+/// `program`, found by its command line: the program path is unique to the
+/// fixture's temporary directory, so this is the host's view of a server
+/// whatever pid it has inside its namespace.
+fn program_running(program: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        std::fs::read(entry.path().join("cmdline")).is_ok_and(|line| {
+            line.windows(program.len())
+                .any(|window| window == program.as_bytes())
+        })
+    })
+}
+
+/// Whether the server `pid` (as it reports it) of `program` runs: by host
+/// pid, or, in a PID namespace, by its command line.
+fn running(pid: u32, program: &str) -> bool {
+    if namespaced() {
+        return program_running(program);
+    }
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
         .stderr(std::process::Stdio::null())
@@ -263,12 +284,9 @@ fn running(pid: u32) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-async fn wait_gone(pid: u32) -> bool {
-    if namespaced() {
-        return true;
-    }
+async fn wait_gone(pid: u32, program: &str) -> bool {
     for _ in 0..100 {
-        if !running(pid) {
+        if !running(pid, program) {
             return true;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -354,21 +372,23 @@ async fn a_server_starts_lists_and_answers_its_tools_and_stops_with_the_session(
     assert_eq!(failed["code"], "local_tools.mcp_tool_error");
 
     let pid = pid_of(&hello);
-    assert!(namespaced() || running(pid));
+    let program = server_program(&fixture);
+    assert!(running(pid, &program), "the server runs");
     // Every tool holds the session: none may outlive this part.
     drop(tools);
     fixture.session.stop_processes().await;
-    assert!(wait_gone(pid).await, "stopped with the session's processes");
+    assert!(wait_gone(pid, &program).await, "stopped with the session's processes");
     assert!(fixture.session.mcp().ready().is_empty());
     // A later turn starts it again.
     let again = fixture.session.start_mcp_servers("turn-2").await;
     assert_eq!(again[0].state, ServerState::Ready);
     let tools = offered(&fixture).await;
     let pid = pid_of(&call(&tools, "mcp__fx__echo", json!({})).await);
+    assert!(running(pid, &program), "the restarted server runs");
     drop(tools);
     let Fixture { session, .. } = fixture;
     drop(session);
-    assert!(wait_gone(pid).await, "killed when the session is dropped");
+    assert!(wait_gone(pid, &program).await, "killed when the session is dropped");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -390,12 +410,14 @@ async fn a_changed_configuration_stops_the_server_and_plan_mode_keeps_read_only_
     fixture.session.start_mcp_servers("turn-1").await;
     let tools = offered(&fixture).await;
     let pid = pid_of(&call(&tools, "mcp__fx__echo", json!({})).await);
+    let program = server_program(&fixture);
+    assert!(running(pid, &program), "the server runs");
     drop(tools);
     configure(&fixture, |server| {
         server.allowed_tools = Some(vec!["echo".to_owned(), "env".to_owned()]);
     });
     assert!(
-        wait_gone(pid).await,
+        wait_gone(pid, &program).await,
         "the old configuration's server stopped"
     );
     fixture.session.start_mcp_servers("turn-2").await;
