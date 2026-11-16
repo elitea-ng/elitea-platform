@@ -334,7 +334,7 @@ func (h *Handler) MarketplaceFeedbackAction(w http.ResponseWriter, r *http.Reque
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": "only the publisher or an administrator may flag"})
 			return
 		}
-		actionErr = marketplace.Flag(ctx, h.pool, listingID, feedbackID, body.Action == "flag", body.Reason, caller)
+		actionErr = marketplace.Flag(ctx, h.pool, listingID, feedbackID, body.Action == "flag", body.Reason, caller, !moderator)
 	case "hide", "unhide":
 		if !moderator {
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": "only a platform administrator may hide an item"})

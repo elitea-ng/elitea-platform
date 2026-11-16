@@ -130,6 +130,11 @@ VALUES ($1, $2, $3, $4, $5)`, feedbackID, listingID, action, actor, clamp(string
 // RefreshRating recomputes rating_avg and rating_count of a listing from its
 // visible reviews. A listing with none has a null average and a zero count.
 func RefreshRating(ctx context.Context, db DB, listingID int64) error {
+	// Serialise concurrent reviews and hides of one listing: the recount below
+	// runs after the lock, so it sees every committed row.
+	if _, err := db.Exec(ctx, `SELECT 1 FROM elitea_marketplace.listings WHERE id = $1 FOR UPDATE`, listingID); err != nil {
+		return fmt.Errorf("marketplace: lock the listing: %w", err)
+	}
 	if _, err := db.Exec(ctx, `
 UPDATE elitea_marketplace.listings l
 SET rating_avg = r.avg, rating_count = r.n, updated_at = clock_timestamp()
@@ -237,11 +242,12 @@ func SaveReview(ctx context.Context, db TxDB, in ReviewInput) (int64, bool, erro
 	var id int64
 	var created bool
 	err := inTx(ctx, db, func(tx pgx.Tx) error {
-		publisher, _, err := listingOrigin(ctx, tx, in.ListingID)
+		publisher, source, err := listingOrigin(ctx, tx, in.ListingID)
 		if err != nil {
 			return err
 		}
-		if publisher != nil && *publisher == in.UserID {
+		// Neither the publisher nor anyone reviewing from the publishing project.
+		if (publisher != nil && *publisher == in.UserID) || source == in.ProjectID {
 			return ErrOwnListing
 		}
 		versions, err := hiredVersions(ctx, tx, in.ProjectID, in.ListingID)
@@ -478,8 +484,9 @@ WHERE id = $1 AND listing_id = $2 AND state = 'visible'`, feedbackID, listingID)
 }
 
 // Flag marks an item for an administrator, or clears the mark. A second flag on
-// a flagged item changes nothing.
-func Flag(ctx context.Context, db TxDB, listingID, feedbackID int64, flagged bool, reason string, who int64) error {
+// a flagged item changes nothing. restricted is a publisher who is not an
+// administrator: they reach visible items only and clear only their own flag.
+func Flag(ctx context.Context, db TxDB, listingID, feedbackID int64, flagged bool, reason string, who int64, restricted bool) error {
 	reason = clamp(strings.TrimSpace(reason), MaxReason)
 	return inTx(ctx, db, func(tx pgx.Tx) error {
 		var tag pgconn.CommandTag
@@ -489,18 +496,28 @@ func Flag(ctx context.Context, db TxDB, listingID, feedbackID int64, flagged boo
 			tag, err = tx.Exec(ctx, `
 UPDATE elitea_marketplace.listing_feedback SET flagged_at = clock_timestamp(), flagged_by = $3, flag_reason = $4,
     updated_at = clock_timestamp()
-WHERE id = $1 AND listing_id = $2 AND flagged_at IS NULL`, feedbackID, listingID, who, reason)
+WHERE id = $1 AND listing_id = $2 AND flagged_at IS NULL AND ($5::boolean = false OR state = 'visible')`,
+				feedbackID, listingID, who, reason, restricted)
 		} else {
 			action = ActionUnflag
 			tag, err = tx.Exec(ctx, `
 UPDATE elitea_marketplace.listing_feedback SET flagged_at = NULL, flagged_by = NULL, flag_reason = '',
     updated_at = clock_timestamp()
-WHERE id = $1 AND listing_id = $2 AND flagged_at IS NOT NULL`, feedbackID, listingID)
+WHERE id = $1 AND listing_id = $2 AND flagged_at IS NOT NULL
+  AND ($3::boolean = false OR (state = 'visible' AND flagged_by = $4))`, feedbackID, listingID, restricted, who)
 		}
 		if err != nil {
 			return fmt.Errorf("marketplace: flag the item: %w", err)
 		}
 		if tag.RowsAffected() == 0 {
+			if restricted {
+				// A publisher learns nothing about an item they may not see.
+				var visible bool
+				if err := tx.QueryRow(ctx, `SELECT state = 'visible' FROM elitea_marketplace.listing_feedback WHERE id = $1 AND listing_id = $2`, feedbackID, listingID).Scan(&visible); err != nil || !visible {
+					return ErrNotFound
+				}
+				return nil
+			}
 			return itemExists(ctx, tx, listingID, feedbackID)
 		}
 		return recordEvent(ctx, tx, feedbackID, listingID, action, who, reason)

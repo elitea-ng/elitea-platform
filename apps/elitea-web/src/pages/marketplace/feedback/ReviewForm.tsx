@@ -95,7 +95,14 @@ function initialDraft(
   versions: readonly MarketplaceReviewVersion[],
 ): ReviewDraft {
   if (existing === null) return { versionId: versions[0]?.id ?? '', rating: 0, body: '' };
-  return { versionId: existing.version_id, rating: existing.rating ?? 0, body: existing.body };
+  // The saved version may be one this project did not hire (the review is per person, the hire per
+  // project), and the server refuses a version it did not hire.
+  const hired = versions.some((version) => version.id === existing.version_id);
+  return {
+    versionId: hired ? existing.version_id : (versions[0]?.id ?? ''),
+    rating: existing.rating ?? 0,
+    body: existing.body,
+  };
 }
 
 export function ReviewForm({ projectId, listingId, versions, existing }: ReviewFormProps): ReactNode {

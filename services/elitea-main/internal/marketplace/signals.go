@@ -192,7 +192,10 @@ ORDER BY version_id, day DESC`, listingID)
 	if err := rows.Err(); err != nil {
 		return SignalsSet{}, err
 	}
-	if found {
+	// The daily rows answer only when the listing row is today's: an older one
+	// could sit beside version rows from other days, or miss a version that was
+	// hired since.
+	if found && set.Listing.Day == time.Now().UTC().Format("2006-01-02") {
 		return set, nil
 	}
 	return liveSignals(ctx, db, listingID)
