@@ -46,6 +46,15 @@ type CurrentProjectSkill struct {
 	Description   string
 	Instructions  string
 	IconMeta      json.RawMessage
+	// Untrusted is true for a skill written in another project (its base
+	// version records a parent project that is not this one) whose current
+	// text this project has not trusted (ADR-0051 amendment 1, A1.6). The
+	// worker then shows the text as quoted untrusted data, not as an
+	// instruction. The resolver decides it; the request never does.
+	Untrusted bool
+	// PublisherProjectID is the project the skill was forked from, when
+	// Untrusted. Zero otherwise.
+	PublisherProjectID int64
 }
 
 // CurrentProjectSkillResolver reads the project skills a turn names by id,
@@ -77,23 +86,34 @@ func (service *CurrentApplicationStartService) resolveProjectSkills(
 	ctx context.Context,
 	request CurrentApplicationStartRequest,
 ) ([]map[string]any, error) {
-	if len(request.ProjectSkillIDs) == 0 {
+	return service.resolveProjectSkillIDs(ctx, request.ProjectID, request.ProjectSkillIDs)
+}
+
+// resolveProjectSkillIDs is resolveProjectSkills for the ids of either start
+// contract: an agent turn and a model chat read and freeze a pick the same
+// way, so the runtime admits both by the same rules.
+func (service *CurrentApplicationStartService) resolveProjectSkillIDs(
+	ctx context.Context,
+	projectID int64,
+	skillIDs []int64,
+) ([]map[string]any, error) {
+	if len(skillIDs) == 0 {
 		return nil, nil
 	}
-	if len(request.ProjectSkillIDs) > currentMaxProjectSkillPicks {
+	if len(skillIDs) > currentMaxProjectSkillPicks {
 		return nil, ErrProjectSkillsTooMany
 	}
 	if service.projectSkills == nil {
 		return nil, ErrProjectSkillUnknown
 	}
-	skills, err := service.projectSkills.ResolveCurrentProjectSkills(ctx, request.ProjectID, request.ProjectSkillIDs)
+	skills, err := service.projectSkills.ResolveCurrentProjectSkills(ctx, projectID, skillIDs)
 	if err != nil {
 		return nil, err
 	}
-	if len(skills) != len(request.ProjectSkillIDs) {
+	if len(skills) != len(skillIDs) {
 		return nil, ErrProjectSkillUnknown
 	}
-	scope := fmt.Sprintf("project:%d", request.ProjectID)
+	scope := fmt.Sprintf("project:%d", projectID)
 	snapshots := make([]map[string]any, 0, len(skills))
 	for _, skill := range skills {
 		if skill.SkillID <= 0 || skill.BaseVersionID <= 0 || strings.TrimSpace(skill.Name) == "" ||
@@ -104,7 +124,7 @@ func (service *CurrentApplicationStartService) resolveProjectSkills(
 		if len(skill.IconMeta) != 0 && json.Valid(skill.IconMeta) {
 			_ = json.Unmarshal(skill.IconMeta, &iconMeta)
 		}
-		snapshots = append(snapshots, map[string]any{
+		snapshot := map[string]any{
 			"skill_id":         skill.SkillID,
 			"skill_version_id": skill.BaseVersionID,
 			"name":             skill.Name,
@@ -115,7 +135,13 @@ func (service *CurrentApplicationStartService) resolveProjectSkills(
 			"id":               fmt.Sprintf("skill:%d:version:%d", skill.SkillID, skill.BaseVersionID),
 			"revision":         currentInstructionRevision(skill.Instructions),
 			"scope":            scope,
-		})
+		}
+		if skill.Untrusted {
+			// Absent when trusted, so a trusted skill's snapshot and digest
+			// are the ones every earlier turn froze.
+			snapshot["trust"] = "untrusted"
+		}
+		snapshots = append(snapshots, snapshot)
 	}
 	return snapshots, nil
 }

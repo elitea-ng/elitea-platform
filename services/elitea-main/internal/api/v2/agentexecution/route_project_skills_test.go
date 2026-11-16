@@ -93,7 +93,7 @@ func TestCurrentStartRouteRefusesProjectSkillsWithoutTheSkillsPermission(t *test
 	}
 }
 
-func TestCurrentStartRouteRefusesSixProjectSkillsAndAModelChatPick(t *testing.T) {
+func TestCurrentStartRouteRefusesSixProjectSkills(t *testing.T) {
 	six := `[{"source":"project","id":1},{"source":"project","id":2},{"source":"project","id":3},{"source":"project","id":4},{"source":"project","id":5},{"source":"project","id":6}]`
 	useCase := &currentStartUseCaseStub{}
 	route := newCurrentStartRoute(t, useCase, permissionsOf(CurrentApplicationStartPermission, CurrentProjectSkillsPermission))
@@ -103,12 +103,31 @@ func TestCurrentStartRouteRefusesSixProjectSkillsAndAModelChatPick(t *testing.T)
 	if response.Code != http.StatusBadRequest || useCase.calls != 0 {
 		t.Fatalf("six picks: status=%d calls=%d", response.Code, useCase.calls)
 	}
+}
 
-	adhoc := strings.Replace(validCurrentAdhocStartBody(), `"payload":{"user_input":"hello from main chat"`, `"payload":{"user_input":"hello from main chat","skills":[{"source":"project","id":4}]`, 1)
+// A model chat takes project skills since skills S2 (ADR-0050 amendment 1):
+// the picks reach the ad-hoc use case, behind the same permission.
+func TestCurrentAdhocStartRouteCarriesProjectSkillIDsToTheUseCase(t *testing.T) {
+	adhoc := strings.Replace(validCurrentAdhocStartBody(), `"payload":{"user_input":"hello from main chat"`, `"payload":{"user_input":"hello from main chat","skills":[{"source":"project","id":4},{"source":"project","id":9}]`, 1)
+
+	useCase := &currentStartUseCaseStub{}
+	route := newCurrentStartRoute(t, useCase, permissionsOf(CurrentApplicationStartPermission, CurrentProjectSkillsPermission))
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentAdhocStartRequest(adhoc))
+	if response.Code != http.StatusOK || useCase.adhocCalls != 1 {
+		t.Fatalf("model chat pick: status=%d adhoc_calls=%d body=%s", response.Code, useCase.adhocCalls, response.Body.String())
+	}
+	if got := useCase.adhocRequest.ProjectSkillIDs; !reflect.DeepEqual(got, []int64{4, 9}) {
+		t.Fatalf("project skill ids = %v, want [4 9]", got)
+	}
+
+	// Without the skills permission the pick is refused before the use case.
+	denied := &currentStartUseCaseStub{}
+	route = newCurrentStartRoute(t, denied, permissionsOf(CurrentApplicationStartPermission))
 	response = httptest.NewRecorder()
 	route.ServeHTTP(response, currentAdhocStartRequest(adhoc))
-	if response.Code != http.StatusBadRequest || useCase.adhocCalls != 0 {
-		t.Fatalf("model chat pick: status=%d adhoc_calls=%d", response.Code, useCase.adhocCalls)
+	if response.Code != http.StatusForbidden || denied.adhocCalls != 0 {
+		t.Fatalf("model chat pick without permission: status=%d adhoc_calls=%d", response.Code, denied.adhocCalls)
 	}
 }
 
