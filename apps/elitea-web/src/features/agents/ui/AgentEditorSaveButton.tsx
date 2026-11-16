@@ -34,11 +34,13 @@ export function AgentEditorSaveButton({
       />
     );
   }
+  // Live only with a save to call AND an edit to save.
+  const canSave = onSaveVersion !== undefined && isDirty;
   return (
     <ApplicationSaveButton
       onSave={onSaveVersion ?? noopSave}
       isSaving={isSavingVersion ?? false}
-      disabled={!onSaveVersion || !isDirty}
+      disabled={!canSave}
     />
   );
 }
