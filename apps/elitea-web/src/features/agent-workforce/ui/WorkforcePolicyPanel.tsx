@@ -28,6 +28,7 @@ import type { AutomaticActionDecision } from '../api/agentWorkforceApi';
 import { actionKindLabel, actionStatusLabel, conditionText, formOf, inputOf, thresholdKey, typeThreshold, withRules, type PolicyForm } from '../lib/policy';
 import { stageLabel, workforceRefusal } from '../lib/workforce';
 import { useAutomaticActions, useWorkforcePolicy, useWorkforcePolicyActions } from '../model/useWorkforcePolicy';
+import { AutoFeedbackSwitch } from './AutoFeedbackSwitch';
 
 export interface WorkforcePolicyPanelProps {
   readonly projectId: string;
@@ -236,26 +237,11 @@ function PolicyEditor({ projectId, policy }: { readonly projectId: string; reado
         <RulesEditor form={form} disabled={disabled} onChange={edit} />
       </Box>
 
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        <FormControlLabel
-          control={
-            <BaseSwitch
-              checked={form.autoFeedbackEnabled}
-              disabled={disabled}
-              onChange={(event) => edit({ ...form, autoFeedbackEnabled: event.target.checked })}
-              aria-label={t('features.agentWorkforce.policy.autoFeedback', 'Publish workforce reports automatically')}
-              data-testid="agent-workforce-policy-auto-feedback"
-            />
-          }
-          label={t('features.agentWorkforce.policy.autoFeedback', 'Publish workforce reports automatically')}
-        />
-        <Typography variant="bodySmall" color="text.secondary">
-          {t(
-            'features.agentWorkforce.policy.autoFeedbackHelp',
-            'When a dismissal or demotion of an installed or forked agent is applied, the report a workforce manager drafted is published to the listing version without waiting for approval. It is recorded under you as the person who set this policy. Off by default.',
-          )}
-        </Typography>
-      </Box>
+      <AutoFeedbackSwitch
+        checked={form.autoFeedbackEnabled}
+        disabled={disabled}
+        onChange={(checked) => edit({ ...form, autoFeedbackEnabled: checked })}
+      />
 
       {error !== undefined && (
         <Alert severity="error" data-testid="agent-workforce-policy-error">

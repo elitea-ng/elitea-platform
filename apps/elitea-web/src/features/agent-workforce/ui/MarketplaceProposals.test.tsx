@@ -61,7 +61,7 @@ function proposal(overrides: Partial<AgentWorkforceProposal>): AgentWorkforcePro
       bindings_hint: [{ requirement_key: 'toolkit:github', toolkit_id: 12 }],
     },
     ...overrides,
-  } as AgentWorkforceProposal;
+  };
 }
 
 const HIRE = proposal({ id: 9 });
@@ -100,7 +100,7 @@ beforeEach(() => {
 afterEach(() => resetGeneratedClient());
 
 describe('MarketplaceProposals', () => {
-  it('asks for the Marketplace kinds and shows nothing to a caller who does not manage agents', async () => {
+  it('asks for the Marketplace kinds and shows nothing to a caller who does not manage agents', () => {
     renderWithQueryAndTheme(<MarketplaceProposals projectId="7" canManage={false} onOpenWizard={vi.fn()} />);
     expect(screen.queryByTestId('agent-workforce-marketplace')).not.toBeInTheDocument();
     expect(calls.query).toEqual([]);

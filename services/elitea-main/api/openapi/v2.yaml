@@ -9705,7 +9705,7 @@ components:
             A feedback_report has outcome, reason_code, scorecard (the platform-filled summary), listing_name and
             hired_agent_id; its text is the rationale. Empty for the ladder.
           x-elitea-passthrough: >-
-            NOTE(W2): repos.WorkforceProposal.Payload (internal/infra/db/repos/agent_workforce.go) is the jsonb the
+            NOTE(W2): repos.WorkforceProposal.Payload (internal/infra/db/repos/agent_workforce.go:133) is the jsonb the
             Marketplace tools wrote (internal/infra/db/repos/agent_workforce_marketplace.go).
     AgentScorecard:
       type: object

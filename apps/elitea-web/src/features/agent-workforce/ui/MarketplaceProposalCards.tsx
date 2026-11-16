@@ -13,6 +13,7 @@ import { useState } from 'react';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import type { SxProps, Theme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
@@ -25,7 +26,15 @@ import { useMarketplaceProposalActions } from '../model/useMarketplaceProposals'
 
 const failed = (): string => t('features.agentWorkforce.decision.failed', 'That did not go through.');
 
-const cardSx = { display: 'flex', flexDirection: 'column', gap: '0.5rem', border: '1px solid', borderColor: 'divider', borderRadius: 1, p: '0.75rem' } as const;
+const cardSx: SxProps<Theme> = (theme: Theme) => ({
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '0.5rem',
+  border: '1px solid',
+  borderColor: 'divider',
+  borderRadius: theme.vars.shape.radiusMd,
+  p: '0.75rem',
+});
 
 function figure(label: string, value: number | undefined, digits = 1): string {
   return value === undefined ? '' : `${label} ${value.toFixed(digits)}`;
