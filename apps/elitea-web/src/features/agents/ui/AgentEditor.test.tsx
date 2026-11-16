@@ -211,11 +211,19 @@ describe('AgentEditor', () => {
     await waitFor(() => expect(screen.getByTestId('agent-save-button')).toBeDisabled());
   });
 
+  it('edit-mode Save stays disabled while nothing is unsaved (#2120)', async () => {
+    renderEditor({
+      agent: { id: 1, entity_meta: { id: 1 }, name: 'My Agent' },
+      deps: stubShell({ onSaveVersion: vi.fn(), isConfigurationDirty: false }),
+    });
+    await waitFor(() => expect(screen.getByTestId('agent-save-button')).toBeDisabled());
+  });
+
   it('edit-mode Save calls the injected onSaveVersion', async () => {
     const onSaveVersion = vi.fn();
     renderEditor({
       agent: { id: 1, entity_meta: { id: 1 }, name: 'My Agent' },
-      deps: stubShell({ onSaveVersion }),
+      deps: stubShell({ onSaveVersion, isConfigurationDirty: true }),
     });
     await waitFor(() => expect(screen.getByTestId('agent-save-button')).not.toBeDisabled());
 

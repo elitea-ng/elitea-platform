@@ -21,6 +21,8 @@ export interface UseChatAgentConfigResult {
   /** Passed straight to `AgentEditorDeps.onSaveVersion`; `undefined` until the stored version is resolvable. */
   readonly onSaveVersion: (() => void) | undefined;
   readonly isSavingVersion: boolean;
+  /** Passed straight to `AgentEditorDeps.isConfigurationDirty`: Save is live only while the draft differs from the stored agent. */
+  readonly isConfigurationDirty: boolean;
 }
 
 export function useChatAgentConfig(params: Omit<UseChatPipelineConfigParams, 'entityType'>): UseChatAgentConfigResult {
@@ -35,5 +37,6 @@ export function useChatAgentConfig(params: Omit<UseChatPipelineConfigParams, 'en
     renderConfigurationForm,
     onSaveVersion: onSaveVersion === undefined ? undefined : save,
     isSavingVersion: config.isSavingVersion,
+    isConfigurationDirty: config.isConfigurationDirty,
   };
 }

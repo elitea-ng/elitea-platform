@@ -19,6 +19,7 @@ import { ContextBudget } from './ContextBudget';
 
 const BASE = '/api/v2';
 const STATUS_URL = `${BASE}/elitea_core/context_analytics/prompt_lib/7/42`;
+const STRATEGY_URL = `${BASE}/elitea_core/context_strategy/prompt_lib/7/42`;
 
 /** `eliteaFetch` returns a `{data,status,headers}` envelope whose `data` IS the JSON body, so the handler serves the body unwrapped. */
 const STATUS_BODY = {
@@ -96,6 +97,7 @@ describe('ContextBudget — editing the budget', () => {
         sink?.push(await request.json());
         return HttpResponse.json({ ok: true });
       }),
+      http.put(STRATEGY_URL, () => HttpResponse.json({ message: 'Strategy updated successfully' })),
     ];
   }
 
@@ -173,6 +175,7 @@ describe('ContextBudget — editing the budget', () => {
         budget = body.default_context_management?.budget_mode ?? budget;
         return HttpResponse.json({ ok: true });
       }),
+      http.put(STRATEGY_URL, () => HttpResponse.json({ message: 'Strategy updated successfully' })),
     );
     const user = userEvent.setup();
     renderWithTheme(wrap(<ContextBudget conversationId="42" projectId="7" />));
@@ -190,6 +193,35 @@ describe('ContextBudget — editing the budget', () => {
     await waitFor(() =>
       expect(screen.getByTestId('context-budget-stat-mode').textContent).toContain('Full'),
     );
+  });
+
+  /**
+   * #2123: the default saved from the panel reached only conversations created
+   * afterwards, so this one kept its pinned window, and the panel (which shows
+   * the latest response's measurement) read as if the save had done nothing.
+   */
+  it('applies the saved budget to the open conversation and says when the figures follow', async () => {
+    const strategy: unknown[] = [];
+    server.use(
+      // The latest response's measurement still says Full.
+      http.get(STATUS_URL, () => HttpResponse.json({ ...STATUS_BODY, budget_mode: 'full' })),
+      http.get(`${BASE}/social/author`, () => HttpResponse.json({})),
+      http.put(`${BASE}/social/author`, () => HttpResponse.json({ ok: true })),
+      http.put(STRATEGY_URL, async ({ request }) => {
+        strategy.push(await request.json());
+        return HttpResponse.json({ message: 'Strategy updated successfully' });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithTheme(wrap(<ContextBudget conversationId="42" projectId="7" />));
+
+    expect(screen.queryByTestId('context-budget-pending')).not.toBeInTheDocument();
+    await user.click(await screen.findByTestId('context-budget-edit-button'));
+    await user.click(screen.getByRole('radio', { name: /^Balanced/ }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(strategy).toEqual([{ budget_mode: 'balanced' }]));
+    expect(await screen.findByTestId('context-budget-pending')).toHaveTextContent('Balanced');
   });
 
   it('reports a refused save inside the dialog and keeps what was typed', async () => {

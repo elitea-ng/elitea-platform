@@ -45,6 +45,8 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { useQueryClient } from '@tanstack/react-query';
+
 import { AgentTagEditor, CreateAgentForm, applicationWriteHooks } from '@/features/agents';
 import type { Tag } from '@/entities/tag';
 import { useGetApplication, useGetApplicationVersionDetail } from '@/shared/api/generated/applications/applications';
@@ -318,6 +320,7 @@ export function useChatPipelineConfig({
   );
 
   const { onSave, isSaving } = applicationWriteHooks.useSaveVersion();
+  const queryClient = useQueryClient();
 
   const renderConfigurationPanels = useCallback(
     () => ({
@@ -371,12 +374,18 @@ export function useChatPipelineConfig({
         // reporting that as saved would clear the editor's dirty flag over an
         // edit the server never took.
         if (result !== undefined) {
+          // Saved: nothing is unsaved until the next edit. The re-seed below
+          // also clears it, but only when the refetch returns changed data.
+          setIsConfigurationDirty(false);
           refetch();
+          // The conversation's participant rows carry the entity's name; a
+          // rename made here must reach the rail and the transcript (#2096).
+          void queryClient.invalidateQueries({ queryKey: ['conversation', 'details'] });
           onSuccess(result);
         }
       });
     },
-    [projectId, applicationId, versionId, onSave, draft, storedVersion, refetch],
+    [projectId, applicationId, versionId, onSave, draft, storedVersion, refetch, queryClient],
   );
 
   return {

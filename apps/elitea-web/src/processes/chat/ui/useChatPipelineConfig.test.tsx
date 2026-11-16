@@ -451,6 +451,27 @@ describe('useChatPipelineConfig — onSaveVersion', () => {
     expect(saved?.versionDetail).toBeDefined();
   });
 
+  it('refreshes the conversation participants after a save so a rename reaches the rail (#2096, #2118)', async () => {
+    const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+    server.use(
+      getGetApplicationVersionDetailMockHandler({ id: '10', application_id: '1', name: 'latest', status: 'draft' }),
+      getGetApplicationMockHandler({ id: '1', name: 'App', description: 'Desc', icon: '', owner_id: 'u1', created_at: '2026-01-01T00:00:00Z', versions: [] }),
+      getUpdateApplicationVersionMockHandler({ id: '10', application_id: '1', name: 'latest', status: 'draft' }),
+      getEditApplicationMockHandler({ id: '1', name: 'Renamed', description: 'Desc', icon: '', owner_id: 'u1', created_at: '2026-01-01T00:00:00Z' }),
+    );
+    const { result } = renderHook(
+      () => useChatPipelineConfig({ projectId: '7', participant: { entity_meta: { id: '1' }, entity_settings: { version_id: '10' } }, enabled: true }),
+      { wrapper },
+    );
+    await waitFor(() => expect(panelProps(result.current.renderConfigurationPanels()).values.name).toBe('App'));
+    const onSuccess = vi.fn<(saved: unknown) => void>();
+    await act(async () => {
+      result.current.onSaveVersion?.(onSuccess);
+      await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+    });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['conversation', 'details'] });
+  });
+
   it('sends toVersionBody defaults (empty strings/arrays, step_limit 25) for a bare draft', async () => {
     const seenBodies: unknown[] = [];
     server.use(

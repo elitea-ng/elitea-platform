@@ -430,8 +430,9 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 		SELECT av.id, COALESCE(av.status, ''), COALESCE(av.name, ''),
 		       COALESCE(av.meta->>'withdrawn_from_name', ''),
 		       av.application_id,
-		       CASE WHEN jsonb_typeof(av.avatar_pack) = 'object' THEN av.avatar_pack::text END
-		FROM %s.application_versions av
+		       CASE WHEN jsonb_typeof(av.avatar_pack) = 'object' THEN av.avatar_pack::text END,
+		       (SELECT a.name FROM %[1]s.applications a WHERE a.id = av.application_id)
+		FROM %[1]s.application_versions av
 		WHERE av.id = ANY($1::int[])`, s), versionIDs)
 	if err != nil {
 		return // no application_versions on this tenant: participants stand as read
@@ -443,14 +444,18 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 		withdrawn   bool
 		application int64
 		pack        map[string]any
+		// name is the application's CURRENT name (#2096, #2118). A participant
+		// stores the name it had when it was attached; a later rename never
+		// reached it, so the rail and the chat kept showing the creation name.
+		name string
 	}
 	resolved := map[int32]publication{}
 	for rows.Next() {
 		var versionID int32
 		var status, name, withdrawnFrom string
 		var applicationID *int64
-		var rawPack *string
-		if err := rows.Scan(&versionID, &status, &name, &withdrawnFrom, &applicationID, &rawPack); err != nil {
+		var rawPack, applicationName *string
+		if err := rows.Scan(&versionID, &status, &name, &withdrawnFrom, &applicationID, &rawPack, &applicationName); err != nil {
 			continue
 		}
 		state := publication{
@@ -460,6 +465,9 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 		}
 		if applicationID != nil {
 			state.application = *applicationID
+		}
+		if applicationName != nil {
+			state.name = *applicationName
 		}
 		if rawPack != nil {
 			var pack map[string]any
@@ -484,6 +492,10 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 		for _, i := range indexes {
 			items[i].Meta["version_status"] = state.status
 			items[i].Meta["version_withdrawn"] = state.withdrawn
+			if state.name != "" && participantOwnsVersion(items[i], s, state.application) {
+				items[i].Meta["name"] = state.name
+				items[i].EntityMeta["name"] = state.name
+			}
 			if state.pack != nil && participantOwnsVersion(items[i], s, state.application) {
 				if items[i].Persona == nil {
 					items[i].Persona = map[string]any{}

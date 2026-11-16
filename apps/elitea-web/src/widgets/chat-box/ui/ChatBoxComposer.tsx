@@ -12,7 +12,7 @@ import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonH
 import { NewChatInput, type voiceHooks } from '@/features/chat-input';
 import { t } from '@/shared/i18n';
 
-import { buildAgentEditorProps, buildCreateHandlerProps, shouldDisableClearChat, type ChatBoxEditorCallbacks, type deriveChatBoxInputState } from './ChatBox.helpers';
+import { buildAgentEditorProps, buildCreateHandlerProps, shouldDisableClearChat, switchToModel, type ChatBoxEditorCallbacks, type deriveChatBoxInputState } from './ChatBox.helpers';
 import { chatDraftKey } from './ChatBox.draft';
 import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxFloorTarget } from './ChatBoxFloorTarget';
@@ -133,7 +133,7 @@ export function ChatBoxComposer(props: ChatBoxComposerProps): ReactNode {
           participantForEditor,
           activeParticipantDetails: participant.agentEditorParticipantDetails,
           isAgentsPage,
-          selectSavedOrDefaultModel: data.selectSavedOrDefaultModel,
+          selectSavedOrDefaultModel: switchToModel(participant.onChangeParticipant, data.selectSavedOrDefaultModel),
           onShowParticipantsList: () => state.setShowRecommendationList(!state.showRecommendationList),
           onSelectVersion: (version) => {
             void participant.onSelectVersion(version);

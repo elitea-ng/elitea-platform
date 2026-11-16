@@ -33,6 +33,13 @@ export interface ContextBudgetPanelProps {
    * (the collapsed rail has no room for the control).
    */
   readonly onEdit?: () => void;
+  /**
+   * The window the reader just saved, while the figures above still describe
+   * the latest response's (#2123). The measurement is the response's own and
+   * is replaced by the next one, so until then the panel says so rather than
+   * leaving "Window: Full" to read as if the save did nothing.
+   */
+  readonly pendingMode?: ContextBudgetStats['budgetMode'] | undefined;
 }
 
 /** Unknown runtime usage shows the selected policy without inventing counts. */
@@ -65,7 +72,7 @@ function visibleStatRows(stats: ContextBudgetStats): readonly { readonly key: st
   ];
 }
 
-export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): ReactNode {
+export function ContextBudgetPanel({ stats, onEdit, pendingMode }: ContextBudgetPanelProps): ReactNode {
   // The bar itself caps at 100%; the number above it does not (the old app
   // shows the true over-budget percentage and flags it with the warning icon).
   const barPercentage = Math.min(stats.utilizationPercentage ?? 0, 100);
@@ -148,6 +155,13 @@ export function ContextBudgetPanel({ stats, onEdit }: ContextBudgetPanelProps): 
         {stats.usageAvailable && <ProgressBar percentage={barPercentage} isHigh={stats.isHighUtilization} />}
       </Box>
 
+      {pendingMode !== undefined && pendingMode !== stats.budgetMode && (
+        <Typography variant="bodySmall" data-testid="context-budget-pending" sx={{ paddingX: 2, paddingBottom: 1 }}>
+          {t('widgets.contextBudget.pendingMode', 'Now set to {{mode}}. The window and usage above update with the next reply.', {
+            mode: pendingMode === 'full' ? t('contextBudget.mode.full', 'Full') : t('contextBudget.mode.balanced', 'Balanced'),
+          })}
+        </Typography>
+      )}
       {stats.runtime && <Typography variant="bodySmall" sx={{ paddingX: 2, paddingBottom: 1 }}>
         {stats.runtime.providerUsage
           ? t('widgets.contextBudget.providerHelp', 'Provider-reported input and output for the latest model call, including cached input and reasoning. The safety margin is excluded from the available window. The next request is estimated separately for automatic compaction.')

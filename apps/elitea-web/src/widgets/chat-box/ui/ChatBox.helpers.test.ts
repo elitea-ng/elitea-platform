@@ -12,6 +12,7 @@ import {
   optField,
   pickIdAndUuid,
   resolveConversationStarters,
+  switchToModel,
   toParticipant,
   toParticipants,
 } from './ChatBox.helpers';
@@ -71,6 +72,17 @@ describe('buildAgentEditorProps', () => {
   });
 });
 
+
+describe('switchToModel (#2121)', () => {
+  it('clears the active participant, then picks the model', () => {
+    const calls: string[] = [];
+    switchToModel(
+      (next) => calls.push(`participant:${String(next)}`),
+      () => calls.push('model'),
+    )();
+    expect(calls).toEqual(['participant:undefined', 'model']);
+  });
+});
 
 describe('buildUserParticipant', () => {
   it('includes all defined fields', () => {

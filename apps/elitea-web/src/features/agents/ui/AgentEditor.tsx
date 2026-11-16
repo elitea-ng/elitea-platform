@@ -130,6 +130,12 @@ export interface AgentEditorDeps {
   /** Edit-mode save — owned by whoever supplies `renderConfigurationForm`'s real live state (this component does not own edit-mode values). */
   readonly onSaveVersion?: () => void;
   readonly isSavingVersion?: boolean;
+  /**
+   * Edit mode: whether the form holds an edit not yet saved. Without it Save
+   * was enabled on an untouched agent and stayed enabled after a save (#2118,
+   * #2120). Owned by whoever owns the edit-mode values (`useChatAgentConfig`).
+   */
+  readonly isConfigurationDirty?: boolean;
   /** Baseline: `useRefetchAgentVersionDetailsOnClose`, simplified to a plain callback — see the module doc comment. */
   readonly onEditorClosed?: () => void;
 }
@@ -172,6 +178,10 @@ function asValidatorId(value: string | number | undefined): number | undefined {
 }
 
 /** `isCreateMode ? value : fallback` — this component only owns CREATE-mode state (module doc comment), so several values are only real in that mode. Extracted purely to keep `AgentEditor` under the complexity budget, same reason as `asValidatorId` above. */
+function editModeDirty(deps: AgentEditorDeps): boolean {
+  return deps.isConfigurationDirty === true;
+}
+
 function whenCreateMode<T>(isCreateMode: boolean, value: T, fallback: T): T {
   return isCreateMode ? value : fallback;
 }
@@ -183,6 +193,8 @@ interface SaveButtonSlotProps {
   readonly canSaveCreate: boolean;
   readonly onSaveVersion: (() => void) | undefined;
   readonly isSavingVersion: boolean | undefined;
+  /** Edit mode: Save is live only while the form holds an edit (#2118, #2120). */
+  readonly isDirty: boolean;
 }
 
 /** The create-vs-edit `ApplicationSaveButton` branch, extracted purely to keep `AgentEditor` under the complexity budget. */
@@ -193,6 +205,7 @@ function AgentEditorSaveButton({
   canSaveCreate,
   onSaveVersion,
   isSavingVersion,
+  isDirty,
 }: SaveButtonSlotProps): ReactNode {
   if (isCreateMode) {
     return (
@@ -207,7 +220,7 @@ function AgentEditorSaveButton({
     <ApplicationSaveButton
       onSave={onSaveVersion ?? noopSave}
       isSaving={isSavingVersion ?? false}
-      disabled={!onSaveVersion}
+      disabled={!onSaveVersion || !isDirty}
     />
   );
 }
@@ -305,7 +318,7 @@ export function AgentEditor({
   const validateProjectId = resolveValidateProjectId(entityProjectId, projectId);
 
   const create = useAgentEditorCreate(projectId);
-  const isDirty = whenCreateMode(isCreateMode, create.isDirty, false);
+  const isDirty = whenCreateMode(isCreateMode, create.isDirty, editModeDirty(deps));
 
   const handleClose = useCallback(() => {
     onCloseAgentEditor?.();
@@ -349,6 +362,7 @@ export function AgentEditor({
       canSaveCreate={canSaveCreate}
       onSaveVersion={deps.onSaveVersion}
       isSavingVersion={deps.isSavingVersion}
+      isDirty={isDirty}
     />
   );
 
