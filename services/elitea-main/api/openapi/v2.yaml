@@ -9695,7 +9695,7 @@ components:
           nullable: true
           description: The rule of a stage the workforce policy applied or noticed (source policy).
         listing_id: { type: integer, format: int64, nullable: true, description: The Marketplace listing of a hire_listing or feedback_report. }
-        listing_version_id: { type: integer, format: int64, nullable: true, description: The listing version to hire, or the version the hired agent was installed from. }
+        listing_version_id: { type: integer, format: int64, nullable: true, description: 'The listing version to hire, or the version the hired agent was installed from.' }
         payload:
           type: object
           additionalProperties: true
