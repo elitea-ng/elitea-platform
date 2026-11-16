@@ -39,6 +39,8 @@ export interface SettingsListProps {
   usage?: ReactNode;
   /** Opens Memory (client contract 1.3 with a project); no row without it. */
   onMemory?: (() => void) | null;
+  /** Opens Workforce proposals (client contract 1.56 with a project); no row without it. */
+  onWorkforce?: (() => void) | null;
   /** Opens Signed-in devices (a native sign-in, not a developer token); no row without it. */
   onDevices?: (() => void) | null;
   /** Opens About Elitea AI (the Elitea mark, the version, the links). */
@@ -78,6 +80,7 @@ export function SettingsList({
   securityFooter,
   usage,
   onMemory,
+  onWorkforce,
   onDevices,
   onAbout,
   appVersion,
@@ -175,6 +178,17 @@ export function SettingsList({
       {onMemory ? (
         <ListSection>
           <ListRow icon="memory" title="Memory" accessibilityHint="What the workspace remembers about you in this project" onPress={onMemory} />
+        </ListSection>
+      ) : null}
+
+      {onWorkforce ? (
+        <ListSection>
+          <ListRow
+            icon="people"
+            title="Workforce proposals"
+            accessibilityHint="Hire proposals and drafted reports from the project's workforce managers"
+            onPress={onWorkforce}
+          />
         </ListSection>
       ) : null}
 
