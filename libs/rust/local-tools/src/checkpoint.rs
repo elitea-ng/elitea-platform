@@ -520,6 +520,15 @@ pub struct GitCheckpoints {
     limits: CheckpointLimits,
 }
 
+/// A held `<ref>.lock`, removed when dropped.
+struct RefLock(PathBuf);
+
+impl Drop for RefLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// What [`GitCheckpoints::prune_loose`] did with one ref.
 enum Pruned {
     /// Removed, reflog included.
@@ -740,25 +749,31 @@ impl GitCheckpoints {
             .open(&lock)
         {
             Ok(file) => drop(file),
-            Err(error) if error.kind() == ErrorKind::AlreadyExists => return Pruned::Busy,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                tracing::warn!(lock = %lock.display(), "a checkpoint ref is locked, not pruned");
+                return Pruned::Busy;
+            }
             Err(_) => return Pruned::NotLoose,
         }
+        // Released on every exit, a panic included.
+        let _release = RefLock(lock);
         // Under the lock: the ref still names this checkpoint, or leave it.
-        let outcome = if std::fs::read_to_string(&loose).is_ok_and(|text| text.trim() == info.id)
-            && std::fs::remove_file(&loose).is_ok()
+        if !std::fs::read_to_string(&loose).is_ok_and(|text| text.trim() == info.id) {
+            return Pruned::NotLoose;
+        }
+        // The reflog first: a reflog left behind would keep the commit
+        // reachable, and one that cannot go keeps the ref for the next try.
+        if let Err(error) = std::fs::remove_file(common.join("logs").join(&name))
+            && error.kind() != ErrorKind::NotFound
         {
-            // A reflog left behind would keep the commit reachable.
-            if let Err(error) = std::fs::remove_file(common.join("logs").join(&name))
-                && error.kind() != ErrorKind::NotFound
-            {
-                tracing::warn!(%error, "a pruned checkpoint's reflog stays");
-            }
+            tracing::warn!(%error, "a pruned checkpoint's reflog stays");
+            return Pruned::Busy;
+        }
+        if std::fs::remove_file(&loose).is_ok() {
             Pruned::Done
         } else {
             Pruned::NotLoose
-        };
-        let _ = std::fs::remove_file(&lock);
-        outcome
+        }
     }
 
     /// A commit of `tree` with `HEAD` as parent, objects only.
