@@ -247,6 +247,21 @@ func (h *Handler) MarketplaceHire(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		proposalID = parsed
+		// A workforce manager's proposal is the agent managers' to settle: a
+		// person who can hire but does not manage agents hires without it.
+		manages := false
+		if h.holdsWorkforceManage != nil {
+			var err error
+			if manages, err = h.holdsWorkforceManage(r, projectIDText); err != nil {
+				slog.ErrorContext(ctx, "marketplace hire: resolve the agent manager permission failed", "project_id", projectID, "error", err)
+				hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
+				return
+			}
+		}
+		if !manages {
+			hireError(w, http.StatusForbidden, "workforce_forbidden", "Only an agent manager hires from a workforce manager's proposal.")
+			return
+		}
 	}
 	if body.Mode != marketplace.ModeInstall && body.Mode != marketplace.ModeFork {
 		hireError(w, http.StatusBadRequest, "invalid_request", "mode must be install or fork.")
@@ -494,7 +509,7 @@ INSERT INTO %s.application_version_tag_association (version_id, tag_id) VALUES (
 	// A hire made from a workforce manager's proposal settles it in the same
 	// transaction: the person who hires is the one who approves it.
 	if in.ProposalID > 0 {
-		if err := marketplace.SettleHireProposalTx(ctx, tx, projectID, in.ProposalID, listingID, in.ActorID, map[string]any{
+		if err := marketplace.SettleHireProposalTx(ctx, tx, projectID, in.ProposalID, listingID, 0, in.ActorID, map[string]any{
 			"application_id": appID, "version_id": versionID, "mode": in.Mode, "automatic": in.Automatic,
 		}); err != nil {
 			switch {

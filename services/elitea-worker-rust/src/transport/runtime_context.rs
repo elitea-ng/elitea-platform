@@ -93,6 +93,10 @@ const PROPOSE_AGENT_SCHEMA: &str = "elitea.runtime.propose-agent.v1";
 const PROPOSE_DISMISSAL_SCHEMA: &str = "elitea.runtime.propose-dismissal.v1";
 /// The workforce manager's Marketplace tools' answer (ADR-0051 decision 6, #1632).
 const MARKETPLACE_WORKFORCE_SCHEMA: &str = "elitea.runtime.marketplace-workforce.v1";
+/// Main's own request ceiling for the Marketplace tools
+/// (`maxRuntimeMarketplaceWorkforceRequestBytes`): a hire proposal carries a
+/// 4096-byte rationale and up to 32 binding hints.
+const MAX_MARKETPLACE_WORKFORCE_REQUEST_BYTES: usize = 16 * 1_024;
 /// Main's own request ceiling for the three (`maxRuntimeAgentMemoryRequestBytes`).
 const MAX_AGENT_MEMORY_REQUEST_BYTES: usize = 8 * 1_024;
 /// Main's own request ceiling for `propose_agent`
@@ -1148,7 +1152,10 @@ impl RuntimeContextClient {
             &binding,
             MarketplaceWorkforceRequestV1 {
                 scope: Some(scope(&binding)),
-                request_json: encode_agent_memory_body(request)?,
+                request_json: encode_bounded_body(
+                    request,
+                    MAX_MARKETPLACE_WORKFORCE_REQUEST_BYTES,
+                )?,
             },
             MARKETPLACE_WORKFORCE_AUTHORITY_MALFORMED,
         )?;

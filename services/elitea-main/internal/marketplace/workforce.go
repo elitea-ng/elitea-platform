@@ -112,20 +112,23 @@ WHERE project_id = $1 AND id = $2`, in.ProjectID, in.ProposalID, in.ApprovedBy, 
 
 // SettleHireProposalTx marks the open hire_listing proposal as approved by the
 // person who made the hire, in the hire's own transaction. The proposal must
-// be of the same project and name the same listing and version: a hire cannot
-// settle another listing's proposal. applied records the agent that was hired.
-func SettleHireProposalTx(ctx context.Context, tx DB, projectID, proposalID, listingID, decidedBy int64, applied map[string]any) error {
+// be of the same project and name the same listing: a hire cannot settle
+// another listing's proposal. A person's hire may pick another version than
+// the one the agent named (versionID 0); the policy's hire passes the
+// proposal's own version, because the conditions it checked were that version's.
+// applied records the agent that was hired.
+func SettleHireProposalTx(ctx context.Context, tx DB, projectID, proposalID, listingID, versionID, decidedBy int64, applied map[string]any) error {
 	if projectID <= 0 || proposalID <= 0 || decidedBy <= 0 {
 		return ErrInvalidRequest
 	}
 	var (
-		listing int64
-		status  string
+		listing, version int64
+		status           string
 	)
 	err := tx.QueryRow(ctx, `
-SELECT listing_id, status
+SELECT listing_id, listing_version_id, status
 FROM elitea_lifecycle.agent_workforce_proposals
-WHERE project_id = $1 AND id = $2 AND kind = 'hire_listing' FOR UPDATE`, projectID, proposalID).Scan(&listing, &status)
+WHERE project_id = $1 AND id = $2 AND kind = 'hire_listing' FOR UPDATE`, projectID, proposalID).Scan(&listing, &version, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -135,7 +138,7 @@ WHERE project_id = $1 AND id = $2 AND kind = 'hire_listing' FOR UPDATE`, project
 	if status != "proposed" && status != "asked_owner" {
 		return ErrProposalNotOpen
 	}
-	if listing != listingID {
+	if listing != listingID || (versionID > 0 && version != versionID) {
 		return ErrInvalidRequest
 	}
 	// The wizard may hire another version of the same listing than the one the

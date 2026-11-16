@@ -48,6 +48,10 @@ type WorkforcePolicy struct {
 	// AutoFeedbackBy is the person who turned auto_feedback on: an automatic
 	// workforce report is recorded under them (ADR-0051 decision 6).
 	AutoFeedbackBy *int64 `json:"auto_feedback_by"`
+	// AutoHireBy is the person who turned auto_hire on: an automatic hire of a
+	// Marketplace listing is made for them and recorded under them, however
+	// many people save the policy later. Not served.
+	AutoHireBy *int64 `json:"-"`
 	// DefaultRules are the platform's starting rules.
 	DefaultRules []agentworkforce.Rule `json:"default_rules"`
 	// OpenAutoHired counts the automatically hired agents nobody kept yet
@@ -61,11 +65,11 @@ func readPolicy(ctx context.Context, q lifecycleQuerier, projectID int64) (Workf
 	err := q.QueryRow(ctx, `
 SELECT auto_hire_enabled, min_successful_runs, max_auto_hired, auto_dismiss_enabled, auto_dismiss_rules, grace_days,
        updated_by, updated_at, auto_feedback_enabled, auto_feedback_by, listing_min_reviews,
-       listing_min_rating::float8, listing_max_dismissal_rate::float8
+       listing_min_rating::float8, listing_max_dismissal_rate::float8, auto_hire_by
 FROM elitea_lifecycle.agent_workforce_policies WHERE project_id = $1`, projectID).Scan(
 		&policy.AutoHireEnabled, &policy.MinSuccessfulRuns, &policy.MaxAutoHired, &policy.AutoDismissEnabled, &rules,
 		&policy.GraceDays, &policy.UpdatedBy, &policy.UpdatedAt, &policy.AutoFeedbackEnabled, &policy.AutoFeedbackBy,
-		&policy.ListingMinReviews, &policy.ListingMinRating, &policy.ListingMaxDismissalRate)
+		&policy.ListingMinReviews, &policy.ListingMinRating, &policy.ListingMaxDismissalRate, &policy.AutoHireBy)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 	case err != nil:
@@ -119,8 +123,9 @@ func (s *AgentWorkforce) SetPolicy(ctx context.Context, projectID int64, actor W
 INSERT INTO elitea_lifecycle.agent_workforce_policies
     (project_id, auto_hire_enabled, min_successful_runs, max_auto_hired, auto_dismiss_enabled, auto_dismiss_rules,
      grace_days, updated_by, auto_feedback_enabled, auto_feedback_by, listing_min_reviews, listing_min_rating,
-     listing_max_dismissal_rate)
-VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::bigint, $9::boolean, CASE WHEN $9::boolean THEN $8::bigint END, $10, $11, $12)
+     listing_max_dismissal_rate, auto_hire_by)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::bigint, $9::boolean, CASE WHEN $9::boolean THEN $8::bigint END, $10, $11, $12,
+        CASE WHEN $2::boolean THEN $8::bigint END)
 ON CONFLICT (project_id) DO UPDATE SET
     auto_hire_enabled = EXCLUDED.auto_hire_enabled, min_successful_runs = EXCLUDED.min_successful_runs,
     max_auto_hired = EXCLUDED.max_auto_hired, auto_dismiss_enabled = EXCLUDED.auto_dismiss_enabled,
@@ -131,6 +136,11 @@ ON CONFLICT (project_id) DO UPDATE SET
         THEN CASE WHEN agent_workforce_policies.auto_feedback_enabled
                   THEN COALESCE(agent_workforce_policies.auto_feedback_by, EXCLUDED.auto_feedback_by)
                   ELSE EXCLUDED.auto_feedback_by END
+        END,
+    auto_hire_by = CASE WHEN EXCLUDED.auto_hire_enabled
+        THEN CASE WHEN agent_workforce_policies.auto_hire_enabled
+                  THEN COALESCE(agent_workforce_policies.auto_hire_by, EXCLUDED.auto_hire_by)
+                  ELSE EXCLUDED.auto_hire_by END
         END,
     auto_feedback_enabled = EXCLUDED.auto_feedback_enabled, listing_min_reviews = EXCLUDED.listing_min_reviews,
     listing_min_rating = EXCLUDED.listing_min_rating, listing_max_dismissal_rate = EXCLUDED.listing_max_dismissal_rate`,

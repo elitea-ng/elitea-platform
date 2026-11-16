@@ -49,7 +49,8 @@ func newMarketplaceHarness(t *testing.T) *marketplaceHarness {
 	if err != nil {
 		t.Fatalf("compose the agent lifecycle: %v", err)
 	}
-	handler := eliteacore.NewHandler(pool, eliteacore.WithPublishGovernor(lifecycle))
+	handler := eliteacore.NewHandler(pool, eliteacore.WithPublishGovernor(lifecycle),
+		eliteacore.WithWorkforceManagerCheck(managesAgents))
 	lifecycle.ComposePublisher(handler)
 	lifecycle.ComposeMarketplaceApplier(handler)
 	h := &marketplaceHarness{t: t, pool: pool, handler: handler, lifecycle: lifecycle}

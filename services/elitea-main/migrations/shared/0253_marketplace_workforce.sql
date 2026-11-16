@@ -31,9 +31,12 @@
 -- published; a hire proposal is unique per listing while it is open.
 --
 -- agent_workforce_policies gains the auto_feedback switch (and the person who
--- turned it on, whom an automatic report is recorded under) and the three
--- numbers the auto_hire rule reads for a listing: min_reviews, min_rating and
--- max_dismissal_rate (ADR-0051 decision 6).
+-- turned it on, whom an automatic report is recorded under), the person who
+-- turned auto_hire on (whom an automatic hire of a listing is made for, and
+-- recorded under, however many people save the policy later: backfilled from
+-- updated_by for a policy that is on) and the three numbers the auto_hire rule
+-- reads for a listing: min_reviews, min_rating and max_dismissal_rate
+-- (ADR-0051 decision 6).
 --
 -- No new permission: deciding these proposals needs agents.workforce.manage,
 -- granted by 0236. Additive only. Idempotent. No BEGIN/COMMIT: the ledgered
@@ -109,11 +112,16 @@ BEGIN
     ALTER TABLE elitea_lifecycle.agent_workforce_policies
         ADD COLUMN IF NOT EXISTS auto_feedback_enabled boolean NOT NULL DEFAULT false,
         ADD COLUMN IF NOT EXISTS auto_feedback_by bigint CHECK (auto_feedback_by IS NULL OR auto_feedback_by > 0),
+        ADD COLUMN IF NOT EXISTS auto_hire_by bigint CHECK (auto_hire_by IS NULL OR auto_hire_by > 0),
         ADD COLUMN IF NOT EXISTS listing_min_reviews integer NOT NULL DEFAULT 3
             CHECK (listing_min_reviews BETWEEN 1 AND 1000),
         ADD COLUMN IF NOT EXISTS listing_min_rating numeric(2, 1) NOT NULL DEFAULT 4.0
             CHECK (listing_min_rating BETWEEN 1.0 AND 5.0),
         ADD COLUMN IF NOT EXISTS listing_max_dismissal_rate numeric(3, 2) NOT NULL DEFAULT 0.20
             CHECK (listing_max_dismissal_rate BETWEEN 0 AND 1);
+
+    UPDATE elitea_lifecycle.agent_workforce_policies
+       SET auto_hire_by = updated_by
+     WHERE auto_hire_enabled AND auto_hire_by IS NULL AND updated_by IS NOT NULL;
 END
 $$;
