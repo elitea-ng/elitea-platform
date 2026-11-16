@@ -334,6 +334,17 @@ describe('client contract 1.52', () => {
   });
 });
 
+describe('client contract 1.57', () => {
+  it('lists, pins and unpins the skills of a conversation (skills epic 2169)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 57), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.57`);
+    assert.ok(doc.paths['/elitea_core/conversation_skills/prompt_lib/{project_id}/{conversation_id}'].get);
+    assert.ok(doc.paths['/elitea_core/conversation_skills/prompt_lib/{project_id}/{conversation_id}'].post);
+    assert.ok(doc.paths['/elitea_core/conversation_skill/prompt_lib/{project_id}/{conversation_id}/{pin_id}'].delete);
+  });
+});
+
 describe('client contract 1.56', () => {
   it('reads the workforce proposals and probation of an agent (issue 1632)', () => {
     const { doc } = buildContract();

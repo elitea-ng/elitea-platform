@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.57
+
+| Area | What |
+|---|---|
+| Skills pinned to a conversation (skills epic 2169, ADR-0050 amendment 1) | `listConversationSkills`, `pinConversationSkill` and `unpinConversationSkill`. A conversation holds up to five skills, each a project skill or a Marketplace skill listing version pinned by reference, applied to every run of the conversation whichever agent or model answers. The conversation details sheet shows them as a **Skills** section directly below **Participants**, never among them. A pin carries no skill text; a listing pin is always untrusted. A server before 1.57 has none; the section is left out. |
+
 ## Client contract 1.56
 
 | Area | What |

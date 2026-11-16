@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.56"
+  x-elitea-client-contract: "1.57"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3851,6 +3851,161 @@ components:
             (internal/infra/db/repos/conversations.go:768). Several writers own
             keys in it (steps_limit, internal_tools, is_hidden,
             single_participant), so its key set is not fixed by this route.
+
+    ConversationSkillTrust:
+      type: object
+      description: The state of a pinned skill's text (ADR-0051 amendment 1, A1.6).
+      required: [state]
+      properties:
+        state:
+          type: string
+          description: "`trusted` or `untrusted`. A listing pinned by reference is always `untrusted`."
+        publisher_project_id:
+          type: integer
+          format: int64
+          description: The project a forked skill came from, when it has one.
+
+    ConversationSkillPin:
+      type: object
+      description: One skill pinned to a conversation. It carries no skill text.
+      required: [id, kind, name, description, trust, pinned_by, pinned_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        kind:
+          type: string
+          description: "`project` (a project skill) or `listing` (a Marketplace skill listing version, pinned by reference)."
+        skill_id:
+          type: integer
+          format: int64
+          description: The project skill, for kind `project`.
+        listing_id:
+          type: integer
+          format: int64
+          description: The listing, for kind `listing`.
+        listing_version_id:
+          type: integer
+          format: int64
+          description: The pinned version of the listing, for kind `listing`.
+        name:
+          type: string
+          description: The skill's name; for a listing, the listing's. Empty when the listing is gone, so the pin can still be removed.
+        description:
+          type: string
+        version_name:
+          type: string
+          description: The listing version's name, for kind `listing`.
+        trust:
+          $ref: "#/components/schemas/ConversationSkillTrust"
+        pinned_by:
+          type: integer
+          format: int64
+          description: The user id of the person who pinned it.
+        pinned_at:
+          type: string
+          format: date-time
+
+    ConversationSkillList:
+      type: object
+      description: The skills pinned to a conversation, oldest first.
+      required: [rows, total, max]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationSkillPin"
+        total:
+          type: integer
+        max:
+          type: integer
+          description: How many skills a conversation may hold (five, shared with the skills one message invokes).
+
+    PinConversationSkillRequest:
+      type: object
+      description: >
+        The body of pinConversationSkill: either `skill_id` alone, or `listing_id`
+        with `listing_version_id`. Any other key, or both forms, answers 400.
+      additionalProperties: false
+      properties:
+        skill_id:
+          type: integer
+          format: int64
+          minimum: 1
+        listing_id:
+          type: integer
+          format: int64
+          minimum: 1
+        listing_version_id:
+          type: integer
+          format: int64
+          minimum: 1
+
+    SkillTrustRecord:
+      type: object
+      description: One trust decision, kept after a revoke as history.
+      required: [revision, trusted_at, source]
+      properties:
+        revision:
+          type: string
+          description: The SHA-256 digest of the text that was trusted.
+        publisher_project_id:
+          type: integer
+          format: int64
+        trusted_by:
+          type: integer
+          format: int64
+        trusted_at:
+          type: string
+          format: date-time
+        revoked_by:
+          type: integer
+          format: int64
+        revoked_at:
+          type: string
+          format: date-time
+        source:
+          type: string
+          description: "`user`, or `migration` for a fork that existed before trust did."
+
+    SkillTrustStatus:
+      type: object
+      description: What a project trusts of one skill's current text (ADR-0051 amendment 1, A1.6).
+      required: [skill_id, name, foreign, revision, state, history]
+      properties:
+        skill_id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        foreign:
+          type: boolean
+          description: True when the skill was written in another project. A skill that is not foreign needs no trust.
+        publisher_project_id:
+          type: integer
+          format: int64
+        revision:
+          type: string
+          description: The digest of the skill's current base text; what a trust request must name.
+        state:
+          type: string
+          description: "`not_required` (not foreign), `trusted` or `untrusted`."
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillTrustRecord"
+
+    TrustSkillRevisionRequest:
+      type: object
+      description: The body of trustSkillRevision.
+      required: [revision]
+      additionalProperties: false
+      properties:
+        revision:
+          type: string
+          minLength: 64
+          maxLength: 64
+          description: The digest of the skill's current text, as getSkillTrust answered it.
 
     UpdateConversationInternalToolsRequest:
       type: object
@@ -29281,6 +29436,283 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /elitea_core/conversation_skills/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The conversation's numeric id or its UUID; both resolve.
+    get:
+      operationId: listConversationSkills
+      summary: The skills pinned to a conversation
+      description: |
+        Client contract 1.57 (ADR-0050 amendment 1). The skills pinned to the
+        conversation, oldest first: each is a project skill or a Marketplace
+        skill listing version. A pin applies to every run of the conversation,
+        whichever agent or model answers, and is shown apart from the
+        participants. It is an attachment, never a participant, and grants
+        nothing. Needs access to the conversation; a conversation the caller
+        cannot see answers 404. NOTE(W2):
+        internal/api/v2/conversationskills/handler.go:105 (`List`).
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      responses:
+        "200":
+          description: The pins.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationSkillList"
+        "400":
+          description: A native client version that does not parse (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+    post:
+      operationId: pinConversationSkill
+      summary: Pin a skill to a conversation
+      description: |
+        Client contract 1.57 (ADR-0050 amendment 1). Pins a project skill
+        (`skill_id`) or a Marketplace skill listing version (`listing_id` and
+        `listing_version_id`); a listing is pinned by reference and nothing is
+        forked into the project. The text is read when each turn starts, under
+        the caller's own visibility, so the pin never carries text. Pinning what
+        is pinned already answers the existing pin with 200. A skill the caller
+        cannot read, or a listing that is not listed or whose version is yanked
+        or withdrawn, answers one 404. A conversation holds at most five pins
+        (409). Needs `models.chat.conversation.update` and the right to write to
+        the conversation (a participant). Audited. NOTE(W2):
+        internal/api/v2/conversationskills/handler.go:137 (`Pin`).
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PinConversationSkillRequest"
+      responses:
+        "200":
+          description: The skill was pinned already; its pin.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationSkillPin"
+        "201":
+          description: The new pin.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationSkillPin"
+        "400":
+          description: >
+            A body that names neither one skill nor one listing version, or a
+            native client version that does not parse (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          description: The conversation already holds five skills.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+  /elitea_core/conversation_skill/prompt_lib/{project_id}/{conversation_id}/{pin_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The conversation's numeric id or its UUID; both resolve.
+      - name: pin_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    delete:
+      operationId: unpinConversationSkill
+      summary: Remove a pinned skill from a conversation
+      description: |
+        Client contract 1.57 (ADR-0050 amendment 1). Removes the pin; the skill
+        stops applying from the next turn. Needs `models.chat.conversation.update`
+        and the right to write to the conversation. Audited. NOTE(W2):
+        internal/api/v2/conversationskills/handler.go:179 (`Unpin`).
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      responses:
+        "204":
+          description: The pin was removed.
+        "400":
+          description: >
+            A pin id that is not a positive integer, or a native client version
+            that does not parse (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+  /elitea_core/skill_trust/prompt_lib/{project_id}/{skill_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: skill_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    get:
+      operationId: getSkillTrust
+      summary: What the project trusts of a skill's current text
+      description: |
+        ADR-0051 amendment 1, A1.6. A skill written in another project is third-party
+        text: on the chat surfaces the worker shows it as quoted untrusted data until
+        this project has trusted that exact revision of it. Answers whether the skill
+        is foreign, the revision (the SHA-256 digest of its current text) a trust
+        request must name, the state (`not_required`, `trusted` or `untrusted`) and the
+        history of trust decisions, revokes included. Needs the permission that reads
+        a skill; a skill the caller cannot read answers 404. NOTE(W2):
+        internal/api/v2/skilltrust/handler.go:83 (`Get`).
+      tags:
+        - skills
+      responses:
+        "200":
+          description: The skill's trust state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillTrustStatus"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "500":
+          $ref: "#/components/responses/500"
+    post:
+      operationId: trustSkillRevision
+      summary: Trust this version of a skill's text for this project
+      description: |
+        ADR-0051 amendment 1, A1.6. Records the project's trust in one revision of a
+        skill written in another project: after it, that exact text reaches the model
+        as an instruction. The revision must be the skill's current one (409
+        otherwise), so a review of old text cannot trust new text, and any later change
+        to the text is a new revision and is untrusted again. A skill written in this
+        project needs no trust (400). Trusting grants the skill no tool and no
+        permission. Needs the permission that edits a skill. Audited. NOTE(W2):
+        internal/api/v2/skilltrust/handler.go:100 (`Trust`).
+      tags:
+        - skills
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TrustSkillRevisionRequest"
+      responses:
+        "200":
+          description: The skill's trust state after the decision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillTrustStatus"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          description: The skill's text changed since it was read.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/500"
+    delete:
+      operationId: revokeSkillTrust
+      summary: Stop trusting a skill's text for this project
+      description: |
+        ADR-0051 amendment 1, A1.6. Revokes the project's active trust of the skill:
+        its text reaches the model as quoted untrusted data again from the next turn.
+        The decision stays in the history. Needs the permission that edits a skill.
+        Audited. NOTE(W2): internal/api/v2/skilltrust/handler.go:134 (`Revoke`).
+      tags:
+        - skills
+      responses:
+        "200":
+          description: The skill's trust state after the revoke.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillTrustStatus"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "500":
+          $ref: "#/components/responses/500"
   /elitea_core/conversation_fork/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: "#/components/parameters/ProjectId"

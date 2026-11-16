@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.56
+ * client contract:    1.57
  * operations sha256:  6289cf99737da7cfce1dd3633f4de6fa8fa653296686f34307d1c02fe26646e4
  */
 export interface paths {

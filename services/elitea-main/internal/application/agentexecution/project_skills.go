@@ -68,6 +68,47 @@ type CurrentProjectSkillResolver interface {
 	ResolveCurrentProjectSkills(ctx context.Context, projectID int64, skillIDs []int64) ([]CurrentProjectSkill, error)
 }
 
+// CurrentListingSkill is a Marketplace skill listing version pinned to a
+// conversation, read for a turn: its text comes from the listing version, and
+// nothing about it was ever forked into the project. It is always untrusted
+// (ADR-0051 amendment 1, A1.6): trusting needs a project skill, so the person
+// adds the skill first.
+type CurrentListingSkill struct {
+	ListingID   int64
+	VersionID   int64
+	Name        string
+	Description string
+	// Instructions is the listing version's text.
+	Instructions string
+}
+
+// ConversationSkills are the skills pinned to a conversation (ADR-0050
+// amendment 1, A1.2), oldest pin first.
+type ConversationSkills struct {
+	// ProjectSkillIDs are the pinned project skills, read like a message's
+	// picks, under the caller's visibility.
+	ProjectSkillIDs []int64
+	// Listing are the pinned listing versions, already read.
+	Listing []CurrentListingSkill
+}
+
+// CurrentConversationSkillResolver reads what a conversation has pinned. It
+// answers ErrProjectSkillUnknown for a pinned listing version that is yanked,
+// withdrawn or delisted: the turn is refused with the answer a missing skill
+// gets, not run without the skill.
+type CurrentConversationSkillResolver interface {
+	ResolveConversationSkills(ctx context.Context, projectID int64, conversationUUID string) (ConversationSkills, error)
+}
+
+// WithConversationSkills attaches the resolver, in the same idiom as
+// WithProjectSkills. A service without it applies no pins.
+func (service *CurrentApplicationStartService) WithConversationSkills(
+	resolver CurrentConversationSkillResolver,
+) *CurrentApplicationStartService {
+	service.conversationSkills = resolver
+	return service
+}
+
 // WithProjectSkills attaches the resolver, in the same after-construction
 // idiom as WithMemories. A service without it refuses a request that names a
 // project skill (ErrProjectSkillUnknown) instead of ignoring the pick.
@@ -86,7 +127,109 @@ func (service *CurrentApplicationStartService) resolveProjectSkills(
 	ctx context.Context,
 	request CurrentApplicationStartRequest,
 ) ([]map[string]any, error) {
-	return service.resolveProjectSkillIDs(ctx, request.ProjectID, request.ProjectSkillIDs)
+	return service.resolveTurnSkills(ctx, request.ProjectID, request.ConversationUUID, request.ProjectSkillIDs)
+}
+
+// resolveTurnSkills freezes the skills of one turn: the conversation's pins
+// first, then the message's picks (ADR-0050 amendment 1). A pin that is also
+// picked is applied once. A pin is marked so that a name another skill of the
+// answering agent already holds drops the PIN instead of refusing the turn: a
+// pin must never make a conversation unusable for an agent it was not made for
+// (mergeProjectSkills).
+func (service *CurrentApplicationStartService) resolveTurnSkills(
+	ctx context.Context,
+	projectID int64,
+	conversationUUID string,
+	picks []int64,
+) ([]map[string]any, error) {
+	var pinned ConversationSkills
+	if service.conversationSkills != nil && conversationUUID != "" {
+		var err error
+		if pinned, err = service.conversationSkills.ResolveConversationSkills(ctx, projectID, conversationUUID); err != nil {
+			return nil, err
+		}
+	}
+	if len(pinned.ProjectSkillIDs) == 0 && len(pinned.Listing) == 0 {
+		return service.resolveProjectSkillIDs(ctx, projectID, picks)
+	}
+	if len(pinned.ProjectSkillIDs)+len(pinned.Listing)+len(picks) > currentMaxProjectSkillPicks {
+		// A pick the pins already hold is not a sixth skill.
+		extra := 0
+		held := make(map[int64]struct{}, len(pinned.ProjectSkillIDs))
+		for _, id := range pinned.ProjectSkillIDs {
+			held[id] = struct{}{}
+		}
+		for _, id := range picks {
+			if _, dup := held[id]; !dup {
+				extra++
+			}
+		}
+		if len(pinned.ProjectSkillIDs)+len(pinned.Listing)+extra > currentMaxProjectSkillPicks {
+			return nil, ErrProjectSkillsTooMany
+		}
+	}
+	ids := make([]int64, 0, len(pinned.ProjectSkillIDs)+len(picks))
+	ids = append(ids, pinned.ProjectSkillIDs...)
+	for _, id := range picks {
+		if !containsSkillID(pinned.ProjectSkillIDs, id) {
+			ids = append(ids, id)
+		}
+	}
+	snapshots, err := service.resolveProjectSkillIDs(ctx, projectID, ids)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]map[string]any, 0, len(snapshots)+len(pinned.Listing))
+	for index, snapshot := range snapshots {
+		if index < len(pinned.ProjectSkillIDs) {
+			snapshot["pinned"] = true
+		}
+		result = append(result, snapshot)
+	}
+	// Pinned listing versions sit with the pins, ahead of the message's picks.
+	listing := make([]map[string]any, 0, len(pinned.Listing))
+	for _, skill := range pinned.Listing {
+		snapshot, err := listingSkillSnapshot(skill)
+		if err != nil {
+			return nil, err
+		}
+		listing = append(listing, snapshot)
+	}
+	at := len(pinned.ProjectSkillIDs)
+	return append(result[:at:at], append(listing, result[at:]...)...), nil
+}
+
+func containsSkillID(ids []int64, id int64) bool {
+	for _, candidate := range ids {
+		if candidate == id {
+			return true
+		}
+	}
+	return false
+}
+
+// listingSkillSnapshot freezes a pinned Marketplace listing version as a skill
+// snapshot the runtime admits like any other: its id names the listing and the
+// version, its scope says where it came from, and it is untrusted.
+func listingSkillSnapshot(skill CurrentListingSkill) (map[string]any, error) {
+	if skill.ListingID <= 0 || skill.VersionID <= 0 || strings.TrimSpace(skill.Name) == "" ||
+		strings.TrimSpace(skill.Instructions) == "" {
+		return nil, ErrProjectSkillUnknown
+	}
+	return map[string]any{
+		"skill_id":         nil,
+		"skill_version_id": nil,
+		"name":             skill.Name,
+		"version_name":     "listing",
+		"description":      skill.Description,
+		"icon_meta":        nil,
+		"instructions":     skill.Instructions,
+		"id":               fmt.Sprintf("listing:%d:version:%d", skill.ListingID, skill.VersionID),
+		"revision":         currentInstructionRevision(skill.Instructions),
+		"scope":            fmt.Sprintf("marketplace:%d:%d", skill.ListingID, skill.VersionID),
+		"trust":            "untrusted",
+		"pinned":           true,
+	}, nil
 }
 
 // resolveProjectSkillIDs is resolveProjectSkills for the ids of either start
@@ -169,6 +312,11 @@ func mergeProjectSkills(attached, picks []map[string]any) (candidates, forced []
 		name, _ := pick["name"].(string)
 		if existing, ok := byName[strings.ToLower(name)]; ok {
 			if currentSkillIdentity(existing["id"]) != identity {
+				if pinned, _ := pick["pinned"].(bool); pinned {
+					// A conversation pin never refuses a turn: the agent's own
+					// skill (or an earlier pin) of that name stands.
+					continue
+				}
 				return nil, nil, ErrProjectSkillNameConflict
 			}
 			forced = append(forced, existing)

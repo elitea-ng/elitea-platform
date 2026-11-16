@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.56",
+  "client_contract": "1.57",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -670,6 +670,189 @@
                   "type": "string"
                 }
               }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "DELETE /elitea_core/conversation_skill/prompt_lib/{project_id}/{conversation_id}/{pin_id}": {
+      "operation_id": "unpinConversationSkill",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:conversation_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:pin_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "204": {},
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "max_length": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              ]
             }
           }
         },
@@ -8584,6 +8767,269 @@
                   "type": "integer"
                 }
               }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "GET /elitea_core/conversation_skills/prompt_lib/{project_id}/{conversation_id}": {
+      "operation_id": "listConversationSkills",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:conversation_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "max",
+                "rows",
+                "total"
+              ],
+              "properties": {
+                "max": {
+                  "type": "integer"
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "description",
+                      "id",
+                      "kind",
+                      "name",
+                      "pinned_at",
+                      "pinned_by",
+                      "trust"
+                    ],
+                    "properties": {
+                      "description": {
+                        "type": "string"
+                      },
+                      "id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "kind": {
+                        "type": "string"
+                      },
+                      "listing_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "listing_version_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "pinned_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "pinned_by": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "skill_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "trust": {
+                        "type": "object",
+                        "required": [
+                          "state"
+                        ],
+                        "properties": {
+                          "publisher_project_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          },
+                          "state": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "version_name": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "total": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "max_length": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              ]
             }
           }
         },
@@ -21772,6 +22218,365 @@
           }
         },
         "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /elitea_core/conversation_skills/prompt_lib/{project_id}/{conversation_id}": {
+      "operation_id": "pinConversationSkill",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:conversation_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "properties": {
+              "listing_id": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              },
+              "listing_version_id": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              },
+              "skill_id": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "description",
+                "id",
+                "kind",
+                "name",
+                "pinned_at",
+                "pinned_by",
+                "trust"
+              ],
+              "properties": {
+                "description": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "listing_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "listing_version_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "pinned_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "pinned_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "skill_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "trust": {
+                  "type": "object",
+                  "required": [
+                    "state"
+                  ],
+                  "properties": {
+                    "publisher_project_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "version_name": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "201": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "description",
+                "id",
+                "kind",
+                "name",
+                "pinned_at",
+                "pinned_by",
+                "trust"
+              ],
+              "properties": {
+                "description": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "listing_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "listing_version_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "pinned_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "pinned_by": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "skill_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "trust": {
+                  "type": "object",
+                  "required": [
+                    "state"
+                  ],
+                  "properties": {
+                    "publisher_project_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "version_name": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "max_length": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
           "content": {
             "application/json": {
               "type": "object",

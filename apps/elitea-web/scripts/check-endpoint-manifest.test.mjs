@@ -950,7 +950,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // setMarketplaceUpgradePolicy, getMarketplaceUpstreamReview and proposeMarketplaceUpstreamMerge.
 // 548 -> 552 (issue 1631, ADR-0051 M5): getMarketplaceFeedback, saveMarketplaceReview,
 // saveMarketplaceWorkforceReport and actOnMarketplaceFeedback.
-const GENERATED_OPERATION_COUNT = 552;
+// 552 -> 558 (issues 2170 and 2172, skills epic 2169): list/pin/unpinConversationSkill, the skills
+// pinned to a conversation, and getSkillTrust, trustSkillRevision and revokeSkillTrust, a project's
+// trust in skill text from another project. MANIFEST_ENTRY_COUNT is unchanged (the UI lands next).
+const GENERATED_OPERATION_COUNT = 558;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

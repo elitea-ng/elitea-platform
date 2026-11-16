@@ -20,6 +20,10 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	v2conversationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversationskills"
+	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
+	v2skilltrust "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skilltrust"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
 
@@ -120,8 +124,17 @@ func TestProductionRouterDoesNotAuditContentTraffic(t *testing.T) {
 // correctness" class this repo keeps producing (see AuditedSurfaces' doc).
 // Walking the real router is the only way to tell the two apart.
 func TestEveryAuditedSurfaceMatchesAMountedRoute(t *testing.T) {
-	// The entity folder routes exist only when their repository is configured.
-	router, ok := NewRouter(RouterConfig{EntityFoldersRepo: &entityFolderStub{}}).(chi.Routes)
+	// The entity folder, conversation skill and skill trust routes exist only
+	// when their repositories are configured.
+	router, ok := NewRouter(RouterConfig{
+		EntityFoldersRepo: &entityFolderStub{},
+		ConvsRepo:         struct{ v2convs.Repository }{},
+		SkillsRepo:        struct{ v2skills.Repository }{},
+		ConversationSkillsRepo: struct {
+			v2conversationskills.Repository
+		}{},
+		SkillTrustRepo: struct{ v2skilltrust.Repository }{},
+	}).(chi.Routes)
 	if !ok {
 		t.Fatal("NewRouter no longer returns a chi.Routes; this test cannot walk it")
 	}
