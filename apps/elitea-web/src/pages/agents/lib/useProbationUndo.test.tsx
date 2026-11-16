@@ -61,7 +61,7 @@ describe('useProbationUndo (#2091)', () => {
     expect(result.current(hired)).toBeUndefined();
   });
 
-  it('does not read the actions at all while no row is on probation', async () => {
+  it('does not read the actions at all while no row is on probation', () => {
     let reads = 0;
     server.use(
       http.get(ACTIONS_URL, () => {
