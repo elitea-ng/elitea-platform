@@ -77,6 +77,9 @@ func (r *ConversationSkillsRepo) scanPins(ctx context.Context, projectID int64, 
 			id := int64(*skillID)
 			pin.Kind, pin.SkillID = conversationskills.KindProject, &id
 			pin.Trust = conversationskills.Trust{State: "trusted"}
+			// Readable by THIS caller? The turn skips a pin they cannot read.
+			_, readErr := NewProjectSkillsRepo(r.pool).ResolveCurrentProjectSkills(ctx, projectID, []int64{id})
+			pin.Available = readErr == nil
 			if publisher, foreign := skilltrust.Foreign(parent, projectID); foreign {
 				if publisher > 0 {
 					pin.Trust.PublisherProjectID = &publisher
@@ -114,6 +117,7 @@ WHERE lv.listing_id = $1 AND lv.version_id = $2
 		// A listing that is yanked, withdrawn or delisted shows no name (the project has no
 		// right to it any more), and still lists its pin so the person can remove it.
 		pins[index].Name, pins[index].Description, pins[index].VersionName = name, description, version
+		pins[index].Available = name != ""
 	}
 	return pins, nil
 }

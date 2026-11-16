@@ -354,6 +354,7 @@ export const getListConversationSkillsResponseMock = (
     (_, i) => i + 1,
   ).map(() => ({
     id: faker.number.int(),
+    available: faker.datatype.boolean(),
     kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
     skill_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
     listing_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
@@ -388,6 +389,7 @@ export const getPinConversationSkillResponseMock = (
   faker.helpers.arrayElement([
     {
       id: faker.number.int(),
+      available: faker.datatype.boolean(),
       kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
       skill_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
       listing_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
@@ -414,6 +416,7 @@ export const getPinConversationSkillResponseMock = (
     },
     {
       id: faker.number.int(),
+      available: faker.datatype.boolean(),
       kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
       skill_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
       listing_id: faker.helpers.arrayElement([faker.number.int(), undefined]),

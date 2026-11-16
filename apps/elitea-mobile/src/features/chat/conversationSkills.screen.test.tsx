@@ -23,6 +23,7 @@ const pin = (id: number, name: string, extra: object = {}) => ({
   name,
   description: '',
   trust: { state: 'trusted' },
+  available: true,
   pinned_by: 5,
   pinned_at: '2026-11-16T10:00:00Z',
   ...extra,
@@ -101,4 +102,10 @@ it('says why a pin was refused', async () => {
   const older = fakeServer();
   older.on('GET', PINS, { status: 404 });
   await expect(fetchConversationSkills(P, '3', older.client)).resolves.toBeNull();
+});
+
+it('says a pin is not applied for the caller who cannot read the skill', async () => {
+  server.on('GET', PINS, { status: 200, body: { rows: [pin(1, 'Hidden', { available: false })], total: 1, max: 5 } });
+  await render(withQueries(sheet()));
+  expect(await screen.findByText(/Not applied for you/)).toBeTruthy();
 });

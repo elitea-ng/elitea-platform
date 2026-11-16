@@ -4010,6 +4010,8 @@ export interface components {
         };
         /** @description One skill pinned to a conversation. It carries no skill text. */
         ConversationSkillPin: {
+            /** @description False when the pin is not applied for the caller: a project skill they cannot read, or a listing version that is yanked, withdrawn or delisted. A turn skips such a pin for that caller, and the client says so. */
+            available: boolean;
             description: string;
             /** Format: int64 */
             id: number;

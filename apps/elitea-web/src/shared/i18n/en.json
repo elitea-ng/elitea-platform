@@ -11,6 +11,7 @@
   "chat.skills.loadFailed": "The skills of this conversation could not be loaded.",
   "chat.skills.loading": "Loading the project skills…",
   "chat.skills.noneToAdd": "Every project skill is pinned already, or the project has none.",
+  "chat.skills.notApplied": "Not applied for you: this skill is not available to you.",
   "chat.skills.optionsFailed": "The project skills could not be loaded.",
   "chat.skills.pinnedBy": "Pinned by {{name}}",
   "chat.skills.pinnedByOther": "Pinned by a teammate",

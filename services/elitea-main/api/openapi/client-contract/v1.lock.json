@@ -8923,6 +8923,7 @@
                   "items": {
                     "type": "object",
                     "required": [
+                      "available",
                       "description",
                       "id",
                       "kind",
@@ -8932,6 +8933,9 @@
                       "trust"
                     ],
                     "properties": {
+                      "available": {
+                        "type": "boolean"
+                      },
                       "description": {
                         "type": "string"
                       },
@@ -22292,6 +22296,7 @@
             "application/json": {
               "type": "object",
               "required": [
+                "available",
                 "description",
                 "id",
                 "kind",
@@ -22301,6 +22306,9 @@
                 "trust"
               ],
               "properties": {
+                "available": {
+                  "type": "boolean"
+                },
                 "description": {
                   "type": "string"
                 },
@@ -22361,6 +22369,7 @@
             "application/json": {
               "type": "object",
               "required": [
+                "available",
                 "description",
                 "id",
                 "kind",
@@ -22370,6 +22379,9 @@
                 "trust"
               ],
               "properties": {
+                "available": {
+                  "type": "boolean"
+                },
                 "description": {
                   "type": "string"
                 },

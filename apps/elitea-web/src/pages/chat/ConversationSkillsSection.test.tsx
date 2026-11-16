@@ -24,6 +24,7 @@ interface Pin {
   description: string;
   version_name?: string;
   trust: { state: 'trusted' | 'untrusted' };
+  available: boolean;
   pinned_by: number;
   pinned_at: string;
 }
@@ -36,6 +37,7 @@ function pin(id: number, name: string, overrides: Partial<Pin> = {}): Pin {
     name,
     description: '',
     trust: { state: 'trusted' },
+    available: true,
     pinned_by: 7,
     pinned_at: '2026-11-16T10:00:00Z',
     ...overrides,
@@ -125,6 +127,14 @@ describe('ConversationSkillsSection', () => {
     expect(within(section).getByTestId('conversation-skill-untrusted-3')).toBeInTheDocument();
     expect(within(section).queryByTestId('conversation-skill-untrusted-1')).not.toBeInTheDocument();
     expect(within(section).getByText('Marketplace v1.2')).toBeInTheDocument();
+  });
+
+  it('says a pin is not applied for the caller when they cannot read the skill', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    mockBackend([pin(1, 'Triage'), pin(2, 'Hidden', { available: false })]);
+    mount();
+    expect(await screen.findByTestId('conversation-skill-unavailable-2')).toHaveTextContent('Not applied for you');
+    expect(screen.queryByTestId('conversation-skill-unavailable-1')).not.toBeInTheDocument();
   });
 
   it('shows no section for a conversation that is not saved yet', () => {

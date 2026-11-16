@@ -124,6 +124,11 @@ function PinRow({
           <Typography variant="labelSmall" color="text.secondary" data-testid={`conversation-skill-pinned-by-${pin.id}`}>
             {pinnedBy}
           </Typography>
+          {!pin.available && (
+            <Typography variant="labelSmall" color="warning.main" role="note" data-testid={`conversation-skill-unavailable-${pin.id}`}>
+              {t('chat.skills.notApplied', 'Not applied for you: this skill is not available to you.')}
+            </Typography>
+          )}
           {pin.trust.state === 'untrusted' && (
             <Chip
               size="small"

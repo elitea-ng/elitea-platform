@@ -46,6 +46,11 @@ import { ConversationSkillTrust } from "./conversationSkillTrust.zod";
 export const ConversationSkillPin = zod
   .object({
     id: zod.int(),
+    available: zod
+      .boolean()
+      .describe(
+        "False when the pin is not applied for the caller: a project skill they cannot read, or a listing version that is yanked, withdrawn or delisted. A turn skips such a pin for that caller, and the client says so.\n",
+      ),
     kind: zod
       .string()
       .describe(

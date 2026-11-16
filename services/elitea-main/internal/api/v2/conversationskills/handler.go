@@ -62,6 +62,10 @@ type Pin struct {
 	// VersionName is the listing version's name, for kind `listing`.
 	VersionName string `json:"version_name,omitempty"`
 	Trust       Trust  `json:"trust"`
+	// Available is false when this pin is NOT applied for the caller: a project
+	// skill the caller cannot read, or a listing version that is yanked,
+	// withdrawn or delisted. The Skills section says so (ADR-0050 amendment 1).
+	Available bool `json:"available"`
 	// PinnedBy is the user id of the person who pinned it.
 	PinnedBy int64     `json:"pinned_by"`
 	PinnedAt time.Time `json:"pinned_at"`

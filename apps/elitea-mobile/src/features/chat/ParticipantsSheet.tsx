@@ -285,11 +285,12 @@ function SheetBody({
                 const name = pin.name === '' ? 'A skill that is no longer available' : pin.name;
                 const untrusted = pin.trust.state === 'untrusted';
                 const origin = pin.kind === 'listing' ? `Marketplace ${pin.version_name ?? ''}`.trim() : 'Project skill';
+                const note = pin.available ? '' : ' · Not applied for you: not available to you';
                 return (
                   <ListRow
                     key={pin.id}
                     title={name}
-                    subtitle={untrusted ? `${origin} · Untrusted: the model gets its text as quoted data` : origin}
+                    subtitle={`${untrusted ? `${origin} · Untrusted: the model gets its text as quoted data` : origin}${note}`}
                     trailing={
                       <Button
                         title="Remove"

@@ -3868,11 +3868,18 @@ components:
     ConversationSkillPin:
       type: object
       description: One skill pinned to a conversation. It carries no skill text.
-      required: [id, kind, name, description, trust, pinned_by, pinned_at]
+      required: [id, kind, name, description, trust, available, pinned_by, pinned_at]
       properties:
         id:
           type: integer
           format: int64
+        available:
+          type: boolean
+          description: >
+            False when the pin is not applied for the caller: a project skill
+            they cannot read, or a listing version that is yanked, withdrawn or
+            delisted. A turn skips such a pin for that caller, and the client
+            says so.
         kind:
           type: string
           description: "`project` (a project skill) or `listing` (a Marketplace skill listing version, pinned by reference)."
