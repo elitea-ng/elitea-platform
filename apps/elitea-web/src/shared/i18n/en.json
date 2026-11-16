@@ -6505,6 +6505,7 @@
   "marketplace.noResults.description": "Clear a filter or try different search terms.",
   "marketplace.noResults.title": "No listings match",
   "marketplace.popular": "Popular in your organisation",
+  "marketplace.sort.likes": "Most liked",
   "marketplace.sort.name": "Name A-Z",
   "marketplace.sort.newest": "Newest first",
   "marketplace.summary.category": "Category: {{category}}",

@@ -42,7 +42,7 @@ import { useCallback, useRef, useState } from 'react';
 
 import { create } from 'zustand';
 
-import { likeApplication, unlikeApplication } from '@/shared/api/generated/social/social';
+import { likeApplication, likeEntity, unlikeApplication, unlikeEntity } from '@/shared/api/generated/social/social';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 
 /* ── Store ──────────────────────────────────────────────────────────── */
@@ -69,8 +69,19 @@ const useLikeStore = create<LikeState>(set => ({
 
 /* ── Hook ───────────────────────────────────────────────────────────── */
 
+/**
+ * What a like names. An agent is liked as the `application` entity, a skill as
+ * the `skill` entity (skills epic 2169, S6: the generic like route takes any
+ * entity name). The two share one id space per table, so the store keys a like
+ * by both.
+ */
+export type CardLikeEntityType = 'application' | 'skill';
+
 export interface UseCardLikeOptions {
+  /** The entity's id (the public twin's id for a Marketplace listing). Named for its first use, the agents hub. */
   applicationId: string;
+  /** Default `application`. */
+  entityType?: CardLikeEntityType;
   /**
    * Owning project id — for every public agents-hub card this is always the
    * public project (`ApplicationData.project_id`, "Always the public
@@ -88,6 +99,7 @@ export interface UseCardLikeOptions {
 
 export function useCardLike({
   applicationId,
+  entityType = 'application',
   projectId,
   initialLiked = false,
   initialCount = 0,
@@ -98,8 +110,10 @@ export function useCardLike({
   const setLikeState = useLikeStore(state => state.setLikeState);
   const setLikeCount = useLikeStore(state => state.setLikeCount);
 
-  const isLiked = likedStates[applicationId] ?? initialLiked;
-  const likeCount = likeCounts[applicationId] ?? initialCount;
+  // An agent and a skill can share a numeric id: key the store by both.
+  const storeKey = `${entityType}:${applicationId}`;
+  const isLiked = likedStates[storeKey] ?? initialLiked;
+  const likeCount = likeCounts[storeKey] ?? initialCount;
   const [isToggling, setIsToggling] = useState(false);
   // A ref as well as the state: two clicks in one tick both read the state as false.
   const inFlight = useRef(false);
@@ -115,8 +129,8 @@ export function useCardLike({
     const newCount = newLiked ? previousCount + 1 : Math.max(0, previousCount - 1);
 
     // Optimistic update — reverted below if the server call fails.
-    setLikeState(applicationId, newLiked);
-    setLikeCount(applicationId, newCount);
+    setLikeState(storeKey, newLiked);
+    setLikeCount(storeKey, newCount);
 
     const numericApplicationId = Number(applicationId);
     try {
@@ -125,7 +139,9 @@ export function useCardLike({
           `useCardLike: applicationId "${applicationId}" is not numeric — /social/like/prompt_lib requires a numeric path segment`,
         );
       }
-      if (newLiked) {
+      if (entityType === 'skill') {
+        await (newLiked ? likeEntity : unlikeEntity)(projectId, 'skill', numericApplicationId);
+      } else if (newLiked) {
         await likeApplication(projectId, numericApplicationId);
       } else {
         await unlikeApplication(projectId, numericApplicationId);
@@ -134,8 +150,8 @@ export function useCardLike({
     } catch (error) {
       // Revert the optimistic update — the like did not actually persist
       // (see this file's module doc comment for the known backend defect).
-      setLikeState(applicationId, wasLiked);
-      setLikeCount(applicationId, previousCount);
+      setLikeState(storeKey, wasLiked);
+      setLikeCount(storeKey, previousCount);
       // Only the documented API-failure path is swallowed; anything else
       // (a programmer error, e.g. the NaN guard above) still surfaces.
       if (!(error instanceof EliteaApiError)) throw error;
@@ -143,7 +159,7 @@ export function useCardLike({
       inFlight.current = false;
       setIsToggling(false);
     }
-  }, [isLiked, likeCount, applicationId, projectId, setLikeState, setLikeCount, onLikeSuccess]);
+  }, [isLiked, likeCount, applicationId, entityType, storeKey, projectId, setLikeState, setLikeCount, onLikeSuccess]);
 
   return { isLiked, likeCount, isToggling, toggleLike };
 }

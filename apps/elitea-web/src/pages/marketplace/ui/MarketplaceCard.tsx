@@ -6,7 +6,8 @@
  * in a new tab, copies as an address and is reached by the keyboard with the
  * browser's own focus ring. The name is the link's text, which is what a
  * screen reader announces; the like count is read as text, not as an icon.
- * It also shows the publisher, the rating as text ("No ratings yet" until
+ * It also shows the publisher, the heart (a button beside the link, for agents
+ * and skills alike), the rating as text ("No ratings yet" until
  * reviews exist), the hire count, the tier, what the agent requires and a
  * "Hired v2.3" badge when this project hired it.
  */
@@ -25,6 +26,8 @@ import { cardGradientSx } from '@/shared/lib/cardGradient';
 
 import { listingParams, ratingText } from '../listing';
 import type { ListingCardData } from '../types';
+
+import { ListingLike } from './ListingLike';
 
 export interface MarketplaceCardProps {
   readonly card: ListingCardData;
@@ -103,6 +106,10 @@ export const MarketplaceCard = memo(function MarketplaceCard({ card }: Marketpla
           </Typography>
         </Box>
       </Link>
+      {/* Beside the link, not inside it: a button in an anchor is invalid, and a like must not open the listing. */}
+      <Box sx={styles.like}>
+        <ListingLike kind={card.kind} entityId={card.entityId} likes={card.likes} isLiked={card.isLiked} name={card.name} />
+      </Box>
     </Card>
   );
 });
@@ -129,7 +136,9 @@ const styles: Record<string, SxProps<Theme>> = {
     boxShadow: 'none',
     height: '12rem',
     boxSizing: 'border-box',
+    position: 'relative',
   }),
+  like: { position: 'absolute', right: '1rem', bottom: '0.75rem' },
   header: { display: 'flex', alignItems: 'center', gap: '0.75rem', width: '100%' },
   icon: (theme: Theme) => ({ width: '2rem', height: '2rem', flexShrink: 0, borderRadius: theme.vars.shape.radiusSm }),
   monogram: (theme: Theme) => ({
@@ -167,5 +176,7 @@ const styles: Record<string, SxProps<Theme>> = {
     flexWrap: 'wrap',
     gap: '0.5rem',
     minHeight: '1.25rem',
+    // Room for the heart, which sits beside the link at the card's corner.
+    paddingRight: '3.5rem',
   },
 };

@@ -7497,7 +7497,7 @@ export interface operations {
                 query?: string;
                 /** @description Comma-separated toolkit or MCP types; a listing needs one of them. */
                 requires?: string;
-                /** @description `relevance` (default), `hires`, `rating`, `newest` or `name`. */
+                /** @description `relevance` (default), `hires`, `likes` (agents and skills together), `rating`, `newest` or `name`. */
                 sort?: string;
                 /** @description Comma-separated tags; a listing needs one of them. */
                 tag?: string;
