@@ -155,11 +155,13 @@ export function ContextBudgetPanel({ stats, onEdit, pendingMode }: ContextBudget
         {stats.usageAvailable && <ProgressBar percentage={barPercentage} isHigh={stats.isHighUtilization} />}
       </Box>
 
-      {pendingMode !== undefined && pendingMode !== stats.budgetMode && (
+      {pendingMode !== undefined && (stats.estimated === true || pendingMode !== stats.budgetMode) && (
         <Typography variant="bodySmall" data-testid="context-budget-pending" sx={{ paddingX: 2, paddingBottom: 1 }}>
-          {t('widgets.contextBudget.pendingMode', 'Now set to {{mode}}. The window and usage above update with the next reply.', {
-            mode: pendingMode === 'full' ? t('contextBudget.mode.full', 'Full') : t('contextBudget.mode.balanced', 'Balanced'),
-          })}
+          {stats.estimated === true
+            ? t('widgets.contextBudget.estimatedMode', 'Estimated for the new window until the next reply.')
+            : t('widgets.contextBudget.pendingMode', 'Now set to {{mode}}. The window and usage above update with the next reply.', {
+                mode: pendingMode === 'full' ? t('contextBudget.mode.full', 'Full') : t('contextBudget.mode.balanced', 'Balanced'),
+              })}
         </Typography>
       )}
       {stats.runtime && <Typography variant="bodySmall" sx={{ paddingX: 2, paddingBottom: 1 }}>

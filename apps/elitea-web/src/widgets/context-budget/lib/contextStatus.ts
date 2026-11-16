@@ -48,6 +48,46 @@ export interface ContextBudgetStats {
   readonly summariesGenerated: number;
   /** `context_summarization` -> `context summarization`. */
   readonly strategyName: string;
+  /** True when the window figures were recomputed for a mode saved after the latest reply (#2123). */
+  readonly estimated?: boolean;
+}
+
+/** Balanced caps the combined window here; Full uses the model window (the contract's wording). */
+export const BALANCED_WINDOW_TOKENS = 272_000;
+
+/**
+ * The latest measurement, restated for another window mode (#2123).
+ *
+ * A measurement is the latest response's own, so after the reader saves a
+ * different mode it still describes the old window until the next reply. The
+ * new window follows from the rule the contract states: Balanced is the
+ * smaller of 272 000 and the model window, Full is the model window. The
+ * model window itself is read off the measurement: it IS the total when that
+ * was measured under Full, or under Balanced below the cap. A Balanced total
+ * at the cap says only "at least that", so Full cannot be estimated from it
+ * and `undefined` is answered (the caller keeps the measured figures).
+ * Reserved output and the safety margin are the measurement's own.
+ */
+export function estimateForMode(stats: ContextBudgetStats, mode: ContextBudgetMode): ContextBudgetStats | undefined {
+  const runtime = stats.runtime;
+  if (!runtime || runtime.legacy || runtime.phase !== 'measured' || mode === stats.budgetMode) return undefined;
+  const total = runtime.totalTokens;
+  const windowKnown = stats.budgetMode === 'full' || total < BALANCED_WINDOW_TOKENS;
+  if (!windowKnown && mode === 'full') return undefined;
+  const newTotal = mode === 'balanced' ? Math.min(BALANCED_WINDOW_TOKENS, total) : total;
+  const maxTokens = Math.max(0, newTotal - runtime.reservedOutputTokens - runtime.safetyMarginTokens);
+  const usageAvailable = stats.usageAvailable && maxTokens > 0;
+  return {
+    ...stats,
+    budgetMode: mode,
+    runtime: { ...runtime, totalTokens: newTotal },
+    maxTokens,
+    usageAvailable,
+    tokensDisplay: usageAvailable ? formatTokensDisplay(stats.currentTokens, maxTokens) : '—',
+    utilizationPercentage: usageAvailable ? deriveUtilizationPercentage(stats.currentTokens, maxTokens) : undefined,
+    isHighUtilization: usageAvailable && stats.currentTokens * 100 >= maxTokens * HIGH_UTILIZATION_PERCENTAGE,
+    estimated: true,
+  };
 }
 
 function readNumber(source: Record<string, unknown>, key: string): number {

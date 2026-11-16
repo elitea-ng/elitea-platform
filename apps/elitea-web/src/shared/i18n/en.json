@@ -4430,6 +4430,7 @@
   "widgets.contextBudget.mode": "Window",
   "widgets.contextBudget.output": "Reserved for output",
   "widgets.contextBudget.unknown": "Usage not yet measured",
+  "widgets.contextBudget.estimatedMode": "Estimated for the new window until the next reply.",
   "widgets.contextBudget.pendingMode": "Now set to {{mode}}. The window and usage above update with the next reply.",
   "widgets.contextBudget.window": "Total window",
   "settings.memory.summarization.contractDescription": "{{product}} always preserves the task, constraints, key facts, decisions, completed work, open issues, next steps, and verified references in a structured summary. Your guidance only adds emphasis.",

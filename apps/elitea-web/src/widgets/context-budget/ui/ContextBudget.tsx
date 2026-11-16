@@ -16,7 +16,7 @@ import {
   selectBudgetMode,
   type AuthorContextProfile,
 } from '../lib/authorContextUpdate';
-import { toContextBudgetStats } from '../lib/contextStatus';
+import { estimateForMode, toContextBudgetStats } from '../lib/contextStatus';
 import { ContextBudgetEditDialog } from './ContextBudgetEditDialog';
 import { ContextBudgetCollapsed, ContextBudgetPanel } from './ContextBudgetPanel';
 
@@ -46,8 +46,11 @@ export function ContextBudget({ conversationId, projectId, collapsed = false }: 
 
   if (!enabled || isPending || isError) return null;
 
-  const stats = toContextBudgetStats(data);
-  if (!stats) return null;
+  const measured = toContextBudgetStats(data);
+  if (!measured) return null;
+  // A window saved after the latest reply: show it now, estimated from that
+  // reply's measurement, until the next reply replaces it (#2123).
+  const stats = edit.pendingMode === undefined ? measured : (estimateForMode(measured, edit.pendingMode) ?? measured);
 
   if (collapsed) return <ContextBudgetCollapsed stats={stats} />;
   return (

@@ -224,6 +224,54 @@ describe('ContextBudget — editing the budget', () => {
     expect(await screen.findByTestId('context-budget-pending')).toHaveTextContent('Balanced');
   });
 
+  /**
+   * #2123: the figures are the latest response's measurement. Saving another
+   * window must restate them at once (Window and percentage), without a reply.
+   */
+  it('recomputes Window and percentage for the saved window before any new reply', async () => {
+    server.use(
+      http.get(STATUS_URL, () =>
+        HttpResponse.json({
+          ...STATUS_BODY,
+          budget_mode: 'full',
+          current_tokens: 26200,
+          max_tokens: 390000,
+          context_analytics_available: true,
+          runtime_context: {
+            active: false,
+            measurement: {
+              version: 1,
+              phase: 'measured',
+              budget_mode: 'full',
+              total_tokens: 400000,
+              reserved_output_tokens: 8000,
+              safety_margin_tokens: 2000,
+              auto_output: false,
+            },
+          },
+        }),
+      ),
+      http.get(`${BASE}/social/author`, () => HttpResponse.json({})),
+      http.put(`${BASE}/social/author`, () => HttpResponse.json({ ok: true })),
+      http.put(STRATEGY_URL, () => HttpResponse.json({ message: 'Strategy updated successfully' })),
+    );
+    const user = userEvent.setup();
+    renderWithTheme(wrap(<ContextBudget conversationId="42" projectId="7" />));
+
+    expect((await screen.findByTestId('context-budget-stat-window')).textContent).toContain('400\u00a0000');
+    expect(screen.getByTestId('context-budget-utilization').textContent).toBe('7%');
+
+    await user.click(screen.getByTestId('context-budget-edit-button'));
+    await user.click(screen.getByRole('radio', { name: /^Balanced/ }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    // 272 000 - 8 000 - 2 000 = 262 000 usable; 26 200 / 262 000 = 10%.
+    await waitFor(() => expect(screen.getByTestId('context-budget-stat-window').textContent).toContain('272\u00a0000'));
+    expect(screen.getByTestId('context-budget-stat-mode').textContent).toContain('Balanced');
+    expect(screen.getByTestId('context-budget-utilization').textContent).toBe('10%');
+    expect(screen.getByTestId('context-budget-pending')).toHaveTextContent('Estimated');
+  });
+
   it('reports a refused save inside the dialog and keeps what was typed', async () => {
     server.use(
       http.get(STATUS_URL, () => HttpResponse.json(STATUS_BODY)),
