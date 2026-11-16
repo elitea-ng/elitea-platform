@@ -1,6 +1,6 @@
 ---
 title: "Marketplace"
-description: "Browse, search, hire, and add published agents and skills from Elitea's shared library, with versions, release notes, and requirements."
+description: "Browse, search, hire, upgrade, and add published agents and skills from Elitea's shared library, with versions, release notes, and requirements."
 ---
 
 Marketplace is the shared library of published agents and skills, visible across every project you have access to — a discovery surface, not a personal workspace. It was called **Catalog** (and, before that, **Agent HUB**). Open it from the **Marketplace** row in the sidebar, beside the **Workshop** group, on the web and in the desktop app.
@@ -44,7 +44,7 @@ Select a card to open its page at `/marketplace/{kind}/{listing}`. The page has 
 | **current** | The newest version that can be hired. |
 | **available** | An older version that can still be hired. |
 | **deprecated** | Still hireable. The wizard shows a warning. |
-| **yanked** | Not hireable. Agents already installed from it keep running and show a warning. |
+| **yanked** | Not hireable. Agents already installed from it keep running and show a warning, and their people get a notification. A platform administrator can also suspend them. |
 
 The publisher can deprecate, yank, and restore a version in the **Versions** section. A platform administrator can yank a version and can delist or feature a listing. A version that an administrator yanked stays yanked until an administrator restores it.
 
@@ -73,6 +73,45 @@ You can hire the same listing more than once. The Workshop marks the second hire
 
 You cannot publish an installed agent as it is. Fork it first.
 
+## Upgrade an installed agent
+
+The banner on an installed agent shows **Upgrade to...** and an **Upgrade policy**.
+
+**Upgrade to...** lists every version of the listing except the pinned one, so you can go up, down, or across. Pick one and read the plan before anything changes:
+
+- the release notes and the rating of the listing;
+- **What changes**: the difference between the pinned version and the one you picked, line by line;
+- what the version adds, if anything: a new tool, a new capability, a new requirement, or a higher risk tier;
+- the toolkits it still needs. Choose a toolkit for each, or **Disable for now**. The toolkits you already bound carry over.
+
+Select **Upgrade**. At low tier, with no write tool in the version, it applies at once and is recorded as an approved change request of kind `upgrade`. Above low tier, or with a write tool, the button says **Request upgrade**: a change request of kind `upgrade` waits for an approver, and the agent keeps its current version until it is approved. A yanked, withdrawn, or delisted version cannot be chosen. In a personal project the same rule as for a hire applies.
+
+### Upgrade policy
+
+| Policy | What happens when a new version is published |
+| --- | --- |
+| **Pinned** (default) | Nothing. The agent changes only when a person acts. |
+| **Notify** | The agent's people get one notification per new version. |
+| **Auto** | The platform upgrades the agent by itself, but only at low tier and only when the new version adds no tool, no capability and no requirement, and does not raise the tier. |
+
+A version that is wider in any way is never taken by itself, whatever the policy says. The agent's people get a notification that says what the version adds, and the policy control shows the same line until a person upgrades or the version is replaced. An agent above low tier never upgrades by itself.
+
+## Update a fork from upstream
+
+When the listing gets a version newer than the one a fork came from, the banner says **Upstream update available**, and **Review update** opens a three-way view:
+
+- **Base**: the version the fork came from.
+- **Theirs**: the new listing version.
+- **Ours**: the fork's current draft.
+
+Each field is listed with a status in words. Conflicts, where both sides changed the field, come first and cannot be skipped. For each field choose **Keep theirs**, **Keep ours**, or **Edit**. A field that only upstream changed defaults to theirs, and a field that only you changed defaults to ours. The fields that merge are the instructions, the welcome message, the agent type, the conversation starters, the model settings, the pipeline settings, and the soul. A fork keeps its own tools, skills, and nested agents; the view lists what upstream now asks for so you can add it by hand.
+
+**Propose the merge** writes the result as a **new draft** of the fork and a change request of kind `upstream_merge`. A fork is never updated without a person. At low tier the person who merges is that person, and the request is recorded as approved by them. Above low tier an approver decides. The fork's origin moves to the new version when the request is approved, so the next review starts from there. A fork made before forks recorded their origin version has no base, so its review is a two-way view of theirs and ours.
+
+## Yanked versions
+
+When a version is yanked, every installed agent and fork that holds it shows a banner with the reason. The agent's people (the person who hired it and the owners in its registry row) get one notification. The agents keep running on their copy. To stop them as well, a platform administrator ticks **Also suspend the agents installed from this version** when yanking. That suspends each installed agent with a reason that starts with `listing_yanked`, and an administrator resumes them from the kill switch. Restoring a version does not resume them.
+
 ## Add a skill
 
 **Add to an agent** on a skill listing has a version pick. A yanked version is disabled. The skill is forked into your project and attached to the agent versions you choose. The Marketplace counts the add as a hire.
@@ -91,7 +130,7 @@ The **Origin** filter in the agents list gains **Installed**. The **Update avail
 
 ## On mobile
 
-The mobile **Discover** tab only browses. It does not hire or add. Hiring needs toolkit binding, and that stays on the web and desktop apps.
+The mobile **Discover** tab only browses. It does not hire, add, or upgrade. Hiring and upgrading need toolkit binding, and that stays on the web and desktop apps. The notification inbox on mobile shows the yank and update notices as they arrive, with the message the platform wrote.
 
 ## What you can and cannot change
 

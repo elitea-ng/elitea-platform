@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -31,10 +32,14 @@ func (s *AgentLifecycle) RecordMarketplaceChangeTx(ctx context.Context, tx pgx.T
 	if err := EnsureRegistryTx(ctx, tx, change.ProjectID, change.ApplicationID, change.ProposedBy); err != nil {
 		return agentlifecycle.ChangeRequest{}, err
 	}
-	if _, err := tx.Exec(ctx, `
+	if change.Kind == agentlifecycle.KindHire {
+		// A hire sets the tier of the listing. An upgrade raises it only when
+		// the request is applied, and an upstream merge never changes it.
+		if _, err := tx.Exec(ctx, `
 UPDATE elitea_lifecycle.agent_registry SET risk_tier = $3, updated_at = clock_timestamp()
 WHERE tenant_project_id = $1 AND application_id = $2`, change.ProjectID, change.ApplicationID, string(change.Tier)); err != nil {
-		return agentlifecycle.ChangeRequest{}, fmt.Errorf("agent lifecycle: set the tier of the hired agent: %w", err)
+			return agentlifecycle.ChangeRequest{}, fmt.Errorf("agent lifecycle: set the tier of the hired agent: %w", err)
+		}
 	}
 	if !change.NeedsChange {
 		return agentlifecycle.ChangeRequest{}, nil
@@ -59,13 +64,13 @@ WHERE tenant_project_id = $1 AND application_id = $2`, change.ProjectID, change.
 INSERT INTO elitea_lifecycle.change_requests
     (tenant_project_id, application_id, kind, state, risk_tier, summary, proposed_by, self_approved,
      required_approvals, required_governance_approvals, submitted_at,
-     decided_by, decided_at, marketplace_listing_id, marketplace_version_id, marketplace_digest)
+     decided_by, decided_at, marketplace_listing_id, marketplace_version_id, marketplace_digest, marketplace_payload)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, clock_timestamp(),
-        CASE WHEN $8 THEN $7::bigint END, CASE WHEN $8 THEN clock_timestamp() END, $11, $12, $13)
+        CASE WHEN $8 THEN $7::bigint END, CASE WHEN $8 THEN clock_timestamp() END, $11, $12, $13, $14::jsonb)
 RETURNING `+changeRequestColumns,
 		change.ProjectID, change.ApplicationID, string(change.Kind), state, string(change.Tier),
 		clampText(change.Summary, agentlifecycle.MaxSummary), change.ProposedBy, selfApproved, approvals, governance,
-		change.ListingID, change.VersionID, change.Digest[:]))
+		change.ListingID, change.VersionID, change.Digest[:], payloadText(change.Payload)))
 	if isUniqueViolation(err, "change_requests_one_open") {
 		return agentlifecycle.ChangeRequest{}, agentlifecycle.Refuse(agentlifecycle.OpenChangeCode,
 			"The agent already has an open change request. Withdraw it or finish it first.")
@@ -79,7 +84,11 @@ RETURNING `+changeRequestColumns,
 	action := agentlifecycle.ActionChangeSubmitted
 	if change.SelfApprove {
 		action = agentlifecycle.ActionChangeApproved
-		reasons = append(reasons, "policy:marketplace_personal_self_approve")
+		reason := change.ApprovalReason
+		if reason == "" {
+			reason = "marketplace_personal_self_approve"
+		}
+		reasons = append(reasons, "policy:"+reason)
 	}
 	if err := s.append(ctx, tx, lifecycleEvent(change.ProjectID, action, change.ProposedBy,
 		"agent_change_request", changeRef(change.ApplicationID, created.ID), reasons...)); err != nil {
@@ -88,26 +97,78 @@ RETURNING `+changeRequestColumns,
 	return created, nil
 }
 
-// finalizeMarketplace is the final approval of a hire: it enables the tools and
-// closes the request as approved, with no release and no certification. A hire
-// of a version that was yanked, withdrawn or delisted since the request was
-// recorded is refused as stale.
-func (s *AgentLifecycle) finalizeMarketplace(ctx context.Context, tx pgx.Tx, change agentlifecycle.ChangeRequest, approverID int64) error {
-	if change.Kind != agentlifecycle.KindHire {
-		return agentlifecycle.Refuse(agentlifecycle.InvalidCode, "Only a hire change request can be approved in this version.")
+func payloadText(payload json.RawMessage) string {
+	if len(payload) == 0 {
+		return "{}"
 	}
-	if err := marketplace.ActivateHireTx(ctx, tx, change.ProjectID, change.ApplicationID); err != nil {
-		if errors.Is(err, marketplace.ErrNotHireable) {
-			return agentlifecycle.Refuse(agentlifecycle.StaleCode,
-				"The listing version was yanked or withdrawn after this request was made. Reject it.")
+	return string(payload)
+}
+
+// MarketplaceApplier applies an approved upgrade or upstream merge to the
+// agent's tenant schema, in the transaction that approves it. The handler that
+// owns the tenant schema satisfies it (eliteacore.Handler.ApplyMarketplaceTx),
+// composed after construction like the publisher.
+type MarketplaceApplier interface {
+	ApplyMarketplaceTx(ctx context.Context, tx pgx.Tx, apply agentlifecycle.MarketplaceApply) error
+}
+
+// ComposeMarketplaceApplier sets the applier after construction. It is a
+// composition-time call, before the store serves.
+func (s *AgentLifecycle) ComposeMarketplaceApplier(applier MarketplaceApplier) {
+	if s != nil {
+		s.marketplaceApplier = applier
+	}
+}
+
+// finalizeMarketplace is the final approval of a Marketplace change request. A
+// hire enables the tools and closes the request as approved, with no release
+// and no certification. An upgrade or an upstream merge is applied by the
+// applier in this transaction. A change to a version that was yanked, withdrawn
+// or delisted since the request was recorded is refused as stale.
+func (s *AgentLifecycle) finalizeMarketplace(ctx context.Context, tx pgx.Tx, change agentlifecycle.ChangeRequest, approverID int64) error {
+	switch change.Kind {
+	case agentlifecycle.KindHire:
+		if err := marketplace.ActivateHireTx(ctx, tx, change.ProjectID, change.ApplicationID); err != nil {
+			if errors.Is(err, marketplace.ErrNotHireable) {
+				return agentlifecycle.Refuse(agentlifecycle.StaleCode,
+					"The listing version was yanked or withdrawn after this request was made. Reject it.")
+			}
+			return fmt.Errorf("agent lifecycle: enable the tools of the hired agent: %w", err)
 		}
-		return fmt.Errorf("agent lifecycle: enable the tools of the hired agent: %w", err)
+	case agentlifecycle.KindUpgrade, agentlifecycle.KindUpstreamMerge:
+		if s.marketplaceApplier == nil {
+			return errors.New("agent lifecycle: no Marketplace applier is composed")
+		}
+		apply := agentlifecycle.MarketplaceApply{
+			ProjectID: change.ProjectID, ApplicationID: change.ApplicationID, Kind: change.Kind, ActorID: approverID, Tier: change.Tier,
+		}
+		var digest, payload []byte
+		if err := tx.QueryRow(ctx, `
+SELECT marketplace_listing_id, marketplace_version_id, marketplace_digest, marketplace_payload
+FROM elitea_lifecycle.change_requests WHERE id = $1`, change.ID).
+			Scan(&apply.ListingID, &apply.VersionID, &digest, &payload); err != nil {
+			return fmt.Errorf("agent lifecycle: read the Marketplace change request: %w", err)
+		}
+		copy(apply.Digest[:], digest)
+		apply.Payload = payload
+		if err := s.marketplaceApplier.ApplyMarketplaceTx(ctx, tx, apply); err != nil {
+			if errors.Is(err, marketplace.ErrNotHireable) {
+				return agentlifecycle.Refuse(agentlifecycle.StaleCode,
+					"The listing version was yanked or withdrawn after this request was made. Reject it.")
+			}
+			if refusal, ok := agentlifecycle.AsRefusal(err); ok {
+				return refusal
+			}
+			return fmt.Errorf("agent lifecycle: apply the Marketplace change: %w", err)
+		}
+	default:
+		return agentlifecycle.Refuse(agentlifecycle.InvalidCode, "Only a Marketplace change request can be approved here.")
 	}
 	if _, err := tx.Exec(ctx, `
 UPDATE elitea_lifecycle.change_requests
 SET state = 'approved', decided_by = $2, decided_at = clock_timestamp(), updated_at = clock_timestamp()
 WHERE id = $1`, change.ID, approverID); err != nil {
-		return fmt.Errorf("agent lifecycle: close the hire change request: %w", err)
+		return fmt.Errorf("agent lifecycle: close the Marketplace change request: %w", err)
 	}
 	return nil
 }

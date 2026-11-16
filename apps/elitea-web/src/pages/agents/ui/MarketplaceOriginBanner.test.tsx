@@ -6,6 +6,7 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
@@ -50,6 +51,43 @@ describe('MarketplaceOriginBanner', () => {
     expect(getByTestId('marketplace-origin-update').textContent).toContain('Update available: v2.4.');
   });
 
+  it('says why a version was yanked and what to do next', async () => {
+    const { getByTestId } = await renderBanner({
+      ...ORIGIN,
+      version_state: 'yanked',
+      version_state_reason: 'It leaks data.',
+    });
+    expect(getByTestId('marketplace-origin-yanked').textContent).toContain(
+      'This version was yanked: It leaks data. Your agent keeps running. Upgrade it to another version.',
+    );
+  });
+
+  it('offers Upgrade to... and the upgrade policy to an installed agent', async () => {
+    const { getByTestId, queryByTestId } = await renderBanner(
+      {
+        ...ORIGIN,
+        upgrade_policy: 'auto',
+        latest_version: { id: '400', name: 'v2.4', published_at: '2026-11-01T00:00:00Z' },
+        update_widening: [{ kind: 'tool_added', detail: 'github: create_issue' }],
+      },
+      { projectId: '5', applicationId: 88 },
+    );
+    expect(getByTestId('marketplace-upgrade-to').textContent).toBe('Upgrade to...');
+    expect(getByTestId('upgrade-auto-waiting').textContent).toContain('A new tool: github: create_issue');
+    expect(queryByTestId('marketplace-review-update')).toBeNull();
+  });
+
+  it('offers Review update to a fork when upstream has a newer version, and no policy', async () => {
+    const { getByTestId, queryByTestId } = await renderBanner(
+      { ...ORIGIN, mode: 'forked', latest_version: { id: '400', name: 'v2.4', published_at: '2026-11-01T00:00:00Z' } },
+      { projectId: '5', applicationId: 88 },
+    );
+    expect(getByTestId('marketplace-origin-update').textContent).toContain('Upstream update available: v2.4.');
+    expect(getByTestId('marketplace-review-update').textContent).toBe('Review update');
+    expect(queryByTestId('marketplace-upgrade-to')).toBeNull();
+    expect(queryByTestId('upgrade-policy')).toBeNull();
+  });
+
   it('shows a fork as a line only', async () => {
     const { getByTestId } = await renderBanner({ ...ORIGIN, mode: 'forked' });
     expect(getByTestId('marketplace-origin-line').textContent).toContain('Forked from Changelog Writer v2.3.');
@@ -58,12 +96,19 @@ describe('MarketplaceOriginBanner', () => {
 });
 
 /** The banner inside a real router with the listing route, so its links build real hrefs. */
-async function renderBanner(origin: MarketplaceOrigin) {
+async function renderBanner(
+  origin: MarketplaceOrigin,
+  ids?: { readonly projectId: string; readonly applicationId: number },
+) {
   const root = createRootRoute({ component: Outlet });
   const index = createRoute({
     getParentRoute: () => root,
     path: '/',
-    component: () => <MarketplaceOriginBanner origin={origin} />,
+    component: () => (
+      <QueryClientProvider client={new QueryClient()}>
+        <MarketplaceOriginBanner origin={origin} projectId={ids?.projectId} applicationId={ids?.applicationId} />
+      </QueryClientProvider>
+    ),
   });
   const listing = createRoute({
     getParentRoute: () => root,

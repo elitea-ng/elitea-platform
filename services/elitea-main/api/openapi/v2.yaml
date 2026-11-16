@@ -14912,6 +14912,12 @@ components:
           type: string
           description: '`available`, `deprecated` or `yanked`. The publisher may set any; an administrator may yank.'
         reason: { type: string, maxLength: 500 }
+        suspend:
+          type: boolean
+          description: >-
+            Also suspend the installed agents that hold the version, with the
+            reason `listing_yanked` (ADR-0041). Only a platform administrator,
+            and only with a yank.
       description: >
         Change a version's state (internal/api/v2/eliteacore/marketplace_manage.go).
 
@@ -15012,9 +15018,230 @@ components:
           allOf: [{ $ref: '#/components/schemas/MarketplaceVersionRef' }]
           nullable: true
           description: A newer hireable version, when one exists.
+        version_state_reason:
+          type: string
+          description: Why the pinned version was yanked or deprecated; empty when it was not.
+        upgrade_policy:
+          type: string
+          description: '`pinned`, `notify` or `auto` for an installed agent; empty for a fork, which is never updated without a person.'
+        base_known:
+          type: boolean
+          description: False for a fork made before forks recorded their origin version; its update review is a two-way diff.
+        update_widening:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceWidening' }
+          description: What the newest version adds to the pinned one. A non-empty list is why an `auto` install waits for a person.
       description: >
         Where an installed or forked agent came from
         (internal/marketplace/origin.go).
+
+    MarketplaceWidening:
+      type: object
+      required: [kind, detail]
+      properties:
+        kind:
+          type: string
+          description: '`tool_added`, `capability_added`, `requirement_added` or `tier_raised`.'
+        detail: { type: string }
+      description: >
+        One way a target version holds more than the pinned one; any of them
+        always needs a person (internal/marketplace/upgrade.go).
+
+    MarketplacePlanVersion:
+      type: object
+      required: [id, name, state, state_reason, release_notes, published_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        state: { type: string, description: '`available`, `deprecated` or `yanked`.' }
+        state_reason: { type: string }
+        release_notes: { type: string }
+        published_at: { type: string, format: date-time }
+      description: >
+        A listing version as the upgrade plan and the upstream review show it
+        (internal/api/v2/eliteacore/marketplace_upgrade.go).
+
+    MarketplaceFeedbackSummary:
+      type: object
+      required: [rating_count]
+      properties:
+        rating_avg: { type: number, nullable: true }
+        rating_count: { type: integer }
+      description: >
+        The listing's rating (internal/api/v2/eliteacore/marketplace_upgrade.go).
+
+    MarketplaceUpgradePlan:
+      type: object
+      required: [current_version, target_version, direction, changes, widening, requirements, bindings,
+                 new_requirements, needs_approval, auto_eligible, hireable, feedback]
+      properties:
+        current_version: { $ref: '#/components/schemas/MarketplacePlanVersion' }
+        target_version: { $ref: '#/components/schemas/MarketplacePlanVersion' }
+        direction: { type: string, description: '`up`, `down` or `same`, by publish time.' }
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/ApplicationReleaseChange' }
+          description: The definition and requirement diff from the pinned to the target version (agentrelease.Diff).
+        widening:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceWidening' }
+        requirements: { $ref: '#/components/schemas/MarketplaceRequirements' }
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceBinding' }
+          description: What the pinned version's bindings already cover for the target.
+        new_requirements:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceRequirement' }
+          description: The toolkit and MCP requirements that still need a binding.
+        needs_approval:
+          type: boolean
+          description: A change request of kind `upgrade` waits for an approver; otherwise the upgrade is one click.
+        auto_eligible:
+          type: boolean
+          description: The `auto` policy would take this version by itself.
+        hireable: { type: boolean }
+        feedback: { $ref: '#/components/schemas/MarketplaceFeedbackSummary' }
+      description: >
+        What a person reads before upgrading an installed agent to a version
+        (internal/api/v2/eliteacore/marketplace_upgrade.go).
+
+    MarketplaceUpgradeRequest:
+      type: object
+      required: [version_id]
+      properties:
+        version_id: { type: string }
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceBinding' }
+          description: Bindings for the requirements the target adds; the others carry over.
+      description: >
+        Upgrade an installed agent to a version
+        (internal/api/v2/eliteacore/marketplace_upgrade.go).
+
+    MarketplaceUpgradeResult:
+      type: object
+      required: [application_id, version_id, applied, awaiting_approval]
+      properties:
+        application_id: { type: string }
+        version_id: { type: string }
+        applied: { type: boolean }
+        awaiting_approval:
+          type: boolean
+          description: A change request of kind `upgrade` waits for a person; the agent stays on its pinned version.
+        change_request_id: { type: string }
+      description: >
+        What the upgrade did (internal/api/v2/eliteacore/marketplace_upgrade.go).
+
+    MarketplaceUpgradePolicy:
+      type: object
+      required: [policy]
+      properties:
+        policy: { type: string, description: '`pinned`, `notify` or `auto`.' }
+      description: >
+        The upgrade policy of an installed agent
+        (internal/api/v2/eliteacore/marketplace_upgrade.go).
+
+    MarketplaceMergeField:
+      type: object
+      required: [key, label, status, default, base, theirs, ours]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        status:
+          type: string
+          description: >-
+            `conflict`, `theirs_only`, `ours_only`, `same`, or `differs` in a
+            two-way review. Conflicts are listed first.
+        default: { type: string, description: '`theirs` or `ours`.' }
+        base:
+          x-elitea-passthrough: >-
+            NOTE(W2): any JSON value of the version field
+            (internal/api/v2/eliteacore/marketplace_upstream.go:60-68).
+        theirs:
+          x-elitea-passthrough: >-
+            NOTE(W2): any JSON value of the version field
+            (internal/api/v2/eliteacore/marketplace_upstream.go:60-68).
+        ours:
+          x-elitea-passthrough: >-
+            NOTE(W2): any JSON value of the version field
+            (internal/api/v2/eliteacore/marketplace_upstream.go:60-68).
+      description: >
+        One field of the three-way view
+        (internal/api/v2/eliteacore/marketplace_upstream.go).
+
+    MarketplaceUpstreamReview:
+      type: object
+      required: [mode, listing_id, listing_name, theirs, fields, changes, widening, needs_approval, hireable,
+                 our_version_name, open_change_request]
+      properties:
+        mode: { type: string, description: '`three_way`, or `two_way` for a fork with no origin version.' }
+        listing_id: { type: string }
+        listing_name: { type: string }
+        base:
+          allOf: [{ $ref: '#/components/schemas/MarketplacePlanVersion' }]
+          nullable: true
+          description: The version the fork came from; absent in a two-way review.
+        theirs: { $ref: '#/components/schemas/MarketplacePlanVersion' }
+        fields:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceMergeField' }
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/ApplicationReleaseChange' }
+          description: What upstream changed from the base to theirs (agentrelease.Diff); empty in a two-way review.
+        widening:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceWidening' }
+          description: What upstream now asks for that the base did not. The fork's own tools are not merged.
+        needs_approval: { type: boolean }
+        hireable: { type: boolean }
+        our_version_name: { type: string }
+        open_change_request:
+          type: boolean
+          description: The fork already has an open change request, so a merge cannot be proposed.
+      description: >
+        The three-way view of an upstream update
+        (internal/api/v2/eliteacore/marketplace_upstream.go).
+
+    MarketplaceMergeResolution:
+      type: object
+      required: [choice]
+      properties:
+        choice: { type: string, description: '`theirs`, `ours` or `edit`.' }
+        value:
+          x-elitea-passthrough: >-
+            NOTE(W2): the edited JSON value of the version field, for choice
+            `edit` (internal/api/v2/eliteacore/marketplace_upstream.go:392-395).
+      description: >
+        How one field is resolved
+        (internal/api/v2/eliteacore/marketplace_upstream.go).
+
+    MarketplaceUpstreamRequest:
+      type: object
+      properties:
+        version_id: { type: string, description: The listing version to merge; the newest by default. }
+        resolutions:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/MarketplaceMergeResolution' }
+          description: A resolution for every conflicting field; the others take the review's default.
+      description: >
+        Propose an upstream merge (internal/api/v2/eliteacore/marketplace_upstream.go).
+
+    MarketplaceUpstreamResult:
+      type: object
+      required: [application_id, draft_version_id, version_id, applied, awaiting_approval]
+      properties:
+        application_id: { type: string }
+        draft_version_id: { type: string, description: The new draft of the fork that holds the merge. }
+        version_id: { type: string }
+        applied:
+          type: boolean
+          description: The fork's origin moved to the version (a low-tier fork, recorded as approved by the person who merged).
+        awaiting_approval: { type: boolean }
+        change_request_id: { type: string }
+      description: >
+        What the merge wrote (internal/api/v2/eliteacore/marketplace_upstream.go).
 
     PublicApplicationSummary:
       type: object
@@ -39207,6 +39434,188 @@ paths:
         '404': { $ref: '#/components/responses/404' }
         '409':
           description: A required toolkit is unbound (`binding_missing`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /elitea_core/marketplace_upgrade/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      operationId: getMarketplaceUpgradePlan
+      summary: Plan an upgrade of an installed agent to a version
+      description: |
+        What a person reads before upgrading (ADR-0051 decision 4): the diff
+        between the pinned and the target version as `agentrelease.Diff` changes,
+        the target's release notes, the listing's feedback summary, and the
+        requirements that still need a binding. The target is `version_id`, or
+        the newest hireable version. It may be older or newer: a person can go
+        up, down or across. A fork answers 409 `fork_has_no_upgrade`; an agent
+        on the newest version answers 404 `up_to_date`
+        (internal/api/v2/eliteacore/marketplace_upgrade.go).
+      tags: [marketplace]
+      parameters:
+        - name: version_id
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The plan
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceUpgradePlan' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: A fork has no upgrade (`fork_has_no_upgrade`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    post:
+      operationId: upgradeMarketplaceAgent
+      summary: Upgrade an installed agent to a version
+      description: |
+        Records a change request of kind `upgrade`. At low tier, with no write
+        tool in the target, it is one click: the request is recorded as approved
+        and applied in the same transaction. Above low tier it waits for an
+        approver and the agent keeps running on its pinned version. A version
+        that is yanked, withdrawn or delisted answers 409
+        `version_not_hireable`; an unbound required toolkit, 409
+        `binding_missing` (internal/api/v2/eliteacore/marketplace_upgrade.go).
+      tags: [marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceUpgradeRequest' }
+      responses:
+        '200':
+          description: Applied, or waiting for approval
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceUpgradeResult' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: >-
+            A fork, a pending hire, the version already pinned, a version that is
+            not hireable, an unbound requirement, an open change request, or a
+            personal project that needs a shared one.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /elitea_core/marketplace_upgrade_policy/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer }
+    put:
+      operationId: setMarketplaceUpgradePolicy
+      summary: Set the upgrade policy of an installed agent
+      description: |
+        `pinned` (the default) changes nothing until a person acts. `notify`
+        tells the agent's people when a newer version appears. `auto` upgrades
+        by itself only at low tier and only when the new version adds no tool,
+        capability or requirement and does not raise the tier; anything wider
+        waits for a person (internal/marketplace/upgrade.go AutoUpgradeAllowed).
+        A fork has no policy and answers 404
+        (internal/api/v2/eliteacore/marketplace_upgrade.go).
+      tags: [marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceUpgradePolicy' }
+      responses:
+        '200':
+          description: The policy after the change
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceUpgradePolicy' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  /elitea_core/marketplace_upstream/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      operationId: getMarketplaceUpstreamReview
+      summary: Review the upstream update of a fork
+      description: |
+        The three-way view of a fork: base (the version the fork came from),
+        theirs (the listing version) and ours (the fork's current draft), field
+        by field with conflicts first. A fork with no origin version gets a
+        two-way view. An installed agent answers 409
+        `installed_has_no_upstream`; a fork on the newest version answers 404
+        `up_to_date` (internal/api/v2/eliteacore/marketplace_upstream.go).
+      tags: [marketplace]
+      parameters:
+        - name: version_id
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        '200':
+          description: The review
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceUpstreamReview' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: An installed agent has no upstream review (`installed_has_no_upstream`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    post:
+      operationId: proposeMarketplaceUpstreamMerge
+      summary: Propose the merge of an upstream update into a fork
+      description: |
+        Writes the merge as a new draft of the fork and a change request of kind
+        `upstream_merge`. A fork is never updated without a person: above low
+        tier an approver decides, and at low tier the person who merged is that
+        person and the request is recorded as approved by them. Every conflicting
+        field needs a resolution, or the call answers 409
+        `unresolved_conflicts` with the field keys
+        (internal/api/v2/eliteacore/marketplace_upstream.go).
+      tags: [marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceUpstreamRequest' }
+      responses:
+        '201':
+          description: The draft and its change request
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceUpstreamResult' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: >-
+            Unresolved conflicts, a version that is not hireable, an open change
+            request, or a personal project that needs a shared one.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

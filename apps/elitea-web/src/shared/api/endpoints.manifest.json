@@ -4512,6 +4512,71 @@
       "usedBy": [
         "pages/marketplace"
       ]
+    },
+    {
+      "$comment": "READ. What a person reads before upgrading an installed agent: the diff, the release notes, the feedback and the new bindings.",
+      "id": "marketplace.getUpgradePlan",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_upgrade/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "getMarketplaceUpgradePlan",
+      "source": "generated",
+      "responseSchema": "MarketplaceUpgradePlan",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. Upgrade an installed agent to a version (a change request of kind upgrade).",
+      "id": "marketplace.upgrade",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_upgrade/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "upgradeMarketplaceAgent",
+      "source": "generated",
+      "responseSchema": "MarketplaceUpgradeResult",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. Set the upgrade policy of an installed agent: pinned, notify or auto.",
+      "id": "marketplace.setUpgradePolicy",
+      "method": "PUT",
+      "path": "/elitea_core/marketplace_upgrade_policy/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "setMarketplaceUpgradePolicy",
+      "source": "generated",
+      "responseSchema": "MarketplaceUpgradePolicy",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "READ. The three-way view of a fork's upstream update.",
+      "id": "marketplace.getUpstreamReview",
+      "method": "GET",
+      "path": "/elitea_core/marketplace_upstream/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "getMarketplaceUpstreamReview",
+      "source": "generated",
+      "responseSchema": "MarketplaceUpstreamReview",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. Merge an upstream update into a fork as a new draft and a change request of kind upstream_merge.",
+      "id": "marketplace.proposeUpstreamMerge",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_upstream/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "proposeMarketplaceUpstreamMerge",
+      "source": "generated",
+      "responseSchema": "MarketplaceUpstreamResult",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
     }
   ]
 }

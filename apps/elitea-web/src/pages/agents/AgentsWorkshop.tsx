@@ -7,12 +7,13 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { EntityImportButton, useEntityImport, workshopList } from '@/features/agent-lifecycle';
 import { ProposalsInboxButton } from '@/features/agent-proposals';
 import { TEAM_PERMISSIONS, TeamsPanel } from '@/features/agent-teams';
+import type { Application } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { EntitySelectionProvider } from '@/shared/ui/EntityCardList';
 import { EntityListFiltersBody, useRailTagSelection } from '@/shared/ui/EntityRail';
-import { EntityFolderDnd, EntityFolderPanel, EntityFolderScope, MoveSelectionControl, useFolderFilter } from '@/widgets/entity-folders';
+import { EntityFolderDnd, EntityFolderPanel, EntityFolderScope, MoveSelectionControl, useFolderFilter, useFolderOrder } from '@/widgets/entity-folders';
 import { EntityListSidebar, ListSelectionSection, pageBodySx, pageSx, useListSearchQuery, useListSelection } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
@@ -28,6 +29,9 @@ const TEAMS_MODE = 'teams';
 const LEGACY_STATUS_TABS: Readonly<Record<string, string>> = { drafts: 'draft', published: 'published' };
 
 type Permissions = ReturnType<typeof usePermissionSet>;
+
+/** An agent's id as the folders know it (a number on the wire, a string in the list rows). */
+const entityIdOf = (application: Application): number => Number(application.id);
 
 /** An old status tab or an unknown one lands on the list; a status tab keeps its filter. */
 function useLegacyTabRedirect(tab: string | undefined): void {
@@ -189,6 +193,17 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
   const folderId = useFolderFilter(projectId, 'agent').folderId;
   const list = workshopList.useListData({ projectId, agentsType: 'classic', enabled: true, query, tags: selectedTags, folderId });
   const ids = useMemo(() => list.rows.map((row) => row.id), [list.rows]);
+  const sortFields = useMemo(
+    () => ({
+      items: [
+        { value: 'createdAt', label: t('pages.agents.applications.sortCreated', 'Created') },
+        { value: 'name', label: t('pages.agents.applications.sortName', 'Name') },
+      ],
+      defaultField: 'createdAt',
+    }),
+    [],
+  );
+  const ordered = useFolderOrder({ projectId, kind: 'agent', folderId, sortFields, rows: list.rows, idOf: entityIdOf });
   const selected = useListSelection(ids);
   const bulk = workshopList.useBulkActions(projectId, 'agent');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -202,17 +217,12 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
       kind="agent"
       permissions={permissions}
       selectedIds={selected.ids}
+      folderOrder={ordered.folderOrder}
     >
       <EntityListSidebar
         {...base}
         facets={facets}
-        sortFields={{
-          items: [
-            { value: 'createdAt', label: t('pages.agents.applications.sortCreated', 'Created') },
-            { value: 'name', label: t('pages.agents.applications.sortName', 'Name') },
-          ],
-          defaultField: 'createdAt',
-        }}
+        sortFields={ordered.sortFields}
         extraChips={selectedTags.map((tag) => ({ id: `tag-${tag}`, label: t('pages.agents.applications.tagChip', 'Tag: {{tag}}', { tag }), onRemove: () => toggleTag(tag) }))}
         clearParams={{ 'tags[]': [] }}
         folders={
@@ -260,7 +270,7 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
             permissions={permissions}
           >
             <ApplicationListPanel
-              rows={list.rows.map((application) => toApplicationRow(application, open, workshopList.rowBadge(application, list.rows)))}
+              rows={ordered.rows.map((application) => toApplicationRow(application, open, workshopList.rowBadge(application, list.rows)))}
               isLoading={list.isLoading}
               isError={list.isError}
               errorMessage={t('pages.agents.privateList.error', 'Failed to load applications.')}

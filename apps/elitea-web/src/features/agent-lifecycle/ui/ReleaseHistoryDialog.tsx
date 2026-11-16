@@ -19,8 +19,9 @@ import TableRow from '@mui/material/TableRow';
 import Tabs from '@mui/material/Tabs';
 import Typography from '@mui/material/Typography';
 
-import type { ApplicationRelease, ApplicationReleaseChange } from '@/shared/api/generated/model';
+import type { ApplicationRelease } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { ChangeList } from '@/shared/ui/ChangeList';
 
 import {
   useApplicationRelease,
@@ -310,42 +311,4 @@ function NotSaved(): ReactNode {
       {t('features.agentLifecycle.releases.notSaved', 'Save the agent first; its history starts with its first saved version.')}
     </Typography>
   );
-}
-
-function ChangeList({ changes }: { readonly changes: readonly ApplicationReleaseChange[] }): ReactNode {
-  if (changes.length === 0) {
-    return (
-      <Typography
-        variant="bodySmall"
-        color="text.secondary"
-      >
-        {t('features.agentLifecycle.releases.noChanges', 'No changes.')}
-      </Typography>
-    );
-  }
-  return (
-    <Box
-      component="ul"
-      sx={{ margin: 0, paddingLeft: '1.25rem' }}
-    >
-      {changes.map((change) => (
-        <Typography
-          key={`${change.op}:${change.path}`}
-          component="li"
-          variant="bodySmall"
-          sx={{ fontFamily: 'monospace', wordBreak: 'break-word' }}
-        >
-          {change.op} {change.path}
-          {change.op !== 'remove' && `: ${preview(change.after)}`}
-        </Typography>
-      ))}
-    </Box>
-  );
-}
-
-/** A changed value, short enough for one line. */
-function preview(value: unknown): string {
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
-  if (text === undefined) return '';
-  return text.length > 160 ? `${text.slice(0, 157)}...` : text;
 }

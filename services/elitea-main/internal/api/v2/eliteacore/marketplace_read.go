@@ -206,7 +206,9 @@ func (h *Handler) MarketplaceOrigin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid application id"})
 		return
 	}
-	origin, err := marketplace.GetOrigin(ctx, h.pool, schema, applicationID)
+	origin, err := marketplace.GetOrigin(ctx, h.pool, schema, applicationID, marketplace.OriginLookup{
+		ProjectID: parseProjectID(chi.URLParam(r, "projectID")), PublicProjectID: publicProjectIDOrDefault(),
+	})
 	if errors.Is(err, marketplace.ErrNotFound) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "the agent was not hired from the marketplace"})
 		return

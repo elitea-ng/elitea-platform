@@ -277,7 +277,9 @@ Attestations are never deleted. A revocation is stamped with who revoked it and 
 
 ## Marketplace hires
 
-A hire from the [Marketplace](/menus/marketplace) above low tier, or with a write tool, creates the agent with every tool disabled and a change request of kind `hire`. The request is submitted at once and needs the approvals of the agent's tier, and at least one. The proposer cannot approve. The final approval turns the tools on. It records no release. If the listing version was yanked or withdrawn meanwhile, the approval is refused as stale. The kinds `upgrade` and `upstream_merge` are reserved for a later phase.
+A hire from the [Marketplace](/menus/marketplace) above low tier, or with a write tool, creates the agent with every tool disabled and a change request of kind `hire`. The request is submitted at once and needs the approvals of the agent's tier, and at least one. The proposer cannot approve. The final approval turns the tools on. It records no release. If the listing version was yanked or withdrawn meanwhile, the approval is refused as stale. 
+
+An upgrade of an installed agent is a change request of kind `upgrade`, and a merge of an upstream update into a fork is one of kind `upstream_merge`. Both carry the listing, the version and the digest. An upgrade of a low-tier agent to a low-tier version with no write tool is recorded as approved by the person who made it, with the reason `direct_low_tier`, and applies at once. The `auto` upgrade policy records its request as approved with the reason `marketplace_auto_upgrade`, and only at low tier with nothing added. Above that, the request waits for the approvals of the tier, and the final approval applies the change in the same transaction. An upstream merge is never applied by a policy: at low tier the person who merges is the person who approves. If the listing version was yanked, withdrawn or delisted meanwhile, the approval is refused as stale. The `marketplace_personal_self_approve` policy covers upgrades and merges in a personal project as it covers a hire.
 
 ## Configure the tier policy
 
@@ -350,7 +352,7 @@ Every change to the registry, a change request, a certification or an attestatio
 
 | Action | When |
 | --- | --- |
-| `agent.change.submitted`, `approved`, `rejected`, `withdrawn`, `published` | A change request moves |
+| `agent.change.submitted`, `approved`, `rejected`, `withdrawn`, `published` | A change request moves (a Marketplace request names the listing and the version, and a self-approval names its rule, such as `policy:direct_low_tier`) |
 | `agent.change.gate_overridden` | A failed gate is accepted, with the reason |
 | `agent.registry.tier_changed` | A tier changes |
 | `agent.certification.certified`, `due`, `lapsed`, `suspended` | The certification state moves, with the reason codes |

@@ -111,19 +111,40 @@ type Origin struct {
 	VersionState string      `json:"version_state"`
 	Digest       string      `json:"digest"`
 	LatestVer    *VersionRef `json:"latest_version"`
+	// VersionStateReason is why the pinned version was yanked or deprecated.
+	VersionStateReason string `json:"version_state_reason"`
+	// UpgradePolicy is `pinned`, `notify` or `auto` for an install, and empty
+	// for a fork, which is never updated without a person.
+	UpgradePolicy string `json:"upgrade_policy"`
+	// BaseKnown is false for a fork made before forks recorded their origin
+	// version: its update review is a two-way diff.
+	BaseKnown bool `json:"base_known"`
+	// UpdateWidening is what the newest version adds to the pinned one. A
+	// non-empty list is why an `auto` install waits for a person.
+	UpdateWidening []Widening `json:"update_widening"`
+}
+
+// OriginLookup names the project and the public catalogue project an origin is
+// read for.
+type OriginLookup struct {
+	ProjectID int64
+	// PublicProjectID is the project whose schema holds the published
+	// catalogue, as text: a fork made before forks recorded their origin
+	// version names its source by that project and the catalogue agent.
+	PublicProjectID string
 }
 
 // GetOrigin reads the origin of an agent from its version meta and the
 // listing. schema is the quoted tenant schema. It answers ErrNotFound for an
 // agent that was not hired from the Marketplace.
-func GetOrigin(ctx context.Context, db DB, schema string, applicationID int64) (Origin, error) {
+func GetOrigin(ctx context.Context, db DB, schema string, applicationID int64, lookup OriginLookup) (Origin, error) {
 	var raw []byte
 	err := db.QueryRow(ctx, fmt.Sprintf(`
 SELECT meta::text FROM %s.application_versions
 WHERE application_id = $1 AND meta ? 'origin_listing_id'
 ORDER BY id LIMIT 1`, schema), applicationID).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Origin{}, ErrNotFound
+		return legacyForkOrigin(ctx, db, schema, applicationID, lookup)
 	}
 	if err != nil {
 		return Origin{}, fmt.Errorf("marketplace: read the agent meta: %w", err)
@@ -144,10 +165,11 @@ ORDER BY id LIMIT 1`, schema), applicationID).Scan(&raw)
 		withdrawn  bool
 	)
 	err = db.QueryRow(ctx, `
-SELECT l.id, l.name, l.state, v.version_id, v.name, v.state, v.withdrawn_at IS NOT NULL, v.digest
+SELECT l.id, l.name, l.state, v.version_id, v.name, v.state, v.state_reason, v.withdrawn_at IS NOT NULL, v.digest
 FROM elitea_marketplace.listing_versions v JOIN elitea_marketplace.listings l ON l.id = v.listing_id
 WHERE v.listing_id = $1 AND v.version_id = $2`, listingID, versionID).
-		Scan(&listingID, &origin.ListingName, &origin.ListingState, &versionRaw, &origin.VersionName, &origin.VersionState, &withdrawn, &digest)
+		Scan(&listingID, &origin.ListingName, &origin.ListingState, &versionRaw, &origin.VersionName, &origin.VersionState,
+			&origin.VersionStateReason, &withdrawn, &digest)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Origin{}, ErrNotFound
 	}
@@ -155,6 +177,7 @@ WHERE v.listing_id = $1 AND v.version_id = $2`, listingID, versionID).
 		return Origin{}, fmt.Errorf("marketplace: read the origin: %w", err)
 	}
 	origin.Mode = kind
+	origin.BaseKnown = true
 	origin.ListingID = strconv.FormatInt(listingID, 10)
 	origin.VersionID = strconv.FormatInt(versionRaw, 10)
 	origin.Digest = hex.EncodeToString(digest)
@@ -174,6 +197,82 @@ SELECT (SELECT cv.version_id || '|' || cv.name || '|' || to_char(cv.published_at
 		return Origin{}, fmt.Errorf("marketplace: read the latest version: %w", err)
 	}
 	origin.LatestVer = parseVersionRef(latest)
+	origin.UpdateWidening = []Widening{}
+	if kind == OriginInstalled && lookup.ProjectID > 0 {
+		if held, err := LoadHeld(ctx, db, lookup.ProjectID, applicationID, false); err == nil {
+			origin.UpgradePolicy = held.Policy
+		}
+		if origin.LatestVer != nil {
+			origin.UpdateWidening = wideningToLatest(ctx, db, listingID, versionID, origin.LatestVer.ID)
+		}
+	}
+	return origin, nil
+}
+
+// wideningToLatest is what the newest version adds to the pinned one. A read
+// that fails answers an empty list: the card then offers the upgrade and the
+// plan names the changes.
+func wideningToLatest(ctx context.Context, db DB, listingID, pinned int64, latestID string) []Widening {
+	latest, err := strconv.ParseInt(latestID, 10, 64)
+	if err != nil {
+		return []Widening{}
+	}
+	prev, err := LoadVersion(ctx, db, listingID, pinned)
+	if err != nil {
+		return []Widening{}
+	}
+	next, err := LoadVersion(ctx, db, listingID, latest)
+	if err != nil {
+		return []Widening{}
+	}
+	return WideningOf(prev.Requirements, next.Requirements)
+}
+
+// legacyForkOrigin reads the origin of a fork made before forks recorded their
+// origin version. Such a fork has only the parent entity in its meta. When that
+// entity is a published agent that still has a listing, the fork is offered the
+// listing's newest version, and its update review is a two-way diff.
+func legacyForkOrigin(ctx context.Context, db DB, schema string, applicationID int64, lookup OriginLookup) (Origin, error) {
+	var raw []byte
+	err := db.QueryRow(ctx, fmt.Sprintf(`
+SELECT meta::text FROM %s.application_versions
+WHERE application_id = $1 AND meta ? 'parent_entity_id' ORDER BY id LIMIT 1`, schema), applicationID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Origin{}, ErrNotFound
+	}
+	if err != nil {
+		return Origin{}, fmt.Errorf("marketplace: read the fork meta: %w", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return Origin{}, ErrNotFound
+	}
+	parentProject, _ := meta["parent_project_id"].(string)
+	parent := metaInt(meta, "parent_entity_id")
+	if parent <= 0 || lookup.PublicProjectID == "" || parentProject != lookup.PublicProjectID {
+		return Origin{}, ErrNotFound
+	}
+	var origin Origin
+	var listingID int64
+	var latest *string
+	err = db.QueryRow(ctx, `
+SELECT l.id, l.name, l.state,
+       (SELECT cv.version_id || '|' || cv.name || '|' || to_char(cv.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        FROM elitea_marketplace.listing_versions cv
+        WHERE cv.listing_id = l.id AND cv.withdrawn_at IS NULL AND cv.state <> 'yanked'
+        ORDER BY cv.published_at DESC, cv.version_id DESC LIMIT 1)
+FROM elitea_marketplace.listings l WHERE l.kind = 'agent' AND l.entity_id = $1`, parent).
+		Scan(&listingID, &origin.ListingName, &origin.ListingState, &latest)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Origin{}, ErrNotFound
+	}
+	if err != nil {
+		return Origin{}, fmt.Errorf("marketplace: find the listing of the fork: %w", err)
+	}
+	origin.Mode = OriginForked
+	origin.ListingID = strconv.FormatInt(listingID, 10)
+	origin.LatestVer = parseVersionRef(latest)
+	origin.UpdateWidening = []Widening{}
 	return origin, nil
 }
 

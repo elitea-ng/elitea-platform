@@ -7,3 +7,6 @@ export { MarketplaceListing } from './MarketplaceListing';
 export { kindFromSearch } from './listing';
 export { findListingIdByEntity } from './legacyLink';
 export { BindingsEditorDialog } from './ui/BindingsEditorDialog';
+export { UpgradeDialog } from './upgrade/UpgradeDialog';
+export { UpstreamReviewDialog } from './upgrade/UpstreamReviewDialog';
+export { UpgradePolicyControl } from './upgrade/UpgradePolicyControl';

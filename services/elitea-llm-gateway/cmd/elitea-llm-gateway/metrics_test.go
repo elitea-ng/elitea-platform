@@ -45,6 +45,36 @@ func scrape(t *testing.T, url string) (int, string) {
 	return resp.StatusCode, string(body)
 }
 
+// scrapeServed scrapes like scrape, but a refused connection is retried for a
+// few seconds and, when it persists, fails with the gateway's own log. The port
+// comes from freeLoopbackAddr, which releases it before the gateway binds it, so
+// a parallel test can answer /healthz on that port a moment before the gateway
+// does; one refused scrape then says nothing about the route under test, and
+// the log shows which process held the port.
+func scrapeServed(t *testing.T, url string, log *strings.Builder) (int, string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			defer func() { _ = resp.Body.Close() }()
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil {
+				t.Fatalf("read body: %v", readErr)
+			}
+			return resp.StatusCode, string(body)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET %s: %v\nlog:\n%s", url, err, log.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // newMetricsServer mounts the metrics route on a real mux, exactly as main()
 // mounts it, and serves it over a real HTTP listener.
 func newMetricsServer(t *testing.T) *httptest.Server {
@@ -190,7 +220,7 @@ func TestMetricsRoute_IsServedByTheRunningGateway(t *testing.T) {
 
 	waitForLiveness(t, "http://"+addr+"/healthz", &out)
 
-	status, body := scrape(t, "http://"+addr+"/metrics")
+	status, body := scrapeServed(t, "http://"+addr+"/metrics", &out)
 	if status != http.StatusOK {
 		t.Fatalf("GET /metrics on the running gateway: status = %d, want 200; body=%s\nlog:\n%s",
 			status, body, out.String())

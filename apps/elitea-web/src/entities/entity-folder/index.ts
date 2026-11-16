@@ -5,5 +5,6 @@
  */
 export { entityIdsInFolder, folderOfEntity, isPinnedGroupId, neighboursForStep, pinnedGroupId } from './model/kinds';
 export type { EntityFolderKind } from './model/kinds';
+export { neighboursAt } from './model/itemOrder';
 export { useEntityFolderMutations, useEntityFolders, useEntityPins } from './model/useEntityFolders';
 export type { EntityFolder } from '@/shared/api/generated/model';

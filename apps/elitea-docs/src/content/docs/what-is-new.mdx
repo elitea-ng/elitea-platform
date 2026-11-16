@@ -5,9 +5,17 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Marketplace: upgrade installed agents and update forks
+
+An installed agent gets **Upgrade to...**, which shows the difference, the release notes, the rating and what a version adds before you choose any version, up, down or across. At low tier it is one click, and above it a change request of kind `upgrade` waits for an approver. An **Upgrade policy** (pinned, notify, auto) says whether the platform may move the agent by itself. Auto works only at low tier and never takes a version that adds a tool, a capability or a requirement, or raises the tier. A fork shows **Upstream update available** and a three-way view (base, theirs, ours) with conflicts first; the merge is a new draft and a change request of kind `upstream_merge`, never applied without a person. A yanked version raises a banner and a notification for every project that holds it, and an administrator can also suspend those agents. **Run the migrations** (shared `0251`) and upgrade Main and the web app together. See [Marketplace](/menus/marketplace#upgrade-an-installed-agent).
+
 ## Marketplace: versions, release notes and a hire wizard
 
 Every published agent and skill is now a **listing** with versions. Each version keeps a snapshot, release notes, a digest, and its requirements (toolkit and MCP types, skills, nested agents, model class, tier; never credentials). A publisher can deprecate or yank a version. An administrator can yank, delist, or feature a listing. The Browse sidebar searches by kind, category, tag, publisher, tier, required types, rating, and hired here. **Hire** opens a four-step wizard (version, mode, bindings, review). **Install** makes a read-only agent pinned to the version, and **Fork** makes an editable agent that records its origin. A hire above low tier, or with a write tool, starts with tools disabled and a change request of kind `hire`. The Workshop gains the **Installed** origin and an **Update available** filter. Unpublish now delists and keeps the snapshot while a project holds it. **Run the migrations** (shared `0250`) and upgrade Main and the web app together. See [Marketplace](/menus/marketplace).
+
+## Rearrange the items inside a folder
+
+On the **Agents** and **Pipelines** lists, an open folder is sorted by **Folder order** by default: drag a card or row onto another one, use the keyboard (**Space**, arrow keys, **Space**), or choose **Move up** / **Move down** in the folder icon's menu. Every member sees the same order. See [Order inside a folder](/how-tos/entity-management/organizing-entities/#order-inside-a-folder).
 
 ## Drag items into folders, move them from the keyboard, and pin your own
 
