@@ -31,7 +31,8 @@ export function BaseCardBody({ tool, onClickShowActions, showActions }: BaseCard
   // A saved toolkit instance always offers its tools for this agent to choose
   // from, whether or not the agent has chosen any yet: with no choice made the
   // toggle was missing, and so was any way to filter tools per agent (#2146).
-  const offersTools = tool.tool_id !== undefined || !!tool.settings?.selected_tools?.length || !!tool.settings?.available_tools?.length;
+  const isMcp = tool.type === 'mcp' || !!tool.type?.startsWith('mcp_') || tool.meta?.mcp === true;
+  const offersTools = (tool.tool_id !== undefined && !isMcp) || !!tool.settings?.selected_tools?.length || !!tool.settings?.available_tools?.length;
   if (!offersTools) {
     return (
       <TypographyWithConditionalTooltip

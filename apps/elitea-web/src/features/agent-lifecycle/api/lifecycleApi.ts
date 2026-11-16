@@ -221,8 +221,31 @@ function firstForkedAgent(outcome: ForkOutcome): ForkedAgent {
   return { applicationId: positiveInteger(agent?.['id']), versionId: positiveInteger(agent?.['version_id']) };
 }
 
-function mergeAgents(channels: unknown, extra: readonly unknown[]): unknown {
-  return { ...((channels ?? {}) as Record<string, unknown>), agents: [...channelEntries(channels, 'agents'), ...extra] };
+type Channels = Record<'agents' | 'toolkits' | 'skills', unknown[]>;
+
+function emptyChannels(): Channels {
+  return { agents: [], toolkits: [], skills: [] };
+}
+
+/** The three channels of one answer, as arrays. */
+function channelsOf(answer: unknown): Channels {
+  return { agents: channelEntries(answer, 'agents'), toolkits: channelEntries(answer, 'toolkits'), skills: channelEntries(answer, 'skills') };
+}
+
+function withChannels(answer: unknown, extra: Channels): unknown {
+  const own = channelsOf(answer);
+  return {
+    ...((answer ?? {}) as Record<string, unknown>),
+    agents: [...own.agents, ...extra.agents],
+    toolkits: [...own.toolkits, ...extra.toolkits],
+    skills: [...own.skills, ...extra.skills],
+  };
+}
+
+function addChannels(into: Channels, from: Channels): void {
+  into.agents.push(...from.agents);
+  into.toolkits.push(...from.toolkits);
+  into.skills.push(...from.skills);
 }
 
 /**
@@ -231,53 +254,61 @@ function mergeAgents(channels: unknown, extra: readonly unknown[]): unknown {
  * The server copies the toolkits of the document and skips each sub-agent
  * stand-in, because the sub-agent is a separate agent with its own versions.
  * So each one is read from the SOURCE project (the caller can read it there),
- * forked into the target the same way, and linked to the new parent version
+ * created in the target the same way, and linked to the new parent version
  * through the relation route the editor's "add agent" uses. Only credentials
  * and secrets stay behind, as the toolkit copy already drops them.
  *
- * A nested agent that cannot be forked or linked is reported on the errors
- * channel with status 207 and the parent stays forked. A chain deeper than
- * MAX_NESTED_DEPTH, or a cycle, stops there.
+ * An agent reached twice (a shared sub-agent, or one that nests its parent) is
+ * created once and linked wherever it is nested. A nested agent that cannot be
+ * created or linked is reported on the errors channel with status 207 and the
+ * parent stays; one that was created but not linked is still in the result, so
+ * nothing is created silently. A chain deeper than MAX_NESTED_DEPTH stops there.
  */
 export async function forkEntityWithNested(
   sourceProjectId: string,
   targetProjectId: string,
   document: EntityExportDocument,
-  seen: ReadonlySet<number> = new Set<number>(),
+  created: Map<number, ForkedAgent> = new Map<number, ForkedAgent>(),
   depth = 0,
 ): Promise<ForkOutcome> {
   const outcome = await forkEntity(targetProjectId, document);
   const parent = firstForkedAgent(outcome);
-  const refs = nestedAgentRefs(document).filter((ref) => !seen.has(ref.applicationId));
-  if (refs.length === 0 || parent.applicationId === undefined || parent.versionId === undefined || depth >= MAX_NESTED_DEPTH) {
-    return outcome;
-  }
-  const nestedAgents: unknown[] = [];
-  const failures: unknown[] = [];
-  const visited = new Set(seen);
-  for (const ref of refs) visited.add(ref.applicationId);
+  const sourceId = positiveInteger((document.applications?.[0] as { id?: unknown } | undefined)?.id);
+  if (sourceId !== undefined && parent.applicationId !== undefined) created.set(sourceId, parent);
+  const refs = nestedAgentRefs(document);
+  if (refs.length === 0 || parent.applicationId === undefined || parent.versionId === undefined) return outcome;
+
+  const added = emptyChannels();
+  const failed = emptyChannels();
   for (const ref of refs) {
     try {
-      const nestedDocument = await fetchForkDocument(sourceProjectId, ref.applicationId, ref.versionId);
-      const nested = await forkEntityWithNested(sourceProjectId, targetProjectId, nestedDocument, visited, depth + 1);
-      const child = firstForkedAgent(nested);
-      if (child.applicationId === undefined || child.versionId === undefined) throw new Error('the nested agent was not forked');
+      let child = created.get(ref.applicationId);
+      if (child === undefined) {
+        if (depth >= MAX_NESTED_DEPTH) throw new Error('it is nested too deeply');
+        const nestedDocument = await fetchForkDocument(sourceProjectId, ref.applicationId, ref.versionId);
+        const nested = await forkEntityWithNested(sourceProjectId, targetProjectId, nestedDocument, created, depth + 1);
+        // Recorded before the link, so a child that was created but not linked is reported.
+        addChannels(added, channelsOf(nested.result));
+        addChannels(failed, channelsOf(nested.errors));
+        child = firstForkedAgent(nested);
+        created.set(ref.applicationId, child);
+      }
+      if (child.applicationId === undefined || child.versionId === undefined) throw new Error('the nested agent was not created');
       await updateApplicationRelation(targetProjectId, child.applicationId, child.versionId, {
         application_id: parent.applicationId,
         version_id: parent.versionId,
         has_relation: true,
       });
-      nestedAgents.push(...channelEntries(nested.result, 'agents'));
-      failures.push(...channelEntries(nested.errors, 'agents'));
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : 'unknown error';
-      failures.push({ index: 0, name: String(ref.applicationId), msg: `Nested agent ${String(ref.applicationId)} was not forked: ${reason}` });
+      failed.agents.push({ index: 0, name: String(ref.applicationId), msg: `Nested agent ${String(ref.applicationId)} was not forked or linked: ${reason}` });
     }
   }
+  const hasFailures = failed.agents.length + failed.toolkits.length + failed.skills.length > 0;
   return {
-    status: failures.length > 0 ? 207 : outcome.status,
-    result: mergeAgents(outcome.result, nestedAgents),
-    errors: failures.length > 0 ? mergeAgents(outcome.errors, failures) : outcome.errors,
+    status: hasFailures ? 207 : outcome.status,
+    result: withChannels(outcome.result, added),
+    errors: hasFailures ? withChannels(outcome.errors, failed) : outcome.errors,
   };
 }
 

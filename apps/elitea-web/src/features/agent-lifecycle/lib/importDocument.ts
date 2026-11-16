@@ -181,9 +181,9 @@ function agentKey(entry: Rec): string {
 }
 
 /** A toolkit or skill block minus its per-file import key: the same block in two files is ONE toolkit, not two. */
-function blockKey(agent: string, block: Rec): string {
+function blockKey(block: Rec): string {
   const { import_uuid: _key, ...rest } = block;
-  return `${agent}\u0000${JSON.stringify(rest)}`;
+  return JSON.stringify(rest);
 }
 
 function remapRefs(refs: unknown, replacements: ReadonlyMap<string, string>): unknown {
@@ -208,7 +208,8 @@ function remapRefs(refs: unknown, replacements: ReadonlyMap<string, string>): un
  */
 function mergeVersionFiles(parsed: readonly ParsedMarkdown[]): ParsedMarkdown[] {
   const merged: ParsedMarkdown[] = [];
-  const knownBlocks = new Map<string, string>();
+  // Per merged entry, so two agents that only share a name never share a toolkit.
+  const knownBlocks: Map<string, string>[] = [];
   for (const file of parsed) {
     const key = agentKey(file.entry);
     const incoming = versionName(versionsOf(file.entry)[0]);
@@ -216,29 +217,32 @@ function mergeVersionFiles(parsed: readonly ParsedMarkdown[]): ParsedMarkdown[] 
       (candidate) =>
         agentKey(candidate.entry) === key && !versionsOf(candidate.entry).some((v) => versionName(v) === incoming),
     );
+    const known = knownBlocks[index] ?? new Map<string, string>();
     const replacements = new Map<string, string>();
     const keep = (blocks: Rec[]): Rec[] =>
       blocks.filter((block) => {
-        const known = knownBlocks.get(blockKey(key, block));
-        if (known === undefined) {
-          knownBlocks.set(blockKey(key, block), String(block['import_uuid']));
+        const seen = known.get(blockKey(block));
+        if (seen === undefined) {
+          known.set(blockKey(block), String(block['import_uuid']));
           return true;
         }
-        replacements.set(String(block['import_uuid']), known);
+        replacements.set(String(block['import_uuid']), seen);
         return false;
       });
-    const target = merged[index];
-    if (target === undefined) {
-      merged.push({ ...file, toolkits: keep(file.toolkits), skills: keep(file.skills) });
-      continue;
-    }
     const toolkits = keep(file.toolkits);
     const skills = keep(file.skills);
+    // Every version of the file is re-pointed at the toolkit or skill that was kept, on both paths.
     const added = versionsOf(file.entry).map((version) => ({
       ...version,
       tools: remapRefs(version['tools'], replacements),
       skills: remapRefs(version['skills'], replacements),
     }));
+    const target = merged[index];
+    if (target === undefined) {
+      merged.push({ ...file, entry: { ...file.entry, versions: added }, toolkits, skills });
+      knownBlocks.push(known);
+      continue;
+    }
     const versions = [...versionsOf(target.entry), ...added].sort(
       (a, b) => Number(versionName(b) === 'base') - Number(versionName(a) === 'base'),
     );

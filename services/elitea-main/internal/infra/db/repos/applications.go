@@ -331,8 +331,12 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	// request per agent (issue 2091). A database without the registry has no
 	// probation to show.
 	probationOnSQL, probationUntilSQL := "false", "''"
+	// The columns arrive with shared 0237, after the table (0204), so the probe
+	// names the column the query reads.
 	var hasRegistry bool
-	if err := r.pool.QueryRow(ctx, `SELECT to_regclass('elitea_lifecycle.agent_registry') IS NOT NULL`).Scan(&hasRegistry); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = 'elitea_lifecycle' AND table_name = 'agent_registry' AND column_name = 'probation_reviewed_at')`).Scan(&hasRegistry); err != nil {
 		return empty, fmt.Errorf("applications: list registry probe: %w", err)
 	}
 	if projectNumber, convErr := strconv.ParseInt(req.ProjectID, 10, 64); hasRegistry && convErr == nil {

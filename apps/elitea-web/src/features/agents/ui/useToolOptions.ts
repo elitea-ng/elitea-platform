@@ -17,7 +17,9 @@ import { normalizeAvailableToolOptions } from './ToolCard.lib';
  */
 export function useToolOptions(tool: AgentToolAssociation, projectId: string | number | undefined): readonly AgentToolAvailableToolOption[] {
   const stored = useMemo(() => normalizeAvailableToolOptions(tool.settings?.available_tools ?? []), [tool.settings?.available_tools]);
-  const isToolkit = tool.type !== 'application' && tool.tool_id !== undefined;
+  // An MCP connection discovers its tools on the remote server, so opening a card must not trigger that.
+  const isMcp = tool.type === 'mcp' || !!tool.type?.startsWith('mcp_') || tool.meta?.mcp === true;
+  const isToolkit = tool.type !== 'application' && tool.tool_id !== undefined && !isMcp;
   const catalogue = toolkitTools.useToolkitTools({
     projectId: projectId === undefined ? undefined : String(projectId),
     toolkitId: tool.tool_id === undefined ? undefined : String(tool.tool_id),

@@ -188,6 +188,20 @@ describe('import size limits (#2032)', () => {
     expect(bot.versions[1]?.tools[0]?.import_uuid).toBe(bot.versions[0]?.tools[0]?.import_uuid);
   });
 
+  it('never leaves a version pointing at a toolkit that another agent of the same name owns', async () => {
+    const block = 'toolkits:\n  - toolkit: Repo\n    type: custom\n    settings: {repo: a/b}\n';
+    const zip = new JSZip();
+    zip.file('a/bot.agent.md', `---\nname: Bot\n${block}---\none`);
+    zip.file('b/bot.agent.md', `---\nname: Bot\n${block}---\ntwo`);
+    const { document } = await readImportFile(new File([await zip.generateAsync({ type: 'arraybuffer' })], 'dup2.zip'));
+    const entries = document.applications as unknown as Entry[];
+    const toolkitIds = new Set((document.toolkits as unknown as { import_uuid: string }[]).map((t) => t.import_uuid));
+    expect(entries).toHaveLength(2);
+    // Each agent keeps its own toolkit: every reference resolves inside the document.
+    for (const entry of entries) expect(toolkitIds.has(entry.versions[0]?.tools[0]?.import_uuid ?? '')).toBe(true);
+    expect(document.toolkits).toHaveLength(2);
+  });
+
   it('keeps two same-named agents apart when their version names collide', async () => {
     const zip = new JSZip();
     zip.file('a/bot.agent.md', '---\nname: Bot\n---\none');

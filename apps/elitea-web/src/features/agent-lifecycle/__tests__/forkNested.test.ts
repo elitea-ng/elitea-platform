@@ -78,6 +78,35 @@ describe('forkEntityWithNested (#2109)', () => {
     expect(JSON.stringify(outcome.errors)).toContain('Nested agent 20 was not forked');
   });
 
+  it('creates a shared sub-agent once and links it under every agent that nests it', async () => {
+    const links: string[] = [];
+    let forks = 0;
+    const standIn = (id: number) => ({ name: `N${String(id)}`, type: 'application', settings: { application_id: id } });
+    server.use(
+      http.get(`${BASE}/elitea_core/export_import/prompt_lib/:projectId/:entityId`, ({ params }) => {
+        const id = Number(params['entityId']);
+        const nests = id === 20 || id === 30 ? [standIn(40)] : [];
+        return HttpResponse.json({ ok: true, applications: [{ id: String(id), name: `A${String(id)}`, versions: [] }], toolkits: nests });
+      }),
+      http.post(`${BASE}/elitea_core/fork/prompt_lib/:projectId`, () => {
+        forks += 1;
+        return HttpResponse.json({ result: { agents: [{ id: String(100 + forks), version_id: String(200 + forks) }] }, errors: {} }, { status: 201 });
+      }),
+      http.patch(`${BASE}/elitea_core/application_relation/prompt_lib/:projectId/:appId/:versionId`, async ({ request, params }) => {
+        const body = (await request.json()) as { application_id: number };
+        links.push(`${String(params['appId'])}->${String(body.application_id)}`);
+        return HttpResponse.json({ application_id: 1, version_id: 1, has_relation: true });
+      }),
+    );
+    const diamond = { ...parentDocument, toolkits: [standIn(20), standIn(30)] };
+
+    await forkEntityWithNested('2', '9', diamond);
+
+    // 10 (parent), 20, 30 and 40 once, not twice; 40 (the third fork, id 103) is linked under both.
+    expect(forks).toBe(4);
+    expect(links.filter((link) => link.startsWith('103->'))).toHaveLength(2);
+  });
+
   it('does not loop when a nested agent names an agent already being forked', async () => {
     let forks = 0;
     server.use(
