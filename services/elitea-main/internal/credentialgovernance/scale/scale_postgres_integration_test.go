@@ -572,11 +572,19 @@ type rotatingProvider struct {
 	refreshToken  string
 	generation    int
 	challenges    map[string]string
+	site          string // the target's site, the one accessible resource
 	refreshCalls  atomic.Int32
 	invalidGrants atomic.Int32
 }
 
 func (p *rotatingProvider) serve(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && r.URL.Path == "/oauth/token/accessible-resources" {
+		// Atlassian 3LO (#1464): the consent callback reads the sites the
+		// token reaches and stores the gateway base for the target's site.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `[{"id":%q,"url":%q,"name":"scale","scopes":["read:jira-work"]}]`, scaleCloudID, p.site)
+		return
+	}
 	var fields map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
 		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
@@ -613,6 +621,31 @@ func (p *rotatingProvider) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	}
 }
+
+// scaleCloudID is the Atlassian cloud id the fake gateway answers.
+const scaleCloudID = "11111111-2222-4333-8444-555555555555"
+
+// gatewayClient sends the fixed Atlassian gateway host to server and every
+// other request as is: the client builds its URLs from AtlassianAPIURL, so
+// there is no gateway override to set.
+func gatewayClient(t *testing.T, server *httptest.Server) *http.Client {
+	t.Helper()
+	target, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	gateway, err := url.Parse(provideroauth.AtlassianAPIURL)
+	require.NoError(t, err)
+	return &http.Client{Transport: gatewayRoundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == gateway.Host {
+			r = r.Clone(r.Context())
+			r.URL.Scheme, r.URL.Host, r.Host = target.Scheme, target.Host, ""
+		}
+		return http.DefaultTransport.RoundTrip(r)
+	})}
+}
+
+type gatewayRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f gatewayRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 const scaleRedirect = "http://127.0.0.1:9/api/v2/credential_consent/jira:callback"
 
@@ -665,14 +698,15 @@ func measureRefresh(t *testing.T, config *pgxpool.Config, f *Fixture, report *Re
 	copied := *agent
 	oauthToolkit(t, ctx, admin, &copied)
 
-	provider := &rotatingProvider{refreshToken: "rt-0", challenges: map[string]string{}}
+	provider := &rotatingProvider{refreshToken: "rt-0", challenges: map[string]string{},
+		site: "https://oauth-" + strconv.Itoa(copied.Index) + ".jira.scale.test"}
 	server := httptest.NewServer(http.HandlerFunc(provider.serve))
 	t.Cleanup(server.Close)
 	client, err := provideroauth.NewClient(provideroauth.ProviderConfig{
 		Provider: "jira", Flavor: provideroauth.FlavorAtlassian, ClientID: "client", ClientSecret: "client-secret",
 		AuthorizeURL: server.URL + "/authorize", TokenURL: server.URL + "/oauth/token", RedirectURI: scaleRedirect,
 		Scopes: []string{"read:jira-work", "offline_access"}, Timeout: 5 * time.Second,
-	}, nil)
+	}, gatewayClient(t, server))
 	require.NoError(t, err)
 
 	// The user's consent, through the production flow.

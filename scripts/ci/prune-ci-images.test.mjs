@@ -139,6 +139,46 @@ test("an API failure other than 404 fails the run", async () => {
   await assert.rejects(run(github), /versions failed: Server Error/);
 });
 
+test("a transient DELETE failure is retried, a persistent one fails the run", async () => {
+  const flaky = new FakeGithub({ "ci-elitea-main": [v(1, 30), v(2, 1)] });
+  const real = flaky.rest.packages.deletePackageVersionForOrg;
+  let calls = 0;
+  flaky.rest.packages.deletePackageVersionForOrg = async (params) => {
+    calls += 1;
+    if (calls <= 2) {
+      const error = new Error("Server Error");
+      error.status = 502;
+      throw error;
+    }
+    return real(params);
+  };
+  const waits = [];
+  const [code] = await run(flaky, { sleep: async (ms) => waits.push(ms) });
+  assert.equal(code, 0);
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [2000, 4000]);
+  assert.deepEqual(flaky.deleted, ["ci-elitea-main/1"]);
+
+  const down = new FakeGithub({ "ci-elitea-main": [v(1, 30), v(2, 1)] });
+  down.rest.packages.deletePackageVersionForOrg = async () => {
+    const error = new Error("Server Error");
+    error.status = 502;
+    throw error;
+  };
+  await assert.rejects(run(down, { sleep: async () => {} }), /versions\/1 failed: Server Error/);
+
+  const forbidden = new FakeGithub({ "ci-elitea-main": [v(1, 30), v(2, 1)] });
+  let forbiddenCalls = 0;
+  forbidden.rest.packages.deletePackageVersionForOrg = async () => {
+    forbiddenCalls += 1;
+    const error = new Error("Forbidden");
+    error.status = 403;
+    throw error;
+  };
+  await assert.rejects(run(forbidden, { sleep: async () => {} }), /Forbidden/);
+  assert.equal(forbiddenCalls, 1);
+});
+
 test("an unreadable updated_at fails the package and selects nothing", () => {
   for (const bad of [undefined, null, "", "yesterday", "2026-10-01", "2026-10-01T00:00:00", "2026-13-45T00:00:00Z", "2026-02-30T00:00:00Z", 1700000000]) {
     const broken = v(9, 30);
