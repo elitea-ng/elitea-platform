@@ -170,7 +170,7 @@ func TestSkillIconUploadWithAVersionIsReadableOnTheSkill(t *testing.T) {
 	downloadRec := httptest.NewRecorder()
 	eliteacore.DownloadIcon(store).ServeHTTP(downloadRec,
 		newRequest(http.MethodGet, "/", map[string]string{"projectID": "1", "filename": name}, nil))
-	if downloadRec.Code != http.StatusOK || downloadRec.Body.String() != "bytes" {
+	if downloadRec.Code != http.StatusOK || downloadRec.Body.String() != string(pngBytes("bytes")) {
 		t.Fatalf("download of the skill's own icon = %d %q", downloadRec.Code, downloadRec.Body.String())
 	}
 }
