@@ -13,7 +13,6 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversationskills"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/skilltrust"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -34,11 +33,7 @@ var (
 )
 
 func (r *ConversationSkillsRepo) actor(ctx context.Context) (int64, error) {
-	user, ok := auth.UserFromContext(ctx)
-	if !ok {
-		return 0, apierr.Unauthorized("authentication required")
-	}
-	id, ok := user.OwningUserID()
+	id, ok := actorOf(ctx)
 	if !ok {
 		return 0, apierr.Forbidden("a conversation skill is pinned by a person")
 	}
@@ -61,7 +56,7 @@ LEFT JOIN %[1]s.skills sk ON sk.id = cs.skill_id
 LEFT JOIN %[1]s.skill_versions sv ON sv.skill_id = sk.id AND sv.name = 'base'`, schema)
 }
 
-func (r *ConversationSkillsRepo) scanPins(ctx context.Context, schema string, projectID int64, rows pgx.Rows) ([]conversationskills.Pin, error) {
+func (r *ConversationSkillsRepo) scanPins(ctx context.Context, projectID int64, rows pgx.Rows) ([]conversationskills.Pin, error) {
 	defer rows.Close()
 	var pins []conversationskills.Pin
 	for rows.Next() {
@@ -111,14 +106,15 @@ func (r *ConversationSkillsRepo) scanPins(ctx context.Context, schema string, pr
 SELECT l.name, l.description, lv.name
 FROM elitea_marketplace.listing_versions lv
 JOIN elitea_marketplace.listings l ON l.id = lv.listing_id
-WHERE lv.listing_id = $1 AND lv.version_id = $2`, *pins[index].ListingID, *pins[index].ListingVersionID).Scan(&name, &description, &version)
+WHERE lv.listing_id = $1 AND lv.version_id = $2
+  AND l.kind = 'skill' AND l.state = 'listed' AND lv.state <> 'yanked' AND lv.withdrawn_at IS NULL`, *pins[index].ListingID, *pins[index].ListingVersionID).Scan(&name, &description, &version)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("conversation skills: read listing: %w", err)
 		}
-		// A listing that is gone still shows its pin, so the person can remove it.
+		// A listing that is yanked, withdrawn or delisted shows no name (the project has no
+		// right to it any more), and still lists its pin so the person can remove it.
 		pins[index].Name, pins[index].Description, pins[index].VersionName = name, description, version
 	}
-	_ = schema
 	return pins, nil
 }
 
@@ -147,7 +143,7 @@ func (r *ConversationSkillsRepo) List(ctx context.Context, projectID, conversati
 	if err != nil {
 		return nil, fmt.Errorf("conversation skills: list: %w", err)
 	}
-	return r.scanPins(ctx, schema, project, rows)
+	return r.scanPins(ctx, project, rows)
 }
 
 // lockConversation takes the conversation's row lock and answers how many pins
@@ -231,7 +227,7 @@ func (r *ConversationSkillsRepo) one(ctx context.Context, schema string, project
 	if err != nil {
 		return conversationskills.Pin{}, fmt.Errorf("conversation skills: read pin: %w", err)
 	}
-	pins, err := r.scanPins(ctx, schema, project, rows)
+	pins, err := r.scanPins(ctx, project, rows)
 	if err != nil {
 		return conversationskills.Pin{}, err
 	}

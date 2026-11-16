@@ -18,7 +18,7 @@ describe('detectMention', () => {
     expect(detectMention('/skill', 6)).toEqual({ anchor: 0, query: '' });
     expect(detectMention('/skill ', 7)).toEqual({ anchor: 0, query: '' });
     expect(detectMention('/skill Tri', 10)).toEqual({ anchor: 0, query: 'Tri' });
-    expect(detectMention('please /skill rel', 17)).toEqual({ anchor: 7, query: 'rel' });
+    expect(detectMention('line one\n/skill rel', 19)).toEqual({ anchor: 9, query: 'rel' });
     expect(detectMention('/SKILL rel', 10)).toEqual({ anchor: 0, query: 'rel' });
   });
 
@@ -26,6 +26,8 @@ describe('detectMention', () => {
     expect(detectMention('/skills', 7)).toBeNull();
     expect(detectMention('/skillset/tool', 14)).toBeNull();
     expect(detectMention('a/skill', 7)).toBeNull();
+    // Prose that mentions the command mid-sentence does not open the picker.
+    expect(detectMention('please /skill rel', 17)).toBeNull();
     expect(detectMention('/skill Triage and more', 22)).toBeNull();
     // Only the text up to the cursor counts: the cursor before the command is not in it.
     expect(detectMention('hello /skill', 5)).toBeNull();

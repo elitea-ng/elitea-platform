@@ -636,6 +636,42 @@ describe('Try on a skill listing (skills epic 2169)', () => {
   });
 });
 
+describe('Try on a skill listing that was yanked meanwhile', () => {
+  afterEach(() => {
+    resetGeneratedClient();
+  });
+
+  it('removes the empty conversation when the pin is refused, instead of leaving it behind', async () => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    const deleted: string[] = [];
+    mockListing(
+      detailOf({
+        listing: { ...LISTING, id: '7', kind: 'skill', entity_id: '41', name: 'PR Reviewer' },
+        versions: [version('6', 'v1.1', 'current', { requirements: NO_REQUIREMENTS })],
+      }),
+      ['models.applications.fork.post'],
+    );
+    server.use(
+      http.post('/api/v2/elitea_core/conversations/prompt_lib/:projectId', () => HttpResponse.json({ id: 56 }, { status: 201 })),
+      http.post('/api/v2/elitea_core/conversation_skills/prompt_lib/:projectId/:conversationId', () =>
+        HttpResponse.json({ error: 'gone' }, { status: 404 }),
+      ),
+      http.delete('/api/v2/elitea_core/conversation/prompt_lib/:projectId/:conversationId', ({ params }) => {
+        deleted.push(String(params['conversationId']));
+        return new HttpResponse(null, { status: 204 });
+      }),
+      http.get('/api/v2/elitea_core/public_skill/prompt_lib/41', () =>
+        HttpResponse.json({ id: 41, name: 'PR Reviewer', description: 'd', versions: [], version_details: null }),
+      ),
+    );
+    mount('/marketplace/skills/7');
+
+    await userEvent.setup().click(await screen.findByTestId('marketplace-try-skill'));
+    await waitFor(() => expect(deleted).toEqual(['56']));
+    expect(await screen.findByText('The chat could not be started. Try again.')).toBeInTheDocument();
+  });
+});
+
 describe('listing load errors', () => {
   afterEach(() => {
     resetGeneratedClient();

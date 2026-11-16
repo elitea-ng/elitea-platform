@@ -104,10 +104,10 @@ export interface DetectedMention {
 
 /**
  * The `/skill` command (ADR-0050 amendment 1, A1.5): `/skill`, optionally followed by a space and the start of a
- * name, at the start of the text or after whitespace, with the cursor at its end. It opens the same skill list `~`
+ * name, at the start of the text or of a line (so prose that mentions `/skill` does not open the picker), with the cursor at its end. It opens the same skill list `~`
  * does, and a pick writes the canonical `~name` token in its place, so the stored message never carries `/skill`.
  */
-const SKILL_COMMAND_PATTERN = /(^|\s)(\/skill)(?:[ \t]+(\S*))?$/i;
+const SKILL_COMMAND_PATTERN = /(^|\n)(\/skill)(?:[ \t]+(\S*))?$/i;
 
 /** `useChatSkillMention.hooks.js`'s own `detectMention` — a "~" trigger must be preceded by start-of-text or whitespace, and the fragment up to the cursor must be whitespace-free. `/skill <name>` is the same trigger spelled as a command. */
 export function detectMention(text: string, cursorPos: number): DetectedMention | null {

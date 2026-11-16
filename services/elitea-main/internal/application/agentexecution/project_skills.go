@@ -132,10 +132,12 @@ func (service *CurrentApplicationStartService) resolveProjectSkills(
 
 // resolveTurnSkills freezes the skills of one turn: the conversation's pins
 // first, then the message's picks (ADR-0050 amendment 1). A pin that is also
-// picked is applied once. A pin is marked so that a name another skill of the
-// answering agent already holds drops the PIN instead of refusing the turn: a
-// pin must never make a conversation unusable for an agent it was not made for
-// (mergeProjectSkills).
+// picked is applied once. A pin never refuses a turn for what is only the pin's
+// own trouble for this caller: a name the answering agent already holds drops
+// the pin (mergeProjectSkills), and a project skill this caller cannot read is
+// not applied for them. A pinned LISTING version that was yanked, withdrawn or
+// delisted does refuse (the resolver's answer), because the conversation was
+// pinned to text that is no longer offered.
 func (service *CurrentApplicationStartService) resolveTurnSkills(
 	ctx context.Context,
 	projectID int64,
@@ -168,35 +170,42 @@ func (service *CurrentApplicationStartService) resolveTurnSkills(
 			return nil, ErrProjectSkillsTooMany
 		}
 	}
-	ids := make([]int64, 0, len(pinned.ProjectSkillIDs)+len(picks))
-	ids = append(ids, pinned.ProjectSkillIDs...)
-	for _, id := range picks {
-		if !containsSkillID(pinned.ProjectSkillIDs, id) {
-			ids = append(ids, id)
+	// Each pin is read on its own, under the caller's visibility. A pin this
+	// caller cannot read (a folder that hides it from them) or that has no text
+	// is not applied for them; it never refuses their turn, so one person's pin
+	// cannot make the conversation unusable for another. A pin is marked so that
+	// a name the answering agent already holds drops the pin, too.
+	pinSnapshots := make([]map[string]any, 0, len(pinned.ProjectSkillIDs)+len(pinned.Listing))
+	for _, id := range pinned.ProjectSkillIDs {
+		one, err := service.resolveProjectSkillIDs(ctx, projectID, []int64{id})
+		if errors.Is(err, ErrProjectSkillUnknown) {
+			continue
 		}
-	}
-	snapshots, err := service.resolveProjectSkillIDs(ctx, projectID, ids)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]map[string]any, 0, len(snapshots)+len(pinned.Listing))
-	for index, snapshot := range snapshots {
-		if index < len(pinned.ProjectSkillIDs) {
-			snapshot["pinned"] = true
+		if err != nil {
+			return nil, err
 		}
-		result = append(result, snapshot)
+		one[0]["pinned"] = true
+		pinSnapshots = append(pinSnapshots, one[0])
 	}
 	// Pinned listing versions sit with the pins, ahead of the message's picks.
-	listing := make([]map[string]any, 0, len(pinned.Listing))
 	for _, skill := range pinned.Listing {
 		snapshot, err := listingSkillSnapshot(skill)
 		if err != nil {
 			return nil, err
 		}
-		listing = append(listing, snapshot)
+		pinSnapshots = append(pinSnapshots, snapshot)
 	}
-	at := len(pinned.ProjectSkillIDs)
-	return append(result[:at:at], append(listing, result[at:]...)...), nil
+	pickIDs := make([]int64, 0, len(picks))
+	for _, id := range picks {
+		if !containsSkillID(pinned.ProjectSkillIDs, id) {
+			pickIDs = append(pickIDs, id)
+		}
+	}
+	pickSnapshots, err := service.resolveProjectSkillIDs(ctx, projectID, pickIDs)
+	if err != nil {
+		return nil, err
+	}
+	return append(pinSnapshots, pickSnapshots...), nil
 }
 
 func containsSkillID(ids []int64, id int64) bool {

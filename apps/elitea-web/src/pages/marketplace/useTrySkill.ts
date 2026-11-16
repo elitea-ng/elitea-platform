@@ -52,7 +52,13 @@ export function useTrySkill(target: TrySkillTarget): TrySkill {
       );
       const conversationId = created.data.id;
       if (conversationId === undefined) throw new Error('The conversation was not created');
-      await pinConversationSkill(project, String(conversationId), target.pin);
+      try {
+        await pinConversationSkill(project, String(conversationId), target.pin);
+      } catch (error) {
+        // The listing may have been yanked since the page loaded: do not leave an empty "Try" conversation behind.
+        await eliteaFetch(`/elitea_core/conversation/prompt_lib/${project}/${String(conversationId)}`, { method: 'DELETE' }).catch(() => undefined);
+        throw error;
+      }
       return String(conversationId);
     },
     onSuccess: (conversationId) => {

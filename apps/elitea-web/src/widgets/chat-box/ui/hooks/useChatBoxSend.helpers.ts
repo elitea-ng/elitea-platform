@@ -201,7 +201,7 @@ function projectSkillIDs(raw: unknown): number[] {
 }
 
 /** Project skill picks by id: an agent turn and, since skills epic 2169 (ADR-0050 amendment 1, A1.4), a model chat. */
-function projectSkillsField(_isApplicationTurn: boolean, ids: readonly number[]): { skills?: { source: 'project'; id: number }[] } {
+function projectSkillsField(ids: readonly number[]): { skills?: { source: 'project'; id: number }[] } {
   return ids.length > 0 ? { skills: ids.map((id) => ({ source: 'project' as const, id })) } : {};
 }
 
@@ -278,7 +278,7 @@ function startBodyBase(params: StartBodyBaseParams): Record<string, unknown> {
       user_input: question,
       ...(payload['attachments'] ? { attachments: payload['attachments'] } : {}),
       // Project skills picked in the "~" menu: ids only, application turns only.
-      ...projectSkillsField(params.isApplicationTurn, projectSkills),
+      ...projectSkillsField(projectSkills),
     },
   };
   return base;
