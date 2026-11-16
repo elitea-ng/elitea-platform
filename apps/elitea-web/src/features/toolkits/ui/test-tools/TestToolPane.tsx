@@ -62,8 +62,7 @@ import type { ToolkitConversationValues } from '../../lib/helpers/toolkitConvers
 import { resolveDefaultValue } from './TestTools.helpers';
 import { TestToolResultPanel } from './TestToolResultPanel';
 import { TestToolSettings } from './TestToolSettings';
-import type { McpToolOption } from './useGetSelectedToolSchema';
-import { useGetSelectedToolSchema } from './useGetSelectedToolSchema';
+import { mcpToolOptionsFromSettings, useGetSelectedToolSchema } from './useGetSelectedToolSchema';
 import { useToolkitTestToolRun } from './useToolkitTestToolRun';
 
 export interface TestToolPaneProps {
@@ -84,6 +83,7 @@ export function TestToolPane({ projectId, toolkitId, values, renderAuthorization
   const { clearIndexNameError, indexNameError } = indexNameValidation;
   const { outcome, isRunning, run, reset, authorize, skip, rememberAuthorization, getAuthorizationReference } = useToolkitTestToolRun({ projectId, toolkitId });
 
+  const availableMcpTools = useMemo(() => mcpToolOptionsFromSettings(values.settings), [values.settings]);
   const {
     toolSchema,
     isError: toolSchemaReadFailed,
@@ -94,7 +94,7 @@ export function TestToolPane({ projectId, toolkitId, values, renderAuthorization
     toolkitId,
     toolkitType: values.type,
     toolOptionType: selectedTool,
-    availableMcpTools: values.settings?.['available_mcp_tools'] as readonly McpToolOption[] | undefined,
+    availableMcpTools,
   });
 
   const selectedToolSchema = useMemo(() => {

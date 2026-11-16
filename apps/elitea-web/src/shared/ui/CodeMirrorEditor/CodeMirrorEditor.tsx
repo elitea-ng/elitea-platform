@@ -202,8 +202,23 @@ export function CodeMirrorEditor({
   const lastNotifiedValueRef = useRef(value);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  /** True from a keystroke until its debounced `onChange` has fired: the parent's `value` is older than the document in that window. */
+  const changePendingRef = useRef(false);
+
   useEffect(() => {
-    if (value !== lastNotifiedValueRef.current) {
+    // An outside write (an import, a Discard) is told apart from the echo of
+    // our own `onChange` by the `lastNotified` guard. When that guard reads
+    // "already notified" but the document on screen still differs and nothing
+    // is in flight, the write must land anyway, or the parent's state and the
+    // editor disagree for good (settings.project-context PJC03a on webkit).
+    const onScreen = cmRef.current?.view?.state.doc.toString();
+    const staleOnScreen = !changePendingRef.current && onScreen !== undefined && onScreen !== value;
+    const view = cmRef.current?.view;
+    if (staleOnScreen && view !== undefined) {
+      // `code` may already equal `value`, so a state write alone would not re-render: write the document directly.
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+    }
+    if (value !== lastNotifiedValueRef.current || staleOnScreen) {
       setCode(value);
       lastNotifiedValueRef.current = value;
     }
@@ -220,7 +235,9 @@ export function CodeMirrorEditor({
     (newValue: string) => {
       setCode(newValue);
       if (debounceRef.current !== undefined) clearTimeout(debounceRef.current);
+      changePendingRef.current = true;
       debounceRef.current = setTimeout(() => {
+        changePendingRef.current = false;
         lastNotifiedValueRef.current = newValue;
         onChange?.(newValue);
       }, CHANGE_DEBOUNCE_MS);

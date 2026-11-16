@@ -59,15 +59,23 @@ async function centre(locator: Locator): Promise<{ x: number; y: number }> {
 async function dragCardToFolder(page: Page, agentName: string, folderName: string): Promise<void> {
   const handle = page.getByTestId('entity-card').filter({ hasText: agentName }).getByTestId('entity-drag-handle');
   const target = page.getByTestId('entity-folder-drop').filter({ hasText: folderName });
+  // Both ends must be on screen and laid out before the pointer is measured: a list still re-rendering from the previous drop moves them.
+  await expect(handle).toBeVisible();
+  await expect(target).toBeVisible();
+  await handle.scrollIntoViewIfNeeded();
   const from = await centre(handle);
   const to = await centre(target);
+  // Armed before the drag, resolved only by the PUT the drop makes.
   const moved = page.waitForResponse((r) => r.url().includes('/items/') && r.request().method() === 'PUT');
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
   await page.mouse.move(from.x + 12, from.y + 12, { steps: 4 });
   await page.mouse.move(to.x, to.y, { steps: 14 });
+  // The drop target has registered the drag when dnd-kit announces it; releasing earlier drops on nothing.
+  await expect(page.locator('[aria-live]').filter({ hasText: `is over ${folderName}` }).first()).toBeAttached();
   await page.mouse.up();
   expect((await moved).status()).toBe(204);
+  await expect(page.getByTestId('entity-folder-dnd-status')).toContainText(`Moved ${agentName} to ${folderName}`);
 }
 
 async function folderItems(request: import('@playwright/test').APIRequestContext, folderId: string): Promise<number[]> {

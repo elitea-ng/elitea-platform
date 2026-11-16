@@ -1,7 +1,10 @@
+import { ThemeProvider } from '@mui/material/styles';
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { SocketClientContext } from '@/shared/api/socket/client';
 import { createTestSocketClient } from '@/shared/api/socket/testing';
@@ -110,6 +113,28 @@ describe('useMcpLoadTools', () => {
       available_mcp_tools: ['echo', 'ping'],
     });
     expect(sent).toMatchObject({ url: 'https://mcp-mock:8443/mcp', timeout: 120, headers: { Authorization: 'Bearer t' } });
+  });
+
+  it('stores each tool\'s input schema beside the names, so the Test pane can draw its fields (issue 2124)', async () => {
+    server.use(
+      http.post(PATH, () =>
+        HttpResponse.json({
+          success: true,
+          tools: [{ name: 'get_repo', description: 'Read a repository', inputSchema: { properties: { repo: { type: 'string' } }, required: ['repo'] } }, { name: 'ping' }],
+        }),
+      ),
+    );
+    const onChangeToolDetail = vi.fn();
+    const editToolDetail = detail({ settings: { url: 'https://mcp-mock:8443/mcp' } });
+
+    const { result } = renderHook(() => useMcpLoadTools({ projectId: '1', editToolDetail, onChangeToolDetail }), { wrapper });
+    act(() => result.current?.onLoadTools());
+
+    await waitFor(() => expect(onChangeToolDetail).toHaveBeenCalledTimes(1));
+    const updater = onChangeToolDetail.mock.calls[0]?.[0] as (previous: EditToolDetail | null) => EditToolDetail | null;
+    expect(updater(editToolDetail)?.settings?.['available_mcp_tool_schemas']).toEqual({
+      get_repo: { name: 'get_repo', description: 'Read a repository', inputSchema: { properties: { repo: { type: 'string' } }, required: ['repo'] } },
+    });
   });
 
   /**
@@ -221,6 +246,46 @@ describe('useMcpLoadTools', () => {
 
     act(() => release?.());
     await waitFor(() => expect(result.current?.isLoadingTools).toBe(false));
+  });
+
+  it('answers a click on Login with a message: the reason when the server refuses (issue 2125)', async () => {
+    server.use(http.post(PATH, () => HttpResponse.json({ success: false, error: 'Unauthorized' })));
+    const detailWithHeader = detail({ id: 7, settings: { url: 'https://mcp-mock:8443/mcp', headers: { Authorization: 'Bearer {{secret.token}}' } } });
+    function Probe() {
+      const slot = useMcpLoadTools({ projectId: '1', editToolDetail: detailWithHeader, onChangeToolDetail: vi.fn() });
+      return <>{slot?.mcpAuthStatus}</>;
+    }
+    render(
+      <ThemeProvider theme={buildEliteaTheme(DEFAULT_BRAND_PACK)} defaultMode={DEFAULT_COLOR_SCHEME}>
+        <Probe />
+      </ThemeProvider>,
+      { wrapper },
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Login' }));
+
+    expect(await screen.findByText('Authorization failed. Please try logging in again.')).toBeInTheDocument();
+  });
+
+  it('answers a successful Login with the tool count, and the message can be dismissed (issue 2125)', async () => {
+    server.use(http.post(PATH, () => HttpResponse.json({ success: true, tools: [{ name: 'echo' }], args_schemas: { echo: { properties: {} }, bad: 'x' } })));
+    const savedDetail = detail({ id: 7, settings: { url: 'https://mcp-mock:8443/mcp' } });
+    function Probe() {
+      const slot = useMcpLoadTools({ projectId: '1', editToolDetail: savedDetail, onChangeToolDetail: vi.fn() });
+      return <>{slot?.mcpAuthStatus}</>;
+    }
+    render(
+      <ThemeProvider theme={buildEliteaTheme(DEFAULT_BRAND_PACK)} defaultMode={DEFAULT_COLOR_SCHEME}>
+        <Probe />
+      </ThemeProvider>,
+      { wrapper },
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Login' }));
+    expect(await screen.findByText('Connected. 1 tools are available.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByText('Connected. 1 tools are available.')).not.toBeInTheDocument());
   });
 
   it('carries the real MCP authorization modal in its slot', () => {
