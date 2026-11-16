@@ -1,5 +1,7 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 
+import Alert from '@mui/material/Alert';
+import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 
 import { ConnectorNotApprovedNotice, type ConnectorTarget } from '@/features/connector-requests';
@@ -48,6 +50,9 @@ import type { EditToolDetail } from './toolkitFormTypes';
  * would write a row nothing reads, under a name every other Remote MCP in the
  * project would collide with.
  */
+
+/** Read by the Test pane in `features/toolkits/ui/test-tools/useGetSelectedToolSchema.ts` (a different slice, so the literal is repeated, not imported). */
+const MCP_TOOL_SCHEMAS_KEY = 'available_mcp_tool_schemas';
 
 /** The four props `ToolBaseSlots.toolActionsExtra` accepts. */
 export interface McpLoadToolsSlot {
@@ -126,6 +131,30 @@ function toRemoteMcpValues(editToolDetail: EditToolDetail | null | undefined): R
   };
 }
 
+/**
+ * What "Load Tools" learned about each tool's arguments, by tool name: the
+ * description and `inputSchema` the server published, plus any `args_schemas`
+ * the discovery answered with. Kept in the settings beside the names so the Test
+ * pane can draw the input fields without a second authorised round trip (#2124).
+ */
+function schemaEntryOf(tool: unknown): [string, unknown] | undefined {
+  if (typeof tool !== 'object' || tool === null) return undefined;
+  const { name, description, inputSchema } = tool as { name?: unknown; description?: unknown; inputSchema?: unknown };
+  if (typeof name !== 'string' || name === '' || typeof inputSchema !== 'object' || inputSchema === null) return undefined;
+  return [name, { name, ...(typeof description === 'string' ? { description } : {}), inputSchema }];
+}
+
+function toolSchemasOf(tools: readonly unknown[], argsSchemas: Record<string, unknown> | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = Object.fromEntries(tools.flatMap((tool) => {
+    const entry = schemaEntryOf(tool);
+    return entry === undefined ? [] : [entry];
+  }));
+  for (const [name, schema] of Object.entries(argsSchemas ?? {})) {
+    if (out[name] === undefined && typeof schema === 'object' && schema !== null) out[name] = schema;
+  }
+  return out;
+}
+
 /** An unapproved server's preview as the request form's tools: name, description and the schema the pin digests. */
 function declaredTools(tools: readonly unknown[]): ConnectorDeclaredTool[] {
   return tools.flatMap((tool) => {
@@ -165,21 +194,30 @@ export interface UseMcpLoadToolsParams {
 export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail }: UseMcpLoadToolsParams): McpLoadToolsSlot | undefined {
   const [error, setError] = useState<string | undefined>(undefined);
   const [unapproved, setUnapproved] = useState<UnapprovedConnector>();
+  /** True between a click on the status pane's Login and its outcome, so only a LOGIN answers with a toast (#2125). */
+  const loginRequested = useRef(false);
+  const [loginFeedback, setLoginFeedback] = useState<{ readonly severity: 'success' | 'error'; readonly message: string } | undefined>(undefined);
 
   const toolkitType = editToolDetail?.type;
   /** Memoized: a fresh object every render would churn the hook below through every one of its own memos. */
   const values = useMemo(() => toRemoteMcpValues(editToolDetail), [editToolDetail]);
 
   const onToolsFetched = useCallback(
-    (tools: readonly unknown[]) => {
+    (tools: readonly unknown[], argsSchemas?: Record<string, unknown>) => {
       setError(undefined);
       setUnapproved(undefined);
       const names = toolNamesOf(tools);
+      const schemas = toolSchemasOf(tools, argsSchemas);
+      if (loginRequested.current) {
+        loginRequested.current = false;
+        setLoginFeedback({ severity: 'success', message: t('pages.toolkits.mcpLoadTools.loginSuccess', 'Connected. {{count}} tools are available.', { count: names.length }) });
+      }
       onChangeToolDetail((previous) => {
         if (previous === null) return previous;
         const selected = previous.settings?.['selected_tools'];
         const initializeSelection = names.length > 0 && (!Array.isArray(selected) || selected.length === 0);
         return { ...previous, settings: { ...previous.settings, available_mcp_tools: names,
+          [MCP_TOOL_SCHEMAS_KEY]: schemas,
           ...(initializeSelection ? { selected_tools: names } : {}),
         } };
       });
@@ -190,11 +228,18 @@ export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail 
   // A failed discovery answers HTTP 200 with `success: false`, so it must be
   // rendered as its own state. Writing an empty tool list instead would report
   // a dead server as a server that publishes no tools.
-  const onError = useCallback((message: string) => setError(message), []);
+  const onError = useCallback((message: string) => {
+    setError(message);
+    if (loginRequested.current) {
+      loginRequested.current = false;
+      setLoginFeedback({ severity: 'error', message });
+    }
+  }, []);
   // The approved_only catalogue (#1501): the server answered a preview
   // because it is not an approved connector. Its tools are not applied; the
   // slot offers "Request connector" with them instead.
   const onConnectorApprovalRequired = useCallback((required: McpConnectorApprovalRequired) => {
+    loginRequested.current = false;
     setError(undefined);
     setUnapproved(unapprovedConnector(required));
   }, []);
@@ -248,6 +293,23 @@ export function useMcpLoadTools({ projectId, editToolDetail, onChangeToolDetail 
   if (!isMcpToolkitType(toolkitType)) return undefined;
   // Saved MCPs use the same REST discovery and consent flow for Login.
   // The status component owns logout and cross-tab grant invalidation.
-  const mcpAuthStatus = values.id ? <McpAuthStatusBadge values={values} projectId={projectId} authConfig={{ onLogin: fetchTools, isRunning: isLoading }} /> : undefined;
-  return { onLoadTools: fetchTools, isLoadingTools: isLoading, canLoadTools, mcpAuthModal, mcpAuthStatus };
+  const onLogin = () => {
+    loginRequested.current = true;
+    fetchTools();
+  };
+  const mcpAuthStatus = values.id ? (
+    <>
+      <McpAuthStatusBadge values={values} projectId={projectId} authConfig={{ onLogin, isRunning: isLoading }} />
+      <Snackbar open={loginFeedback !== undefined} autoHideDuration={6000} onClose={() => setLoginFeedback(undefined)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+        <Alert severity={loginFeedback?.severity ?? 'success'} variant="filled" onClose={() => setLoginFeedback(undefined)}>
+          {loginFeedback?.message}
+        </Alert>
+      </Snackbar>
+    </>
+  ) : undefined;
+  const onLoadTools = () => {
+    loginRequested.current = false;
+    fetchTools();
+  };
+  return { onLoadTools, isLoadingTools: isLoading, canLoadTools, mcpAuthModal, mcpAuthStatus };
 }
