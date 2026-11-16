@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.54
- * operations sha256:  f7ee943a688628161a2769979c78db8a8fbddc8137d5fbb7eab75d49b27deda1
+ * client contract:    1.55
+ * operations sha256:  75e3e53c44cc8bcdb39b77de8ac3330cb6ac556a1442ee7f7194ec613fd196d7
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -1077,6 +1077,67 @@ export interface paths {
          * @description The guardrail verdicts of a run that the person must be told about, merged to one notice per guardrail, stage and kind (ADR-0043 decision 1): a request or an answer the gateway blocked, content it redacted (masked), content a `warn` guardrail warned about, and a guardrail with fail mode closed that could not run. A notice names the stage, the action, the guardrail (the governance entry's name) and the finding labels such as `email`. It never holds the inspected text or the matched value. A run with no notice, and an unknown run, answer an empty list. The gateway writes verdicts up to one second after the request, so a client asks again once when a turn failed or ended and the list is empty. Requires `models.chat.messages.create`, the permission that sends a chat message; reading the full verdicts needs `runs.evidence.read` (listRunSteps).
          */
         get: operations["listRunGuardrailNotices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/marketplace_feedback/prompt_lib/{project_id}/{listing_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                listing_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The Feedback section of a listing
+         * @description A page of reviews and workforce reports, newest first, the rating
+         *     distribution of each version and the signals beside it. `version_id`
+         *     filters the items to one version and `kind` to one kind. A hidden item
+         *     is shown only to a platform administrator and to its author. No item
+         *     carries a project id or a project name: a review names its author, and
+         *     a workforce report reads "Workforce report from a hiring project"
+         *     (internal/api/v2/eliteacore/marketplace_feedback.go).
+         */
+        get: operations["getMarketplaceFeedback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/marketplace_listings/prompt_lib/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Search the Marketplace
+         * @description Facet search over the listings (ADR-0051 decision 2). Answers
+         *     `{rows, total, facets}`. `project_id` is the project that hires: the
+         *     `hired_here` filter and the `hired` field read it.
+         *
+         *     Every parameter is validated in internal/marketplace/search.go. A
+         *     `kind`, `sort`, `max_tier` or numeric parameter outside its range
+         *     answers 400. `query` matches the name, description and soul summary;
+         *     the pattern is a bind parameter. The `facets` counts ignore the facet
+         *     they describe.
+         */
+        get: operations["searchMarketplaceListings"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3948,6 +4009,206 @@ export interface components {
         MarkConversationReadRequest: {
             /** @description The numeric id or the UUID of a message group of the conversation: the caller read the conversation up to and including that message. A number is also accepted. */
             message_id?: string;
+        };
+        /** @description One facet value and how many listings carry it. Each count honours every search filter except the facet it belongs to. */
+        MarketplaceFacetCount: {
+            count: number;
+            /** @description The text to show. */
+            label: string;
+            /** @description The filter value to send back. */
+            value: string;
+        };
+        /** @description The counts behind the Browse sidebar (internal/marketplace/search.go Facets). */
+        MarketplaceFacets: {
+            categories: components["schemas"]["MarketplaceFacetCount"][];
+            /** @description Listings the project in the path has already hired or added. */
+            hired_here: number;
+            kinds: components["schemas"]["MarketplaceFacetCount"][];
+            /** @description The 50 publishers with most listings. `value` is the publisher id. */
+            publishers: components["schemas"]["MarketplaceFacetCount"][];
+            /** @description Toolkit and MCP types the listings need. */
+            required_types: components["schemas"]["MarketplaceFacetCount"][];
+            /** @description The 50 most used tags. */
+            tags: components["schemas"]["MarketplaceFacetCount"][];
+            /** @description Listings per risk tier (low, medium, high, critical). */
+            tiers: components["schemas"]["MarketplaceFacetCount"][];
+        };
+        /** @description The Feedback section of a listing (internal/api/v2/eliteacore/marketplace_feedback.go). */
+        MarketplaceFeedback: {
+            /** @description The caller is the publisher or an administrator. */
+            can_flag: boolean;
+            /** @description The caller is a platform administrator and may hide an item. */
+            can_moderate: boolean;
+            /** @description The caller is the publisher. */
+            can_reply: boolean;
+            /** @description The caller's project hired the listing and the caller is not its publisher. */
+            can_review: boolean;
+            items: components["schemas"]["MarketplaceFeedbackItem"][];
+            /** @description The caller's own review, wherever it falls in the list. Null when they wrote none. */
+            my_review: components["schemas"]["MarketplaceFeedbackItem"] | null;
+            overall: components["schemas"]["MarketplaceRatingBucket"];
+            /** @description The versions the caller's project hired. Empty when it never hired the listing. */
+            review_versions: components["schemas"]["MarketplaceReviewVersion"][];
+            signals: components["schemas"]["MarketplaceSignalsSet"];
+            total: number;
+            /** @description One bucket per version, newest first. */
+            versions: components["schemas"]["MarketplaceRatingBucket"][];
+        };
+        /** @description Who an item is from, as a reader may see it (internal/marketplace/feedback.go). */
+        MarketplaceFeedbackAuthor: {
+            /** @description `person` for a review; `agent` or `policy` for a workforce report. */
+            kind: string;
+            /** @description A person's name for a review. For a workforce report it is the label "Workforce report from a hiring project". It is never a project's name. */
+            name: string;
+        };
+        /** @description One item of feedback. It never carries a project id or a project name (internal/marketplace/feedback.go FeedbackItem). */
+        MarketplaceFeedbackItem: {
+            author: components["schemas"]["MarketplaceFeedbackAuthor"];
+            body: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @description Shown to the publisher and to a moderator. */
+            flag_reason?: string;
+            flagged: boolean;
+            /** @description Shown to a moderator. */
+            hide_reason?: string;
+            id: string;
+            /** @description `review`, `workforce_report` or `signal`. */
+            kind: string;
+            /** @description A review the caller wrote, or a report the caller's project wrote. */
+            mine: boolean;
+            /** @description A report: `kept`, `demoted` or `dismissed`. */
+            outcome?: string;
+            /** @description 1 to 5 for a review; null for a workforce report. */
+            rating: number | null;
+            reason_code?: string;
+            reply: components["schemas"]["MarketplaceFeedbackReply"] | null;
+            scorecard?: components["schemas"]["MarketplaceFeedbackScorecard"];
+            stage?: string;
+            /** @description `visible`, or `hidden` (shown to a moderator and to the author only). */
+            state: string;
+            /** Format: date-time */
+            updated_at: string;
+            version_id: string;
+            version_name: string;
+        };
+        /** @description The publisher's one reply to an item (internal/marketplace/feedback.go). */
+        MarketplaceFeedbackReply: {
+            body: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description The platform-computed summary of a workforce report (internal/marketplace/feedback.go CleanScorecard). Four numbers and nothing else: never a transcript, a prompt, tool arguments or memory. */
+        MarketplaceFeedbackScorecard: {
+            active_days?: number;
+            breaker_trips?: number;
+            cost_vs_median?: number;
+            failure_rate?: number;
+        };
+        /** @description One hire of the listing in the project in the path (internal/marketplace/search.go). */
+        MarketplaceHired: {
+            /** @description The project agent or skill. */
+            application_id: string;
+            /** @description `install` or `fork`. */
+            mode: string;
+            version_id: string;
+            version_name: string;
+        };
+        /** @description A page of listings with the facet counts (internal/marketplace/search.go Search). */
+        MarketplaceListingPage: {
+            facets: components["schemas"]["MarketplaceFacets"];
+            rows: components["schemas"]["MarketplaceListingSummary"][];
+            total: number;
+        };
+        /** @description One listing as a card shows it (internal/marketplace/search.go). */
+        MarketplaceListingSummary: {
+            category: string;
+            /** @description The newest version that is neither yanked nor withdrawn. Null when none is left. */
+            current_version?: components["schemas"]["MarketplaceVersionRef"] | null;
+            description: string;
+            /** @description The public catalogue agent or skill. Try in chat, likes and the public read use it. */
+            entity_id: string;
+            featured: boolean;
+            has_write_tools: boolean;
+            /** @description Hires in the project in the path; empty when none. */
+            hired: components["schemas"]["MarketplaceHired"][];
+            /** @description Projects that hired or added it. */
+            hires: number;
+            icon_url?: string | null;
+            /** @description The listing id. */
+            id: string;
+            is_liked: boolean;
+            /** @description `agent` or `skill`. */
+            kind: string;
+            likes: number;
+            name: string;
+            publisher?: components["schemas"]["MarketplacePublisher"] | null;
+            /** @description Average review rating; null until reviews exist (ADR-0051 M5). */
+            rating_avg?: number | null;
+            rating_count: number;
+            required_types: string[];
+            /** @description `listed` or `delisted`. */
+            state: string;
+            tags: string[];
+            /** @description The risk tier at the source (low, medium, high, critical). */
+            tier: string;
+        };
+        /** @description The person who published the listing (internal/marketplace/search.go). */
+        MarketplacePublisher: {
+            id: string;
+            name: string;
+        };
+        /** @description The rating distribution of one version, from the visible reviews (internal/marketplace/feedback.go RatingBucket). */
+        MarketplaceRatingBucket: {
+            /** @description The number of reviews with one star, two, three, four and five. */
+            distribution: number[];
+            rating_avg: number | null;
+            rating_count: number;
+            /** @description Visible workforce reports. */
+            report_count: number;
+            /** @description `0` for every version together. */
+            version_id: string;
+            version_name: string;
+        };
+        /** @description A version the caller's project hired (internal/marketplace/feedback.go ReviewableVersions). */
+        MarketplaceReviewVersion: {
+            id: string;
+            name: string;
+        };
+        /** @description The daily signals of a listing or a version (internal/marketplace/signals.go). */
+        MarketplaceSignals: {
+            active_hires: number;
+            day: string;
+            /** @description Dismissed over every hire; null with no hire. */
+            dismissal_rate: number | null;
+            dismissed: number;
+            hires_total: number;
+            /** @description True when the daily routine has not written a row yet and the figures were computed at the request. */
+            live: boolean;
+            /** @description Of the cohort, the share still active on day 30; null with an empty cohort. */
+            retention_30d: number | null;
+            /** @description Hires at least 30 days old. */
+            retention_cohort: number;
+            /** @description Of those, the share now on the current version. */
+            upgrade_adoption: number | null;
+            /** @description Active hires made before the current version was published. */
+            upgrade_eligible: number;
+        };
+        /** @description The signals of a listing and of each version (internal/marketplace/signals.go). */
+        MarketplaceSignalsSet: {
+            listing: components["schemas"]["MarketplaceSignals"];
+            /** @description By version id. A version that was never hired has no entry. */
+            versions: {
+                [key: string]: components["schemas"]["MarketplaceSignals"];
+            };
+        };
+        /** @description A listing version by name (internal/marketplace/search.go). */
+        MarketplaceVersionRef: {
+            /** @description The catalogue version id. */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            published_at: string;
         };
         /** @description The user's default context-management settings, stored in centry.social_users.default_context_management (jsonb) and edited by Settings > Memory. Every property is optional: absent means "the user has no opinion", which resolves to the platform default, and is a different answer from an explicit false or zero. Ranges are enforced on write (internal/domain/contextsettings); an out-of-range value is refused with {"error", "field"}. `enable_context_editing` is not in the legacy runtime's ContextManagementModel but IS read out of the same dict by set_context_strategy, and the Memory page has always sent it. */
         MemoryContextManagement: {
@@ -6848,6 +7109,187 @@ export interface operations {
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             500: components["responses"]["500"];
+        };
+    };
+    getMarketplaceFeedback: {
+        parameters: {
+            query?: {
+                /** @description `review`, `workforce_report` or `signal`. */
+                kind?: string;
+                limit?: number;
+                offset?: number;
+                version_id?: string;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                listing_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The feedback */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketplaceFeedback"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    searchMarketplaceListings: {
+        parameters: {
+            query?: {
+                /** @description Comma-separated categories. */
+                category?: string;
+                /** @description The public catalogue agent or skill id. The old `?agentId=` links use it to find their listing. */
+                entity_id?: string;
+                /** @description Keep only listings an administrator features. */
+                featured?: boolean;
+                /** @description Keep only listings the project has hired or added. */
+                hired_here?: boolean;
+                /** @description `agent` or `skill`. Absent keeps both. */
+                kind?: string;
+                /** @description Maximum number of items to return */
+                limit?: components["parameters"]["Limit"];
+                /** @description The highest risk tier to show (low, medium, high, critical). */
+                max_tier?: string;
+                min_rating?: number;
+                /** @description Number of items to skip before starting to collect results */
+                offset?: components["parameters"]["Offset"];
+                publisher_id?: string;
+                /** @description Words matched against the name, description and soul summary. */
+                query?: string;
+                /** @description Comma-separated toolkit or MCP types; a listing needs one of them. */
+                requires?: string;
+                /** @description `relevance` (default), `hires`, `rating`, `newest` or `name`. */
+                sort?: string;
+                /** @description Comma-separated tags; a listing needs one of them. */
+                tag?: string;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of listings with the facet counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "rows": [
+                     *         {
+                     *           "id": "7",
+                     *           "kind": "agent",
+                     *           "entity_id": "42",
+                     *           "name": "Changelog Writer",
+                     *           "description": "Drafts release notes from merged pull requests.",
+                     *           "category": "Development",
+                     *           "tags": [
+                     *             "github",
+                     *             "release"
+                     *           ],
+                     *           "publisher": {
+                     *             "id": "3",
+                     *             "name": "Dana Owner"
+                     *           },
+                     *           "tier": "medium",
+                     *           "current_version": {
+                     *             "id": "311",
+                     *             "name": "v2.3",
+                     *             "published_at": "2026-10-30T09:00:00Z"
+                     *           },
+                     *           "hires": 120,
+                     *           "rating_avg": null,
+                     *           "rating_count": 0,
+                     *           "likes": 31,
+                     *           "is_liked": false,
+                     *           "featured": true,
+                     *           "required_types": [
+                     *             "github"
+                     *           ],
+                     *           "has_write_tools": true,
+                     *           "state": "listed",
+                     *           "hired": []
+                     *         }
+                     *       ],
+                     *       "total": 1,
+                     *       "facets": {
+                     *         "kinds": [
+                     *           {
+                     *             "value": "agent",
+                     *             "label": "Agents",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "categories": [
+                     *           {
+                     *             "value": "Development",
+                     *             "label": "Development",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "tags": [
+                     *           {
+                     *             "value": "github",
+                     *             "label": "github",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "publishers": [
+                     *           {
+                     *             "value": "3",
+                     *             "label": "Dana Owner",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "tiers": [
+                     *           {
+                     *             "value": "medium",
+                     *             "label": "medium",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "required_types": [
+                     *           {
+                     *             "value": "github",
+                     *             "label": "github",
+                     *             "count": 1
+                     *           }
+                     *         ],
+                     *         "hired_here": 0
+                     *       }
+                     *     }
+                     */
+                    "application/json": components["schemas"]["MarketplaceListingPage"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
         };
     };
     listMemories: {

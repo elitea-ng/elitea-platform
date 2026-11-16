@@ -269,6 +269,13 @@ func TestReviewsComeOnlyFromVerifiedHiresOneEach(t *testing.T) {
 	if page["can_review"] != true {
 		t.Errorf("project 4 hired the listing, can_review = %v", page["can_review"])
 	}
+	// The caller's own review comes back whatever the page, with the version it is on.
+	if mine, _ := page["my_review"].(map[string]any); mine == nil || mine["rating"] != float64(3) || mine["version_name"] != "v2" {
+		t.Errorf("my_review = %v, want the 3-star review of v2", page["my_review"])
+	}
+	if _, other, _ := f.feedback(7, 2, ""); other["my_review"] != nil {
+		t.Errorf("the publisher has no review, my_review = %v", other["my_review"])
+	}
 	if _, page, _ = f.feedback(13, 5, ""); page["can_review"] != false {
 		t.Errorf("project 5 did not hire it, can_review = %v", page["can_review"])
 	}

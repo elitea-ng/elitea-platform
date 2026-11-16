@@ -28,9 +28,11 @@ type feedbackView struct {
 	// people may review. Empty when the project never hired the listing.
 	ReviewVersions []marketplace.ReviewVersion `json:"review_versions"`
 	CanReview      bool                        `json:"can_review"`
-	CanReply       bool                        `json:"can_reply"`
-	CanFlag        bool                        `json:"can_flag"`
-	CanModerate    bool                        `json:"can_moderate"`
+	// MyReview is the caller's own review, wherever it falls in the list.
+	MyReview    *marketplace.FeedbackItem `json:"my_review"`
+	CanReply    bool                      `json:"can_reply"`
+	CanFlag     bool                      `json:"can_flag"`
+	CanModerate bool                      `json:"can_moderate"`
 }
 
 func writeFeedbackError(w http.ResponseWriter, err error) bool {
@@ -161,6 +163,11 @@ func (h *Handler) MarketplaceFeedback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view.CanReview = len(view.ReviewVersions) > 0
+		if view.MyReview, err = marketplace.MyReview(ctx, h.pool, listingID, query.UserID, projectID); err != nil {
+			slog.ErrorContext(ctx, "marketplace: read the caller's review failed", "listing_id", listingID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read the feedback"})
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, view)
 }

@@ -613,6 +613,9 @@ type FeedbackQuery struct {
 	// reasons.
 	Moderator bool
 	Publisher bool
+	// AuthorUserID narrows the items to the ones that person wrote; zero is
+	// everyone. The caller's own review is read this way, past the first page.
+	AuthorUserID int64
 }
 
 // FeedbackPage is a page of items with the rating summary of the listing.
@@ -627,7 +630,8 @@ type FeedbackPage struct {
 const feedbackFilterSQL = `
 WHERE f.listing_id = $1 AND ($2::bigint = 0 OR f.version_id = $2) AND ($3::text = '' OR f.kind = $3)
   AND (f.state = 'visible' OR $4::boolean
-       OR (f.kind = 'review' AND f.author_user_id = $5) OR (f.kind <> 'review' AND f.project_id = $6))`
+       OR (f.kind = 'review' AND f.author_user_id = $5) OR (f.kind <> 'review' AND f.project_id = $6))
+  AND ($7::bigint = 0 OR f.author_user_id = $7)`
 
 // ListFeedback reads a page of the listing's items, newest first, with the
 // rating distribution of each version. Hidden items show only to a moderator
@@ -649,7 +653,7 @@ func ListFeedback(ctx context.Context, db DB, q FeedbackQuery) (FeedbackPage, er
 	}
 	page := FeedbackPage{Items: []FeedbackItem{}, Versions: []RatingBucket{}}
 	if err := db.QueryRow(ctx, `SELECT count(*) FROM elitea_marketplace.listing_feedback f`+feedbackFilterSQL,
-		q.ListingID, q.VersionID, q.Kind, q.Moderator, q.UserID, q.ProjectID).Scan(&page.Total); err != nil {
+		q.ListingID, q.VersionID, q.Kind, q.Moderator, q.UserID, q.ProjectID, q.AuthorUserID).Scan(&page.Total); err != nil {
 		return FeedbackPage{}, fmt.Errorf("marketplace: count the feedback: %w", err)
 	}
 	rows, err := db.Query(ctx, `
@@ -661,8 +665,8 @@ SELECT f.id, f.kind, f.version_id, v.name, f.rating, f.body, COALESCE(f.outcome,
 FROM elitea_marketplace.listing_feedback f
 JOIN elitea_marketplace.listing_versions v ON v.listing_id = f.listing_id AND v.version_id = f.version_id
 LEFT JOIN auth_core__user u ON u.id = f.author_user_id AND f.kind = 'review'`+feedbackFilterSQL+`
-ORDER BY f.created_at DESC, f.id DESC LIMIT $7 OFFSET $8`,
-		q.ListingID, q.VersionID, q.Kind, q.Moderator, q.UserID, q.ProjectID, q.Limit, q.Offset)
+ORDER BY f.created_at DESC, f.id DESC LIMIT $8 OFFSET $9`,
+		q.ListingID, q.VersionID, q.Kind, q.Moderator, q.UserID, q.ProjectID, q.AuthorUserID, q.Limit, q.Offset)
 	if err != nil {
 		return FeedbackPage{}, fmt.Errorf("marketplace: read the feedback: %w", err)
 	}
@@ -779,6 +783,21 @@ func (b *RatingBucket) finish() {
 		avg = float64(int(avg*100+0.5)) / 100
 		b.RatingAvg = &avg
 	}
+}
+
+// MyReview reads the person's own review of the listing, wherever it falls in
+// the list, or nil when they wrote none. A hidden review is still theirs.
+func MyReview(ctx context.Context, db DB, listingID, userID, projectID int64) (*FeedbackItem, error) {
+	if userID <= 0 {
+		return nil, nil
+	}
+	page, err := ListFeedback(ctx, db, FeedbackQuery{
+		ListingID: listingID, Kind: FeedbackReview, Limit: 1, UserID: userID, ProjectID: projectID, AuthorUserID: userID,
+	})
+	if err != nil || len(page.Items) == 0 {
+		return nil, err
+	}
+	return &page.Items[0], nil
 }
 
 // ReviewVersion is a version the project hired and its people may review.

@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.54"
+  x-elitea-client-contract: "1.55"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -15115,9 +15115,9 @@ components:
         dismissed: { type: integer }
         dismissal_rate: { type: number, nullable: true, description: Dismissed over every hire; null with no hire. }
         retention_cohort: { type: integer, description: Hires at least 30 days old. }
-        retention_30d: { type: number, nullable: true, description: Of the cohort, the share still active on day 30; null with an empty cohort. }
+        retention_30d: { type: number, nullable: true, description: 'Of the cohort, the share still active on day 30; null with an empty cohort.' }
         upgrade_eligible: { type: integer, description: Active hires made before the current version was published. }
-        upgrade_adoption: { type: number, nullable: true, description: Of those, the share now on the current version. }
+        upgrade_adoption: { type: number, nullable: true, description: 'Of those, the share now on the current version.' }
         live:
           type: boolean
           description: True when the daily routine has not written a row yet and the figures were computed at the request.
@@ -15147,7 +15147,7 @@ components:
 
     MarketplaceFeedback:
       type: object
-      required: [items, total, versions, overall, signals, review_versions, can_review, can_reply, can_flag, can_moderate]
+      required: [items, total, versions, overall, signals, review_versions, can_review, my_review, can_reply, can_flag, can_moderate]
       properties:
         items:
           type: array
@@ -15164,6 +15164,10 @@ components:
           items: { $ref: '#/components/schemas/MarketplaceReviewVersion' }
           description: The versions the caller's project hired. Empty when it never hired the listing.
         can_review: { type: boolean, description: The caller's project hired the listing and the caller is not its publisher. }
+        my_review:
+          allOf: [{ $ref: '#/components/schemas/MarketplaceFeedbackItem' }]
+          nullable: true
+          description: The caller's own review, wherever it falls in the list. Null when they wrote none.
         can_reply: { type: boolean, description: The caller is the publisher. }
         can_flag: { type: boolean, description: The caller is the publisher or an administrator. }
         can_moderate: { type: boolean, description: The caller is a platform administrator and may hide an item. }
@@ -39114,8 +39118,9 @@ paths:
         answers 400. `query` matches the name, description and soul summary;
         the pattern is a bind parameter. The `facets` counts ignore the facet
         they describe.
-      tags: [marketplace]
+      tags: [marketplace, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
         - name: kind
@@ -39206,6 +39211,7 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
 
   /elitea_core/marketplace_listing/prompt_lib/{project_id}/{listing_id}:
     parameters:
@@ -39441,8 +39447,9 @@ paths:
         carries a project id or a project name: a review names its author, and
         a workforce report reads "Workforce report from a hiring project"
         (internal/api/v2/eliteacore/marketplace_feedback.go).
-      tags: [marketplace]
+      tags: [marketplace, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - name: version_id
           in: query
           schema: { type: string }
@@ -39466,6 +39473,7 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
     post:
       operationId: saveMarketplaceReview
       summary: Review a listing the project hired

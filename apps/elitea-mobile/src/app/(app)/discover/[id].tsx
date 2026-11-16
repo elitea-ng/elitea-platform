@@ -10,6 +10,8 @@ import {
   usePublicAgentDetail,
 } from '@/api/queries/discover';
 import { queryKeys } from '@/api/queries/keys';
+import { useAgentFeedback } from '@/api/queries/marketplaceFeedback';
+import { useFeedbackAvailable } from '@/features/discover/useFeedbackAvailable';
 import { StatusScreen } from '@/components/StatusScreen';
 import { useAgentMemoryAvailable } from '@/features/agentMemory/useAgentMemoryAvailable';
 import { PublicAgentView } from '@/features/discover/PublicAgentView';
@@ -41,6 +43,8 @@ export default function PublicAgentScreen() {
   const starting = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const memoryAvailable = useAgentMemoryAvailable();
+  const feedbackAvailable = useFeedbackAvailable();
+  const feedback = useAgentFeedback(projectId, agentId, feedbackAvailable);
 
   if (!available) return <StatusScreen title="Marketplace isn't available" />;
   if (projectId === null) return <StatusScreen title="No project selected" />;
@@ -83,6 +87,7 @@ export default function PublicAgentScreen() {
       starters={detail.data?.starters ?? []}
       busy={busy}
       error={error}
+      feedback={feedback.data ?? null}
       onStart={() => void start('start', null)}
       onStarter={(index, text) => void start(`starter:${index}`, text)}
       // The agent's memory is kept in the project its chats run in: the active one. A pipeline has

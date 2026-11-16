@@ -99,6 +99,41 @@ function detailOf(overrides: Partial<MarketplaceListingDetail> = {}): Marketplac
   };
 }
 
+const EMPTY_FEEDBACK = {
+  items: [],
+  total: 0,
+  versions: [],
+  overall: {
+    version_id: '0',
+    version_name: '',
+    rating_avg: null,
+    rating_count: 0,
+    distribution: [0, 0, 0, 0, 0],
+    report_count: 0,
+  },
+  signals: {
+    listing: {
+      day: '2026-11-15',
+      active_hires: 0,
+      hires_total: 0,
+      dismissed: 0,
+      dismissal_rate: null,
+      retention_cohort: 0,
+      retention_30d: null,
+      upgrade_eligible: 0,
+      upgrade_adoption: null,
+      live: true,
+    },
+    versions: {},
+  },
+  review_versions: [],
+  can_review: false,
+  my_review: null,
+  can_reply: false,
+  can_flag: false,
+  can_moderate: false,
+};
+
 let requests: string[] = [];
 let createBodies: unknown[] = [];
 let participantBodies: unknown[] = [];
@@ -126,6 +161,9 @@ function mockListing(
       if (params['listingId'] !== '7') return HttpResponse.json({ error: 'not found' }, { status: 404 });
       return HttpResponse.json(detail);
     }),
+    http.get('/api/v2/elitea_core/marketplace_feedback/prompt_lib/:projectId/:listingId', () =>
+      HttpResponse.json(EMPTY_FEEDBACK),
+    ),
     http.get('/api/v2/elitea_core/toolkits/prompt_lib/:projectId', () =>
       HttpResponse.json({
         rows: [

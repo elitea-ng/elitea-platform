@@ -37,7 +37,8 @@ import { useMarketplaceListing } from '../useMarketplaceListings';
 
 import { ListingLoadError } from './ListingLoadError';
 import { ListingNotFound } from './ListingNotFound';
-import { DelistedBanner, ListingAdminBar, ListingFeedback, ListingUsedBy } from './ListingSections';
+import { ListingFeedback } from '../feedback/ListingFeedback';
+import { DelistedBanner, ListingAdminBar, ListingUsedBy } from './ListingSections';
 import { ListingBlock, ListingShell } from './ListingShell';
 import { ListingVersions } from './ListingVersions';
 
@@ -126,7 +127,7 @@ function SkillSections({ detail, projectId }: SkillListingViewProps): ReactNode 
         />
       </ListingBlock>
       <ListingBlock id="feedback" title={t('marketplace.listing.feedback', 'Feedback')}>
-        <ListingFeedback detail={detail} />
+        <ListingFeedback detail={detail} projectId={projectId} />
       </ListingBlock>
       {listing.hired.length > 0 && (
         <ListingBlock id="used-by" title={t('marketplace.listing.usedBy', 'Used by this project')}>

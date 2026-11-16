@@ -1,6 +1,6 @@
 /**
  * The smaller sections of a listing page (ADR-0051 decision 8): the delisted
- * banner, the administrator's Feature and Delist controls, Feedback and **Used
+ * banner, the administrator's Feature and Delist controls and **Used
  * by this project**.
  */
 import type { ReactNode } from 'react';
@@ -18,7 +18,6 @@ import type { MarketplaceHired, MarketplaceListingDetail } from '@/shared/api/ge
 import { t } from '@/shared/i18n';
 
 import { invalidateMarketplace } from '../invalidate';
-import { ratingText } from '../listing';
 import type { MarketplaceKind } from '../types';
 
 /** What a delisted listing means for the reader. */
@@ -78,26 +77,6 @@ export function ListingAdminBar({
           {t('marketplace.admin.failed', 'The change failed. Try again.')}
         </Typography>
       )}
-    </Box>
-  );
-}
-
-/** Feedback: the rating as text and the saves. Reviews and workforce reports arrive in a later phase. */
-export function ListingFeedback({ detail }: { readonly detail: MarketplaceListingDetail }): ReactNode {
-  const { listing } = detail;
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }} data-testid="marketplace-feedback">
-      <Typography variant="bodyMedium">
-        {ratingText({ ratingAvg: listing.rating_avg ?? null, ratingCount: listing.rating_count })}
-      </Typography>
-      <Typography variant="bodySmall" color="text.secondary">
-        {t('marketplace.feedback.saved', 'Saved by {{count}}', { count: listing.likes })}
-        {' · '}
-        {t('marketplace.feedback.hires', 'Hired by {{count}} projects', { count: listing.hires })}
-      </Typography>
-      <Typography variant="bodySmall" color="text.secondary">
-        {t('marketplace.feedback.later', 'Reviews and workforce reports from hiring projects come in a later release.')}
-      </Typography>
     </Box>
   );
 }
