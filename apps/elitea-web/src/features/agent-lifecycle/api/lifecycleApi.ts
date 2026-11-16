@@ -161,7 +161,7 @@ export interface ForkOutcome {
   readonly errors: unknown;
 }
 
-export async function forkEntity(targetProjectId: string, document: EntityExportDocument): Promise<ForkOutcome> {
+async function forkEntity(targetProjectId: string, document: EntityExportDocument): Promise<ForkOutcome> {
   const request = {
     applications: document.applications ?? [],
     // The toolkits travel with the agent. The server copies each one into the
