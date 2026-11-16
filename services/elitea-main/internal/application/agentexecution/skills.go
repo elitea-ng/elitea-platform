@@ -34,6 +34,50 @@ type currentSkillMention struct {
 	name  string
 }
 
+// projectAdhocSkills is projectCurrentApplicationSkills for a model chat: no
+// version, so the picks are the only candidates. The `~name` sigils leave the
+// text the worker sees, as on an agent turn, and a pick is applied whether or
+// not the text names it. The picks are already read and frozen.
+func projectAdhocSkills(userInput string, picks []map[string]any) (currentSkillProjection, error) {
+	if len(picks) == 0 {
+		return currentSkillProjection{
+			userInput: userInput, invoked: []byte(`[]`), applied: []byte(`[]`), attached: []byte(`[]`),
+		}, nil
+	}
+	candidates, forced, err := mergeProjectSkills(nil, picks)
+	if err != nil {
+		return currentSkillProjection{}, err
+	}
+	cleanedInput, invoked := consumeCurrentInvokedSkills(userInput, candidates)
+	invoked, err = withForcedSkills(invoked, forced)
+	if err != nil {
+		return currentSkillProjection{}, err
+	}
+	if strings.TrimSpace(cleanedInput) == "" {
+		cleanedInput = "continue"
+	}
+	applied := make([]map[string]any, 0, len(invoked))
+	for _, skill := range invoked {
+		applied = append(applied, currentSkillAuthorityProjection(map[string]any{
+			"skill_id":         skill["skill_id"],
+			"skill_version_id": skill["skill_version_id"],
+			"name":             skill["name"],
+			"icon_meta":        skill["icon_meta"],
+		}, skill))
+	}
+	encodedInvoked, err := json.Marshal(invoked)
+	if err != nil {
+		return currentSkillProjection{}, ErrUnsupportedCurrentAgentStart
+	}
+	encodedApplied, err := json.Marshal(applied)
+	if err != nil {
+		return currentSkillProjection{}, ErrUnsupportedCurrentAgentStart
+	}
+	return currentSkillProjection{
+		userInput: cleanedInput, invoked: encodedInvoked, applied: encodedApplied, attached: []byte(`[]`),
+	}, nil
+}
+
 // projectCurrentApplicationSkills preserves the current Core skill boundary:
 // message-level ~skill references are consumed into invoked/applied channels,
 // while non-pipeline application skills remain available for the SDK-owned
@@ -270,7 +314,7 @@ func nullableCurrentSkillDescription(original any, resolved string) any {
 }
 
 func currentSkillAuthorityProjection(projected, source map[string]any) map[string]any {
-	for _, key := range []string{"id", "revision", "scope"} {
+	for _, key := range []string{"id", "revision", "scope", "trust"} {
 		if value, ok := source[key]; ok {
 			projected[key] = value
 		}
