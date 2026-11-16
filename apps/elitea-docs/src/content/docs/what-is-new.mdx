@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Chat fixes: renamed agents, tagged people, the X button and Save
+
+A renamed agent now shows its current name in the participants panel and on its messages, not the name it had when it joined the conversation. After you tag a person with `@` and send, the next message to the model no longer fails with "The execution input is invalid." (upgrade the worker with Main). The **X** next to the agent or pipeline in the message bar now switches the conversation back to the model. In the agent and pipeline editor opened from a chat, **Save** is enabled only while there is something to save, and a save refreshes the panel.
+
 ## Skills in a model chat, and untrusted skill text
 
 The message start for a chat with only a model now accepts project skills (`payload.skills`, ids only), applied through the same skill loading an agent chat uses, with the same limits (five skills, 64 KiB, a skill you cannot read refuses the message). Text of a skill forked from another project reaches the model as quoted data until your project trusts that version of it; skills that existed before keep working as before. **Run the migrations** (tenant `0250`) and upgrade Main and the worker together. See [Skills](/menus/skills#skills-from-another-project-are-untrusted-until-you-trust-them).

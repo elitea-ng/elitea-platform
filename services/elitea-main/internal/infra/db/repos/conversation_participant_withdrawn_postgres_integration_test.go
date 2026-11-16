@@ -196,3 +196,50 @@ func TestWithdrawnVersionNameMarkerMatchesTheWriter(t *testing.T) {
 		t.Fatalf("%s no longer declares %s — this package's copy of the marker has drifted", writer, want)
 	}
 }
+
+// #2096 / #2118: a participant stores the name its agent had when it was
+// attached, so renaming the agent afterwards left the chat rail and the
+// message captions on the creation name. The read overlays the application's
+// CURRENT name, for an agent of the conversation's own project.
+func TestListParticipantsServesTheAgentsCurrentName(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewConversationsRepo(pool)
+	ctx := context.Background()
+
+	versionID := seedApplicationVersion(t, repo, "base", "draft", `{}`)
+	const applicationID = 4243
+
+	// Attached while the application is still unknown to the schema (as the
+	// sibling fixtures do), then renamed: the participant row keeps the name
+	// it was attached with.
+	conversationID := seedConversation(t, repo)
+	if err := repo.AddParticipant(ctx, "1", conversationID, map[string]any{
+		"entity_name":     "application",
+		"entity_meta":     map[string]any{"id": applicationID, "project_id": 1, "name": "Creation name"},
+		"entity_settings": map[string]any{"version_id": versionID},
+	}); err != nil {
+		t.Fatalf("attach agent participant: %v", err)
+	}
+	if _, err := repo.pool.Exec(ctx, `INSERT INTO p_1.applications (id, name) VALUES ($1, 'Renamed agent')`, applicationID); err != nil {
+		t.Fatalf("seed application: %v", err)
+	}
+	t.Cleanup(func() { _, _ = repo.pool.Exec(ctx, `DELETE FROM p_1.applications WHERE id = $1`, applicationID) })
+	if _, err := repo.pool.Exec(ctx, `UPDATE p_1.application_versions SET application_id = $1 WHERE id = $2`, applicationID, versionID); err != nil {
+		t.Fatalf("bind version to application: %v", err)
+	}
+
+	items, err := repo.ListParticipants(ctx, "1", conversationID)
+	if err != nil {
+		t.Fatalf("list participants: %v", err)
+	}
+	for _, item := range items {
+		if item.EntityName != participantEntityApplication {
+			continue
+		}
+		if item.EntityMeta["name"] != "Renamed agent" || item.Meta["name"] != "Renamed agent" {
+			t.Fatalf("the participant must carry the agent's current name: entity_meta=%v meta=%v", item.EntityMeta, item.Meta)
+		}
+		return
+	}
+	t.Fatalf("no agent participant in %+v", items)
+}
