@@ -28,7 +28,7 @@ describe('BaseModal', () => {
           open
           title="T"
           content="c"
-          wide={wide}
+          fullscreen={wide ? 'wide' : false}
         />,
       );
       const width = Number.parseFloat(getComputedStyle(getByRole('dialog')).width);
