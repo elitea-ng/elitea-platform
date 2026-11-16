@@ -377,7 +377,10 @@ async fn a_server_starts_lists_and_answers_its_tools_and_stops_with_the_session(
     // Every tool holds the session: none may outlive this part.
     drop(tools);
     fixture.session.stop_processes().await;
-    assert!(wait_gone(pid, &program).await, "stopped with the session's processes");
+    assert!(
+        wait_gone(pid, &program).await,
+        "stopped with the session's processes"
+    );
     assert!(fixture.session.mcp().ready().is_empty());
     // A later turn starts it again.
     let again = fixture.session.start_mcp_servers("turn-2").await;
@@ -388,7 +391,10 @@ async fn a_server_starts_lists_and_answers_its_tools_and_stops_with_the_session(
     drop(tools);
     let Fixture { session, .. } = fixture;
     drop(session);
-    assert!(wait_gone(pid, &program).await, "killed when the session is dropped");
+    assert!(
+        wait_gone(pid, &program).await,
+        "killed when the session is dropped"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

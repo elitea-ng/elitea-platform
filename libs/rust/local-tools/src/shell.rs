@@ -1232,7 +1232,8 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(10));
     }
 
-    const STUCK_PIPE: &str = "echo before; echo oops >&2; /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); sleep 6' & sleep 1";
+    const STUCK_PIPE: &str =
+        "echo before; echo oops >&2; /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); sleep 6' & sleep 1";
 
     /// A grandchild that leaves the process group and keeps stdout open
     /// does not cost the output read before it: the readers are cut off
