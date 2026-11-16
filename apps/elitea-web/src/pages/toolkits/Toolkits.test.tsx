@@ -302,7 +302,7 @@ describe('Toolkits', () => {
     expect(router.state.location.pathname).toBe('/mcps/all');
   });
 
-  it('asks the server for MCPs only on /mcps and for plain toolkits on /toolkits (#2092: MCPs past the first page of toolkits left the list empty)', async () => {
+  it('asks the server for MCPs only on /mcps and for plain toolkits on /toolkits (issue 2092: MCPs past the first page of toolkits left the list empty)', async () => {
     const seen: string[] = [];
     server.use(
       getListToolkitInstancesMockHandler(({ request }) => {

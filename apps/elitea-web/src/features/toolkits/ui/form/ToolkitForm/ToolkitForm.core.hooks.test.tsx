@@ -211,7 +211,7 @@ describe('useToolkitFormCore editField', () => {
       expect(readEnum(box)).toBeUndefined();
     });
 
-    it.each(['mcp', 'mcp_context7'])('reads no type catalogue for a %s toolkit still being created: that route lists the project\'s other MCPs, not tools (#2093)', async (mcpType) => {
+    it.each(['mcp', 'mcp_context7'])('reads no type catalogue for a %s toolkit still being created: that route lists the project\'s other MCPs, not tools (issue 2093)', async (mcpType) => {
       let requestCount = 0;
       server.use(http.get(TOOLKIT_TYPES_URL, () => HttpResponse.json({ [mcpType]: { properties: { selected_tools: { type: 'array' } } } })));
       server.use(

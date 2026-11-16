@@ -135,14 +135,18 @@ function toRemoteMcpValues(editToolDetail: EditToolDetail | null | undefined): R
  * the discovery answered with. Kept in the settings beside the names so the Test
  * pane can draw the input fields without a second authorised round trip (#2124).
  */
+function schemaEntryOf(tool: unknown): [string, unknown] | undefined {
+  if (typeof tool !== 'object' || tool === null) return undefined;
+  const { name, description, inputSchema } = tool as { name?: unknown; description?: unknown; inputSchema?: unknown };
+  if (typeof name !== 'string' || name === '' || typeof inputSchema !== 'object' || inputSchema === null) return undefined;
+  return [name, { name, ...(typeof description === 'string' ? { description } : {}), inputSchema }];
+}
+
 function toolSchemasOf(tools: readonly unknown[], argsSchemas: Record<string, unknown> | undefined): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const tool of tools) {
-    if (typeof tool !== 'object' || tool === null) continue;
-    const { name, description, inputSchema } = tool as { name?: unknown; description?: unknown; inputSchema?: unknown };
-    if (typeof name !== 'string' || name === '' || typeof inputSchema !== 'object' || inputSchema === null) continue;
-    out[name] = { name, ...(typeof description === 'string' ? { description } : {}), inputSchema };
-  }
+  const out: Record<string, unknown> = Object.fromEntries(tools.flatMap((tool) => {
+    const entry = schemaEntryOf(tool);
+    return entry === undefined ? [] : [entry];
+  }));
   for (const [name, schema] of Object.entries(argsSchemas ?? {})) {
     if (out[name] === undefined && typeof schema === 'object' && schema !== null) out[name] = schema;
   }

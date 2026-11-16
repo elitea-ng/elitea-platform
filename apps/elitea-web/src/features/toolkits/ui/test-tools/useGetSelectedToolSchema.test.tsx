@@ -225,7 +225,7 @@ it('uses the discovery authorization reference when loading argument schemas', a
   expect(reference).toBe('A'.repeat(43));
 });
 
-describe('mcpToolOptionsFromSettings (#2124)', () => {
+describe('mcpToolOptionsFromSettings (issue 2124)', () => {
   it('turns the schemas "Load Tools" stored into options the selected-tool lookup finds', () => {
     const options = mcpToolOptionsFromSettings({
       available_mcp_tools: ['get_repo'],

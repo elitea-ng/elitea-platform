@@ -115,7 +115,7 @@ describe('useMcpLoadTools', () => {
     expect(sent).toMatchObject({ url: 'https://mcp-mock:8443/mcp', timeout: 120, headers: { Authorization: 'Bearer t' } });
   });
 
-  it('stores each tool\'s input schema beside the names, so the Test pane can draw its fields (#2124)', async () => {
+  it('stores each tool\'s input schema beside the names, so the Test pane can draw its fields (issue 2124)', async () => {
     server.use(
       http.post(PATH, () =>
         HttpResponse.json({
@@ -248,7 +248,7 @@ describe('useMcpLoadTools', () => {
     await waitFor(() => expect(result.current?.isLoadingTools).toBe(false));
   });
 
-  it('answers a click on Login with a message: the reason when the server refuses (#2125)', async () => {
+  it('answers a click on Login with a message: the reason when the server refuses (issue 2125)', async () => {
     server.use(http.post(PATH, () => HttpResponse.json({ success: false, error: 'Unauthorized' })));
     const detailWithHeader = detail({ id: 7, settings: { url: 'https://mcp-mock:8443/mcp', headers: { Authorization: 'Bearer {{secret.token}}' } } });
     function Probe() {
