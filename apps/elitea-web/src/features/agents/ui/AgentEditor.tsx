@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useCallback, useMemo } from 'react';
 
-import { applicationCreationSchema, ApplicationSaveButton, ApplicationValidator } from '@/entities/application-form';
+import { applicationCreationSchema, ApplicationValidator } from '@/entities/application-form';
 import type { ApplicationCreatedResponse, LlmSettings } from '@/shared/api/generated/model';
 import { ChatParticipantType } from '@/shared/lib/chat';
 import { PERMISSIONS } from '@/shared/lib/permissions';
@@ -22,6 +22,7 @@ import { useAgentEditorCreate } from '../lib/useAgentEditorCreate';
 import { contextBlockRefusal } from '../lib/errorMessage';
 import { useHasPermission } from '../lib/useHasPermission';
 import { useValidateAgentVersion } from '../lib/useValidateAgentVersion';
+import { AgentEditorSaveButton } from './AgentEditorSaveButton';
 import { CreateAgentForm } from './CreateAgentForm';
 import { GenerateAgentButton } from './generate-agent-modal/GenerateAgentButton';
 
@@ -130,6 +131,12 @@ export interface AgentEditorDeps {
   /** Edit-mode save — owned by whoever supplies `renderConfigurationForm`'s real live state (this component does not own edit-mode values). */
   readonly onSaveVersion?: () => void;
   readonly isSavingVersion?: boolean;
+  /**
+   * Edit mode: whether the form holds an edit not yet saved. Without it Save
+   * was enabled on an untouched agent and stayed enabled after a save (#2118,
+   * #2120). Owned by whoever owns the edit-mode values (`useChatAgentConfig`).
+   */
+  readonly isConfigurationDirty?: boolean;
   /** Baseline: `useRefetchAgentVersionDetailsOnClose`, simplified to a plain callback — see the module doc comment. */
   readonly onEditorClosed?: () => void;
 }
@@ -163,8 +170,6 @@ function noopConversationStartersSync(_onChange: ((starters: readonly string[]) 
   // No-op default — see `AgentEditorDeps.useConversationStartersSync`'s doc comment.
 }
 
-function noopSave(): void {}
-
 /** `theAgentId`/`versionId` arrive as `string | number | undefined`; `ApplicationValidator` wants a real `number`. Extracted purely to keep `AgentEditor` under the complexity budget. */
 function asValidatorId(value: string | number | undefined): number | undefined {
   const numeric = Number(value);
@@ -174,42 +179,6 @@ function asValidatorId(value: string | number | undefined): number | undefined {
 /** `isCreateMode ? value : fallback` — this component only owns CREATE-mode state (module doc comment), so several values are only real in that mode. Extracted purely to keep `AgentEditor` under the complexity budget, same reason as `asValidatorId` above. */
 function whenCreateMode<T>(isCreateMode: boolean, value: T, fallback: T): T {
   return isCreateMode ? value : fallback;
-}
-
-interface SaveButtonSlotProps {
-  readonly isCreateMode: boolean;
-  readonly onCreateSave: () => void;
-  readonly isCreating: boolean;
-  readonly canSaveCreate: boolean;
-  readonly onSaveVersion: (() => void) | undefined;
-  readonly isSavingVersion: boolean | undefined;
-}
-
-/** The create-vs-edit `ApplicationSaveButton` branch, extracted purely to keep `AgentEditor` under the complexity budget. */
-function AgentEditorSaveButton({
-  isCreateMode,
-  onCreateSave,
-  isCreating,
-  canSaveCreate,
-  onSaveVersion,
-  isSavingVersion,
-}: SaveButtonSlotProps): ReactNode {
-  if (isCreateMode) {
-    return (
-      <ApplicationSaveButton
-        onSave={onCreateSave}
-        isSaving={isCreating}
-        disabled={!canSaveCreate}
-      />
-    );
-  }
-  return (
-    <ApplicationSaveButton
-      onSave={onSaveVersion ?? noopSave}
-      isSaving={isSavingVersion ?? false}
-      disabled={!onSaveVersion}
-    />
-  );
 }
 
 /** The derived agent/view state `AgentEditorBody` needs — grouped into one prop to stay under the §3.5 12-prop budget. */
@@ -305,7 +274,7 @@ export function AgentEditor({
   const validateProjectId = resolveValidateProjectId(entityProjectId, projectId);
 
   const create = useAgentEditorCreate(projectId);
-  const isDirty = whenCreateMode(isCreateMode, create.isDirty, false);
+  const isDirty = whenCreateMode(isCreateMode, create.isDirty, deps.isConfigurationDirty === true);
 
   const handleClose = useCallback(() => {
     onCloseAgentEditor?.();
@@ -349,6 +318,7 @@ export function AgentEditor({
       canSaveCreate={canSaveCreate}
       onSaveVersion={deps.onSaveVersion}
       isSavingVersion={deps.isSavingVersion}
+      isDirty={isDirty}
     />
   );
 
