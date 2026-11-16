@@ -332,7 +332,13 @@ func (h *Handler) MarketplaceUpstream(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	review, err := h.buildReview(ctx, schema, projectID, appID, fork)
+	ours, err := loadOurs(ctx, h.pool, schema, appID)
+	if err != nil {
+		slog.ErrorContext(ctx, "marketplace upstream: read the fork failed", "application_id", appID, "error", err)
+		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to read the upstream update.")
+		return
+	}
+	review, err := h.buildReview(ctx, projectID, appID, fork, ours)
 	if err != nil {
 		slog.ErrorContext(ctx, "marketplace upstream: build the review failed", "application_id", appID, "error", err)
 		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to read the upstream update.")
@@ -341,14 +347,10 @@ func (h *Handler) MarketplaceUpstream(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, review)
 }
 
-func (h *Handler) buildReview(ctx context.Context, schema string, projectID, appID int64, fork forkTarget) (upstreamReview, error) {
+func (h *Handler) buildReview(ctx context.Context, projectID, appID int64, fork forkTarget, ours ourVersion) (upstreamReview, error) {
 	theirsNode, err := marketplace.ParseDefinition(fork.target.Definition)
 	if err != nil {
 		return upstreamReview{}, err
-	}
-	ours, err := loadOurs(ctx, h.pool, schema, appID)
-	if err != nil {
-		return upstreamReview{}, fmt.Errorf("read the fork: %w", err)
 	}
 	targetInfo, err := marketplace.LoadVersionInfo(ctx, h.pool, fork.listing, fork.target.VersionID)
 	if err != nil {
@@ -419,14 +421,16 @@ func (h *Handler) proposeUpstreamMerge(w http.ResponseWriter, r *http.Request, s
 		hireError(w, http.StatusConflict, "version_not_hireable", "This version was yanked, withdrawn or delisted. Choose another version.")
 		return
 	}
-	review, err := h.buildReview(ctx, schema, projectID, appID, fork)
+	// One read of the fork's draft serves both the review and the merge, so the
+	// field statuses are computed against the draft that is merged.
+	ours, err := loadOurs(ctx, h.pool, schema, appID)
 	if err != nil {
-		slog.ErrorContext(ctx, "marketplace upstream: build the review failed", "application_id", appID, "error", err)
 		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to merge.")
 		return
 	}
-	ours, err := loadOurs(ctx, h.pool, schema, appID)
+	review, err := h.buildReview(ctx, projectID, appID, fork, ours)
 	if err != nil {
+		slog.ErrorContext(ctx, "marketplace upstream: build the review failed", "application_id", appID, "error", err)
 		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to merge.")
 		return
 	}

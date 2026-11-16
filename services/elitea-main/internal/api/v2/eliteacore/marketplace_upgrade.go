@@ -155,7 +155,7 @@ func (h *Handler) MarketplaceUpgradePlan(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	ctx := r.Context()
-	projectID, appID, schema, ok := parseUpgradeIDs(w, r)
+	projectID, appID, _, ok := parseUpgradeIDs(w, r)
 	if !ok {
 		return
 	}
@@ -187,7 +187,7 @@ func (h *Handler) MarketplaceUpgradePlan(w http.ResponseWriter, r *http.Request)
 		}
 		targetID = newest.VersionID
 	}
-	plan, status, code, msg := h.buildUpgradePlan(ctx, schema, projectID, appID, held, targetID)
+	plan, status, code, msg := h.buildUpgradePlan(ctx, projectID, appID, held, targetID)
 	if code != "" {
 		hireError(w, status, code, msg)
 		return
@@ -195,7 +195,7 @@ func (h *Handler) MarketplaceUpgradePlan(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, plan)
 }
 
-func (h *Handler) buildUpgradePlan(ctx context.Context, schema string, projectID, appID int64, held marketplace.Held, targetID int64) (upgradePlan, int, string, string) {
+func (h *Handler) buildUpgradePlan(ctx context.Context, projectID, appID int64, held marketplace.Held, targetID int64) (upgradePlan, int, string, string) {
 	fail := func(status int, code, msg string) (upgradePlan, int, string, string) {
 		return upgradePlan{}, status, code, msg
 	}
@@ -244,7 +244,6 @@ func (h *Handler) buildUpgradePlan(ctx context.Context, schema string, projectID
 	if plan.Requirements.Items == nil {
 		plan.Requirements.Items = []marketplace.Requirement{}
 	}
-	_ = schema
 	return plan, http.StatusOK, "", ""
 }
 
@@ -611,27 +610,36 @@ SELECT id FROM elitea_marketplace.listings WHERE kind = 'agent' AND source_proje
 		slog.WarnContext(ctx, "marketplace settle: find the listing failed", "project_id", projectID, "error", err)
 		return
 	}
-	rows, err := h.pool.Query(ctx, `
+	// Keyset pages of 500, so no install is skipped however many there are.
+	var lastProject, lastApp int64
+	for {
+		rows, err := h.pool.Query(ctx, `
 SELECT project_id, entity_id FROM elitea_marketplace.installs
 WHERE listing_id = $1 AND entity_kind = 'agent' AND mode = 'install' AND upgrade_policy <> 'pinned'
-ORDER BY project_id, entity_id LIMIT 500`, listingID)
-	if err != nil {
-		slog.WarnContext(ctx, "marketplace settle: list the installs failed", "listing_id", listingID, "error", err)
-		return
-	}
-	type ref struct{ project, app int64 }
-	var refs []ref
-	for rows.Next() {
-		var item ref
-		if err := rows.Scan(&item.project, &item.app); err != nil {
-			rows.Close()
+  AND (project_id, entity_id) > ($2, $3)
+ORDER BY project_id, entity_id LIMIT 500`, listingID, lastProject, lastApp)
+		if err != nil {
+			slog.WarnContext(ctx, "marketplace settle: list the installs failed", "listing_id", listingID, "error", err)
 			return
 		}
-		refs = append(refs, item)
-	}
-	rows.Close()
-	for _, item := range refs {
-		h.settleInstall(ctx, item.project, item.app)
+		type ref struct{ project, app int64 }
+		var refs []ref
+		for rows.Next() {
+			var item ref
+			if err := rows.Scan(&item.project, &item.app); err != nil {
+				slog.WarnContext(ctx, "marketplace settle: read an install failed", "listing_id", listingID, "error", err)
+				continue
+			}
+			refs = append(refs, item)
+		}
+		rows.Close()
+		for _, item := range refs {
+			h.settleInstall(ctx, item.project, item.app)
+		}
+		if len(refs) < 500 {
+			return
+		}
+		lastProject, lastApp = refs[len(refs)-1].project, refs[len(refs)-1].app
 	}
 }
 

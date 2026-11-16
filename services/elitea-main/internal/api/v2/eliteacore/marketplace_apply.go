@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -30,7 +31,7 @@ func (h *Handler) ApplyMarketplaceTx(ctx context.Context, tx pgx.Tx, apply agent
 	}
 	switch apply.Kind {
 	case agentlifecycle.KindUpgrade:
-		return applyUpgradeTx(ctx, tx, schema, apply)
+		return h.applyUpgradeTx(ctx, tx, schema, apply)
 	case agentlifecycle.KindUpstreamMerge:
 		return applyMergeTx(ctx, tx, schema, apply)
 	}
@@ -58,7 +59,7 @@ func loadTarget(ctx context.Context, tx pgx.Tx, apply agentlifecycle.Marketplace
 	return target, nil
 }
 
-func applyUpgradeTx(ctx context.Context, tx pgx.Tx, schema string, apply agentlifecycle.MarketplaceApply) error {
+func (h *Handler) applyUpgradeTx(ctx context.Context, tx pgx.Tx, schema string, apply agentlifecycle.MarketplaceApply) error {
 	held, err := marketplace.LoadHeld(ctx, tx, apply.ProjectID, apply.ApplicationID, true)
 	if errors.Is(err, marketplace.ErrNotFound) {
 		return agentlifecycle.Refuse(agentlifecycle.InvalidCode, "The agent was not installed from the Marketplace.")
@@ -101,6 +102,13 @@ func applyUpgradeTx(ctx context.Context, tx pgx.Tx, schema string, apply agentli
 		}
 	}
 
+	// The bindings were checked when the request was made. An approver may act
+	// days later, so they are checked again: a toolkit deleted or retyped since
+	// then refuses the approval with a message instead of failing in the write.
+	if err := revalidateBindings(ctx, tx, schema, target.Requirements, payload.Bindings); err != nil {
+		return err
+	}
+
 	var baseVersion int64
 	var metaText string
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`
@@ -116,8 +124,27 @@ WHERE application_id = $1 AND meta ? 'origin_listing_id' ORDER BY id LIMIT 1`, s
 	}
 	var snapshotMeta map[string]any
 	_ = json.Unmarshal(node.Version.Meta, &snapshotMeta) // the snapshot's meta is an object or null
+	// A key the previous version set and this one no longer sets is dropped; a
+	// key the project set itself stays.
+	var previousMeta map[string]any
+	_ = json.Unmarshal(prevNode.Version.Meta, &previousMeta) // the snapshot's meta is an object or null
+	for key := range previousMeta {
+		if _, kept := snapshotMeta[key]; !kept {
+			delete(meta, key)
+		}
+	}
 	for key, value := range snapshotMeta {
 		meta[key] = value
+	}
+	if snapshotMeta == nil {
+		snapshotMeta = map[string]any{}
+	}
+	var packDoc any
+	_ = json.Unmarshal(node.Version.AvatarPack, &packDoc) // null reads as no pack
+	avatar, avatarErr := h.carriedAvatarPack(ctx, map[string]any{"avatar_pack": packDoc, "meta": snapshotMeta}, strconv.FormatInt(apply.ProjectID, 10))
+	if avatarErr != nil {
+		// The files of the new avatar could not be copied: keep the one the agent has.
+		slog.WarnContext(ctx, "marketplace apply: the avatar could not be copied", "application_id", apply.ApplicationID, "error", avatarErr)
 	}
 	meta[marketplace.MetaOriginKind] = marketplace.OriginInstalled
 	meta[marketplace.MetaOriginListingID] = strconv.FormatInt(target.ListingID, 10)
@@ -140,11 +167,13 @@ WHERE application_id = $1 AND meta ? 'origin_listing_id' ORDER BY id LIMIT 1`, s
 	}
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`
 UPDATE %s.application_versions SET llm_settings = $2::jsonb, instructions = $3, conversation_starters = $4::jsonb,
-    welcome_message = $5, agent_type = $6, meta = $7::jsonb, pipeline_settings = $8::jsonb, soul = $9::jsonb
+    welcome_message = $5, agent_type = $6, meta = $7::jsonb, pipeline_settings = $8::jsonb, soul = $9::jsonb,
+    avatar_pack = CASE WHEN $10::boolean THEN $11::jsonb ELSE avatar_pack END
 WHERE id = $1`, schema),
 		baseVersion, jsonText(node.Version.LLMSettings, "{}"), node.Version.Instructions,
 		jsonText(node.Version.ConversationStarters, "[]"), node.Version.WelcomeMessage, node.Version.AgentType,
-		string(metaJSON), jsonText(node.Version.PipelineSettings, "{}"), jsonOrNil(node.Version.Soul)); err != nil {
+		string(metaJSON), jsonText(node.Version.PipelineSettings, "{}"), jsonOrNil(node.Version.Soul),
+		avatarErr == nil, avatar); err != nil {
 		return fmt.Errorf("marketplace apply: write the definition: %w", err)
 	}
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`
@@ -186,6 +215,45 @@ WHERE tenant_project_id = $1 AND application_id = $2`, apply.ProjectID, apply.Ap
 		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("marketplace apply: read the tier: %w", err)
+	}
+	return nil
+}
+
+// revalidateBindings checks the bindings a request carries against the project
+// as it is now: a toolkit or MCP requirement must be bound to a project toolkit
+// of its type, a skill requirement to a project skill. A binding that fails
+// refuses the approval as stale, with the reason in words.
+func revalidateBindings(ctx context.Context, q relationQuerier, schema string, reqs marketplace.Requirements, bindings []marketplace.Binding) error {
+	byKey := map[string]marketplace.Requirement{}
+	for _, item := range reqs.Items {
+		byKey[item.Key] = item
+	}
+	stale := func(msg string) error { return agentlifecycle.Refuse(agentlifecycle.StaleCode, msg) }
+	for _, binding := range bindings {
+		item, ok := byKey[binding.RequirementKey]
+		if !ok || binding.Disabled || binding.ToolkitID <= 0 {
+			continue
+		}
+		switch item.Kind {
+		case marketplace.RequirementToolkit, marketplace.RequirementMCP:
+			var found string
+			err := q.QueryRow(ctx, fmt.Sprintf(`SELECT type FROM %s.elitea_tools WHERE id = $1`, schema), binding.ToolkitID).Scan(&found)
+			if errors.Is(err, pgx.ErrNoRows) || (err == nil && found != item.Type) {
+				return stale("The toolkit chosen for " + item.Type + " was deleted or changed since this request was made. Reject it and propose the upgrade again.")
+			}
+			if err != nil {
+				return fmt.Errorf("marketplace apply: check a binding: %w", err)
+			}
+		case marketplace.RequirementSkill:
+			var found string
+			err := q.QueryRow(ctx, fmt.Sprintf(`SELECT name FROM %s.skills WHERE id = $1`, schema), binding.ToolkitID).Scan(&found)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return stale("The skill chosen for " + item.Name + " was deleted since this request was made. Reject it and propose the upgrade again.")
+			}
+			if err != nil {
+				return fmt.Errorf("marketplace apply: check a binding: %w", err)
+			}
+		}
 	}
 	return nil
 }
