@@ -51,6 +51,7 @@ func newMarketplaceHarness(t *testing.T) *marketplaceHarness {
 	}
 	handler := eliteacore.NewHandler(pool, eliteacore.WithPublishGovernor(lifecycle))
 	lifecycle.ComposePublisher(handler)
+	lifecycle.ComposeMarketplaceApplier(handler)
 	h := &marketplaceHarness{t: t, pool: pool, handler: handler, lifecycle: lifecycle}
 	h.router = h.newRouter(marketplacePublisher)
 	return h
@@ -74,6 +75,11 @@ func (h *marketplaceHarness) newRouter(userID int) chi.Router {
 	router.Post("/elitea_core/marketplace_listing_version/prompt_lib/{projectID}/{listingID}/{versionID}", h.handler.MarketplaceVersionState)
 	router.Post("/elitea_core/marketplace_hire/prompt_lib/{projectID}", h.handler.MarketplaceHire)
 	router.Get("/elitea_core/marketplace_origin/prompt_lib/{projectID}/{applicationID}", h.handler.MarketplaceOrigin)
+	router.Get("/elitea_core/marketplace_upgrade/prompt_lib/{projectID}/{applicationID}", h.handler.MarketplaceUpgradePlan)
+	router.Post("/elitea_core/marketplace_upgrade/prompt_lib/{projectID}/{applicationID}", h.handler.MarketplaceUpgrade)
+	router.Put("/elitea_core/marketplace_upgrade_policy/prompt_lib/{projectID}/{applicationID}", h.handler.MarketplaceUpgradePolicy)
+	router.Get("/elitea_core/marketplace_upstream/prompt_lib/{projectID}/{applicationID}", h.handler.MarketplaceUpstream)
+	router.Post("/elitea_core/marketplace_upstream/prompt_lib/{projectID}/{applicationID}", h.handler.MarketplaceUpstream)
 	return router
 }
 

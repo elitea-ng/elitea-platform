@@ -11,6 +11,7 @@ import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -20,6 +21,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { setMarketplaceVersionState } from '@/shared/api/generated/marketplace/marketplace';
 import type { MarketplaceVersion } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { invalidateMarketplace } from '../invalidate';
@@ -139,11 +141,14 @@ export function ListingVersions({
   const queryClient = useQueryClient();
   const [pending, setPending] = useState<Pending>();
   const [reason, setReason] = useState('');
+  const [suspend, setSuspend] = useState(false);
   const change = useMutation({
     mutationFn: ({ version, action }: Pending) =>
       setMarketplaceVersionState(projectId ?? '', listingId, version.id, {
         state: action,
         ...(reason.trim() === '' ? {} : { reason: reason.trim() }),
+        // Only an administrator's yank may also suspend the agents that hold the version (ADR-0041).
+        ...(suspend && action === 'yanked' && canModerate ? { suspend: true } : {}),
       }),
     onSuccess: () => {
       invalidateMarketplace(queryClient);
@@ -152,6 +157,7 @@ export function ListingVersions({
   });
   const ask = (version: MarketplaceVersion, action: VersionAction): void => {
     setReason('');
+    setSuspend(false);
     change.reset();
     setPending({ version, action });
   };
@@ -197,6 +203,16 @@ export function ListingVersions({
               onChange={(event) => setReason(event.target.value)}
               slotProps={{ htmlInput: { maxLength: 500 } }}
             />
+            {pending?.action === 'yanked' && canModerate && (
+              <FormControlLabel
+                control={<BaseCheckbox size="small" checked={suspend} onChange={(event) => setSuspend(event.target.checked)} />}
+                label={t(
+                  'marketplace.versions.suspend',
+                  'Also suspend the agents installed from this version (reason: listing_yanked)',
+                )}
+                data-testid="marketplace-version-suspend"
+              />
+            )}
             {change.isError && (
               <Alert severity="error">{t('marketplace.versions.failed', 'The change failed. Try again.')}</Alert>
             )}

@@ -42,6 +42,7 @@
  */
 import * as zod from "zod";
 import { MarketplaceVersionRef } from "./marketplaceVersionRef.zod";
+import { MarketplaceWidening } from "./marketplaceWidening.zod";
 
 export const MarketplaceOrigin = zod
   .object({
@@ -61,6 +62,30 @@ export const MarketplaceOrigin = zod
       .union([MarketplaceVersionRef, zod.null()])
       .optional()
       .describe("A newer hireable version, when one exists."),
+    version_state_reason: zod
+      .string()
+      .optional()
+      .describe(
+        "Why the pinned version was yanked or deprecated; empty when it was not.",
+      ),
+    upgrade_policy: zod
+      .string()
+      .optional()
+      .describe(
+        "`pinned`, `notify` or `auto` for an installed agent; empty for a fork, which is never updated without a person.",
+      ),
+    base_known: zod
+      .boolean()
+      .optional()
+      .describe(
+        "False for a fork made before forks recorded their origin version; its update review is a two-way diff.",
+      ),
+    update_widening: zod
+      .array(MarketplaceWidening)
+      .optional()
+      .describe(
+        "What the newest version adds to the pinned one. A non-empty list is why an `auto` install waits for a person.",
+      ),
   })
   .describe(
     "Where an installed or forked agent came from (internal/marketplace/origin.go).\n",

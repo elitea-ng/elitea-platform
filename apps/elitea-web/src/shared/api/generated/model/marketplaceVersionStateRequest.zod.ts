@@ -55,6 +55,12 @@ export const MarketplaceVersionStateRequest = zod
       .string()
       .max(marketplaceVersionStateRequestReasonMax)
       .optional(),
+    suspend: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Also suspend the installed agents that hold the version, with the reason `listing_yanked` (ADR-0041). Only a platform administrator, and only with a yank.",
+      ),
   })
   .describe(
     "Change a version's state (internal/api/v2/eliteacore/marketplace_manage.go).\n",

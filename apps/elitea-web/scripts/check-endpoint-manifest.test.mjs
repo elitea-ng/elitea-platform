@@ -946,7 +946,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 
 // 534 -> 535 (issue 1628): setEntityPin, the personal Pinned group.
 // 535 -> 543 (issue 1629): the eight Marketplace operations above.
-const GENERATED_OPERATION_COUNT = 543;
+// 543 -> 548 (issue 1630, ADR-0051 M4): getMarketplaceUpgradePlan, upgradeMarketplaceAgent,
+// setMarketplaceUpgradePolicy, getMarketplaceUpstreamReview and proposeMarketplaceUpstreamMerge.
+const GENERATED_OPERATION_COUNT = 548;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1276,8 +1278,12 @@ const GENERATED_OPERATION_COUNT = 543;
  *
  * 382 -> 384 (issue 1629): marketplace.getBindings and marketplace.setBindings (the bindings
  * editor on a hired agent's page). Both generated.
+ *
+ * 384 -> 389 (issue 1630, ADR-0051 M4): marketplace.getUpgradePlan, upgrade, setUpgradePolicy,
+ * getUpstreamReview and proposeUpstreamMerge (the Upgrade to... dialog, the policy and the
+ * fork's three-way review). All generated.
  */
-const MANIFEST_ENTRY_COUNT = 384;
+const MANIFEST_ENTRY_COUNT = 389;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

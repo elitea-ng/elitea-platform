@@ -55,6 +55,8 @@ import type {
 
 import type {
   ErrorResponse,
+  GetMarketplaceUpgradePlanParams,
+  GetMarketplaceUpstreamReviewParams,
   MarketplaceBindingsRequest,
   MarketplaceBindingsState,
   MarketplaceHireRequest,
@@ -64,6 +66,13 @@ import type {
   MarketplaceListingSummary,
   MarketplaceListingUpdateRequest,
   MarketplaceOrigin,
+  MarketplaceUpgradePlan,
+  MarketplaceUpgradePolicy,
+  MarketplaceUpgradeRequest,
+  MarketplaceUpgradeResult,
+  MarketplaceUpstreamRequest,
+  MarketplaceUpstreamResult,
+  MarketplaceUpstreamReview,
   MarketplaceVersion,
   MarketplaceVersionStateRequest,
   N400Response,
@@ -2230,6 +2239,1442 @@ export function useSetMarketplaceBindings<
     projectId,
     applicationId,
     marketplaceBindingsRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getMarketplaceUpgradePlanResponse200 = {
+  data: MarketplaceUpgradePlan;
+  status: 200;
+};
+
+export type getMarketplaceUpgradePlanResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getMarketplaceUpgradePlanResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getMarketplaceUpgradePlanResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getMarketplaceUpgradePlanResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type getMarketplaceUpgradePlanResponseSuccess =
+  getMarketplaceUpgradePlanResponse200 & {
+    headers: Headers;
+  };
+export type getMarketplaceUpgradePlanResponseError = (
+  | getMarketplaceUpgradePlanResponse401
+  | getMarketplaceUpgradePlanResponse403
+  | getMarketplaceUpgradePlanResponse404
+  | getMarketplaceUpgradePlanResponse409
+) & {
+  headers: Headers;
+};
+
+export type getMarketplaceUpgradePlanResponse =
+  | getMarketplaceUpgradePlanResponseSuccess
+  | getMarketplaceUpgradePlanResponseError;
+
+export const getGetMarketplaceUpgradePlanUrl = (
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpgradePlanParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/marketplace_upgrade/prompt_lib/${projectId}/${applicationId}?${stringifiedParams}`
+    : `/elitea_core/marketplace_upgrade/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * What a person reads before upgrading (ADR-0051 decision 4): the diff
+ * between the pinned and the target version as `agentrelease.Diff` changes,
+ * the target's release notes, the listing's feedback summary, and the
+ * requirements that still need a binding. The target is `version_id`, or
+ * the newest hireable version. It may be older or newer: a person can go
+ * up, down or across. A fork answers 409 `fork_has_no_upgrade`; an agent
+ * on the newest version answers 404 `up_to_date`
+ * (internal/api/v2/eliteacore/marketplace_upgrade.go).
+ * @summary Plan an upgrade of an installed agent to a version
+ */
+export const getMarketplaceUpgradePlan = async (
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpgradePlanParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getMarketplaceUpgradePlanResponse> => {
+  return eliteaFetch<getMarketplaceUpgradePlanResponse>(
+    getGetMarketplaceUpgradePlanUrl(projectId, applicationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetMarketplaceUpgradePlanQueryKey = (
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpgradePlanParams,
+) => {
+  return [
+    `/elitea_core/marketplace_upgrade/prompt_lib/${projectId}/${applicationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetMarketplaceUpgradePlanQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpgradePlanParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetMarketplaceUpgradePlanQueryKey(projectId, applicationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>
+  > = ({ signal }) =>
+    getMarketplaceUpgradePlan(projectId, applicationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetMarketplaceUpgradePlanQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>
+>;
+export type GetMarketplaceUpgradePlanQueryError =
+  N401Response | N403Response | N404Response | ErrorResponse;
+
+export function useGetMarketplaceUpgradePlan<
+  TData = Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  params: undefined | GetMarketplaceUpgradePlanParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+          TError,
+          Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMarketplaceUpgradePlan<
+  TData = Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpgradePlanParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+          TError,
+          Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMarketplaceUpgradePlan<
+  TData = Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpgradePlanParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Plan an upgrade of an installed agent to a version
+ */
+
+export function useGetMarketplaceUpgradePlan<
+  TData = Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpgradePlanParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceUpgradePlan>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetMarketplaceUpgradePlanQueryOptions(
+    projectId,
+    applicationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type upgradeMarketplaceAgentResponse200 = {
+  data: MarketplaceUpgradeResult;
+  status: 200;
+};
+
+export type upgradeMarketplaceAgentResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type upgradeMarketplaceAgentResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type upgradeMarketplaceAgentResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type upgradeMarketplaceAgentResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type upgradeMarketplaceAgentResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type upgradeMarketplaceAgentResponseSuccess =
+  upgradeMarketplaceAgentResponse200 & {
+    headers: Headers;
+  };
+export type upgradeMarketplaceAgentResponseError = (
+  | upgradeMarketplaceAgentResponse400
+  | upgradeMarketplaceAgentResponse401
+  | upgradeMarketplaceAgentResponse403
+  | upgradeMarketplaceAgentResponse404
+  | upgradeMarketplaceAgentResponse409
+) & {
+  headers: Headers;
+};
+
+export type upgradeMarketplaceAgentResponse =
+  upgradeMarketplaceAgentResponseSuccess | upgradeMarketplaceAgentResponseError;
+
+export const getUpgradeMarketplaceAgentUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/marketplace_upgrade/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Records a change request of kind `upgrade`. At low tier, with no write
+ * tool in the target, it is one click: the request is recorded as approved
+ * and applied in the same transaction. Above low tier it waits for an
+ * approver and the agent keeps running on its pinned version. A version
+ * that is yanked, withdrawn or delisted answers 409
+ * `version_not_hireable`; an unbound required toolkit, 409
+ * `binding_missing` (internal/api/v2/eliteacore/marketplace_upgrade.go).
+ * @summary Upgrade an installed agent to a version
+ */
+export const upgradeMarketplaceAgent = async (
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradeRequest: MarketplaceUpgradeRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<upgradeMarketplaceAgentResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<upgradeMarketplaceAgentResponse>(
+    getUpgradeMarketplaceAgentUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(marketplaceUpgradeRequest),
+    },
+  );
+};
+
+export const getUpgradeMarketplaceAgentQueryKey = (
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradeRequest?: MarketplaceUpgradeRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/marketplace_upgrade/prompt_lib/${projectId}/${applicationId}`,
+    marketplaceUpgradeRequest,
+  ] as const;
+};
+
+export const getUpgradeMarketplaceAgentQueryOptions = <
+  TData = Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradeRequest: MarketplaceUpgradeRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpgradeMarketplaceAgentQueryKey(
+      projectId,
+      applicationId,
+      marketplaceUpgradeRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof upgradeMarketplaceAgent>>
+  > = ({ signal }) =>
+    upgradeMarketplaceAgent(
+      projectId,
+      applicationId,
+      marketplaceUpgradeRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpgradeMarketplaceAgentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof upgradeMarketplaceAgent>>
+>;
+export type UpgradeMarketplaceAgentQueryError =
+  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
+
+export function useUpgradeMarketplaceAgent<
+  TData = Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradeRequest: MarketplaceUpgradeRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+          TError,
+          Awaited<ReturnType<typeof upgradeMarketplaceAgent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpgradeMarketplaceAgent<
+  TData = Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradeRequest: MarketplaceUpgradeRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+          TError,
+          Awaited<ReturnType<typeof upgradeMarketplaceAgent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpgradeMarketplaceAgent<
+  TData = Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradeRequest: MarketplaceUpgradeRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Upgrade an installed agent to a version
+ */
+
+export function useUpgradeMarketplaceAgent<
+  TData = Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradeRequest: MarketplaceUpgradeRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof upgradeMarketplaceAgent>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpgradeMarketplaceAgentQueryOptions(
+    projectId,
+    applicationId,
+    marketplaceUpgradeRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setMarketplaceUpgradePolicyResponse200 = {
+  data: MarketplaceUpgradePolicy;
+  status: 200;
+};
+
+export type setMarketplaceUpgradePolicyResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type setMarketplaceUpgradePolicyResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setMarketplaceUpgradePolicyResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setMarketplaceUpgradePolicyResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type setMarketplaceUpgradePolicyResponseSuccess =
+  setMarketplaceUpgradePolicyResponse200 & {
+    headers: Headers;
+  };
+export type setMarketplaceUpgradePolicyResponseError = (
+  | setMarketplaceUpgradePolicyResponse400
+  | setMarketplaceUpgradePolicyResponse401
+  | setMarketplaceUpgradePolicyResponse403
+  | setMarketplaceUpgradePolicyResponse404
+) & {
+  headers: Headers;
+};
+
+export type setMarketplaceUpgradePolicyResponse =
+  | setMarketplaceUpgradePolicyResponseSuccess
+  | setMarketplaceUpgradePolicyResponseError;
+
+export const getSetMarketplaceUpgradePolicyUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/marketplace_upgrade_policy/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * `pinned` (the default) changes nothing until a person acts. `notify`
+ * tells the agent's people when a newer version appears. `auto` upgrades
+ * by itself only at low tier and only when the new version adds no tool,
+ * capability or requirement and does not raise the tier; anything wider
+ * waits for a person (internal/marketplace/upgrade.go AutoUpgradeAllowed).
+ * A fork has no policy and answers 404
+ * (internal/api/v2/eliteacore/marketplace_upgrade.go).
+ * @summary Set the upgrade policy of an installed agent
+ */
+export const setMarketplaceUpgradePolicy = async (
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradePolicy: MarketplaceUpgradePolicy,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setMarketplaceUpgradePolicyResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setMarketplaceUpgradePolicyResponse>(
+    getSetMarketplaceUpgradePolicyUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(marketplaceUpgradePolicy),
+    },
+  );
+};
+
+export const getSetMarketplaceUpgradePolicyQueryKey = (
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradePolicy?: MarketplaceUpgradePolicy,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/marketplace_upgrade_policy/prompt_lib/${projectId}/${applicationId}`,
+    marketplaceUpgradePolicy,
+  ] as const;
+};
+
+export const getSetMarketplaceUpgradePolicyQueryOptions = <
+  TData = Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradePolicy: MarketplaceUpgradePolicy,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetMarketplaceUpgradePolicyQueryKey(
+      projectId,
+      applicationId,
+      marketplaceUpgradePolicy,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>
+  > = ({ signal }) =>
+    setMarketplaceUpgradePolicy(
+      projectId,
+      applicationId,
+      marketplaceUpgradePolicy,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetMarketplaceUpgradePolicyQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>
+>;
+export type SetMarketplaceUpgradePolicyQueryError =
+  N400Response | N401Response | N403Response | N404Response;
+
+export function useSetMarketplaceUpgradePolicy<
+  TData = Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradePolicy: MarketplaceUpgradePolicy,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+          TError,
+          Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetMarketplaceUpgradePolicy<
+  TData = Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradePolicy: MarketplaceUpgradePolicy,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+          TError,
+          Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetMarketplaceUpgradePolicy<
+  TData = Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradePolicy: MarketplaceUpgradePolicy,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Set the upgrade policy of an installed agent
+ */
+
+export function useSetMarketplaceUpgradePolicy<
+  TData = Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpgradePolicy: MarketplaceUpgradePolicy,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setMarketplaceUpgradePolicy>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetMarketplaceUpgradePolicyQueryOptions(
+    projectId,
+    applicationId,
+    marketplaceUpgradePolicy,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getMarketplaceUpstreamReviewResponse200 = {
+  data: MarketplaceUpstreamReview;
+  status: 200;
+};
+
+export type getMarketplaceUpstreamReviewResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getMarketplaceUpstreamReviewResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getMarketplaceUpstreamReviewResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getMarketplaceUpstreamReviewResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type getMarketplaceUpstreamReviewResponseSuccess =
+  getMarketplaceUpstreamReviewResponse200 & {
+    headers: Headers;
+  };
+export type getMarketplaceUpstreamReviewResponseError = (
+  | getMarketplaceUpstreamReviewResponse401
+  | getMarketplaceUpstreamReviewResponse403
+  | getMarketplaceUpstreamReviewResponse404
+  | getMarketplaceUpstreamReviewResponse409
+) & {
+  headers: Headers;
+};
+
+export type getMarketplaceUpstreamReviewResponse =
+  | getMarketplaceUpstreamReviewResponseSuccess
+  | getMarketplaceUpstreamReviewResponseError;
+
+export const getGetMarketplaceUpstreamReviewUrl = (
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpstreamReviewParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/marketplace_upstream/prompt_lib/${projectId}/${applicationId}?${stringifiedParams}`
+    : `/elitea_core/marketplace_upstream/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * The three-way view of a fork: base (the version the fork came from),
+ * theirs (the listing version) and ours (the fork's current draft), field
+ * by field with conflicts first. A fork with no origin version gets a
+ * two-way view. An installed agent answers 409
+ * `installed_has_no_upstream`; a fork on the newest version answers 404
+ * `up_to_date` (internal/api/v2/eliteacore/marketplace_upstream.go).
+ * @summary Review the upstream update of a fork
+ */
+export const getMarketplaceUpstreamReview = async (
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpstreamReviewParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getMarketplaceUpstreamReviewResponse> => {
+  return eliteaFetch<getMarketplaceUpstreamReviewResponse>(
+    getGetMarketplaceUpstreamReviewUrl(projectId, applicationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetMarketplaceUpstreamReviewQueryKey = (
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpstreamReviewParams,
+) => {
+  return [
+    `/elitea_core/marketplace_upstream/prompt_lib/${projectId}/${applicationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetMarketplaceUpstreamReviewQueryOptions = <
+  TData = Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpstreamReviewParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetMarketplaceUpstreamReviewQueryKey(projectId, applicationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>
+  > = ({ signal }) =>
+    getMarketplaceUpstreamReview(projectId, applicationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetMarketplaceUpstreamReviewQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>
+>;
+export type GetMarketplaceUpstreamReviewQueryError =
+  N401Response | N403Response | N404Response | ErrorResponse;
+
+export function useGetMarketplaceUpstreamReview<
+  TData = Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  params: undefined | GetMarketplaceUpstreamReviewParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+          TError,
+          Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMarketplaceUpstreamReview<
+  TData = Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpstreamReviewParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+          TError,
+          Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetMarketplaceUpstreamReview<
+  TData = Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpstreamReviewParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Review the upstream update of a fork
+ */
+
+export function useGetMarketplaceUpstreamReview<
+  TData = Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+  TError = N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: GetMarketplaceUpstreamReviewParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getMarketplaceUpstreamReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetMarketplaceUpstreamReviewQueryOptions(
+    projectId,
+    applicationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type proposeMarketplaceUpstreamMergeResponse201 = {
+  data: MarketplaceUpstreamResult;
+  status: 201;
+};
+
+export type proposeMarketplaceUpstreamMergeResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type proposeMarketplaceUpstreamMergeResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type proposeMarketplaceUpstreamMergeResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type proposeMarketplaceUpstreamMergeResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type proposeMarketplaceUpstreamMergeResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type proposeMarketplaceUpstreamMergeResponseSuccess =
+  proposeMarketplaceUpstreamMergeResponse201 & {
+    headers: Headers;
+  };
+export type proposeMarketplaceUpstreamMergeResponseError = (
+  | proposeMarketplaceUpstreamMergeResponse400
+  | proposeMarketplaceUpstreamMergeResponse401
+  | proposeMarketplaceUpstreamMergeResponse403
+  | proposeMarketplaceUpstreamMergeResponse404
+  | proposeMarketplaceUpstreamMergeResponse409
+) & {
+  headers: Headers;
+};
+
+export type proposeMarketplaceUpstreamMergeResponse =
+  | proposeMarketplaceUpstreamMergeResponseSuccess
+  | proposeMarketplaceUpstreamMergeResponseError;
+
+export const getProposeMarketplaceUpstreamMergeUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/marketplace_upstream/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Writes the merge as a new draft of the fork and a change request of kind
+ * `upstream_merge`. A fork is never updated without a person: above low
+ * tier an approver decides, and at low tier the person who merged is that
+ * person and the request is recorded as approved by them. Every conflicting
+ * field needs a resolution, or the call answers 409
+ * `unresolved_conflicts` with the field keys
+ * (internal/api/v2/eliteacore/marketplace_upstream.go).
+ * @summary Propose the merge of an upstream update into a fork
+ */
+export const proposeMarketplaceUpstreamMerge = async (
+  projectId: string,
+  applicationId: number,
+  marketplaceUpstreamRequest: MarketplaceUpstreamRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<proposeMarketplaceUpstreamMergeResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<proposeMarketplaceUpstreamMergeResponse>(
+    getProposeMarketplaceUpstreamMergeUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(marketplaceUpstreamRequest),
+    },
+  );
+};
+
+export const getProposeMarketplaceUpstreamMergeQueryKey = (
+  projectId: string,
+  applicationId: number,
+  marketplaceUpstreamRequest?: MarketplaceUpstreamRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/marketplace_upstream/prompt_lib/${projectId}/${applicationId}`,
+    marketplaceUpstreamRequest,
+  ] as const;
+};
+
+export const getProposeMarketplaceUpstreamMergeQueryOptions = <
+  TData = Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpstreamRequest: MarketplaceUpstreamRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getProposeMarketplaceUpstreamMergeQueryKey(
+      projectId,
+      applicationId,
+      marketplaceUpstreamRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>
+  > = ({ signal }) =>
+    proposeMarketplaceUpstreamMerge(
+      projectId,
+      applicationId,
+      marketplaceUpstreamRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ProposeMarketplaceUpstreamMergeQueryResult = NonNullable<
+  Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>
+>;
+export type ProposeMarketplaceUpstreamMergeQueryError =
+  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
+
+export function useProposeMarketplaceUpstreamMerge<
+  TData = Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpstreamRequest: MarketplaceUpstreamRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+          TError,
+          Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProposeMarketplaceUpstreamMerge<
+  TData = Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpstreamRequest: MarketplaceUpstreamRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+          TError,
+          Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProposeMarketplaceUpstreamMerge<
+  TData = Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpstreamRequest: MarketplaceUpstreamRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Propose the merge of an upstream update into a fork
+ */
+
+export function useProposeMarketplaceUpstreamMerge<
+  TData = Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  applicationId: number,
+  marketplaceUpstreamRequest: MarketplaceUpstreamRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeMarketplaceUpstreamMerge>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getProposeMarketplaceUpstreamMergeQueryOptions(
+    projectId,
+    applicationId,
+    marketplaceUpstreamRequest,
     options,
   );
 
