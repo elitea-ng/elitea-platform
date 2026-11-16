@@ -71,11 +71,12 @@ export function AgentTagEditor({ projectId, value, onChange }: AgentTagEditorPro
 
   const handleChange = useCallback(
     (_event: SyntheticEvent, newValue: readonly (Tag | string)[]) => {
-      const resolved = newValue.map((entry): Tag | undefined => {
+      const stamp = Date.now();
+      const resolved = newValue.map((entry, index): Tag | undefined => {
         if (typeof entry !== 'string') return entry;
         if (!isValidTagName(entry)) return undefined;
         const existing = availableTags.find((tag) => tag.name === entry.trim());
-        return existing ?? { id: -Date.now(), name: entry.trim(), data: null };
+        return existing ?? { id: -(stamp + index), name: entry.trim(), data: null };
       });
       onChange(dedupeTagsByName(resolved.filter((tag): tag is Tag => tag !== undefined)));
     },
