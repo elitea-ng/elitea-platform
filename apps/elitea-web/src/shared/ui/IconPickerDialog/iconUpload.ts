@@ -16,7 +16,7 @@ export interface UploadDimensions {
 /** The maximum icon edge the server stores; the client measures against it. */
 export const MAX_ICON_EDGE = 64;
 
-export const DEFAULT_EXTENSIONS: readonly string[] = ['.jpg', '.jpeg', '.png', '.tiff', '.webp', '.gif', '.bmp', '.ico'];
+const DEFAULT_EXTENSIONS: readonly string[] = ['.jpg', '.jpeg', '.png', '.tiff', '.webp', '.gif', '.bmp', '.ico'];
 
 function fileExtension(name: string): string {
   const dot = name.lastIndexOf('.');
