@@ -97,7 +97,7 @@ func (j *workforceJourney) wizardHireAs(user int, version string, mode string, p
 	if proposal > 0 {
 		body["proposal_id"] = strconv.FormatInt(proposal, 10)
 	}
-	return j.do(j.marketplaceHarness.newRouter(user), http.MethodPost, "/elitea_core/marketplace_hire/prompt_lib/3", body)
+	return j.do(j.newRouter(user), http.MethodPost, "/elitea_core/marketplace_hire/prompt_lib/3", body)
 }
 
 func (j *workforceJourney) hired(version string) int64 {
@@ -533,7 +533,7 @@ func TestSuggestFeedbackPublishesOnlyAfterApprovalFromTheAgentsOwnProposal(t *te
 
 	// The project that published the listing cannot be reported on by its own
 	// workforce manager.
-	own := j.marketplaceHarness.seedAgent(2, "Own hire", nil)
+	own := j.seedAgent(2, "Own hire", nil)
 	j.hire2(int64(own.appID))
 	ownManager := j.workforceManager(2, "Own warden", true)
 	ownRun := storage.ProposeDismissalRun{ProjectID: 2, ExecutionID: "exec-2", ApplicationID: ownManager, ActorID: 7, IsWorkforceManager: true}
@@ -658,7 +658,7 @@ FROM elitea_marketplace.listing_feedback WHERE id = $1`, body["id"]).Scan(&autho
 // hire2 records the publisher project's own hire of the listing.
 func (j *workforceJourney) hire2(entity int64) {
 	j.t.Helper()
-	j.feedbackFixture.hire(2, entity, j.v1)
+	j.hire(2, entity, j.v1)
 }
 
 // TestAutoFeedbackPublishesWhenTheStageIsApplied: with the project's policy on,

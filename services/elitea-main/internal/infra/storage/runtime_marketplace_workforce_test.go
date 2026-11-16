@@ -10,10 +10,9 @@ import (
 )
 
 type fakeMarketplaceSink struct {
-	run     ProposeDismissalRun
-	runErr  error
-	calls   []string
-	answers map[string]any
+	run    ProposeDismissalRun
+	runErr error
+	calls  []string
 }
 
 func (f *fakeMarketplaceSink) ResolveProposeDismissalRun(context.Context, int64, string, uint64) (ProposeDismissalRun, error) {
