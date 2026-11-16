@@ -325,6 +325,23 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 	if !hasListings {
 		updateSQL = "false"
 	}
+	// An agent the workforce policy hired is on probation until a person keeps
+	// it (ADR-0051 decision 6). The registry is central and keyed by project,
+	// so the list reads it here and the row can say so without a second
+	// request per agent (issue 2091). A database without the registry has no
+	// probation to show.
+	probationOnSQL, probationUntilSQL := "false", "''"
+	var hasRegistry bool
+	if err := r.pool.QueryRow(ctx, `SELECT to_regclass('elitea_lifecycle.agent_registry') IS NOT NULL`).Scan(&hasRegistry); err != nil {
+		return empty, fmt.Errorf("applications: list registry probe: %w", err)
+	}
+	if projectNumber, convErr := strconv.ParseInt(req.ProjectID, 10, 64); hasRegistry && convErr == nil {
+		probation := fmt.Sprintf(`FROM elitea_lifecycle.agent_registry reg
+			WHERE reg.tenant_project_id = %d AND reg.application_id = a.id
+			  AND reg.auto_hired_at IS NOT NULL AND reg.probation_reviewed_at IS NULL`, projectNumber)
+		probationOnSQL = "EXISTS (SELECT 1 " + probation + ")"
+		probationUntilSQL = `COALESCE((SELECT to_char(reg.probation_until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') ` + probation + `), '')`
+	}
 	// Status and origin are facets: the page of rows is narrowed by them, the
 	// facet counts are not (each count honours every OTHER filter).
 	facetConditions := []string{}
@@ -422,7 +439,8 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
 			COALESCE(av.author_id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
 			`+statusExpr+`,
-			`+tagsExpr+`
+			`+tagsExpr+`,
+			`+probationOnSQL+`, `+probationUntilSQL+`
 		FROM %s.applications a`, s) + join +
 		// The author join reads `av.author_id`, the USER that wrote the
 		// version, and not `a.owner_id`, which is the owning PROJECT (#533).
@@ -451,6 +469,8 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			authorID       int
 			authorEmail    string
 			authorName     string
+			onProbation    bool
+			probationUntil string
 		)
 		if err := rows.Scan(
 			&app.ID, &app.Name, &app.Description, &app.Icon,
@@ -458,6 +478,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			&metaStr, &versionMetaStr, &app.AgentType,
 			&authorID, &authorEmail, &authorName,
 			&app.Status, &app.Tags,
+			&onProbation, &probationUntil,
 		); err != nil {
 			return empty, fmt.Errorf("applications: list scan: %w", err)
 		}
@@ -483,6 +504,12 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 		for _, key := range []string{"origin_kind", "origin_listing_id", "origin_version_id", "origin_version_name", "origin_listing_name"} {
 			if value, ok := versionMeta[key]; ok {
 				app.Meta[key] = value
+			}
+		}
+		if onProbation {
+			app.Meta["on_probation"] = true
+			if probationUntil != "" {
+				app.Meta["probation_until"] = probationUntil
 			}
 		}
 		if entityID, projectID, ok := applications.ForkOrigin(versionMeta); ok {

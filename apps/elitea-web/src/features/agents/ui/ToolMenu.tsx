@@ -10,7 +10,12 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { isMcpToolkit } from '@/entities/toolkit';
 import type { Toolkit } from '@/entities/toolkit';
-import { getGetApplicationQueryKey, useGetApplication, useListApplications } from '@/shared/api/generated/applications/applications';
+import {
+  getGetApplicationQueryKey,
+  getGetApplicationVersionDetailQueryKey,
+  useGetApplication,
+  useListApplications,
+} from '@/shared/api/generated/applications/applications';
 import type { Application, ApplicationDetail } from '@/shared/api/generated/model';
 import { getToolkit } from '@/shared/api/generated/toolkits/toolkits';
 import { unwrapBody, unwrapList } from '@/shared/api/unwrap';
@@ -127,6 +132,14 @@ import { EntityAddSection, InstanceAddSection, useEntityAssociationItems } from 
  */
 export interface ToolMenuProps {
   readonly applicationId?: number | string | undefined;
+  /**
+   * The version the user is on. The application detail read carries only the
+   * DEFAULT version, so without this an attach on any other version was sent
+   * for the default one (#2130, #2139).
+   */
+  readonly versionId?: number | string | undefined;
+  /** That version's own tools, for the "already added" filtering; falls back to the default version's. */
+  readonly currentTools?: readonly AgentToolAssociation[] | undefined;
   /** Called after any successful attach (agent/pipeline/toolkit/MCP) — see the module doc comment's "known integration gap" paragraph. */
   readonly onToolsChanged?: (() => void) | undefined;
   /** Optional observer, fired after this component's OWN real toolkit-attach call succeeds — see the module doc comment's "REAL GAPS" bullet. Not required for attaching to work. */
@@ -185,15 +198,21 @@ interface ToolMenuEntityDetail {
   readonly addedToolkitIds: ReadonlySet<string | number>;
 }
 
-function useToolMenuEntityDetail(applicationId: number | string | undefined, projectId: string | undefined): ToolMenuEntityDetail {
+function useToolMenuEntityDetail(
+  applicationId: number | string | undefined,
+  projectId: string | undefined,
+  pinned: { readonly versionId?: number | string | undefined; readonly currentTools?: readonly AgentToolAssociation[] | undefined },
+): ToolMenuEntityDetail {
   const numericApplicationId = applicationId === undefined ? undefined : Number(applicationId);
   const applicationQuery = useGetApplication(projectId ?? '', numericApplicationId ?? 0, {
     query: { enabled: projectId !== undefined && numericApplicationId !== undefined },
   });
   // Same error-envelope-unreachable cast as every other Wave-2 generated-client caller (eliteaFetch throws instead of resolving with the error variant).
   const versionDetails = (applicationQuery.data as { data: ApplicationDetail } | undefined)?.data.version_details;
-  const versionId = versionDetails === undefined || versionDetails.id === undefined ? undefined : Number(versionDetails.id);
-  const currentTools = useMemo(() => (versionDetails?.tools ?? []).map(toApplicationTool), [versionDetails?.tools]);
+  const defaultVersionId = versionDetails === undefined || versionDetails.id === undefined ? undefined : Number(versionDetails.id);
+  const versionId = pinned.versionId === undefined ? defaultVersionId : Number(pinned.versionId);
+  const detailTools = useMemo(() => (versionDetails?.tools ?? []).map(toApplicationTool), [versionDetails?.tools]);
+  const currentTools = pinned.currentTools ?? detailTools;
   const addedToolkitIds = useMemo(() => computeAddedToolkitIds(currentTools), [currentTools]);
 
   return {
@@ -206,12 +225,12 @@ function useToolMenuEntityDetail(applicationId: number | string | undefined, pro
   };
 }
 
-export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAttachMcp }: ToolMenuProps): ReactNode {
+export function ToolMenu({ applicationId, versionId: pinnedVersionId, currentTools: pinnedTools, onToolsChanged, onAttachToolkit, onAttachMcp }: ToolMenuProps): ReactNode {
   const projectId = useSelectedProjectId();
   const queryClient = useQueryClient();
   const isMcpVisible = useIsMcpVisible();
 
-  const { numericApplicationId, versionId, isEntityUnsaved, entityLabel, currentTools, addedToolkitIds } = useToolMenuEntityDetail(applicationId, projectId);
+  const { numericApplicationId, versionId, isEntityUnsaved, entityLabel, currentTools, addedToolkitIds } = useToolMenuEntityDetail(applicationId, projectId, { versionId: pinnedVersionId, currentTools: pinnedTools });
   const { filterAgents, filterPipelines } = useFilterAddedItems(currentTools);
 
   // `getToolIcon` (agent/pipeline flat icon, faithfully ported) is also returned by this hook
@@ -223,9 +242,13 @@ export function ToolMenu({ applicationId, onToolsChanged, onAttachToolkit, onAtt
   const onAssociated = useCallback(async () => {
     if (projectId !== undefined && numericApplicationId !== undefined) {
       await queryClient.invalidateQueries({ queryKey: getGetApplicationQueryKey(projectId, numericApplicationId) });
+      // A non-default version is read from its own detail query (#2130).
+      if (versionId !== undefined) {
+        await queryClient.invalidateQueries({ queryKey: getGetApplicationVersionDetailQueryKey(projectId, numericApplicationId, versionId) });
+      }
     }
     onToolsChanged?.();
-  }, [projectId, numericApplicationId, queryClient, onToolsChanged]);
+  }, [projectId, numericApplicationId, versionId, queryClient, onToolsChanged]);
 
 
   // Performs the REAL toolkit/MCP attach (see this module's own doc comment, "REAL GAPS"

@@ -4,6 +4,7 @@ import {
   importWizard,
   publishApplication,
   unpublishApplication,
+  updateApplicationRelation,
   validateForPublish,
 } from '@/shared/api/generated/applications/applications';
 import type {
@@ -163,6 +164,11 @@ export interface ForkOutcome {
 export async function forkEntity(targetProjectId: string, document: EntityExportDocument): Promise<ForkOutcome> {
   const request = {
     applications: document.applications ?? [],
+    // The toolkits travel with the agent. The server copies each one into the
+    // target project without its credentials and links the version to the
+    // copy; a document sent without them forked an agent with an empty Tools
+    // area (#2109).
+    ...(document.toolkits === undefined ? {} : { toolkits: document.toolkits }),
     ...(document.skills === undefined ? {} : { skills: document.skills }),
   } as ForkRequest;
   const envelope = (await forkAgent(targetProjectId, request)) as Envelope<Record<string, unknown>>;
@@ -170,6 +176,108 @@ export async function forkEntity(targetProjectId: string, document: EntityExport
     status: envelope.status,
     result: envelope.data['result'],
     errors: envelope.data['errors'],
+  };
+}
+
+/** How deep a chain of nested agents is followed, and so how many agents one fork can create. */
+const MAX_NESTED_DEPTH = 3;
+
+interface NestedAgentRef {
+  readonly applicationId: number;
+  readonly versionId?: number;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' || typeof value === 'string' ? Number(value) : Number.NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/** The sub-agents a fork document names: its `type: application` toolkit entries, which carry the source agent's id pair. */
+function nestedAgentRefs(document: EntityExportDocument): NestedAgentRef[] {
+  const refs: NestedAgentRef[] = [];
+  for (const entry of document.toolkits ?? []) {
+    const toolkit = entry as { type?: unknown; settings?: { application_id?: unknown; application_version_id?: unknown } };
+    if (toolkit.type !== 'application') continue;
+    const applicationId = positiveInteger(toolkit.settings?.application_id);
+    if (applicationId === undefined) continue;
+    const versionId = positiveInteger(toolkit.settings?.application_version_id);
+    refs.push(versionId === undefined ? { applicationId } : { applicationId, versionId });
+  }
+  return refs;
+}
+
+interface ForkedAgent {
+  readonly applicationId: number | undefined;
+  readonly versionId: number | undefined;
+}
+
+function channelEntries(channel: unknown, key: 'agents' | 'toolkits' | 'skills'): unknown[] {
+  const entries = (channel as Record<string, unknown> | undefined)?.[key];
+  return Array.isArray(entries) ? entries : [];
+}
+
+function firstForkedAgent(outcome: ForkOutcome): ForkedAgent {
+  const agent = channelEntries(outcome.result, 'agents')[0] as Record<string, unknown> | undefined;
+  return { applicationId: positiveInteger(agent?.['id']), versionId: positiveInteger(agent?.['version_id']) };
+}
+
+function mergeAgents(channels: unknown, extra: readonly unknown[]): unknown {
+  return { ...((channels ?? {}) as Record<string, unknown>), agents: [...channelEntries(channels, 'agents'), ...extra] };
+}
+
+/**
+ * Forks an agent into another project WITH everything it nests (#2109).
+ *
+ * The server copies the toolkits of the document and skips each sub-agent
+ * stand-in, because the sub-agent is a separate agent with its own versions.
+ * So each one is read from the SOURCE project (the caller can read it there),
+ * forked into the target the same way, and linked to the new parent version
+ * through the relation route the editor's "add agent" uses. Only credentials
+ * and secrets stay behind, as the toolkit copy already drops them.
+ *
+ * A nested agent that cannot be forked or linked is reported on the errors
+ * channel with status 207 and the parent stays forked. A chain deeper than
+ * MAX_NESTED_DEPTH, or a cycle, stops there.
+ */
+export async function forkEntityWithNested(
+  sourceProjectId: string,
+  targetProjectId: string,
+  document: EntityExportDocument,
+  seen: ReadonlySet<number> = new Set<number>(),
+  depth = 0,
+): Promise<ForkOutcome> {
+  const outcome = await forkEntity(targetProjectId, document);
+  const parent = firstForkedAgent(outcome);
+  const refs = nestedAgentRefs(document).filter((ref) => !seen.has(ref.applicationId));
+  if (refs.length === 0 || parent.applicationId === undefined || parent.versionId === undefined || depth >= MAX_NESTED_DEPTH) {
+    return outcome;
+  }
+  const nestedAgents: unknown[] = [];
+  const failures: unknown[] = [];
+  const visited = new Set(seen);
+  for (const ref of refs) visited.add(ref.applicationId);
+  for (const ref of refs) {
+    try {
+      const nestedDocument = await fetchForkDocument(sourceProjectId, ref.applicationId, ref.versionId);
+      const nested = await forkEntityWithNested(sourceProjectId, targetProjectId, nestedDocument, visited, depth + 1);
+      const child = firstForkedAgent(nested);
+      if (child.applicationId === undefined || child.versionId === undefined) throw new Error('the nested agent was not forked');
+      await updateApplicationRelation(targetProjectId, child.applicationId, child.versionId, {
+        application_id: parent.applicationId,
+        version_id: parent.versionId,
+        has_relation: true,
+      });
+      nestedAgents.push(...channelEntries(nested.result, 'agents'));
+      failures.push(...channelEntries(nested.errors, 'agents'));
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : 'unknown error';
+      failures.push({ index: 0, name: String(ref.applicationId), msg: `Nested agent ${String(ref.applicationId)} was not forked: ${reason}` });
+    }
+  }
+  return {
+    status: failures.length > 0 ? 207 : outcome.status,
+    result: mergeAgents(outcome.result, nestedAgents),
+    errors: failures.length > 0 ? mergeAgents(outcome.errors, failures) : outcome.errors,
   };
 }
 

@@ -6608,6 +6608,7 @@
   "features.agentLifecycle.facets.updateAvailable": "Update available",
   "features.agentLifecycle.badge.installed": "Installed",
   "features.agentLifecycle.badge.installedVersion": "Installed {{version}}",
+  "features.agentLifecycle.badge.onProbation": "On probation",
   "features.agentLifecycle.badge.forkedFrom": "Forked from {{listing}} {{version}}",
   "features.agentLifecycle.badge.alsoHiredAs": "also hired as {{name}}",
   "features.agentLifecycle.changeRequest.kind.hire": "Hire",

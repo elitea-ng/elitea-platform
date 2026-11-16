@@ -17,8 +17,8 @@ var _ repos.ListingHirer = (*Handler)(nil)
 // HireListingTx is the workforce policy's hire of a Marketplace listing
 // (ADR-0051 decision 6, issue 1632). It is the hire of the wizard, run in the
 // caller's transaction: there is one hire, with the same checks, whoever asks
-// for it. The avatar files are not copied (the policy has no request to copy
-// them under), and a hire that would need a person's approval is refused with
+// for it. The avatar files are copied as the person the policy acts for, as a
+// person's own hire copies them, and a hire that would need a person's approval is refused with
 // repos.ErrListingHireRefused, leaving the proposal to a person.
 func (h *Handler) HireListingTx(ctx context.Context, tx pgx.Tx, request repos.ListingHireRequest) (repos.ListingHireResult, error) {
 	if h == nil || h.pool == nil {
@@ -32,7 +32,7 @@ func (h *Handler) HireListingTx(ctx context.Context, tx pgx.Tx, request repos.Li
 	}
 	result, failure := h.performHire(ctx, tx, hireInput{
 		ProjectIDText: strconv.FormatInt(request.ProjectID, 10), ListingID: request.ListingID, VersionID: request.VersionID,
-		Mode: request.Mode, Bindings: bindings, ActorID: request.ActorUserID, SkipAvatar: true, Automatic: true,
+		Mode: request.Mode, Bindings: bindings, ActorID: request.ActorUserID, Automatic: true,
 	})
 	if failure != nil {
 		if failure.status >= http.StatusInternalServerError {

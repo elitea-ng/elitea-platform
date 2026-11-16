@@ -29,6 +29,14 @@ describe('toAgentToolAssociations', () => {
     expect(tool?.settings?.selected_tools).toEqual(['create_issue', 'list_issues']);
   });
 
+  it('offers the toolkit\'s own enabled tools as the choices and keeps the attachment\'s subset as the selection (#2146)', () => {
+    const [tool] = toAgentToolAssociations([
+      { id: 5, tool_id: 77, type: 'github', selected_tools: ['list_issues'], config: { selected_tools: ['create_issue', 'list_issues'] } },
+    ]);
+    expect(tool?.settings?.available_tools).toEqual(['create_issue', 'list_issues']);
+    expect(tool?.settings?.selected_tools).toEqual(['list_issues']);
+  });
+
   it('tolerates a null/absent blob and a non-array selected_tools without throwing', () => {
     expect(toAgentToolAssociations([{ id: 1 }, { id: 2, config: null, selected_tools: {} }])).toEqual([
       { id: 1, settings: {} },

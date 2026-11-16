@@ -28,7 +28,11 @@ export interface BaseCardBodyProps {
 }
 
 export function BaseCardBody({ tool, onClickShowActions, showActions }: BaseCardBodyProps): ReactNode {
-  if (!tool.settings?.selected_tools?.length) {
+  // A saved toolkit instance always offers its tools for this agent to choose
+  // from, whether or not the agent has chosen any yet: with no choice made the
+  // toggle was missing, and so was any way to filter tools per agent (#2146).
+  const offersTools = tool.tool_id !== undefined || !!tool.settings?.selected_tools?.length || !!tool.settings?.available_tools?.length;
+  if (!offersTools) {
     return (
       <TypographyWithConditionalTooltip
         title={tool.description ?? ''}

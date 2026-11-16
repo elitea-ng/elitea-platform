@@ -129,6 +129,10 @@ export function workshopRowBadge(application: Application, rows: readonly Applic
   const parts = [statusBadgeLabel(application.status)];
   const origin = originBadgeLabel(application);
   if (origin !== '') parts.push(origin);
+  // An agent the workforce policy hired stays on probation until a person keeps it (ADR-0051 decision 6).
+  if (application.meta?.['on_probation'] === true) {
+    parts.push(t('features.agentLifecycle.badge.onProbation', 'On probation'));
+  }
   const listingId = metaText(application, 'origin_listing_id');
   const first = listingId === '' ? undefined : firstHireByListing(rows).get(listingId);
   if (first !== undefined && first.id !== application.id) {

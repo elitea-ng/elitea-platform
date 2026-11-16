@@ -80,6 +80,8 @@ export interface ApplicationToolsProps {
   readonly internalTools: readonly string[];
   readonly onInternalToolsChange: (next: readonly string[]) => void;
   readonly applicationId?: number | string | undefined;
+  /** The version being edited; the toolkit menu attaches to it, not to the default version (#2130). */
+  readonly versionId?: number | string | undefined;
   /** Renders one `markedDuplicateTools` entry — see the module doc comment for why this is injected rather than a direct `ToolCard` render. */
   readonly renderToolCard: (tool: AgentToolAssociation, index: number, isDuplicate: boolean) => ReactNode;
   /**
@@ -110,6 +112,7 @@ export function ApplicationTools({
   internalTools,
   onInternalToolsChange,
   applicationId,
+  versionId,
   renderToolCard,
   onToolsChanged,
   disabled,
@@ -193,6 +196,8 @@ export function ApplicationTools({
                 <Box sx={toolMenuWrapperSx}>
                   <ToolMenu
                     applicationId={applicationId}
+                    versionId={versionId}
+                    currentTools={tools}
                     onToolsChanged={onToolsChanged}
                   />
                 </Box>
