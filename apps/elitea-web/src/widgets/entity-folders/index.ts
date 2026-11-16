@@ -15,6 +15,7 @@ export type { FolderFilter } from './lib/useFolderFilter';
 export { EntityFolderDnd } from './ui/EntityFolderDnd';
 /** @public */
 export type { EntityFolderDndProps } from './ui/EntityFolderDnd';
+export { useFolderOrder } from './lib/useFolderOrder';
 export { MoveSelectionControl } from './ui/MoveSelectionControl';
 /** @public */
 export type { MoveSelectionControlProps } from './ui/MoveSelectionControl';
