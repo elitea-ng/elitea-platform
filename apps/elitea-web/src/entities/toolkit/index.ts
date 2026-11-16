@@ -54,7 +54,7 @@ import {
 } from './api/useValidateToolkit';
 
 export type { Toolkit, ToolkitAuthor, ToolkitPage, ToolkitTypeSchemaMap } from './model/types';
-export { MCP_TOOL_SCHEMAS_KEY, isMcpToolkit, isOnlineToolkit, sortToolkitsByName, toolkitDisplayName } from './model/selectors';
+export { isMcpToolkit, isOnlineToolkit, sortToolkitsByName, toolkitDisplayName } from './model/selectors';
 
 export { ToolEvents, ToolTypes, toolIconStaticUrl } from './model/toolForm';
 export { ToolInitialValues } from './model/toolInitialValues';

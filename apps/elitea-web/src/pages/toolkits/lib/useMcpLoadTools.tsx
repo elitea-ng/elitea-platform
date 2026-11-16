@@ -4,7 +4,6 @@ import Alert from '@mui/material/Alert';
 import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 
-import { MCP_TOOL_SCHEMAS_KEY } from '@/entities/toolkit';
 import { ConnectorNotApprovedNotice, type ConnectorTarget } from '@/features/connector-requests';
 import { McpAuthModal, McpAuthStatusBadge, useGetRemoteMcpTools, type McpConnectorApprovalRequired } from '@/features/mcps';
 import type { ConnectorDeclaredTool } from '@/shared/api/generated/model';
@@ -51,6 +50,9 @@ import type { EditToolDetail } from './toolkitFormTypes';
  * would write a row nothing reads, under a name every other Remote MCP in the
  * project would collide with.
  */
+
+/** Read by the Test pane in `features/toolkits/ui/test-tools/useGetSelectedToolSchema.ts` (a different slice, so the literal is repeated, not imported). */
+const MCP_TOOL_SCHEMAS_KEY = 'available_mcp_tool_schemas';
 
 /** The four props `ToolBaseSlots.toolActionsExtra` accepts. */
 export interface McpLoadToolsSlot {

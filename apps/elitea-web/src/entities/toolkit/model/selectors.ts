@@ -49,6 +49,3 @@ export function sortToolkitsByName(toolkits: readonly Toolkit[]): Toolkit[] {
     toolkitDisplayName(a).toLowerCase().localeCompare(toolkitDisplayName(b).toLowerCase()),
   );
 }
-
-/** The settings key "Load Tools" stores each discovered MCP tool's description and input schema under, by tool name (#2124). */
-export const MCP_TOOL_SCHEMAS_KEY = 'available_mcp_tool_schemas';

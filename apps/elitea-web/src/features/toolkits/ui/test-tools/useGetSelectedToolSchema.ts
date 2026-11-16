@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { MCP_TOOL_SCHEMAS_KEY, toolkitTools } from '@/entities/toolkit';
+import { toolkitTools } from '@/entities/toolkit';
 
 import { useSelectedProjectId } from '../../lib/hooks/useSelectedProjectId';
 
@@ -23,6 +23,9 @@ export interface UseGetSelectedToolSchemaParams {
   readonly toolOptionType: string | null;
   readonly availableMcpTools: readonly McpToolOption[] | undefined;
 }
+
+/** Written by `pages/toolkits/lib/useMcpLoadTools.tsx` (a different slice, so the literal is repeated, not imported). */
+const MCP_TOOL_SCHEMAS_KEY = 'available_mcp_tool_schemas';
 
 /**
  * The tools of an MCP toolkit with the argument schema "Load Tools" found for
