@@ -38,7 +38,8 @@ import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { DeletableIconTile } from './DeletableIconTile';
-import { DEFAULT_EXTENSIONS, MAX_ICON_EDGE, readImageDimensions, uploadFailureMessage, uploadProblem } from './iconUpload';
+import type { UploadDimensions, UploadLimits } from './iconUpload';
+import { MAX_ICON_EDGE, readImageDimensions, resolveUploadLimits, uploadFailureMessage, uploadProblem } from './iconUpload';
 import { IconTile } from './IconTile';
 import { typeScale } from '@/shared/brand/typeScale';
 
@@ -48,11 +49,7 @@ export interface PickableIcon {
   readonly url?: string | undefined;
 }
 
-/** The upload's measured (and capped) pixel box. */
-export interface UploadDimensions {
-  readonly width: number;
-  readonly height: number;
-}
+export type { UploadDimensions } from './iconUpload';
 
 export interface IconPickerDialogProps {
   readonly open: boolean;
@@ -74,9 +71,7 @@ export interface IconPickerDialogProps {
    * the browser-drawable set below. A caller whose server stores fewer formats
    * passes its own, so the picker refuses the rest before sending them.
    */
-  readonly acceptedExtensions?: readonly string[] | undefined;
-  /** Largest upload in bytes. Absent means the picker does not check. */
-  readonly maxFileBytes?: number | undefined;
+  readonly uploadLimits?: UploadLimits | undefined;
 }
 
 
@@ -92,9 +87,9 @@ export function IconPickerDialog({
   onSelectIcon,
   onUpload,
   onDeleteIcon,
-  acceptedExtensions = DEFAULT_EXTENSIONS,
-  maxFileBytes,
+  uploadLimits,
 }: IconPickerDialogProps): ReactNode {
+  const { extensions: acceptedExtensions, maxBytes: maxFileBytes } = resolveUploadLimits(uploadLimits);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | undefined>(undefined);

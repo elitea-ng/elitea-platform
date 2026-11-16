@@ -121,8 +121,7 @@ export function SkillIconDialog({
       onSelectIcon={handleSelect}
       onUpload={handleUpload}
       onDeleteIcon={handleDelete}
-      acceptedExtensions={SKILL_ICON_EXTENSIONS}
-      maxFileBytes={SKILL_ICON_MAX_BYTES}
+      uploadLimits={{ extensions: SKILL_ICON_EXTENSIONS, maxBytes: SKILL_ICON_MAX_BYTES }}
     />
   );
 }

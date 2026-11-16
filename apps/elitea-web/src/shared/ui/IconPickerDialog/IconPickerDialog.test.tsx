@@ -19,8 +19,7 @@ function renderPicker(overrides: Partial<React.ComponentProps<typeof IconPickerD
       onSelectIcon={vi.fn()}
       onUpload={onUpload}
       onDeleteIcon={vi.fn()}
-      acceptedExtensions={['.png', '.jpg']}
-      maxFileBytes={1024}
+      uploadLimits={{ extensions: ['.png', '.jpg'], maxBytes: 1024 }}
       {...overrides}
     />,
   );
@@ -55,7 +54,7 @@ describe('IconPickerDialog upload validation (#2107)', () => {
       body: { error: 'Unsupported file format. Upload a PNG image.' },
     } as never);
     const onUpload = vi.fn().mockRejectedValue(refusal);
-    renderPicker({ onUpload, acceptedExtensions: ['.png'], maxFileBytes: undefined });
+    renderPicker({ onUpload, uploadLimits: { extensions: ['.png'] } });
     // jsdom cannot decode an image; a TIFF-typed file skips the decode step.
     await user().upload(screen.getByTestId('icon-picker-file-input'), new File(['x'], 'icon.png', { type: 'image/tiff' }));
     await waitFor(() =>
@@ -65,7 +64,7 @@ describe('IconPickerDialog upload validation (#2107)', () => {
 
   it('says a non-HTTP failure is a connection problem, not a refusal', async () => {
     const onUpload = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
-    renderPicker({ onUpload, acceptedExtensions: ['.png'], maxFileBytes: undefined });
+    renderPicker({ onUpload, uploadLimits: { extensions: ['.png'] } });
     await user().upload(screen.getByTestId('icon-picker-file-input'), new File(['x'], 'icon.png', { type: 'image/tiff' }));
     await waitFor(() => expect(screen.getByTestId('icon-picker-upload-error')).toHaveTextContent('Check your connection'));
   });

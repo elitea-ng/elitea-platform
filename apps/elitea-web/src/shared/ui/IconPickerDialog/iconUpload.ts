@@ -1,7 +1,17 @@
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 
-import type { UploadDimensions } from './IconPickerDialog';
+/** What a caller's server stores: allowed extensions (lower case, with the dot) and the largest upload in bytes. */
+export interface UploadLimits {
+  readonly extensions?: readonly string[] | undefined;
+  readonly maxBytes?: number | undefined;
+}
+
+/** The upload's measured (and capped) pixel box. */
+export interface UploadDimensions {
+  readonly width: number;
+  readonly height: number;
+}
 
 /** The maximum icon edge the server stores; the client measures against it. */
 export const MAX_ICON_EDGE = 64;
@@ -74,4 +84,9 @@ export function readImageDimensions(file: File): Promise<UploadDimensions> {
     reader.onerror = () => { reject(new UnreadableImageError(`icon picker: failed to read file "${file.name}"`)); };
     reader.readAsDataURL(file);
   });
+}
+
+/** The limits in force: the caller's, with the browser-drawable extension set as the default. */
+export function resolveUploadLimits(limits: UploadLimits | undefined): { readonly extensions: readonly string[]; readonly maxBytes: number | undefined } {
+  return { extensions: limits?.extensions ?? DEFAULT_EXTENSIONS, maxBytes: limits?.maxBytes };
 }
