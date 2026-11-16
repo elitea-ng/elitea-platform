@@ -127,7 +127,6 @@ func (service *CurrentApplicationStartService) resolveProjectSkills(
 	ctx context.Context,
 	request CurrentApplicationStartRequest,
 ) ([]map[string]any, error) {
-<<<<<<< HEAD
 	return service.resolveTurnSkills(ctx, request.ProjectID, request.ConversationUUID, request.ProjectSkillIDs)
 }
 
@@ -242,22 +241,6 @@ func (service *CurrentApplicationStartService) resolveProjectSkillIDs(
 	skillIDs []int64,
 ) ([]map[string]any, error) {
 	if len(skillIDs) == 0 {
-||||||| fa5dbac00
-	if len(request.ProjectSkillIDs) == 0 {
-=======
-	return service.resolveProjectSkillIDs(ctx, request.ProjectID, request.ProjectSkillIDs)
-}
-
-// resolveProjectSkillIDs is resolveProjectSkills for the ids of either start
-// contract: an agent turn and a model chat read and freeze a pick the same
-// way, so the runtime admits both by the same rules.
-func (service *CurrentApplicationStartService) resolveProjectSkillIDs(
-	ctx context.Context,
-	projectID int64,
-	skillIDs []int64,
-) ([]map[string]any, error) {
-	if len(skillIDs) == 0 {
->>>>>>> origin/main
 		return nil, nil
 	}
 	if len(skillIDs) > currentMaxProjectSkillPicks {

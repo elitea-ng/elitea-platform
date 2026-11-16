@@ -175,7 +175,6 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 		!validJSONArray(target.ChatHistory) || !validJSONObject(target.ConversationMeta) {
 		return CurrentApplicationStartOutcome{}, ErrUnsupportedCurrentAgentStart
 	}
-<<<<<<< HEAD
 	// Project skills the message picked: read here, by id, under the
 	// caller's visibility; a pick the caller cannot read refuses the turn.
 	picks, err := service.resolveTurnSkills(ctx, request.ProjectID, request.ConversationUUID, request.ProjectSkillIDs)
@@ -186,19 +185,6 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
-||||||| fa5dbac00
-=======
-	// Project skills the message picked: read here, by id, under the
-	// caller's visibility; a pick the caller cannot read refuses the turn.
-	picks, err := service.resolveProjectSkillIDs(ctx, request.ProjectID, request.ProjectSkillIDs)
-	if err != nil {
-		return CurrentApplicationStartOutcome{}, err
-	}
-	skills, err := projectAdhocSkills(request.UserInput, picks)
-	if err != nil {
-		return CurrentApplicationStartOutcome{}, err
-	}
->>>>>>> origin/main
 	snapshot, err := currentAdhocSnapshot(request.LLMSettings, target)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("build current ad-hoc snapshot: %w", err)
