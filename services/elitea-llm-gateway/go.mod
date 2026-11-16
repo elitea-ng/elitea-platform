@@ -12,7 +12,7 @@ require (
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.12.0
-	github.com/maximhq/bifrost/core v1.15.1
+	github.com/maximhq/bifrost/core v1.14.1
 	github.com/nats-io/nats.go v1.55.0
 	github.com/sony/gobreaker/v2 v2.4.0
 	golang.org/x/oauth2 v0.38.0
