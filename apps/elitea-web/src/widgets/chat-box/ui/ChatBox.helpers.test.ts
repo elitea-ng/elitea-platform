@@ -12,10 +12,10 @@ import {
   optField,
   pickIdAndUuid,
   resolveConversationStarters,
-  switchToModel,
   toParticipant,
   toParticipants,
 } from './ChatBox.helpers';
+import { switchToModel } from './switchToModel';
 
 const PARTICIPANT: Participant = { id: '1', entityName: 'application' };
 

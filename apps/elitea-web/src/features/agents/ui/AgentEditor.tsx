@@ -130,11 +130,7 @@ export interface AgentEditorDeps {
   /** Edit-mode save — owned by whoever supplies `renderConfigurationForm`'s real live state (this component does not own edit-mode values). */
   readonly onSaveVersion?: () => void;
   readonly isSavingVersion?: boolean;
-  /**
-   * Edit mode: whether the form holds an edit not yet saved. Without it Save
-   * was enabled on an untouched agent and stayed enabled after a save (#2118,
-   * #2120). Owned by whoever owns the edit-mode values (`useChatAgentConfig`).
-   */
+  /** Edit mode: whether the form holds an unsaved edit; gates Save. Owned by `useChatAgentConfig`. */
   readonly isConfigurationDirty?: boolean;
   /** Baseline: `useRefetchAgentVersionDetailsOnClose`, simplified to a plain callback — see the module doc comment. */
   readonly onEditorClosed?: () => void;
@@ -189,7 +185,6 @@ interface SaveButtonSlotProps {
   readonly canSaveCreate: boolean;
   readonly onSaveVersion: (() => void) | undefined;
   readonly isSavingVersion: boolean | undefined;
-  /** Edit mode: Save is live only while the form holds an edit (#2118, #2120). */
   readonly isDirty: boolean;
 }
 
@@ -357,8 +352,7 @@ export function AgentEditor({
       isCreating={create.isCreating}
       canSaveCreate={canSaveCreate}
       onSaveVersion={deps.onSaveVersion}
-      isSavingVersion={deps.isSavingVersion}
-      isDirty={isDirty}
+      isSavingVersion={deps.isSavingVersion} isDirty={isDirty}
     />
   );
 

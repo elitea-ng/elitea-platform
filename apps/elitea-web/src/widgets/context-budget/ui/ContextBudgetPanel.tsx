@@ -72,6 +72,19 @@ function visibleStatRows(stats: ContextBudgetStats): readonly { readonly key: st
   ];
 }
 
+/** The line under the figures while a saved window is not yet in the latest reply's measurement. */
+function PendingModeNote({ stats, pendingMode }: { readonly stats: ContextBudgetStats; readonly pendingMode: ContextBudgetStats['budgetMode'] | undefined }): ReactNode {
+  if (pendingMode === undefined || (stats.estimated !== true && pendingMode === stats.budgetMode)) return null;
+  const mode = pendingMode === 'full' ? t('contextBudget.mode.full', 'Full') : t('contextBudget.mode.balanced', 'Balanced');
+  return (
+    <Typography variant="bodySmall" data-testid="context-budget-pending" sx={{ paddingX: 2, paddingBottom: 1 }}>
+      {stats.estimated === true
+        ? t('widgets.contextBudget.estimatedMode', 'Estimated for the new window until the next reply.')
+        : t('widgets.contextBudget.pendingMode', 'Now set to {{mode}}. The window and usage above update with the next reply.', { mode })}
+    </Typography>
+  );
+}
+
 export function ContextBudgetPanel({ stats, onEdit, pendingMode }: ContextBudgetPanelProps): ReactNode {
   // The bar itself caps at 100%; the number above it does not (the old app
   // shows the true over-budget percentage and flags it with the warning icon).
@@ -155,15 +168,7 @@ export function ContextBudgetPanel({ stats, onEdit, pendingMode }: ContextBudget
         {stats.usageAvailable && <ProgressBar percentage={barPercentage} isHigh={stats.isHighUtilization} />}
       </Box>
 
-      {pendingMode !== undefined && (stats.estimated === true || pendingMode !== stats.budgetMode) && (
-        <Typography variant="bodySmall" data-testid="context-budget-pending" sx={{ paddingX: 2, paddingBottom: 1 }}>
-          {stats.estimated === true
-            ? t('widgets.contextBudget.estimatedMode', 'Estimated for the new window until the next reply.')
-            : t('widgets.contextBudget.pendingMode', 'Now set to {{mode}}. The window and usage above update with the next reply.', {
-                mode: pendingMode === 'full' ? t('contextBudget.mode.full', 'Full') : t('contextBudget.mode.balanced', 'Balanced'),
-              })}
-        </Typography>
-      )}
+      <PendingModeNote stats={stats} pendingMode={pendingMode} />
       {stats.runtime && <Typography variant="bodySmall" sx={{ paddingX: 2, paddingBottom: 1 }}>
         {stats.runtime.providerUsage
           ? t('widgets.contextBudget.providerHelp', 'Provider-reported input and output for the latest model call, including cached input and reasoning. The safety margin is excluded from the available window. The next request is estimated separately for automatic compaction.')

@@ -290,9 +290,7 @@ export function useChatPipelineConfig({
   // `refetch()` changes `version`, which re-fires the seed effect below.
   const [isConfigurationDirty, setIsConfigurationDirty] = useState(false);
   const draftRef = useRef(draft);
-  useEffect(() => {
-    draftRef.current = draft;
-  }, [draft]);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
 
   /*
    * Re-seeded whenever the SERVER's version changes — which includes the
@@ -378,15 +376,12 @@ export function useChatPipelineConfig({
         // reporting that as saved would clear the editor's dirty flag over an
         // edit the server never took.
         if (result !== undefined) {
-          // Saved: nothing is unsaved until the next edit. An edit made while
-          // the save was in flight stays dirty (the draft is no longer the
-          // body that was sent), and is kept rather than re-seeded over.
+          // An edit made while the save was in flight stays dirty and is kept.
           if (draftRef.current === draft) {
             setIsConfigurationDirty(false);
             refetch();
           }
-          // The conversation's participant rows carry the entity's name; a
-          // rename made here must reach the rail and the transcript (#2096).
+          // Participant rows carry the entity's name: refresh them after a rename.
           void queryClient.invalidateQueries({ queryKey: ['conversation', 'details'] });
           onSuccess(result);
         }

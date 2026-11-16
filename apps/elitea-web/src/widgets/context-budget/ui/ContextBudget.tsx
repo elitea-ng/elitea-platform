@@ -36,6 +36,17 @@ export interface ContextBudgetProps {
   readonly collapsed?: boolean;
 }
 
+/**
+ * The panel's figures. A window saved after the latest reply is shown now,
+ * estimated from that reply's measurement, until the next reply replaces it
+ * (#2123).
+ */
+function statsWithPendingMode(wire: unknown, pendingMode: ContextBudgetMode | undefined) {
+  const measured = toContextBudgetStats(wire);
+  if (measured === undefined || pendingMode === undefined) return measured;
+  return estimateForMode(measured, pendingMode) ?? measured;
+}
+
 export function ContextBudget({ conversationId, projectId, collapsed = false }: ContextBudgetProps): ReactNode {
   const enabled = conversationId !== undefined && conversationId !== '' && projectId !== undefined && projectId !== '';
   const { data, isPending, isError } = contextManagementApi.useGetStatus(
@@ -46,11 +57,8 @@ export function ContextBudget({ conversationId, projectId, collapsed = false }: 
 
   if (!enabled || isPending || isError) return null;
 
-  const measured = toContextBudgetStats(data);
-  if (!measured) return null;
-  // A window saved after the latest reply: show it now, estimated from that
-  // reply's measurement, until the next reply replaces it (#2123).
-  const stats = edit.pendingMode === undefined ? measured : (estimateForMode(measured, edit.pendingMode) ?? measured);
+  const stats = statsWithPendingMode(data, edit.pendingMode);
+  if (!stats) return null;
 
   if (collapsed) return <ContextBudgetCollapsed stats={stats} />;
   return (

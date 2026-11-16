@@ -55,6 +55,16 @@ export interface ContextBudgetStats {
 /** Balanced caps the combined window here; Full uses the model window (the contract's wording). */
 const BALANCED_WINDOW_TOKENS = 272_000;
 
+/** The restated total window, or `undefined` when it cannot be known (see {@link estimateForMode}). */
+function estimatedTotal(stats: ContextBudgetStats, mode: ContextBudgetMode): number | undefined {
+  const runtime = stats.runtime;
+  if (!runtime || runtime.legacy || runtime.phase !== 'measured' || mode === stats.budgetMode) return undefined;
+  const total = runtime.totalTokens;
+  const windowKnown = stats.budgetMode === 'full' || total < BALANCED_WINDOW_TOKENS;
+  if (!windowKnown && mode === 'full') return undefined;
+  return mode === 'balanced' ? Math.min(BALANCED_WINDOW_TOKENS, total) : total;
+}
+
 /**
  * The latest measurement, restated for another window mode (#2123).
  *
@@ -69,18 +79,14 @@ const BALANCED_WINDOW_TOKENS = 272_000;
  * Reserved output and the safety margin are the measurement's own.
  */
 export function estimateForMode(stats: ContextBudgetStats, mode: ContextBudgetMode): ContextBudgetStats | undefined {
-  const runtime = stats.runtime;
-  if (!runtime || runtime.legacy || runtime.phase !== 'measured' || mode === stats.budgetMode) return undefined;
-  const total = runtime.totalTokens;
-  const windowKnown = stats.budgetMode === 'full' || total < BALANCED_WINDOW_TOKENS;
-  if (!windowKnown && mode === 'full') return undefined;
-  const newTotal = mode === 'balanced' ? Math.min(BALANCED_WINDOW_TOKENS, total) : total;
-  const maxTokens = Math.max(0, newTotal - runtime.reservedOutputTokens - runtime.safetyMarginTokens);
+  const newTotal = estimatedTotal(stats, mode);
+  if (newTotal === undefined || !stats.runtime) return undefined;
+  const maxTokens = Math.max(0, newTotal - stats.runtime.reservedOutputTokens - stats.runtime.safetyMarginTokens);
   const usageAvailable = stats.usageAvailable && maxTokens > 0;
   return {
     ...stats,
     budgetMode: mode,
-    runtime: { ...runtime, totalTokens: newTotal },
+    runtime: { ...stats.runtime, totalTokens: newTotal },
     maxTokens,
     usageAvailable,
     tokensDisplay: usageAvailable ? formatTokensDisplay(stats.currentTokens, maxTokens) : '—',

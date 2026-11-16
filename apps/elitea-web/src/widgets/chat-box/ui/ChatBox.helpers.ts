@@ -247,23 +247,6 @@ function resolveEditorCallbacks(editorCallbacks: ChatBoxEditorCallbacks | undefi
 }
 
 /**
- * The panel's "X" (#2121): leave the agent or pipeline and talk to the model.
- *
- * It used to be `selectSavedOrDefaultModel` alone, which only picks the model
- * the composer would use; the active participant stayed set, so the panel
- * still read "To: <agent>" and the next send still went to it.
- */
-export function switchToModel(
-  onChangeParticipant: (participant: unknown) => void,
-  selectSavedOrDefaultModel: () => void,
-): () => void {
-  return () => {
-    onChangeParticipant(undefined);
-    selectSavedOrDefaultModel();
-  };
-}
-
-/**
  * Builds `NewChatInput`'s `agentEditor` prop group — extracted to keep
  * `ChatBox`'s own complexity down. `onShowAgentEditor`/`onShowPipelineEditor`/
  * `onCloseAgentEditor`/`onClosePipelineEditor` fall back to their previous
