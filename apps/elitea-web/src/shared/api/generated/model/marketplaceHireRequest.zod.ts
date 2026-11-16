@@ -56,6 +56,12 @@ export const MarketplaceHireRequest = zod
       .optional()
       .describe("A name override."),
     bindings: zod.array(MarketplaceBinding).optional(),
+    proposal_id: zod
+      .string()
+      .optional()
+      .describe(
+        "The open hire_listing proposal of a workforce manager this hire settles (ADR-0051 decision 6). It must name the same listing; the hire and its approval are one transaction.\n",
+      ),
   })
   .describe(
     "The hire wizard's answer (internal/api/v2/eliteacore/marketplace_hire.go).\n",

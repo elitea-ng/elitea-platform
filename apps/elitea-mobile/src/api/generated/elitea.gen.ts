@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.55
- * operations sha256:  75e3e53c44cc8bcdb39b77de8ac3330cb6ac556a1442ee7f7194ec613fd196d7
+ * client contract:    1.56
+ * operations sha256:  6289cf99737da7cfce1dd3633f4de6fa8fa653296686f34307d1c02fe26646e4
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -420,6 +420,53 @@ export interface paths {
          * @description A manager with ownership or `models.applications.memory.delete` deletes any entry; anyone deletes an entry about themself. Requires `models.applications.memory.list`.
          */
         delete: operations["deleteAgentMemoryEntry"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Read an agent's workforce state and latest scorecard
+         * @description The agent's place on the dismissal ladder (ADR-0050 decision 5g): whether it is under review (watch), suspended, retired (and until when it can be reinstated) or deleted, its owners, legal hold, whether it is a workforce manager, its latest daily scorecard, and whether the caller manages agents here or owns the agent. Requires `models.applications.applications.list`. The mobile app reads it for the probation badge of an automatically hired agent (contract 1.56).
+         */
+        get: operations["getAgentWorkforce"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/agent_workforce/prompt_lib/{project_id}/proposals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List workforce proposals
+         * @description The project's workforce proposals, newest first: open ones (proposed or asked_owner) unless status names proposed, asked_owner, approved, rejected or all. application_id narrows them to one agent. kind picks the ladder's dismiss and demote (the default) or the Marketplace's hire_listing and feedback_report (ADR-0051 decision 6). Requires `models.applications.applications.list`. The mobile app reads the Marketplace kinds, read-only (contract 1.56).
+         */
+        get: operations["listAgentWorkforceProposals"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2469,6 +2516,27 @@ export interface components {
                 tool?: string;
             }[];
         };
+        AgentScorecard: {
+            approval_rejections_30d: number;
+            breaker_trips_7d: number;
+            cap_reached_30d: number;
+            certification_state: string;
+            /** Format: date-time */
+            computed_at: string;
+            /** Format: date */
+            day: string;
+            failed_30d: number;
+            failure_rate_30d: number;
+            guardrail_hits_30d: number;
+            /** Format: date-time */
+            last_used_at: string | null;
+            project_median_spend_usd: number;
+            runs_30d: number;
+            spend_30d_usd: number;
+            thumbs_down_30d: number;
+            thumbs_up_30d: number;
+            unused_days: number | null;
+        };
         /**
          * @description ADR-0050 decision 1a: an agent version's soul document, the JSON form of a `SOUL.md` file (YAML front matter holding every key but `body`, then `body` as the markdown after the closing `---`). It shapes how the agent speaks and behaves and GRANTS NOTHING: no key names a tool, a toolkit, a credential, a secret, a permission or a scope, and Main refuses an unknown key outright (400 `soul_capability_key` for a capability-shaped one, `soul_invalid` for any other), so a soul can never be read as a grant. At most 16384 bytes of text: the UTF-8 bytes of every string value (keys not counted) are summed, which reads the same in every client and in SOUL.md (400 `soul_too_large`). Prompt order: platform system text, organization guardrails, the soul, the instructions, recalled memory. `proactive_goals` is not put into the prompt; the heartbeat reads it. Self-contained (no $ref, no `nullable`) so it is valid JSON Schema as written.
          * @example {
@@ -2536,6 +2604,180 @@ export interface components {
             };
             /** @description The tools the agent may use in a turn nobody waits on (a turn another agent handed it). Absent is the read-only tools; a tool that writes needs the platform's agents.unattended_tools_allowlist too. Empty is no tool. */
             unattended_tools?: string[];
+        };
+        AgentWorkforceAgent: {
+            /** Format: int64 */
+            application_id: number;
+            application_name: string;
+            /**
+             * Format: date-time
+             * @description The workforce policy hired the agent (it is on probation until a manager keeps it).
+             */
+            auto_hired_at: string | null;
+            /** Format: int64 */
+            business_owner_id: number;
+            /** @description The caller holds agents.workforce.manage here (only on getAgentWorkforce). */
+            can_manage?: boolean;
+            /**
+             * @deprecated
+             * @description Deprecated duplicate of is_workforce_manager, kept for one release for older mobile and desktop builds. Removed in the next release.
+             */
+            is_hr_agent?: boolean;
+            /** @description The caller owns the agent (only on getAgentWorkforce). */
+            is_owner?: boolean;
+            is_workforce_manager: boolean;
+            legal_hold: boolean;
+            /** @description active, retired or deleted. */
+            lifecycle_state: string;
+            /**
+             * Format: date-time
+             * @description The agent's owners left the project; it is offered for reassignment.
+             */
+            orphaned_since: string | null;
+            /**
+             * Format: date-time
+             * @description When an agent manager kept or undid the automatic hire.
+             */
+            probation_reviewed_at: string | null;
+            /**
+             * Format: date-time
+             * @description Until when an agent manager can undo the automatic hire.
+             */
+            probation_until: string | null;
+            /** Format: int64 */
+            project_id: number;
+            /** Format: date-time */
+            purge_after: string | null;
+            /** Format: date-time */
+            reinstate_until: string | null;
+            /** Format: date-time */
+            retired_at: string | null;
+            /** Format: int64 */
+            retired_by: number | null;
+            risk_tier: string;
+            /** @description The latest scorecard (only on getAgentWorkforce). */
+            scorecard?: components["schemas"]["AgentScorecard"] | null;
+            /**
+             * Format: int64
+             * @description The active suspension, 0 for none.
+             */
+            suspension_id: number;
+            suspension_source: string;
+            /** Format: int64 */
+            technical_owner_id: number;
+            /** @description The watch flag. */
+            under_review: boolean;
+            /** Format: date-time */
+            under_review_since: string | null;
+        };
+        /** @description The exact narrowing of a demotion. Every field only takes away. */
+        AgentWorkforceNarrowing: {
+            /** @description Set the memory write mode to review. */
+            memory_review?: boolean;
+            /** @description Turn the heartbeat off. */
+            proactivity_off?: boolean;
+            /** @description can_propose_agents and/or can_review_agents. */
+            remove_capabilities?: string[];
+            /** @description Drop the agent as the lead of every conversation it leads. */
+            remove_lead?: boolean;
+            remove_toolkit_ids?: number[];
+            /** @description Keep only toolkits of these types (an allowlist; empty is no ceiling). */
+            toolkit_type_ceiling?: string[];
+        };
+        AgentWorkforceNesting: {
+            /** Format: int64 */
+            application_id: number;
+            name: string;
+        };
+        AgentWorkforceProposal: {
+            /** Format: date-time */
+            appeal_decided_at: string | null;
+            /** Format: int64 */
+            appeal_decided_by_user_id: number | null;
+            appeal_note: string | null;
+            appeal_reason: string | null;
+            /** @description open, granted or upheld. */
+            appeal_state: string | null;
+            /** Format: date-time */
+            appealed_at: string | null;
+            /** Format: int64 */
+            appealed_by_user_id: number | null;
+            /**
+             * Format: int64
+             * @description The agent the proposal is about; the hired agent of a feedback_report. 0 for a hire_listing (no agent yet).
+             */
+            application_id: number;
+            application_name: string;
+            /** @description What applying the stage changed (the reinstate and appeal reversal read it). */
+            applied: {
+                [key: string]: unknown;
+            } | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            decided_at: string | null;
+            /** Format: int64 */
+            decided_by_user_id: number | null;
+            decision_note: string | null;
+            /** @description The latest scorecard when the proposal was made. */
+            evidence: {
+                [key: string]: unknown;
+            } | null;
+            evidence_digest: string;
+            execution_id: string | null;
+            /** Format: int64 */
+            id: number;
+            /** @description dismiss or demote (the ladder), hire_listing (a workforce manager proposes hiring a Marketplace listing version) or feedback_report (a workforce manager's drafted report on a hired agent). */
+            kind: string;
+            /**
+             * Format: int64
+             * @description The Marketplace listing of a hire_listing or feedback_report.
+             */
+            listing_id: number | null;
+            /**
+             * Format: int64
+             * @description The listing version to hire, or the version the hired agent was installed from.
+             */
+            listing_version_id: number | null;
+            narrowing: components["schemas"]["AgentWorkforceNarrowing"];
+            owner_comment: string | null;
+            /** @description What a Marketplace kind carries. A hire_listing has mode (install or fork), bindings_hint ([{requirement_key, toolkit_id}]), listing_name, version_name, tier, has_write_tools and required_types. A feedback_report has outcome, reason_code, scorecard (the platform-filled summary), listing_name and hired_agent_id; its text is the rationale. Empty for the ladder. */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** @description The rule of a stage the workforce policy applied or noticed (source policy). */
+            policy_rule: string | null;
+            /** Format: int64 */
+            project_id: number;
+            /** Format: int64 */
+            proposed_by_user_id: number | null;
+            /**
+             * Format: int64
+             * @description The workforce manager that proposed it.
+             */
+            proposer_application_id: number | null;
+            rationale: string;
+            /** @description person, workforce_manager or policy (the project's automatic dismissal policy). */
+            source: string;
+            /** @description watch, demote, suspend, retire or delete. For a feedback_report, the stage the report is about. Empty for a hire_listing. */
+            stage: string;
+            /** @description proposed, asked_owner, approved or rejected. */
+            status: string;
+        };
+        /** @description NOTE(W2): internal/api/v2/agentworkforce/handler.go, writeError. code is one of not_found, workforce_invalid, workforce_forbidden, workforce_guard_refused, workforce_proposal_open, workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed. */
+        AgentWorkforceRefusal: {
+            code: string;
+            error: string;
+            message: string;
+            /** @description With workforce_confirm_nested, the agents that nest it. */
+            nested_by?: components["schemas"]["AgentWorkforceNesting"][];
+            /**
+             * Format: date-time
+             * @description With workforce_retention_pending.
+             */
+            purge_after?: string | null;
+            /** Format: int64 */
+            workforce_proposal_id?: number;
         };
         /** @description NOTE(W2): internal/domain/applications/types.go:15-50 — required set = json tags WITHOUT omitempty (id, name, tags, created_at, owner_id, is_forked, meta, has_interrupt) PLUS updated_at, whose omitempty is ineffective on a time.Time (always marshaled; zero sentinel when unscanned). Every other omitempty field is optional (absent when zero-valued). */
         Application: {
@@ -6100,6 +6342,87 @@ export interface operations {
                     "application/json": components["schemas"]["AgentMemoryRefusal"];
                 };
             };
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    getAgentWorkforce: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The agent's workforce state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentWorkforceAgent"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            /** @description (code not_found) No such agent or proposal in this project */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentWorkforceRefusal"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    listAgentWorkforceProposals: {
+        parameters: {
+            query?: {
+                application_id?: number;
+                /** @description Omitted: the ladder's proposals (dismiss and demote). hire_listing or feedback_report: that kind. marketplace: both. dismiss, demote or all. The Marketplace kinds are the agent manager's to read. */
+                kind?: string;
+                limit?: number;
+                offset?: number;
+                /** @description proposed, asked_owner, approved, rejected or all */
+                status?: string;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The proposals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        rows: components["schemas"]["AgentWorkforceProposal"][];
+                        total: number;
+                    };
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
             426: components["responses"]["ClientUpgradeRequired"];
         };
     };

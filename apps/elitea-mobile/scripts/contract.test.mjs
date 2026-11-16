@@ -334,6 +334,16 @@ describe('client contract 1.52', () => {
   });
 });
 
+describe('client contract 1.56', () => {
+  it('reads the workforce proposals and probation of an agent (issue 1632)', () => {
+    const { doc } = buildContract();
+    const [major, minor] = String(doc.info['x-elitea-client-contract']).split('.').map(Number);
+    assert.ok(major > 1 || (major === 1 && minor >= 56), `contract ${String(doc.info['x-elitea-client-contract'])} predates 1.56`);
+    assert.ok(doc.paths['/elitea_core/agent_workforce/prompt_lib/{project_id}/proposals'].get);
+    assert.ok(doc.paths['/elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}'].get);
+  });
+});
+
 describe('client contract 1.55', () => {
   it('reads the feedback of a Marketplace listing (issue 1631)', () => {
     const { doc } = buildContract();

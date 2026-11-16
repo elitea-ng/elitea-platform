@@ -2922,11 +2922,15 @@ export const getSaveMarketplaceWorkforceReportUrl = (
 
 /**
  * The caller approves and publishes a workforce manager's report on the
- * listing version a hired agent was installed from. The agent must be a
- * workforce manager of the project, the project must have hired the
- * listing and not published it, and there is one report per hired agent
- * and stage. The scorecard summary is filled by the platform
- * (internal/api/v2/eliteacore/marketplace_feedback.go).
+ * listing version a hired agent was installed from, from the
+ * feedback_report proposal that agent drafted with suggest_feedback
+ * (ADR-0051 decision 6). The caller needs `agents.workforce.manage`. A
+ * report that did not originate from the agent's own proposal is not
+ * accepted: the request names the proposal, not the agent. The drafting
+ * agent must still be a workforce manager of the project, the project
+ * must have hired the listing and not published it, and there is one
+ * report per hired agent and stage. The scorecard summary is filled by
+ * the platform (internal/api/v2/eliteacore/marketplace_feedback.go).
  * @summary Publish a workforce report on a hired agent
  */
 export const saveMarketplaceWorkforceReport = async (

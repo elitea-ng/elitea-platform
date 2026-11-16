@@ -2979,6 +2979,9 @@ export const getListAgentWorkforceProposalsResponseMock = (
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       null,
     ]),
+    listing_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    listing_version_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    payload: {},
   })),
   total: faker.number.int(),
   ...overrideResponse,
@@ -3092,6 +3095,9 @@ export const getProposeAgentWorkforceStageResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  listing_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  listing_version_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  payload: {},
   ...overrideResponse,
 });
 
@@ -3203,6 +3209,9 @@ export const getGetAgentWorkforceProposalResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  listing_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  listing_version_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  payload: {},
   ...overrideResponse,
 });
 
@@ -3314,6 +3323,9 @@ export const getApproveAgentWorkforceProposalResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  listing_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  listing_version_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  payload: {},
   ...overrideResponse,
 });
 
@@ -3425,6 +3437,9 @@ export const getRejectAgentWorkforceProposalResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  listing_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  listing_version_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  payload: {},
   ...overrideResponse,
 });
 
@@ -3536,6 +3551,9 @@ export const getAskOwnerAgentWorkforceProposalResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  listing_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  listing_version_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  payload: {},
   ...overrideResponse,
 });
 
@@ -3647,6 +3665,9 @@ export const getCommentAgentWorkforceProposalResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  listing_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  listing_version_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  payload: {},
   ...overrideResponse,
 });
 
@@ -3758,6 +3779,9 @@ export const getAppealAgentWorkforceProposalResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  listing_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  listing_version_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  payload: {},
   ...overrideResponse,
 });
 
@@ -3869,6 +3893,9 @@ export const getDecideAgentWorkforceAppealResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     null,
   ]),
+  listing_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  listing_version_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  payload: {},
   ...overrideResponse,
 });
 
@@ -3902,6 +3929,11 @@ export const getGetAgentWorkforcePolicyResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     null,
   ]),
+  auto_feedback_enabled: faker.datatype.boolean(),
+  auto_feedback_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  listing_min_reviews: faker.number.int(),
+  listing_min_rating: faker.number.float({ fractionDigits: 2 }),
+  listing_max_dismissal_rate: faker.number.float({ fractionDigits: 2 }),
   default_rules: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
@@ -3952,6 +3984,11 @@ export const getSetAgentWorkforcePolicyResponseMock = (
     faker.date.past().toISOString().slice(0, 19) + "Z",
     null,
   ]),
+  auto_feedback_enabled: faker.datatype.boolean(),
+  auto_feedback_by: faker.helpers.arrayElement([faker.number.int(), null]),
+  listing_min_reviews: faker.number.int(),
+  listing_min_rating: faker.number.float({ fractionDigits: 2 }),
+  listing_max_dismissal_rate: faker.number.float({ fractionDigits: 2 }),
   default_rules: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,

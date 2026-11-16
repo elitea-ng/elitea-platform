@@ -46,10 +46,22 @@ import { AgentWorkforceNarrowing } from "./agentWorkforceNarrowing.zod";
 export const AgentWorkforceProposal = zod.object({
   id: zod.int(),
   project_id: zod.int(),
-  application_id: zod.int(),
+  application_id: zod
+    .int()
+    .describe(
+      "The agent the proposal is about; the hired agent of a feedback_report. 0 for a hire_listing (no agent yet).",
+    ),
   application_name: zod.string(),
-  kind: zod.string().describe("dismiss or demote."),
-  stage: zod.string().describe("watch, demote, suspend, retire or delete."),
+  kind: zod
+    .string()
+    .describe(
+      "dismiss or demote (the ladder), hire_listing (a workforce manager proposes hiring a Marketplace listing version) or feedback_report (a workforce manager's drafted report on a hired agent).\n",
+    ),
+  stage: zod
+    .string()
+    .describe(
+      "watch, demote, suspend, retire or delete. For a feedback_report, the stage the report is about. Empty for a hire_listing.",
+    ),
   source: zod
     .string()
     .describe(
@@ -92,6 +104,21 @@ export const AgentWorkforceProposal = zod.object({
     .nullable()
     .describe(
       "The rule of a stage the workforce policy applied or noticed (source policy).",
+    ),
+  listing_id: zod
+    .int()
+    .nullable()
+    .describe("The Marketplace listing of a hire_listing or feedback_report."),
+  listing_version_id: zod
+    .int()
+    .nullable()
+    .describe(
+      "The listing version to hire, or the version the hired agent was installed from.",
+    ),
+  payload: zod
+    .record(zod.string(), zod.unknown())
+    .describe(
+      "What a Marketplace kind carries. A hire_listing has mode (install or fork), bindings_hint ([{requirement_key, toolkit_id}]), listing_name, version_name, tier, has_write_tools and required_types. A feedback_report has outcome, reason_code, scorecard (the platform-filled summary), listing_name and hired_agent_id; its text is the rationale. Empty for the ladder.\n",
     ),
 });
 
