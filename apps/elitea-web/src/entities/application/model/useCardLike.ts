@@ -81,7 +81,7 @@ const useLikeStore = create<LikeState>(set => ({
  * entity name). The two share one id space per table, so the store keys a like
  * by both.
  */
-export type CardLikeEntityType = 'application' | 'skill';
+type CardLikeEntityType = 'application' | 'skill';
 
 export interface UseCardLikeOptions {
   /** The entity's id (the public twin's id for a Marketplace listing). Named for its first use, the agents hub. */
