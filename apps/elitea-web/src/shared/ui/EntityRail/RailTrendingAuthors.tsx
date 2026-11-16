@@ -57,7 +57,10 @@ const SKELETON_ROW_COUNT = 3;
 /** Presentational half — no data source, so a test can drive every state directly. */
 export function RailTrendingAuthorsView({ authors, isLoading, isError, onSelect }: RailTrendingAuthorsViewProps): ReactNode {
   return (
-    <Box data-testid="entity-rail-trending-authors">
+    <Box
+      data-testid="entity-rail-trending-authors"
+      sx={rootSx}
+    >
       <Typography
         component="div"
         variant="headingSmall"
@@ -134,6 +137,9 @@ export function RailTrendingAuthors({ projectId, onSelect }: RailTrendingAuthors
     />
   );
 }
+
+/** Never shrinks: a flex column squeezing it is how it ended up painted over the tags (#2115). */
+const rootSx: SxProps<Theme> = { flexShrink: 0 };
 
 const titleSx: SxProps<Theme> = (theme: Theme) => ({ marginBottom: theme.spacing(1) });
 

@@ -19,6 +19,8 @@ export interface AiEditReviewFormProps {
   readonly current: AiEditFields;
   readonly draft: AiEditFields;
   readonly onChange: (next: AiEditFields) => void;
+  /** Show the welcome message and conversation starters. Agents have them; skills do not. Default true. */
+  readonly agentFields?: boolean;
 }
 
 type TextKey = 'name' | 'description' | 'welcome_message';
@@ -48,7 +50,7 @@ function Field({ draft, field, label, multiline, required = false, onChange }: F
   );
 }
 
-export function AiEditReviewForm({ current, draft, onChange }: AiEditReviewFormProps): ReactNode {
+export function AiEditReviewForm({ current, draft, onChange, agentFields = true }: AiEditReviewFormProps): ReactNode {
   return (
     <Box sx={reviewSx}>
       <Typography variant="labelMedium">{t('features.agents.aiEdit.proposedChanges', 'Proposed changes')}</Typography>
@@ -68,6 +70,8 @@ export function AiEditReviewForm({ current, draft, onChange }: AiEditReviewFormP
         value={draft.instructions}
         onChange={(event) => onChange({ ...draft, instructions: event.target.value })}
       />
+      {agentFields && (
+        <>
       <Field draft={draft} field="welcome_message" label={t('features.agents.aiEdit.fieldWelcome', 'Welcome message')} multiline onChange={onChange} />
       <TextField
         fullWidth
@@ -78,6 +82,8 @@ export function AiEditReviewForm({ current, draft, onChange }: AiEditReviewFormP
         value={draft.conversation_starters.join('\n')}
         onChange={(event) => onChange({ ...draft, conversation_starters: event.target.value.split('\n') })}
       />
+        </>
+      )}
     </Box>
   );
 }

@@ -9,6 +9,10 @@ Elitea ships frequent, small releases. This page summarizes the most recent user
 
 A renamed agent now shows its current name in the participants panel and on its messages, not the name it had when it joined the conversation. After you tag a person with `@` and send, the next message to the model no longer fails with "The execution input is invalid." (upgrade the worker with Main). The **X** next to the agent or pipeline in the message bar now switches the conversation back to the model. In the agent and pipeline editor opened from a chat, **Save** is enabled only while there is something to save, and a save refreshes the panel.
 
+## Skills: versions, tags, AI edit and a tidier list
+
+A skill saved as a new version proposes the next version name and warns about a duplicate one. Tags accept a comma or Enter, **Edit with AI** is available on a skill, and a failed publish check no longer reports a bogus invalid token. The icon picker rejects a file that is not a PNG, JPG, GIF, WEBP, BMP or ICO image, and you can delete an icon you uploaded. In the table view the Skills list has an **Actions** column with a three-dot menu (Export, Delete), and the side panel no longer paints **Trending Authors** over the tags. See [Skills](/menus/skills).
+
 ## MCP fixes: list, Create form, secrets and Login
 
 The **MCPs** list now asks the server for MCPs only, so a project with many toolkits no longer shows an empty list or sends you to **New MCP**. The Create form no longer lists your other MCPs as tools before **Load Tools**. A saved **Headers** value such as `Authorization: Bearer {{secret.token}}` and a **Client Secret** that is a secret reference now read back as saved, instead of coming back empty and being dropped on the next save. **Load Tools** keeps each tool's input schema, so **Test settings** shows the input fields and enables **Run** for MCPs that need a login. **Login** on a saved MCP answers with a message: connected, or the reason it failed. A plain literal header or client secret is still never returned; reference it with `{{secret.name}}`.

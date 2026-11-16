@@ -2,7 +2,6 @@ import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 
 import Box from '@mui/material/Box';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
@@ -13,6 +12,7 @@ import {
   isSkillValid,
   skillVersionKey,
   SkillCompareModal,
+  NewSkillVersionModal,
   SkillForm,
   SkillPublishControls,
   useBindSkillIconMutation,
@@ -23,6 +23,7 @@ import {
   type SkillRecord,
   type SkillWriteInput,
 } from '@/features/skills';
+import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { hasBackendCapability } from '@/shared/config';
 import { usePermissionSet } from '@/widgets/sidebar';
 import { t } from '@/shared/i18n';
@@ -33,6 +34,7 @@ import { pageSx } from '@/widgets/page-header';
 
 import { useEditSkillVersionControls } from './lib/useEditSkillVersionControls';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
+import { SkillAiEditButton } from './SkillAiEditButton';
 import { SkillEditorHeader } from './SkillEditorHeader';
 import { SkillTestPanel } from './SkillTestPanel';
 
@@ -118,6 +120,16 @@ function buildSkillIconControl(args: {
   };
 }
 
+/** A published version is frozen server-side, so there is nothing for the AI to edit. */
+function aiEditDisabled(saving: boolean, skill: SkillRecord, versionId: string | undefined): boolean {
+  const shown = versionId === undefined ? skill.version_details : skill.versions?.find((version) => String(version.id) === versionId);
+  return saving || shown?.status === 'published';
+}
+
+function isConflict(error: unknown): boolean {
+  return error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 409;
+}
+
 export function EditSkill(): ReactNode {
   const navigate = useNavigate();
   const params = useParams({ strict: false }) as EditSkillParams;
@@ -129,7 +141,7 @@ export function EditSkill(): ReactNode {
   const [showErrors, setShowErrors] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [versionOpen, setVersionOpen] = useState(false);
-  const [versionName, setVersionName] = useState('');
+  const [versionError, setVersionError] = useState<string>();
   const [error, setError] = useState<string>();
   const permissions = usePermissionSet(projectId);
   const bindIcon = useBindSkillIconMutation(projectId ?? '');
@@ -179,6 +191,27 @@ export function EditSkill(): ReactNode {
         ...(params.version ? { versionId: params.version } : {}),
       })
       .catch(() => setError(t('skills.edit.saveError', 'Failed to save the skill.')));
+  };
+
+  // #2102: a saved version becomes the one on screen, so the header, the form
+  // and the next save all address the new version instead of the one it was cut from.
+  const createVersion = (name: string): void => {
+    if (!params.skillId) return;
+    setVersionError(undefined);
+    void mutations.createVersion
+      .mutateAsync({ skillId: params.skillId, input: { name, instructions: value.instructions, tags: value.tags } })
+      .then((created) => {
+        setVersionOpen(false);
+        const createdId = created.version_details?.id;
+        if (createdId !== undefined) goToVersion(String(createdId));
+      })
+      .catch((caught: unknown) => {
+        setVersionError(
+          isConflict(caught)
+            ? t('skills.edit.versionNameExists', 'Version name already exists. Please choose a different name.')
+            : t('skills.edit.createVersionError', 'Failed to create the version.'),
+        );
+      });
   };
 
   const doExport = async (): Promise<void> => {
@@ -243,6 +276,14 @@ export function EditSkill(): ReactNode {
             disabled={mutations.update.isPending}
             showErrors={showErrors}
             icon={iconControl}
+            aiEditSlot={
+              <SkillAiEditButton
+                projectId={projectId}
+                value={value}
+                onChange={setValue}
+                disabled={aiEditDisabled(mutations.update.isPending, detail.data, params.version)}
+              />
+            }
           />
         </Box>
         {projectId && canTestSkill && (
@@ -267,31 +308,13 @@ export function EditSkill(): ReactNode {
           );
         }}
       />
-      <BaseModal
+      <NewSkillVersionModal
         open={versionOpen}
-        title={t('skills.edit.newVersionTitle', 'Create skill version')}
+        existingNames={versions.map((version) => version.name)}
+        confirming={mutations.createVersion.isPending}
+        error={versionError}
         onClose={() => setVersionOpen(false)}
-        onConfirm={() => {
-          if (!params.skillId || !versionName.trim()) return;
-          void mutations.createVersion
-            .mutateAsync({
-              skillId: params.skillId,
-              input: { name: versionName.trim(), instructions: value.instructions, tags: value.tags },
-            })
-            .then(() => {
-              setVersionName('');
-              setVersionOpen(false);
-            });
-        }}
-        actions={{ confirming: mutations.createVersion.isPending }}
-        content={
-          <TextField
-            fullWidth
-            label={t('skills.edit.versionName', 'Version name')}
-            value={versionName}
-            onChange={(event) => setVersionName(event.target.value)}
-          />
-        }
+        onConfirm={createVersion}
       />
       {versionControls.compare.open && (
         <SkillCompareModal

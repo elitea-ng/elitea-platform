@@ -173,7 +173,8 @@ export function RailTagsPanel({ projectId, ...viewProps }: RailTagsPanelProps): 
  * rail's free height, which is what leaves the author card sitting on the
  * bottom edge of the viewport in production when the tag list is long.
  */
-const panelSx: SxProps<Theme> = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' };
+// overflow hidden: the chips container keeps a 5.5em floor, so a rail shorter than that must clip the chips rather than paint them over the sibling below (#2115).
+const panelSx: SxProps<Theme> = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
 
 /**
  * The same panel when it has NO chips to hold.
