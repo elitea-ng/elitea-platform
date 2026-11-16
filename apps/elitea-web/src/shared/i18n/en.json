@@ -6245,6 +6245,7 @@
   "toolkits.editor.saved": "Toolkit saved.",
   "widgets.chat.plusChatButton.menuSkills": "Skills",
   "artifacts.rename.confirm": "Rename",
+  "artifacts.rename.extension": "The file extension cannot be changed.",
   "artifacts.rename.label": "File name",
   "artifacts.rename.stale": "That file no longer exists, so it cannot be renamed.",
   "artifacts.rename.title": "Rename file",

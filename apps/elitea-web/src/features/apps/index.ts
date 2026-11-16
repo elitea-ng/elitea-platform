@@ -24,4 +24,4 @@ export { appsTabByIndex, appsTabIndex, isApplicationsTab, normalizeAppsTab, sear
 
 export { useApplicationToolkits } from './api/useApplicationToolkits';
 
-export { APPLICATION_CATALOG_TYPES } from './lib/constants';
+export { WIKI_TOOLKIT_TYPES } from './lib/constants';

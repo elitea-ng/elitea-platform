@@ -309,7 +309,14 @@ fn pinned_to(listed: &Listed, fetched: &FetchedObject) -> Result<(), Failure> {
             // none) is pinned by the listed modification time instead; an
             // object with neither is unverifiable.
             None => match listed.fallback_modified_at.as_deref() {
-                Some(listed_at) => pinned_by_time(listed_at, fetched),
+                Some(listed_at) => {
+                    // The size is the second witness: a rewrite within the same
+                    // second that changed the length is still `Changed`.
+                    if fetched.bytes.len() as u64 != listed.reference.size {
+                        return Err(Failure::Changed);
+                    }
+                    pinned_by_time(listed_at, fetched)
+                }
                 None => Err(Failure::InvalidResponse(
                     "the object answer has no etag to pin the fetch to",
                 )),

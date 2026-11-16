@@ -2145,9 +2145,9 @@ impl Runner<'_> {
         // Documents were written before the gateway gave out: the index
         // holds them and a re-run continues, so this is a partial index, not
         // a failed one (#2105).
-        if self.tally.gateway_outage && self.tally.indexed_documents > 0 {
+        if self.tally.gateway_outage && self.store_record(plan).total_documents > 0 {
             let message = format!(
-                "Index '{}' of toolkit '{}' stopped early: {} documents indexed ({} chunks) before the run stopped. {reason}",
+                "Index '{}' of toolkit '{}' stopped early: {} documents indexed in this run ({} chunks); the index keeps what it holds. {reason}",
                 self.parameters.index_name,
                 self.toolkit_name,
                 self.tally.indexed_documents,

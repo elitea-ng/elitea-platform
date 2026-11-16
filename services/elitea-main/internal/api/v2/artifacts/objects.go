@@ -856,7 +856,7 @@ func (h *Handler) MoveObject(w http.ResponseWriter, r *http.Request) {
 	// A rename keeps the file's type: the extension is what the preview, the
 	// indexer and the media type read, so changing it silently changes how
 	// the file is treated (#2119). Moving a file never changes it either.
-	if keyExtension(req.From) != keyExtension(req.To) {
+	if !strings.EqualFold(keyExtension(req.From), keyExtension(req.To)) {
 		writeError(w, http.StatusBadRequest, "InvalidArgument", "the file extension cannot be changed")
 		return
 	}

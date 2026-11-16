@@ -49,6 +49,16 @@ describe('RenameArtifactDialog', () => {
     expect(onSubmit).toHaveBeenCalledWith('example.json.txt');
   });
 
+  it('refuses a name that gives an extensionless file an extension', async () => {
+    const user = userEvent.setup();
+    const { onSubmit } = renderDialog({ item: { ...file, key: 'a/Makefile', name: 'Makefile' } });
+    const field = screen.getByRole('textbox', { name: 'File name' });
+    await user.type(field, '.md');
+    expect(screen.getByText('The file extension cannot be changed.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rename' })).toBeDisabled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it('shows no extension for a name that has none', async () => {
     const user = userEvent.setup();
     const { onSubmit } = renderDialog({ item: { ...file, key: 'a/Makefile', name: 'Makefile' } });

@@ -5,12 +5,10 @@ import Typography from '@mui/material/Typography';
 
 import { useNavigate } from '@tanstack/react-router';
 
-import { APPLICATION_CATALOG_TYPES, useApplicationToolkits } from '@/features/apps';
+import { WIKI_TOOLKIT_TYPES, useApplicationToolkits } from '@/features/apps';
 import { ToolkitsList, type ToolkitListItem } from '@/features/toolkits';
 import { t } from '@/shared/i18n';
 import { EntityCard, entityTypeIcon } from '@/shared/ui/EntityCardList';
-
-const [WIKI_TYPE] = APPLICATION_CATALOG_TYPES;
 
 function noop(): void {
   // The list is one page: `useApplicationToolkits` asks for every toolkit at once.
@@ -27,7 +25,7 @@ export function ApplicationsTab(): ReactNode {
 
   const open = useCallback(
     (item: ToolkitListItem) => {
-      if (item.type === WIKI_TYPE) {
+      if (WIKI_TOOLKIT_TYPES.includes(item.type)) {
         void navigate({ to: '/deepwiki/$toolkitId', params: { toolkitId: item.id } });
       } else {
         void navigate({ to: '/inventory/$toolkitId', params: { toolkitId: item.id } });

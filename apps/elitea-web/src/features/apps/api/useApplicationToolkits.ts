@@ -4,14 +4,14 @@ import type { ToolkitInstance } from '@/shared/api/generated/model';
 import { useListToolkitInstances } from '@/shared/api/generated/toolkits/toolkits';
 import { unwrapListPage } from '@/shared/api/unwrap';
 
-import { APPLICATION_CATALOG_TYPES } from '../lib/constants';
+import { APPLICATION_CATALOG_TYPES, WIKI_TOOLKIT_TYPES } from '../lib/constants';
 
 import { useSelectedProjectId } from './useSelectedProjectId';
 
 /** The server's page ceiling (`listToolkitInstancesParamsLimitMax`): one request holds every toolkit a project realistically has. */
 const LIST_LIMIT = 1000;
 
-const APPLICATION_TYPES: ReadonlySet<string> = new Set(APPLICATION_CATALOG_TYPES);
+const APPLICATION_TYPES: ReadonlySet<string> = new Set([...APPLICATION_CATALOG_TYPES, ...WIKI_TOOLKIT_TYPES]);
 
 export interface ApplicationToolkitsState {
   /** The project's toolkit instances whose type is an application type (Wikis, Inventory). */
@@ -43,5 +43,6 @@ export function useApplicationToolkits(): ApplicationToolkitsState {
   );
   const applications = useMemo(() => rows.filter((row) => APPLICATION_TYPES.has(row.type)), [rows]);
 
-  return { applications, isLoading: query.isFetching, isError: query.isError };
+  return { applications, // First load only: a background refetch must not read as "loading" (the Apps redirect waits on it).
+    isLoading: query.isLoading, isError: query.isError };
 }

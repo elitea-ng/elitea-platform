@@ -35,7 +35,13 @@ export function RenameArtifactDialog({ item, pending, error, onClose, onSubmit }
   }, [item]);
   const trimmed = stem.trim();
   const fullName = `${trimmed}${extension}`;
-  const validation = trimmed === '' ? '' : validateFileName(fullName);
+  // A name that gains or changes an extension is refused here, as Main refuses it (#2119): typing
+  // `Makefile.md` for a file with no extension would otherwise reach the server and come back a 400.
+  const keepsExtension = splitFileName(fullName).extension === extension;
+  const validation =
+    trimmed === ''
+      ? ''
+      : validateFileName(fullName) || (keepsExtension ? '' : t('artifacts.rename.extension', 'The file extension cannot be changed.'));
   const unchanged = fullName === item?.name;
   const disabled = pending || trimmed === '' || validation !== '' || unchanged;
   const submit = (): void => {
