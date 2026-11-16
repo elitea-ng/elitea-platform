@@ -2005,6 +2005,22 @@ impl Runner<'_> {
             .collect()
     }
 
+    /// Every lost document failed to fetch and the index holds nothing at
+    /// all (none was kept from an earlier run): there is no part of it to
+    /// call partial, so the run is a failure (#2106). A run that lost
+    /// documents to anything else (a model, a limit) keeps its status.
+    fn nothing_indexed(&self, plan: &RunPlan) -> bool {
+        let fetch_failures = self
+            .tally
+            .skipped
+            .get(SKIP_FETCH_FAILED)
+            .copied()
+            .unwrap_or(0);
+        fetch_failures > 0
+            && fetch_failures == self.tally.lost_skips
+            && self.store_record(plan).total_documents == 0
+    }
+
     /// The sentence naming the ignored chunking settings of the file types
     /// this run listed. The form sends a default for every extension, and
     /// naming settings of types the source does not hold is noise the user
@@ -2039,10 +2055,7 @@ impl Runner<'_> {
     /// totals and record, the stamp.
     fn summary(self, plan: &RunPlan) -> IndexIngestSummaryV1 {
         let partial = self.tally.failed_chunks > 0 || self.tally.lost_skips > 0;
-        // Work was lost and the index holds nothing at all (every document
-        // failed, none was kept from an earlier run): there is no part of it
-        // to call partial, so the run is a failure (#2106).
-        let nothing_indexed = partial && self.store_record(plan).total_documents == 0;
+        let nothing_indexed = self.nothing_indexed(plan);
         let (status, state) = if nothing_indexed {
             (
                 IndexIngestStatusV1::Error,
