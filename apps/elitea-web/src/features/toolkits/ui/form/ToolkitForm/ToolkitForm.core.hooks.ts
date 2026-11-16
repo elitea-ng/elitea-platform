@@ -106,6 +106,17 @@ interface ToolCatalogueReadArgs {
  * publishes them at run time. Split out of `useToolkitFormCore` to keep that
  * function under the §3.5 complexity budget.
  */
+/**
+ * A toolkit still being created has no id, so the read falls to the TYPE route,
+ * and that route answers with the project's saved toolkits OF THAT TYPE. For an
+ * MCP type those rows are other MCPs, not tools: they showed up as chips on the
+ * Create form before "Load Tools" ran (#2093). An MCP's tools come only from
+ * Load Tools (or from a saved instance's own route).
+ */
+function readsTypeRouteOfMcp(toolkitId: string | number | undefined, toolkitType: string): boolean {
+  return toolkitId === undefined && (toolkitType === 'mcp' || toolkitType.startsWith('mcp_'));
+}
+
 function useToolCatalogueRead(args: ToolCatalogueReadArgs): ToolCatalogueRead {
   const { projectId, toolkitId, toolkitType, staticToolNames, schemasAreFetching, schemasReadFailed, retrySchemasRead } = args;
 
@@ -114,7 +125,7 @@ function useToolCatalogueRead(args: ToolCatalogueReadArgs): ToolCatalogueRead {
     // `ToolkitFormEditDetail.id` is `string | number`; the route takes a path segment.
     toolkitId: toolkitId !== undefined ? String(toolkitId) : undefined,
     toolkitType,
-    enabled: !schemasAreFetching && staticToolNames.length === 0,
+    enabled: !schemasAreFetching && staticToolNames.length === 0 && !readsTypeRouteOfMcp(toolkitId, toolkitType),
   });
 
   // Both reads feed the "Tools" section, so one retry control must run both.

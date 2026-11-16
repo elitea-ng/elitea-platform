@@ -302,6 +302,21 @@ describe('Toolkits', () => {
     expect(router.state.location.pathname).toBe('/mcps/all');
   });
 
+  it('asks the server for MCPs only on /mcps and for plain toolkits on /toolkits (#2092: MCPs past the first page of toolkits left the list empty)', async () => {
+    const seen: string[] = [];
+    server.use(
+      getListToolkitInstancesMockHandler(({ request }) => {
+        seen.push(new URL(request.url).searchParams.get('mcp') ?? 'absent');
+        return { rows: [toolkitRow({ id: 'tk-2', name: 'My MCP Server', type: 'mcp' })], total: 1 };
+      }),
+    );
+
+    renderToolkitsPage(<Toolkits isMCP />, '/mcps/all', 'proj-1');
+
+    expect(await screen.findByText('My MCP Server')).toBeInTheDocument();
+    expect(seen).toEqual(['true']);
+  });
+
   it('renders the MCPs search and list-panel test hook when isMCP is true', async () => {
     server.use(getListToolkitInstancesMockHandler({ rows: [], total: 0 }));
     setPublicProjectConfig('proj-1');

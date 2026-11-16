@@ -119,7 +119,9 @@ function usePagedToolkitRows(projectId: string | undefined, isMCP: boolean): Use
 
   const query = useListToolkitInstances(
     safeProjectId,
-    { limit: PAGE_SIZE, offset: resolvedPage * PAGE_SIZE },
+    // The server filters by kind, so a page holds only this list's rows. Without it
+    // the first 20 rows of a project with many toolkits held no MCP at all (#2092).
+    { limit: PAGE_SIZE, offset: resolvedPage * PAGE_SIZE, mcp: isMCP },
     { query: { enabled: projectId !== undefined } },
   );
   // R-A6 (#132) via the one helper. `undefined` is preserved deliberately:
@@ -148,7 +150,10 @@ function usePagedToolkitRows(projectId: string | undefined, isMCP: boolean): Use
   const totalCount = wire?.total ?? 0;
   // `hasMore` hides "load more" while a fetch is in flight; the redirect gate must not inherit that,
   // or a refetch on re-entry reads as an empty project and sends the person to Create (#2000).
-  const hasMoreRawPages = (resolvedPage + 1) * PAGE_SIZE < totalCount;
+  // While a later page is in flight `wire` is undefined and `totalCount` reads 0: that is "not known yet",
+  // never "no more rows", or the redirect gate sends the person to Create mid load-more (#2092).
+  const nextPageUnknown = resolvedPage > 0 && wire === undefined;
+  const hasMoreRawPages = nextPageUnknown || (resolvedPage + 1) * PAGE_SIZE < totalCount;
   const hasMore = !query.isFetching && hasMoreRawPages;
   const onLoadMore = useCallback(() => setPage((prev) => prev + 1), []);
 

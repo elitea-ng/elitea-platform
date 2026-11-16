@@ -12,7 +12,7 @@ import { server } from '@/test/setup';
 import { createTestQueryClient } from '../../__tests__/testUtils';
 
 import type { UseGetSelectedToolSchemaParams } from './useGetSelectedToolSchema';
-import { useGetSelectedToolSchema } from './useGetSelectedToolSchema';
+import { mcpToolOptionsFromSettings, useGetSelectedToolSchema } from './useGetSelectedToolSchema';
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
@@ -223,4 +223,21 @@ it('uses the discovery authorization reference when loading argument schemas', a
   const { box } = renderSelectedToolSchema({ toolkitType: 'mcp', toolkitId: '19', toolOptionType: 'echo_marker', availableMcpTools: undefined, getAuthorizationReference: () => 'A'.repeat(43) });
   await waitFor(() => expect(box.current?.toolSchema?.properties).toEqual({ marker: { type: 'string' } }));
   expect(reference).toBe('A'.repeat(43));
+});
+
+describe('mcpToolOptionsFromSettings (#2124)', () => {
+  it('turns the schemas "Load Tools" stored into options the selected-tool lookup finds', () => {
+    const options = mcpToolOptionsFromSettings({
+      available_mcp_tools: ['get_repo'],
+      available_mcp_tool_schemas: { get_repo: { name: 'get_repo', inputSchema: { properties: { repo: { type: 'string' } }, required: ['repo'] } } },
+    });
+    expect(options).toHaveLength(1);
+    expect(options?.[0]?.value).toBe('get_repo');
+    expect(options?.[0]?.args_schema).toMatchObject({ inputSchema: { required: ['repo'] } });
+  });
+
+  it('has no options for a toolkit that stored only names', () => {
+    expect(mcpToolOptionsFromSettings({ available_mcp_tools: ['get_repo'] })).toBeUndefined();
+    expect(mcpToolOptionsFromSettings(undefined)).toBeUndefined();
+  });
 });

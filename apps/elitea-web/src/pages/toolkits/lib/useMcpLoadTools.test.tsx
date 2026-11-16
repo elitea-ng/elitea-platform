@@ -112,6 +112,28 @@ describe('useMcpLoadTools', () => {
     expect(sent).toMatchObject({ url: 'https://mcp-mock:8443/mcp', timeout: 120, headers: { Authorization: 'Bearer t' } });
   });
 
+  it('stores each tool\'s input schema beside the names, so the Test pane can draw its fields (#2124)', async () => {
+    server.use(
+      http.post(PATH, () =>
+        HttpResponse.json({
+          success: true,
+          tools: [{ name: 'get_repo', description: 'Read a repository', inputSchema: { properties: { repo: { type: 'string' } }, required: ['repo'] } }, { name: 'ping' }],
+        }),
+      ),
+    );
+    const onChangeToolDetail = vi.fn();
+    const editToolDetail = detail({ settings: { url: 'https://mcp-mock:8443/mcp' } });
+
+    const { result } = renderHook(() => useMcpLoadTools({ projectId: '1', editToolDetail, onChangeToolDetail }), { wrapper });
+    act(() => result.current?.onLoadTools());
+
+    await waitFor(() => expect(onChangeToolDetail).toHaveBeenCalledTimes(1));
+    const updater = onChangeToolDetail.mock.calls[0]?.[0] as (previous: EditToolDetail | null) => EditToolDetail | null;
+    expect(updater(editToolDetail)?.settings?.['available_mcp_tool_schemas']).toEqual({
+      get_repo: { name: 'get_repo', description: 'Read a repository', inputSchema: { properties: { repo: { type: 'string' } }, required: ['repo'] } },
+    });
+  });
+
   /**
    * A generic Remote MCP is resolved by dynamic discovery from its own stored
    * `settings.url` at run time — the SDK's `_mcp_tools` skips `type == 'mcp'`

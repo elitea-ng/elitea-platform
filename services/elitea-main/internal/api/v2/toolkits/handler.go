@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -1915,7 +1916,13 @@ func redactSettings(value any) any {
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for key, nested := range v {
-			if isSensitiveSettingKey(key) || key == configurationapp.RetiredPgvectorToolkitSetting {
+			if key == configurationapp.RetiredPgvectorToolkitSetting {
+				continue
+			}
+			// A `{{secret.NAME}}` reference POINTS at a secret; it is not one. Dropping it
+			// hid a saved Authorization header and a saved Client Secret from the edit
+			// form, which then re-saved the toolkit without them (#2116, #2126).
+			if isSensitiveSettingKey(key) && !isSecretReferenceValue(nested) {
 				continue
 			}
 			out[key] = redactSettings(nested)
@@ -1930,6 +1937,25 @@ func redactSettings(value any) any {
 	default:
 		return value
 	}
+}
+
+// secretReferencePattern matches one `{{secret.NAME}}` reference.
+var secretReferencePattern = regexp.MustCompile(`\{\{secret\.[A-Za-z0-9_]+\}\}`)
+
+// authSchemeResidue is what may stand around a reference in a served header
+// value: an HTTP auth scheme word and spaces, so `Bearer {{secret.token}}` reads
+// back as typed. Any other residue could be a literal credential.
+var authSchemeResidue = regexp.MustCompile(`(?i)^\s*(bearer|basic|token|bot|apikey)?\s*$`)
+
+// isSecretReferenceValue reports whether a settings value holds only secret
+// references (plus at most an auth scheme word), the one form that is safe to
+// serve under a credential-like key.
+func isSecretReferenceValue(value any) bool {
+	text, ok := value.(string)
+	if !ok || !secretReferencePattern.MatchString(text) {
+		return false
+	}
+	return authSchemeResidue.MatchString(secretReferencePattern.ReplaceAllString(text, ""))
 }
 
 // isSensitiveSettingKey delegates to the word-based classifier in

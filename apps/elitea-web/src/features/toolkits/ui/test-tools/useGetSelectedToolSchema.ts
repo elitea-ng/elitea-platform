@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { toolkitTools } from '@/entities/toolkit';
+import { MCP_TOOL_SCHEMAS_KEY, toolkitTools } from '@/entities/toolkit';
 
 import { useSelectedProjectId } from '../../lib/hooks/useSelectedProjectId';
 
@@ -22,6 +22,24 @@ export interface UseGetSelectedToolSchemaParams {
   readonly toolkitType: string | undefined;
   readonly toolOptionType: string | null;
   readonly availableMcpTools: readonly McpToolOption[] | undefined;
+}
+
+/**
+ * The tools of an MCP toolkit with the argument schema "Load Tools" found for
+ * each. `available_mcp_tools` holds NAMES only, so without the schema map a
+ * selected tool of an authorised MCP (whose live route needs a token the test
+ * pane does not hold) drew no input fields and left Run disabled (#2124).
+ */
+export function mcpToolOptionsFromSettings(settings: Readonly<Record<string, unknown>> | undefined): readonly McpToolOption[] | undefined {
+  const legacy = settings?.['available_mcp_tools'];
+  const fromObjects = Array.isArray(legacy) ? legacy.filter((entry): entry is McpToolOption => typeof entry === 'object' && entry !== null) : [];
+  const schemas = settings?.[MCP_TOOL_SCHEMAS_KEY];
+  const fromSchemas: McpToolOption[] =
+    typeof schemas === 'object' && schemas !== null && !Array.isArray(schemas)
+      ? Object.entries(schemas).map(([value, schema]) => ({ value, args_schema: schema as JsonSchemaLike }))
+      : [];
+  const merged = [...fromObjects, ...fromSchemas];
+  return merged.length > 0 ? merged : undefined;
 }
 
 interface SelectedToolsSchemaEntry {
