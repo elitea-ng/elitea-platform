@@ -31,6 +31,62 @@ export interface SkillTrustPanelProps {
   readonly revisionHint?: string | undefined;
 }
 
+function failureText(failed: unknown): string {
+  if (failed === null || failed === undefined) return '';
+  const stale = failed instanceof EliteaApiError && failed.failure.kind === 'http' && failed.failure.status === 409;
+  return ` ${stale ? t('skills.trust.stale', 'The text changed since you opened it. Read it again before trusting it.') : t('skills.trust.failed', 'The trust could not be changed. Try again.')}`;
+}
+
+function TrustedAlert({ canEdit, busy, onRevoke }: { readonly canEdit: boolean; readonly busy: boolean; readonly onRevoke: () => void }): ReactNode {
+  return (
+    <Alert
+      severity="success"
+      data-testid="skill-trust-panel"
+      action={
+        canEdit ? (
+          <Button color="inherit" size="small" disabled={busy} onClick={onRevoke} data-testid="skill-trust-revoke">
+            {t('skills.trust.revoke', 'Revoke trust')}
+          </Button>
+        ) : undefined
+      }
+    >
+      {t('skills.trust.trusted', 'This project trusts this version of the text, written in another project. Chats give it to the model as an instruction.')}
+    </Alert>
+  );
+}
+
+function UntrustedAlert({
+  canEdit,
+  busy,
+  failed,
+  onTrust,
+}: {
+  readonly canEdit: boolean;
+  readonly busy: boolean;
+  readonly failed: unknown;
+  readonly onTrust: () => void;
+}): ReactNode {
+  return (
+    <Alert
+      severity="warning"
+      data-testid="skill-trust-panel"
+      action={
+        canEdit ? (
+          <Button color="inherit" size="small" disabled={busy} onClick={onTrust} data-testid="skill-trust-grant">
+            {t('skills.trust.grant', 'Trust this version for this project')}
+          </Button>
+        ) : undefined
+      }
+    >
+      {t(
+        'skills.trust.untrusted',
+        'Written in another project. Until this project trusts this version, chats give its text to the model as quoted data, not as an instruction. Read it, then trust it. Any change to the text needs trust again.',
+      )}
+      {failureText(failed)}
+    </Alert>
+  );
+}
+
 export function SkillTrustPanel({ projectId, skillId, canEdit, revisionHint }: SkillTrustPanelProps): ReactNode {
   const id = Number(skillId);
   const enabled = projectId !== undefined && Number.isInteger(id) && id > 0;
@@ -53,44 +109,6 @@ export function SkillTrustPanel({ projectId, skillId, canEdit, revisionHint }: S
   const data = status.data;
   if (!enabled || data === undefined || !data.foreign) return null;
   const busy = trust.isPending || revoke.isPending;
-  const failed = trust.error ?? revoke.error;
-  const stale = failed instanceof EliteaApiError && failed.failure.kind === 'http' && failed.failure.status === 409;
-
-  if (data.state === 'trusted') {
-    return (
-      <Alert
-        severity="success"
-        data-testid="skill-trust-panel"
-        action={
-          canEdit ? (
-            <Button color="inherit" size="small" disabled={busy} onClick={() => revoke.mutate()} data-testid="skill-trust-revoke">
-              {t('skills.trust.revoke', 'Revoke trust')}
-            </Button>
-          ) : undefined
-        }
-      >
-        {t('skills.trust.trusted', 'This project trusts this version of the text, written in another project. Chats give it to the model as an instruction.')}
-      </Alert>
-    );
-  }
-  return (
-    <Alert
-      severity="warning"
-      data-testid="skill-trust-panel"
-      action={
-        canEdit ? (
-          <Button color="inherit" size="small" disabled={busy} onClick={() => trust.mutate(data.revision)} data-testid="skill-trust-grant">
-            {t('skills.trust.grant', 'Trust this version for this project')}
-          </Button>
-        ) : undefined
-      }
-    >
-      {t(
-        'skills.trust.untrusted',
-        'Written in another project. Until this project trusts this version, chats give its text to the model as quoted data, not as an instruction. Read it, then trust it. Any change to the text needs trust again.',
-      )}
-      {stale ? ` ${t('skills.trust.stale', 'The text changed since you opened it. Read it again before trusting it.')}` : ''}
-      {failed !== null && !stale ? ` ${t('skills.trust.failed', 'The trust could not be changed. Try again.')}` : ''}
-    </Alert>
-  );
+  if (data.state === 'trusted') return <TrustedAlert canEdit={canEdit} busy={busy} onRevoke={() => revoke.mutate()} />;
+  return <UntrustedAlert canEdit={canEdit} busy={busy} failed={trust.error ?? revoke.error} onTrust={() => trust.mutate(data.revision)} />;
 }

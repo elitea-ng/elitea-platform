@@ -159,72 +159,121 @@ function PinRow({
   );
 }
 
+/** The menu that offers the project's skills not pinned yet, and a way to the Marketplace. */
+function AddMenu({
+  projectId,
+  anchor,
+  pinned,
+  onClose,
+  onPick,
+}: {
+  readonly projectId: string | undefined;
+  readonly anchor: HTMLElement | null;
+  readonly pinned: ReadonlySet<number>;
+  readonly onClose: () => void;
+  readonly onPick: (skillId: number) => void;
+}): ReactNode {
+  const navigate = useNavigate();
+  const options = useProjectSkillOptions(projectId, anchor !== null);
+  const addable = (options.data ?? []).filter((skill) => !pinned.has(skill.id));
+  return (
+    <Menu anchorEl={anchor} open={anchor !== null} onClose={onClose} data-testid="conversation-skills-menu">
+      {options.isPending && <MenuItem disabled>{t('chat.skills.loading', 'Loading the project skills…')}</MenuItem>}
+      {options.isError && <MenuItem disabled>{t('chat.skills.optionsFailed', 'The project skills could not be loaded.')}</MenuItem>}
+      {options.isSuccess && addable.length === 0 && (
+        <MenuItem disabled>{t('chat.skills.noneToAdd', 'Every project skill is pinned already, or the project has none.')}</MenuItem>
+      )}
+      {addable.map((skill) => (
+        <MenuItem key={skill.id} onClick={() => onPick(skill.id)} data-testid={`conversation-skills-option-${skill.id}`}>
+          {skill.name}
+        </MenuItem>
+      ))}
+      <MenuItem
+        onClick={() => {
+          onClose();
+          void navigate({ to: '/marketplace', search: { kind: 'skills' } });
+        }}
+      >
+        {t('chat.skills.browse', 'Find more skills in the Marketplace')}
+      </MenuItem>
+    </Menu>
+  );
+}
+
+/** What the section says besides the rows: a failed read, a refusal, or that nothing is pinned. */
+function Notices({
+  failed,
+  empty,
+  refusal,
+  onDismiss,
+}: {
+  readonly failed: boolean;
+  readonly empty: boolean;
+  readonly refusal: string | null;
+  readonly onDismiss: () => void;
+}): ReactNode {
+  return (
+    <>
+      {failed && (
+        <Alert severity="error" data-testid="conversation-skills-error">
+          {t('chat.skills.loadFailed', 'The skills of this conversation could not be loaded.')}
+        </Alert>
+      )}
+      {refusal !== null && (
+        <Alert severity="warning" onClose={onDismiss} data-testid="conversation-skills-refusal">
+          {refusal}
+        </Alert>
+      )}
+      {empty && (
+        <Typography variant="bodySmall" color="text.secondary" data-testid="conversation-skills-empty">
+          {t('chat.skills.empty', 'No skills pinned.')}
+        </Typography>
+      )}
+    </>
+  );
+}
+
+function AddButton({ full, onOpen }: { readonly full: boolean; readonly onOpen: (anchor: HTMLElement) => void }): ReactNode {
+  return (
+    <IconButton
+      size="small"
+      disabled={full}
+      onClick={(event) => onOpen(event.currentTarget)}
+      aria-label={
+        full ? t('chat.skills.addFull', 'Add a skill (this conversation holds five)') : t('chat.skills.add', 'Add a skill to this conversation')
+      }
+      data-testid="conversation-skills-add"
+    >
+      <AddIcon fontSize="small" />
+    </IconButton>
+  );
+}
+
 export function ConversationSkillsSection({ projectId, conversationId, readOnly = false, personName }: ConversationSkillsSectionProps): ReactNode {
   const currentUserId = (useGetCurrentAuthor().data?.data as { readonly id?: string } | undefined)?.id;
-  const navigate = useNavigate();
   const list = useConversationSkills(projectId, conversationId);
   const { pin, unpin } = useConversationSkillMutations(projectId, conversationId);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const options = useProjectSkillOptions(projectId, anchor !== null);
   const pins = useMemo(() => list.data ?? [], [list.data]);
-  const full = pins.length >= CONVERSATION_SKILL_LIMIT;
   const pinned = useMemo(() => new Set(pins.flatMap((entry) => (entry.skill_id === undefined ? [] : [entry.skill_id]))), [pins]);
 
   // A conversation still being composed has nowhere to hold a pin.
   if (conversationId === undefined || conversationId === '') return null;
 
-  const add = (skillId: number): void => {
-    setAnchor(null);
-    setRefusal(null);
-    pin.mutate({ skill_id: skillId }, { onError: (error) => setRefusal(refusalText(error)) });
-  };
-  const remove = (entry: ConversationSkillPin): void => {
-    setRefusal(null);
-    unpin.mutate(entry.id, { onError: (error) => setRefusal(refusalText(error)) });
-  };
-  const addable = (options.data ?? []).filter((skill) => !pinned.has(skill.id));
-
+  const refuse = { onError: (error: unknown) => setRefusal(refusalText(error)) };
   return (
     <Box component="section" sx={sectionSx} data-testid="conversation-skills" aria-label={t('chat.skills.title', 'Skills')}>
       <Box sx={headerSx}>
         <Typography variant="labelMedium" component="h3" color="text.secondary">
           {t('chat.skills.heading', 'Skills ({{count}})', { count: pins.length })}
         </Typography>
-        {!readOnly && (
-          <IconButton
-            size="small"
-            disabled={full}
-            onClick={(event) => setAnchor(event.currentTarget)}
-            aria-label={
-              full
-                ? t('chat.skills.addFull', 'Add a skill (this conversation holds five)')
-                : t('chat.skills.add', 'Add a skill to this conversation')
-            }
-            data-testid="conversation-skills-add"
-          >
-            <AddIcon fontSize="small" />
-          </IconButton>
-        )}
+        {!readOnly && <AddButton full={pins.length >= CONVERSATION_SKILL_LIMIT} onOpen={setAnchor} />}
       </Box>
       <Typography variant="labelSmall" color="text.secondary" component="p" sx={{ mb: 0.5 }}>
         {t('chat.skills.hint', 'Applied to every reply here, whichever agent or model answers.')}
       </Typography>
-      {list.isError && (
-        <Alert severity="error" data-testid="conversation-skills-error">
-          {t('chat.skills.loadFailed', 'The skills of this conversation could not be loaded.')}
-        </Alert>
-      )}
-      {refusal !== null && (
-        <Alert severity="warning" onClose={() => setRefusal(null)} data-testid="conversation-skills-refusal">
-          {refusal}
-        </Alert>
-      )}
-      {!list.isError && pins.length === 0 && !list.isPending && (
-        <Typography variant="bodySmall" color="text.secondary" data-testid="conversation-skills-empty">
-          {t('chat.skills.empty', 'No skills pinned.')}
-        </Typography>
-      )}
+      <Notices failed={list.isError} empty={!list.isError && pins.length === 0 && !list.isPending} refusal={refusal} onDismiss={() => setRefusal(null)} />
       <Box component="ul" sx={listSx}>
         {pins.map((entry) => (
           <PinRow
@@ -232,33 +281,25 @@ export function ConversationSkillsSection({ projectId, conversationId, readOnly 
             pin={entry}
             readOnly={readOnly}
             removing={unpin.isPending}
-            onRemove={remove}
+            onRemove={(removed) => {
+              setRefusal(null);
+              unpin.mutate(removed.id, refuse);
+            }}
             pinnedBy={pinnedByText(entry, currentUserId, personName)}
           />
         ))}
       </Box>
-      <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)} data-testid="conversation-skills-menu">
-        {options.isPending && (
-          <MenuItem disabled>{t('chat.skills.loading', 'Loading the project skills…')}</MenuItem>
-        )}
-        {options.isError && <MenuItem disabled>{t('chat.skills.optionsFailed', 'The project skills could not be loaded.')}</MenuItem>}
-        {options.isSuccess && addable.length === 0 && (
-          <MenuItem disabled>{t('chat.skills.noneToAdd', 'Every project skill is pinned already, or the project has none.')}</MenuItem>
-        )}
-        {addable.map((skill) => (
-          <MenuItem key={skill.id} onClick={() => add(skill.id)} data-testid={`conversation-skills-option-${skill.id}`}>
-            {skill.name}
-          </MenuItem>
-        ))}
-        <MenuItem
-          onClick={() => {
-            setAnchor(null);
-            void navigate({ to: '/marketplace', search: { kind: 'skills' } });
-          }}
-        >
-          {t('chat.skills.browse', 'Find more skills in the Marketplace')}
-        </MenuItem>
-      </Menu>
+      <AddMenu
+        projectId={projectId}
+        anchor={anchor}
+        pinned={pinned}
+        onClose={() => setAnchor(null)}
+        onPick={(skillId) => {
+          setAnchor(null);
+          setRefusal(null);
+          pin.mutate({ skill_id: skillId }, refuse);
+        }}
+      />
     </Box>
   );
 }

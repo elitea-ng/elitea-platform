@@ -63,16 +63,8 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
   const leadSlot = useAgentLeadSlot(projectId, activeConversation);
 
   // ADR-0050 amendment 1, A1.3: the skills pinned to the conversation, in their own section beside
-  // the participants and never among them. Only a saved conversation can hold a pin.
-  const savedConversationId =
-    activeConversation === undefined || activeConversation.isNew || activeConversation.isPlayback ? undefined : activeConversationId(activeConversation);
-  const skills = (
-    <ConversationSkillsSection
-      projectId={projectId}
-      conversationId={savedConversationId}
-      personName={personNameOf(activeConversation)}
-    />
-  );
+  // the participants and never among them.
+  const skills = <PanelSkills projectId={projectId} activeConversation={activeConversation} />;
 
   const panel = (
     <ParticipantsWrapper
@@ -118,6 +110,18 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
       {panel}
       {skills}
     </>
+  );
+}
+
+/** The Skills section for the open conversation; only a saved conversation can hold a pin. */
+function PanelSkills({ projectId, activeConversation }: { readonly projectId: string | undefined; readonly activeConversation: ActiveConversation | undefined }): ReactNode {
+  const saved = activeConversation !== undefined && !activeConversation.isNew && !activeConversation.isPlayback;
+  return (
+    <ConversationSkillsSection
+      projectId={projectId}
+      conversationId={saved ? activeConversationId(activeConversation) : undefined}
+      personName={personNameOf(activeConversation)}
+    />
   );
 }
 

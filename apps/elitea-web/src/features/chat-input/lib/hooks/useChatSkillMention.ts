@@ -214,6 +214,18 @@ function useProjectSkillIds(
   return { projectSkillIdsFor, resolveProjectSkillIds };
 }
 
+/** An agent and a participant that is only a model take project skills; a toolkit or a person does not. */
+function canUseSkills(participant: Participant | null | undefined): boolean {
+  const kind = participant?.entityName;
+  return kind === 'application' || kind === 'llm' || kind === 'dummy';
+}
+
+/** The ids of the project skills pinned to the conversation, as strings. */
+function usePinnedSkillIds(projectId: string | undefined, conversationId: string | undefined): ReadonlySet<string> {
+  const pins = useConversationSkills(projectId, conversationId);
+  return useMemo(() => new Set((pins.data ?? []).flatMap((pin) => (pin.skill_id === undefined ? [] : [String(pin.skill_id)]))), [pins.data]);
+}
+
 export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppVersionId, projectId, conversationId }: UseChatSkillMentionParams): UseChatSkillMentionResult {
   const [inputContent, setInputContent] = useState('');
   const [phase, setPhase] = useState<MentionPhaseValue>(MentionPhase.Idle);
@@ -224,7 +236,7 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
   const isAgent = activeParticipant?.entityName === 'application';
   // A model chat takes project skills too (ADR-0050 amendment 1, A1.4): the project's skills are offered for an
   // agent and for a participant that is only a model, never for a toolkit or a person.
-  const canUseProjectSkills = isAgent || activeParticipant?.entityName === 'llm' || activeParticipant?.entityName === 'dummy';
+  const canUseProjectSkills = canUseSkills(activeParticipant);
   // entitySettings.versionId is not always populated (e.g. the agent editor's
   // test chat), so fall back to the caller-supplied fallbackAppVersionId.
   const appVersionId = toVersionIdNumber(activeParticipant?.entitySettings?.versionId) ?? toVersionIdNumber(fallbackAppVersionId);
@@ -238,11 +250,7 @@ export function useChatSkillMention({ chatInput, activeParticipant, fallbackAppV
   // the CONVERSATION's project, which is the one the send's route reads them
   // from, not to the agent's own (possibly public) project.
   const projectSkills = useProjectSkillList(projectId, canUseProjectSkills);
-  const pins = useConversationSkills(projectId, conversationId);
-  const pinnedIds = useMemo(
-    () => new Set((pins.data ?? []).flatMap((pin) => (pin.skill_id === undefined ? [] : [String(pin.skill_id)]))),
-    [pins.data],
-  );
+  const pinnedIds = usePinnedSkillIds(projectId, conversationId);
 
   const versionItems = useMemo<readonly SkillMentionItem[]>(() => {
     // See `applicationParticipants.ts`'s header (this app's established
