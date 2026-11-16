@@ -41,7 +41,7 @@ elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
 indexmap = { version = "=2.14.2", features = ["serde"] }
 # The wall-clock stamps graph metadata carries (embeddings_generated_at).
-jiff = "=0.2.38"
+jiff = "=0.2.42"
 # Repairing a model's malformed JSON answer.
 jsonrepair = { version = "=0.1.0", default-features = false, features = ["serde"] }
 # Entity ids are Python's md5 prefix; file hashes its sha256.
