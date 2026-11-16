@@ -283,10 +283,24 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		filter.ApplicationID = value
 	}
+	// kind: the ladder's proposals unless it names another (ADR-0051 decision
+	// 6: hire_listing and feedback_report, or marketplace for both).
+	filter.Kind = query.Get("kind")
+	if filter.Kind != "" && !oneOf(filter.Kind, "dismiss", "demote", agentworkforce.KindHireListing,
+		agentworkforce.KindFeedbackReport, "marketplace", "all") {
+		apierr.Write(w, apierr.BadRequest("kind is dismiss, demote, hire_listing, feedback_report, marketplace or all"))
+		return
+	}
 	// The project-wide inbox is the agent manager's; the owner reads the
 	// proposals of their own agent (application_id).
 	actor, ok := h.actor(w, r, projectID)
 	if !ok {
+		return
+	}
+	// A hire or a report proposal is the agent manager's to read: it names
+	// a listing and holds text an agent drafted for the Marketplace.
+	if !actor.Manager && filter.Kind != "" && filter.Kind != "dismiss" && filter.Kind != "demote" {
+		writeError(w, r, forbidden)
 		return
 	}
 	if !actor.Manager {
@@ -318,6 +332,19 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	proposal, err := h.store.GetProposal(r.Context(), projectID, proposalID)
 	if err != nil {
 		writeError(w, r, err)
+		return
+	}
+	if agentworkforce.IsMarketplaceKind(proposal.Kind) {
+		// A hire or a report proposal is the agent manager's to read.
+		actor, ok := h.actor(w, r, projectID)
+		if !ok {
+			return
+		}
+		if !actor.Manager {
+			writeError(w, r, forbidden)
+			return
+		}
+		writeJSON(w, http.StatusOK, proposal)
 		return
 	}
 	if !h.mayReadAgent(w, r, projectID, proposal.ApplicationID) {

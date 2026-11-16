@@ -2628,6 +2628,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct propose dismissal tool: %w", dismissalErr)
 		}
 		contentServer = contentServer.WithRuntimeProposeDismissal(proposeDismissal)
+		// The Marketplace tools of the same workforce manager (ADR-0051
+		// decision 6, #1632), on the same claim, pool and store.
+		marketplaceWorkforce, marketplaceErr := storage.NewRuntimeMarketplaceWorkforceService(contentRepository, workforce)
+		if marketplaceErr != nil {
+			return nil, fmt.Errorf("construct marketplace workforce tools: %w", marketplaceErr)
+		}
+		contentServer = contentServer.WithRuntimeMarketplaceWorkforce(marketplaceWorkforce)
 	}
 	// The `artifact` toolkit family's four routes (#906), registered the same
 	// way and nil for the same reasons: no agent dispatch, or no Go object

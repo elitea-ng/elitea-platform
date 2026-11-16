@@ -1729,6 +1729,106 @@ func (x *ProposeDismissalResponseV1) GetResponseJson() []byte {
 	return nil
 }
 
+type MarketplaceWorkforceRequestV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Scope *RuntimeContentScopeV1 `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
+	// {"tool": "marketplace_search" | "marketplace_listing" | "propose_hire" |
+	// "suggest_feedback", "arguments": {...}}
+	RequestJson   []byte `protobuf:"bytes,2,opt,name=request_json,json=requestJson,proto3" json:"request_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MarketplaceWorkforceRequestV1) Reset() {
+	*x = MarketplaceWorkforceRequestV1{}
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarketplaceWorkforceRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarketplaceWorkforceRequestV1) ProtoMessage() {}
+
+func (x *MarketplaceWorkforceRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarketplaceWorkforceRequestV1.ProtoReflect.Descriptor instead.
+func (*MarketplaceWorkforceRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *MarketplaceWorkforceRequestV1) GetScope() *RuntimeContentScopeV1 {
+	if x != nil {
+		return x.Scope
+	}
+	return nil
+}
+
+func (x *MarketplaceWorkforceRequestV1) GetRequestJson() []byte {
+	if x != nil {
+		return x.RequestJson
+	}
+	return nil
+}
+
+type MarketplaceWorkforceResponseV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// {"schema_version": string, "status": string, "message": string, ...the
+	// tool's data}
+	ResponseJson  []byte `protobuf:"bytes,1,opt,name=response_json,json=responseJson,proto3" json:"response_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MarketplaceWorkforceResponseV1) Reset() {
+	*x = MarketplaceWorkforceResponseV1{}
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarketplaceWorkforceResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarketplaceWorkforceResponseV1) ProtoMessage() {}
+
+func (x *MarketplaceWorkforceResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarketplaceWorkforceResponseV1.ProtoReflect.Descriptor instead.
+func (*MarketplaceWorkforceResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *MarketplaceWorkforceResponseV1) GetResponseJson() []byte {
+	if x != nil {
+		return x.ResponseJson
+	}
+	return nil
+}
+
 type ListArtifactsRequestV1 struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Scope         *RuntimeContentScopeV1 `protobuf:"bytes,1,opt,name=scope,proto3" json:"scope,omitempty"`
@@ -1739,7 +1839,7 @@ type ListArtifactsRequestV1 struct {
 
 func (x *ListArtifactsRequestV1) Reset() {
 	*x = ListArtifactsRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[30]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1751,7 +1851,7 @@ func (x *ListArtifactsRequestV1) String() string {
 func (*ListArtifactsRequestV1) ProtoMessage() {}
 
 func (x *ListArtifactsRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[30]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1764,7 +1864,7 @@ func (x *ListArtifactsRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListArtifactsRequestV1.ProtoReflect.Descriptor instead.
 func (*ListArtifactsRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{30}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ListArtifactsRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -1790,7 +1890,7 @@ type ListArtifactsResponseV1 struct {
 
 func (x *ListArtifactsResponseV1) Reset() {
 	*x = ListArtifactsResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[31]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1802,7 +1902,7 @@ func (x *ListArtifactsResponseV1) String() string {
 func (*ListArtifactsResponseV1) ProtoMessage() {}
 
 func (x *ListArtifactsResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[31]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1815,7 +1915,7 @@ func (x *ListArtifactsResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListArtifactsResponseV1.ProtoReflect.Descriptor instead.
 func (*ListArtifactsResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{31}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ListArtifactsResponseV1) GetResponseJson() []byte {
@@ -1835,7 +1935,7 @@ type ReadArtifactRequestV1 struct {
 
 func (x *ReadArtifactRequestV1) Reset() {
 	*x = ReadArtifactRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[32]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1847,7 +1947,7 @@ func (x *ReadArtifactRequestV1) String() string {
 func (*ReadArtifactRequestV1) ProtoMessage() {}
 
 func (x *ReadArtifactRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[32]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1860,7 +1960,7 @@ func (x *ReadArtifactRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadArtifactRequestV1.ProtoReflect.Descriptor instead.
 func (*ReadArtifactRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{32}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ReadArtifactRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -1886,7 +1986,7 @@ type ReadArtifactResponseV1 struct {
 
 func (x *ReadArtifactResponseV1) Reset() {
 	*x = ReadArtifactResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[33]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1898,7 +1998,7 @@ func (x *ReadArtifactResponseV1) String() string {
 func (*ReadArtifactResponseV1) ProtoMessage() {}
 
 func (x *ReadArtifactResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[33]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1911,7 +2011,7 @@ func (x *ReadArtifactResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadArtifactResponseV1.ProtoReflect.Descriptor instead.
 func (*ReadArtifactResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{33}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ReadArtifactResponseV1) GetResponseJson() []byte {
@@ -1931,7 +2031,7 @@ type WriteArtifactRequestV1 struct {
 
 func (x *WriteArtifactRequestV1) Reset() {
 	*x = WriteArtifactRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[34]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1943,7 +2043,7 @@ func (x *WriteArtifactRequestV1) String() string {
 func (*WriteArtifactRequestV1) ProtoMessage() {}
 
 func (x *WriteArtifactRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[34]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1956,7 +2056,7 @@ func (x *WriteArtifactRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteArtifactRequestV1.ProtoReflect.Descriptor instead.
 func (*WriteArtifactRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{34}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *WriteArtifactRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -1982,7 +2082,7 @@ type WriteArtifactResponseV1 struct {
 
 func (x *WriteArtifactResponseV1) Reset() {
 	*x = WriteArtifactResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[35]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1994,7 +2094,7 @@ func (x *WriteArtifactResponseV1) String() string {
 func (*WriteArtifactResponseV1) ProtoMessage() {}
 
 func (x *WriteArtifactResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[35]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2007,7 +2107,7 @@ func (x *WriteArtifactResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteArtifactResponseV1.ProtoReflect.Descriptor instead.
 func (*WriteArtifactResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{35}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *WriteArtifactResponseV1) GetResponseJson() []byte {
@@ -2027,7 +2127,7 @@ type DeleteArtifactRequestV1 struct {
 
 func (x *DeleteArtifactRequestV1) Reset() {
 	*x = DeleteArtifactRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[36]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2039,7 +2139,7 @@ func (x *DeleteArtifactRequestV1) String() string {
 func (*DeleteArtifactRequestV1) ProtoMessage() {}
 
 func (x *DeleteArtifactRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[36]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2052,7 +2152,7 @@ func (x *DeleteArtifactRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteArtifactRequestV1.ProtoReflect.Descriptor instead.
 func (*DeleteArtifactRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{36}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *DeleteArtifactRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -2078,7 +2178,7 @@ type DeleteArtifactResponseV1 struct {
 
 func (x *DeleteArtifactResponseV1) Reset() {
 	*x = DeleteArtifactResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[37]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2090,7 +2190,7 @@ func (x *DeleteArtifactResponseV1) String() string {
 func (*DeleteArtifactResponseV1) ProtoMessage() {}
 
 func (x *DeleteArtifactResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[37]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2103,7 +2203,7 @@ func (x *DeleteArtifactResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteArtifactResponseV1.ProtoReflect.Descriptor instead.
 func (*DeleteArtifactResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{37}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *DeleteArtifactResponseV1) GetResponseJson() []byte {
@@ -2123,7 +2223,7 @@ type ResolveCodeWorkspaceRequestV1 struct {
 
 func (x *ResolveCodeWorkspaceRequestV1) Reset() {
 	*x = ResolveCodeWorkspaceRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[38]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2135,7 +2235,7 @@ func (x *ResolveCodeWorkspaceRequestV1) String() string {
 func (*ResolveCodeWorkspaceRequestV1) ProtoMessage() {}
 
 func (x *ResolveCodeWorkspaceRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[38]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2148,7 +2248,7 @@ func (x *ResolveCodeWorkspaceRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveCodeWorkspaceRequestV1.ProtoReflect.Descriptor instead.
 func (*ResolveCodeWorkspaceRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{38}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ResolveCodeWorkspaceRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -2178,7 +2278,7 @@ type ResolveCodeWorkspaceResponseV1 struct {
 
 func (x *ResolveCodeWorkspaceResponseV1) Reset() {
 	*x = ResolveCodeWorkspaceResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[39]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2190,7 +2290,7 @@ func (x *ResolveCodeWorkspaceResponseV1) String() string {
 func (*ResolveCodeWorkspaceResponseV1) ProtoMessage() {}
 
 func (x *ResolveCodeWorkspaceResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[39]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2203,7 +2303,7 @@ func (x *ResolveCodeWorkspaceResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveCodeWorkspaceResponseV1.ProtoReflect.Descriptor instead.
 func (*ResolveCodeWorkspaceResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{39}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ResolveCodeWorkspaceResponseV1) GetManifestJson() []byte {
@@ -2230,7 +2330,7 @@ type AdmitCodeDebugRequestV1 struct {
 
 func (x *AdmitCodeDebugRequestV1) Reset() {
 	*x = AdmitCodeDebugRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[40]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2242,7 +2342,7 @@ func (x *AdmitCodeDebugRequestV1) String() string {
 func (*AdmitCodeDebugRequestV1) ProtoMessage() {}
 
 func (x *AdmitCodeDebugRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[40]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2255,7 +2355,7 @@ func (x *AdmitCodeDebugRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdmitCodeDebugRequestV1.ProtoReflect.Descriptor instead.
 func (*AdmitCodeDebugRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{40}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *AdmitCodeDebugRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -2280,7 +2380,7 @@ type AdmitCodeDebugResponseV1 struct {
 
 func (x *AdmitCodeDebugResponseV1) Reset() {
 	*x = AdmitCodeDebugResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[41]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2292,7 +2392,7 @@ func (x *AdmitCodeDebugResponseV1) String() string {
 func (*AdmitCodeDebugResponseV1) ProtoMessage() {}
 
 func (x *AdmitCodeDebugResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[41]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2305,7 +2405,7 @@ func (x *AdmitCodeDebugResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdmitCodeDebugResponseV1.ProtoReflect.Descriptor instead.
 func (*AdmitCodeDebugResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{41}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{43}
 }
 
 type CommitCodeDebugRequestV1 struct {
@@ -2319,7 +2419,7 @@ type CommitCodeDebugRequestV1 struct {
 
 func (x *CommitCodeDebugRequestV1) Reset() {
 	*x = CommitCodeDebugRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[42]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2331,7 +2431,7 @@ func (x *CommitCodeDebugRequestV1) String() string {
 func (*CommitCodeDebugRequestV1) ProtoMessage() {}
 
 func (x *CommitCodeDebugRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[42]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2344,7 +2444,7 @@ func (x *CommitCodeDebugRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitCodeDebugRequestV1.ProtoReflect.Descriptor instead.
 func (*CommitCodeDebugRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{42}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *CommitCodeDebugRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -2377,7 +2477,7 @@ type CommitCodeDebugResponseV1 struct {
 
 func (x *CommitCodeDebugResponseV1) Reset() {
 	*x = CommitCodeDebugResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[43]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2389,7 +2489,7 @@ func (x *CommitCodeDebugResponseV1) String() string {
 func (*CommitCodeDebugResponseV1) ProtoMessage() {}
 
 func (x *CommitCodeDebugResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[43]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2402,7 +2502,7 @@ func (x *CommitCodeDebugResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitCodeDebugResponseV1.ProtoReflect.Descriptor instead.
 func (*CommitCodeDebugResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{43}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *CommitCodeDebugResponseV1) GetReferenceJson() []byte {
@@ -2422,7 +2522,7 @@ type StepCodePlatformRequestV1 struct {
 
 func (x *StepCodePlatformRequestV1) Reset() {
 	*x = StepCodePlatformRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[44]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2434,7 +2534,7 @@ func (x *StepCodePlatformRequestV1) String() string {
 func (*StepCodePlatformRequestV1) ProtoMessage() {}
 
 func (x *StepCodePlatformRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[44]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2447,7 +2547,7 @@ func (x *StepCodePlatformRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StepCodePlatformRequestV1.ProtoReflect.Descriptor instead.
 func (*StepCodePlatformRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{44}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *StepCodePlatformRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -2473,7 +2573,7 @@ type StepCodePlatformResponseV1 struct {
 
 func (x *StepCodePlatformResponseV1) Reset() {
 	*x = StepCodePlatformResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[45]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2485,7 +2585,7 @@ func (x *StepCodePlatformResponseV1) String() string {
 func (*StepCodePlatformResponseV1) ProtoMessage() {}
 
 func (x *StepCodePlatformResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[45]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2498,7 +2598,7 @@ func (x *StepCodePlatformResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StepCodePlatformResponseV1.ProtoReflect.Descriptor instead.
 func (*StepCodePlatformResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{45}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *StepCodePlatformResponseV1) GetResponseJson() []byte {
@@ -2518,7 +2618,7 @@ type ReadCodePlatformEffectsRequestV1 struct {
 
 func (x *ReadCodePlatformEffectsRequestV1) Reset() {
 	*x = ReadCodePlatformEffectsRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[46]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2530,7 +2630,7 @@ func (x *ReadCodePlatformEffectsRequestV1) String() string {
 func (*ReadCodePlatformEffectsRequestV1) ProtoMessage() {}
 
 func (x *ReadCodePlatformEffectsRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[46]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2543,7 +2643,7 @@ func (x *ReadCodePlatformEffectsRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadCodePlatformEffectsRequestV1.ProtoReflect.Descriptor instead.
 func (*ReadCodePlatformEffectsRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{46}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ReadCodePlatformEffectsRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -2569,7 +2669,7 @@ type ReadCodePlatformEffectsResponseV1 struct {
 
 func (x *ReadCodePlatformEffectsResponseV1) Reset() {
 	*x = ReadCodePlatformEffectsResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[47]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2581,7 +2681,7 @@ func (x *ReadCodePlatformEffectsResponseV1) String() string {
 func (*ReadCodePlatformEffectsResponseV1) ProtoMessage() {}
 
 func (x *ReadCodePlatformEffectsResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[47]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2594,7 +2694,7 @@ func (x *ReadCodePlatformEffectsResponseV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ReadCodePlatformEffectsResponseV1.ProtoReflect.Descriptor instead.
 func (*ReadCodePlatformEffectsResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{47}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *ReadCodePlatformEffectsResponseV1) GetResponseJson() []byte {
@@ -2613,7 +2713,7 @@ type PollNodeRecoveryRequestV1 struct {
 
 func (x *PollNodeRecoveryRequestV1) Reset() {
 	*x = PollNodeRecoveryRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[48]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2625,7 +2725,7 @@ func (x *PollNodeRecoveryRequestV1) String() string {
 func (*PollNodeRecoveryRequestV1) ProtoMessage() {}
 
 func (x *PollNodeRecoveryRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[48]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2638,7 +2738,7 @@ func (x *PollNodeRecoveryRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PollNodeRecoveryRequestV1.ProtoReflect.Descriptor instead.
 func (*PollNodeRecoveryRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{48}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *PollNodeRecoveryRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -2657,7 +2757,7 @@ type PollNodeRecoveryResponseV1 struct {
 
 func (x *PollNodeRecoveryResponseV1) Reset() {
 	*x = PollNodeRecoveryResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[49]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2669,7 +2769,7 @@ func (x *PollNodeRecoveryResponseV1) String() string {
 func (*PollNodeRecoveryResponseV1) ProtoMessage() {}
 
 func (x *PollNodeRecoveryResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[49]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2682,7 +2782,7 @@ func (x *PollNodeRecoveryResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PollNodeRecoveryResponseV1.ProtoReflect.Descriptor instead.
 func (*PollNodeRecoveryResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{49}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *PollNodeRecoveryResponseV1) GetControlJson() []byte {
@@ -2702,7 +2802,7 @@ type AcknowledgeNodeRecoveryRequestV1 struct {
 
 func (x *AcknowledgeNodeRecoveryRequestV1) Reset() {
 	*x = AcknowledgeNodeRecoveryRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[50]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2714,7 +2814,7 @@ func (x *AcknowledgeNodeRecoveryRequestV1) String() string {
 func (*AcknowledgeNodeRecoveryRequestV1) ProtoMessage() {}
 
 func (x *AcknowledgeNodeRecoveryRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[50]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2727,7 +2827,7 @@ func (x *AcknowledgeNodeRecoveryRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcknowledgeNodeRecoveryRequestV1.ProtoReflect.Descriptor instead.
 func (*AcknowledgeNodeRecoveryRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{50}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *AcknowledgeNodeRecoveryRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -2753,7 +2853,7 @@ type AcknowledgeNodeRecoveryResponseV1 struct {
 
 func (x *AcknowledgeNodeRecoveryResponseV1) Reset() {
 	*x = AcknowledgeNodeRecoveryResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[51]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2765,7 +2865,7 @@ func (x *AcknowledgeNodeRecoveryResponseV1) String() string {
 func (*AcknowledgeNodeRecoveryResponseV1) ProtoMessage() {}
 
 func (x *AcknowledgeNodeRecoveryResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[51]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2778,7 +2878,7 @@ func (x *AcknowledgeNodeRecoveryResponseV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use AcknowledgeNodeRecoveryResponseV1.ProtoReflect.Descriptor instead.
 func (*AcknowledgeNodeRecoveryResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{51}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *AcknowledgeNodeRecoveryResponseV1) GetOutcomeJson() []byte {
@@ -2797,7 +2897,7 @@ type FetchExecutionInterruptsRequestV1 struct {
 
 func (x *FetchExecutionInterruptsRequestV1) Reset() {
 	*x = FetchExecutionInterruptsRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[52]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2809,7 +2909,7 @@ func (x *FetchExecutionInterruptsRequestV1) String() string {
 func (*FetchExecutionInterruptsRequestV1) ProtoMessage() {}
 
 func (x *FetchExecutionInterruptsRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[52]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2822,7 +2922,7 @@ func (x *FetchExecutionInterruptsRequestV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use FetchExecutionInterruptsRequestV1.ProtoReflect.Descriptor instead.
 func (*FetchExecutionInterruptsRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{52}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *FetchExecutionInterruptsRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -2841,7 +2941,7 @@ type FetchExecutionInterruptsResponseV1 struct {
 
 func (x *FetchExecutionInterruptsResponseV1) Reset() {
 	*x = FetchExecutionInterruptsResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[53]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2853,7 +2953,7 @@ func (x *FetchExecutionInterruptsResponseV1) String() string {
 func (*FetchExecutionInterruptsResponseV1) ProtoMessage() {}
 
 func (x *FetchExecutionInterruptsResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[53]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2866,7 +2966,7 @@ func (x *FetchExecutionInterruptsResponseV1) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use FetchExecutionInterruptsResponseV1.ProtoReflect.Descriptor instead.
 func (*FetchExecutionInterruptsResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{53}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *FetchExecutionInterruptsResponseV1) GetFetchJson() []byte {
@@ -2886,7 +2986,7 @@ type AcknowledgeExecutionInterruptRequestV1 struct {
 
 func (x *AcknowledgeExecutionInterruptRequestV1) Reset() {
 	*x = AcknowledgeExecutionInterruptRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[54]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2898,7 +2998,7 @@ func (x *AcknowledgeExecutionInterruptRequestV1) String() string {
 func (*AcknowledgeExecutionInterruptRequestV1) ProtoMessage() {}
 
 func (x *AcknowledgeExecutionInterruptRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[54]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2911,7 +3011,7 @@ func (x *AcknowledgeExecutionInterruptRequestV1) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use AcknowledgeExecutionInterruptRequestV1.ProtoReflect.Descriptor instead.
 func (*AcknowledgeExecutionInterruptRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{54}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *AcknowledgeExecutionInterruptRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -2937,7 +3037,7 @@ type AcknowledgeExecutionInterruptResponseV1 struct {
 
 func (x *AcknowledgeExecutionInterruptResponseV1) Reset() {
 	*x = AcknowledgeExecutionInterruptResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[55]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2949,7 +3049,7 @@ func (x *AcknowledgeExecutionInterruptResponseV1) String() string {
 func (*AcknowledgeExecutionInterruptResponseV1) ProtoMessage() {}
 
 func (x *AcknowledgeExecutionInterruptResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[55]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2962,7 +3062,7 @@ func (x *AcknowledgeExecutionInterruptResponseV1) ProtoReflect() protoreflect.Me
 
 // Deprecated: Use AcknowledgeExecutionInterruptResponseV1.ProtoReflect.Descriptor instead.
 func (*AcknowledgeExecutionInterruptResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{55}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *AcknowledgeExecutionInterruptResponseV1) GetOutcomeJson() []byte {
@@ -2984,7 +3084,7 @@ type ReadNodeRecoveryResultRequestV1 struct {
 
 func (x *ReadNodeRecoveryResultRequestV1) Reset() {
 	*x = ReadNodeRecoveryResultRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[56]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2996,7 +3096,7 @@ func (x *ReadNodeRecoveryResultRequestV1) String() string {
 func (*ReadNodeRecoveryResultRequestV1) ProtoMessage() {}
 
 func (x *ReadNodeRecoveryResultRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[56]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3009,7 +3109,7 @@ func (x *ReadNodeRecoveryResultRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadNodeRecoveryResultRequestV1.ProtoReflect.Descriptor instead.
 func (*ReadNodeRecoveryResultRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{56}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ReadNodeRecoveryResultRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -3042,7 +3142,7 @@ type ReadNodeRecoveryResultResponseV1 struct {
 
 func (x *ReadNodeRecoveryResultResponseV1) Reset() {
 	*x = ReadNodeRecoveryResultResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[57]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3054,7 +3154,7 @@ func (x *ReadNodeRecoveryResultResponseV1) String() string {
 func (*ReadNodeRecoveryResultResponseV1) ProtoMessage() {}
 
 func (x *ReadNodeRecoveryResultResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[57]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3067,7 +3167,7 @@ func (x *ReadNodeRecoveryResultResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadNodeRecoveryResultResponseV1.ProtoReflect.Descriptor instead.
 func (*ReadNodeRecoveryResultResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{57}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ReadNodeRecoveryResultResponseV1) GetResultJson() []byte {
@@ -3087,7 +3187,7 @@ type RegisterCodeVisitRequestV1 struct {
 
 func (x *RegisterCodeVisitRequestV1) Reset() {
 	*x = RegisterCodeVisitRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[58]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3099,7 +3199,7 @@ func (x *RegisterCodeVisitRequestV1) String() string {
 func (*RegisterCodeVisitRequestV1) ProtoMessage() {}
 
 func (x *RegisterCodeVisitRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[58]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3112,7 +3212,7 @@ func (x *RegisterCodeVisitRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterCodeVisitRequestV1.ProtoReflect.Descriptor instead.
 func (*RegisterCodeVisitRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{58}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *RegisterCodeVisitRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -3138,7 +3238,7 @@ type RegisterCodeVisitResponseV1 struct {
 
 func (x *RegisterCodeVisitResponseV1) Reset() {
 	*x = RegisterCodeVisitResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[59]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3150,7 +3250,7 @@ func (x *RegisterCodeVisitResponseV1) String() string {
 func (*RegisterCodeVisitResponseV1) ProtoMessage() {}
 
 func (x *RegisterCodeVisitResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[59]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3163,7 +3263,7 @@ func (x *RegisterCodeVisitResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterCodeVisitResponseV1.ProtoReflect.Descriptor instead.
 func (*RegisterCodeVisitResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{59}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *RegisterCodeVisitResponseV1) GetVisitJson() []byte {
@@ -3183,7 +3283,7 @@ type RegisterCodeIntentRequestV1 struct {
 
 func (x *RegisterCodeIntentRequestV1) Reset() {
 	*x = RegisterCodeIntentRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[60]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3195,7 +3295,7 @@ func (x *RegisterCodeIntentRequestV1) String() string {
 func (*RegisterCodeIntentRequestV1) ProtoMessage() {}
 
 func (x *RegisterCodeIntentRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[60]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3208,7 +3308,7 @@ func (x *RegisterCodeIntentRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterCodeIntentRequestV1.ProtoReflect.Descriptor instead.
 func (*RegisterCodeIntentRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{60}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *RegisterCodeIntentRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -3234,7 +3334,7 @@ type RegisterCodeIntentResponseV1 struct {
 
 func (x *RegisterCodeIntentResponseV1) Reset() {
 	*x = RegisterCodeIntentResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[61]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3246,7 +3346,7 @@ func (x *RegisterCodeIntentResponseV1) String() string {
 func (*RegisterCodeIntentResponseV1) ProtoMessage() {}
 
 func (x *RegisterCodeIntentResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[61]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3259,7 +3359,7 @@ func (x *RegisterCodeIntentResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterCodeIntentResponseV1.ProtoReflect.Descriptor instead.
 func (*RegisterCodeIntentResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{61}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *RegisterCodeIntentResponseV1) GetResponseJson() []byte {
@@ -3282,7 +3382,7 @@ type PutToolkitDiscoveryResultRequestV1 struct {
 
 func (x *PutToolkitDiscoveryResultRequestV1) Reset() {
 	*x = PutToolkitDiscoveryResultRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[62]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3294,7 +3394,7 @@ func (x *PutToolkitDiscoveryResultRequestV1) String() string {
 func (*PutToolkitDiscoveryResultRequestV1) ProtoMessage() {}
 
 func (x *PutToolkitDiscoveryResultRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[62]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3307,7 +3407,7 @@ func (x *PutToolkitDiscoveryResultRequestV1) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use PutToolkitDiscoveryResultRequestV1.ProtoReflect.Descriptor instead.
 func (*PutToolkitDiscoveryResultRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{62}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *PutToolkitDiscoveryResultRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -3347,7 +3447,7 @@ type PutToolkitDiscoveryResultResponseV1 struct {
 
 func (x *PutToolkitDiscoveryResultResponseV1) Reset() {
 	*x = PutToolkitDiscoveryResultResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[63]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3359,7 +3459,7 @@ func (x *PutToolkitDiscoveryResultResponseV1) String() string {
 func (*PutToolkitDiscoveryResultResponseV1) ProtoMessage() {}
 
 func (x *PutToolkitDiscoveryResultResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[63]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3372,7 +3472,7 @@ func (x *PutToolkitDiscoveryResultResponseV1) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use PutToolkitDiscoveryResultResponseV1.ProtoReflect.Descriptor instead.
 func (*PutToolkitDiscoveryResultResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{63}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *PutToolkitDiscoveryResultResponseV1) GetReference() *ToolkitAvailableToolsArtifactReferenceV1 {
@@ -3393,7 +3493,7 @@ type GetToolkitDiscoveryResultRequestV1 struct {
 
 func (x *GetToolkitDiscoveryResultRequestV1) Reset() {
 	*x = GetToolkitDiscoveryResultRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[64]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3405,7 +3505,7 @@ func (x *GetToolkitDiscoveryResultRequestV1) String() string {
 func (*GetToolkitDiscoveryResultRequestV1) ProtoMessage() {}
 
 func (x *GetToolkitDiscoveryResultRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[64]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3418,7 +3518,7 @@ func (x *GetToolkitDiscoveryResultRequestV1) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use GetToolkitDiscoveryResultRequestV1.ProtoReflect.Descriptor instead.
 func (*GetToolkitDiscoveryResultRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{64}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *GetToolkitDiscoveryResultRequestV1) GetScope() *RuntimeContentScopeV1 {
@@ -3451,7 +3551,7 @@ type GetToolkitDiscoveryResultResponseV1 struct {
 
 func (x *GetToolkitDiscoveryResultResponseV1) Reset() {
 	*x = GetToolkitDiscoveryResultResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[65]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3463,7 +3563,7 @@ func (x *GetToolkitDiscoveryResultResponseV1) String() string {
 func (*GetToolkitDiscoveryResultResponseV1) ProtoMessage() {}
 
 func (x *GetToolkitDiscoveryResultResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[65]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3476,7 +3576,7 @@ func (x *GetToolkitDiscoveryResultResponseV1) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use GetToolkitDiscoveryResultResponseV1.ProtoReflect.Descriptor instead.
 func (*GetToolkitDiscoveryResultResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{65}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *GetToolkitDiscoveryResultResponseV1) GetResultJson() []byte {
@@ -3499,7 +3599,7 @@ type ReadSandboxWorkspaceManifestRequestV1 struct {
 
 func (x *ReadSandboxWorkspaceManifestRequestV1) Reset() {
 	*x = ReadSandboxWorkspaceManifestRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[66]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3511,7 +3611,7 @@ func (x *ReadSandboxWorkspaceManifestRequestV1) String() string {
 func (*ReadSandboxWorkspaceManifestRequestV1) ProtoMessage() {}
 
 func (x *ReadSandboxWorkspaceManifestRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[66]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3524,7 +3624,7 @@ func (x *ReadSandboxWorkspaceManifestRequestV1) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use ReadSandboxWorkspaceManifestRequestV1.ProtoReflect.Descriptor instead.
 func (*ReadSandboxWorkspaceManifestRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{66}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ReadSandboxWorkspaceManifestRequestV1) GetManifestSha256() string {
@@ -3550,7 +3650,7 @@ type ReadSandboxWorkspaceManifestResponseV1 struct {
 
 func (x *ReadSandboxWorkspaceManifestResponseV1) Reset() {
 	*x = ReadSandboxWorkspaceManifestResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[67]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3562,7 +3662,7 @@ func (x *ReadSandboxWorkspaceManifestResponseV1) String() string {
 func (*ReadSandboxWorkspaceManifestResponseV1) ProtoMessage() {}
 
 func (x *ReadSandboxWorkspaceManifestResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[67]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3575,7 +3675,7 @@ func (x *ReadSandboxWorkspaceManifestResponseV1) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use ReadSandboxWorkspaceManifestResponseV1.ProtoReflect.Descriptor instead.
 func (*ReadSandboxWorkspaceManifestResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{67}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *ReadSandboxWorkspaceManifestResponseV1) GetManifestJson() []byte {
@@ -3597,7 +3697,7 @@ type ReadSandboxWorkspaceFileRequestV1 struct {
 
 func (x *ReadSandboxWorkspaceFileRequestV1) Reset() {
 	*x = ReadSandboxWorkspaceFileRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[68]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3609,7 +3709,7 @@ func (x *ReadSandboxWorkspaceFileRequestV1) String() string {
 func (*ReadSandboxWorkspaceFileRequestV1) ProtoMessage() {}
 
 func (x *ReadSandboxWorkspaceFileRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[68]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3622,7 +3722,7 @@ func (x *ReadSandboxWorkspaceFileRequestV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use ReadSandboxWorkspaceFileRequestV1.ProtoReflect.Descriptor instead.
 func (*ReadSandboxWorkspaceFileRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{68}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *ReadSandboxWorkspaceFileRequestV1) GetManifestSha256() string {
@@ -3657,7 +3757,7 @@ type ReadSandboxWorkspaceFileResponseV1 struct {
 
 func (x *ReadSandboxWorkspaceFileResponseV1) Reset() {
 	*x = ReadSandboxWorkspaceFileResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[69]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3669,7 +3769,7 @@ func (x *ReadSandboxWorkspaceFileResponseV1) String() string {
 func (*ReadSandboxWorkspaceFileResponseV1) ProtoMessage() {}
 
 func (x *ReadSandboxWorkspaceFileResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[69]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3682,7 +3782,7 @@ func (x *ReadSandboxWorkspaceFileResponseV1) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use ReadSandboxWorkspaceFileResponseV1.ProtoReflect.Descriptor instead.
 func (*ReadSandboxWorkspaceFileResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{69}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ReadSandboxWorkspaceFileResponseV1) GetContent() []byte {
@@ -3704,7 +3804,7 @@ type SandboxContentFileHeaderV1 struct {
 
 func (x *SandboxContentFileHeaderV1) Reset() {
 	*x = SandboxContentFileHeaderV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[70]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3716,7 +3816,7 @@ func (x *SandboxContentFileHeaderV1) String() string {
 func (*SandboxContentFileHeaderV1) ProtoMessage() {}
 
 func (x *SandboxContentFileHeaderV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[70]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3729,7 +3829,7 @@ func (x *SandboxContentFileHeaderV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxContentFileHeaderV1.ProtoReflect.Descriptor instead.
 func (*SandboxContentFileHeaderV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{70}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *SandboxContentFileHeaderV1) GetLength() uint64 {
@@ -3759,7 +3859,7 @@ type GetSandboxBundleRequestV1 struct {
 
 func (x *GetSandboxBundleRequestV1) Reset() {
 	*x = GetSandboxBundleRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[71]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3771,7 +3871,7 @@ func (x *GetSandboxBundleRequestV1) String() string {
 func (*GetSandboxBundleRequestV1) ProtoMessage() {}
 
 func (x *GetSandboxBundleRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[71]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3784,7 +3884,7 @@ func (x *GetSandboxBundleRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSandboxBundleRequestV1.ProtoReflect.Descriptor instead.
 func (*GetSandboxBundleRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{71}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *GetSandboxBundleRequestV1) GetKind() SandboxBundleKindV1 {
@@ -3817,7 +3917,7 @@ type GetSandboxBundleResponseV1 struct {
 
 func (x *GetSandboxBundleResponseV1) Reset() {
 	*x = GetSandboxBundleResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[72]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3829,7 +3929,7 @@ func (x *GetSandboxBundleResponseV1) String() string {
 func (*GetSandboxBundleResponseV1) ProtoMessage() {}
 
 func (x *GetSandboxBundleResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[72]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3842,7 +3942,7 @@ func (x *GetSandboxBundleResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSandboxBundleResponseV1.ProtoReflect.Descriptor instead.
 func (*GetSandboxBundleResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{72}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *GetSandboxBundleResponseV1) GetBundleJson() []byte {
@@ -3864,7 +3964,7 @@ type PublishSandboxBundleRequestV1 struct {
 
 func (x *PublishSandboxBundleRequestV1) Reset() {
 	*x = PublishSandboxBundleRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[73]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3876,7 +3976,7 @@ func (x *PublishSandboxBundleRequestV1) String() string {
 func (*PublishSandboxBundleRequestV1) ProtoMessage() {}
 
 func (x *PublishSandboxBundleRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[73]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3889,7 +3989,7 @@ func (x *PublishSandboxBundleRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishSandboxBundleRequestV1.ProtoReflect.Descriptor instead.
 func (*PublishSandboxBundleRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{73}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *PublishSandboxBundleRequestV1) GetKind() SandboxBundleKindV1 {
@@ -3928,7 +4028,7 @@ type PublishSandboxBundleResponseV1 struct {
 
 func (x *PublishSandboxBundleResponseV1) Reset() {
 	*x = PublishSandboxBundleResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[74]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3940,7 +4040,7 @@ func (x *PublishSandboxBundleResponseV1) String() string {
 func (*PublishSandboxBundleResponseV1) ProtoMessage() {}
 
 func (x *PublishSandboxBundleResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[74]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3953,7 +4053,7 @@ func (x *PublishSandboxBundleResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishSandboxBundleResponseV1.ProtoReflect.Descriptor instead.
 func (*PublishSandboxBundleResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{74}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{76}
 }
 
 type FetchSandboxBundleFileRequestV1 struct {
@@ -3968,7 +4068,7 @@ type FetchSandboxBundleFileRequestV1 struct {
 
 func (x *FetchSandboxBundleFileRequestV1) Reset() {
 	*x = FetchSandboxBundleFileRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[75]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3980,7 +4080,7 @@ func (x *FetchSandboxBundleFileRequestV1) String() string {
 func (*FetchSandboxBundleFileRequestV1) ProtoMessage() {}
 
 func (x *FetchSandboxBundleFileRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[75]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3993,7 +4093,7 @@ func (x *FetchSandboxBundleFileRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchSandboxBundleFileRequestV1.ProtoReflect.Descriptor instead.
 func (*FetchSandboxBundleFileRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{75}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *FetchSandboxBundleFileRequestV1) GetKind() SandboxBundleKindV1 {
@@ -4037,7 +4137,7 @@ type FetchSandboxBundleFileResponseV1 struct {
 
 func (x *FetchSandboxBundleFileResponseV1) Reset() {
 	*x = FetchSandboxBundleFileResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[76]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4049,7 +4149,7 @@ func (x *FetchSandboxBundleFileResponseV1) String() string {
 func (*FetchSandboxBundleFileResponseV1) ProtoMessage() {}
 
 func (x *FetchSandboxBundleFileResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[76]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4062,7 +4162,7 @@ func (x *FetchSandboxBundleFileResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchSandboxBundleFileResponseV1.ProtoReflect.Descriptor instead.
 func (*FetchSandboxBundleFileResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{76}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *FetchSandboxBundleFileResponseV1) GetPart() isFetchSandboxBundleFileResponseV1_Part {
@@ -4121,7 +4221,7 @@ type UploadSandboxBundleFileHeaderV1 struct {
 
 func (x *UploadSandboxBundleFileHeaderV1) Reset() {
 	*x = UploadSandboxBundleFileHeaderV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[77]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4133,7 +4233,7 @@ func (x *UploadSandboxBundleFileHeaderV1) String() string {
 func (*UploadSandboxBundleFileHeaderV1) ProtoMessage() {}
 
 func (x *UploadSandboxBundleFileHeaderV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[77]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4146,7 +4246,7 @@ func (x *UploadSandboxBundleFileHeaderV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadSandboxBundleFileHeaderV1.ProtoReflect.Descriptor instead.
 func (*UploadSandboxBundleFileHeaderV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{77}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *UploadSandboxBundleFileHeaderV1) GetKind() SandboxBundleKindV1 {
@@ -4198,7 +4298,7 @@ type UploadSandboxBundleFileRequestV1 struct {
 
 func (x *UploadSandboxBundleFileRequestV1) Reset() {
 	*x = UploadSandboxBundleFileRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[78]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4210,7 +4310,7 @@ func (x *UploadSandboxBundleFileRequestV1) String() string {
 func (*UploadSandboxBundleFileRequestV1) ProtoMessage() {}
 
 func (x *UploadSandboxBundleFileRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[78]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4223,7 +4323,7 @@ func (x *UploadSandboxBundleFileRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadSandboxBundleFileRequestV1.ProtoReflect.Descriptor instead.
 func (*UploadSandboxBundleFileRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{78}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *UploadSandboxBundleFileRequestV1) GetPart() isUploadSandboxBundleFileRequestV1_Part {
@@ -4275,7 +4375,7 @@ type UploadSandboxBundleFileResponseV1 struct {
 
 func (x *UploadSandboxBundleFileResponseV1) Reset() {
 	*x = UploadSandboxBundleFileResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[79]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4287,7 +4387,7 @@ func (x *UploadSandboxBundleFileResponseV1) String() string {
 func (*UploadSandboxBundleFileResponseV1) ProtoMessage() {}
 
 func (x *UploadSandboxBundleFileResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[79]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4300,7 +4400,7 @@ func (x *UploadSandboxBundleFileResponseV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use UploadSandboxBundleFileResponseV1.ProtoReflect.Descriptor instead.
 func (*UploadSandboxBundleFileResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{79}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{81}
 }
 
 type GetCompiledSnapshotRequestV1 struct {
@@ -4315,7 +4415,7 @@ type GetCompiledSnapshotRequestV1 struct {
 
 func (x *GetCompiledSnapshotRequestV1) Reset() {
 	*x = GetCompiledSnapshotRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[80]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4327,7 +4427,7 @@ func (x *GetCompiledSnapshotRequestV1) String() string {
 func (*GetCompiledSnapshotRequestV1) ProtoMessage() {}
 
 func (x *GetCompiledSnapshotRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[80]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4340,7 +4440,7 @@ func (x *GetCompiledSnapshotRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCompiledSnapshotRequestV1.ProtoReflect.Descriptor instead.
 func (*GetCompiledSnapshotRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{80}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *GetCompiledSnapshotRequestV1) GetRoot() string {
@@ -4366,7 +4466,7 @@ type GetCompiledSnapshotResponseV1 struct {
 
 func (x *GetCompiledSnapshotResponseV1) Reset() {
 	*x = GetCompiledSnapshotResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[81]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4378,7 +4478,7 @@ func (x *GetCompiledSnapshotResponseV1) String() string {
 func (*GetCompiledSnapshotResponseV1) ProtoMessage() {}
 
 func (x *GetCompiledSnapshotResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[81]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4391,7 +4491,7 @@ func (x *GetCompiledSnapshotResponseV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCompiledSnapshotResponseV1.ProtoReflect.Descriptor instead.
 func (*GetCompiledSnapshotResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{81}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *GetCompiledSnapshotResponseV1) GetDescriptorJson() []byte {
@@ -4413,7 +4513,7 @@ type PublishCompiledSnapshotRequestV1 struct {
 
 func (x *PublishCompiledSnapshotRequestV1) Reset() {
 	*x = PublishCompiledSnapshotRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[82]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4425,7 +4525,7 @@ func (x *PublishCompiledSnapshotRequestV1) String() string {
 func (*PublishCompiledSnapshotRequestV1) ProtoMessage() {}
 
 func (x *PublishCompiledSnapshotRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[82]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4438,7 +4538,7 @@ func (x *PublishCompiledSnapshotRequestV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PublishCompiledSnapshotRequestV1.ProtoReflect.Descriptor instead.
 func (*PublishCompiledSnapshotRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{82}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *PublishCompiledSnapshotRequestV1) GetRoot() string {
@@ -4470,7 +4570,7 @@ type PublishCompiledSnapshotResponseV1 struct {
 
 func (x *PublishCompiledSnapshotResponseV1) Reset() {
 	*x = PublishCompiledSnapshotResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[83]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4482,7 +4582,7 @@ func (x *PublishCompiledSnapshotResponseV1) String() string {
 func (*PublishCompiledSnapshotResponseV1) ProtoMessage() {}
 
 func (x *PublishCompiledSnapshotResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[83]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4495,7 +4595,7 @@ func (x *PublishCompiledSnapshotResponseV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use PublishCompiledSnapshotResponseV1.ProtoReflect.Descriptor instead.
 func (*PublishCompiledSnapshotResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{83}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{85}
 }
 
 type FetchCompiledSnapshotFileRequestV1 struct {
@@ -4509,7 +4609,7 @@ type FetchCompiledSnapshotFileRequestV1 struct {
 
 func (x *FetchCompiledSnapshotFileRequestV1) Reset() {
 	*x = FetchCompiledSnapshotFileRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[84]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4521,7 +4621,7 @@ func (x *FetchCompiledSnapshotFileRequestV1) String() string {
 func (*FetchCompiledSnapshotFileRequestV1) ProtoMessage() {}
 
 func (x *FetchCompiledSnapshotFileRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[84]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4534,7 +4634,7 @@ func (x *FetchCompiledSnapshotFileRequestV1) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use FetchCompiledSnapshotFileRequestV1.ProtoReflect.Descriptor instead.
 func (*FetchCompiledSnapshotFileRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{84}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *FetchCompiledSnapshotFileRequestV1) GetRoot() string {
@@ -4571,7 +4671,7 @@ type FetchCompiledSnapshotFileResponseV1 struct {
 
 func (x *FetchCompiledSnapshotFileResponseV1) Reset() {
 	*x = FetchCompiledSnapshotFileResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[85]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4583,7 +4683,7 @@ func (x *FetchCompiledSnapshotFileResponseV1) String() string {
 func (*FetchCompiledSnapshotFileResponseV1) ProtoMessage() {}
 
 func (x *FetchCompiledSnapshotFileResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[85]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4596,7 +4696,7 @@ func (x *FetchCompiledSnapshotFileResponseV1) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use FetchCompiledSnapshotFileResponseV1.ProtoReflect.Descriptor instead.
 func (*FetchCompiledSnapshotFileResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{85}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *FetchCompiledSnapshotFileResponseV1) GetPart() isFetchCompiledSnapshotFileResponseV1_Part {
@@ -4652,7 +4752,7 @@ type UploadCompiledSnapshotFileHeaderV1 struct {
 
 func (x *UploadCompiledSnapshotFileHeaderV1) Reset() {
 	*x = UploadCompiledSnapshotFileHeaderV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[86]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4664,7 +4764,7 @@ func (x *UploadCompiledSnapshotFileHeaderV1) String() string {
 func (*UploadCompiledSnapshotFileHeaderV1) ProtoMessage() {}
 
 func (x *UploadCompiledSnapshotFileHeaderV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[86]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4677,7 +4777,7 @@ func (x *UploadCompiledSnapshotFileHeaderV1) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use UploadCompiledSnapshotFileHeaderV1.ProtoReflect.Descriptor instead.
 func (*UploadCompiledSnapshotFileHeaderV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{86}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *UploadCompiledSnapshotFileHeaderV1) GetRoot() string {
@@ -4721,7 +4821,7 @@ type UploadCompiledSnapshotFileRequestV1 struct {
 
 func (x *UploadCompiledSnapshotFileRequestV1) Reset() {
 	*x = UploadCompiledSnapshotFileRequestV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[87]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4733,7 +4833,7 @@ func (x *UploadCompiledSnapshotFileRequestV1) String() string {
 func (*UploadCompiledSnapshotFileRequestV1) ProtoMessage() {}
 
 func (x *UploadCompiledSnapshotFileRequestV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[87]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4746,7 +4846,7 @@ func (x *UploadCompiledSnapshotFileRequestV1) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use UploadCompiledSnapshotFileRequestV1.ProtoReflect.Descriptor instead.
 func (*UploadCompiledSnapshotFileRequestV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{87}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *UploadCompiledSnapshotFileRequestV1) GetPart() isUploadCompiledSnapshotFileRequestV1_Part {
@@ -4798,7 +4898,7 @@ type UploadCompiledSnapshotFileResponseV1 struct {
 
 func (x *UploadCompiledSnapshotFileResponseV1) Reset() {
 	*x = UploadCompiledSnapshotFileResponseV1{}
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[88]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4810,7 +4910,7 @@ func (x *UploadCompiledSnapshotFileResponseV1) String() string {
 func (*UploadCompiledSnapshotFileResponseV1) ProtoMessage() {}
 
 func (x *UploadCompiledSnapshotFileResponseV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_content_proto_msgTypes[88]
+	mi := &file_elitea_runtime_v1_content_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4823,7 +4923,7 @@ func (x *UploadCompiledSnapshotFileResponseV1) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use UploadCompiledSnapshotFileResponseV1.ProtoReflect.Descriptor instead.
 func (*UploadCompiledSnapshotFileResponseV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{88}
+	return file_elitea_runtime_v1_content_proto_rawDescGZIP(), []int{90}
 }
 
 var File_elitea_runtime_v1_content_proto protoreflect.FileDescriptor
@@ -4927,6 +5027,11 @@ const file_elitea_runtime_v1_content_proto_rawDesc = "" +
 	"\x05scope\x18\x01 \x01(\v2(.elitea.runtime.v1.RuntimeContentScopeV1R\x05scope\x12!\n" +
 	"\frequest_json\x18\x02 \x01(\fR\vrequestJsonJ\x04\b\x03\x10\x10\"G\n" +
 	"\x1aProposeDismissalResponseV1\x12#\n" +
+	"\rresponse_json\x18\x01 \x01(\fR\fresponseJsonJ\x04\b\x02\x10\x10\"\x88\x01\n" +
+	"\x1dMarketplaceWorkforceRequestV1\x12>\n" +
+	"\x05scope\x18\x01 \x01(\v2(.elitea.runtime.v1.RuntimeContentScopeV1R\x05scope\x12!\n" +
+	"\frequest_json\x18\x02 \x01(\fR\vrequestJsonJ\x04\b\x03\x10\x10\"K\n" +
+	"\x1eMarketplaceWorkforceResponseV1\x12#\n" +
 	"\rresponse_json\x18\x01 \x01(\fR\fresponseJsonJ\x04\b\x02\x10\x10\"\x81\x01\n" +
 	"\x16ListArtifactsRequestV1\x12>\n" +
 	"\x05scope\x18\x01 \x01(\v2(.elitea.runtime.v1.RuntimeContentScopeV1R\x05scope\x12!\n" +
@@ -5111,7 +5216,7 @@ const file_elitea_runtime_v1_content_proto_rawDesc = "" +
 	"\x13SandboxBundleKindV1\x12&\n" +
 	"\"SANDBOX_BUNDLE_KIND_V1_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dSANDBOX_BUNDLE_KIND_V1_PYTHON\x10\x01\x12!\n" +
-	"\x1dSANDBOX_BUNDLE_KIND_V1_NATIVE\x10\x022\x8c(\n" +
+	"\x1dSANDBOX_BUNDLE_KIND_V1_NATIVE\x10\x022\x89)\n" +
 	"\x15RuntimeContentService\x12Y\n" +
 	"\bGetInput\x12$.elitea.runtime.v1.GetInputRequestV1\x1a%.elitea.runtime.v1.GetInputResponseV10\x01\x12{\n" +
 	"\x14GetEliteaClientToken\x120.elitea.runtime.v1.GetEliteaClientTokenRequestV1\x1a1.elitea.runtime.v1.GetEliteaClientTokenResponseV1\x12o\n" +
@@ -5127,7 +5232,8 @@ const file_elitea_runtime_v1_content_proto_rawDesc = "" +
 	"\x11ForgetAgentMemory\x12-.elitea.runtime.v1.ForgetAgentMemoryRequestV1\x1a..elitea.runtime.v1.ForgetAgentMemoryResponseV1\x12Z\n" +
 	"\tHandFloor\x12%.elitea.runtime.v1.HandFloorRequestV1\x1a&.elitea.runtime.v1.HandFloorResponseV1\x12c\n" +
 	"\fProposeAgent\x12(.elitea.runtime.v1.ProposeAgentRequestV1\x1a).elitea.runtime.v1.ProposeAgentResponseV1\x12o\n" +
-	"\x10ProposeDismissal\x12,.elitea.runtime.v1.ProposeDismissalRequestV1\x1a-.elitea.runtime.v1.ProposeDismissalResponseV1\x12f\n" +
+	"\x10ProposeDismissal\x12,.elitea.runtime.v1.ProposeDismissalRequestV1\x1a-.elitea.runtime.v1.ProposeDismissalResponseV1\x12{\n" +
+	"\x14MarketplaceWorkforce\x120.elitea.runtime.v1.MarketplaceWorkforceRequestV1\x1a1.elitea.runtime.v1.MarketplaceWorkforceResponseV1\x12f\n" +
 	"\rListArtifacts\x12).elitea.runtime.v1.ListArtifactsRequestV1\x1a*.elitea.runtime.v1.ListArtifactsResponseV1\x12c\n" +
 	"\fReadArtifact\x12(.elitea.runtime.v1.ReadArtifactRequestV1\x1a).elitea.runtime.v1.ReadArtifactResponseV1\x12f\n" +
 	"\rWriteArtifact\x12).elitea.runtime.v1.WriteArtifactRequestV1\x1a*.elitea.runtime.v1.WriteArtifactResponseV1\x12i\n" +
@@ -5170,7 +5276,7 @@ func file_elitea_runtime_v1_content_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_runtime_v1_content_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_runtime_v1_content_proto_msgTypes = make([]protoimpl.MessageInfo, 89)
+var file_elitea_runtime_v1_content_proto_msgTypes = make([]protoimpl.MessageInfo, 91)
 var file_elitea_runtime_v1_content_proto_goTypes = []any{
 	(SandboxBundleKindV1)(0),                         // 0: elitea.runtime.v1.SandboxBundleKindV1
 	(*RuntimeContentScopeV1)(nil),                    // 1: elitea.runtime.v1.RuntimeContentScopeV1
@@ -5203,80 +5309,82 @@ var file_elitea_runtime_v1_content_proto_goTypes = []any{
 	(*ProposeAgentResponseV1)(nil),                   // 28: elitea.runtime.v1.ProposeAgentResponseV1
 	(*ProposeDismissalRequestV1)(nil),                // 29: elitea.runtime.v1.ProposeDismissalRequestV1
 	(*ProposeDismissalResponseV1)(nil),               // 30: elitea.runtime.v1.ProposeDismissalResponseV1
-	(*ListArtifactsRequestV1)(nil),                   // 31: elitea.runtime.v1.ListArtifactsRequestV1
-	(*ListArtifactsResponseV1)(nil),                  // 32: elitea.runtime.v1.ListArtifactsResponseV1
-	(*ReadArtifactRequestV1)(nil),                    // 33: elitea.runtime.v1.ReadArtifactRequestV1
-	(*ReadArtifactResponseV1)(nil),                   // 34: elitea.runtime.v1.ReadArtifactResponseV1
-	(*WriteArtifactRequestV1)(nil),                   // 35: elitea.runtime.v1.WriteArtifactRequestV1
-	(*WriteArtifactResponseV1)(nil),                  // 36: elitea.runtime.v1.WriteArtifactResponseV1
-	(*DeleteArtifactRequestV1)(nil),                  // 37: elitea.runtime.v1.DeleteArtifactRequestV1
-	(*DeleteArtifactResponseV1)(nil),                 // 38: elitea.runtime.v1.DeleteArtifactResponseV1
-	(*ResolveCodeWorkspaceRequestV1)(nil),            // 39: elitea.runtime.v1.ResolveCodeWorkspaceRequestV1
-	(*ResolveCodeWorkspaceResponseV1)(nil),           // 40: elitea.runtime.v1.ResolveCodeWorkspaceResponseV1
-	(*AdmitCodeDebugRequestV1)(nil),                  // 41: elitea.runtime.v1.AdmitCodeDebugRequestV1
-	(*AdmitCodeDebugResponseV1)(nil),                 // 42: elitea.runtime.v1.AdmitCodeDebugResponseV1
-	(*CommitCodeDebugRequestV1)(nil),                 // 43: elitea.runtime.v1.CommitCodeDebugRequestV1
-	(*CommitCodeDebugResponseV1)(nil),                // 44: elitea.runtime.v1.CommitCodeDebugResponseV1
-	(*StepCodePlatformRequestV1)(nil),                // 45: elitea.runtime.v1.StepCodePlatformRequestV1
-	(*StepCodePlatformResponseV1)(nil),               // 46: elitea.runtime.v1.StepCodePlatformResponseV1
-	(*ReadCodePlatformEffectsRequestV1)(nil),         // 47: elitea.runtime.v1.ReadCodePlatformEffectsRequestV1
-	(*ReadCodePlatformEffectsResponseV1)(nil),        // 48: elitea.runtime.v1.ReadCodePlatformEffectsResponseV1
-	(*PollNodeRecoveryRequestV1)(nil),                // 49: elitea.runtime.v1.PollNodeRecoveryRequestV1
-	(*PollNodeRecoveryResponseV1)(nil),               // 50: elitea.runtime.v1.PollNodeRecoveryResponseV1
-	(*AcknowledgeNodeRecoveryRequestV1)(nil),         // 51: elitea.runtime.v1.AcknowledgeNodeRecoveryRequestV1
-	(*AcknowledgeNodeRecoveryResponseV1)(nil),        // 52: elitea.runtime.v1.AcknowledgeNodeRecoveryResponseV1
-	(*FetchExecutionInterruptsRequestV1)(nil),        // 53: elitea.runtime.v1.FetchExecutionInterruptsRequestV1
-	(*FetchExecutionInterruptsResponseV1)(nil),       // 54: elitea.runtime.v1.FetchExecutionInterruptsResponseV1
-	(*AcknowledgeExecutionInterruptRequestV1)(nil),   // 55: elitea.runtime.v1.AcknowledgeExecutionInterruptRequestV1
-	(*AcknowledgeExecutionInterruptResponseV1)(nil),  // 56: elitea.runtime.v1.AcknowledgeExecutionInterruptResponseV1
-	(*ReadNodeRecoveryResultRequestV1)(nil),          // 57: elitea.runtime.v1.ReadNodeRecoveryResultRequestV1
-	(*ReadNodeRecoveryResultResponseV1)(nil),         // 58: elitea.runtime.v1.ReadNodeRecoveryResultResponseV1
-	(*RegisterCodeVisitRequestV1)(nil),               // 59: elitea.runtime.v1.RegisterCodeVisitRequestV1
-	(*RegisterCodeVisitResponseV1)(nil),              // 60: elitea.runtime.v1.RegisterCodeVisitResponseV1
-	(*RegisterCodeIntentRequestV1)(nil),              // 61: elitea.runtime.v1.RegisterCodeIntentRequestV1
-	(*RegisterCodeIntentResponseV1)(nil),             // 62: elitea.runtime.v1.RegisterCodeIntentResponseV1
-	(*PutToolkitDiscoveryResultRequestV1)(nil),       // 63: elitea.runtime.v1.PutToolkitDiscoveryResultRequestV1
-	(*PutToolkitDiscoveryResultResponseV1)(nil),      // 64: elitea.runtime.v1.PutToolkitDiscoveryResultResponseV1
-	(*GetToolkitDiscoveryResultRequestV1)(nil),       // 65: elitea.runtime.v1.GetToolkitDiscoveryResultRequestV1
-	(*GetToolkitDiscoveryResultResponseV1)(nil),      // 66: elitea.runtime.v1.GetToolkitDiscoveryResultResponseV1
-	(*ReadSandboxWorkspaceManifestRequestV1)(nil),    // 67: elitea.runtime.v1.ReadSandboxWorkspaceManifestRequestV1
-	(*ReadSandboxWorkspaceManifestResponseV1)(nil),   // 68: elitea.runtime.v1.ReadSandboxWorkspaceManifestResponseV1
-	(*ReadSandboxWorkspaceFileRequestV1)(nil),        // 69: elitea.runtime.v1.ReadSandboxWorkspaceFileRequestV1
-	(*ReadSandboxWorkspaceFileResponseV1)(nil),       // 70: elitea.runtime.v1.ReadSandboxWorkspaceFileResponseV1
-	(*SandboxContentFileHeaderV1)(nil),               // 71: elitea.runtime.v1.SandboxContentFileHeaderV1
-	(*GetSandboxBundleRequestV1)(nil),                // 72: elitea.runtime.v1.GetSandboxBundleRequestV1
-	(*GetSandboxBundleResponseV1)(nil),               // 73: elitea.runtime.v1.GetSandboxBundleResponseV1
-	(*PublishSandboxBundleRequestV1)(nil),            // 74: elitea.runtime.v1.PublishSandboxBundleRequestV1
-	(*PublishSandboxBundleResponseV1)(nil),           // 75: elitea.runtime.v1.PublishSandboxBundleResponseV1
-	(*FetchSandboxBundleFileRequestV1)(nil),          // 76: elitea.runtime.v1.FetchSandboxBundleFileRequestV1
-	(*FetchSandboxBundleFileResponseV1)(nil),         // 77: elitea.runtime.v1.FetchSandboxBundleFileResponseV1
-	(*UploadSandboxBundleFileHeaderV1)(nil),          // 78: elitea.runtime.v1.UploadSandboxBundleFileHeaderV1
-	(*UploadSandboxBundleFileRequestV1)(nil),         // 79: elitea.runtime.v1.UploadSandboxBundleFileRequestV1
-	(*UploadSandboxBundleFileResponseV1)(nil),        // 80: elitea.runtime.v1.UploadSandboxBundleFileResponseV1
-	(*GetCompiledSnapshotRequestV1)(nil),             // 81: elitea.runtime.v1.GetCompiledSnapshotRequestV1
-	(*GetCompiledSnapshotResponseV1)(nil),            // 82: elitea.runtime.v1.GetCompiledSnapshotResponseV1
-	(*PublishCompiledSnapshotRequestV1)(nil),         // 83: elitea.runtime.v1.PublishCompiledSnapshotRequestV1
-	(*PublishCompiledSnapshotResponseV1)(nil),        // 84: elitea.runtime.v1.PublishCompiledSnapshotResponseV1
-	(*FetchCompiledSnapshotFileRequestV1)(nil),       // 85: elitea.runtime.v1.FetchCompiledSnapshotFileRequestV1
-	(*FetchCompiledSnapshotFileResponseV1)(nil),      // 86: elitea.runtime.v1.FetchCompiledSnapshotFileResponseV1
-	(*UploadCompiledSnapshotFileHeaderV1)(nil),       // 87: elitea.runtime.v1.UploadCompiledSnapshotFileHeaderV1
-	(*UploadCompiledSnapshotFileRequestV1)(nil),      // 88: elitea.runtime.v1.UploadCompiledSnapshotFileRequestV1
-	(*UploadCompiledSnapshotFileResponseV1)(nil),     // 89: elitea.runtime.v1.UploadCompiledSnapshotFileResponseV1
-	(*BoundToolInvocationV1)(nil),                    // 90: elitea.runtime.v1.BoundToolInvocationV1
-	(*DigestV1)(nil),                                 // 91: elitea.runtime.v1.DigestV1
-	(*CredentialEnvelopeV1)(nil),                     // 92: elitea.runtime.v1.CredentialEnvelopeV1
-	(*CredentialRedeemDenialV1)(nil),                 // 93: elitea.runtime.v1.CredentialRedeemDenialV1
-	(*ToolkitAvailableToolsArtifactReferenceV1)(nil), // 94: elitea.runtime.v1.ToolkitAvailableToolsArtifactReferenceV1
+	(*MarketplaceWorkforceRequestV1)(nil),            // 31: elitea.runtime.v1.MarketplaceWorkforceRequestV1
+	(*MarketplaceWorkforceResponseV1)(nil),           // 32: elitea.runtime.v1.MarketplaceWorkforceResponseV1
+	(*ListArtifactsRequestV1)(nil),                   // 33: elitea.runtime.v1.ListArtifactsRequestV1
+	(*ListArtifactsResponseV1)(nil),                  // 34: elitea.runtime.v1.ListArtifactsResponseV1
+	(*ReadArtifactRequestV1)(nil),                    // 35: elitea.runtime.v1.ReadArtifactRequestV1
+	(*ReadArtifactResponseV1)(nil),                   // 36: elitea.runtime.v1.ReadArtifactResponseV1
+	(*WriteArtifactRequestV1)(nil),                   // 37: elitea.runtime.v1.WriteArtifactRequestV1
+	(*WriteArtifactResponseV1)(nil),                  // 38: elitea.runtime.v1.WriteArtifactResponseV1
+	(*DeleteArtifactRequestV1)(nil),                  // 39: elitea.runtime.v1.DeleteArtifactRequestV1
+	(*DeleteArtifactResponseV1)(nil),                 // 40: elitea.runtime.v1.DeleteArtifactResponseV1
+	(*ResolveCodeWorkspaceRequestV1)(nil),            // 41: elitea.runtime.v1.ResolveCodeWorkspaceRequestV1
+	(*ResolveCodeWorkspaceResponseV1)(nil),           // 42: elitea.runtime.v1.ResolveCodeWorkspaceResponseV1
+	(*AdmitCodeDebugRequestV1)(nil),                  // 43: elitea.runtime.v1.AdmitCodeDebugRequestV1
+	(*AdmitCodeDebugResponseV1)(nil),                 // 44: elitea.runtime.v1.AdmitCodeDebugResponseV1
+	(*CommitCodeDebugRequestV1)(nil),                 // 45: elitea.runtime.v1.CommitCodeDebugRequestV1
+	(*CommitCodeDebugResponseV1)(nil),                // 46: elitea.runtime.v1.CommitCodeDebugResponseV1
+	(*StepCodePlatformRequestV1)(nil),                // 47: elitea.runtime.v1.StepCodePlatformRequestV1
+	(*StepCodePlatformResponseV1)(nil),               // 48: elitea.runtime.v1.StepCodePlatformResponseV1
+	(*ReadCodePlatformEffectsRequestV1)(nil),         // 49: elitea.runtime.v1.ReadCodePlatformEffectsRequestV1
+	(*ReadCodePlatformEffectsResponseV1)(nil),        // 50: elitea.runtime.v1.ReadCodePlatformEffectsResponseV1
+	(*PollNodeRecoveryRequestV1)(nil),                // 51: elitea.runtime.v1.PollNodeRecoveryRequestV1
+	(*PollNodeRecoveryResponseV1)(nil),               // 52: elitea.runtime.v1.PollNodeRecoveryResponseV1
+	(*AcknowledgeNodeRecoveryRequestV1)(nil),         // 53: elitea.runtime.v1.AcknowledgeNodeRecoveryRequestV1
+	(*AcknowledgeNodeRecoveryResponseV1)(nil),        // 54: elitea.runtime.v1.AcknowledgeNodeRecoveryResponseV1
+	(*FetchExecutionInterruptsRequestV1)(nil),        // 55: elitea.runtime.v1.FetchExecutionInterruptsRequestV1
+	(*FetchExecutionInterruptsResponseV1)(nil),       // 56: elitea.runtime.v1.FetchExecutionInterruptsResponseV1
+	(*AcknowledgeExecutionInterruptRequestV1)(nil),   // 57: elitea.runtime.v1.AcknowledgeExecutionInterruptRequestV1
+	(*AcknowledgeExecutionInterruptResponseV1)(nil),  // 58: elitea.runtime.v1.AcknowledgeExecutionInterruptResponseV1
+	(*ReadNodeRecoveryResultRequestV1)(nil),          // 59: elitea.runtime.v1.ReadNodeRecoveryResultRequestV1
+	(*ReadNodeRecoveryResultResponseV1)(nil),         // 60: elitea.runtime.v1.ReadNodeRecoveryResultResponseV1
+	(*RegisterCodeVisitRequestV1)(nil),               // 61: elitea.runtime.v1.RegisterCodeVisitRequestV1
+	(*RegisterCodeVisitResponseV1)(nil),              // 62: elitea.runtime.v1.RegisterCodeVisitResponseV1
+	(*RegisterCodeIntentRequestV1)(nil),              // 63: elitea.runtime.v1.RegisterCodeIntentRequestV1
+	(*RegisterCodeIntentResponseV1)(nil),             // 64: elitea.runtime.v1.RegisterCodeIntentResponseV1
+	(*PutToolkitDiscoveryResultRequestV1)(nil),       // 65: elitea.runtime.v1.PutToolkitDiscoveryResultRequestV1
+	(*PutToolkitDiscoveryResultResponseV1)(nil),      // 66: elitea.runtime.v1.PutToolkitDiscoveryResultResponseV1
+	(*GetToolkitDiscoveryResultRequestV1)(nil),       // 67: elitea.runtime.v1.GetToolkitDiscoveryResultRequestV1
+	(*GetToolkitDiscoveryResultResponseV1)(nil),      // 68: elitea.runtime.v1.GetToolkitDiscoveryResultResponseV1
+	(*ReadSandboxWorkspaceManifestRequestV1)(nil),    // 69: elitea.runtime.v1.ReadSandboxWorkspaceManifestRequestV1
+	(*ReadSandboxWorkspaceManifestResponseV1)(nil),   // 70: elitea.runtime.v1.ReadSandboxWorkspaceManifestResponseV1
+	(*ReadSandboxWorkspaceFileRequestV1)(nil),        // 71: elitea.runtime.v1.ReadSandboxWorkspaceFileRequestV1
+	(*ReadSandboxWorkspaceFileResponseV1)(nil),       // 72: elitea.runtime.v1.ReadSandboxWorkspaceFileResponseV1
+	(*SandboxContentFileHeaderV1)(nil),               // 73: elitea.runtime.v1.SandboxContentFileHeaderV1
+	(*GetSandboxBundleRequestV1)(nil),                // 74: elitea.runtime.v1.GetSandboxBundleRequestV1
+	(*GetSandboxBundleResponseV1)(nil),               // 75: elitea.runtime.v1.GetSandboxBundleResponseV1
+	(*PublishSandboxBundleRequestV1)(nil),            // 76: elitea.runtime.v1.PublishSandboxBundleRequestV1
+	(*PublishSandboxBundleResponseV1)(nil),           // 77: elitea.runtime.v1.PublishSandboxBundleResponseV1
+	(*FetchSandboxBundleFileRequestV1)(nil),          // 78: elitea.runtime.v1.FetchSandboxBundleFileRequestV1
+	(*FetchSandboxBundleFileResponseV1)(nil),         // 79: elitea.runtime.v1.FetchSandboxBundleFileResponseV1
+	(*UploadSandboxBundleFileHeaderV1)(nil),          // 80: elitea.runtime.v1.UploadSandboxBundleFileHeaderV1
+	(*UploadSandboxBundleFileRequestV1)(nil),         // 81: elitea.runtime.v1.UploadSandboxBundleFileRequestV1
+	(*UploadSandboxBundleFileResponseV1)(nil),        // 82: elitea.runtime.v1.UploadSandboxBundleFileResponseV1
+	(*GetCompiledSnapshotRequestV1)(nil),             // 83: elitea.runtime.v1.GetCompiledSnapshotRequestV1
+	(*GetCompiledSnapshotResponseV1)(nil),            // 84: elitea.runtime.v1.GetCompiledSnapshotResponseV1
+	(*PublishCompiledSnapshotRequestV1)(nil),         // 85: elitea.runtime.v1.PublishCompiledSnapshotRequestV1
+	(*PublishCompiledSnapshotResponseV1)(nil),        // 86: elitea.runtime.v1.PublishCompiledSnapshotResponseV1
+	(*FetchCompiledSnapshotFileRequestV1)(nil),       // 87: elitea.runtime.v1.FetchCompiledSnapshotFileRequestV1
+	(*FetchCompiledSnapshotFileResponseV1)(nil),      // 88: elitea.runtime.v1.FetchCompiledSnapshotFileResponseV1
+	(*UploadCompiledSnapshotFileHeaderV1)(nil),       // 89: elitea.runtime.v1.UploadCompiledSnapshotFileHeaderV1
+	(*UploadCompiledSnapshotFileRequestV1)(nil),      // 90: elitea.runtime.v1.UploadCompiledSnapshotFileRequestV1
+	(*UploadCompiledSnapshotFileResponseV1)(nil),     // 91: elitea.runtime.v1.UploadCompiledSnapshotFileResponseV1
+	(*BoundToolInvocationV1)(nil),                    // 92: elitea.runtime.v1.BoundToolInvocationV1
+	(*DigestV1)(nil),                                 // 93: elitea.runtime.v1.DigestV1
+	(*CredentialEnvelopeV1)(nil),                     // 94: elitea.runtime.v1.CredentialEnvelopeV1
+	(*CredentialRedeemDenialV1)(nil),                 // 95: elitea.runtime.v1.CredentialRedeemDenialV1
+	(*ToolkitAvailableToolsArtifactReferenceV1)(nil), // 96: elitea.runtime.v1.ToolkitAvailableToolsArtifactReferenceV1
 }
 var file_elitea_runtime_v1_content_proto_depIdxs = []int32{
 	1,  // 0: elitea.runtime.v1.GetInputRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
 	3,  // 1: elitea.runtime.v1.GetInputResponseV1.header:type_name -> elitea.runtime.v1.InputContentHeaderV1
 	1,  // 2: elitea.runtime.v1.GetEliteaClientTokenRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
 	1,  // 3: elitea.runtime.v1.RedeemCredentialRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	90, // 4: elitea.runtime.v1.RedeemCredentialRequestV1.invocation:type_name -> elitea.runtime.v1.BoundToolInvocationV1
-	91, // 5: elitea.runtime.v1.RedeemCredentialRequestV1.security_context_digest:type_name -> elitea.runtime.v1.DigestV1
-	92, // 6: elitea.runtime.v1.RedeemCredentialResponseV1.envelope:type_name -> elitea.runtime.v1.CredentialEnvelopeV1
-	93, // 7: elitea.runtime.v1.RedeemCredentialResponseV1.denial:type_name -> elitea.runtime.v1.CredentialRedeemDenialV1
+	92, // 4: elitea.runtime.v1.RedeemCredentialRequestV1.invocation:type_name -> elitea.runtime.v1.BoundToolInvocationV1
+	93, // 5: elitea.runtime.v1.RedeemCredentialRequestV1.security_context_digest:type_name -> elitea.runtime.v1.DigestV1
+	94, // 6: elitea.runtime.v1.RedeemCredentialResponseV1.envelope:type_name -> elitea.runtime.v1.CredentialEnvelopeV1
+	95, // 7: elitea.runtime.v1.RedeemCredentialResponseV1.denial:type_name -> elitea.runtime.v1.CredentialRedeemDenialV1
 	1,  // 8: elitea.runtime.v1.GetApplicationVersionRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
 	1,  // 9: elitea.runtime.v1.GetAttachmentObjectRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
 	1,  // 10: elitea.runtime.v1.ExecuteHTTPActionRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
@@ -5288,122 +5396,125 @@ var file_elitea_runtime_v1_content_proto_depIdxs = []int32{
 	1,  // 16: elitea.runtime.v1.HandFloorRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
 	1,  // 17: elitea.runtime.v1.ProposeAgentRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
 	1,  // 18: elitea.runtime.v1.ProposeDismissalRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 19: elitea.runtime.v1.ListArtifactsRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 20: elitea.runtime.v1.ReadArtifactRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 21: elitea.runtime.v1.WriteArtifactRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 22: elitea.runtime.v1.DeleteArtifactRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 23: elitea.runtime.v1.ResolveCodeWorkspaceRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 24: elitea.runtime.v1.AdmitCodeDebugRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 25: elitea.runtime.v1.CommitCodeDebugRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 26: elitea.runtime.v1.StepCodePlatformRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 27: elitea.runtime.v1.ReadCodePlatformEffectsRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 28: elitea.runtime.v1.PollNodeRecoveryRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 29: elitea.runtime.v1.AcknowledgeNodeRecoveryRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 30: elitea.runtime.v1.FetchExecutionInterruptsRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 31: elitea.runtime.v1.AcknowledgeExecutionInterruptRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 32: elitea.runtime.v1.ReadNodeRecoveryResultRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 33: elitea.runtime.v1.RegisterCodeVisitRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 34: elitea.runtime.v1.RegisterCodeIntentRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	1,  // 35: elitea.runtime.v1.PutToolkitDiscoveryResultRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	94, // 36: elitea.runtime.v1.PutToolkitDiscoveryResultResponseV1.reference:type_name -> elitea.runtime.v1.ToolkitAvailableToolsArtifactReferenceV1
-	1,  // 37: elitea.runtime.v1.GetToolkitDiscoveryResultRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
-	0,  // 38: elitea.runtime.v1.GetSandboxBundleRequestV1.kind:type_name -> elitea.runtime.v1.SandboxBundleKindV1
-	0,  // 39: elitea.runtime.v1.PublishSandboxBundleRequestV1.kind:type_name -> elitea.runtime.v1.SandboxBundleKindV1
-	0,  // 40: elitea.runtime.v1.FetchSandboxBundleFileRequestV1.kind:type_name -> elitea.runtime.v1.SandboxBundleKindV1
-	71, // 41: elitea.runtime.v1.FetchSandboxBundleFileResponseV1.header:type_name -> elitea.runtime.v1.SandboxContentFileHeaderV1
-	0,  // 42: elitea.runtime.v1.UploadSandboxBundleFileHeaderV1.kind:type_name -> elitea.runtime.v1.SandboxBundleKindV1
-	78, // 43: elitea.runtime.v1.UploadSandboxBundleFileRequestV1.header:type_name -> elitea.runtime.v1.UploadSandboxBundleFileHeaderV1
-	71, // 44: elitea.runtime.v1.FetchCompiledSnapshotFileResponseV1.header:type_name -> elitea.runtime.v1.SandboxContentFileHeaderV1
-	87, // 45: elitea.runtime.v1.UploadCompiledSnapshotFileRequestV1.header:type_name -> elitea.runtime.v1.UploadCompiledSnapshotFileHeaderV1
-	2,  // 46: elitea.runtime.v1.RuntimeContentService.GetInput:input_type -> elitea.runtime.v1.GetInputRequestV1
-	5,  // 47: elitea.runtime.v1.RuntimeContentService.GetEliteaClientToken:input_type -> elitea.runtime.v1.GetEliteaClientTokenRequestV1
-	7,  // 48: elitea.runtime.v1.RuntimeContentService.RedeemCredential:input_type -> elitea.runtime.v1.RedeemCredentialRequestV1
-	9,  // 49: elitea.runtime.v1.RuntimeContentService.GetApplicationVersion:input_type -> elitea.runtime.v1.GetApplicationVersionRequestV1
-	11, // 50: elitea.runtime.v1.RuntimeContentService.GetAttachmentObject:input_type -> elitea.runtime.v1.GetAttachmentObjectRequestV1
-	13, // 51: elitea.runtime.v1.RuntimeContentService.ExecuteHTTPAction:input_type -> elitea.runtime.v1.ExecuteHTTPActionRequestV1
-	15, // 52: elitea.runtime.v1.RuntimeContentService.WriteSkill:input_type -> elitea.runtime.v1.WriteSkillRequestV1
-	17, // 53: elitea.runtime.v1.RuntimeContentService.WriteProjectContext:input_type -> elitea.runtime.v1.WriteProjectContextRequestV1
-	19, // 54: elitea.runtime.v1.RuntimeContentService.RememberAgentMemory:input_type -> elitea.runtime.v1.RememberAgentMemoryRequestV1
-	21, // 55: elitea.runtime.v1.RuntimeContentService.RecallAgentMemory:input_type -> elitea.runtime.v1.RecallAgentMemoryRequestV1
-	23, // 56: elitea.runtime.v1.RuntimeContentService.ForgetAgentMemory:input_type -> elitea.runtime.v1.ForgetAgentMemoryRequestV1
-	25, // 57: elitea.runtime.v1.RuntimeContentService.HandFloor:input_type -> elitea.runtime.v1.HandFloorRequestV1
-	27, // 58: elitea.runtime.v1.RuntimeContentService.ProposeAgent:input_type -> elitea.runtime.v1.ProposeAgentRequestV1
-	29, // 59: elitea.runtime.v1.RuntimeContentService.ProposeDismissal:input_type -> elitea.runtime.v1.ProposeDismissalRequestV1
-	31, // 60: elitea.runtime.v1.RuntimeContentService.ListArtifacts:input_type -> elitea.runtime.v1.ListArtifactsRequestV1
-	33, // 61: elitea.runtime.v1.RuntimeContentService.ReadArtifact:input_type -> elitea.runtime.v1.ReadArtifactRequestV1
-	35, // 62: elitea.runtime.v1.RuntimeContentService.WriteArtifact:input_type -> elitea.runtime.v1.WriteArtifactRequestV1
-	37, // 63: elitea.runtime.v1.RuntimeContentService.DeleteArtifact:input_type -> elitea.runtime.v1.DeleteArtifactRequestV1
-	39, // 64: elitea.runtime.v1.RuntimeContentService.ResolveCodeWorkspace:input_type -> elitea.runtime.v1.ResolveCodeWorkspaceRequestV1
-	41, // 65: elitea.runtime.v1.RuntimeContentService.AdmitCodeDebug:input_type -> elitea.runtime.v1.AdmitCodeDebugRequestV1
-	43, // 66: elitea.runtime.v1.RuntimeContentService.CommitCodeDebug:input_type -> elitea.runtime.v1.CommitCodeDebugRequestV1
-	45, // 67: elitea.runtime.v1.RuntimeContentService.StepCodePlatform:input_type -> elitea.runtime.v1.StepCodePlatformRequestV1
-	47, // 68: elitea.runtime.v1.RuntimeContentService.ReadCodePlatformEffects:input_type -> elitea.runtime.v1.ReadCodePlatformEffectsRequestV1
-	49, // 69: elitea.runtime.v1.RuntimeContentService.PollNodeRecovery:input_type -> elitea.runtime.v1.PollNodeRecoveryRequestV1
-	51, // 70: elitea.runtime.v1.RuntimeContentService.AcknowledgeNodeRecovery:input_type -> elitea.runtime.v1.AcknowledgeNodeRecoveryRequestV1
-	57, // 71: elitea.runtime.v1.RuntimeContentService.ReadNodeRecoveryResult:input_type -> elitea.runtime.v1.ReadNodeRecoveryResultRequestV1
-	53, // 72: elitea.runtime.v1.RuntimeContentService.FetchExecutionInterrupts:input_type -> elitea.runtime.v1.FetchExecutionInterruptsRequestV1
-	55, // 73: elitea.runtime.v1.RuntimeContentService.AcknowledgeExecutionInterrupt:input_type -> elitea.runtime.v1.AcknowledgeExecutionInterruptRequestV1
-	59, // 74: elitea.runtime.v1.RuntimeContentService.RegisterCodeVisit:input_type -> elitea.runtime.v1.RegisterCodeVisitRequestV1
-	61, // 75: elitea.runtime.v1.RuntimeContentService.RegisterCodeIntent:input_type -> elitea.runtime.v1.RegisterCodeIntentRequestV1
-	63, // 76: elitea.runtime.v1.RuntimeContentService.PutToolkitDiscoveryResult:input_type -> elitea.runtime.v1.PutToolkitDiscoveryResultRequestV1
-	65, // 77: elitea.runtime.v1.RuntimeContentService.GetToolkitDiscoveryResult:input_type -> elitea.runtime.v1.GetToolkitDiscoveryResultRequestV1
-	67, // 78: elitea.runtime.v1.RuntimeContentService.ReadSandboxWorkspaceManifest:input_type -> elitea.runtime.v1.ReadSandboxWorkspaceManifestRequestV1
-	69, // 79: elitea.runtime.v1.RuntimeContentService.ReadSandboxWorkspaceFile:input_type -> elitea.runtime.v1.ReadSandboxWorkspaceFileRequestV1
-	72, // 80: elitea.runtime.v1.RuntimeContentService.GetSandboxBundle:input_type -> elitea.runtime.v1.GetSandboxBundleRequestV1
-	74, // 81: elitea.runtime.v1.RuntimeContentService.PublishSandboxBundle:input_type -> elitea.runtime.v1.PublishSandboxBundleRequestV1
-	76, // 82: elitea.runtime.v1.RuntimeContentService.FetchSandboxBundleFile:input_type -> elitea.runtime.v1.FetchSandboxBundleFileRequestV1
-	79, // 83: elitea.runtime.v1.RuntimeContentService.UploadSandboxBundleFile:input_type -> elitea.runtime.v1.UploadSandboxBundleFileRequestV1
-	81, // 84: elitea.runtime.v1.RuntimeContentService.GetCompiledSnapshot:input_type -> elitea.runtime.v1.GetCompiledSnapshotRequestV1
-	83, // 85: elitea.runtime.v1.RuntimeContentService.PublishCompiledSnapshot:input_type -> elitea.runtime.v1.PublishCompiledSnapshotRequestV1
-	85, // 86: elitea.runtime.v1.RuntimeContentService.FetchCompiledSnapshotFile:input_type -> elitea.runtime.v1.FetchCompiledSnapshotFileRequestV1
-	88, // 87: elitea.runtime.v1.RuntimeContentService.UploadCompiledSnapshotFile:input_type -> elitea.runtime.v1.UploadCompiledSnapshotFileRequestV1
-	4,  // 88: elitea.runtime.v1.RuntimeContentService.GetInput:output_type -> elitea.runtime.v1.GetInputResponseV1
-	6,  // 89: elitea.runtime.v1.RuntimeContentService.GetEliteaClientToken:output_type -> elitea.runtime.v1.GetEliteaClientTokenResponseV1
-	8,  // 90: elitea.runtime.v1.RuntimeContentService.RedeemCredential:output_type -> elitea.runtime.v1.RedeemCredentialResponseV1
-	10, // 91: elitea.runtime.v1.RuntimeContentService.GetApplicationVersion:output_type -> elitea.runtime.v1.GetApplicationVersionResponseV1
-	12, // 92: elitea.runtime.v1.RuntimeContentService.GetAttachmentObject:output_type -> elitea.runtime.v1.GetAttachmentObjectResponseV1
-	14, // 93: elitea.runtime.v1.RuntimeContentService.ExecuteHTTPAction:output_type -> elitea.runtime.v1.ExecuteHTTPActionResponseV1
-	16, // 94: elitea.runtime.v1.RuntimeContentService.WriteSkill:output_type -> elitea.runtime.v1.WriteSkillResponseV1
-	18, // 95: elitea.runtime.v1.RuntimeContentService.WriteProjectContext:output_type -> elitea.runtime.v1.WriteProjectContextResponseV1
-	20, // 96: elitea.runtime.v1.RuntimeContentService.RememberAgentMemory:output_type -> elitea.runtime.v1.RememberAgentMemoryResponseV1
-	22, // 97: elitea.runtime.v1.RuntimeContentService.RecallAgentMemory:output_type -> elitea.runtime.v1.RecallAgentMemoryResponseV1
-	24, // 98: elitea.runtime.v1.RuntimeContentService.ForgetAgentMemory:output_type -> elitea.runtime.v1.ForgetAgentMemoryResponseV1
-	26, // 99: elitea.runtime.v1.RuntimeContentService.HandFloor:output_type -> elitea.runtime.v1.HandFloorResponseV1
-	28, // 100: elitea.runtime.v1.RuntimeContentService.ProposeAgent:output_type -> elitea.runtime.v1.ProposeAgentResponseV1
-	30, // 101: elitea.runtime.v1.RuntimeContentService.ProposeDismissal:output_type -> elitea.runtime.v1.ProposeDismissalResponseV1
-	32, // 102: elitea.runtime.v1.RuntimeContentService.ListArtifacts:output_type -> elitea.runtime.v1.ListArtifactsResponseV1
-	34, // 103: elitea.runtime.v1.RuntimeContentService.ReadArtifact:output_type -> elitea.runtime.v1.ReadArtifactResponseV1
-	36, // 104: elitea.runtime.v1.RuntimeContentService.WriteArtifact:output_type -> elitea.runtime.v1.WriteArtifactResponseV1
-	38, // 105: elitea.runtime.v1.RuntimeContentService.DeleteArtifact:output_type -> elitea.runtime.v1.DeleteArtifactResponseV1
-	40, // 106: elitea.runtime.v1.RuntimeContentService.ResolveCodeWorkspace:output_type -> elitea.runtime.v1.ResolveCodeWorkspaceResponseV1
-	42, // 107: elitea.runtime.v1.RuntimeContentService.AdmitCodeDebug:output_type -> elitea.runtime.v1.AdmitCodeDebugResponseV1
-	44, // 108: elitea.runtime.v1.RuntimeContentService.CommitCodeDebug:output_type -> elitea.runtime.v1.CommitCodeDebugResponseV1
-	46, // 109: elitea.runtime.v1.RuntimeContentService.StepCodePlatform:output_type -> elitea.runtime.v1.StepCodePlatformResponseV1
-	48, // 110: elitea.runtime.v1.RuntimeContentService.ReadCodePlatformEffects:output_type -> elitea.runtime.v1.ReadCodePlatformEffectsResponseV1
-	50, // 111: elitea.runtime.v1.RuntimeContentService.PollNodeRecovery:output_type -> elitea.runtime.v1.PollNodeRecoveryResponseV1
-	52, // 112: elitea.runtime.v1.RuntimeContentService.AcknowledgeNodeRecovery:output_type -> elitea.runtime.v1.AcknowledgeNodeRecoveryResponseV1
-	58, // 113: elitea.runtime.v1.RuntimeContentService.ReadNodeRecoveryResult:output_type -> elitea.runtime.v1.ReadNodeRecoveryResultResponseV1
-	54, // 114: elitea.runtime.v1.RuntimeContentService.FetchExecutionInterrupts:output_type -> elitea.runtime.v1.FetchExecutionInterruptsResponseV1
-	56, // 115: elitea.runtime.v1.RuntimeContentService.AcknowledgeExecutionInterrupt:output_type -> elitea.runtime.v1.AcknowledgeExecutionInterruptResponseV1
-	60, // 116: elitea.runtime.v1.RuntimeContentService.RegisterCodeVisit:output_type -> elitea.runtime.v1.RegisterCodeVisitResponseV1
-	62, // 117: elitea.runtime.v1.RuntimeContentService.RegisterCodeIntent:output_type -> elitea.runtime.v1.RegisterCodeIntentResponseV1
-	64, // 118: elitea.runtime.v1.RuntimeContentService.PutToolkitDiscoveryResult:output_type -> elitea.runtime.v1.PutToolkitDiscoveryResultResponseV1
-	66, // 119: elitea.runtime.v1.RuntimeContentService.GetToolkitDiscoveryResult:output_type -> elitea.runtime.v1.GetToolkitDiscoveryResultResponseV1
-	68, // 120: elitea.runtime.v1.RuntimeContentService.ReadSandboxWorkspaceManifest:output_type -> elitea.runtime.v1.ReadSandboxWorkspaceManifestResponseV1
-	70, // 121: elitea.runtime.v1.RuntimeContentService.ReadSandboxWorkspaceFile:output_type -> elitea.runtime.v1.ReadSandboxWorkspaceFileResponseV1
-	73, // 122: elitea.runtime.v1.RuntimeContentService.GetSandboxBundle:output_type -> elitea.runtime.v1.GetSandboxBundleResponseV1
-	75, // 123: elitea.runtime.v1.RuntimeContentService.PublishSandboxBundle:output_type -> elitea.runtime.v1.PublishSandboxBundleResponseV1
-	77, // 124: elitea.runtime.v1.RuntimeContentService.FetchSandboxBundleFile:output_type -> elitea.runtime.v1.FetchSandboxBundleFileResponseV1
-	80, // 125: elitea.runtime.v1.RuntimeContentService.UploadSandboxBundleFile:output_type -> elitea.runtime.v1.UploadSandboxBundleFileResponseV1
-	82, // 126: elitea.runtime.v1.RuntimeContentService.GetCompiledSnapshot:output_type -> elitea.runtime.v1.GetCompiledSnapshotResponseV1
-	84, // 127: elitea.runtime.v1.RuntimeContentService.PublishCompiledSnapshot:output_type -> elitea.runtime.v1.PublishCompiledSnapshotResponseV1
-	86, // 128: elitea.runtime.v1.RuntimeContentService.FetchCompiledSnapshotFile:output_type -> elitea.runtime.v1.FetchCompiledSnapshotFileResponseV1
-	89, // 129: elitea.runtime.v1.RuntimeContentService.UploadCompiledSnapshotFile:output_type -> elitea.runtime.v1.UploadCompiledSnapshotFileResponseV1
-	88, // [88:130] is the sub-list for method output_type
-	46, // [46:88] is the sub-list for method input_type
-	46, // [46:46] is the sub-list for extension type_name
-	46, // [46:46] is the sub-list for extension extendee
-	0,  // [0:46] is the sub-list for field type_name
+	1,  // 19: elitea.runtime.v1.MarketplaceWorkforceRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 20: elitea.runtime.v1.ListArtifactsRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 21: elitea.runtime.v1.ReadArtifactRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 22: elitea.runtime.v1.WriteArtifactRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 23: elitea.runtime.v1.DeleteArtifactRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 24: elitea.runtime.v1.ResolveCodeWorkspaceRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 25: elitea.runtime.v1.AdmitCodeDebugRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 26: elitea.runtime.v1.CommitCodeDebugRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 27: elitea.runtime.v1.StepCodePlatformRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 28: elitea.runtime.v1.ReadCodePlatformEffectsRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 29: elitea.runtime.v1.PollNodeRecoveryRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 30: elitea.runtime.v1.AcknowledgeNodeRecoveryRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 31: elitea.runtime.v1.FetchExecutionInterruptsRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 32: elitea.runtime.v1.AcknowledgeExecutionInterruptRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 33: elitea.runtime.v1.ReadNodeRecoveryResultRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 34: elitea.runtime.v1.RegisterCodeVisitRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 35: elitea.runtime.v1.RegisterCodeIntentRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	1,  // 36: elitea.runtime.v1.PutToolkitDiscoveryResultRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	96, // 37: elitea.runtime.v1.PutToolkitDiscoveryResultResponseV1.reference:type_name -> elitea.runtime.v1.ToolkitAvailableToolsArtifactReferenceV1
+	1,  // 38: elitea.runtime.v1.GetToolkitDiscoveryResultRequestV1.scope:type_name -> elitea.runtime.v1.RuntimeContentScopeV1
+	0,  // 39: elitea.runtime.v1.GetSandboxBundleRequestV1.kind:type_name -> elitea.runtime.v1.SandboxBundleKindV1
+	0,  // 40: elitea.runtime.v1.PublishSandboxBundleRequestV1.kind:type_name -> elitea.runtime.v1.SandboxBundleKindV1
+	0,  // 41: elitea.runtime.v1.FetchSandboxBundleFileRequestV1.kind:type_name -> elitea.runtime.v1.SandboxBundleKindV1
+	73, // 42: elitea.runtime.v1.FetchSandboxBundleFileResponseV1.header:type_name -> elitea.runtime.v1.SandboxContentFileHeaderV1
+	0,  // 43: elitea.runtime.v1.UploadSandboxBundleFileHeaderV1.kind:type_name -> elitea.runtime.v1.SandboxBundleKindV1
+	80, // 44: elitea.runtime.v1.UploadSandboxBundleFileRequestV1.header:type_name -> elitea.runtime.v1.UploadSandboxBundleFileHeaderV1
+	73, // 45: elitea.runtime.v1.FetchCompiledSnapshotFileResponseV1.header:type_name -> elitea.runtime.v1.SandboxContentFileHeaderV1
+	89, // 46: elitea.runtime.v1.UploadCompiledSnapshotFileRequestV1.header:type_name -> elitea.runtime.v1.UploadCompiledSnapshotFileHeaderV1
+	2,  // 47: elitea.runtime.v1.RuntimeContentService.GetInput:input_type -> elitea.runtime.v1.GetInputRequestV1
+	5,  // 48: elitea.runtime.v1.RuntimeContentService.GetEliteaClientToken:input_type -> elitea.runtime.v1.GetEliteaClientTokenRequestV1
+	7,  // 49: elitea.runtime.v1.RuntimeContentService.RedeemCredential:input_type -> elitea.runtime.v1.RedeemCredentialRequestV1
+	9,  // 50: elitea.runtime.v1.RuntimeContentService.GetApplicationVersion:input_type -> elitea.runtime.v1.GetApplicationVersionRequestV1
+	11, // 51: elitea.runtime.v1.RuntimeContentService.GetAttachmentObject:input_type -> elitea.runtime.v1.GetAttachmentObjectRequestV1
+	13, // 52: elitea.runtime.v1.RuntimeContentService.ExecuteHTTPAction:input_type -> elitea.runtime.v1.ExecuteHTTPActionRequestV1
+	15, // 53: elitea.runtime.v1.RuntimeContentService.WriteSkill:input_type -> elitea.runtime.v1.WriteSkillRequestV1
+	17, // 54: elitea.runtime.v1.RuntimeContentService.WriteProjectContext:input_type -> elitea.runtime.v1.WriteProjectContextRequestV1
+	19, // 55: elitea.runtime.v1.RuntimeContentService.RememberAgentMemory:input_type -> elitea.runtime.v1.RememberAgentMemoryRequestV1
+	21, // 56: elitea.runtime.v1.RuntimeContentService.RecallAgentMemory:input_type -> elitea.runtime.v1.RecallAgentMemoryRequestV1
+	23, // 57: elitea.runtime.v1.RuntimeContentService.ForgetAgentMemory:input_type -> elitea.runtime.v1.ForgetAgentMemoryRequestV1
+	25, // 58: elitea.runtime.v1.RuntimeContentService.HandFloor:input_type -> elitea.runtime.v1.HandFloorRequestV1
+	27, // 59: elitea.runtime.v1.RuntimeContentService.ProposeAgent:input_type -> elitea.runtime.v1.ProposeAgentRequestV1
+	29, // 60: elitea.runtime.v1.RuntimeContentService.ProposeDismissal:input_type -> elitea.runtime.v1.ProposeDismissalRequestV1
+	31, // 61: elitea.runtime.v1.RuntimeContentService.MarketplaceWorkforce:input_type -> elitea.runtime.v1.MarketplaceWorkforceRequestV1
+	33, // 62: elitea.runtime.v1.RuntimeContentService.ListArtifacts:input_type -> elitea.runtime.v1.ListArtifactsRequestV1
+	35, // 63: elitea.runtime.v1.RuntimeContentService.ReadArtifact:input_type -> elitea.runtime.v1.ReadArtifactRequestV1
+	37, // 64: elitea.runtime.v1.RuntimeContentService.WriteArtifact:input_type -> elitea.runtime.v1.WriteArtifactRequestV1
+	39, // 65: elitea.runtime.v1.RuntimeContentService.DeleteArtifact:input_type -> elitea.runtime.v1.DeleteArtifactRequestV1
+	41, // 66: elitea.runtime.v1.RuntimeContentService.ResolveCodeWorkspace:input_type -> elitea.runtime.v1.ResolveCodeWorkspaceRequestV1
+	43, // 67: elitea.runtime.v1.RuntimeContentService.AdmitCodeDebug:input_type -> elitea.runtime.v1.AdmitCodeDebugRequestV1
+	45, // 68: elitea.runtime.v1.RuntimeContentService.CommitCodeDebug:input_type -> elitea.runtime.v1.CommitCodeDebugRequestV1
+	47, // 69: elitea.runtime.v1.RuntimeContentService.StepCodePlatform:input_type -> elitea.runtime.v1.StepCodePlatformRequestV1
+	49, // 70: elitea.runtime.v1.RuntimeContentService.ReadCodePlatformEffects:input_type -> elitea.runtime.v1.ReadCodePlatformEffectsRequestV1
+	51, // 71: elitea.runtime.v1.RuntimeContentService.PollNodeRecovery:input_type -> elitea.runtime.v1.PollNodeRecoveryRequestV1
+	53, // 72: elitea.runtime.v1.RuntimeContentService.AcknowledgeNodeRecovery:input_type -> elitea.runtime.v1.AcknowledgeNodeRecoveryRequestV1
+	59, // 73: elitea.runtime.v1.RuntimeContentService.ReadNodeRecoveryResult:input_type -> elitea.runtime.v1.ReadNodeRecoveryResultRequestV1
+	55, // 74: elitea.runtime.v1.RuntimeContentService.FetchExecutionInterrupts:input_type -> elitea.runtime.v1.FetchExecutionInterruptsRequestV1
+	57, // 75: elitea.runtime.v1.RuntimeContentService.AcknowledgeExecutionInterrupt:input_type -> elitea.runtime.v1.AcknowledgeExecutionInterruptRequestV1
+	61, // 76: elitea.runtime.v1.RuntimeContentService.RegisterCodeVisit:input_type -> elitea.runtime.v1.RegisterCodeVisitRequestV1
+	63, // 77: elitea.runtime.v1.RuntimeContentService.RegisterCodeIntent:input_type -> elitea.runtime.v1.RegisterCodeIntentRequestV1
+	65, // 78: elitea.runtime.v1.RuntimeContentService.PutToolkitDiscoveryResult:input_type -> elitea.runtime.v1.PutToolkitDiscoveryResultRequestV1
+	67, // 79: elitea.runtime.v1.RuntimeContentService.GetToolkitDiscoveryResult:input_type -> elitea.runtime.v1.GetToolkitDiscoveryResultRequestV1
+	69, // 80: elitea.runtime.v1.RuntimeContentService.ReadSandboxWorkspaceManifest:input_type -> elitea.runtime.v1.ReadSandboxWorkspaceManifestRequestV1
+	71, // 81: elitea.runtime.v1.RuntimeContentService.ReadSandboxWorkspaceFile:input_type -> elitea.runtime.v1.ReadSandboxWorkspaceFileRequestV1
+	74, // 82: elitea.runtime.v1.RuntimeContentService.GetSandboxBundle:input_type -> elitea.runtime.v1.GetSandboxBundleRequestV1
+	76, // 83: elitea.runtime.v1.RuntimeContentService.PublishSandboxBundle:input_type -> elitea.runtime.v1.PublishSandboxBundleRequestV1
+	78, // 84: elitea.runtime.v1.RuntimeContentService.FetchSandboxBundleFile:input_type -> elitea.runtime.v1.FetchSandboxBundleFileRequestV1
+	81, // 85: elitea.runtime.v1.RuntimeContentService.UploadSandboxBundleFile:input_type -> elitea.runtime.v1.UploadSandboxBundleFileRequestV1
+	83, // 86: elitea.runtime.v1.RuntimeContentService.GetCompiledSnapshot:input_type -> elitea.runtime.v1.GetCompiledSnapshotRequestV1
+	85, // 87: elitea.runtime.v1.RuntimeContentService.PublishCompiledSnapshot:input_type -> elitea.runtime.v1.PublishCompiledSnapshotRequestV1
+	87, // 88: elitea.runtime.v1.RuntimeContentService.FetchCompiledSnapshotFile:input_type -> elitea.runtime.v1.FetchCompiledSnapshotFileRequestV1
+	90, // 89: elitea.runtime.v1.RuntimeContentService.UploadCompiledSnapshotFile:input_type -> elitea.runtime.v1.UploadCompiledSnapshotFileRequestV1
+	4,  // 90: elitea.runtime.v1.RuntimeContentService.GetInput:output_type -> elitea.runtime.v1.GetInputResponseV1
+	6,  // 91: elitea.runtime.v1.RuntimeContentService.GetEliteaClientToken:output_type -> elitea.runtime.v1.GetEliteaClientTokenResponseV1
+	8,  // 92: elitea.runtime.v1.RuntimeContentService.RedeemCredential:output_type -> elitea.runtime.v1.RedeemCredentialResponseV1
+	10, // 93: elitea.runtime.v1.RuntimeContentService.GetApplicationVersion:output_type -> elitea.runtime.v1.GetApplicationVersionResponseV1
+	12, // 94: elitea.runtime.v1.RuntimeContentService.GetAttachmentObject:output_type -> elitea.runtime.v1.GetAttachmentObjectResponseV1
+	14, // 95: elitea.runtime.v1.RuntimeContentService.ExecuteHTTPAction:output_type -> elitea.runtime.v1.ExecuteHTTPActionResponseV1
+	16, // 96: elitea.runtime.v1.RuntimeContentService.WriteSkill:output_type -> elitea.runtime.v1.WriteSkillResponseV1
+	18, // 97: elitea.runtime.v1.RuntimeContentService.WriteProjectContext:output_type -> elitea.runtime.v1.WriteProjectContextResponseV1
+	20, // 98: elitea.runtime.v1.RuntimeContentService.RememberAgentMemory:output_type -> elitea.runtime.v1.RememberAgentMemoryResponseV1
+	22, // 99: elitea.runtime.v1.RuntimeContentService.RecallAgentMemory:output_type -> elitea.runtime.v1.RecallAgentMemoryResponseV1
+	24, // 100: elitea.runtime.v1.RuntimeContentService.ForgetAgentMemory:output_type -> elitea.runtime.v1.ForgetAgentMemoryResponseV1
+	26, // 101: elitea.runtime.v1.RuntimeContentService.HandFloor:output_type -> elitea.runtime.v1.HandFloorResponseV1
+	28, // 102: elitea.runtime.v1.RuntimeContentService.ProposeAgent:output_type -> elitea.runtime.v1.ProposeAgentResponseV1
+	30, // 103: elitea.runtime.v1.RuntimeContentService.ProposeDismissal:output_type -> elitea.runtime.v1.ProposeDismissalResponseV1
+	32, // 104: elitea.runtime.v1.RuntimeContentService.MarketplaceWorkforce:output_type -> elitea.runtime.v1.MarketplaceWorkforceResponseV1
+	34, // 105: elitea.runtime.v1.RuntimeContentService.ListArtifacts:output_type -> elitea.runtime.v1.ListArtifactsResponseV1
+	36, // 106: elitea.runtime.v1.RuntimeContentService.ReadArtifact:output_type -> elitea.runtime.v1.ReadArtifactResponseV1
+	38, // 107: elitea.runtime.v1.RuntimeContentService.WriteArtifact:output_type -> elitea.runtime.v1.WriteArtifactResponseV1
+	40, // 108: elitea.runtime.v1.RuntimeContentService.DeleteArtifact:output_type -> elitea.runtime.v1.DeleteArtifactResponseV1
+	42, // 109: elitea.runtime.v1.RuntimeContentService.ResolveCodeWorkspace:output_type -> elitea.runtime.v1.ResolveCodeWorkspaceResponseV1
+	44, // 110: elitea.runtime.v1.RuntimeContentService.AdmitCodeDebug:output_type -> elitea.runtime.v1.AdmitCodeDebugResponseV1
+	46, // 111: elitea.runtime.v1.RuntimeContentService.CommitCodeDebug:output_type -> elitea.runtime.v1.CommitCodeDebugResponseV1
+	48, // 112: elitea.runtime.v1.RuntimeContentService.StepCodePlatform:output_type -> elitea.runtime.v1.StepCodePlatformResponseV1
+	50, // 113: elitea.runtime.v1.RuntimeContentService.ReadCodePlatformEffects:output_type -> elitea.runtime.v1.ReadCodePlatformEffectsResponseV1
+	52, // 114: elitea.runtime.v1.RuntimeContentService.PollNodeRecovery:output_type -> elitea.runtime.v1.PollNodeRecoveryResponseV1
+	54, // 115: elitea.runtime.v1.RuntimeContentService.AcknowledgeNodeRecovery:output_type -> elitea.runtime.v1.AcknowledgeNodeRecoveryResponseV1
+	60, // 116: elitea.runtime.v1.RuntimeContentService.ReadNodeRecoveryResult:output_type -> elitea.runtime.v1.ReadNodeRecoveryResultResponseV1
+	56, // 117: elitea.runtime.v1.RuntimeContentService.FetchExecutionInterrupts:output_type -> elitea.runtime.v1.FetchExecutionInterruptsResponseV1
+	58, // 118: elitea.runtime.v1.RuntimeContentService.AcknowledgeExecutionInterrupt:output_type -> elitea.runtime.v1.AcknowledgeExecutionInterruptResponseV1
+	62, // 119: elitea.runtime.v1.RuntimeContentService.RegisterCodeVisit:output_type -> elitea.runtime.v1.RegisterCodeVisitResponseV1
+	64, // 120: elitea.runtime.v1.RuntimeContentService.RegisterCodeIntent:output_type -> elitea.runtime.v1.RegisterCodeIntentResponseV1
+	66, // 121: elitea.runtime.v1.RuntimeContentService.PutToolkitDiscoveryResult:output_type -> elitea.runtime.v1.PutToolkitDiscoveryResultResponseV1
+	68, // 122: elitea.runtime.v1.RuntimeContentService.GetToolkitDiscoveryResult:output_type -> elitea.runtime.v1.GetToolkitDiscoveryResultResponseV1
+	70, // 123: elitea.runtime.v1.RuntimeContentService.ReadSandboxWorkspaceManifest:output_type -> elitea.runtime.v1.ReadSandboxWorkspaceManifestResponseV1
+	72, // 124: elitea.runtime.v1.RuntimeContentService.ReadSandboxWorkspaceFile:output_type -> elitea.runtime.v1.ReadSandboxWorkspaceFileResponseV1
+	75, // 125: elitea.runtime.v1.RuntimeContentService.GetSandboxBundle:output_type -> elitea.runtime.v1.GetSandboxBundleResponseV1
+	77, // 126: elitea.runtime.v1.RuntimeContentService.PublishSandboxBundle:output_type -> elitea.runtime.v1.PublishSandboxBundleResponseV1
+	79, // 127: elitea.runtime.v1.RuntimeContentService.FetchSandboxBundleFile:output_type -> elitea.runtime.v1.FetchSandboxBundleFileResponseV1
+	82, // 128: elitea.runtime.v1.RuntimeContentService.UploadSandboxBundleFile:output_type -> elitea.runtime.v1.UploadSandboxBundleFileResponseV1
+	84, // 129: elitea.runtime.v1.RuntimeContentService.GetCompiledSnapshot:output_type -> elitea.runtime.v1.GetCompiledSnapshotResponseV1
+	86, // 130: elitea.runtime.v1.RuntimeContentService.PublishCompiledSnapshot:output_type -> elitea.runtime.v1.PublishCompiledSnapshotResponseV1
+	88, // 131: elitea.runtime.v1.RuntimeContentService.FetchCompiledSnapshotFile:output_type -> elitea.runtime.v1.FetchCompiledSnapshotFileResponseV1
+	91, // 132: elitea.runtime.v1.RuntimeContentService.UploadCompiledSnapshotFile:output_type -> elitea.runtime.v1.UploadCompiledSnapshotFileResponseV1
+	90, // [90:133] is the sub-list for method output_type
+	47, // [47:90] is the sub-list for method input_type
+	47, // [47:47] is the sub-list for extension type_name
+	47, // [47:47] is the sub-list for extension extendee
+	0,  // [0:47] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_content_proto_init() }
@@ -5426,19 +5537,19 @@ func file_elitea_runtime_v1_content_proto_init() {
 		(*GetAttachmentObjectResponseV1_DocumentJson)(nil),
 		(*GetAttachmentObjectResponseV1_UnreadableReason)(nil),
 	}
-	file_elitea_runtime_v1_content_proto_msgTypes[76].OneofWrappers = []any{
+	file_elitea_runtime_v1_content_proto_msgTypes[78].OneofWrappers = []any{
 		(*FetchSandboxBundleFileResponseV1_Header)(nil),
 		(*FetchSandboxBundleFileResponseV1_Chunk)(nil),
 	}
-	file_elitea_runtime_v1_content_proto_msgTypes[78].OneofWrappers = []any{
+	file_elitea_runtime_v1_content_proto_msgTypes[80].OneofWrappers = []any{
 		(*UploadSandboxBundleFileRequestV1_Header)(nil),
 		(*UploadSandboxBundleFileRequestV1_Chunk)(nil),
 	}
-	file_elitea_runtime_v1_content_proto_msgTypes[85].OneofWrappers = []any{
+	file_elitea_runtime_v1_content_proto_msgTypes[87].OneofWrappers = []any{
 		(*FetchCompiledSnapshotFileResponseV1_Header)(nil),
 		(*FetchCompiledSnapshotFileResponseV1_Chunk)(nil),
 	}
-	file_elitea_runtime_v1_content_proto_msgTypes[87].OneofWrappers = []any{
+	file_elitea_runtime_v1_content_proto_msgTypes[89].OneofWrappers = []any{
 		(*UploadCompiledSnapshotFileRequestV1_Header)(nil),
 		(*UploadCompiledSnapshotFileRequestV1_Chunk)(nil),
 	}
@@ -5448,7 +5559,7 @@ func file_elitea_runtime_v1_content_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_content_proto_rawDesc), len(file_elitea_runtime_v1_content_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   89,
+			NumMessages:   91,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

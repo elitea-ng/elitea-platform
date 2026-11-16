@@ -9,6 +9,8 @@ import (
 	"github.com/elitea-ng/elitea-platform/libs/go/routines"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -30,6 +32,16 @@ func startAgentWorkforcePolicy(ctx context.Context, pool *pgxpool.Pool, ks killS
 	if err != nil {
 		return fmt.Errorf("compose the agent workforce store: %w", err)
 	}
+	// The hire of a Marketplace listing a workforce manager proposed
+	// (ADR-0051 decision 6, #1632) is the wizard's hire, run for the policy:
+	// the one hire code of the core handler, with the lifecycle store that
+	// records the hire's registry row. It needs no release gate (a hire the
+	// policy makes is low tier with no write tool, so no change request).
+	lifecycle, err := dbrepos.ComposeAgentLifecycle(pool, agentlifecycle.NoGate{}, ks.gate.Notify)
+	if err != nil {
+		return fmt.Errorf("compose the agent lifecycle store: %w", err)
+	}
+	store.WithListingHirer(eliteacore.NewHandler(pool, eliteacore.WithPublishGovernor(lifecycle)))
 	loop := &routines.Loop{
 		Backend: routines.NewStore(pool),
 		Def: routines.Definition{

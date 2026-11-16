@@ -94,6 +94,13 @@ service RuntimeContentService {
   // or under legal hold) and stores a proposal; nothing is applied until a
   // person approves it.
   rpc ProposeDismissal(ProposeDismissalRequestV1) returns (ProposeDismissalResponseV1);
+  // The Marketplace tools of a workforce manager (ADR-0051 decision 6, #1632):
+  // marketplace_search and marketplace_listing (read-only), propose_hire and
+  // suggest_feedback (each leaves a proposal a person decides). One route
+  // names the tool. The project, the calling agent and the person come from
+  // the claim; Main checks the can_review_agents capability and every guard
+  // of the two proposals, and fills a report's scorecard summary itself.
+  rpc MarketplaceWorkforce(MarketplaceWorkforceRequestV1) returns (MarketplaceWorkforceResponseV1);
   // The `artifact` toolkit family (#906).
   rpc ListArtifacts(ListArtifactsRequestV1) returns (ListArtifactsResponseV1);
   rpc ReadArtifact(ReadArtifactRequestV1) returns (ReadArtifactResponseV1);
@@ -357,6 +364,21 @@ message ProposeDismissalRequestV1 {
 message ProposeDismissalResponseV1 {
   // {"schema_version": string, "status": string, "proposal_id": string,
   // "message": string}
+  bytes response_json = 1;
+  reserved 2 to 15;
+}
+
+message MarketplaceWorkforceRequestV1 {
+  RuntimeContentScopeV1 scope = 1;
+  // {"tool": "marketplace_search" | "marketplace_listing" | "propose_hire" |
+  // "suggest_feedback", "arguments": {...}}
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+
+message MarketplaceWorkforceResponseV1 {
+  // {"schema_version": string, "status": string, "message": string, ...the
+  // tool's data}
   bytes response_json = 1;
   reserved 2 to 15;
 }

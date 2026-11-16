@@ -33,6 +33,7 @@ const (
 	RuntimeContentService_HandFloor_FullMethodName                     = "/elitea.runtime.v1.RuntimeContentService/HandFloor"
 	RuntimeContentService_ProposeAgent_FullMethodName                  = "/elitea.runtime.v1.RuntimeContentService/ProposeAgent"
 	RuntimeContentService_ProposeDismissal_FullMethodName              = "/elitea.runtime.v1.RuntimeContentService/ProposeDismissal"
+	RuntimeContentService_MarketplaceWorkforce_FullMethodName          = "/elitea.runtime.v1.RuntimeContentService/MarketplaceWorkforce"
 	RuntimeContentService_ListArtifacts_FullMethodName                 = "/elitea.runtime.v1.RuntimeContentService/ListArtifacts"
 	RuntimeContentService_ReadArtifact_FullMethodName                  = "/elitea.runtime.v1.RuntimeContentService/ReadArtifact"
 	RuntimeContentService_WriteArtifact_FullMethodName                 = "/elitea.runtime.v1.RuntimeContentService/WriteArtifact"
@@ -153,6 +154,13 @@ type RuntimeContentServiceClient interface {
 	// or under legal hold) and stores a proposal; nothing is applied until a
 	// person approves it.
 	ProposeDismissal(ctx context.Context, in *ProposeDismissalRequestV1, opts ...grpc.CallOption) (*ProposeDismissalResponseV1, error)
+	// The Marketplace tools of a workforce manager (ADR-0051 decision 6, #1632):
+	// marketplace_search and marketplace_listing (read-only), propose_hire and
+	// suggest_feedback (each leaves a proposal a person decides). One route
+	// names the tool. The project, the calling agent and the person come from
+	// the claim; Main checks the can_review_agents capability and every guard
+	// of the two proposals, and fills a report's scorecard summary itself.
+	MarketplaceWorkforce(ctx context.Context, in *MarketplaceWorkforceRequestV1, opts ...grpc.CallOption) (*MarketplaceWorkforceResponseV1, error)
 	// The `artifact` toolkit family (#906).
 	ListArtifacts(ctx context.Context, in *ListArtifactsRequestV1, opts ...grpc.CallOption) (*ListArtifactsResponseV1, error)
 	ReadArtifact(ctx context.Context, in *ReadArtifactRequestV1, opts ...grpc.CallOption) (*ReadArtifactResponseV1, error)
@@ -351,6 +359,16 @@ func (c *runtimeContentServiceClient) ProposeDismissal(ctx context.Context, in *
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ProposeDismissalResponseV1)
 	err := c.cc.Invoke(ctx, RuntimeContentService_ProposeDismissal_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeContentServiceClient) MarketplaceWorkforce(ctx context.Context, in *MarketplaceWorkforceRequestV1, opts ...grpc.CallOption) (*MarketplaceWorkforceResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarketplaceWorkforceResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeContentService_MarketplaceWorkforce_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -751,6 +769,13 @@ type RuntimeContentServiceServer interface {
 	// or under legal hold) and stores a proposal; nothing is applied until a
 	// person approves it.
 	ProposeDismissal(context.Context, *ProposeDismissalRequestV1) (*ProposeDismissalResponseV1, error)
+	// The Marketplace tools of a workforce manager (ADR-0051 decision 6, #1632):
+	// marketplace_search and marketplace_listing (read-only), propose_hire and
+	// suggest_feedback (each leaves a proposal a person decides). One route
+	// names the tool. The project, the calling agent and the person come from
+	// the claim; Main checks the can_review_agents capability and every guard
+	// of the two proposals, and fills a report's scorecard summary itself.
+	MarketplaceWorkforce(context.Context, *MarketplaceWorkforceRequestV1) (*MarketplaceWorkforceResponseV1, error)
 	// The `artifact` toolkit family (#906).
 	ListArtifacts(context.Context, *ListArtifactsRequestV1) (*ListArtifactsResponseV1, error)
 	ReadArtifact(context.Context, *ReadArtifactRequestV1) (*ReadArtifactResponseV1, error)
@@ -847,6 +872,9 @@ func (UnimplementedRuntimeContentServiceServer) ProposeAgent(context.Context, *P
 }
 func (UnimplementedRuntimeContentServiceServer) ProposeDismissal(context.Context, *ProposeDismissalRequestV1) (*ProposeDismissalResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ProposeDismissal not implemented")
+}
+func (UnimplementedRuntimeContentServiceServer) MarketplaceWorkforce(context.Context, *MarketplaceWorkforceRequestV1) (*MarketplaceWorkforceResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method MarketplaceWorkforce not implemented")
 }
 func (UnimplementedRuntimeContentServiceServer) ListArtifacts(context.Context, *ListArtifactsRequestV1) (*ListArtifactsResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListArtifacts not implemented")
@@ -1194,6 +1222,24 @@ func _RuntimeContentService_ProposeDismissal_Handler(srv interface{}, ctx contex
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(RuntimeContentServiceServer).ProposeDismissal(ctx, req.(*ProposeDismissalRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeContentService_MarketplaceWorkforce_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarketplaceWorkforceRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeContentServiceServer).MarketplaceWorkforce(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeContentService_MarketplaceWorkforce_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeContentServiceServer).MarketplaceWorkforce(ctx, req.(*MarketplaceWorkforceRequestV1))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1724,6 +1770,10 @@ var RuntimeContentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ProposeDismissal",
 			Handler:    _RuntimeContentService_ProposeDismissal_Handler,
+		},
+		{
+			MethodName: "MarketplaceWorkforce",
+			Handler:    _RuntimeContentService_MarketplaceWorkforce_Handler,
 		},
 		{
 			MethodName: "ListArtifacts",

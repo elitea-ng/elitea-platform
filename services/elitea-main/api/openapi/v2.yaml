@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.55"
+  x-elitea-client-contract: "1.56"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -9635,14 +9635,23 @@ components:
         proposer_application_id, execution_id, rationale, narrowing, evidence, evidence_digest, status,
         owner_comment, decided_by_user_id, decided_at, decision_note, applied, appeal_state, appeal_reason,
         appealed_by_user_id, appealed_at, appeal_decided_by_user_id, appeal_decided_at, appeal_note, created_at,
-        policy_rule]
+        policy_rule, listing_id, listing_version_id, payload]
       properties:
         id: { type: integer, format: int64 }
         project_id: { type: integer, format: int64 }
-        application_id: { type: integer, format: int64 }
+        application_id:
+          type: integer
+          format: int64
+          description: The agent the proposal is about; the hired agent of a feedback_report. 0 for a hire_listing (no agent yet).
         application_name: { type: string }
-        kind: { type: string, description: dismiss or demote. }
-        stage: { type: string, description: 'watch, demote, suspend, retire or delete.' }
+        kind:
+          type: string
+          description: >
+            dismiss or demote (the ladder), hire_listing (a workforce manager proposes hiring a Marketplace
+            listing version) or feedback_report (a workforce manager's drafted report on a hired agent).
+        stage:
+          type: string
+          description: 'watch, demote, suspend, retire or delete. For a feedback_report, the stage the report is about. Empty for a hire_listing.'
         source: { type: string, description: 'person, workforce_manager or policy (the project''s automatic dismissal policy).' }
         proposed_by_user_id: { type: integer, format: int64, nullable: true }
         proposer_application_id: { type: integer, format: int64, nullable: true, description: The workforce manager that proposed it. }
@@ -9685,6 +9694,19 @@ components:
           type: string
           nullable: true
           description: The rule of a stage the workforce policy applied or noticed (source policy).
+        listing_id: { type: integer, format: int64, nullable: true, description: The Marketplace listing of a hire_listing or feedback_report. }
+        listing_version_id: { type: integer, format: int64, nullable: true, description: The listing version to hire, or the version the hired agent was installed from. }
+        payload:
+          type: object
+          additionalProperties: true
+          description: >
+            What a Marketplace kind carries. A hire_listing has mode (install or fork), bindings_hint
+            ([{requirement_key, toolkit_id}]), listing_name, version_name, tier, has_write_tools and required_types.
+            A feedback_report has outcome, reason_code, scorecard (the platform-filled summary), listing_name and
+            hired_agent_id; its text is the rationale. Empty for the ladder.
+          x-elitea-passthrough: >-
+            NOTE(W2): repos.WorkforceProposal.Payload (internal/infra/db/repos/agent_workforce.go) is the jsonb the
+            Marketplace tools wrote (internal/infra/db/repos/agent_workforce_marketplace.go).
     AgentScorecard:
       type: object
       required: [day, runs_30d, failed_30d, cap_reached_30d, failure_rate_30d, breaker_trips_7d,
@@ -9858,10 +9880,19 @@ components:
           maxItems: 20
           items: { $ref: '#/components/schemas/AgentWorkforceRule' }
         grace_days: { type: integer, minimum: 1, maximum: 90 }
+        auto_feedback_enabled:
+          type: boolean
+          description: >
+            agents.workforce.auto_feedback: publish a workforce manager's drafted report on a dismissed or demoted
+            hired agent when the stage is applied. The person who turns it on is recorded as the approver.
+        listing_min_reviews: { type: integer, minimum: 0, maximum: 1000, description: 'auto_hire of a listing: reviews the version needs. 0 or absent is 3.' }
+        listing_min_rating: { type: number, minimum: 0, maximum: 5, description: 'auto_hire of a listing: the average rating the version needs. 0 or absent is 4.0.' }
+        listing_max_dismissal_rate: { type: number, minimum: 0, maximum: 1, description: 'auto_hire of a listing: the dismissal rate must be under this. 0 or absent is 0.2.' }
     AgentWorkforcePolicy:
       type: object
       required: [project_id, saved, auto_hire_enabled, min_successful_runs, max_auto_hired, auto_dismiss_enabled,
-        auto_dismiss_rules, grace_days, updated_by, updated_at, default_rules, open_auto_hired, can_manage]
+        auto_dismiss_rules, grace_days, updated_by, updated_at, default_rules, open_auto_hired, can_manage,
+        auto_feedback_enabled, auto_feedback_by, listing_min_reviews, listing_min_rating, listing_max_dismissal_rate]
       properties:
         project_id: { type: integer, format: int64 }
         saved: { type: boolean, description: 'An agent manager saved a policy (false is the defaults, everything off).' }
@@ -9875,6 +9906,11 @@ components:
         grace_days: { type: integer }
         updated_by: { type: integer, format: int64, nullable: true }
         updated_at: { type: string, format: date-time, nullable: true }
+        auto_feedback_enabled: { type: boolean }
+        auto_feedback_by: { type: integer, format: int64, nullable: true, description: The person who turned auto_feedback on; an automatic report is recorded under them. }
+        listing_min_reviews: { type: integer }
+        listing_min_rating: { type: number }
+        listing_max_dismissal_rate: { type: number }
         default_rules:
           type: array
           items: { $ref: '#/components/schemas/AgentWorkforceRule' }
@@ -14957,6 +14993,11 @@ components:
         bindings:
           type: array
           items: { $ref: '#/components/schemas/MarketplaceBinding' }
+        proposal_id:
+          type: string
+          description: >
+            The open hire_listing proposal of a workforce manager this hire settles (ADR-0051 decision 6). It must
+            name the same listing; the hire and its approval are one transaction.
       description: >
         The hire wizard's answer (internal/api/v2/eliteacore/marketplace_hire.go).
 
@@ -15215,17 +15256,16 @@ components:
 
     MarketplaceReportRequest:
       type: object
-      required: [hired_agent_id, agent_id, outcome, stage]
+      required: [proposal_id]
       properties:
-        hired_agent_id: { type: integer, description: The hired agent the report is about. }
-        agent_id: { type: integer, description: The workforce manager that wrote it. }
-        outcome: { type: string, description: '`kept`, `demoted` or `dismissed`.' }
-        stage: { type: string, maxLength: 64 }
-        reason_code: { type: string, maxLength: 64 }
-        text: { type: string, maxLength: 500 }
+        proposal_id:
+          type: string
+          description: >
+            The feedback_report proposal a workforce manager drafted with suggest_feedback. The agent, the hired
+            agent, the outcome, the stage and the scorecard summary come from it, never from this request.
+        text: { type: string, maxLength: 500, description: 'Replaces the agent''s draft: the approving person edited it.' }
       description: >
-        A workforce report that the caller approves. The scorecard summary is
-        filled by the platform, not by the request
+        A workforce report that the caller publishes by approving the proposal it came from
         (internal/api/v2/eliteacore/marketplace_feedback.go).
 
     MarketplaceFeedbackActionRequest:
@@ -31896,14 +31936,18 @@ paths:
         when it can be reinstated) or deleted, its owners, legal hold, whether
         it is a workforce manager, its latest daily scorecard, and whether the caller
         manages agents here or owns the agent. Requires
-        `models.applications.applications.list`.
-      tags: [applications]
+        `models.applications.applications.list`. The mobile app reads it for the
+        probation badge of an automatically hired agent (contract 1.56).
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
         '200':
           description: The agent's workforce state
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentWorkforceAgent' }
+        '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404':
@@ -31911,6 +31955,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
 
   /elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}/scorecards:
     parameters:
@@ -32030,16 +32075,27 @@ paths:
       - $ref: '#/components/parameters/ProjectId'
     get:
       operationId: listAgentWorkforceProposals
-      summary: List dismissal and demotion proposals
+      summary: List workforce proposals
       description: >
         The project's workforce proposals, newest first: open ones (proposed
         or asked_owner) unless status names proposed, asked_owner, approved,
-        rejected or all. application_id narrows them to one agent. Requires
-        `models.applications.applications.list`.
-      tags: [applications]
+        rejected or all. application_id narrows them to one agent. kind picks
+        the ladder's dismiss and demote (the default) or the Marketplace's
+        hire_listing and feedback_report (ADR-0051 decision 6). Requires
+        `models.applications.applications.list`. The mobile app reads the
+        Marketplace kinds, read-only (contract 1.56).
+      tags: [applications, client]
       parameters:
+        - $ref: '#/components/parameters/XClientVersion'
         - { name: status, in: query, required: false, description: 'proposed, asked_owner, approved, rejected or all', schema: { type: string } }
         - { name: application_id, in: query, required: false, schema: { type: integer, format: int64, minimum: 1 } }
+        - name: kind
+          in: query
+          required: false
+          description: >
+            Omitted: the ladder's proposals (dismiss and demote). hire_listing or feedback_report: that kind.
+            marketplace: both. dismiss, demote or all. The Marketplace kinds are the agent manager's to read.
+          schema: { type: string }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 100 } }
         - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
       responses:
@@ -32058,6 +32114,7 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
     post:
       operationId: proposeAgentWorkforceStage
       summary: Propose a ladder stage for an agent
@@ -32147,7 +32204,9 @@ paths:
       operationId: approveAgentWorkforceProposal
       summary: Approve a workforce proposal and apply its stage
       description: >
-        Applies the stage. Retiring an agent that other agents nest needs confirm_nested. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+        Applies the stage. Retiring an agent that other agents nest needs confirm_nested. A feedback_report
+        proposal is published to its listing version (an agent manager only). A hire_listing proposal is
+        approved by hiring (the hire wizard settles it), so it is refused here. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
       tags: [applications]
       requestBody:
         required: false
@@ -32194,7 +32253,8 @@ paths:
       operationId: rejectAgentWorkforceProposal
       summary: Reject a workforce proposal
       description: >
-        Keeps the agent; a watch flag the proposal raised is cleared. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+        Keeps the agent; a watch flag the proposal raised is cleared. For a hire_listing or feedback_report
+        proposal it discards the proposal (an agent manager only). Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
       tags: [applications]
       requestBody:
         required: false
@@ -39747,11 +39807,15 @@ paths:
       summary: Publish a workforce report on a hired agent
       description: |
         The caller approves and publishes a workforce manager's report on the
-        listing version a hired agent was installed from. The agent must be a
-        workforce manager of the project, the project must have hired the
-        listing and not published it, and there is one report per hired agent
-        and stage. The scorecard summary is filled by the platform
-        (internal/api/v2/eliteacore/marketplace_feedback.go).
+        listing version a hired agent was installed from, from the
+        feedback_report proposal that agent drafted with suggest_feedback
+        (ADR-0051 decision 6). The caller needs `agents.workforce.manage`. A
+        report that did not originate from the agent's own proposal is not
+        accepted: the request names the proposal, not the agent. The drafting
+        agent must still be a workforce manager of the project, the project
+        must have hired the listing and not published it, and there is one
+        report per hired agent and stage. The scorecard summary is filled by
+        the platform (internal/api/v2/eliteacore/marketplace_feedback.go).
       tags: [marketplace]
       requestBody:
         required: true
@@ -39773,7 +39837,7 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '404': { $ref: '#/components/responses/404' }
         '409':
-          description: This hired agent already has a report for the stage (`already_done`).
+          description: This hired agent already has a report for the stage (`already_done`), or the proposal was decided already (`proposal_not_open`).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

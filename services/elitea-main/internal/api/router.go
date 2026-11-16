@@ -2256,6 +2256,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithEvents(cfg.DomainEvents),
 		v2core.WithPublishAIValidation(publishAIValidator(cfg.PredictCompleter)),
 		v2core.WithConnectorGate(connectorGate),
+		v2core.WithWorkforceManagerCheck(apimw.HoldsPermissionIn(coreResolver, platformauth.PermissionModeDefault, v2agentworkforce.ManagePermission)),
 	)
 	agentLifecycle.ComposePublisher(coreHandler)
 	// An approved upgrade or upstream merge is applied by the handler that owns
@@ -5005,9 +5006,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Feedback per listing version (ADR-0051 decision 5, issue
 				// 1631). A review needs a hire by the caller's project, which
 				// the store checks; a report is a person approving a workforce
-				// manager's account of a hired agent, so it takes the permission
-				// that updates an agent. Reply, flag and hide are the
-				// publisher's or an administrator's, and the handler decides.
+				// manager's account of a hired agent, from the proposal that
+				// agent drafted with suggest_feedback (#1632). The route takes
+				// the update permission; the handler also needs the agent
+				// manager's (agents.workforce.manage), as the workforce routes
+				// do. Reply, flag and hide are the publisher's or an
+				// administrator's, and the handler decides.
 				r.With(requireMarketplaceRead).
 					Get("/marketplace_feedback/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceFeedback)
 				r.With(requireMarketplaceRead).

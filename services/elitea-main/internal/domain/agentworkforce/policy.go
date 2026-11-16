@@ -29,6 +29,7 @@ package agentworkforce
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"time"
@@ -47,8 +48,12 @@ const (
 	DefaultMinSuccessfulRuns = 3
 	DefaultMaxAutoHired      = 5
 	DefaultGraceDays         = 7
-	MaxRules                 = 20
-	MaxConditions            = 8
+	// The auto_hire rule for a Marketplace listing (ADR-0051 decision 6).
+	DefaultListingMinReviews       = 3
+	DefaultListingMinRating        = 4.0
+	DefaultListingMaxDismissalRate = 0.2
+	MaxRules                       = 20
+	MaxConditions                  = 8
 
 	// Rule names of the actions the platform takes outside a project's
 	// rules.
@@ -139,6 +144,18 @@ type Policy struct {
 	AutoDismissEnabled bool   `json:"auto_dismiss_enabled"`
 	Rules              []Rule `json:"auto_dismiss_rules"`
 	GraceDays          int    `json:"grace_days"`
+	// AutoFeedbackEnabled publishes a workforce manager's report on a
+	// dismissed or demoted hired agent when the stage is applied, without a
+	// person approving that one report (ADR-0051 decision 6, owner question
+	// Q5). The person who turned it on is recorded as the approver.
+	AutoFeedbackEnabled bool `json:"auto_feedback_enabled"`
+	// The three numbers auto_hire reads for a Marketplace listing: the version
+	// has at least ListingMinReviews reviews averaging ListingMinRating or
+	// better, and its listing's dismissal rate is under
+	// ListingMaxDismissalRate. Zero reads as the default.
+	ListingMinReviews       int     `json:"listing_min_reviews"`
+	ListingMinRating        float64 `json:"listing_min_rating"`
+	ListingMaxDismissalRate float64 `json:"listing_max_dismissal_rate"`
 }
 
 // DefaultRules are the platform's starting rules (ADR-0050 decision 5k).
@@ -157,6 +174,8 @@ func DefaultPolicy() Policy {
 	return Policy{
 		MinSuccessfulRuns: DefaultMinSuccessfulRuns, MaxAutoHired: DefaultMaxAutoHired,
 		Rules: DefaultRules(), GraceDays: DefaultGraceDays,
+		ListingMinReviews: DefaultListingMinReviews, ListingMinRating: DefaultListingMinRating,
+		ListingMaxDismissalRate: DefaultListingMaxDismissalRate,
 	}
 }
 
@@ -181,6 +200,26 @@ func CheckPolicy(p Policy) (Policy, error) {
 	if p.GraceDays < 1 || p.GraceDays > 90 {
 		return Policy{}, invalid("grace_days is between 1 and 90.")
 	}
+	if p.ListingMinReviews == 0 {
+		p.ListingMinReviews = DefaultListingMinReviews
+	}
+	if p.ListingMinRating == 0 {
+		p.ListingMinRating = DefaultListingMinRating
+	}
+	if p.ListingMaxDismissalRate == 0 {
+		p.ListingMaxDismissalRate = DefaultListingMaxDismissalRate
+	}
+	if p.ListingMinReviews < 1 || p.ListingMinReviews > 1000 {
+		return Policy{}, invalid("listing_min_reviews is between 1 and 1000.")
+	}
+	if p.ListingMinRating < 1 || p.ListingMinRating > 5 {
+		return Policy{}, invalid("listing_min_rating is between 1 and 5.")
+	}
+	if p.ListingMaxDismissalRate <= 0 || p.ListingMaxDismissalRate > 1 {
+		return Policy{}, invalid("listing_max_dismissal_rate is above 0 and at most 1.")
+	}
+	p.ListingMinRating = math.Round(p.ListingMinRating*10) / 10
+	p.ListingMaxDismissalRate = math.Round(p.ListingMaxDismissalRate*100) / 100
 	if len(p.Rules) > MaxRules {
 		return Policy{}, invalid("At most %d rules.", MaxRules)
 	}

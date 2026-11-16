@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.55",
+  "client_contract": "1.56",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -4724,6 +4724,739 @@
                   "type": "integer"
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    "GET /elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}": {
+      "operation_id": "getAgentWorkforce",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:application_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "application_id",
+                "application_name",
+                "auto_hired_at",
+                "business_owner_id",
+                "is_workforce_manager",
+                "legal_hold",
+                "lifecycle_state",
+                "orphaned_since",
+                "probation_reviewed_at",
+                "probation_until",
+                "project_id",
+                "purge_after",
+                "reinstate_until",
+                "retired_at",
+                "retired_by",
+                "risk_tier",
+                "suspension_id",
+                "suspension_source",
+                "technical_owner_id",
+                "under_review",
+                "under_review_since"
+              ],
+              "properties": {
+                "application_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "application_name": {
+                  "type": "string"
+                },
+                "auto_hired_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true
+                },
+                "business_owner_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "can_manage": {
+                  "type": "boolean"
+                },
+                "is_hr_agent": {
+                  "type": "boolean"
+                },
+                "is_owner": {
+                  "type": "boolean"
+                },
+                "is_workforce_manager": {
+                  "type": "boolean"
+                },
+                "legal_hold": {
+                  "type": "boolean"
+                },
+                "lifecycle_state": {
+                  "type": "string"
+                },
+                "orphaned_since": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true
+                },
+                "probation_reviewed_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true
+                },
+                "probation_until": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true
+                },
+                "project_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "purge_after": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true
+                },
+                "reinstate_until": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true
+                },
+                "retired_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true
+                },
+                "retired_by": {
+                  "type": "integer",
+                  "format": "int64",
+                  "nullable": true
+                },
+                "risk_tier": {
+                  "type": "string"
+                },
+                "scorecard": {
+                  "type": "object",
+                  "nullable": true,
+                  "required": [
+                    "approval_rejections_30d",
+                    "breaker_trips_7d",
+                    "cap_reached_30d",
+                    "certification_state",
+                    "computed_at",
+                    "day",
+                    "failed_30d",
+                    "failure_rate_30d",
+                    "guardrail_hits_30d",
+                    "last_used_at",
+                    "project_median_spend_usd",
+                    "runs_30d",
+                    "spend_30d_usd",
+                    "thumbs_down_30d",
+                    "thumbs_up_30d",
+                    "unused_days"
+                  ],
+                  "properties": {
+                    "approval_rejections_30d": {
+                      "type": "integer"
+                    },
+                    "breaker_trips_7d": {
+                      "type": "integer"
+                    },
+                    "cap_reached_30d": {
+                      "type": "integer"
+                    },
+                    "certification_state": {
+                      "type": "string"
+                    },
+                    "computed_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "day": {
+                      "type": "string",
+                      "format": "date"
+                    },
+                    "failed_30d": {
+                      "type": "integer"
+                    },
+                    "failure_rate_30d": {
+                      "type": "number"
+                    },
+                    "guardrail_hits_30d": {
+                      "type": "integer"
+                    },
+                    "last_used_at": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
+                    },
+                    "project_median_spend_usd": {
+                      "type": "number"
+                    },
+                    "runs_30d": {
+                      "type": "integer"
+                    },
+                    "spend_30d_usd": {
+                      "type": "number"
+                    },
+                    "thumbs_down_30d": {
+                      "type": "integer"
+                    },
+                    "thumbs_up_30d": {
+                      "type": "integer"
+                    },
+                    "unused_days": {
+                      "type": "integer",
+                      "nullable": true
+                    }
+                  }
+                },
+                "suspension_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "suspension_source": {
+                  "type": "string"
+                },
+                "technical_owner_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "under_review": {
+                  "type": "boolean"
+                },
+                "under_review_since": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "code",
+                "error",
+                "message"
+              ],
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "nested_by": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "application_id",
+                      "name"
+                    ],
+                    "properties": {
+                      "application_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "purge_after": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true
+                },
+                "workforce_proposal_id": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "GET /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals": {
+      "operation_id": "listAgentWorkforceProposals",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "query:application_id": {
+          "schema": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          }
+        },
+        "query:kind": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "query:limit": {
+          "schema": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "query:offset": {
+          "schema": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "query:status": {
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "rows",
+                "total"
+              ],
+              "properties": {
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "appeal_decided_at",
+                      "appeal_decided_by_user_id",
+                      "appeal_note",
+                      "appeal_reason",
+                      "appeal_state",
+                      "appealed_at",
+                      "appealed_by_user_id",
+                      "application_id",
+                      "application_name",
+                      "applied",
+                      "created_at",
+                      "decided_at",
+                      "decided_by_user_id",
+                      "decision_note",
+                      "evidence",
+                      "evidence_digest",
+                      "execution_id",
+                      "id",
+                      "kind",
+                      "listing_id",
+                      "listing_version_id",
+                      "narrowing",
+                      "owner_comment",
+                      "payload",
+                      "policy_rule",
+                      "project_id",
+                      "proposed_by_user_id",
+                      "proposer_application_id",
+                      "rationale",
+                      "source",
+                      "stage",
+                      "status"
+                    ],
+                    "properties": {
+                      "appeal_decided_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                      },
+                      "appeal_decided_by_user_id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true
+                      },
+                      "appeal_note": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "appeal_reason": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "appeal_state": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "appealed_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                      },
+                      "appealed_by_user_id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true
+                      },
+                      "application_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "application_name": {
+                        "type": "string"
+                      },
+                      "applied": {
+                        "type": "object",
+                        "nullable": true,
+                        "open": true
+                      },
+                      "created_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "decided_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                      },
+                      "decided_by_user_id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true
+                      },
+                      "decision_note": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "evidence": {
+                        "type": "object",
+                        "nullable": true,
+                        "open": true
+                      },
+                      "evidence_digest": {
+                        "type": "string"
+                      },
+                      "execution_id": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "kind": {
+                        "type": "string"
+                      },
+                      "listing_id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true
+                      },
+                      "listing_version_id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true
+                      },
+                      "narrowing": {
+                        "type": "object",
+                        "properties": {
+                          "memory_review": {
+                            "type": "boolean"
+                          },
+                          "proactivity_off": {
+                            "type": "boolean"
+                          },
+                          "remove_capabilities": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "max_items": 2
+                          },
+                          "remove_lead": {
+                            "type": "boolean"
+                          },
+                          "remove_toolkit_ids": {
+                            "type": "array",
+                            "items": {
+                              "type": "integer",
+                              "format": "int64",
+                              "minimum": 1
+                            },
+                            "max_items": 50
+                          },
+                          "toolkit_type_ceiling": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "max_items": 50
+                          }
+                        }
+                      },
+                      "owner_comment": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "payload": {
+                        "type": "object",
+                        "open": true
+                      },
+                      "policy_rule": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "project_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "proposed_by_user_id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true
+                      },
+                      "proposer_application_id": {
+                        "type": "integer",
+                        "format": "int64",
+                        "nullable": true
+                      },
+                      "rationale": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string"
+                      },
+                      "stage": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "total": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
             }
           }
         }

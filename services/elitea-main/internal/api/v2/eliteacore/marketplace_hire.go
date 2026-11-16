@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
@@ -49,6 +50,9 @@ type hireBody struct {
 	Mode      string            `json:"mode"`
 	Name      string            `json:"name"`
 	Bindings  []hireBindingBody `json:"bindings"`
+	// ProposalID is the open hire_listing proposal of a workforce manager the
+	// hire settles (ADR-0051 decision 6).
+	ProposalID string `json:"proposal_id"`
 }
 
 func hireError(w http.ResponseWriter, status int, code, msg string) {
@@ -172,6 +176,40 @@ VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNIN
 	return nil
 }
 
+// hireFailure is a hire that did not happen: the status and body the route
+// answers.
+type hireFailure struct {
+	status int
+	body   any
+}
+
+func failHire(status int, code, msg string) *hireFailure {
+	return &hireFailure{status: status, body: map[string]any{"error": code, "msg": msg}}
+}
+
+// hireInput is one hire, however it was asked for: a person in the wizard, or
+// the workforce policy's auto_hire of a listing a workforce manager proposed.
+type hireInput struct {
+	ProjectIDText string
+	ListingID     int64
+	VersionID     int64
+	Mode          string
+	Name          string
+	Bindings      []hireBindingBody
+	// ActorID is the person the hire is made for: the author of the new
+	// agent's versions.
+	ActorID int64
+	// ProposalID settles the open hire_listing proposal of a workforce manager
+	// in the same transaction (0: none).
+	ProposalID int64
+	// SkipAvatar leaves the avatar files uncopied (the policy has no request
+	// to copy them under).
+	SkipAvatar bool
+	// Automatic: the hire is the policy's. It is refused (a person decides)
+	// when it would need an approval.
+	Automatic bool
+}
+
 // MarketplaceHire answers POST /elitea_core/marketplace_hire/prompt_lib/{projectID}.
 func (h *Handler) MarketplaceHire(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
@@ -180,12 +218,11 @@ func (h *Handler) MarketplaceHire(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	projectIDText := chi.URLParam(r, "projectID")
-	schema, ok := tenantSchema(w, projectIDText)
-	if !ok {
+	if _, ok := tenantSchema(w, projectIDText); !ok {
 		return
 	}
 	projectID := parseProjectID(projectIDText)
-	owner, ownerErr := tenantOwnerID(projectIDText)
+	_, ownerErr := tenantOwnerID(projectIDText)
 	userID, hasUser := importPrincipalUserID(ctx)
 	if !hasUser {
 		hireError(w, http.StatusUnauthorized, "unauthorized", "An authenticated person is required to hire.")
@@ -202,36 +239,72 @@ func (h *Handler) MarketplaceHire(w http.ResponseWriter, r *http.Request) {
 		hireError(w, http.StatusBadRequest, "invalid_request", "listing_id, version_id and the project must be ids.")
 		return
 	}
+	var proposalID int64
+	if body.ProposalID != "" {
+		parsed, err := strconv.ParseInt(body.ProposalID, 10, 64)
+		if err != nil || parsed <= 0 {
+			hireError(w, http.StatusBadRequest, "invalid_request", "proposal_id must be a workforce proposal id.")
+			return
+		}
+		proposalID = parsed
+	}
 	if body.Mode != marketplace.ModeInstall && body.Mode != marketplace.ModeFork {
 		hireError(w, http.StatusBadRequest, "invalid_request", "mode must be install or fork.")
 		return
 	}
 	h.ensureListings(ctx)
+	result, failure := h.performHire(ctx, nil, hireInput{
+		ProjectIDText: projectIDText, ListingID: listingID, VersionID: versionID, Mode: body.Mode, Name: body.Name,
+		Bindings: body.Bindings, ActorID: userID.Int64(), ProposalID: proposalID,
+	})
+	if failure != nil {
+		writeJSON(w, failure.status, failure.body)
+		return
+	}
+	if h.events != nil {
+		h.events.Emit(ctx, projectIDText, "agent.hired", map[string]any{
+			"application_id": result["application_id"], "listing_id": listingID, "version_id": versionID, "mode": body.Mode,
+		})
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+// performHire makes one hire (ADR-0051 decision 3). With a transaction it
+// writes inside it and leaves the commit to the caller (the policy's hire is
+// one transaction with its probation record); without one it opens its own and
+// commits.
+func (h *Handler) performHire(ctx context.Context, external pgx.Tx, in hireInput) (map[string]any, *hireFailure) {
+	projectIDText := in.ProjectIDText
+	schema, err := tenantschema.Quote(projectIDText)
+	if err != nil {
+		return nil, failHire(http.StatusBadRequest, "invalid_request", "The project id is not valid.")
+	}
+	projectID := parseProjectID(projectIDText)
+	owner, ownerErr := tenantOwnerID(projectIDText)
+	if ownerErr != nil {
+		return nil, failHire(http.StatusBadRequest, "invalid_request", "The project id is not valid.")
+	}
+	listingID, versionID := in.ListingID, in.VersionID
 	version, err := marketplace.LoadVersion(ctx, h.pool, listingID, versionID)
 	if errors.Is(err, marketplace.ErrNotFound) {
-		hireError(w, http.StatusNotFound, "not_found", "The listing version does not exist.")
-		return
+		return nil, failHire(http.StatusNotFound, "not_found", "The listing version does not exist.")
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "marketplace hire: read the version failed", "listing_id", listingID, "error", err)
-		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-		return
+		return nil, failHire(http.StatusInternalServerError, "internal_error", "Failed to hire.")
 	}
 	if version.ListingKind != marketplace.KindAgent {
-		hireError(w, http.StatusBadRequest, "invalid_request", "A skill is added to an agent, not hired.")
-		return
+		return nil, failHire(http.StatusBadRequest, "invalid_request", "A skill is added to an agent, not hired.")
 	}
 	if !version.Hireable() {
-		hireError(w, http.StatusConflict, "version_not_hireable", "This version was yanked, withdrawn or delisted. Choose another version.")
-		return
+		return nil, failHire(http.StatusConflict, "version_not_hireable", "This version was yanked, withdrawn or delisted. Choose another version.")
 	}
 	node, err := marketplace.ParseDefinition(version.Definition)
 	if err != nil {
 		slog.ErrorContext(ctx, "marketplace hire: read the definition failed", "listing_id", listingID, "error", err)
-		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-		return
+		return nil, failHire(http.StatusInternalServerError, "internal_error", "Failed to hire.")
 	}
-	bindings, code, msg := h.checkBindings(ctx, schema, version.Requirements, body.Bindings)
+	bindings, code, msg := h.checkBindings(ctx, schema, version.Requirements, in.Bindings)
 	if code != "" {
 		status := http.StatusConflict
 		switch code {
@@ -240,8 +313,7 @@ func (h *Handler) MarketplaceHire(w http.ResponseWriter, r *http.Request) {
 		case "internal_error":
 			status = http.StatusInternalServerError
 		}
-		hireError(w, status, code, msg)
-		return
+		return nil, failHire(status, code, msg)
 	}
 
 	// Above low tier, or with a write tool, a person approves the hire.
@@ -250,33 +322,32 @@ func (h *Handler) MarketplaceHire(w http.ResponseWriter, r *http.Request) {
 		tier = agentlifecycle.TierLow
 	}
 	needsApproval := tier.Above(agentlifecycle.TierLow) || version.Requirements.HasWriteTools
+	if in.Automatic && needsApproval {
+		return nil, failHire(http.StatusConflict, "hire_needs_approval", "This agent needs a person's approval.")
+	}
 	selfApprove := false
 	if needsApproval {
 		personal, perr := marketplace.IsPersonalProject(ctx, h.pool, projectID)
 		if perr != nil {
 			slog.ErrorContext(ctx, "marketplace hire: read the project failed", "project_id", projectID, "error", perr)
-			hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-			return
+			return nil, failHire(http.StatusInternalServerError, "internal_error", "Failed to hire.")
 		}
 		if personal {
 			allowed, cerr := platformconfig.LoadMarketplacePersonalSelfApprove(ctx, h.pool)
 			if cerr != nil {
 				slog.ErrorContext(ctx, "marketplace hire: read the policy failed", "error", cerr)
-				hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-				return
+				return nil, failHire(http.StatusInternalServerError, "internal_error", "Failed to hire.")
 			}
 			if !allowed {
-				hireError(w, http.StatusConflict, "hire_needs_shared_project",
+				return nil, failHire(http.StatusConflict, "hire_needs_shared_project",
 					"This agent needs an approval, and a personal project has no second approver. Hire it in a shared project.")
-				return
 			}
 			selfApprove = true
 		}
 	}
 	governor, hasGovernor := h.governor.(hireGovernor)
 	if needsApproval && !hasGovernor {
-		hireError(w, http.StatusServiceUnavailable, "unavailable", "Approvals are not available on this deployment.")
-		return
+		return nil, failHire(http.StatusServiceUnavailable, "unavailable", "Approvals are not available on this deployment.")
 	}
 
 	// The avatar files are copied into this project before the transaction.
@@ -285,25 +356,28 @@ func (h *Handler) MarketplaceHire(w http.ResponseWriter, r *http.Request) {
 	if metaMap == nil {
 		metaMap = map[string]any{}
 	}
-	var packDoc any
-	if len(node.Version.AvatarPack) > 0 {
-		_ = json.Unmarshal(node.Version.AvatarPack, &packDoc) // null reads as no pack
-	}
-	avatar, err := h.carriedAvatarPack(ctx, map[string]any{"avatar_pack": packDoc, "meta": metaMap}, projectIDText)
-	if err != nil {
-		slog.WarnContext(ctx, "marketplace hire: the avatar could not be copied", "listing_id", listingID, "error", err)
-		avatar = nil
+	var avatar any
+	if !in.SkipAvatar {
+		var packDoc any
+		if len(node.Version.AvatarPack) > 0 {
+			_ = json.Unmarshal(node.Version.AvatarPack, &packDoc) // null reads as no pack
+		}
+		avatar, err = h.carriedAvatarPack(ctx, map[string]any{"avatar_pack": packDoc, "meta": metaMap}, projectIDText)
+		if err != nil {
+			slog.WarnContext(ctx, "marketplace hire: the avatar could not be copied", "listing_id", listingID, "error", err)
+			avatar = nil
+		}
 	}
 
 	name := node.Name
-	if body.Name != "" {
-		name = body.Name
+	if in.Name != "" {
+		name = in.Name
 	}
 	name = entitylimits.Truncate(name, entitylimits.MaxNameLength)
 	description := entitylimits.Truncate(node.Description, entitylimits.MaxDescriptionLength)
 
 	origin := marketplace.OriginInstalled
-	if body.Mode == marketplace.ModeFork {
+	if in.Mode == marketplace.ModeFork {
 		origin = marketplace.OriginForked
 	}
 	metaMap[marketplace.MetaOriginKind] = origin
@@ -312,7 +386,7 @@ func (h *Handler) MarketplaceHire(w http.ResponseWriter, r *http.Request) {
 	metaMap[marketplace.MetaOriginDigest] = hex.EncodeToString(version.Digest[:])
 	metaMap[marketplace.MetaOriginVersionName] = version.Name
 	metaMap[marketplace.MetaOriginListingName] = version.ListingName
-	if body.Mode == marketplace.ModeFork {
+	if in.Mode == marketplace.ModeFork {
 		// The existing fork surfaces read these two keys.
 		if version.EntityID > 0 {
 			metaMap["parent_entity_id"] = strconv.FormatInt(version.EntityID, 10)
@@ -320,20 +394,28 @@ func (h *Handler) MarketplaceHire(w http.ResponseWriter, r *http.Request) {
 			metaMap["parent_entity_id"] = strconv.FormatInt(listingID, 10)
 		}
 		metaMap["parent_project_id"] = publicProjectIDOrDefault()
-		metaMap["parent_author_id"] = userID.String()
+		metaMap["parent_author_id"] = strconv.FormatInt(in.ActorID, 10)
 	}
 	metaJSON, err := json.Marshal(metaMap)
 	if err != nil {
-		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-		return
+		return nil, failHire(http.StatusInternalServerError, "internal_error", "Failed to hire.")
 	}
 
-	tx, err := h.pool.Begin(ctx)
+	// Inside the caller's transaction the hire is a savepoint: a refused hire
+	// leaves nothing of itself behind, and the caller's other writes stay.
+	var tx pgx.Tx
+	if external != nil {
+		tx, err = external.Begin(ctx)
+	} else {
+		tx, err = h.pool.Begin(ctx)
+	}
 	if err != nil {
-		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-		return
+		return nil, failHire(http.StatusInternalServerError, "internal_error", "Failed to hire.")
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	fail := func() *hireFailure {
+		return failHire(http.StatusInternalServerError, "internal_error", "Failed to hire.")
+	}
 
 	var appID int64
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`
@@ -341,15 +423,13 @@ INSERT INTO %s.applications (name, description, icon, owner_id, meta, created_at
 VALUES ($1, $2, $3, $4, '{}'::jsonb, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`, schema),
 		name, description, node.Icon, owner.Int64()).Scan(&appID); err != nil {
 		slog.ErrorContext(ctx, "marketplace hire: insert the application failed", "schema", schema, "error", err)
-		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-		return
+		return nil, fail()
 	}
-	versionRow, err := insertDefinitionVersion(ctx, tx, schema, appID, "base", "draft", userID.Int64(),
+	versionRow, err := insertDefinitionVersion(ctx, tx, schema, appID, "base", "draft", in.ActorID,
 		node.Version, string(metaJSON), avatar)
 	if err != nil {
 		slog.ErrorContext(ctx, "marketplace hire: insert the version failed", "schema", schema, "error", err)
-		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-		return
+		return nil, fail()
 	}
 	for _, tag := range node.Tags {
 		var tagID int64
@@ -357,77 +437,82 @@ VALUES ($1, $2, $3, $4, '{}'::jsonb, now() AT TIME ZONE 'UTC', now() AT TIME ZON
 INSERT INTO %s.tags (name, data) VALUES ($1, '{}'::jsonb)
 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`, schema), tag).Scan(&tagID); err != nil {
 			slog.ErrorContext(ctx, "marketplace hire: insert a tag failed", "tag", tag, "error", err)
-			hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-			return
+			return nil, fail()
 		}
 		if _, err := tx.Exec(ctx, fmt.Sprintf(`
 INSERT INTO %s.application_version_tag_association (version_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, schema),
 			versionRow, tagID); err != nil {
-			hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-			return
+			return nil, fail()
 		}
 	}
-	if err := installNested(ctx, tx, schema, int(owner.Int64()), userID.Int64(), versionRow, node); err != nil {
+	if err := installNested(ctx, tx, schema, int(owner.Int64()), in.ActorID, versionRow, node); err != nil {
 		slog.ErrorContext(ctx, "marketplace hire: write the nested agents failed", "schema", schema, "error", err)
-		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-		return
+		return nil, fail()
 	}
 
 	toolsEnabled := !needsApproval || selfApprove
 	if toolsEnabled {
 		if err := marketplace.AttachTools(ctx, tx, schema, appID, versionRow, node, marketplace.BindingMap(bindings)); err != nil {
 			slog.ErrorContext(ctx, "marketplace hire: attach the tools failed", "schema", schema, "error", err)
-			hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-			return
+			return nil, fail()
 		}
 	}
 	bindingsJSON, err := json.Marshal(bindings)
 	if err != nil {
-		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-		return
+		return nil, fail()
 	}
 	if err := marketplace.RecordInstall(ctx, tx, marketplace.Install{
 		ProjectID: projectID, EntityKind: marketplace.KindAgent, EntityID: appID, ListingID: listingID, VersionID: versionID,
-		Digest: version.Digest, Mode: body.Mode, Bindings: bindingsJSON, ToolsOn: toolsEnabled, InstalledBy: userID.Int64(),
+		Digest: version.Digest, Mode: in.Mode, Bindings: bindingsJSON, ToolsOn: toolsEnabled, InstalledBy: in.ActorID,
 	}); err != nil {
 		slog.ErrorContext(ctx, "marketplace hire: record the hire failed", "error", err)
-		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-		return
+		return nil, fail()
 	}
 
 	result := map[string]any{
 		"application_id": strconv.FormatInt(appID, 10), "version_id": strconv.FormatInt(versionRow, 10),
-		"mode": body.Mode, "tools_enabled": toolsEnabled, "awaiting_approval": needsApproval && !selfApprove,
+		"mode": in.Mode, "tools_enabled": toolsEnabled, "awaiting_approval": needsApproval && !selfApprove,
 	}
 	if hasGovernor {
 		change, err := governor.RecordMarketplaceChangeTx(ctx, tx, agentlifecycle.NewMarketplaceChange{
-			ProjectID: projectID, ApplicationID: appID, Tier: tier, ProposedBy: userID.Int64(),
+			ProjectID: projectID, ApplicationID: appID, Tier: tier, ProposedBy: in.ActorID,
 			NeedsChange: needsApproval, Kind: agentlifecycle.KindHire,
-			Summary:   "Hire " + version.ListingName + " " + version.Name + " (" + body.Mode + ").",
+			Summary:   "Hire " + version.ListingName + " " + version.Name + " (" + in.Mode + ").",
 			ListingID: listingID, VersionID: versionID, Digest: version.Digest, SelfApprove: selfApprove,
 		})
 		if err != nil {
 			if refusal, isRefusal := agentlifecycle.AsRefusal(err); isRefusal {
-				writeJSON(w, refusal.Status(), refusal.Body())
-				return
+				return nil, &hireFailure{status: refusal.Status(), body: refusal.Body()}
 			}
 			slog.ErrorContext(ctx, "marketplace hire: record the change request failed", "error", err)
-			hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-			return
+			return nil, fail()
 		}
 		if change.ID > 0 {
 			result["change_request_id"] = strconv.FormatInt(change.ID, 10)
 		}
 	}
+	// A hire made from a workforce manager's proposal settles it in the same
+	// transaction: the person who hires is the one who approves it.
+	if in.ProposalID > 0 {
+		if err := marketplace.SettleHireProposalTx(ctx, tx, projectID, in.ProposalID, listingID, in.ActorID, map[string]any{
+			"application_id": appID, "version_id": versionID, "mode": in.Mode, "automatic": in.Automatic,
+		}); err != nil {
+			switch {
+			case errors.Is(err, marketplace.ErrNotFound):
+				return nil, failHire(http.StatusNotFound, "proposal_not_found", "No such hire proposal in this project.")
+			case errors.Is(err, marketplace.ErrProposalNotOpen):
+				return nil, failHire(http.StatusConflict, "proposal_not_open", "The hire proposal was decided already.")
+			case errors.Is(err, marketplace.ErrInvalidRequest):
+				return nil, failHire(http.StatusBadRequest, "invalid_request", "The proposal is for another listing.")
+			}
+			slog.ErrorContext(ctx, "marketplace hire: settle the proposal failed", "error", err)
+			return nil, fail()
+		}
+		result["proposal_id"] = strconv.FormatInt(in.ProposalID, 10)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		slog.ErrorContext(ctx, "marketplace hire: commit failed", "error", err)
-		hireError(w, http.StatusInternalServerError, "internal_error", "Failed to hire.")
-		return
+		return nil, fail()
 	}
-	if h.events != nil {
-		h.events.Emit(ctx, projectIDText, "agent.hired", map[string]any{
-			"application_id": appID, "listing_id": listingID, "version_id": versionID, "mode": body.Mode,
-		})
-	}
-	writeJSON(w, http.StatusCreated, result)
+	return result, nil
 }
