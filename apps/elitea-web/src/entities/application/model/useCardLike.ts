@@ -115,8 +115,9 @@ export function useCardLike({
   onError,
 }: UseCardLikeOptions) {
   const entry = useLikeStore(state => state.entries[`${entityType}:${applicationId}`]);
-  const setEntry = useLikeStore(state => state.setEntry);
-  const clearEntry = useLikeStore(state => state.clearEntry);
+  // The callbacks are read at click time, so a new function each render does not rebuild the toggle.
+  const callbacks = useRef({ onLikeSuccess, onError });
+  callbacks.current = { onLikeSuccess, onError };
 
   // An agent and a skill can share a numeric id: key the store by both.
   const storeKey = `${entityType}:${applicationId}`;
@@ -138,7 +139,7 @@ export function useCardLike({
     const newCount = newLiked ? likeCount + 1 : Math.max(0, likeCount - 1);
 
     // Optimistic update — reverted below if the server call fails.
-    setEntry(storeKey, { liked: newLiked, count: newCount, baseLiked: initialLiked, baseCount: initialCount });
+    useLikeStore.getState().setEntry(storeKey, { liked: newLiked, count: newCount, baseLiked: initialLiked, baseCount: initialCount });
 
     const numericApplicationId = Number(applicationId);
     try {
@@ -154,20 +155,20 @@ export function useCardLike({
       } else {
         await unlikeApplication(projectId, numericApplicationId);
       }
-      onLikeSuccess?.(applicationId, newLiked, newCount);
+      callbacks.current.onLikeSuccess?.(applicationId, newLiked, newCount);
     } catch (error) {
       // Revert the optimistic update — the like did not actually persist
       // (see this file's module doc comment for the known backend defect).
-      clearEntry(storeKey);
+      useLikeStore.getState().clearEntry(storeKey);
       // Only the documented API-failure path is swallowed; anything else
       // (a programmer error, e.g. the NaN guard above) still surfaces.
       if (!(error instanceof EliteaApiError)) throw error;
-      onError?.();
+      callbacks.current.onError?.();
     } finally {
       inFlight.current = false;
       setIsToggling(false);
     }
-  }, [isLiked, likeCount, applicationId, entityType, storeKey, projectId, initialLiked, initialCount, setEntry, clearEntry, onLikeSuccess, onError]);
+  }, [isLiked, likeCount, applicationId, entityType, storeKey, projectId, initialLiked, initialCount]);
 
   return { isLiked, likeCount, isToggling, toggleLike };
 }
