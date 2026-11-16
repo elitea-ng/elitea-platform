@@ -1022,8 +1022,8 @@ impl OrdinaryNativeAgentAssembler {
         // capability; they hire and publish nothing, a person decides.
         if let Some(marketplace) = super::marketplace_workforce_tool::toolset(
             profile.can_review_agents(),
-            Arc::clone(&self.platform),
-            Arc::clone(runtime_context),
+            &self.platform,
+            runtime_context,
         ) {
             frozen.extend(
                 freeze_toolsets(vec![marketplace], "elitea_ordinary_tool_binding")

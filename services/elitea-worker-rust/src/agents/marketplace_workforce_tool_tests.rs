@@ -45,8 +45,8 @@ fn platform(reply: Value) -> (Arc<PlatformClient>, Arc<Mutex<Vec<ContextCall>>>)
     (Arc::new(PlatformClient::new(Arc::new(client))), calls)
 }
 
-fn bound(platform: Arc<PlatformClient>) -> Arc<dyn Toolset> {
-    toolset(true, platform, Arc::new(test_runtime_context_authority())).expect("bound")
+fn bound(platform: &Arc<PlatformClient>) -> Arc<dyn Toolset> {
+    toolset(true, platform, &Arc::new(test_runtime_context_authority())).expect("bound")
 }
 
 async fn the_tool(toolset: &Arc<dyn Toolset>, name: &str) -> Arc<dyn Tool> {
@@ -78,13 +78,20 @@ fn answer(status: &str) -> Value {
 #[test]
 fn without_the_capability_nothing_is_bound() {
     let (platform, _) = platform(json!({}));
-    assert!(toolset(false, platform, Arc::new(test_runtime_context_authority())).is_none());
+    assert!(
+        toolset(
+            false,
+            &platform,
+            &Arc::new(test_runtime_context_authority())
+        )
+        .is_none()
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn with_the_capability_four_tools_are_bound_two_of_them_read_only() {
     let (platform, _) = platform(json!({}));
-    let toolset = bound(platform);
+    let toolset = bound(&platform);
     assert_eq!(toolset.name(), TOOLSET_NAME);
     let tools = toolset
         .tools(Arc::new(adk_rust::tool::SimpleToolContext::new("t")))
@@ -119,7 +126,7 @@ async fn with_the_capability_four_tools_are_bound_two_of_them_read_only() {
 #[tokio::test(flavor = "current_thread")]
 async fn a_malformed_call_is_answered_locally() {
     let (platform, calls) = platform(json!({}));
-    let toolset = bound(platform);
+    let toolset = bound(&platform);
     let cases = [
         (MARKETPLACE_SEARCH, json!("not an object")),
         (MARKETPLACE_SEARCH, json!({"limit": 11})),
@@ -219,7 +226,7 @@ async fn a_search_sends_the_trimmed_filters_and_returns_mains_answer() {
         "total": 1
     });
     let (platform, calls) = platform(reply.clone());
-    let tool = the_tool(&bound(platform), MARKETPLACE_SEARCH).await;
+    let tool = the_tool(&bound(&platform), MARKETPLACE_SEARCH).await;
     let result = tool
         .execute(
             context(),
@@ -250,7 +257,7 @@ async fn a_search_sends_the_trimmed_filters_and_returns_mains_answer() {
 #[tokio::test(flavor = "current_thread")]
 async fn a_listing_id_is_a_number_or_a_string_and_goes_as_a_string() {
     let (platform, calls) = platform(answer("ok"));
-    let tool = the_tool(&bound(platform), MARKETPLACE_LISTING).await;
+    let tool = the_tool(&bound(&platform), MARKETPLACE_LISTING).await;
     for listing_id in [json!(12), json!(" 12 ")] {
         let result = tool
             .execute(context(), json!({"listing_id": listing_id, "version": 3}))
@@ -278,7 +285,7 @@ async fn a_hire_proposal_sends_the_exact_arguments() {
         "message": "Proposed."
     });
     let (platform, calls) = platform(reply.clone());
-    let tool = the_tool(&bound(platform), PROPOSE_HIRE).await;
+    let tool = the_tool(&bound(&platform), PROPOSE_HIRE).await;
     let result = tool
         .execute(
             context(),
@@ -316,7 +323,7 @@ async fn mains_guard_refusal_of_a_report_is_passed_to_the_model() {
         "message": "This project published the listing."
     });
     let (platform, calls) = platform(reply.clone());
-    let tool = the_tool(&bound(platform), SUGGEST_FEEDBACK).await;
+    let tool = the_tool(&bound(&platform), SUGGEST_FEEDBACK).await;
     let result = tool
         .execute(
             context(),
@@ -343,7 +350,7 @@ async fn mains_guard_refusal_of_a_report_is_passed_to_the_model() {
 #[tokio::test(flavor = "current_thread")]
 async fn an_unexpected_schema_is_a_tool_result() {
     let (platform, _) = platform(json!({"schema_version": "other", "status": "ok"}));
-    let tool = the_tool(&bound(platform), MARKETPLACE_SEARCH).await;
+    let tool = the_tool(&bound(&platform), MARKETPLACE_SEARCH).await;
     let result = tool
         .execute(context(), json!({"query": "docs"}))
         .await

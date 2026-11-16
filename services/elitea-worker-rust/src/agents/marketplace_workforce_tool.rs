@@ -164,8 +164,8 @@ impl Kind {
 #[must_use]
 pub(crate) fn toolset(
     can_review: bool,
-    platform: Arc<PlatformClient>,
-    authority: Arc<ClaimBoundRuntimeContextAuthority>,
+    platform: &Arc<PlatformClient>,
+    authority: &Arc<ClaimBoundRuntimeContextAuthority>,
 ) -> Option<Arc<dyn Toolset>> {
     if !can_review {
         return None;
@@ -180,8 +180,8 @@ pub(crate) fn toolset(
     .map(|kind| {
         Arc::new(MarketplaceTool {
             kind,
-            platform: Arc::clone(&platform),
-            authority: Arc::clone(&authority),
+            platform: Arc::clone(platform),
+            authority: Arc::clone(authority),
         }) as Arc<dyn Tool>
     })
     .collect();
