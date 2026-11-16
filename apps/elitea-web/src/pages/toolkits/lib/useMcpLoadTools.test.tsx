@@ -267,6 +267,27 @@ describe('useMcpLoadTools', () => {
     expect(await screen.findByText('Authorization failed. Please try logging in again.')).toBeInTheDocument();
   });
 
+  it('answers a successful Login with the tool count, and the message can be dismissed (issue 2125)', async () => {
+    server.use(http.post(PATH, () => HttpResponse.json({ success: true, tools: [{ name: 'echo' }], args_schemas: { echo: { properties: {} }, bad: 'x' } })));
+    const savedDetail = detail({ id: 7, settings: { url: 'https://mcp-mock:8443/mcp' } });
+    function Probe() {
+      const slot = useMcpLoadTools({ projectId: '1', editToolDetail: savedDetail, onChangeToolDetail: vi.fn() });
+      return <>{slot?.mcpAuthStatus}</>;
+    }
+    render(
+      <ThemeProvider theme={buildEliteaTheme(DEFAULT_BRAND_PACK)} defaultMode={DEFAULT_COLOR_SCHEME}>
+        <Probe />
+      </ThemeProvider>,
+      { wrapper },
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Login' }));
+    expect(await screen.findByText('Connected. 1 tools are available.')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByText('Connected. 1 tools are available.')).not.toBeInTheDocument());
+  });
+
   it('carries the real MCP authorization modal in its slot', () => {
     const { result } = renderHook(
       () =>
