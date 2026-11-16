@@ -14,9 +14,10 @@ use super::runtime_context::{
     AgentMemoryRememberRequest, AgentMemoryRemembered, ArtifactDeleteOutcome,
     ArtifactDeleteRequest, ArtifactListOutcome, ArtifactListRequest, ArtifactReadOutcome,
     ArtifactReadRequest, ArtifactWriteOutcome, ArtifactWriteRequest, ClaimScopedEliteaContext,
-    HandFloorRequest, ProjectContextWriteOutcome, ProjectContextWriteRequest, ProposeAgentRequest,
-    ProposeDismissalRequest, RuntimeApplicationVersion, RuntimeAttachmentObject,
-    RuntimeContextClient, RuntimeContextError, SkillWriteOutcome, SkillWriteRequest,
+    HandFloorRequest, MarketplaceWorkforceRequest, ProjectContextWriteOutcome,
+    ProjectContextWriteRequest, ProposeAgentRequest, ProposeDismissalRequest,
+    RuntimeApplicationVersion, RuntimeAttachmentObject, RuntimeContextClient, RuntimeContextError,
+    SkillWriteOutcome, SkillWriteRequest,
 };
 
 /// Shared platform transport facade. Invocation authority is always supplied
@@ -191,6 +192,18 @@ impl PlatformClient {
     ) -> Result<serde_json::Value, RuntimeContextError> {
         self.runtime_context
             .propose_dismissal(authority, request)
+            .await
+    }
+
+    /// A workforce manager's Marketplace tool (ADR-0051 decision 6, #1632),
+    /// under the same non-fatal error contract as `propose_dismissal`.
+    pub(crate) async fn marketplace_workforce(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &MarketplaceWorkforceRequest,
+    ) -> Result<serde_json::Value, RuntimeContextError> {
+        self.runtime_context
+            .marketplace_workforce(authority, request)
             .await
     }
 

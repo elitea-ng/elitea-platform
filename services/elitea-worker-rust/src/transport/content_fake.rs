@@ -315,6 +315,20 @@ impl<R: ContextRoutes> ContentFake for Routes<R> {
             .await?;
         reply(pb::ProposeDismissalResponseV1 { response_json })
     }
+    async fn marketplace_workforce(
+        &self,
+        request: Request<pb::MarketplaceWorkforceRequestV1>,
+    ) -> Result<Response<pb::MarketplaceWorkforceResponseV1>, Status> {
+        let response_json = self
+            .json(
+                request,
+                "agent-workforce/marketplace".to_owned(),
+                |message| message.scope.clone(),
+                |message| (message.request_json, Vec::new()),
+            )
+            .await?;
+        reply(pb::MarketplaceWorkforceResponseV1 { response_json })
+    }
     async fn forget_agent_memory(
         &self,
         request: Request<pb::ForgetAgentMemoryRequestV1>,
@@ -471,6 +485,7 @@ content_fake! {
     hand_floor(HandFloorRequestV1) -> HandFloorResponseV1;
     propose_agent(ProposeAgentRequestV1) -> ProposeAgentResponseV1;
     propose_dismissal(ProposeDismissalRequestV1) -> ProposeDismissalResponseV1;
+    marketplace_workforce(MarketplaceWorkforceRequestV1) -> MarketplaceWorkforceResponseV1;
     list_artifacts(ListArtifactsRequestV1) -> ListArtifactsResponseV1;
     read_artifact(ReadArtifactRequestV1) -> ReadArtifactResponseV1;
     write_artifact(WriteArtifactRequestV1) -> WriteArtifactResponseV1;

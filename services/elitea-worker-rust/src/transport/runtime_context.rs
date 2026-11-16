@@ -42,8 +42,9 @@ use crate::protocol::elitea::runtime::v1::{
     WriteSkillRequestV1, get_attachment_object_response_v1::Outcome,
 };
 use crate::protocol::elitea::runtime::v1::{
-    ForgetAgentMemoryRequestV1, HandFloorRequestV1, ProposeAgentRequestV1,
-    ProposeDismissalRequestV1, RecallAgentMemoryRequestV1, RememberAgentMemoryRequestV1,
+    ForgetAgentMemoryRequestV1, HandFloorRequestV1, MarketplaceWorkforceRequestV1,
+    ProposeAgentRequestV1, ProposeDismissalRequestV1, RecallAgentMemoryRequestV1,
+    RememberAgentMemoryRequestV1,
 };
 use crate::workspace_run::context::{
     RUNTIME_CONTEXT_FIELD as WORKSPACE_FIELD, WorkspaceRuntimeContext,
@@ -90,6 +91,8 @@ const HAND_FLOOR_SCHEMA: &str = "elitea.runtime.hand-floor.v1";
 const PROPOSE_AGENT_SCHEMA: &str = "elitea.runtime.propose-agent.v1";
 /// The workforce manager's propose-dismissal answer (ADR-0050 decision 5l, #1616).
 const PROPOSE_DISMISSAL_SCHEMA: &str = "elitea.runtime.propose-dismissal.v1";
+/// The workforce manager's Marketplace tools' answer (ADR-0051 decision 6, #1632).
+const MARKETPLACE_WORKFORCE_SCHEMA: &str = "elitea.runtime.marketplace-workforce.v1";
 /// Main's own request ceiling for the three (`maxRuntimeAgentMemoryRequestBytes`).
 const MAX_AGENT_MEMORY_REQUEST_BYTES: usize = 8 * 1_024;
 /// Main's own request ceiling for `propose_agent`
@@ -1129,6 +1132,48 @@ impl RuntimeContextClient {
             .map_err(|_| RuntimeContextError::Timeout("the workforce proposal timed out"))?
     }
 
+    /// One Marketplace tool of a workforce manager (ADR-0051 decision 6,
+    /// #1632): search, read a listing, propose a hire, suggest a report. Main
+    /// reads the project, the calling agent and the person from the claimed
+    /// execution, checks the capability and every guard, and fills a report's
+    /// scorecard summary itself. Nothing is hired or published by a call.
+    pub(crate) async fn marketplace_workforce(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &MarketplaceWorkforceRequest,
+    ) -> Result<Value, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let request = scoped(
+            &binding,
+            MarketplaceWorkforceRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_agent_memory_body(request)?,
+            },
+            MARKETPLACE_WORKFORCE_AUTHORITY_MALFORMED,
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .marketplace_workforce(request)
+                .await
+                .map_err(|status| {
+                    context_status(
+                        status,
+                        Some(RuntimeContextError::Rejected(
+                            "the Marketplace tool call was refused",
+                        )),
+                    )
+                })?
+                .into_inner()
+                .response_json;
+            marketplace_workforce_response(&bounded_document(body, self.config.max_response_bytes)?)
+        };
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the Marketplace tool call timed out"))?
+    }
+
     /// One artifact response document, within the artifact family's own
     /// envelope ceiling.
     fn artifact_document(&self, body: Vec<u8>) -> Result<Zeroizing<Vec<u8>>, RuntimeContextError> {
@@ -2085,6 +2130,33 @@ fn propose_dismissal_response(body: &[u8]) -> Result<Value, RuntimeContextError>
     {
         return Err(RuntimeContextError::InvalidResponse(
             "the workforce proposal response has an unexpected schema",
+        ));
+    }
+    Ok(decoded)
+}
+
+/// A workforce manager's Marketplace tool call (`storage.MarketplaceWorkforceRequest`
+/// in Main): the tool's name and its arguments, which Main validates again.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub(crate) struct MarketplaceWorkforceRequest {
+    pub(crate) tool: &'static str,
+    pub(crate) arguments: Value,
+}
+
+const MARKETPLACE_WORKFORCE_AUTHORITY_MALFORMED: &str =
+    "the Marketplace tool request authority is malformed";
+
+/// Main's Marketplace tool answer: a JSON object of the expected schema with a
+/// status.
+fn marketplace_workforce_response(body: &[u8]) -> Result<Value, RuntimeContextError> {
+    let decoded: Value = serde_json::from_slice(body).map_err(|_| {
+        RuntimeContextError::InvalidResponse("the Marketplace tool response is malformed")
+    })?;
+    if decoded.get("schema_version").and_then(Value::as_str) != Some(MARKETPLACE_WORKFORCE_SCHEMA)
+        || decoded.get("status").and_then(Value::as_str).is_none()
+    {
+        return Err(RuntimeContextError::InvalidResponse(
+            "the Marketplace tool response has an unexpected schema",
         ));
     }
     Ok(decoded)
