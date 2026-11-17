@@ -272,7 +272,7 @@ export function ConversationSkillsSection({ projectId, conversationId, readOnly 
   return (
     <Box component="section" sx={sectionSx} data-testid="conversation-skills" aria-label={t('chat.skills.title', 'Skills')}>
       <Box sx={headerSx}>
-        <Typography variant="labelMedium" component="h3" color="text.secondary">
+        <Typography variant="labelMedium" component="p" color="text.secondary">
           {t('chat.skills.heading', 'Skills ({{count}})', { count: pins.length })}
         </Typography>
         {!readOnly && <AddButton full={pins.length >= CONVERSATION_SKILL_LIMIT} onOpen={setAnchor} />}
