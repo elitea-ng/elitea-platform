@@ -128,6 +128,20 @@ async function serveConversation(page: Page): Promise<void> {
     onlyGet(() => ({ items: messageRows(), total: ROWS.length, page: 0, page_size: 50, total_pages: 1 })),
   );
   await page.route(routeFor('message_traces'), onlyGet(() => ({ rows: [] })));
+  // The Skills section of the conversation panel (skills epic 2169, ADR-0050 amendment 1, A1.3): one pinned
+  // project skill and one from another project that is not trusted yet. The route itself is exercised against
+  // the real stack by journeys/chat/chat.conversationSkills.spec.ts; here it is served so the section is in the shot.
+  await page.route(
+    routeFor('conversation_skills'),
+    onlyGet(() => ({
+      rows: [
+        { id: 1, kind: 'project', skill_id: 11, name: 'Release checklist', description: '', trust: { state: 'trusted' }, available: true, pinned_by: 1, pinned_at: '2026-11-16T10:00:00Z' },
+        { id: 2, kind: 'project', skill_id: 12, name: 'Changelog style', description: '', trust: { state: 'untrusted', publisher_project_id: 2 }, available: true, pinned_by: 1, pinned_at: '2026-11-16T10:00:00Z' },
+      ],
+      total: 2,
+      max: 5,
+    })),
+  );
   await page.route(`**${ICON_PATH}`, (route) => route.fulfill({ status: 200, contentType: 'image/png', body: ICON_PNG }));
 }
 
