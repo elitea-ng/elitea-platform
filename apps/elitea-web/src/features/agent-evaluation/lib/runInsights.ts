@@ -101,6 +101,10 @@ interface DimensionDelta {
 
 export interface RunComparison {
   readonly previousRunId: string;
+  /** What the delta is against: the run's mode, agent version and start, for the card to name. */
+  readonly previousMode: EvalRun['execution_mode'];
+  readonly previousVersionId: number | undefined;
+  readonly previousStartedAt: string | undefined;
   readonly headline: number | undefined;
   readonly dimensions: readonly DimensionDelta[];
   readonly p50Ms: number | undefined;
@@ -124,6 +128,9 @@ export function compareRuns(current: Side, previous: Side): RunComparison {
   }
   return {
     previousRunId: previous.run.id,
+    previousMode: previous.run.execution_mode,
+    previousVersionId: previous.run.application_version_id ?? undefined,
+    previousStartedAt: previous.run.started_at ?? previous.run.created_at,
     headline: delta(current.run.headline_score, previous.run.headline_score),
     dimensions,
     p50Ms: delta(current.efficiency.p50Ms, previous.efficiency.p50Ms),

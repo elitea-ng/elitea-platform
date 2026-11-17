@@ -38,6 +38,9 @@ pub mod parallel_control;
 pub mod printer;
 pub mod router;
 pub mod state_modifier;
+mod state_modifier_compat;
+#[cfg(test)]
+mod state_modifier_compat_tests;
 #[cfg(test)]
 mod state_modifier_tests;
 pub mod state_reducers;
