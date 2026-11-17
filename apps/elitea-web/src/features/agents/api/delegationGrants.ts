@@ -8,7 +8,7 @@ import {
   previewDelegationGrant,
   useListDelegationGrants,
 } from '@/shared/api/generated/applications/applications';
-import type { ApplicationDetail, DelegationGrant, DelegationItem, DelegationPreview, VersionToolRef } from '@/shared/api/generated/model';
+import type { ApplicationDetail, DelegationGrant, DelegationItem, DelegationPreview } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
 import { edgeKindFor, toolkitNames } from '../lib/delegationReview';
@@ -69,7 +69,7 @@ export async function fetchDelegationReview({ queryClient, projectId, applicatio
     calleeName: preview.callee_name === '' ? calleeName : preview.callee_name,
     calleeVersionId: versionId,
     preview,
-    names: toolkitNames(version?.tools as readonly VersionToolRef[] | undefined),
+    names: toolkitNames(version?.tools),
   };
 }
 

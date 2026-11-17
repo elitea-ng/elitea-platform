@@ -13,7 +13,7 @@ import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { groupItems, groupWithheldReason, isWithheld, itemKey, itemsToApprove, toolLabel } from '../lib/delegationReview';
-import type { ToolkitGroup } from '../lib/delegationReview';
+import type { GroupedItems, ToolkitGroup } from '../lib/delegationReview';
 
 /**
  * The review of what a sub-agent, agent tool or pipeline child brings
@@ -160,7 +160,37 @@ function InfoLine({ label, items }: { readonly label: string; readonly items: re
   );
 }
 
-export function DelegationReviewDialog({ open, calleeName, preview, names, confirmLabel, attachOnlyLabel, omittedReason, notice, busy = false, error, onCancel, onConfirm }: DelegationReviewDialogProps): ReactNode {
+/** The agent brings toolkits only, and the person holds none of them. */
+function holdsNothing(grouped: GroupedItems, withheld: ReadonlySet<string>): boolean {
+  if (grouped.toolkits.length === 0 || grouped.dataClasses.length > 0 || grouped.egressHosts.length > 0) return false;
+  return grouped.toolkits.every((group) => isWithheld(group, withheld));
+}
+
+interface PrimaryAction {
+  readonly primaryLabel: string | undefined;
+  readonly confirmDisabled: boolean;
+}
+
+/** The primary action: approve and attach, or (nothing to approve) attach alone when the caller offers it. */
+function primaryAction(canApproveNothing: boolean, nothingTicked: boolean, confirmLabel: string | undefined, attachOnlyLabel: string | undefined): PrimaryAction {
+  if (!canApproveNothing) return { primaryLabel: confirmLabel, confirmDisabled: nothingTicked };
+  return { primaryLabel: attachOnlyLabel ?? confirmLabel, confirmDisabled: attachOnlyLabel === undefined };
+}
+
+interface ReviewSelection {
+  readonly grouped: GroupedItems;
+  readonly withheld: ReadonlySet<string>;
+  readonly selectable: boolean;
+  readonly unticked: ReadonlySet<string>;
+  readonly canApproveNothing: boolean;
+  readonly primaryLabel: string | undefined;
+  readonly confirmDisabled: boolean;
+  readonly onToggle: (key: string) => void;
+  readonly confirm: () => void;
+}
+
+/** What the person has ticked, and what the primary action then is and sends. */
+function useReviewSelection({ preview, names, confirmLabel, attachOnlyLabel, onConfirm }: Pick<DelegationReviewDialogProps, 'preview' | 'names' | 'confirmLabel' | 'attachOnlyLabel' | 'onConfirm'>): ReviewSelection {
   const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set());
   const grouped = useMemo(() => groupItems(preview.items, names), [preview.items, names]);
   // Under the governed profile a different approver decides, from their own access, so the requester's access
@@ -168,7 +198,7 @@ export function DelegationReviewDialog({ open, calleeName, preview, names, confi
   const selectable = !preview.governed;
   const withheld = useMemo(() => new Set(selectable ? preview.withheld.map(itemKey) : []), [preview.withheld, selectable]);
   const approvableToolkits = grouped.toolkits.filter((group) => !isWithheld(group, withheld));
-  const canApproveNothing = selectable && confirmLabel !== undefined && grouped.toolkits.length > 0 && approvableToolkits.length === 0 && grouped.dataClasses.length === 0 && grouped.egressHosts.length === 0;
+  const canApproveNothing = selectable && confirmLabel !== undefined && holdsNothing(grouped, withheld);
   // Hosts and data classes are never left out, so only the toolkits are a choice to leave empty.
   const nothingTicked = selectable && approvableToolkits.length > 0 && approvableToolkits.every((group) => unticked.has(group.key));
 
@@ -183,13 +213,80 @@ export function DelegationReviewDialog({ open, calleeName, preview, names, confi
 
   // An empty list is "attach, approve nothing": the grant stays pending.
   const confirm = useCallback(() => onConfirm(canApproveNothing ? [] : itemsToApprove(preview.approvable, unticked)), [onConfirm, canApproveNothing, preview.approvable, unticked]);
-  const primaryLabel = canApproveNothing && attachOnlyLabel !== undefined ? attachOnlyLabel : confirmLabel;
+  const action = primaryAction(canApproveNothing, nothingTicked, confirmLabel, attachOnlyLabel);
+  return { grouped, withheld, selectable, unticked, canApproveNothing, ...action, onToggle, confirm };
+}
+
+function ReviewContent({ props, selection }: { readonly props: DelegationReviewDialogProps; readonly selection: ReviewSelection }): ReactNode {
+  const { preview, notice, error, omittedReason, attachOnlyLabel } = props;
+  const { grouped, withheld, selectable, unticked, canApproveNothing, onToggle } = selection;
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: { sm: '30rem' } }}>
+      {notice === undefined ? null : (
+        <BannerMessage
+          message={notice}
+          variant="info"
+        />
+      )}
+      <Typography
+        variant="bodyMedium"
+        color="text.secondary"
+      >
+        {preview.governed
+          ? t('agents.delegation.introGoverned', 'When this agent is used as a tool, it can use the following even if the agent using it does not hold them. A different approver decides this, from their own access.')
+          : t('agents.delegation.intro', 'When this agent is used as a tool, it can use the following even if the agent using it does not hold them. You approve only what you can access yourself.')}
+      </Typography>
+      {canApproveNothing && attachOnlyLabel !== undefined ? (
+        <BannerMessage
+          message={t('agents.delegation.cannotApprove', 'You cannot approve any of this. The agent is attached anyway, and the delegation stays pending until someone with access approves it.')}
+          variant="warning"
+        />
+      ) : null}
+      <Box
+        component="ul"
+        aria-label={t('agents.delegation.toolkitsLabel', 'Toolkits')}
+        sx={listSx}
+      >
+        {grouped.toolkits.map((group) => (
+          <ToolkitRow
+            key={group.key}
+            group={group}
+            reason={isWithheld(group, withheld) ? (omittedReason ?? groupWithheldReason(group, withheld)) : undefined}
+            selectable={selectable}
+            ticked={!unticked.has(group.key)}
+            onToggle={onToggle}
+          />
+        ))}
+      </Box>
+      <InfoLine
+        label={t('agents.delegation.dataClasses', 'Data classes:')}
+        items={grouped.dataClasses}
+      />
+      <InfoLine
+        label={t('agents.delegation.egressHosts', 'Hosts it can reach:')}
+        items={grouped.egressHosts}
+      />
+      <ClosureList nodes={preview.closure} />
+      {error === undefined ? null : (
+        <BannerMessage
+          message={error}
+          variant="error"
+        />
+      )}
+    </Box>
+  );
+}
+
+export function DelegationReviewDialog(props: DelegationReviewDialogProps): ReactNode {
+  const { open, calleeName, busy = false, onCancel } = props;
+  const selection = useReviewSelection(props);
+  const { primaryLabel } = selection;
 
   return (
     <BaseModal
       open={open}
       onClose={onCancel}
-      {...(primaryLabel === undefined ? {} : { onConfirm: confirm })}
+      {...(primaryLabel === undefined ? {} : { onConfirm: selection.confirm })}
       variant="simple"
       title={t('agents.delegation.title', 'What {{name}} will be able to use', { name: calleeName })}
       data-testid="delegation-review-dialog"
@@ -197,62 +294,13 @@ export function DelegationReviewDialog({ open, calleeName, preview, names, confi
         ...(primaryLabel === undefined ? {} : { confirmText: primaryLabel }),
         cancelText: primaryLabel === undefined ? t('agents.delegation.close', 'Close') : t('agents.delegation.cancel', 'Cancel'),
         confirming: busy,
-        confirmDisabled: nothingTicked || (canApproveNothing && attachOnlyLabel === undefined),
+        confirmDisabled: selection.confirmDisabled,
       }}
       content={
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: { sm: '30rem' } }}>
-          {notice === undefined ? null : (
-            <BannerMessage
-              message={notice}
-              variant="info"
-            />
-          )}
-          <Typography
-            variant="bodyMedium"
-            color="text.secondary"
-          >
-            {preview.governed
-              ? t('agents.delegation.introGoverned', 'When this agent is used as a tool, it can use the following even if the agent using it does not hold them. A different approver decides this, from their own access.')
-              : t('agents.delegation.intro', 'When this agent is used as a tool, it can use the following even if the agent using it does not hold them. You approve only what you can access yourself.')}
-          </Typography>
-          {canApproveNothing && attachOnlyLabel !== undefined ? (
-            <BannerMessage
-              message={t('agents.delegation.cannotApprove', 'You cannot approve any of this. The agent is attached anyway, and the delegation stays pending until someone with access approves it.')}
-              variant="warning"
-            />
-          ) : null}
-          <Box
-            component="ul"
-            aria-label={t('agents.delegation.toolkitsLabel', 'Toolkits')}
-            sx={listSx}
-          >
-            {grouped.toolkits.map((group) => (
-              <ToolkitRow
-                key={group.key}
-                group={group}
-                reason={isWithheld(group, withheld) ? (omittedReason ?? groupWithheldReason(group, withheld)) : undefined}
-                selectable={selectable}
-                ticked={!unticked.has(group.key)}
-                onToggle={onToggle}
-              />
-            ))}
-          </Box>
-          <InfoLine
-            label={t('agents.delegation.dataClasses', 'Data classes:')}
-            items={grouped.dataClasses}
-          />
-          <InfoLine
-            label={t('agents.delegation.egressHosts', 'Hosts it can reach:')}
-            items={grouped.egressHosts}
-          />
-          <ClosureList nodes={preview.closure} />
-          {error === undefined ? null : (
-            <BannerMessage
-              message={error}
-              variant="error"
-            />
-          )}
-        </Box>
+        <ReviewContent
+          props={props}
+          selection={selection}
+        />
       }
     />
   );

@@ -100,7 +100,7 @@ export function grantViewLabel(view: GrantView): string {
       return t('agents.delegation.state.awaiting', 'Awaiting approval');
     case 'stale':
       return t('agents.delegation.state.stale', 'Needs re-approval');
-    default:
+    case 'pending':
       return t('agents.delegation.state.pending', 'Delegation not approved');
   }
 }
