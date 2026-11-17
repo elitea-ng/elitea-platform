@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
@@ -81,6 +82,8 @@ WHERE c.relname = 'lock_b' AND NOT l.granted)`).Scan(&waiting); err != nil {
 		otherDone <- other.Commit(ctx)
 	}()
 
+	original := deadlockBackoff
+	t.Cleanup(func() { deadlockBackoff = original })
 	deadlockBackoff = func(int) time.Duration { return 10 * time.Millisecond }
 	require.NoError(t, New(pool, files).ApplyShared(ctx))
 	require.NoError(t, <-otherDone, "the concurrent transaction must not be the victim")
@@ -90,4 +93,6 @@ WHERE c.relname = 'lock_b' AND NOT l.granted)`).Scan(&waiting); err != nil {
 func TestIsDeadlock(t *testing.T) {
 	require.False(t, isDeadlock(nil))
 	require.False(t, isDeadlock(fmt.Errorf("plain")))
+	require.True(t, isDeadlock(fmt.Errorf("wrapped: %w", &pgconn.PgError{Code: "40P01"})))
+	require.False(t, isDeadlock(&pgconn.PgError{Code: "23505"}))
 }

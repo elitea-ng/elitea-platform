@@ -90,12 +90,15 @@ func (r *Runner) apply(ctx context.Context, scope Scope, targetID, schema string
 	var err error
 	for attempt := 1; attempt <= maxDeadlockAttempts; attempt++ {
 		err = r.applyOnce(ctx, scope, targetID, schema)
-		if err == nil || !isDeadlock(err) || attempt == maxDeadlockAttempts {
+		if err == nil || !isDeadlock(err) {
 			return err
+		}
+		if attempt == maxDeadlockAttempts {
+			return fmt.Errorf("migrate: gave up after %d deadlock retries: %w", attempt, err)
 		}
 		select {
 		case <-ctx.Done():
-			return err
+			return errors.Join(ctx.Err(), err)
 		case <-time.After(deadlockBackoff(attempt)):
 		}
 	}

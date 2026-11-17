@@ -52,20 +52,22 @@ test.afterEach(async ({ page }) => {
  * lost while the editor was re-rendering from the Save that had just
  * persisted, and Playwright reports a lost click as a success. The next
  * action, "Save As Version", then waited 30 s behind the open menu's backdrop.
- * So the click is retried until the menu has closed AND the canvas holds one
- * more node. A retry happens only while the menu is still open, which means
- * the item handler (add, then close) never ran, so it cannot add twice.
+ * So the click is retried until the canvas holds one more node; a round starts
+ * by checking the count, so a click that landed late is never repeated.
  */
 async function addNodeThroughMenu(page: Page, label: string): Promise<void> {
   const nodes = page.locator('.react-flow__node');
   const before = await nodes.count();
-  const menu = page.getByRole('menu');
+  const menu = page.locator('#pipeline-add-node-menu');
   await expect(async () => {
+    // Idempotent: a previous round whose click landed late has already added
+    // the node, and clicking again would add a second.
+    if ((await nodes.count()) > before) return;
     if (!(await menu.isVisible())) await page.getByRole('button', { name: 'Add node' }).click({ timeout: 5_000 });
-    await page.getByRole('menuitem', { name: label, exact: true }).click({ timeout: 5_000 });
-    await expect(menu).toBeHidden({ timeout: 3_000 });
+    await menu.getByRole('menuitem', { name: label, exact: true }).click({ timeout: 5_000 });
+    await expect(nodes).toHaveCount(before + 1, { timeout: 3_000 });
   }).toPass({ timeout: 30_000 });
-  await expect(nodes).toHaveCount(before + 1, { timeout: 10_000 });
+  await expect(menu).toBeHidden({ timeout: 10_000 });
 }
 
 /**
