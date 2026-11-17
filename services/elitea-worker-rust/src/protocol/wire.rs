@@ -499,6 +499,10 @@ fn read_varint(raw: &[u8], position: &mut usize) -> Result<u64, ProtocolError> {
     ))
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one table of every v1 message the command scanner admits"
+)]
 const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
     match schema {
         #[cfg(feature = "sandbox-supervisor")]
@@ -598,8 +602,9 @@ const fn field_rule(schema: Schema, field: u32) -> Option<FieldRule> {
         },
         Schema::WorkerEgressPolicy => egress_policy_rule(field),
         Schema::WorkerDelegationPolicy => delegation_policy_rule(field),
-        Schema::WorkerPrincipalBound => principal_bound_rule(field),
-        Schema::WorkerPrincipalToolkit => principal_toolkit_rule(field),
+        Schema::WorkerPrincipalBound | Schema::WorkerPrincipalToolkit => {
+            principal_bound_rule(schema, field)
+        }
         Schema::WorkerApprovalPolicy => approval_policy_rule(field),
         Schema::WorkerRunCaps => run_caps_rule(field),
         Schema::WorkerOutputContracts => output_contracts_rule(field),
@@ -642,29 +647,22 @@ const fn delegation_policy_rule(field: u32) -> Option<FieldRule> {
 }
 
 /// `WorkerPrincipalBoundV1` (#2157): the varint flags 1 and 3, and the
-/// repeated toolkits 2, credential reference ids 4 and data classes 5.
-const fn principal_bound_rule(field: u32) -> Option<FieldRule> {
-    match field {
-        1 | 3 => Some(varint()),
-        2 | 4 | 5 => Some(FieldRule {
-            wire_type: 2,
-            oneof: None,
-            repeated: true,
-        }),
-        _ => None,
-    }
-}
-
-/// `WorkerPrincipalToolkitV1` (#2157): the toolkit id 1 and the all-tools
-/// flag 2 (varints), and the repeated tool names 3.
-const fn principal_toolkit_rule(field: u32) -> Option<FieldRule> {
-    match field {
-        1 | 2 => Some(varint()),
-        3 => Some(FieldRule {
-            wire_type: 2,
-            oneof: None,
-            repeated: true,
-        }),
+/// repeated toolkits 2, credential reference ids 4 and data classes 5; and
+/// its `WorkerPrincipalToolkitV1`: the toolkit id 1 and the all-tools flag 2
+/// (varints), and the repeated tool names 3.
+const fn principal_bound_rule(schema: Schema, field: u32) -> Option<FieldRule> {
+    let repeated = FieldRule {
+        wire_type: 2,
+        oneof: None,
+        repeated: true,
+    };
+    match (schema, field) {
+        (Schema::WorkerPrincipalBound, 1 | 3) | (Schema::WorkerPrincipalToolkit, 1 | 2) => {
+            Some(varint())
+        }
+        (Schema::WorkerPrincipalBound, 2 | 4 | 5) | (Schema::WorkerPrincipalToolkit, 3) => {
+            Some(repeated)
+        }
         _ => None,
     }
 }
