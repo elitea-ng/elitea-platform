@@ -891,8 +891,9 @@ fn the_grant_covers_its_edge_only_and_the_depth_cap_still_applies() {
     let one = parent
         .delegate_edge(Some(1), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
         .expect("Agent1");
-    // Agent1 (now the caller) delegates to Z (id 3), which holds git too. No grant for 1 -> 3.
-    let mut z = git.to_vec();
+    // Agent1 (now the caller) delegates to Z (id 3), which holds a database toolkit
+    // that neither Agent1 nor the grant of 2 -> 1 covers. No grant for 1 -> 3.
+    let mut z = vec![toolkit(9, "Database", &json!({}))];
     let refused = one
         .scope
         .delegate_edge(Some(3), &mut z, &BTreeSet::new(), &PublicPolicy::Open)
