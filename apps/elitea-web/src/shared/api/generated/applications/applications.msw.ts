@@ -2097,6 +2097,7 @@ export const getPreviewDelegationGrantResponseMock = (
       ]),
     })),
   })),
+  governed: faker.datatype.boolean(),
   existing: faker.helpers.arrayElement([
     {
       id: faker.number.int(),

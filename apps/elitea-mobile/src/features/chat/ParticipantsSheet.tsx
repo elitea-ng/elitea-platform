@@ -72,6 +72,8 @@ export interface ParticipantsSheetProps {
    * each agent row offers "What it remembers"; the caller closes the sheet and navigates.
    */
   onAgentMemory?: (agentId: number, name: string) => void;
+  /** Opens the agent's delegation grants (client contract 1.59). When given, each agent row offers "Delegations". */
+  onAgentDelegations?: (agentId: number, name: string) => void;
 }
 
 /** Agents and pipelines: the participants a lead can be. */
@@ -107,6 +109,7 @@ function SheetBody({
   onAgentAdded,
   conversationMeta,
   onAgentMemory,
+  onAgentDelegations,
 }: ParticipantsSheetProps) {
   const { colors, radius } = useDesign();
   const insets = useSafeAreaInsets();
@@ -220,6 +223,8 @@ function SheetBody({
               const kind = KIND_LABEL[p.entity_name] ?? p.entity_name;
               const agentId = onAgentMemory ? participantAgentId(p) : null;
               const remembers = agentId !== null && onAgentMemory ? () => onAgentMemory(agentId, name) : undefined;
+              const delegatesId = onAgentDelegations ? participantAgentId(p) : null;
+              const delegations = delegatesId !== null && onAgentDelegations ? () => onAgentDelegations(delegatesId, name) : undefined;
               return (
                 <ListRow
                   key={p.id}
@@ -227,7 +232,7 @@ function SheetBody({
                   subtitle={isLead ? `${kind} · ${TURN_TAKING_COPY.lead}` : kind}
                   leading={<Avatar name={name} kind={p.entity_name === 'user' ? 'person' : 'agent'} size={36} decorative />}
                   trailing={
-                    leadable || isRemovable(p, selfUserId) || remembers || (!offline && participantAgentId(p) !== null) ? (
+                    leadable || isRemovable(p, selfUserId) || remembers || delegations || (!offline && participantAgentId(p) !== null) ? (
                       <View style={styles.trailing}>
                         {/* Draws only for an agent hired automatically and not kept yet (client contract 1.56). */}
                         {!offline ? <ProbationBadge projectId={projectId} agentId={participantAgentId(p)} /> : null}
@@ -239,6 +244,16 @@ function SheetBody({
                             accessibilityLabel={`What ${name} remembers`}
                             disabled={offline}
                             onPress={remembers}
+                          />
+                        ) : null}
+                        {delegations ? (
+                          <Button
+                            title="Delegations"
+                            variant="plain"
+                            size="small"
+                            accessibilityLabel={`${name} delegations`}
+                            disabled={offline}
+                            onPress={delegations}
                           />
                         ) : null}
                         {leadable ? (

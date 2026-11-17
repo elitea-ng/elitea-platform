@@ -14,6 +14,7 @@ import { useAgentFeedback } from '@/api/queries/marketplaceFeedback';
 import { useFeedbackAvailable } from '@/features/discover/useFeedbackAvailable';
 import { StatusScreen } from '@/components/StatusScreen';
 import { useAgentMemoryAvailable } from '@/features/agentMemory/useAgentMemoryAvailable';
+import { useDelegationAvailable } from '@/features/delegation/useDelegationAvailable';
 import { PublicAgentView } from '@/features/discover/PublicAgentView';
 import { useDiscoverAvailable } from '@/features/discover/useDiscoverAvailable';
 import { handOff } from '@/features/intents/intentHandoff';
@@ -43,6 +44,7 @@ export default function PublicAgentScreen() {
   const starting = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const memoryAvailable = useAgentMemoryAvailable();
+  const delegationAvailable = useDelegationAvailable();
   const feedbackAvailable = useFeedbackAvailable();
   const feedback = useAgentFeedback(projectId, agentId, feedbackAvailable);
 
@@ -93,6 +95,11 @@ export default function PublicAgentScreen() {
       // The agent's memory is kept in the project its chats run in: the active one. A pipeline has
       // none (participantAgentId leaves pipelines out too). This screen is a form sheet: replace it,
       // as starting a chat does, so the memory screen is not pushed underneath the sheet on iOS.
+      onDelegations={
+        delegationAvailable && agent.agentType !== 'pipeline'
+          ? () => router.replace({ pathname: '/agent-delegations/[id]', params: { id: String(agent.id), name: agent.name } })
+          : undefined
+      }
       onMemory={
         memoryAvailable && agent.agentType !== 'pipeline'
           ? () => router.replace({ pathname: '/agent-memory/[id]', params: { id: String(agent.id), name: agent.name } })
