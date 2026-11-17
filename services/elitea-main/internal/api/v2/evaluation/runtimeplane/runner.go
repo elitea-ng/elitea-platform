@@ -86,6 +86,14 @@ type Evidence interface {
 	RecordContentRead(ctx context.Context, userID, projectID int64, runID, stepID string, side runevidence.Side, route string) error
 }
 
+// Guardrails counts the guardrail verdicts the LLM gateway recorded for a run
+// (ADR-0043), by outcome. The verdicts are not in the run's step chain: the
+// gateway writes its own table, keyed by the run id. truncated says the run had
+// more verdicts than one read returns, so the counts are a lower bound.
+type Guardrails interface {
+	GuardrailOutcomes(ctx context.Context, projectID int64, runID string) (outcomes map[string]int, truncated bool, err error)
+}
+
 // Content reads a step's stored content.
 type Content interface {
 	Get(ctx context.Context, key string) ([]byte, error)
@@ -102,6 +110,7 @@ type Runner struct {
 	// usage and authorizer are optional (WithUsage, WithAuthorizer).
 	usage      evaluation.UsageReader
 	authorizer Authorizer
+	guardrails Guardrails
 
 	// pollInitial, pollMax and settleWait are the waits, shortened in tests.
 	pollInitial, pollMax, settleWait time.Duration
@@ -124,6 +133,14 @@ func New(store Store, starter Starter, canceller Canceller, evidence Evidence, c
 // WithUsage lets the runner stop a case that crosses a token or cost limit.
 func (r *Runner) WithUsage(usage evaluation.UsageReader) *Runner {
 	r.usage = usage
+	return r
+}
+
+// WithGuardrails lets the runner count the guardrail decisions of a case's run
+// (evidence.guardrail). Without it the case records none, which reads as not
+// recorded and never as zero events.
+func (r *Runner) WithGuardrails(guardrails Guardrails) *Runner {
+	r.guardrails = guardrails
 	return r
 }
 
@@ -168,6 +185,7 @@ func (r *Runner) RunCase(ctx context.Context, request evaluation.AgentRunRequest
 		r.stop(ctx, project, int64(request.ActorUserID), started.outcome.ResponseMessageID)
 	}
 	result.Steps = r.collectSteps(ctx, project, request, result.ExecutionID)
+	result.GuardrailOutcomes, result.GuardrailTruncated = r.collectGuardrails(ctx, project, result.ExecutionID)
 	r.finish(&result, turn, outcome, reason, request)
 	return result, nil
 }
@@ -383,6 +401,25 @@ func (r *Runner) collectSteps(ctx context.Context, project int64, request evalua
 	return steps
 }
 
+// collectGuardrails reads the guardrail verdicts of the case's run. A read that
+// fails is logged and answers nil: the figures are then absent from the case,
+// not zero.
+func (r *Runner) collectGuardrails(ctx context.Context, project int64, executionID string) (map[string]int, bool) {
+	if r.guardrails == nil {
+		return nil, false
+	}
+	outcomes, truncated, err := r.guardrails.GuardrailOutcomes(context.WithoutCancel(ctx), project, executionID)
+	if err != nil {
+		r.logger.Warn("evaluation: could not read a case's guardrail verdicts",
+			"project_id", project, "execution_id", executionID, "error", err)
+		return nil, false
+	}
+	if outcomes == nil {
+		outcomes = map[string]int{}
+	}
+	return outcomes, truncated
+}
+
 // mayCopyOutputs decides once per case whether tool outputs may be copied into
 // the evaluation result: the suite keeps them, and the run's AUTHOR holds
 // runs.evidence.read in the project. A copy outlives the run evidence's own
@@ -410,6 +447,9 @@ func (r *Runner) step(ctx context.Context, project int64, request evaluation.Age
 	step := evaluation.AgentStep{
 		Seq: int(record.Seq), Kind: string(record.Kind), Name: record.Name, ToolkitID: record.ToolkitID,
 		DurationMs: record.EndedAt.Sub(record.StartedAt).Milliseconds(), Error: summaryError(record.Summary),
+	}
+	if record.Kind == runevidence.KindApproval {
+		step.Decision, step.GuardrailType = summaryText(record.Summary, "decision"), summaryText(record.Summary, "guardrail_type")
 	}
 	if len(record.Inputs.Digest) > 0 {
 		step.InputsDigest = hex.EncodeToString(record.Inputs.Digest)
@@ -481,6 +521,17 @@ func outputExcerpt(body []byte) string {
 		return "base64:" + base64.StdEncoding.EncodeToString(body)
 	}
 	return string(body)
+}
+
+// summaryText is a string field of the step summary, empty when absent or not
+// a string.
+func summaryText(summary []byte, key string) string {
+	var fields map[string]any
+	if json.Unmarshal(summary, &fields) != nil {
+		return ""
+	}
+	text, _ := fields[key].(string)
+	return text
 }
 
 // summaryError is the step summary's `error`, empty for none.

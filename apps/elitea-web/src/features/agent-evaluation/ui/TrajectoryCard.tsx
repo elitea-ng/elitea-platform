@@ -5,6 +5,10 @@
  * (execution mode `runtime_plane`); a run of one model call per case has no
  * steps to show.
  *
+ * Distinct tools, redundant calls, guardrail events and the cases that hit the
+ * step limit (issue 2192) sit beside them, with each case's own values in its
+ * row. Definitions: docs "Evaluation, Trajectory".
+ *
  * A figure that was not recorded reads "not recorded"; it is never printed as 0.
  */
 import type { ReactNode } from 'react';
@@ -16,7 +20,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import { t } from '@/shared/i18n';
 
 import { formatCount, formatMs } from '../lib/insightsFormat';
-import type { CaseTrajectory, TrajectoryItem, TrajectorySummary } from '../lib/trajectory';
+import type { CaseGuardrail, CaseTrajectory, TrajectoryItem, TrajectorySummary, UntrackedCase } from '../lib/trajectory';
 
 const cardSx: SxProps<Theme> = {
   display: 'flex',
@@ -40,6 +44,53 @@ function Stat({ label, value, testId }: { readonly label: string; readonly value
       </Typography>
     </Box>
   );
+}
+
+function notRecorded(): string {
+  return t('features.agentEvaluation.insights.notRecorded', 'not recorded');
+}
+
+function formatShare(share: number | undefined): string {
+  return share === undefined ? '' : new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 0 }).format(share);
+}
+
+function distinctToolsValue(summary: TrajectorySummary): string {
+  if (summary.distinctToolsPerCase === undefined || summary.distinctToolsInRun === undefined) return notRecorded();
+  return t('features.agentEvaluation.trajectory.distinctToolsValue', '{{perCase}} per case, {{inRun}} in all', {
+    perCase: formatCount(summary.distinctToolsPerCase),
+    inRun: formatCount(summary.distinctToolsInRun),
+  });
+}
+
+function redundantValue(summary: TrajectorySummary): string {
+  if (summary.redundantCalls === undefined) return notRecorded();
+  if (summary.redundantShare === undefined) return formatCount(summary.redundantCalls);
+  return t('features.agentEvaluation.trajectory.redundantValue', '{{redundant}} ({{share}} of tool calls)', {
+    redundant: formatCount(summary.redundantCalls),
+    share: formatShare(summary.redundantShare),
+  });
+}
+
+function stepLimitValue(summary: TrajectorySummary): string {
+  return t('features.agentEvaluation.trajectory.stepLimitHitValue', '{{count}} of {{total}} case(s)', {
+    count: summary.stepLimitCases,
+    total: summary.totalCases,
+  });
+}
+
+function guardrailValue(summary: TrajectorySummary): string {
+  const value = formatCount(summary.guardrailEvents);
+  if (summary.guardrailEvents === undefined || !summary.guardrailTruncated) return value;
+  return t('features.agentEvaluation.trajectory.atLeast', 'at least {{value}}', { value });
+}
+
+function guardrailBreakdown(guardrail: CaseGuardrail): string {
+  return t('features.agentEvaluation.trajectory.guardrailBreakdown', '{{blocked}} blocked, {{masked}} masked, {{warned}} warned, {{gated}} held for approval', {
+    blocked: guardrail.blocked,
+    masked: guardrail.masked,
+    warned: guardrail.warned,
+    gated: guardrail.gated,
+  });
 }
 
 function itemLabel(item: TrajectoryItem): string {
@@ -78,6 +129,31 @@ function flagText(entry: CaseTrajectory): string | undefined {
   return undefined;
 }
 
+function UntrackedRow({ entry }: { readonly entry: UntrackedCase }): ReactNode {
+  return (
+    <Box data-testid={`trajectory-untracked-${entry.caseId}`} sx={rowSx}>
+      <Typography variant="bodyMedium" component="span" sx={{ maxWidth: '24rem' }} noWrap>
+        {entry.input ?? entry.caseId}
+      </Typography>
+      <Typography variant="bodySmall" component="span" color="text.secondary">
+        {t('features.agentEvaluation.trajectory.untracked', 'No steps recorded; {{guardrail}} guardrail event(s)', {
+          guardrail: formatCount(entry.guardrail?.events),
+        })}
+      </Typography>
+      {entry.guardrail !== undefined && entry.guardrail.events > 0 && (
+        <Typography variant="bodySmall" component="span" color="text.secondary">
+          {guardrailBreakdown(entry.guardrail)}
+        </Typography>
+      )}
+      {entry.stepLimit && (
+        <Typography variant="bodySmall" color="error" component="span">
+          {t('features.agentEvaluation.trajectory.stepLimit', 'ended at the step limit')}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
 function CaseRow({ entry }: { readonly entry: CaseTrajectory }): ReactNode {
   const flag = flagText(entry);
   return (
@@ -85,6 +161,13 @@ function CaseRow({ entry }: { readonly entry: CaseTrajectory }): ReactNode {
       <Box component="summary" sx={rowSx}>
         <Typography variant="bodyMedium" component="span" sx={{ maxWidth: '24rem' }} noWrap>
           {entry.input ?? entry.caseId}
+        </Typography>
+        <Typography variant="bodySmall" component="span" color="text.secondary" data-testid={`trajectory-extra-${entry.caseId}`}>
+          {t('features.agentEvaluation.trajectory.caseExtra', '{{distinct}} distinct tool(s), {{redundant}} redundant, {{guardrail}} guardrail event(s)', {
+            distinct: formatCount(entry.distinctTools),
+            redundant: formatCount(entry.redundantCalls),
+            guardrail: formatCount(entry.guardrail?.events),
+          })}
         </Typography>
         <Typography variant="bodySmall" component="span" data-testid={`trajectory-counts-${entry.caseId}`}>
           {t('features.agentEvaluation.trajectory.counts', '{{steps}} step(s), {{tools}} tool call(s), {{errors}} error(s), {{retries}} retry(ies)', {
@@ -100,6 +183,11 @@ function CaseRow({ entry }: { readonly entry: CaseTrajectory }): ReactNode {
           </Typography>
         )}
       </Box>
+      {entry.guardrail !== undefined && entry.guardrail.events > 0 && (
+        <Typography variant="bodySmall" color="text.secondary" component="div" data-testid={`trajectory-guardrail-${entry.caseId}`}>
+          {guardrailBreakdown(entry.guardrail)}
+        </Typography>
+      )}
       <StepList entry={entry} />
     </Box>
   );
@@ -126,6 +214,10 @@ export function TrajectoryCard({ summary }: TrajectoryCardProps): ReactNode {
             <Stat label={t('features.agentEvaluation.trajectory.toolCalls', 'Tool calls')} value={formatCount(summary.toolCalls)} testId="run-trajectory-tool-calls" />
             <Stat label={t('features.agentEvaluation.trajectory.toolErrors', 'Tool errors')} value={formatCount(summary.toolErrors)} testId="run-trajectory-tool-errors" />
             <Stat label={t('features.agentEvaluation.trajectory.retries', 'Retries')} value={formatCount(summary.retries)} testId="run-trajectory-retries" />
+            <Stat label={t('features.agentEvaluation.trajectory.distinctTools', 'Distinct tools')} value={distinctToolsValue(summary)} testId="run-trajectory-distinct-tools" />
+            <Stat label={t('features.agentEvaluation.trajectory.redundantCalls', 'Redundant calls')} value={redundantValue(summary)} testId="run-trajectory-redundant" />
+            <Stat label={t('features.agentEvaluation.trajectory.guardrailEvents', 'Guardrail events')} value={guardrailValue(summary)} testId="run-trajectory-guardrail" />
+            <Stat label={t('features.agentEvaluation.trajectory.stepLimitHit', 'Step limit hit')} value={stepLimitValue(summary)} testId="run-trajectory-step-limit" />
           </Box>
           {summary.cases.length < summary.totalCases && (
             <Typography variant="bodySmall" color="text.secondary" data-testid="run-trajectory-partial">
@@ -135,6 +227,25 @@ export function TrajectoryCard({ summary }: TrajectoryCardProps): ReactNode {
               })}
             </Typography>
           )}
+          {summary.guardrailEvents !== undefined && summary.guardrailCases < summary.totalCases && (
+            <Typography variant="bodySmall" color="text.secondary" data-testid="run-trajectory-guardrail-partial">
+              {t('features.agentEvaluation.trajectory.guardrailPartial', 'Guardrail decisions were read for {{measured}} of {{total}} case(s).', {
+                measured: summary.guardrailCases,
+                total: summary.totalCases,
+              })}
+            </Typography>
+          )}
+          {summary.countersRecorded < summary.cases.length && (
+            <Typography variant="bodySmall" color="text.secondary" data-testid="run-trajectory-counters-partial">
+              {t('features.agentEvaluation.trajectory.countersPartial', 'Distinct tools and redundant calls were recorded for {{measured}} of {{total}} measured case(s).', {
+                measured: summary.countersRecorded,
+                total: summary.cases.length,
+              })}
+            </Typography>
+          )}
+          {summary.untracked.map((entry) => (
+            <UntrackedRow key={entry.caseId} entry={entry} />
+          ))}
           {summary.cases.map((entry) => (
             <CaseRow key={entry.caseId} entry={entry} />
           ))}

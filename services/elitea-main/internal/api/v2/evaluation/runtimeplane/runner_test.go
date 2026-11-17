@@ -480,3 +480,45 @@ func TestRunCaseCancelsAtATokenOrCostLimit(t *testing.T) {
 		})
 	}
 }
+
+type fakeGuardrails struct {
+	outcomes  map[string]int
+	truncated bool
+	err       error
+}
+
+func (f fakeGuardrails) GuardrailOutcomes(context.Context, int64, string) (map[string]int, bool, error) {
+	return f.outcomes, f.truncated, f.err
+}
+
+// Issue 2192: the case carries the gateway's guardrail verdicts and the
+// approval gate steps; a read that fails is absence, not zero.
+func TestRunCaseCollectsGuardrailOutcomesAndGateSteps(t *testing.T) {
+	t.Parallel()
+
+	gate := record(2, runevidence.KindApproval, "send_mail", `{"decision": "requested", "guardrail_type": "sensitive_tool"}`)
+	auth := record(3, runevidence.KindApproval, "authorization", `{"decision": "requested", "guardrail_type": "mcp_auth"}`)
+	evidence := &fakeEvidence{records: []runevidence.Record{record(1, runevidence.KindModelCall, "m", `{}`), gate, auth}}
+	runner := copyRunner(evidence, nil, false).WithGuardrails(fakeGuardrails{outcomes: map[string]int{"blocked": 2, "pass": 5}, truncated: true})
+
+	result, err := runner.RunCase(context.Background(), caseRequest())
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.GuardrailOutcomes["blocked"] != 2 || result.GuardrailOutcomes["pass"] != 5 || !result.GuardrailTruncated {
+		t.Errorf("outcomes = %v", result.GuardrailOutcomes)
+	}
+	if !result.Steps[1].IsGovernanceGate() || result.Steps[2].IsGovernanceGate() {
+		t.Errorf("only the sensitive-tool request is a governance gate: %+v / %+v", result.Steps[1], result.Steps[2])
+	}
+
+	failed, _ := copyRunner(evidence, nil, false).WithGuardrails(fakeGuardrails{err: errors.New("down")}).RunCase(context.Background(), caseRequest())
+	if failed.GuardrailOutcomes != nil {
+		t.Errorf("an unreadable verdict table must not read as no events: %v", failed.GuardrailOutcomes)
+	}
+	unset, _ := copyRunner(evidence, nil, false).RunCase(context.Background(), caseRequest())
+	if unset.GuardrailOutcomes != nil {
+		t.Errorf("no guardrail source composed, outcomes = %v", unset.GuardrailOutcomes)
+	}
+}
