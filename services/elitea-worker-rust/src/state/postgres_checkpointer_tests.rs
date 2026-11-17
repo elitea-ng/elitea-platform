@@ -1876,7 +1876,7 @@ async fn sandbox_submission(over_tls: bool) {
         Language::Python
     };
     let source = if compiled {
-        "pub fn run(_: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> { Ok(serde_json::json!({\"marker\":format!(\"authorized-result-{}\", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos())})) }"
+        "pub fn run(_: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> { println!(\"authorized-printed\"); Ok(serde_json::json!({\"marker\":format!(\"authorized-result-{}\", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos())})) }"
     } else {
         "import uuid\nresult = 'authorized-result-' + str(uuid.uuid4())\nprint(result)\n{'marker': result}"
     };
@@ -1980,7 +1980,14 @@ async fn sandbox_submission(over_tls: bool) {
         Err(LedgerError::Missing)
     ));
     let supervisor = supervisor
-        .with_admission_policy("fixture-v1".into(), vec![language])
+        .with_admission_policy(
+            "fixture-v1".into(),
+            if compiled {
+                vec![language]
+            } else {
+                vec![language, Language::JavaScript]
+            },
+        )
         .unwrap();
     assert!(
         supervisor
@@ -2129,6 +2136,56 @@ async fn sandbox_submission(over_tls: bool) {
             panic!("saved receipt expected");
         };
         assert_eq!(repeated, result);
+        // #2203/#2206: what a program prints is in the receipt's stderr for
+        // every language (the adapters send it there), which is where
+        // `run_code` reads it from. Python's print(), and a Rust program's
+        // stdout, in the job above; a JavaScript console.log below.
+        let printed = receipt["stderr"].as_str().unwrap();
+        if compiled {
+            assert!(printed.contains("authorized-printed"), "{printed}");
+        } else {
+            assert!(
+                printed.contains(output["result"]["marker"].as_str().unwrap()),
+                "{printed}"
+            );
+            let js = PreparedJob::new(
+                Language::JavaScript,
+                "console.log('js-printed'); export default {answer: 1 + 1};".into(),
+                std::collections::BTreeMap::default(),
+                image.clone(),
+                "fixture-v1".into(),
+                15,
+            )
+            .unwrap();
+            let mut js_claims = claims.clone();
+            js_claims.activation_id = "node-js".into();
+            js_claims.request_digest = js.fingerprint().unwrap().to_vec();
+            let bytes = js_claims.encode_to_vec();
+            let mut input = b"elitea.sandbox.job-grant.ed25519.v1\0".to_vec();
+            input.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+            input.extend_from_slice(&bytes);
+            let js_grant = SignedSandboxJobGrantV1 {
+                key_id: "fixture-key".into(),
+                claims_bytes: bytes,
+                signature: key.sign(&input).as_ref().to_vec(),
+            };
+            let SandboxOutcome::Completed(js_result) =
+                transport.submit_granted(js_grant, &js).await.unwrap()
+            else {
+                panic!("completed JavaScript receipt expected");
+            };
+            let js_receipt: serde_json::Value = serde_json::from_slice(&js_result).unwrap();
+            let js_output: serde_json::Value =
+                serde_json::from_str(js_receipt["stdout"].as_str().unwrap()).unwrap();
+            assert_eq!(js_output["result"]["answer"], 2);
+            assert!(
+                js_receipt["stderr"]
+                    .as_str()
+                    .unwrap()
+                    .contains("js-printed"),
+                "{js_receipt}"
+            );
+        }
         // A submission grant cannot invoke the stop endpoint.
         assert!(matches!(
             transport.cancel_granted(grant.clone()).await,
