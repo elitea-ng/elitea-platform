@@ -28,6 +28,12 @@ describe('marketplace filters', () => {
     expect(searchFromFilters(filtersFromSearch({}))).toEqual({});
   });
 
+  it('takes Most liked as a sort, in the address and in the request', () => {
+    expect(sortFromSearch('likes')).toBe('likes');
+    expect(searchFromFilters(filtersFromSearch({ sort_by: 'likes' })).sort_by).toBe('likes');
+    expect(apiParamsFromFilters(filtersFromSearch({ sort_by: 'likes' }))['sort']).toBe('likes');
+  });
+
   it('degrades a bad sort or rating to the default', () => {
     expect(sortFromSearch('nonsense')).toBe('relevance');
     expect(filtersFromSearch({ min_rating: 'high' }).minRating).toBe(0);

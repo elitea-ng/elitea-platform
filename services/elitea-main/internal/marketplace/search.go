@@ -17,6 +17,7 @@ import (
 const (
 	SortRelevance = "relevance"
 	SortHires     = "hires"
+	SortLikes     = "likes"
 	SortRating    = "rating"
 	SortNewest    = "newest"
 	SortName      = "name"
@@ -133,9 +134,9 @@ func (p *SearchParams) Validate() error {
 	switch p.Sort {
 	case "":
 		p.Sort = SortRelevance
-	case SortRelevance, SortHires, SortRating, SortNewest, SortName:
+	case SortRelevance, SortHires, SortLikes, SortRating, SortNewest, SortName:
 	default:
-		return &ParamError{"sort", "must be relevance, hires, rating, newest or name"}
+		return &ParamError{"sort", "must be relevance, hires, likes, rating, newest or name"}
 	}
 	if p.MaxTier != "" && TierRank(p.MaxTier) < 0 {
 		return &ParamError{"max_tier", "must be low, medium, high or critical"}
@@ -237,10 +238,34 @@ const currentVersionSQL = `(SELECT cv.version_id || '|' || cv.name || '|' || to_
     WHERE cv.listing_id = l.id AND cv.withdrawn_at IS NULL AND cv.state <> 'yanked'
     ORDER BY cv.published_at DESC, cv.version_id DESC LIMIT 1)`
 
+// likeExpressions are the select-list expressions of a listing's like count
+// and of whether the caller liked it. Agents are liked as the `application`
+// entity and skills as the `skill` entity, both by the listing's public twin id
+// (`entity_id`) in the public project's `social_likes`; skills epic 2169, S6
+// (ADR-0051 amendment 1, A1.5). A listing whose twin was deleted by an
+// unpublish (`entity_id` null) has none.
+func likeExpressions(publicSchema string, userID int64, args *argList) (likes, liked string) {
+	likes = fmt.Sprintf(`CASE WHEN l.entity_id IS NOT NULL THEN
+		    (SELECT count(*) FROM %s.social_likes sl
+		     WHERE sl.entity_name = CASE l.kind WHEN 'skill' THEN 'skill' ELSE 'application' END
+		       AND sl.entity_id = l.entity_id) ELSE 0 END`, publicSchema)
+	liked = "false"
+	if userID > 0 {
+		liked = fmt.Sprintf(`(l.entity_id IS NOT NULL AND EXISTS (SELECT 1 FROM %s.social_likes sm
+		    WHERE sm.entity_name = CASE l.kind WHEN 'skill' THEN 'skill' ELSE 'application' END
+		      AND sm.entity_id = l.entity_id AND sm.user_id = %s))`, publicSchema, args.add(userID))
+	}
+	return likes, liked
+}
+
 func orderBy(p SearchParams, args *argList) string {
 	switch p.Sort {
 	case SortHires:
 		return " ORDER BY hires DESC, l.created_at DESC, l.id DESC"
+	case SortLikes:
+		// `likes` is the output column of the page query's select list: the
+		// count of the listing's kind (agents and skills together).
+		return " ORDER BY likes DESC, hires DESC, l.created_at DESC, l.id DESC"
 	case SortRating:
 		return " ORDER BY l.rating_avg DESC NULLS LAST, l.rating_count DESC, l.id DESC"
 	case SortNewest:
@@ -276,12 +301,7 @@ func Search(ctx context.Context, db DB, p SearchParams) (Page, error) {
 	args := &argList{}
 	likes, liked := "0", "false"
 	if p.PublicSchema != "" {
-		likes = fmt.Sprintf(`CASE WHEN l.kind = 'agent' AND l.entity_id IS NOT NULL THEN
-		    (SELECT count(*) FROM %s.social_likes sl WHERE sl.entity_name = 'application' AND sl.entity_id = l.entity_id) ELSE 0 END`, p.PublicSchema)
-		if p.UserID > 0 {
-			liked = fmt.Sprintf(`(l.kind = 'agent' AND l.entity_id IS NOT NULL AND EXISTS (SELECT 1 FROM %s.social_likes sm
-		    WHERE sm.entity_name = 'application' AND sm.entity_id = l.entity_id AND sm.user_id = %s))`, p.PublicSchema, args.add(p.UserID))
-		}
+		likes, liked = likeExpressions(p.PublicSchema, p.UserID, args)
 	}
 	// The where clause is built after the select list so the parameters stay
 	// numbered in the order they are used.
@@ -291,7 +311,7 @@ func Search(ctx context.Context, db DB, p SearchParams) (Page, error) {
 SELECT l.id, l.kind, COALESCE(l.entity_id, 0), l.name, l.description, l.icon, l.category, l.tags,
        l.publisher_id, COALESCE(au.name, ''), l.risk_tier, %s,
        (SELECT count(DISTINCT i.project_id) FROM elitea_marketplace.installs i WHERE i.listing_id = l.id AND i.dismissed_at IS NULL) AS hires,
-       l.rating_avg::float8, l.rating_count, (%s)::int, %s, l.featured, l.required_types,
+       l.rating_avg::float8, l.rating_count, (%s)::int AS likes, %s, l.featured, l.required_types,
        l.has_write_tools, l.state
 FROM elitea_marketplace.listings l
 LEFT JOIN auth_core__user au ON au.id = l.publisher_id%s%s LIMIT %s OFFSET %s`,
@@ -519,12 +539,7 @@ func Get(ctx context.Context, db DB, p GetParams) (Detail, error) {
 	args := &argList{}
 	likes, liked := "0", "false"
 	if p.PublicSchema != "" {
-		likes = fmt.Sprintf(`CASE WHEN l.kind = 'agent' AND l.entity_id IS NOT NULL THEN
-		    (SELECT count(*) FROM %s.social_likes sl WHERE sl.entity_name = 'application' AND sl.entity_id = l.entity_id) ELSE 0 END`, p.PublicSchema)
-		if p.UserID > 0 {
-			liked = fmt.Sprintf(`(l.kind = 'agent' AND l.entity_id IS NOT NULL AND EXISTS (SELECT 1 FROM %s.social_likes sm
-		    WHERE sm.entity_name = 'application' AND sm.entity_id = l.entity_id AND sm.user_id = %s))`, p.PublicSchema, args.add(p.UserID))
-		}
+		likes, liked = likeExpressions(p.PublicSchema, p.UserID, args)
 	}
 	var (
 		row        ListingSummary

@@ -16,7 +16,7 @@ export const POPULAR_COUNT = 8;
 export const SEARCH_DEBOUNCE_MS = 300;
 
 /** The sort keys the search route accepts (internal/marketplace/search.go). */
-export type MarketplaceSort = 'relevance' | 'hires' | 'rating' | 'newest' | 'name';
+export type MarketplaceSort = 'relevance' | 'hires' | 'likes' | 'rating' | 'newest' | 'name';
 
 export interface MarketplaceSortOption {
   readonly key: MarketplaceSort;
@@ -27,6 +27,7 @@ export interface MarketplaceSortOption {
 export const SORT_OPTIONS: readonly MarketplaceSortOption[] = [
   { key: 'relevance', labelKey: 'marketplace.sort.relevance', labelFallback: 'Relevance' },
   { key: 'hires', labelKey: 'marketplace.sort.hires', labelFallback: 'Most hired' },
+  { key: 'likes', labelKey: 'marketplace.sort.likes', labelFallback: 'Most liked' },
   { key: 'rating', labelKey: 'marketplace.sort.rating', labelFallback: 'Top rated' },
   { key: 'newest', labelKey: 'marketplace.sort.newest', labelFallback: 'Newest first' },
   { key: 'name', labelKey: 'marketplace.sort.name', labelFallback: 'Name A-Z' },

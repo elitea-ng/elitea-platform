@@ -845,3 +845,77 @@ func mustInt(t *testing.T, text string) int64 {
 	}
 	return n
 }
+
+// seedSkillListing inserts a skill listing the way a publish would leave it,
+// with its public twin id, and returns the listing id.
+func (h *marketplaceHarness) seedSkillListing(name string, sourceEntity, twin int) string {
+	h.t.Helper()
+	var id int64
+	if err := h.pool.QueryRow(context.Background(), `
+INSERT INTO elitea_marketplace.listings (kind, source_project_id, source_entity_id, entity_id, name, search_text, publisher_id)
+VALUES ('skill', 2, $1, $2, $3, lower($3), $4) RETURNING id`,
+		sourceEntity, twin, name, marketplacePublisher).Scan(&id); err != nil {
+		h.t.Fatalf("seed a skill listing: %v", err)
+	}
+	// A listing is browsable only with a version that is neither yanked nor withdrawn.
+	if _, err := h.pool.Exec(context.Background(), `
+INSERT INTO elitea_marketplace.listing_versions (listing_id, version_id, name, digest, definition)
+VALUES ($1, $2, 'v1', decode(repeat('ab', 32), 'hex'), jsonb_build_object('name', $3::text, 'instructions', 'steps'))`,
+		id, twin, name); err != nil {
+		h.t.Fatalf("seed a skill listing version: %v", err)
+	}
+	return strconv.FormatInt(id, 10)
+}
+
+func (h *marketplaceHarness) like(entityName string, entityID, userID int) {
+	h.t.Helper()
+	if _, err := h.pool.Exec(context.Background(), `
+INSERT INTO p_1.social_likes (entity_name, entity_id, user_id, created_at) VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC')`,
+		entityName, entityID, userID); err != nil {
+		h.t.Fatalf("seed a like: %v", err)
+	}
+}
+
+// Skills epic 2169, S6 (ADR-0051 amendment 1, A1.5): a skill listing carries the
+// like count and the caller's own like, read from the public project's
+// social_likes under the entity name `skill`, and the Most liked sort orders it.
+// An agent's like (entity `application`) must not count for a skill with the same
+// twin id, and the other way round.
+func TestSkillListingsCarryLikesAndSortByThem(t *testing.T) {
+	h := newMarketplaceHarness(t)
+	agent := h.seedAgent(2, "Liked Agent", nil)
+	h.publish(agent, "v1", "")
+	agentTwin, _ := strconv.Atoi(rowsOf(h.search("?kind=agent"))[0]["entity_id"].(string))
+
+	h.seedSkillListing("Quiet Skill", 91, 501)
+	h.seedSkillListing("Loved Skill", 92, 502)
+	// The caller (7) likes both skills; user 8 also likes the second one.
+	h.like("skill", 501, marketplacePublisher)
+	h.like("skill", 502, marketplacePublisher)
+	h.like("skill", 502, 8)
+	// An agent like with the id of the first skill's twin must not count for the skill.
+	h.like("application", 501, 9)
+	// A skill like with the agent twin's id must not count for the agent.
+	h.like("skill", agentTwin, 9)
+
+	skills := rowsOf(h.search("?kind=skill&sort=likes"))
+	if len(skills) != 2 || skills[0]["name"] != "Loved Skill" || skills[1]["name"] != "Quiet Skill" {
+		t.Fatalf("kind=skill&sort=likes = %v, want Loved Skill then Quiet Skill", skills)
+	}
+	if skills[0]["likes"].(float64) != 2 || skills[1]["likes"].(float64) != 1 {
+		t.Errorf("skill likes = %v and %v, want 2 and 1", skills[0]["likes"], skills[1]["likes"])
+	}
+	if skills[0]["is_liked"] != true || skills[1]["is_liked"] != true {
+		t.Errorf("is_liked = %v and %v, want the caller's own likes", skills[0]["is_liked"], skills[1]["is_liked"])
+	}
+	agents := rowsOf(h.search("?kind=agent"))
+	if len(agents) != 1 || agents[0]["likes"].(float64) != 0 || agents[0]["is_liked"] != false {
+		t.Errorf("agent row = %v, want no likes (a skill like is not an agent like)", agents)
+	}
+
+	// The sort orders both kinds together when no kind is chosen.
+	all := rowsOf(h.search("?sort=likes"))
+	if len(all) != 3 || all[0]["name"] != "Loved Skill" {
+		t.Fatalf("sort=likes = %v, want Loved Skill first", all)
+	}
+}
