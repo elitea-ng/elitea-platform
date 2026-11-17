@@ -3980,6 +3980,30 @@ impl ApplicationAssemblyState<'_> {
     }
 }
 
+/// The root's own toolkits limited to what the run principal may use
+/// (ADR-0044 Amendment 1, `own ∩ P`): a toolkit the acting user, or the
+/// mandate and project, may not use is dropped before any credential or
+/// client exists. An ad hoc conversation's toolkits are bounded the same way.
+/// A run whose command carries no principal bound is unchanged.
+pub(in crate::agents) fn principal_bounded_snapshot<'a>(
+    runtime_context: &ClaimBoundRuntimeContextAuthority,
+    snapshot: AdmittedToolSnapshot<'a>,
+) -> AdmittedToolSnapshot<'a> {
+    let Some(principal) = runtime_context.delegation_policy().principal() else {
+        return snapshot;
+    };
+    let before = snapshot.len();
+    let bounded = snapshot.retain_principal(principal);
+    if bounded.len() < before {
+        tracing::warn!(
+            event = "root_toolkits_bounded_by_principal",
+            removed = before - bounded.len(),
+            "the run's own toolkits exceed the run principal's authority and were removed"
+        );
+    }
+    bounded
+}
+
 /// The run's root delegation scope: the root agent's own frozen grants under
 /// the command's delegation policy. An ad hoc conversation's root holds no
 /// toolkit constraint: the person chose its participants.
@@ -4027,7 +4051,8 @@ pub(in crate::agents) fn delegation_refused_error(
         "a pipeline node delegates to a saved pipeline its caller may not run"
     );
     let detail = match refusal {
-        DelegationRefusal::GrantMissing { kind, .. } => kind.as_str(),
+        DelegationRefusal::GrantMissing { kind, .. }
+        | DelegationRefusal::PrincipalBound { kind, .. } => kind.as_str(),
         DelegationRefusal::DepthExceeded { .. } => "depth",
     };
     NativeAgentAssemblyError::new(

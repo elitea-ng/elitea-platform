@@ -821,7 +821,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, err
 		}
-		agentProducer.WithDelegationPolicy(delegationPolicy)
+		// The run principal's bound (ADR-0044 Amendment 1) rides the same
+		// policy while the section's principal_bound switch is on.
+		agentProducer.WithDelegationPolicy(delegationPolicy.WithPrincipalBound(egressSources))
 		// The approval policy (ADR-0041 decision 5), on the same gate.
 		approvalPolicy, err := workerapprovalpolicyapp.NewResolver(approvalSettings, egressSources, egressSources)
 		if err != nil {

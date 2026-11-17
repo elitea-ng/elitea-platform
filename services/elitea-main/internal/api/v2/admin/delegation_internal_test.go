@@ -33,6 +33,9 @@ func TestValidateDelegationValues(t *testing.T) {
 		{platformconfig.SectionDelegation, map[string]any{"max_depth": float64(17)}, false},
 		{platformconfig.SectionDelegation, map[string]any{"max_depth": float64(2.5)}, false},
 		{platformconfig.SectionDelegation, map[string]any{"mode": "off"}, false},
+		{platformconfig.SectionDelegation, map[string]any{"principal_bound": true}, true},
+		{platformconfig.SectionDelegation, map[string]any{"principal_bound": false}, true},
+		{platformconfig.SectionDelegation, map[string]any{"principal_bound": "yes"}, false},
 		{platformconfig.SectionRunCaps, map[string]any{"max_depth": float64(0)}, true},
 	} {
 		reason := validateDelegationValues(test.section, test.values)
