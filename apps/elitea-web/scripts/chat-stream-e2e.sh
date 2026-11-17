@@ -107,7 +107,7 @@ cleanup() {
     write_logs() { sudo -n tee "$stack_logs" >/dev/null; }
   fi
   STANDALONE_PROJECT="$PROJECT" MOCK_LLM_CHUNK_DELAY_MS="$DELAY_MS" STANDALONE_LOG_TAIL=all \
-    "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" logs elitea-worker elitea-main elitea-llm-gateway llm-mock \
+    "${REPO_ROOT}/deploy/scripts/standalone-stack.sh" logs elitea-worker elitea-main elitea-llm-gateway llm-mock ${CHAT_STREAM_EXTRA_LOG_SERVICES:-} \
     2>&1 | write_logs || true
   if [ "$KEEP" -eq 0 ]; then
     echo "→ Tearing down ${PROJECT}…"

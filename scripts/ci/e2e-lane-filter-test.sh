@@ -79,6 +79,33 @@ expect_handoff true "the compose detection helper" "apps/elitea-web/scripts/lib/
 expect_handoff false "an unrelated desktop-adjacent file" "apps/elitea-desktop/README.md"
 expect_handoff false "docs only" "README.md"
 
+# The code-sandbox lane's own signal (fourth line, #2206/#2208).
+expect_sandbox() {
+  local want="$1" label="$2"; shift 2
+  local out
+  out="$(printf '%s\n' "$@" | bash "$filter" 2>/dev/null | grep '^reaches-sandbox=')"
+  ran=$((ran + 1))
+  if [ "$out" != "reaches-sandbox=$want" ]; then
+    echo "FAIL: $label — got: $out"
+    fails=$((fails + 1))
+  else
+    echo "ok:   $label"
+  fi
+}
+expect_sandbox true "empty list"
+expect_sandbox true "the run_code tool" "libs/rust/agent-runtime/src/toolkits/families/data_analysis/sandbox_tool.rs"
+expect_sandbox true "the worker's code tool" "services/elitea-worker-rust/src/agents/graph/code_tool.rs"
+expect_sandbox true "the runner image" "services/elitea-code-runner/Containerfile"
+expect_sandbox true "the sandbox overlay" "deploy/docker-compose.sandbox.yml"
+expect_sandbox true "the Postgres TLS overlay" "deploy/docker-compose.sandbox-postgres-tls.yml"
+expect_sandbox true "the material script" "deploy/scripts/sandbox-compose-material.sh"
+expect_sandbox true "the lane's journey" "apps/elitea-web/e2e/streaming/code-sandbox.run-code.spec.ts"
+expect_sandbox true "the lane's wrapper" "apps/elitea-web/scripts/code-sandbox-e2e.sh"
+expect_sandbox true "the workflow" ".github/workflows/ci-web-e2e.yml"
+expect_sandbox false "a web page" "apps/elitea-web/src/pages/a.tsx"
+expect_sandbox false "docs only" "README.md"
+expect_sandbox false "the DeepWiki overlay" "deploy/docker-compose.deepwiki-native-real-engine.yml"
+
 # The compose-referenced helm list is READ, not written: against a fixture
 # compose dir that references a different helm file, that file reaches the
 # stack and the real one no longer does.

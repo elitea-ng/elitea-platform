@@ -143,6 +143,51 @@ Leave the value empty to keep image generation off: the toggle then shows disabl
 
 The agents' **Python sandbox** module (stored as `pyodide`) runs the `run_code` tool on the same code sandbox that runs pipeline Code nodes, in the languages of `worker.runtime.sandboxRuntimes` (`python`, `javascript`, `typescript`, `rust`). The chart gives the languages to elitea-main as `ELITEA_CODE_SANDBOX_LANGUAGES`, so `GET /elitea_core/runtime_capabilities` reports `internal_tools.pyodide` as true and lists them in `code_sandbox_languages`. A value you set yourself in `main.env.ELITEA_CODE_SANDBOX_LANGUAGES` wins. With no `sandboxRuntimes`, the toggle shows disabled and the worker skips the tool with a logged `agent_internal_tool_skipped` warning; no agent is refused.
 
+### Run the code sandbox with Docker Compose
+
+A single-host Compose deployment runs the sandbox as one supervisor container on the host's Docker socket. The supervisor starts one runner container per program, with no network, no files and the limits of its profile. Treat the supervisor as a trusted component: access to the Docker socket is access to the host. The CI job `code-sandbox` in `ci-web-e2e.yml` runs exactly this configuration on every change to the worker, the agent runtime, the runner images or these files, and nightly. It starts the stack, turns the module on for an agent and asserts that `run_code` returns `2` for `1+1` in Python, JavaScript, TypeScript and Rust.
+
+You need these pieces, beyond the full standalone stack with the Rust worker (`docker-compose.standalone-full.yml` and `docker-compose.standalone-rust-agent.yml`):
+
+| Piece | Comes from |
+|---|---|
+| The supervisor image | `services/elitea-worker-rust/Containerfile`, target `supervisor` |
+| The runner images | `services/elitea-code-runner/Containerfile`, targets `default` (Python, JavaScript, TypeScript) and `rust-runtime` (Rust). They must already exist in the host's Docker daemon: the supervisor never pulls a runner per job. |
+| A TLS PostgreSQL for the receipt ledger | `docker-compose.sandbox-postgres-tls.yml`. The supervisor verifies the server certificate and the host name `postgres` and has no plaintext mode, and the stack's database is plain. Skip this file if you point the supervisor at a managed PostgreSQL that already has TLS. |
+| One supervisor profile per runtime image, a worker `runtime.json` with `sandbox_runtimes`, and the certificates | `deploy/scripts/sandbox-compose-material.sh` |
+| The supervisor service | `docker-compose.sandbox.yml` |
+
+1. Build the three images and tag them. Both profiles name the runner image by its ID, so the script reads it from the daemon.
+
+   ```sh
+   podman build -f services/elitea-worker-rust/Containerfile --target supervisor -t elitea-sandbox-supervisor:local .
+   podman build -f services/elitea-code-runner/Containerfile --target default -t elitea-code-runner:default services/elitea-code-runner
+   podman build -f services/elitea-code-runner/Containerfile --target rust-runtime -t elitea-code-runner:rust services/elitea-code-runner
+   ```
+
+2. Create the runtime material, then the sandbox material. The script issues the supervisors' and the database's server certificates under the runtime CA, renders the two supervisor profiles (`deno` on port 9446 for Python, JavaScript and TypeScript, `rust` on 9447), and writes the worker configuration. It must give the profile directories to the supervisor's user (UID 10001), so it needs root or passwordless `sudo`. It prints the variables the overlay reads.
+
+   ```sh
+   deploy/scripts/standalone-stack.sh certs
+   export ELITEA_SANDBOX_SUPERVISOR_IMAGE=elitea-sandbox-supervisor:local
+   export ELITEA_SANDBOX_DENO_IMAGE=elitea-code-runner:default
+   export ELITEA_SANDBOX_RUST_IMAGE=elitea-code-runner:rust
+   eval "$(deploy/scripts/sandbox-compose-material.sh ./sandbox-material)"
+   ```
+
+3. Bring the stack up with the two overlays.
+
+   ```sh
+   export STANDALONE_OVERLAY="$PWD/deploy/docker-compose.sandbox.yml $PWD/deploy/docker-compose.sandbox-postgres-tls.yml"
+   deploy/scripts/standalone-stack.sh up
+   ```
+
+The overlay sets `ELITEA_RUNTIME_SANDBOX_AUDIENCES` and `ELITEA_CODE_SANDBOX_LANGUAGES` on elitea-main (defaults `python,javascript,typescript,rust`; set `ELITEA_CODE_SANDBOX_LANGUAGES` to the languages you serve) and mounts the prepared `runtime.json` into the worker. The supervisor needs the socket's group: the script reads it from the socket, or set `ELITEA_SANDBOX_DOCKER_GID` and `ELITEA_SANDBOX_DOCKER_SOCKET`.
+
+**Check it.** `GET /elitea_core/runtime_capabilities` lists the languages in `code_sandbox_languages`. Turn **Python sandbox** on for an agent and ask it to compute `1+1`: the tool result in the conversation shows `stdout` `2`. If the supervisor does not start, `podman compose logs elitea-sandbox` names the step: the profile files must be mode `0600` (private) or `0644` (public) and owned by UID 10001, the ledger needs the agentstate migrations applied, and the image IDs in both profiles must match the daemon's. Rebuilding a runner image changes its ID: rerun the script, which rewrites both the profiles and the worker configuration, then restart the supervisor and the worker.
+
+Code owner recovery and the other Code consumers are separate and optional: see `deploy/runtime/code-consumers-deployment.md`. The `run_code` tool does not need them.
+
 ## Object storage and artifacts
 
 `main.env.STORAGE_BACKEND` / `STORAGE_CONTAINER` point at an S3-compatible bucket. It must **exist before the first sync** — the readiness probe tolerates a missing bucket, but the very next boot step (setting the bucket's retention lifecycle) does not, so a missing bucket looks like a green install that then crash-loops. `objectInit.enabled: true` creates it for a self-hosted S3-compatible endpoint you administer directly (RustFS, MinIO); a managed cloud object store almost always withholds `CreateBucket` from an application-scoped credential, so create it out of band there.

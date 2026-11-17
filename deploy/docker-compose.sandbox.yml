@@ -26,6 +26,11 @@ services:
   elitea-main:
     environment:
       ELITEA_RUNTIME_SANDBOX_AUDIENCES: "dns:elitea-sandbox-deno,dns:elitea-sandbox-rust"
+      # The languages the worker's sandbox_runtimes serve. Main reports them in
+      # GET /elitea_core/runtime_capabilities, which is what turns the agent
+      # form's "Python sandbox" (pyodide, run_code) toggle on. Keep it equal to
+      # the languages of the worker configuration.
+      ELITEA_CODE_SANDBOX_LANGUAGES: ${ELITEA_CODE_SANDBOX_LANGUAGES:-python,javascript,typescript,rust}
 
   elitea-worker:
     volumes:
