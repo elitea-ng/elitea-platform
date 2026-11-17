@@ -284,3 +284,54 @@ fn the_policy_bounds_depth_and_classes() {
     );
     assert_eq!(DelegationPolicy::default().max_depth(), DEFAULT_MAX_DEPTH);
 }
+
+/// The digest vectors Main runs too (`delegationgrant/grantset_test.go`): the
+/// stored form parses, normalises and digests to the same bytes on both sides.
+#[test]
+fn grant_set_digests_match_the_shared_vectors() {
+    let vectors: Value = serde_json::from_str(include_str!(
+        "../../../proto/contracts/delegation-grant-digest-vectors-v1.json"
+    ))
+    .expect("vectors");
+    let cases = vectors["cases"].as_array().expect("cases");
+    assert!(cases.len() >= 7);
+    for case in cases {
+        let name = case["name"].as_str().expect("name");
+        let set = GrantSet::from_canonical(&case["grant_set"])
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(
+            crate::canonical::to_string(&set.canonical()).expect("canonical"),
+            case["canonical"].as_str().expect("canonical"),
+            "{name}: canonical form"
+        );
+        assert_eq!(
+            set.digest(),
+            case["digest"].as_str().expect("digest"),
+            "{name}: digest"
+        );
+        let again = GrantSet::from_canonical(&set.canonical()).expect("round trip");
+        assert_eq!(again, set, "{name}: round trip");
+    }
+}
+
+#[test]
+fn a_grant_set_that_is_not_canonical_is_refused() {
+    let schema = GRANT_SET_SCHEMA;
+    for document in [
+        json!("x"),
+        json!({"schema": "other", "toolkits": [], "data_classes": null, "egress_hosts": []}),
+        json!({"schema": schema, "toolkits": [{"key": "jira", "tools": {"only": []}, "credential": null}], "data_classes": null, "egress_hosts": []}),
+        json!({"schema": schema, "toolkits": [{"key": "toolkit:1", "tools": {"some": []}, "credential": null}], "data_classes": null, "egress_hosts": []}),
+        json!({"schema": schema, "toolkits": [{"key": "toolkit:1", "tools": {"only": [1]}, "credential": null}], "data_classes": null, "egress_hosts": []}),
+        json!({"schema": schema, "toolkits": [{"key": "toolkit:1", "tools": {"only": []}, "credential": ""}], "data_classes": null, "egress_hosts": []}),
+        json!({"schema": schema, "toolkits": [{"key": "toolkit:1", "tools": {"only": null}, "credential": null}], "data_classes": null, "egress_hosts": []}),
+        json!({"schema": schema, "toolkits": [], "data_classes": ["Bad Class"], "egress_hosts": []}),
+        json!({"schema": schema, "toolkits": [], "data_classes": null}),
+    ] {
+        assert_eq!(
+            GrantSet::from_canonical(&document),
+            Err(GrantSetError),
+            "{document}"
+        );
+    }
+}
