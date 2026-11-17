@@ -12,6 +12,7 @@
 import { test, expect } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
+import { openParticipants } from '../../fixtures/sidePanel';
 import {
   API_BASE,
   AUTOTEST_PREFIX,
@@ -55,6 +56,7 @@ test('a skill is pinned to a conversation, shown apart from the participants, an
 
     // The conversation panel shows it in its own section, not among the participants.
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
+    await openParticipants(page);
     const section = page.getByTestId('conversation-skills');
     await expect(section).toBeVisible({ timeout: 20_000 });
     await expect(section.getByText(skillName)).toBeVisible();
