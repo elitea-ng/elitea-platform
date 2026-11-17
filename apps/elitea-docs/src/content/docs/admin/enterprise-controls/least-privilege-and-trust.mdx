@@ -260,7 +260,22 @@ Attaching an agent or a pipeline to another agent (an agent used as a tool, or a
 - **Detaching revokes the grant** once no version of the calling agent attaches the callee.
 - **Audit.** Each proposal, approval, re-approval, stale mark and revoke is a security audit event (`agent.delegation.*`).
 
-The review screen in the attach dialog and the notices in the chat come with later releases; until then grants are managed through the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`). This release records and approves grants; it does not yet change what runs, so no delegation that works today stops working.
+The review screen in the attach dialog and the notices in the chat come with later releases; until then grants are managed through the API (`listDelegationGrants`, `proposeDelegationGrant`, `previewDelegationGrant`, `approveDelegationGrant`, `revokeDelegationGrant`).
+
+#### What a grant changes at run time
+
+The effective set of a callee X called by Y is `own(X) ∩ (E(Y) ∪ G(Y→X))`, where `E(Y)` is what the caller itself may use and `G(Y→X)` is the approved grant of that edge. In words:
+
+- **With an approved grant**, X may use what Y holds **and** what the grant lists, even if Y holds none of it. This is what lets a specialist agent with a git toolkit work under a parent that has no toolkits.
+- **Containment, not equality.** What X holds beyond `E(Y) ∪ G` (a new toolkit, a tool the grant omitted, a swapped credential reference, a data class nobody approved) is **narrowed out** for the run. X still runs. The delegation step records the narrowed items (`delegation_narrowed`).
+- **The step records the grant.** A delegation that used a grant carries `delegation_grant_id` and `delegation_grant_digest` next to the existing `effective_grant_digest` and `delegation_depth`.
+- **Per edge.** The grant covers X's own toolkits only. If X delegates to Z, the edge X to Z needs its own grant. The depth limit still applies. Ephemeral sub-agents need no grant.
+- **No grant, no change.** An edge without an approved grant is refused (or, in `report` mode, recorded) exactly as in the previous section. The run principal's bound and the run's egress allowlist bound every callee, with or without a grant.
+- **Limit of this release.** A grant is read for an agent or a pipeline attached as a tool of an agent or a pipeline. A pipeline that runs a saved pipeline in a node, and the saved pipelines nested below an attached pipeline, are still checked against their caller's own set only.
+
+#### The switch
+
+Grants are read at run time only while the operator sets `ELITEA_DELEGATION_GRANTS_ENFORCED` to `"true"` on the main service (the chart value `main.env.ELITEA_DELEGATION_GRANTS_ENFORCED`; **off by default**). While it is off, commands carry no grant and delegation behaves exactly as before grants, so turning the release on changes nothing. Turn it on only after the migration of existing compositions has created their pending grants and the owners have reviewed them; until a grant is approved, a callee that holds more than its caller is refused as it was. The workers must run this release before the switch is on (a worker from an earlier release refuses a command that carries grants).
 
 ### Evidence
 
