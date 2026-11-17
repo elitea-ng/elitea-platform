@@ -226,6 +226,40 @@ VALUES (1, 32, 'delegation', 'submitted', 'low', 's', 7)`); err == nil {
 	}
 }
 
+func TestConsumableFromCallersListsApprovedAndStaleEdgesOnly(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	holds := holdsAccess{toolkits: map[string]bool{"toolkit:51": true}}
+	_, store := newGovernedDelegationStores(t, pool, false, holds)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	set := calleeSet(t, pool)
+	propose := func(caller int64) dg.Grant {
+		g, err := store.ProposeGrant(ctx, 1, dg.Edge{CallerEntityID: caller, CalleeEntityID: 31, Kind: dg.EdgeAgentTool}, 41, set, dg.OriginAttach, false, 7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return g
+	}
+	pending := propose(32)
+	ok := propose(33)
+	if _, err := store.Approve(ctx, 1, ok.ID, 7, nil, holds); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.ConsumableFromCallers(ctx, 1, []int64{32, 33, 99})
+	if err != nil || len(got) != 1 || got[0].ID != ok.ID {
+		t.Fatalf("only the approved edge is consumable (pending %d): %+v %v", pending.ID, got, err)
+	}
+	if _, _, err := store.MarkStale(ctx, 1, ok.ID, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.ConsumableFromCallers(ctx, 1, []int64{33}); len(got) != 1 || got[0].State != dg.StateStale {
+		t.Fatalf("a stale grant is consumed: %+v", got)
+	}
+	if got, err := NewDelegationGrantReader(pool).ConsumableFromCallers(ctx, 1, []int64{33}); err != nil || len(got) != 1 {
+		t.Fatalf("the read-only store: %+v %v", got, err)
+	}
+}
+
 func TestAttachProposesAndDetachRevokesInTheRelationTransaction(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	_, store := newGovernedDelegationStores(t, pool, false, holdsAccess{})

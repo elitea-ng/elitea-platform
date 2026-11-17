@@ -66,6 +66,13 @@ use serde_json::{Map, Value, json};
 use crate::egress::PublicPolicy;
 use crate::toolkits::{AdmittedToolSnapshot, FrozenToolKind};
 
+mod grants;
+
+pub use grants::{
+    DelegationGrant, EdgeKey, EdgeKind, GrantEvidence, Grants, MAX_GRANT_EDGES, Narrowed,
+    narrow_with_grant,
+};
+
 /// The depth a run may delegate to when the administrator set none.
 pub const DEFAULT_MAX_DEPTH: u32 = 4;
 /// The smallest maximum an administrator may set.
@@ -138,6 +145,11 @@ pub enum DelegationPolicyError {
     /// A principal bound with more entries than its limits, or a name that
     /// is too long.
     PrincipalBoundTooLarge,
+    /// A delegation grant whose set does not hash to its digest, or with no
+    /// id.
+    MalformedGrant,
+    /// More than [`MAX_GRANT_EDGES`] delegation grants.
+    TooManyGrants,
 }
 
 impl fmt::Display for DelegationPolicyError {
@@ -147,6 +159,8 @@ impl fmt::Display for DelegationPolicyError {
             Self::MalformedDataClass => "a data class is not a short identifier",
             Self::TooManyDataClasses => "the run declares more data classes than the limit",
             Self::PrincipalBoundTooLarge => "the run principal's bound is larger than the limit",
+            Self::MalformedGrant => "a delegation grant does not match its digest",
+            Self::TooManyGrants => "the run carries more delegation grants than the limit",
         })
     }
 }
@@ -161,6 +175,11 @@ pub struct DelegationPolicy {
     mode: NarrowingMode,
     root_data_classes: BTreeSet<String>,
     principal: Option<PrincipalBound>,
+    /// The approved delegation grants of the run, by edge (ADR-0044
+    /// Amendment 1, #2166). Empty unless Main's grant switch is on.
+    grants: Grants,
+    /// The saved agent or pipeline the run starts with; 0 for none.
+    root_application_id: u64,
 }
 
 impl Default for DelegationPolicy {
@@ -170,6 +189,8 @@ impl Default for DelegationPolicy {
             mode: NarrowingMode::Enforce,
             root_data_classes: BTreeSet::new(),
             principal: None,
+            grants: Grants::new(),
+            root_application_id: 0,
         }
     }
 }
@@ -194,7 +215,74 @@ impl DelegationPolicy {
             mode,
             root_data_classes: data_classes(root_data_classes)?,
             principal: None,
+            grants: Grants::new(),
+            root_application_id: 0,
         })
+    }
+
+    /// This policy with the run's approved delegation grants, which also turns
+    /// grant enforcement on: an edge that has one is bounded by `E(Y) ∪ G`.
+    ///
+    /// # Errors
+    ///
+    /// [`DelegationPolicyError::TooManyGrants`] for more than
+    /// [`MAX_GRANT_EDGES`].
+    pub fn with_grants(
+        mut self,
+        root_application_id: u64,
+        grants: impl IntoIterator<Item = (EdgeKey, DelegationGrant)>,
+    ) -> Result<Self, DelegationPolicyError> {
+        self.root_application_id = root_application_id;
+        for (edge, grant) in grants {
+            self.grants.insert(edge, grant);
+            if self.grants.len() > MAX_GRANT_EDGES {
+                return Err(DelegationPolicyError::TooManyGrants);
+            }
+        }
+        Ok(self)
+    }
+
+    /// The approved grant of an edge, when the run carries grants.
+    #[must_use]
+    pub fn grant(&self, edge: &EdgeKey) -> Option<&DelegationGrant> {
+        self.grants.get(edge)
+    }
+
+    /// The approved grant between a caller and a callee, whatever the kind of
+    /// edge. The worker reaches a callee through an application tool: an agent
+    /// calls it as a tool (`agent_tool`) and a pipeline runs it as a child
+    /// (`pipeline_child`), which is what attaching creates, so those two are
+    /// read first. A `sub_agent` or `pipeline_node` grant proposed through the
+    /// API for the same pair is read only when neither exists.
+    #[must_use]
+    pub fn grant_between(&self, from_agent: u64, to_agent: u64) -> Option<&DelegationGrant> {
+        [
+            EdgeKind::AgentTool,
+            EdgeKind::PipelineChild,
+            EdgeKind::SubAgent,
+            EdgeKind::PipelineNode,
+        ]
+        .into_iter()
+        .find_map(|kind| {
+            self.grants.get(&EdgeKey {
+                caller: from_agent,
+                callee: to_agent,
+                kind,
+            })
+        })
+    }
+
+    /// Whether the run carries grants (Main's switch is on and some edge of
+    /// the root's closure has one).
+    #[must_use]
+    pub fn grants_enforced(&self) -> bool {
+        !self.grants.is_empty()
+    }
+
+    /// The saved agent or pipeline the run starts with, 0 for none.
+    #[must_use]
+    pub const fn root_application_id(&self) -> u64 {
+        self.root_application_id
     }
 
     /// This policy bounded by the run principal's authority `P`.
@@ -997,6 +1085,8 @@ pub struct DelegationEvidence {
     pub refusal: Option<DelegationRefusal>,
     /// Whether the refusal (if any) was enforced.
     pub enforced: bool,
+    /// The grant that bounded the delegation, and what it narrowed out.
+    pub grant: Option<GrantEvidence>,
 }
 
 impl DelegationEvidence {
@@ -1010,6 +1100,16 @@ impl DelegationEvidence {
         if let Some(refusal) = &self.refusal {
             fields.push(("delegation_refusal", refusal.to_value()));
             fields.push(("delegation_enforced", json!(self.enforced)));
+        }
+        if let Some(grant) = &self.grant {
+            fields.push(("delegation_grant_id", json!(grant.grant_id)));
+            fields.push(("delegation_grant_digest", json!(grant.grant_digest)));
+            if !grant.narrowed.is_empty() {
+                fields.push((
+                    "delegation_narrowed",
+                    Value::Array(grant.narrowed.iter().map(Narrowed::to_value).collect()),
+                ));
+            }
         }
         fields
     }
@@ -1037,6 +1137,10 @@ pub struct DelegationScope {
     policy: Arc<DelegationPolicy>,
     grants: Arc<GrantSet>,
     depth: u32,
+    /// The saved agent or pipeline this scope belongs to: the caller of its
+    /// delegations, the `Y` of an edge. 0 when it has none (an ad hoc root, or
+    /// a callee reached without an edge).
+    application_id: u64,
 }
 
 impl Default for DelegationScope {
@@ -1057,10 +1161,12 @@ impl DelegationScope {
             Some(principal) => grants.bounded_by(principal),
             None => grants,
         };
+        let application_id = policy.root_application_id;
         Self {
             policy,
             grants: Arc::new(grants),
             depth: 0,
+            application_id,
         }
     }
 
@@ -1079,11 +1185,16 @@ impl DelegationScope {
         &self.grants
     }
 
-    /// A key that tells two scopes apart for caching: the depth and the
-    /// grant digest.
+    /// A key that tells two scopes apart for caching: the depth, the agent the
+    /// scope belongs to (its edges' grants depend on it) and the grant digest.
     #[must_use]
     pub fn cache_key(&self) -> String {
-        format!("{}:{}", self.depth, self.grants.digest())
+        format!(
+            "{}:{}:{}",
+            self.depth,
+            self.application_id,
+            self.grants.digest()
+        )
     }
 
     fn next_depth(&self) -> Result<u32, DelegationRefusal> {
@@ -1115,6 +1226,31 @@ impl DelegationScope {
         callee_data_classes: &BTreeSet<String>,
         egress: &PublicPolicy,
     ) -> Result<Delegation, Box<RefusedDelegation>> {
+        self.delegate_edge(None, callee_tools, callee_data_classes, egress)
+    }
+
+    /// [`Self::delegate`] across a known composition edge: `callee` is the id of
+    /// the saved agent or pipeline the caller calls (ADR-0044 Amendment 1). When
+    /// the run carries an approved grant for the edge, the callee is bounded by
+    /// `own(X) ∩ (E(Y) ∪ G(Y→X)) ∩ P`: what it holds beyond that is **narrowed
+    /// out** and recorded, and it still runs. An edge with no grant is
+    /// delegated exactly as [`Self::delegate`] does, so no composition is
+    /// refused by grants alone. The run principal's bound refuses first, in
+    /// both modes, with or without a grant.
+    ///
+    /// # Errors
+    ///
+    /// [`RefusedDelegation`] for a delegation past the maximum depth, for a
+    /// callee outside the run principal's bound, for a host off the run's
+    /// egress allowlist when enforcing, and, when the edge has no grant and the
+    /// run enforces, for a missing grant.
+    pub fn delegate_edge(
+        &self,
+        callee: Option<u64>,
+        callee_tools: &mut Vec<Value>,
+        callee_data_classes: &BTreeSet<String>,
+        egress: &PublicPolicy,
+    ) -> Result<Delegation, Box<RefusedDelegation>> {
         let depth = match self.next_depth() {
             Ok(depth) => depth,
             Err(refusal) => {
@@ -1124,6 +1260,7 @@ impl DelegationScope {
                         effective_grant_digest: self.grants.digest(),
                         refusal: Some(refusal.clone()),
                         enforced: true,
+                        grant: None,
                     },
                     refusal,
                 }));
@@ -1143,11 +1280,24 @@ impl DelegationScope {
                     effective_grant_digest: self.grants.digest(),
                     refusal: Some(refusal.clone()),
                     enforced: true,
+                    grant: None,
                 },
                 refusal,
             }));
         }
         let hosts = declared_hosts(callee_tools);
+        if let Some(callee_id) = callee
+            && self.application_id != 0
+            && let Some(grant) = self.policy.grant_between(self.application_id, callee_id)
+        {
+            return self.delegate_with_grant(
+                (callee_id, grant),
+                callee_tools,
+                (&requested, callee_data_classes),
+                (&hosts, egress),
+                depth,
+            );
+        }
         let missing = self.missing(&requested, callee_data_classes, &hosts, egress);
         let enforce = self.policy.mode == NarrowingMode::Enforce;
         let effective = self.narrow(&requested, callee_data_classes, &hosts, egress);
@@ -1156,6 +1306,7 @@ impl DelegationScope {
             effective_grant_digest: effective.digest(),
             refusal: missing.clone(),
             enforced: enforce && missing.is_some(),
+            grant: None,
         };
         if let (Some(refusal), true) = (missing, enforce) {
             return Err(Box::new(RefusedDelegation { refusal, evidence }));
@@ -1166,6 +1317,68 @@ impl DelegationScope {
                 policy: Arc::clone(&self.policy),
                 grants: Arc::new(effective),
                 depth,
+                application_id: callee.unwrap_or(0),
+            },
+            evidence,
+        })
+    }
+
+    /// The delegation of an edge that has an approved grant: the callee's
+    /// effective set is `own(X) ∩ (E(Y) ∪ G) ∩ P`, narrowed in place, and what
+    /// was narrowed out is recorded on the step with the grant's id and digest.
+    /// The grant covers this edge only: the scope returned belongs to the
+    /// callee, so its own edges need grants of their own.
+    fn delegate_with_grant(
+        &self,
+        (callee_id, grant): (u64, &DelegationGrant),
+        callee_tools: &mut Vec<Value>,
+        (requested, callee_data_classes): (&GrantSet, &BTreeSet<String>),
+        (hosts, egress): (&[(String, u16)], &PublicPolicy),
+        depth: u32,
+    ) -> Result<Delegation, Box<RefusedDelegation>> {
+        let (mut effective, narrowed) =
+            narrow_with_grant(&self.grants, grant.set(), requested, callee_data_classes);
+        // `∩ P`, after the caller's set and the grant.
+        if let Some(principal) = self.policy.principal() {
+            effective = effective.bounded_by(principal);
+        }
+        // The run's egress allowlist bounds every callee, with or without a
+        // grant (it is part of the principal's bound).
+        let refusal = hosts
+            .iter()
+            .find(|(host, port)| !egress.admits(host, *port))
+            .map(|(host, _)| DelegationRefusal::GrantMissing {
+                kind: GrantKind::EgressHost,
+                name: host.clone(),
+                toolkit: None,
+            });
+        effective.egress_hosts = hosts
+            .iter()
+            .filter(|(host, port)| egress.admits(host, *port))
+            .map(|(host, _)| host.clone())
+            .collect();
+        let enforce = self.policy.mode == NarrowingMode::Enforce;
+        let evidence = DelegationEvidence {
+            depth,
+            effective_grant_digest: effective.digest(),
+            refusal: refusal.clone(),
+            enforced: enforce && refusal.is_some(),
+            grant: Some(GrantEvidence {
+                grant_id: grant.id(),
+                grant_digest: grant.digest().to_owned(),
+                narrowed,
+            }),
+        };
+        if let (Some(refusal), true) = (refusal, enforce) {
+            return Err(Box::new(RefusedDelegation { refusal, evidence }));
+        }
+        apply_selection(callee_tools, &effective);
+        Ok(Delegation {
+            scope: Self {
+                policy: Arc::clone(&self.policy),
+                grants: Arc::new(effective),
+                depth,
+                application_id: callee_id,
             },
             evidence,
         })
@@ -1213,12 +1426,14 @@ impl DelegationScope {
                 policy: Arc::clone(&self.policy),
                 grants: Arc::clone(&self.grants),
                 depth,
+                application_id: self.application_id,
             },
             evidence: DelegationEvidence {
                 depth,
                 effective_grant_digest: digest,
                 refusal: None,
                 enforced: false,
+                grant: None,
             },
         })
     }

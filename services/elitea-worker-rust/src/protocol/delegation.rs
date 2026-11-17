@@ -9,8 +9,8 @@
 //! fails the command closed at verification.
 
 use elitea_agent_runtime::delegation::{
-    DEFAULT_MAX_DEPTH, DelegationPolicy, DelegationPolicyError, NarrowingMode, PrincipalBound,
-    PrincipalToolkit,
+    DEFAULT_MAX_DEPTH, DelegationGrant, DelegationPolicy, DelegationPolicyError, EdgeKey, EdgeKind,
+    GrantSet, NarrowingMode, PrincipalBound, PrincipalToolkit,
 };
 
 use super::ProtocolError;
@@ -46,14 +46,44 @@ pub fn policy_from_command(command: &WorkerCommandV1) -> Result<DelegationPolicy
     let delegation =
         DelegationPolicy::new(max_depth, mode, policy.root_data_classes.iter().cloned())
             .map_err(policy_error)?;
-    match policy
+    let delegation = match policy
         .principal_bound
         .as_ref()
         .filter(|bound| bound.bounded)
     {
-        Some(bound) => Ok(delegation.with_principal(principal_bound(bound)?)),
-        None => Ok(delegation),
+        Some(bound) => delegation.with_principal(principal_bound(bound)?),
+        None => delegation,
+    };
+    if !policy.grants_enforced {
+        // Without the switch the grants are not read: delegation is what it was
+        // before grants (ADR-0044 amendment 1, rollout).
+        return Ok(delegation);
     }
+    let mut edges = Vec::with_capacity(policy.grants.len());
+    for grant in &policy.grants {
+        let kind = EdgeKind::parse(&grant.edge_kind).ok_or(ProtocolError::InvalidInput(
+            "the worker delegation grant names an unknown edge kind",
+        ))?;
+        let document: serde_json::Value = serde_json::from_str(&grant.grant_set).map_err(|_| {
+            ProtocolError::InvalidInput("the worker delegation grant set is not JSON")
+        })?;
+        let set = GrantSet::from_canonical(&document).map_err(|_| {
+            ProtocolError::InvalidInput("the worker delegation grant set is malformed")
+        })?;
+        let approved = DelegationGrant::new(grant.grant_id, grant.digest.clone(), set)
+            .map_err(policy_error)?;
+        edges.push((
+            EdgeKey {
+                caller: grant.caller_application_id,
+                callee: grant.callee_application_id,
+                kind,
+            },
+            approved,
+        ));
+    }
+    delegation
+        .with_grants(policy.root_application_id, edges)
+        .map_err(policy_error)
 }
 
 /// The run principal's bound (ADR-0044 Amendment 1, #2157). A message that is
@@ -79,6 +109,12 @@ fn policy_error(error: DelegationPolicyError) -> ProtocolError {
         DelegationPolicyError::PrincipalBoundTooLarge => ProtocolError::ResourceExhausted(
             "the worker delegation policy's principal bound is too large",
         ),
+        DelegationPolicyError::TooManyGrants => ProtocolError::ResourceExhausted(
+            "the worker delegation policy carries too many delegation grants",
+        ),
+        DelegationPolicyError::MalformedGrant => {
+            ProtocolError::InvalidInput("a worker delegation grant does not match its digest")
+        }
         DelegationPolicyError::DepthOutOfRange | DelegationPolicyError::MalformedDataClass => {
             ProtocolError::InvalidInput("the worker delegation policy is malformed")
         }
@@ -87,7 +123,9 @@ fn policy_error(error: DelegationPolicyError) -> ProtocolError {
 
 #[cfg(test)]
 mod tests {
-    use super::super::elitea::runtime::v1::{WorkerDelegationPolicyV1, WorkerPrincipalToolkitV1};
+    use super::super::elitea::runtime::v1::{
+        WorkerDelegationGrantV1, WorkerDelegationPolicyV1, WorkerPrincipalToolkitV1,
+    };
     use super::*;
 
     fn command(policy: Option<WorkerDelegationPolicyV1>) -> WorkerCommandV1 {
@@ -249,5 +287,77 @@ mod tests {
             policy_from_command(&with_bound(bad_class)),
             Err(ProtocolError::InvalidInput(_))
         ));
+    }
+
+    fn grant_message(set: &str, digest: &str) -> WorkerDelegationGrantV1 {
+        WorkerDelegationGrantV1 {
+            caller_application_id: 5,
+            callee_application_id: 6,
+            edge_kind: "agent_tool".to_owned(),
+            grant_id: 9,
+            digest: digest.to_owned(),
+            grant_set: set.to_owned(),
+        }
+    }
+
+    const EMPTY_SET: &str = r#"{"data_classes":null,"egress_hosts":[],"schema":"elitea.delegation.grants.v1","toolkits":[]}"#;
+
+    fn empty_digest() -> String {
+        GrantSet::from_canonical(&serde_json::from_str(EMPTY_SET).expect("json"))
+            .expect("set")
+            .digest()
+    }
+
+    #[test]
+    fn grants_are_read_only_while_the_switch_is_on() {
+        let message = grant_message(EMPTY_SET, &empty_digest());
+        let off = policy_from_command(&command(Some(WorkerDelegationPolicyV1 {
+            grants: vec![message.clone()],
+            root_application_id: 5,
+            ..WorkerDelegationPolicyV1::default()
+        })))
+        .expect("policy");
+        assert!(!off.grants_enforced(), "no switch, no grants");
+        let on = policy_from_command(&command(Some(WorkerDelegationPolicyV1 {
+            grants: vec![message],
+            root_application_id: 5,
+            grants_enforced: true,
+            ..WorkerDelegationPolicyV1::default()
+        })))
+        .expect("policy");
+        assert!(on.grants_enforced());
+        assert_eq!(on.root_application_id(), 5);
+        let edge = EdgeKey {
+            caller: 5,
+            callee: 6,
+            kind: EdgeKind::AgentTool,
+        };
+        assert_eq!(on.grant(&edge).map(DelegationGrant::id), Some(9));
+    }
+
+    #[test]
+    fn a_grant_that_does_not_match_its_digest_or_names_no_kind_is_refused() {
+        for message in [
+            grant_message(EMPTY_SET, &"0".repeat(64)),
+            WorkerDelegationGrantV1 {
+                edge_kind: "skill".to_owned(),
+                ..grant_message(EMPTY_SET, &empty_digest())
+            },
+            grant_message("{", &empty_digest()),
+            grant_message(r#"{"schema":"other"}"#, &empty_digest()),
+            WorkerDelegationGrantV1 {
+                grant_id: 0,
+                ..grant_message(EMPTY_SET, &empty_digest())
+            },
+        ] {
+            assert!(
+                policy_from_command(&command(Some(WorkerDelegationPolicyV1 {
+                    grants: vec![message],
+                    grants_enforced: true,
+                    ..WorkerDelegationPolicyV1::default()
+                })))
+                .is_err()
+            );
+        }
     }
 }

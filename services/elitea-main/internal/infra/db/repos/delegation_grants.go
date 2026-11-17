@@ -85,6 +85,13 @@ func NewDelegationGrants(pool *pgxpool.Pool, audit securityaudit.Appender, optio
 	return s, nil
 }
 
+// NewDelegationGrantReader builds the store for reads only: the run path reads
+// the grants a command carries and never writes one, so it needs no audit
+// appender. Every write method of the store needs the full constructor.
+func NewDelegationGrantReader(pool *pgxpool.Pool) *DelegationGrants {
+	return &DelegationGrants{pool: pool, now: time.Now}
+}
+
 // ProposeInput is a new grant for an edge: what the callee holds now.
 type ProposeInput struct {
 	ProjectID       int64
@@ -611,6 +618,39 @@ WHERE callee_entity_id = ANY($1) AND state IN ('approved', 'stale')
 ORDER BY caller_entity_id, callee_entity_id, edge_kind`, delegationGrantColumns, schema), calleeEntityIDs)
 	if err != nil {
 		return nil, fmt.Errorf("delegation grants: consumable: %w", err)
+	}
+	defer rows.Close()
+	grants := []dg.Grant{}
+	for rows.Next() {
+		grant, err := scanDelegationGrant(rows)
+		if err != nil {
+			return nil, err
+		}
+		grants = append(grants, grant)
+	}
+	return grants, rows.Err()
+}
+
+// ConsumableFromCallers lists the approved and stale grants whose caller is
+// one of callerIDs: the edges below those agents that a run reads as G(Y to X)
+// (story S2c). A stale grant is read too, as ADR-0044 amendment 1 says: it
+// covers the set it recorded (which may be broader than what the callee holds
+// today) and the drift is narrowed out, until its editors re-approve or revoke
+// it. A database without the tenant table answers none.
+func (s *DelegationGrants) ConsumableFromCallers(ctx context.Context, projectID int64, callerIDs []int64) ([]dg.Grant, error) {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+SELECT %s FROM %s.delegation_grants
+WHERE caller_entity_id = ANY($1) AND state IN ('approved', 'stale')
+ORDER BY caller_entity_id, callee_entity_id, edge_kind`, delegationGrantColumns, schema), callerIDs)
+	if err != nil {
+		if undefinedTable(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("delegation grants: consumable from callers: %w", err)
 	}
 	defer rows.Close()
 	grants := []dg.Grant{}

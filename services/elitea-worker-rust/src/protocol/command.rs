@@ -599,6 +599,10 @@ fn scan_delegation_policy(fields: &ScannedFields<'_>) -> Result<(), ProtocolErro
                 scan_message(toolkit, Schema::WorkerPrincipalToolkit)?;
             }
         }
+        // And each approved delegation grant (ADR-0044 Amendment 1, #2166).
+        for grant in policy.repeated_field(21) {
+            scan_message(grant, Schema::WorkerDelegationGrant)?;
+        }
     }
     Ok(())
 }

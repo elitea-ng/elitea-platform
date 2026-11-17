@@ -823,7 +823,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		// The run principal's bound (ADR-0044 Amendment 1) rides the same
 		// policy while the section's principal_bound switch is on.
-		agentProducer.WithDelegationPolicy(delegationPolicy.WithPrincipalBound(egressSources))
+		delegationPolicy = delegationPolicy.WithPrincipalBound(egressSources)
+		// The approved delegation grants of a run (ADR-0044 amendment 1,
+		// story S2c): sent only while the operator turns the grant switch on
+		// (ELITEA_DELEGATION_GRANTS_ENFORCED, off by default until the
+		// migration of existing compositions has run).
+		if config.DelegationGrantsEnforced {
+			delegationPolicy = delegationPolicy.WithGrants(repos.NewDelegationGrantReader(dependencies.AdmissionPool), true)
+		}
+		agentProducer.WithDelegationPolicy(delegationPolicy)
 		// The approval policy (ADR-0041 decision 5), on the same gate.
 		approvalPolicy, err := workerapprovalpolicyapp.NewResolver(approvalSettings, egressSources, egressSources)
 		if err != nil {

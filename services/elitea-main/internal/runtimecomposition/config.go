@@ -155,6 +155,12 @@ type Config struct {
 	IndexIngestCommandStream      string
 	AgentExecutionDispatchEnabled bool
 	AgentExecutionCommandStream   string
+	// DelegationGrantsEnforced is ELITEA_DELEGATION_GRANTS_ENFORCED: while true,
+	// an agent execution command carries the approved delegation grants of its
+	// run and the worker bounds each delegation by E(Y) ∪ G (ADR-0044
+	// amendment 1). Off by default, until the migration of existing
+	// compositions (story S6) has created their pending legacy grants.
+	DelegationGrantsEnforced bool
 
 	// NATSURL and NATSMaterial: the runtime plane's own NATS connection, as
 	// the elitea-main-runtime identity (ELITEA_RUNTIME_NATS_URL,
@@ -341,6 +347,13 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		}
 	default:
 		return Config{}, errors.New("ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED must be true or false")
+	}
+	switch grants, _ := lookup("ELITEA_DELEGATION_GRANTS_ENFORCED"); grants {
+	case "", "false":
+	case "true":
+		config.DelegationGrantsEnforced = true
+	default:
+		return Config{}, errors.New("ELITEA_DELEGATION_GRANTS_ENFORCED must be true or false")
 	}
 	discoveryEnabled, _ := lookup("ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED")
 	switch discoveryEnabled {

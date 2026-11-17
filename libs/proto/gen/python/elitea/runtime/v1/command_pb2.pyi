@@ -145,16 +145,38 @@ class WorkerEgressPolicyV1(_message.Message):
     def __init__(self, mode: _Optional[_Union[WorkerEgressModeV1, str]] = ..., allow: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class WorkerDelegationPolicyV1(_message.Message):
-    __slots__ = ("max_depth", "mode", "root_data_classes", "principal_bound")
+    __slots__ = ("max_depth", "mode", "root_data_classes", "principal_bound", "grants", "root_application_id", "grants_enforced")
     MAX_DEPTH_FIELD_NUMBER: _ClassVar[int]
     MODE_FIELD_NUMBER: _ClassVar[int]
     ROOT_DATA_CLASSES_FIELD_NUMBER: _ClassVar[int]
     PRINCIPAL_BOUND_FIELD_NUMBER: _ClassVar[int]
+    GRANTS_FIELD_NUMBER: _ClassVar[int]
+    ROOT_APPLICATION_ID_FIELD_NUMBER: _ClassVar[int]
+    GRANTS_ENFORCED_FIELD_NUMBER: _ClassVar[int]
     max_depth: int
     mode: WorkerDelegationModeV1
     root_data_classes: _containers.RepeatedScalarFieldContainer[str]
     principal_bound: WorkerPrincipalBoundV1
-    def __init__(self, max_depth: _Optional[int] = ..., mode: _Optional[_Union[WorkerDelegationModeV1, str]] = ..., root_data_classes: _Optional[_Iterable[str]] = ..., principal_bound: _Optional[_Union[WorkerPrincipalBoundV1, _Mapping]] = ...) -> None: ...
+    grants: _containers.RepeatedCompositeFieldContainer[WorkerDelegationGrantV1]
+    root_application_id: int
+    grants_enforced: bool
+    def __init__(self, max_depth: _Optional[int] = ..., mode: _Optional[_Union[WorkerDelegationModeV1, str]] = ..., root_data_classes: _Optional[_Iterable[str]] = ..., principal_bound: _Optional[_Union[WorkerPrincipalBoundV1, _Mapping]] = ..., grants: _Optional[_Iterable[_Union[WorkerDelegationGrantV1, _Mapping]]] = ..., root_application_id: _Optional[int] = ..., grants_enforced: _Optional[bool] = ...) -> None: ...
+
+class WorkerDelegationGrantV1(_message.Message):
+    __slots__ = ("caller_application_id", "callee_application_id", "edge_kind", "grant_id", "digest", "grant_set")
+    CALLER_APPLICATION_ID_FIELD_NUMBER: _ClassVar[int]
+    CALLEE_APPLICATION_ID_FIELD_NUMBER: _ClassVar[int]
+    EDGE_KIND_FIELD_NUMBER: _ClassVar[int]
+    GRANT_ID_FIELD_NUMBER: _ClassVar[int]
+    DIGEST_FIELD_NUMBER: _ClassVar[int]
+    GRANT_SET_FIELD_NUMBER: _ClassVar[int]
+    caller_application_id: int
+    callee_application_id: int
+    edge_kind: str
+    grant_id: int
+    digest: str
+    grant_set: str
+    def __init__(self, caller_application_id: _Optional[int] = ..., callee_application_id: _Optional[int] = ..., edge_kind: _Optional[str] = ..., grant_id: _Optional[int] = ..., digest: _Optional[str] = ..., grant_set: _Optional[str] = ...) -> None: ...
 
 class WorkerPrincipalBoundV1(_message.Message):
     __slots__ = ("bounded", "toolkits", "credentials_bounded", "credential_reference_ids", "data_classes")

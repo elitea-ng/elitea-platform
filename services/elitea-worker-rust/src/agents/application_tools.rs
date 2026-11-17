@@ -3780,6 +3780,7 @@ impl ApplicationAssemblyState<'_> {
             version,
             data_classes,
             self.policy.egress(),
+            Some(reference.identity.0),
         )? {
             Ok(delegation) => {
                 self.materialization = self
@@ -4028,13 +4029,17 @@ pub(in crate::agents) fn narrow_version(
     version: &mut Map<String, Value>,
     data_classes: &BTreeSet<String>,
     egress: &elitea_agent_runtime::egress::RunEgress,
+    target_id: Option<u64>,
 ) -> Result<Result<Delegation, RefusedDelegation>, NativeAgentAssemblyError> {
     let tools = version
         .get_mut("tools")
         .and_then(Value::as_array_mut)
         .ok_or_else(invalid_configuration)?;
+    // `target_id` is the saved agent or pipeline's id when the edge is known: an
+    // approved delegation grant of that edge bounds it by `E(Y) ∪ G` (ADR-0044
+    // amendment 1). Without one the delegation is what it was before grants.
     Ok(caller
-        .delegate(tools, data_classes, egress.policy())
+        .delegate_edge(target_id, tools, data_classes, egress.policy())
         .map_err(|refused| *refused))
 }
 
