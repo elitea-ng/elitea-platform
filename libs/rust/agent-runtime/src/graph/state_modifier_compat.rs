@@ -94,16 +94,12 @@ fn split_whitespace_n(text: &str, limit: usize) -> Vec<String> {
             parts.push(rest.to_owned());
             break;
         }
-        match rest.find(char::is_whitespace) {
-            Some(end) => {
-                parts.push(rest[..end].to_owned());
-                rest = rest[end..].trim_start();
-            }
-            None => {
-                parts.push(rest.to_owned());
-                break;
-            }
-        }
+        let Some(end) = rest.find(char::is_whitespace) else {
+            parts.push(rest.to_owned());
+            break;
+        };
+        parts.push(rest[..end].to_owned());
+        rest = rest[end..].trim_start();
     }
     parts
 }
@@ -118,17 +114,13 @@ fn rsplit_whitespace_n(text: &str, limit: usize) -> Vec<String> {
             parts.push(rest.to_owned());
             break;
         }
-        match rest.rfind(char::is_whitespace) {
-            Some(start) => {
-                let word_start = start + rest[start..].chars().next().map_or(1, char::len_utf8);
-                parts.push(rest[word_start..].to_owned());
-                rest = rest[..start].trim_end();
-            }
-            None => {
-                parts.push(rest.to_owned());
-                break;
-            }
-        }
+        let Some(start) = rest.rfind(char::is_whitespace) else {
+            parts.push(rest.to_owned());
+            break;
+        };
+        let word_start = start + rest[start..].chars().next().map_or(1, char::len_utf8);
+        parts.push(rest[word_start..].to_owned());
+        rest = rest[..start].trim_end();
     }
     parts.reverse();
     parts
