@@ -681,15 +681,15 @@ fn grant_policy(mode: NarrowingMode, grants: &[(u64, u64, &[Value])]) -> Delegat
     let edges = grants
         .iter()
         .enumerate()
-        .map(|(index, (caller, callee, tools))| {
+        .map(|(index, (from_id, to_id, tools))| {
             let set = GrantSet::from_callee(tools, &BTreeSet::new());
             let grant =
                 DelegationGrant::new(u64::try_from(index).expect("index") + 1, set.digest(), set)
                     .expect("grant");
             (
                 EdgeKey {
-                    caller: *caller,
-                    callee: *callee,
+                    caller: *from_id,
+                    callee: *to_id,
                     kind: EdgeKind::AgentTool,
                 },
                 grant,
@@ -717,9 +717,9 @@ fn a_grant_lets_a_specialist_use_what_its_caller_does_not_hold() {
     // Agent2 holds nothing. Agent1 (id 1) holds git. The edge Agent2 -> Agent1 is granted.
     let git = [toolkit(7, "Git", &json!({}))];
     let policy = grant_policy(NarrowingMode::Enforce, &[(2, 1, &git)]);
-    let caller = root_scope(policy.clone(), &[]);
+    let parent = root_scope(policy.clone(), &[]);
     let mut callee = git.to_vec();
-    let delegation = caller
+    let delegation = parent
         .delegate_edge(Some(1), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
         .expect("the grant lets it run");
     assert_eq!(names(&callee), ["Git"]);
@@ -729,7 +729,7 @@ fn a_grant_lets_a_specialist_use_what_its_caller_does_not_hold() {
         grant.grant_digest,
         GrantSet::from_callee(&git, &BTreeSet::new()).digest()
     );
-    assert!(grant.narrowed.is_empty());
+    assert_eq!(grant.narrowed.len(), 0);
     let summary = delegation.evidence.summary();
     assert!(
         summary
@@ -745,13 +745,13 @@ fn a_grant_lets_a_specialist_use_what_its_caller_does_not_hold() {
 
     // Without the grant (no edge, or an edge nobody approved) it is refused as before.
     let mut callee = git.to_vec();
-    let refused = caller
+    let refused = parent
         .delegate_edge(Some(5), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
         .expect_err("no grant for the edge Agent2 -> 5");
     assert_eq!(refused.refusal.code(), GRANT_MISSING);
     let mut callee = git.to_vec();
     assert!(
-        caller
+        parent
             .delegate(&mut callee, &BTreeSet::new(), &PublicPolicy::Open)
             .is_err()
     );
@@ -769,13 +769,13 @@ fn a_grant_lets_a_specialist_use_what_its_caller_does_not_hold() {
 fn what_the_callee_gained_after_approval_is_narrowed_out_and_recorded() {
     let approved = [toolkit(7, "Git", &json!({}))];
     let policy = grant_policy(NarrowingMode::Enforce, &[(2, 1, &approved)]);
-    let caller = root_scope(policy, &[]);
+    let parent = root_scope(policy, &[]);
     // The callee now also holds a database toolkit.
     let mut callee = vec![
         toolkit(7, "Git", &json!({})),
         toolkit(9, "Database", &json!({})),
     ];
-    let delegation = caller
+    let delegation = parent
         .delegate_edge(Some(1), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
         .expect("it still runs");
     assert_eq!(names(&callee), ["Git"], "the new toolkit is narrowed out");
@@ -798,36 +798,29 @@ fn a_newer_callee_with_the_same_or_a_smaller_set_loses_nothing() {
         toolkit(7, "Git", &json!({"selected_tools": ["read", "write"]})),
         toolkit(8, "Wiki", &json!({})),
     ];
-    let caller = root_scope(
+    let parent = root_scope(
         grant_policy(NarrowingMode::Enforce, &[(2, 1, &approved)]),
         &[],
     );
     let mut callee = vec![toolkit(7, "Git", &json!({"selected_tools": ["read"]}))];
-    let delegation = caller
+    let delegation = parent
         .delegate_edge(Some(1), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
         .expect("runs");
-    assert!(
-        delegation
-            .evidence
-            .grant
-            .expect("grant")
-            .narrowed
-            .is_empty()
-    );
+    assert_eq!(delegation.evidence.grant.expect("grant").narrowed.len(), 0);
     assert_eq!(callee[0]["settings"]["selected_tools"], json!(["read"]));
 }
 
 #[test]
 fn the_grant_and_the_caller_union_per_tool_and_a_wider_selection_is_cut() {
     // The caller selects [read]; the grant [write]; the callee selects every tool.
-    let caller_tools = [toolkit(7, "Git", &json!({"selected_tools": ["read"]}))];
+    let parent_tools = [toolkit(7, "Git", &json!({"selected_tools": ["read"]}))];
     let approved = [toolkit(7, "Git", &json!({"selected_tools": ["write"]}))];
-    let caller = root_scope(
+    let parent = root_scope(
         grant_policy(NarrowingMode::Enforce, &[(2, 1, &approved)]),
-        &caller_tools,
+        &parent_tools,
     );
     let mut callee = vec![toolkit(7, "Git", &json!({}))];
-    let delegation = caller
+    let delegation = parent
         .delegate_edge(Some(1), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
         .expect("runs");
     assert_eq!(
@@ -846,7 +839,7 @@ fn the_grant_and_the_caller_union_per_tool_and_a_wider_selection_is_cut() {
         "Git",
         &json!({"selected_tools": ["read", "delete"]}),
     )];
-    let delegation = caller
+    let delegation = parent
         .delegate_edge(Some(1), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
         .expect("runs");
     assert_eq!(callee[0]["settings"]["selected_tools"], json!(["read"]));
@@ -868,9 +861,9 @@ fn a_credential_the_grant_does_not_name_leaves_its_toolkit_out() {
         "Git",
         &json!({"credential_reference_id": "ref-a"}),
     )];
-    let caller = root_scope(grant_policy(NarrowingMode::Enforce, &[(2, 1, &named)]), &[]);
+    let parent = root_scope(grant_policy(NarrowingMode::Enforce, &[(2, 1, &named)]), &[]);
     let mut callee = named.to_vec();
-    caller
+    parent
         .delegate_edge(Some(1), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
         .expect("the grant names the credential");
     assert_eq!(names(&callee), ["Git"]);
@@ -880,10 +873,10 @@ fn a_credential_the_grant_does_not_name_leaves_its_toolkit_out() {
         "Git",
         &json!({"credential_reference_id": "ref-b"}),
     )];
-    let delegation = caller
+    let delegation = parent
         .delegate_edge(Some(1), &mut swapped, &BTreeSet::new(), &PublicPolicy::Open)
         .expect("runs without it");
-    assert!(swapped.is_empty());
+    assert_eq!(swapped.len(), 0);
     let narrowed = delegation.evidence.grant.expect("grant").narrowed;
     assert_eq!(narrowed[0].kind, GrantKind::Credential);
     assert_eq!(narrowed[0].name, "ref-b");
@@ -893,9 +886,9 @@ fn a_credential_the_grant_does_not_name_leaves_its_toolkit_out() {
 fn the_grant_covers_its_edge_only_and_the_depth_cap_still_applies() {
     let git = [toolkit(7, "Git", &json!({}))];
     let policy = grant_policy(NarrowingMode::Enforce, &[(2, 1, &git)]);
-    let caller = root_scope(policy, &[]);
+    let parent = root_scope(policy, &[]);
     let mut callee = git.to_vec();
-    let one = caller
+    let one = parent
         .delegate_edge(Some(1), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
         .expect("Agent1");
     // Agent1 (now the caller) delegates to Z (id 3), which holds git too. No grant for 1 -> 3.
@@ -910,14 +903,12 @@ fn the_grant_covers_its_edge_only_and_the_depth_cap_still_applies() {
         .expect("policy")
         .with_grants(
             2,
-            grant_policy(NarrowingMode::Enforce, &[(2, 1, &git)])
-                .grants
-                .into_iter(),
+            grant_policy(NarrowingMode::Enforce, &[(2, 1, &git)]).grants,
         )
         .expect("grants");
-    let caller = root_scope(shallow, &[]);
+    let parent = root_scope(shallow, &[]);
     let mut callee = git.to_vec();
-    let one = caller
+    let one = parent
         .delegate_edge(Some(1), &mut callee, &BTreeSet::new(), &PublicPolicy::Open)
         .expect("depth 1");
     let mut deeper = git.to_vec();
@@ -952,10 +943,10 @@ fn data_classes_follow_the_caller_and_the_grant() {
         )],
     )
     .expect("grants");
-    let caller = root_scope(policy, &[]);
+    let parent = root_scope(policy, &[]);
     // The grant covers pii; the caller's own class is internal; secret is in neither.
     let mut callee = git.to_vec();
-    let delegation = caller
+    let delegation = parent
         .delegate_edge(
             Some(1),
             &mut callee,
