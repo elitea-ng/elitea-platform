@@ -196,6 +196,7 @@ message WorkerDelegationPolicyV1 {
   // Field 11, not 4: the reserved range 4 to 10 is closed and buf breaking
   // refuses to shrink it.
   WorkerPrincipalBoundV1 principal_bound = 11;
+  reserved 4 to 10;
   reserved 12 to 20;
 }
 

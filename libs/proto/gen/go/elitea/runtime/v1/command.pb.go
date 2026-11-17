@@ -1277,12 +1277,12 @@ const file_elitea_runtime_v1_command_proto_rawDesc = "" +
 	"\x12capability_commandJ\x04\b\x0f\x10\x10J\x04\b\x1a\x10 J\x04\b%\x10@R\x11grant_template_id\"m\n" +
 	"\x14WorkerEgressPolicyV1\x129\n" +
 	"\x04mode\x18\x01 \x01(\x0e2%.elitea.runtime.v1.WorkerEgressModeV1R\x04mode\x12\x14\n" +
-	"\x05allow\x18\x02 \x03(\tR\x05allowJ\x04\b\x03\x10\v\"\xfc\x01\n" +
+	"\x05allow\x18\x02 \x03(\tR\x05allowJ\x04\b\x03\x10\v\"\x82\x02\n" +
 	"\x18WorkerDelegationPolicyV1\x12\x1b\n" +
 	"\tmax_depth\x18\x01 \x01(\rR\bmaxDepth\x12=\n" +
 	"\x04mode\x18\x02 \x01(\x0e2).elitea.runtime.v1.WorkerDelegationModeV1R\x04mode\x12*\n" +
 	"\x11root_data_classes\x18\x03 \x03(\tR\x0frootDataClasses\x12R\n" +
-	"\x0fprincipal_bound\x18\v \x01(\v2).elitea.runtime.v1.WorkerPrincipalBoundV1R\x0eprincipalBoundJ\x04\b\f\x10\x15\"\x8f\x02\n" +
+	"\x0fprincipal_bound\x18\v \x01(\v2).elitea.runtime.v1.WorkerPrincipalBoundV1R\x0eprincipalBoundJ\x04\b\x04\x10\vJ\x04\b\f\x10\x15\"\x8f\x02\n" +
 	"\x16WorkerPrincipalBoundV1\x12\x18\n" +
 	"\abounded\x18\x01 \x01(\bR\abounded\x12G\n" +
 	"\btoolkits\x18\x02 \x03(\v2+.elitea.runtime.v1.WorkerPrincipalToolkitV1R\btoolkits\x12/\n" +
