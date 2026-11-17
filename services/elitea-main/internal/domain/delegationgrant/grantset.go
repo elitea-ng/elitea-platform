@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -191,8 +193,9 @@ func ParseGrantSet(raw []byte) (GrantSet, error) {
 	if wire.Schema != Schema {
 		return GrantSet{}, fmt.Errorf("%w: schema %q", ErrMalformedSet, wire.Schema)
 	}
-	if len(wire.Toolkits) > MaxToolkits || len(wire.EgressHosts) > MaxHosts || len(wire.DataClasses) > MaxClasses {
-		return GrantSet{}, fmt.Errorf("%w: past the bounds", ErrMalformedSet)
+	// Exactly one JSON value: trailing text is not a grant set.
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return GrantSet{}, fmt.Errorf("%w: trailing data", ErrMalformedSet)
 	}
 	set := GrantSet{DataClasses: wire.DataClasses, EgressHosts: wire.EgressHosts}
 	for _, toolkit := range wire.Toolkits {
@@ -202,29 +205,70 @@ func ParseGrantSet(raw []byte) (GrantSet, error) {
 		}
 		set.Toolkits = append(set.Toolkits, grant)
 	}
+	if err := set.Validate(); err != nil {
+		return GrantSet{}, err
+	}
 	return set.Normalize(), nil
 }
 
 func parseToolkit(toolkit wireTool) (ToolkitGrant, error) {
-	if len(toolkit.Tools) != 1 || !validToolkitKey(toolkit.Key) {
+	if len(toolkit.Tools) != 1 {
 		return ToolkitGrant{}, fmt.Errorf("%w: toolkit %q", ErrMalformedSet, toolkit.Key)
 	}
 	grant := ToolkitGrant{Key: toolkit.Key}
 	for mode, names := range toolkit.Tools {
-		switch ToolMode(mode) {
-		case ToolsAllExcept, ToolsOnly:
-			grant.Tools = Tools{Mode: ToolMode(mode), Names: names}
-		default:
-			return ToolkitGrant{}, fmt.Errorf("%w: toolkit %q tool mode %q", ErrMalformedSet, toolkit.Key, mode)
+		if names == nil { // the worker requires an array, never null
+			return ToolkitGrant{}, fmt.Errorf("%w: toolkit %q tools are not a list", ErrMalformedSet, toolkit.Key)
 		}
-	}
-	if len(grant.Tools.Names) > MaxToolNames {
-		return ToolkitGrant{}, fmt.Errorf("%w: toolkit %q has too many tools", ErrMalformedSet, toolkit.Key)
+		grant.Tools = Tools{Mode: ToolMode(mode), Names: names}
 	}
 	if toolkit.Credential != nil {
+		if *toolkit.Credential == "" { // no credential is null, never ""
+			return ToolkitGrant{}, fmt.Errorf("%w: toolkit %q has an empty credential", ErrMalformedSet, toolkit.Key)
+		}
 		grant.Credential = *toolkit.Credential
 	}
 	return grant, nil
+}
+
+var dataClassPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
+
+// Validate refuses a set the worker could not read whole: a toolkit key that
+// is neither "toolkit:<id>" nor "builtin:<type>", an unknown tool mode, an
+// empty name, a data class outside the registry's grammar, or a count past
+// the bounds. Everything Main stores or digests passes through it, so Main
+// never pins a digest the worker cannot reproduce.
+func (s GrantSet) Validate() error {
+	if len(s.Toolkits) > MaxToolkits || len(s.EgressHosts) > MaxHosts || len(s.DataClasses) > MaxClasses {
+		return fmt.Errorf("%w: past the bounds", ErrMalformedSet)
+	}
+	for _, toolkit := range s.Toolkits {
+		if !validToolkitKey(toolkit.Key) {
+			return fmt.Errorf("%w: toolkit key %q", ErrMalformedSet, toolkit.Key)
+		}
+		if toolkit.Tools.Mode != ToolsAllExcept && toolkit.Tools.Mode != ToolsOnly {
+			return fmt.Errorf("%w: toolkit %q tool mode %q", ErrMalformedSet, toolkit.Key, toolkit.Tools.Mode)
+		}
+		if len(toolkit.Tools.Names) > MaxToolNames {
+			return fmt.Errorf("%w: toolkit %q has too many tools", ErrMalformedSet, toolkit.Key)
+		}
+		for _, name := range toolkit.Tools.Names {
+			if name == "" {
+				return fmt.Errorf("%w: toolkit %q lists an empty tool name", ErrMalformedSet, toolkit.Key)
+			}
+		}
+	}
+	for _, class := range s.DataClasses {
+		if !dataClassPattern.MatchString(class) {
+			return fmt.Errorf("%w: data class %q", ErrMalformedSet, class)
+		}
+	}
+	for _, host := range s.EgressHosts {
+		if host == "" {
+			return fmt.Errorf("%w: an empty egress host", ErrMalformedSet)
+		}
+	}
+	return nil
 }
 
 func validToolkitKey(key string) bool {

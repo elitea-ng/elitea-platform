@@ -2,6 +2,7 @@ package delegationgrant
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -172,12 +173,27 @@ type Access interface {
 // without it.
 //
 // A toolkit the approver does not hold, or whose credential reference they do
-// not hold, leaves with its tools. Data classes and egress hosts need no
-// holder: they are project bounds, not things an approver holds.
+// not hold, leaves with its tools. Egress hosts need no holder: they are project bounds, not things an
+// approver holds. Data classes are always kept (see below).
 func Approvable(requested GrantSet, choose []Item, access Access) (approved GrantSet, omitted []Item, err error) {
-	keep := requested.Items()
+	if access == nil {
+		return GrantSet{}, nil, fmt.Errorf("%w: the approver's access is required", ErrInvalid)
+	}
+	if err := requested.Validate(); err != nil {
+		return GrantSet{}, nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	all := requested.Items()
+	keep := all
 	if choose != nil {
-		keep = intersectItems(keep, choose)
+		keep = intersectItems(all, choose)
+		// Data classes are never left out: a set with no data class imposes
+		// none (the worker's None), so dropping one would widen the grant
+		// where the approver meant to narrow it.
+		for _, item := range all {
+			if item.Kind == ItemDataClass {
+				keep = append(keep, item)
+			}
+		}
 	}
 	held := keep[:0:0]
 	for _, item := range keep {

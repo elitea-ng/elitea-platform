@@ -73,6 +73,21 @@ func (in ProposeInput) validate() error {
 	case in.Governed && in.ProposedBy == nil:
 		return fmt.Errorf("%w: a governed grant needs a proposer", dg.ErrInvalid)
 	}
+	if err := in.Requested.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", dg.ErrInvalid, err)
+	}
+	return nil
+}
+
+// lockEdge serialises the writers of one edge for the transaction. FOR UPDATE
+// on the edge's row locks nothing when the edge has no row yet, so two
+// concurrent proposals would both miss and one would fail on the unique
+// index; the advisory lock makes the second wait and then find the first.
+func lockEdge(ctx context.Context, tx pgx.Tx, schema string, edge dg.Edge) error {
+	key := fmt.Sprintf("%s/%d/%d/%s", schema, edge.CallerEntityID, edge.CalleeEntityID, edge.Kind)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
+		return fmt.Errorf("delegation grants: lock the edge: %w", err)
+	}
 	return nil
 }
 
@@ -90,12 +105,16 @@ func (s *DelegationGrants) Propose(ctx context.Context, in ProposeInput) (dg.Gra
 	}
 	var out dg.Grant
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := lockEdge(ctx, tx, schema, in.Edge); err != nil {
+			return err
+		}
 		existing, found, err := activeForEdge(ctx, tx, schema, in.Edge, true)
 		if err != nil {
 			return err
 		}
 		if found {
-			if existing.State == dg.StatePending && existing.RequestedDigest == in.Requested.Digest() {
+			if existing.State == dg.StatePending && existing.RequestedDigest == in.Requested.Digest() &&
+				existing.Governed == in.Governed && sameUser(existing.ProposedBy, in.ProposedBy) {
 				out = existing
 				return nil
 			}
@@ -116,6 +135,9 @@ func (s *DelegationGrants) Propose(ctx context.Context, in ProposeInput) (dg.Gra
 // lists only the chosen items the approver holds access to, the rest is
 // recorded as omitted. A governed grant refuses its own proposer.
 func (s *DelegationGrants) Approve(ctx context.Context, projectID, id, approver int64, choose []dg.Item, access dg.Access) (dg.Grant, error) {
+	if approver <= 0 || access == nil {
+		return dg.Grant{}, fmt.Errorf("%w: an approver and their access are required", dg.ErrInvalid)
+	}
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {
 		return dg.Grant{}, err
@@ -126,7 +148,7 @@ func (s *DelegationGrants) Approve(ctx context.Context, projectID, id, approver 
 		if err != nil {
 			return err
 		}
-		if grant.State != dg.StatePending {
+		if !dg.CanTransition(grant.State, dg.StateApproved) || grant.State != dg.StatePending {
 			return dg.ErrWrongState
 		}
 		if err := dg.CheckApprover(grant.Governed, grant.ProposedBy, approver); err != nil {
@@ -178,6 +200,15 @@ type ReapproveInput struct {
 // Reapprove supersedes the grant and records a new approved grant for the same
 // edge in one transaction.
 func (s *DelegationGrants) Reapprove(ctx context.Context, in ReapproveInput) (dg.Grant, error) {
+	switch {
+	case in.ApprovedBy <= 0 || in.Access == nil:
+		return dg.Grant{}, fmt.Errorf("%w: an approver and their access are required", dg.ErrInvalid)
+	case in.CalleeVersionID <= 0 || !in.Origin.Valid():
+		return dg.Grant{}, fmt.Errorf("%w: a callee version and an origin are required", dg.ErrInvalid)
+	}
+	if err := in.Requested.Validate(); err != nil {
+		return dg.Grant{}, fmt.Errorf("%w: %v", dg.ErrInvalid, err)
+	}
 	schema, err := tenantSchema(strconv.FormatInt(in.ProjectID, 10))
 	if err != nil {
 		return dg.Grant{}, err
@@ -190,6 +221,12 @@ func (s *DelegationGrants) Reapprove(ctx context.Context, in ReapproveInput) (dg
 		}
 		if old.State != dg.StateApproved && old.State != dg.StateStale {
 			return dg.ErrWrongState
+		}
+		// A governed edge stays governed: the caller cannot drop the flag
+		// to approve its own re-grant.
+		in.Governed = in.Governed || old.Governed
+		if in.Governed && in.ProposedBy == nil {
+			return fmt.Errorf("%w: a governed re-approval needs a proposer", dg.ErrInvalid)
 		}
 		if err := dg.CheckApprover(in.Governed, in.ProposedBy, in.ApprovedBy); err != nil {
 			return err
@@ -268,17 +305,61 @@ UPDATE %s.delegation_grants SET state = 'revoked', revoked_by = $2, revoked_at =
 // RevokeEdge revokes the active grant of an edge, if any (a detach). It
 // reports whether one was revoked.
 func (s *DelegationGrants) RevokeEdge(ctx context.Context, projectID int64, edge dg.Edge, actor int64) (bool, error) {
-	grant, found, err := s.ActiveForEdge(ctx, projectID, edge)
-	if err != nil || !found {
-		return false, err
-	}
-	if _, err := s.Revoke(ctx, projectID, grant.ID, actor); err != nil {
-		if errors.Is(err, dg.ErrWrongState) {
-			return false, nil // a concurrent revoke won
+	// A re-approval can supersede the grant between the read and the revoke
+	// (the edge then has a NEW active grant): read the edge again and revoke
+	// that one, so a detach never leaves an approved grant behind.
+	for range 3 {
+		grant, found, err := s.ActiveForEdge(ctx, projectID, edge)
+		if err != nil || !found {
+			return false, err
 		}
-		return false, err
+		_, err = s.Revoke(ctx, projectID, grant.ID, actor)
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, dg.ErrWrongState) {
+			return false, err
+		}
 	}
-	return true, nil
+	return false, dg.ErrWrongState
+}
+
+// MarkCurrent moves a stale grant back to approved when the callee's current
+// digest is the one the grant recorded again (the drift was undone). It
+// reports whether the state changed.
+func (s *DelegationGrants) MarkCurrent(ctx context.Context, projectID, id int64, currentDigest string) (dg.Grant, bool, error) {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return dg.Grant{}, false, err
+	}
+	var out dg.Grant
+	changed := false
+	err = s.inTx(ctx, func(tx pgx.Tx) error {
+		grant, err := lockGrant(ctx, tx, schema, projectID, id)
+		if err != nil {
+			return err
+		}
+		out = grant
+		if grant.State != dg.StateStale || grant.Stale(currentDigest) || !dg.CanTransition(grant.State, dg.StateApproved) {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.delegation_grants SET state = 'approved', updated_at = clock_timestamp() WHERE id = $1`, schema), id); err != nil {
+			return mapDelegationGrantError(err)
+		}
+		if out, err = readGrant(ctx, tx, schema, id); err != nil {
+			return err
+		}
+		changed = true
+		return s.append(ctx, tx, grantEvent(out, dg.ActionApproved, 0, "callee_restored"))
+	})
+	return out, changed, err
+}
+
+func sameUser(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // MarkStale moves an approved grant to stale when the callee's current digest
@@ -298,7 +379,7 @@ func (s *DelegationGrants) MarkStale(ctx context.Context, projectID, id int64, c
 			return err
 		}
 		out = grant
-		if grant.State != dg.StateApproved || !grant.Stale(currentDigest) {
+		if !dg.CanTransition(grant.State, dg.StateStale) || grant.State != dg.StateApproved || !grant.Stale(currentDigest) {
 			return nil
 		}
 		if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.delegation_grants SET state = 'stale', updated_at = clock_timestamp() WHERE id = $1`, schema), id); err != nil {
@@ -481,6 +562,11 @@ func scanDelegationGrant(row pgx.Row) (dg.Grant, error) {
 	}
 	if g.GrantSet, err = dg.ParseGrantSet(approved); err != nil {
 		return dg.Grant{}, err
+	}
+	// The digest columns are the digests of the stored sets: a row edited by
+	// hand, or written by a path that forgot one, must not reach the worker.
+	if g.RequestedSet.Digest() != g.RequestedDigest || g.GrantSet.Digest() != g.Digest {
+		return dg.Grant{}, fmt.Errorf("delegation grants: grant %d: a digest column does not match its set", g.ID)
 	}
 	g.Omitted = []dg.Item{}
 	if err := json.Unmarshal(omitted, &g.Omitted); err != nil {

@@ -323,6 +323,8 @@ fn a_grant_set_that_is_not_canonical_is_refused() {
         json!({"schema": schema, "toolkits": [{"key": "jira", "tools": {"only": []}, "credential": null}], "data_classes": null, "egress_hosts": []}),
         json!({"schema": schema, "toolkits": [{"key": "toolkit:1", "tools": {"some": []}, "credential": null}], "data_classes": null, "egress_hosts": []}),
         json!({"schema": schema, "toolkits": [{"key": "toolkit:1", "tools": {"only": [1]}, "credential": null}], "data_classes": null, "egress_hosts": []}),
+        json!({"schema": schema, "toolkits": [{"key": "toolkit:1", "tools": {"only": []}, "credential": ""}], "data_classes": null, "egress_hosts": []}),
+        json!({"schema": schema, "toolkits": [{"key": "toolkit:1", "tools": {"only": null}, "credential": null}], "data_classes": null, "egress_hosts": []}),
         json!({"schema": schema, "toolkits": [], "data_classes": ["Bad Class"], "egress_hosts": []}),
         json!({"schema": schema, "toolkits": [], "data_classes": null}),
     ] {

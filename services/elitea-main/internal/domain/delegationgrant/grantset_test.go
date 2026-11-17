@@ -179,11 +179,15 @@ func TestApprovableHonoursTheChosenItems(t *testing.T) {
 
 func TestParseGrantSetRefusesWhatTheWorkerCouldNotRead(t *testing.T) {
 	for name, doc := range map[string]string{
-		"not json":          `x`,
-		"a wrong schema":    `{"schema":"x","toolkits":[],"data_classes":null,"egress_hosts":[]}`,
-		"a bad key":         `{"schema":"elitea.delegation.grants.v1","toolkits":[{"key":"jira","tools":{"only":[]},"credential":null}],"data_classes":null,"egress_hosts":[]}`,
-		"a bad mode":        `{"schema":"elitea.delegation.grants.v1","toolkits":[{"key":"toolkit:1","tools":{"some":[]},"credential":null}],"data_classes":null,"egress_hosts":[]}`,
-		"an unknown member": `{"schema":"elitea.delegation.grants.v1","toolkits":[],"data_classes":null,"egress_hosts":[],"x":1}`,
+		"not json":            `x`,
+		"a wrong schema":      `{"schema":"x","toolkits":[],"data_classes":null,"egress_hosts":[]}`,
+		"a bad key":           `{"schema":"elitea.delegation.grants.v1","toolkits":[{"key":"jira","tools":{"only":[]},"credential":null}],"data_classes":null,"egress_hosts":[]}`,
+		"a bad mode":          `{"schema":"elitea.delegation.grants.v1","toolkits":[{"key":"toolkit:1","tools":{"some":[]},"credential":null}],"data_classes":null,"egress_hosts":[]}`,
+		"null tools":          `{"schema":"elitea.delegation.grants.v1","toolkits":[{"key":"toolkit:1","tools":{"only":null},"credential":null}],"data_classes":null,"egress_hosts":[]}`,
+		"an empty credential": `{"schema":"elitea.delegation.grants.v1","toolkits":[{"key":"toolkit:1","tools":{"only":[]},"credential":""}],"data_classes":null,"egress_hosts":[]}`,
+		"a bad data class":    `{"schema":"elitea.delegation.grants.v1","toolkits":[],"data_classes":["Bad Class"],"egress_hosts":[]}`,
+		"trailing data":       `{"schema":"elitea.delegation.grants.v1","toolkits":[],"data_classes":null,"egress_hosts":[]} x`,
+		"an unknown member":   `{"schema":"elitea.delegation.grants.v1","toolkits":[],"data_classes":null,"egress_hosts":[],"x":1}`,
 	} {
 		if _, err := ParseGrantSet([]byte(doc)); !errors.Is(err, ErrMalformedSet) {
 			t.Errorf("%s: err = %v", name, err)

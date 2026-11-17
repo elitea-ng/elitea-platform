@@ -360,3 +360,113 @@ VALUES (1, $1, $2, $3, 5, '{}', repeat('a', 64), '{}', repeat('a', 64), $4, 'att
 		}
 	}
 }
+
+func TestDelegationGrantReapprovalKeepsMakerCheckerAndStaleCanRecover(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	store := newDelegationGrantStore(t, pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	edge := dg.Edge{CallerEntityID: 2, CalleeEntityID: 1, Kind: dg.EdgeSubAgent}
+	all := holdsAccess{
+		toolkits:    map[string]bool{"toolkit:11": true, "toolkit:12": true},
+		credentials: map[string]bool{"ref-git": true},
+	}
+	pending, err := store.Propose(ctx, ProposeInput{ProjectID: 1, Edge: edge, CalleeVersionID: 5, Requested: gitSet(), Origin: dg.OriginAttach, Governed: true, ProposedBy: grantUser(7)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := store.Approve(ctx, 1, pending.ID, 8, nil, all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A caller that drops the governed flag still meets maker-checker: the edge stays governed.
+	if _, err := store.Reapprove(ctx, ReapproveInput{ProjectID: 1, GrantID: approved.ID, CalleeVersionID: 6, Requested: gitSet(), Access: all, Origin: dg.OriginAttach, Governed: false, ProposedBy: grantUser(7), ApprovedBy: 7}); !errors.Is(err, dg.ErrSelfApproval) {
+		t.Fatalf("self re-approval of a governed edge: %v", err)
+	}
+	if _, err := store.Reapprove(ctx, ReapproveInput{ProjectID: 1, GrantID: approved.ID, CalleeVersionID: 6, Requested: gitSet(), Access: all, Origin: dg.OriginAttach, ApprovedBy: 9}); !errors.Is(err, dg.ErrInvalid) {
+		t.Fatalf("a governed re-approval with no proposer: %v", err)
+	}
+	if _, err := store.Reapprove(ctx, ReapproveInput{ProjectID: 1, GrantID: approved.ID, CalleeVersionID: 0, Requested: gitSet(), Access: all, Origin: dg.OriginAttach, ApprovedBy: 9}); !errors.Is(err, dg.ErrInvalid) {
+		t.Fatalf("no callee version: %v", err)
+	}
+	if _, err := store.Reapprove(ctx, ReapproveInput{ProjectID: 1, GrantID: approved.ID, CalleeVersionID: 6, Requested: gitSet(), Origin: dg.OriginAttach, ApprovedBy: 9, ProposedBy: grantUser(7)}); !errors.Is(err, dg.ErrInvalid) {
+		t.Fatalf("no access: %v", err)
+	}
+	fresh, err := store.Reapprove(ctx, ReapproveInput{ProjectID: 1, GrantID: approved.ID, CalleeVersionID: 6, Requested: gitSet(), Access: all, Origin: dg.OriginAttach, ApprovedBy: 9, ProposedBy: grantUser(7)})
+	if err != nil || !fresh.Governed {
+		t.Fatalf("a second person re-approves: %+v %v", fresh, err)
+	}
+
+	// Drift and recovery: stale, then the callee returns to the recorded set.
+	grown := gitSet()
+	grown.EgressHosts = append(grown.EgressHosts, "new.example.com")
+	if _, changed, err := store.MarkStale(ctx, 1, fresh.ID, grown.Digest()); err != nil || !changed {
+		t.Fatalf("drift: %v %v", changed, err)
+	}
+	if _, changed, err := store.MarkCurrent(ctx, 1, fresh.ID, grown.Digest()); err != nil || changed {
+		t.Fatalf("still drifted: %v %v", changed, err)
+	}
+	back, changed, err := store.MarkCurrent(ctx, 1, fresh.ID, gitSet().Digest())
+	if err != nil || !changed || back.State != dg.StateApproved {
+		t.Fatalf("recovered: %+v %v %v", back, changed, err)
+	}
+	// A detach revokes the live grant.
+	if ok, err := store.RevokeEdge(ctx, 1, edge, 9); err != nil || !ok {
+		t.Fatalf("detach: %v %v", ok, err)
+	}
+	if _, found, _ := store.ActiveForEdge(ctx, 1, edge); found {
+		t.Fatal("no active grant after a detach")
+	}
+}
+
+func TestDelegationGrantConcurrentProposalsReturnOneGrant(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	store := newDelegationGrantStore(t, pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	edge := dg.Edge{CallerEntityID: 2, CalleeEntityID: 1, Kind: dg.EdgeAgentTool}
+	const workers = 6
+	type result struct {
+		id  int64
+		err error
+	}
+	results := make(chan result, workers)
+	for range workers {
+		go func() {
+			grant, err := store.Propose(ctx, ProposeInput{ProjectID: 1, Edge: edge, CalleeVersionID: 5, Requested: gitSet(), Origin: dg.OriginAttach, ProposedBy: grantUser(7)})
+			results <- result{grant.ID, err}
+		}()
+	}
+	first := int64(0)
+	for range workers {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("a concurrent retry: %v", r.err)
+		}
+		if first == 0 {
+			first = r.id
+		} else if r.id != first {
+			t.Fatalf("two grants for one edge: %d and %d", first, r.id)
+		}
+	}
+}
+
+func TestDelegationGrantPartialApprovalKeepsDataClasses(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	store := newDelegationGrantStore(t, pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	grant, err := store.Propose(ctx, ProposeInput{ProjectID: 1, Edge: dg.Edge{CallerEntityID: 2, CalleeEntityID: 1, Kind: dg.EdgeSubAgent}, CalleeVersionID: 5, Requested: gitSet(), Origin: dg.OriginAttach, ProposedBy: grantUser(7)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The approver keeps only toolkit 12: the data class bound stays, whatever they uncheck.
+	approved, err := store.Approve(ctx, 1, grant.ID, 7, []dg.Item{{Kind: dg.ItemToolkit, Name: "toolkit:12"}},
+		holdsAccess{toolkits: map[string]bool{"toolkit:11": true, "toolkit:12": true}, credentials: map[string]bool{"ref-git": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(approved.GrantSet.DataClasses) != 1 || approved.GrantSet.DataClasses[0] != "internal" {
+		t.Fatalf("the data class bound must survive a partial approval: %+v", approved.GrantSet)
+	}
+}

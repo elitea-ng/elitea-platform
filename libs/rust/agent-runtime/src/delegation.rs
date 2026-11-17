@@ -607,7 +607,9 @@ fn canonical_toolkit(entry: &Value) -> Result<(String, ToolkitGrant), GrantSetEr
     };
     let credential = match object.get("credential") {
         Some(Value::Null) | None => None,
-        Some(Value::String(reference)) => Some(reference.clone()),
+        // No credential is null, never "": Main refuses the empty form too,
+        // so both sides digest the same document.
+        Some(Value::String(reference)) if !reference.is_empty() => Some(reference.clone()),
         Some(_) => return Err(GrantSetError),
     };
     Ok((
