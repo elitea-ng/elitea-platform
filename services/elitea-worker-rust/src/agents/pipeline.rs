@@ -2559,7 +2559,7 @@ fn composition_refusal(
     caller: &DelegationScope,
     admitted: &AdmittedSavedPipeline,
     egress: &elitea_agent_runtime::egress::RunEgress,
-    callee: Option<u64>,
+    target_id: Option<u64>,
 ) -> Result<Option<RefusedDelegation>, NativeAgentAssemblyError> {
     let mut version = admitted.version.clone();
     match super::application_tools::narrow_version(
@@ -2567,7 +2567,7 @@ fn composition_refusal(
         &mut version,
         &admitted.data_classes,
         egress,
-        callee,
+        target_id,
     )? {
         Err(refused) => Ok(Some(refused)),
         Ok(delegation) => {
