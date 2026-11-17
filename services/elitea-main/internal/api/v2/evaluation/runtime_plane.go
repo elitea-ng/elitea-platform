@@ -93,6 +93,10 @@ type AgentRunResult struct {
 	// Failure is the readable reason of a run that did not complete.
 	Failure string
 	Steps   []AgentStep
+	// GuardrailOutcomes counts the LLM gateway's guardrail verdicts recorded
+	// for the run, by outcome ("blocked", "masked", ...). Nil means the verdicts
+	// could not be read: not recorded, which is not "no events".
+	GuardrailOutcomes map[string]int
 }
 
 // Step kinds, as the run evidence records them (ADR-0042).
@@ -101,6 +105,7 @@ const (
 	StepKindToolCall   = "tool_call"
 	StepKindRetrieval  = "retrieval"
 	StepKindDelegation = "delegation"
+	StepKindApproval   = "approval"
 )
 
 // AgentStep is one step of the case's run, read from the run evidence.
@@ -117,6 +122,20 @@ type AgentStep struct {
 	InputsDigest string
 	// Output is the tool output, kept only when the suite stores them.
 	Output string
+	// Decision and GuardrailType are the summary of an approval step: the
+	// worker records every gate that asked a person to decide (decision
+	// "requested") with the gate's type. Empty for any other step.
+	Decision      string
+	GuardrailType string
+}
+
+// IsGovernanceGate reports whether the step is a sensitive-tool gate that
+// stopped the run for an approval (ADR-0040 governance, and the ADR-0043
+// quoted-data rule, which is a conditional sensitive-tool pause): an approval
+// request whose gate type is a sensitive-tool one. A connection authorization
+// or a clarifying question is not a guardrail decision.
+func (s AgentStep) IsGovernanceGate() bool {
+	return s.Kind == StepKindApproval && s.Decision == "requested" && strings.HasSuffix(s.GuardrailType, "sensitive_tool")
 }
 
 // IsToolStep reports whether the step is the agent using a tool: a tool call,
@@ -220,6 +239,9 @@ func (o *Orchestrator) runtimeCase(
 		trajectory = BuildTrajectory(result.Steps, settings.keepToolOutputs)
 	}
 	done := agentCase{evidence: evidence, trajectory: trajectory}
+	if guardrail := BuildGuardrail(result.Steps, result.GuardrailOutcomes); guardrail != nil {
+		evidence["guardrail"] = guardrail
+	}
 
 	switch {
 	case err != nil:
@@ -286,13 +308,20 @@ const maxToolOutputRunes = 1000
 // A RETRY is a tool step with the same kind, name, toolkit and arguments as an
 // earlier step of the case that ended in an error: the agent tried the same
 // call again. A different argument is a new call, not a retry.
+//
+// A REDUNDANT call is a tool step identical to an earlier step of the case
+// (same kind, toolkit, name and arguments digest) that had already SUCCEEDED:
+// the answer was in hand and the agent asked again. A repeat of a failed call
+// is a retry and is not counted twice, so retries and redundant calls never
+// overlap. DISTINCT tools are the unique (kind, toolkit, name) the case used.
 func BuildTrajectory(steps []AgentStep, keepToolOutputs bool) map[string]any {
 	type toolFigures struct {
 		name, toolkit string
 		calls, errors int
 	}
-	var steppedCount, modelCalls, toolCalls, toolErrors, retries int
+	var steppedCount, modelCalls, toolCalls, toolErrors, retries, redundant int
 	failed := map[string]bool{}
+	succeeded := map[string]bool{}
 	tools := map[string]*toolFigures{}
 	var toolOrder []string
 	items := make([]map[string]any, 0, len(steps))
@@ -316,11 +345,15 @@ func BuildTrajectory(steps []AgentStep, keepToolOutputs bool) map[string]any {
 			call := key + "\x00" + step.InputsDigest
 			if failed[call] {
 				retries++
+			} else if succeeded[call] {
+				redundant++
 			}
 			if step.Error != "" {
 				toolErrors++
 				figures.errors++
 				failed[call] = true
+			} else {
+				succeeded[call] = true
 			}
 		}
 		if len(items) < maxTrajectoryItems {
@@ -340,9 +373,45 @@ func BuildTrajectory(steps []AgentStep, keepToolOutputs bool) map[string]any {
 		"tool_calls":  toolCalls,
 		"tool_errors": toolErrors,
 		"retries":     retries,
-		"tools":       toolList,
-		"items":       items,
-		"truncated":   len(steps) > maxTrajectoryItems,
+		// Added with issue 2192; a case stored before has neither key, and the
+		// card reads that as not recorded.
+		"redundant_calls": redundant,
+		"distinct_tools":  len(toolList),
+		"tools":           toolList,
+		"items":           items,
+		"truncated":       len(steps) > maxTrajectoryItems,
+	}
+}
+
+// BuildGuardrail turns the guardrail decisions recorded for a case's run into
+// the evidence figures (`evidence.guardrail`). A guardrail EVENT is:
+//
+//   - an LLM gateway guardrail verdict (ADR-0043) whose outcome acted or
+//     warned: blocked (and error_closed, a fail-closed detector that stopped
+//     the request), masked, warned or flagged. A pass, and a failure under fail
+//     mode open, changed nothing and are not events;
+//   - a governance gate (ADR-0040/0043): a sensitive-tool approval request,
+//     which is also what the quoted-data rule raises.
+//
+// A nil outcomes map means the verdicts could not be read, and the figures are
+// absent (nil), not zero. Steps may be empty when the step record is not
+// composed; the gate count is then 0 and the verdict counts still stand.
+func BuildGuardrail(steps []AgentStep, outcomes map[string]int) map[string]any {
+	if outcomes == nil {
+		return nil
+	}
+	gated := 0
+	for _, step := range steps {
+		if step.IsGovernanceGate() {
+			gated++
+		}
+	}
+	blocked := outcomes["blocked"] + outcomes["error_closed"]
+	masked := outcomes["masked"]
+	warned := outcomes["warned"] + outcomes["flagged"]
+	return map[string]any{
+		"events":  blocked + masked + warned + gated,
+		"blocked": blocked, "masked": masked, "warned": warned, "gated": gated,
 	}
 }
 

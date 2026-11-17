@@ -157,6 +157,15 @@ The model calls of an agent run count toward the run's token and cost limits and
 
 The **Trajectory** card (agent runs only) is built from the per-step run evidence: **Steps per case** at p50 and p95, the total **Tool calls**, **Tool errors** and **Retries** (a tool call repeated with the same arguments after one that failed), and for each case its steps, tool calls, errors and retries with the list of its steps. The **Efficiency** card adds tool calls per case, tool errors and retries. A case that recorded no steps (for example it never started) is left out of the figures, and the card says how many cases it measured; it is never counted as zero steps.
 
+The Trajectory card also shows four counters, each with its value per case in the case's row:
+
+- **Distinct tools**: the unique tools a case used (the same toolkit and name counts once, however often it was called), as the mean per case and the number of unique tools used across the run.
+- **Redundant calls**: tool calls that repeat an earlier call of the same case with the same toolkit, tool name and arguments, when that earlier call had already succeeded, with their share of all tool calls. A repeat of a call that failed is a **Retry**, not a redundant call, so the two never count the same call. Arguments are compared by the digest of their canonical JSON recorded in the run evidence.
+- **Guardrail events**: what the guardrails did during the case's run: LLM gateway guardrail verdicts that blocked a request (including a fail-closed detector that could not run), masked part of it, or warned or flagged it, plus governance gates, meaning approval requests for a sensitive tool (this is also what the quoted-data rule raises). A verdict that passed, or a detector that failed open, is not an event. An evaluation run answers no approvals, so a gate also ends the case with an error that says so. The card breaks a case's events down as blocked, masked, warned and held for approval. Only the first 1000 verdicts of a run are counted, and a verdict the gateway had not yet written when the case settled is missed.
+- **Step limit hit**: how many cases ended because the suite's step limit was reached and not because the agent finished, out of all cases; those cases are marked **ended at the step limit**.
+
+A counter reads **not recorded** for a run stored before these counters existed, or when the guardrail verdicts could not be read; it is never shown as 0.
+
 ### Enhance with AI
 
 When a finished run missed a target, the scorecard offers **Enhance with AI** (it needs the permission to start runs). The model reads the agent version the run scored and the results that missed, with the outputs and the judge's rationale, and proposes up to three kinds of fix, which you review one step at a time:

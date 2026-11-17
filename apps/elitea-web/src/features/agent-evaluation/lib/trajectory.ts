@@ -30,6 +30,19 @@ interface ToolFigures {
   readonly errors: number;
 }
 
+/**
+ * What the guardrails did to one case's run (`evidence.guardrail`, issue 2192):
+ * LLM gateway verdicts that blocked, masked or warned, and governance gates
+ * (sensitive-tool approval requests). Absent when the verdicts were not read.
+ */
+export interface CaseGuardrail {
+  readonly events: number;
+  readonly blocked: number;
+  readonly masked: number;
+  readonly warned: number;
+  readonly gated: number;
+}
+
 export interface CaseTrajectory {
   readonly caseId: string;
   /** What the case asked, for a row label. */
@@ -39,6 +52,11 @@ export interface CaseTrajectory {
   readonly toolCalls: number;
   readonly toolErrors: number;
   readonly retries: number;
+  /** Unique tools the case used; `undefined` for a case stored before issue 2192. */
+  readonly distinctTools: number | undefined;
+  /** Repeats of an identical, already successful call; `undefined` as above. */
+  readonly redundantCalls: number | undefined;
+  readonly guardrail: CaseGuardrail | undefined;
   readonly tools: readonly ToolFigures[];
   readonly items: readonly TrajectoryItem[];
   /** True when the step list was cut; the counts still cover every step. */
@@ -49,6 +67,19 @@ export interface CaseTrajectory {
 
 export interface TrajectorySummary {
   readonly cases: readonly CaseTrajectory[];
+  /** Mean of the distinct tools per case, over the cases that recorded it. */
+  readonly distinctToolsPerCase: number | undefined;
+  /** Unique tools used by any case of the run. */
+  readonly distinctToolsInRun: number | undefined;
+  readonly redundantCalls: number | undefined;
+  /** Redundant calls over the tool calls of the cases that recorded them (0..1). */
+  readonly redundantShare: number | undefined;
+  /** Guardrail events over the cases whose verdicts were read; `undefined` when none were. */
+  readonly guardrailEvents: number | undefined;
+  readonly guardrailCases: number;
+  /** Cases that ended at the step limit, of every case of the run. */
+  readonly stepLimitCases: number;
+  readonly stepLimitCaseIds: readonly string[];
   readonly totalCases: number;
   readonly stepsP50: number | undefined;
   readonly stepsP95: number | undefined;
@@ -69,6 +100,19 @@ function count(record: Record<string, unknown>, key: string): number | undefined
 function text(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+function parseGuardrail(raw: unknown): CaseGuardrail | undefined {
+  if (!isRecord(raw)) return undefined;
+  const events = count(raw, 'events');
+  if (events === undefined) return undefined;
+  return {
+    events,
+    blocked: count(raw, 'blocked') ?? 0,
+    masked: count(raw, 'masked') ?? 0,
+    warned: count(raw, 'warned') ?? 0,
+    gated: count(raw, 'gated') ?? 0,
+  };
 }
 
 function parseItem(raw: unknown): TrajectoryItem | undefined {
@@ -102,6 +146,19 @@ function list<T>(raw: unknown, parse: (entry: unknown) => T | undefined): T[] {
   });
 }
 
+type CaseCounts = Pick<CaseTrajectory, 'modelCalls' | 'toolCalls' | 'toolErrors' | 'retries' | 'distinctTools' | 'redundantCalls'>;
+
+function parseCounts(raw: Record<string, unknown>): CaseCounts {
+  return {
+    modelCalls: count(raw, 'model_calls') ?? 0,
+    toolCalls: count(raw, 'tool_calls') ?? 0,
+    toolErrors: count(raw, 'tool_errors') ?? 0,
+    retries: count(raw, 'retries') ?? 0,
+    distinctTools: count(raw, 'distinct_tools'),
+    redundantCalls: count(raw, 'redundant_calls'),
+  };
+}
+
 /** One case's trajectory from a result's evidence, or `undefined` when it has none. */
 function parseCase(result: EvalRunResult): CaseTrajectory | undefined {
   const evidence: Record<string, unknown> | undefined = result.evidence;
@@ -114,10 +171,8 @@ function parseCase(result: EvalRunResult): CaseTrajectory | undefined {
     caseId: result.dataset_case_id,
     input: typeof input === 'string' ? input : undefined,
     steps,
-    modelCalls: count(raw, 'model_calls') ?? 0,
-    toolCalls: count(raw, 'tool_calls') ?? 0,
-    toolErrors: count(raw, 'tool_errors') ?? 0,
-    retries: count(raw, 'retries') ?? 0,
+    ...parseCounts(raw),
+    guardrail: parseGuardrail(evidence?.['guardrail']),
     tools: list(raw['tools'], parseTool),
     items: list(raw['items'], parseItem),
     truncated: raw['truncated'] === true,
@@ -126,23 +181,67 @@ function parseCase(result: EvalRunResult): CaseTrajectory | undefined {
   };
 }
 
+function sumOf(values: readonly (number | undefined)[]): number | undefined {
+  const known = values.filter((value): value is number => value !== undefined);
+  return known.length === 0 ? undefined : known.reduce((total, value) => total + value, 0);
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function distinctToolsFigures(measured: readonly CaseTrajectory[]): { perCase: number | undefined; inRun: number | undefined } {
+  const withTools = measured.filter((entry) => entry.distinctTools !== undefined);
+  if (withTools.length === 0) return { perCase: undefined, inRun: undefined };
+  const total = sumOf(withTools.map((entry) => entry.distinctTools)) ?? 0;
+  const union = new Set(withTools.flatMap((entry) => entry.tools.map((tool) => `${tool.toolkitId ?? ''}\u0000${tool.name}`)));
+  return { perCase: round1(total / withTools.length), inRun: union.size };
+}
+
+function redundantFigures(measured: readonly CaseTrajectory[]): { count: number | undefined; share: number | undefined } {
+  const withFigure = measured.filter((entry) => entry.redundantCalls !== undefined);
+  const redundant = sumOf(withFigure.map((entry) => entry.redundantCalls));
+  const calls = withFigure.reduce((total, entry) => total + entry.toolCalls, 0);
+  return { count: redundant, share: redundant === undefined || calls === 0 ? undefined : redundant / calls };
+}
+
+interface SeenCases {
+  readonly caseIds: Set<string>;
+  readonly cases: Map<string, CaseTrajectory>;
+  readonly stepLimit: Set<string>;
+  readonly guardrails: Map<string, CaseGuardrail>;
+}
+
+/** Collapses the rows of each case: its facts are on every row, its trajectory on one. */
+function collectCases(results: readonly EvalRunResult[]): SeenCases {
+  const seen: SeenCases = { caseIds: new Set(), cases: new Map(), stepLimit: new Set(), guardrails: new Map() };
+  for (const result of results) {
+    const id = result.dataset_case_id;
+    seen.caseIds.add(id);
+    const evidence: Record<string, unknown> | undefined = result.evidence;
+    if (evidence?.['agent_step_limit'] === true) seen.stepLimit.add(id);
+    const guardrail = seen.guardrails.has(id) ? undefined : parseGuardrail(evidence?.['guardrail']);
+    if (guardrail !== undefined) seen.guardrails.set(id, guardrail);
+    const parsed = seen.cases.has(id) ? undefined : parseCase(result);
+    if (parsed !== undefined) seen.cases.set(id, parsed);
+  }
+  return seen;
+}
+
 /**
  * The trajectories of a run's cases, one per case (its facts are stored on every
  * result row of the case, so rows collapse by case id), or `undefined` when no
- * case has one.
+ * case has one. The step-limit flag and the guardrail figures are read from
+ * every case, whether or not it recorded steps: a run blocked at its first
+ * request has no steps and still has a guardrail event.
  */
 export function summarizeTrajectory(results: readonly EvalRunResult[]): TrajectorySummary | undefined {
-  const caseIds = new Set<string>();
-  const cases = new Map<string, CaseTrajectory>();
-  for (const result of results) {
-    caseIds.add(result.dataset_case_id);
-    if (cases.has(result.dataset_case_id)) continue;
-    const parsed = parseCase(result);
-    if (parsed !== undefined) cases.set(result.dataset_case_id, parsed);
-  }
-  if (cases.size === 0) return undefined;
+  const { caseIds, cases, stepLimit, guardrails } = collectCases(results);
+  if (cases.size === 0 && stepLimit.size === 0 && guardrails.size === 0) return undefined;
   const measured = [...cases.values()];
   const steps = measured.map((entry) => entry.steps);
+  const tools = distinctToolsFigures(measured);
+  const redundant = redundantFigures(measured);
   return {
     cases: measured,
     totalCases: caseIds.size,
@@ -151,5 +250,13 @@ export function summarizeTrajectory(results: readonly EvalRunResult[]): Trajecto
     toolCalls: measured.reduce((total, entry) => total + entry.toolCalls, 0),
     toolErrors: measured.reduce((total, entry) => total + entry.toolErrors, 0),
     retries: measured.reduce((total, entry) => total + entry.retries, 0),
+    distinctToolsPerCase: tools.perCase,
+    distinctToolsInRun: tools.inRun,
+    redundantCalls: redundant.count,
+    redundantShare: redundant.share,
+    guardrailEvents: sumOf([...guardrails.values()].map((entry) => entry.events)),
+    guardrailCases: guardrails.size,
+    stepLimitCases: stepLimit.size,
+    stepLimitCaseIds: [...stepLimit],
   };
 }

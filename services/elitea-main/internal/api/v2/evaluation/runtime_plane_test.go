@@ -91,7 +91,7 @@ func TestRuntimePlaneRunsCasesThroughTheRunnerNotTheCompleter(t *testing.T) {
 			{Seq: 1, Kind: StepKindModelCall, DurationMs: 40},
 			{Seq: 2, Kind: StepKindToolCall, Name: "search", ToolkitID: "wiki", DurationMs: 90, Output: "result text"},
 			{Seq: 3, Kind: StepKindModelCall, DurationMs: 30},
-		}},
+		}, GuardrailOutcomes: map[string]int{"masked": 1, "pass": 4}},
 	}}
 	completer := &stubCompleter{answer: "must not be used"}
 	judge := &scriptedJudge{answers: []JudgeVerdict{{Score: 5}, {Score: 3}}}
@@ -132,6 +132,19 @@ func TestRuntimePlaneRunsCasesThroughTheRunnerNotTheCompleter(t *testing.T) {
 		trajectory := trajectoryOf(t, result)
 		if trajectory["steps"] != 3 || trajectory["tool_calls"] != 1 || trajectory["model_calls"] != 2 {
 			t.Errorf("trajectory counts = %v", trajectory)
+		}
+		if trajectory["distinct_tools"] != 1 || trajectory["redundant_calls"] != 0 {
+			t.Errorf("distinct tools / redundant calls = %v / %v", trajectory["distinct_tools"], trajectory["redundant_calls"])
+		}
+		guardrail, _ := result.Evidence["guardrail"].(map[string]any)
+		if guardrail["events"] != 1 || guardrail["masked"] != 1 {
+			t.Errorf("guardrail evidence = %v", result.Evidence["guardrail"])
+		}
+	}
+	// A case whose verdicts were not read has no guardrail figures, which is not zero.
+	for _, result := range repo.storedResults() {
+		if result.DatasetCaseID == "12" && result.Evidence["guardrail"] != nil {
+			t.Errorf("a case whose verdicts were not read has guardrail figures: %v", result.Evidence["guardrail"])
 		}
 	}
 }
@@ -552,5 +565,58 @@ func TestRuntimePlaneWithoutAnAuthorErrorsTheRunOnce(t *testing.T) {
 	}
 	if len(runner.requests) != 0 {
 		t.Fatalf("the runner was called %d times for a run with no author", len(runner.requests))
+	}
+}
+
+// Issue 2192: distinct tools, redundant calls and guardrail events.
+func TestBuildTrajectoryCountsDistinctToolsAndRedundantCalls(t *testing.T) {
+	t.Parallel()
+
+	steps := []AgentStep{
+		{Seq: 1, Kind: StepKindToolCall, Name: "fetch", ToolkitID: "web", InputsDigest: "a"},
+		{Seq: 2, Kind: StepKindToolCall, Name: "fetch", ToolkitID: "web", InputsDigest: "a"},   // redundant: the first succeeded
+		{Seq: 3, Kind: StepKindToolCall, Name: "fetch", ToolkitID: "web", InputsDigest: "b"},   // other arguments: new call
+		{Seq: 4, Kind: StepKindToolCall, Name: "fetch", ToolkitID: "other", InputsDigest: "a"}, // other toolkit: other tool
+		{Seq: 5, Kind: StepKindToolCall, Name: "list", ToolkitID: "web", Error: "boom"},        // fails with no arguments
+		{Seq: 6, Kind: StepKindToolCall, Name: "list", ToolkitID: "web", Error: "boom"},        // a retry, not redundant
+		{Seq: 7, Kind: StepKindToolCall, Name: "fetch", ToolkitID: "web", InputsDigest: "a"},   // redundant again
+		{Seq: 8, Kind: StepKindModelCall, Name: "m"},
+		{Seq: 9, Kind: StepKindModelCall, Name: "m"}, // model calls are not tool calls
+	}
+
+	got := BuildTrajectory(steps, false)
+
+	if got["distinct_tools"] != 3 || got["redundant_calls"] != 2 || got["retries"] != 1 || got["tool_calls"] != 7 {
+		t.Errorf("distinct %v redundant %v retries %v tool_calls %v", got["distinct_tools"], got["redundant_calls"], got["retries"], got["tool_calls"])
+	}
+	none := BuildTrajectory([]AgentStep{{Seq: 1, Kind: StepKindModelCall}}, false)
+	if none["distinct_tools"] != 0 || none["redundant_calls"] != 0 {
+		t.Errorf("a case with no tool calls has none: %v", none)
+	}
+}
+
+func TestBuildGuardrailCountsActingVerdictsAndGates(t *testing.T) {
+	t.Parallel()
+
+	steps := []AgentStep{
+		{Kind: StepKindApproval, Decision: "requested", GuardrailType: "sensitive_tool"},
+		{Kind: StepKindApproval, Decision: "requested", GuardrailType: "application_sensitive_tool"},
+		{Kind: StepKindApproval, Decision: "requested", GuardrailType: "mcp_auth"},
+		{Kind: StepKindApproval, Decision: "approve", GuardrailType: "sensitive_tool"},
+		{Kind: StepKindToolCall, Name: "t"},
+	}
+	got := BuildGuardrail(steps, map[string]int{"blocked": 1, "error_closed": 1, "masked": 2, "warned": 1, "flagged": 1, "pass": 9, "error_open": 3})
+
+	want := map[string]any{"events": 8, "blocked": 2, "masked": 2, "warned": 2, "gated": 2}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("%s = %v, want %v (%v)", key, got[key], value, got)
+		}
+	}
+	if BuildGuardrail(steps, nil) != nil {
+		t.Error("unread verdicts must give no figures, not zeros")
+	}
+	if zero := BuildGuardrail(nil, map[string]int{}); zero["events"] != 0 {
+		t.Errorf("a read that found nothing is zero events: %v", zero)
 	}
 }
