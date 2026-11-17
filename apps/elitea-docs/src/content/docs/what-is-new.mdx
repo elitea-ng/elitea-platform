@@ -9,6 +9,10 @@ Elitea ships frequent, small releases. This page summarizes the most recent user
 
 When an agent you attached gains a toolkit, a tool, a credential or a host after you approved it, the delegation grant is marked stale and the calling agent's owners and editors get one notification. The agent keeps running with what you approved; re-approve to give it the new items. Marketplace upgrades list every internal agent that would hold more, need a person's approval when one does, and re-approve those edges when approved. See [When the attached agent changes](/admin/enterprise-controls/least-privilege-and-trust#when-the-attached-agent-changes).
 
+## Run the code sandbox with Docker Compose, proven in CI
+
+A single-host Compose deployment can now run the code sandbox with two overlays and one script: `docker-compose.sandbox.yml` (it now also passes the served languages to Main), `docker-compose.sandbox-postgres-tls.yml` (TLS for the supervisor's receipt ledger) and `deploy/scripts/sandbox-compose-material.sh` (profiles, certificates and the worker's `sandbox_runtimes`). A new CI job runs an agent with **Python sandbox** on and checks that `run_code` returns the program's own output on the real sandbox. See [Run the code sandbox with Docker Compose](/deployment/configuration#run-the-code-sandbox-with-docker-compose). Set `ELITEA_CODE_SANDBOX_LANGUAGES` to the languages you serve (the script prints it).
+
 ## Delegation grants for agents you attach to other agents
 
 Attaching an agent or pipeline to another agent now records a **delegation grant** for that edge: what the attached agent holds, approved by an editor of the calling agent, who can approve only what they have access to. Under the governed profile the grant is approved through a change request with a second person. See [Delegation grants](/admin/enterprise-controls/least-privilege-and-trust#delegation-grants). Nothing that runs today changes.

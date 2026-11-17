@@ -111,6 +111,9 @@ on:
       # nothing under apps/elitea-web. Without this path the job that exists to
       # catch that drift would not start on the change that caused it.
       - "services/elitea-worker-rust/**"
+      # The `code-sandbox` job (#2206, #2208) runs the agent `run_code` tool
+      # on the real Docker code sandbox: the runner images are its subject too.
+      - "services/elitea-code-runner/**"
       # The `index-stream-rust` job (ADR-0030 Verification 3) runs the index
       # journey on the Rust-only path: vectors in Qdrant behind elitea-vector,
       # documents read by the extractor sidecar. Same reasoning as above.
@@ -215,7 +218,8 @@ jobs:
     needs: &build-once-needs model-path-changes
     if: &build-once-if >-
       (needs.model-path-changes.outputs.reaches-stack == 'true' ||
-       needs.model-path-changes.outputs.reaches-handoff == 'true') &&
+       needs.model-path-changes.outputs.reaches-handoff == 'true' ||
+       needs.model-path-changes.outputs.reaches-sandbox == 'true') &&
       (github.event_name != 'pull_request' ||
        (github.event.pull_request.head.repo.full_name == github.repository &&
         github.actor != 'dependabot[bot]'))
@@ -831,6 +835,172 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # The code sandbox's supervisor, built in parallel with the stack images and
+  # handed to the `code-sandbox` lane as an artifact (the image is a distroless
+  # binary, tens of MB). The runner images are NOT built here: they are large,
+  # and the lane builds them from the Actions cache ci-rust.yml writes.
+  sandbox-supervisor-image:
+    name: Build the code sandbox supervisor image
+    needs: [model-path-changes]
+    if: ${{ needs.model-path-changes.outputs.reaches-sandbox == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+        with:
+          # The builder image from the org's own mirror (mirror-buildkit.yml), by
+          # digest: no anonymous Docker Hub pull per job.
+          driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+      # The `supervisor` stage of the worker Containerfile: the same binary the
+      # chart pins by digest (publish.yml), cargo-auditable, distroless.
+      - name: Build the supervisor image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: services/elitea-worker-rust/Containerfile
+          target: supervisor
+          push: false
+          load: true
+          tags: elitea-sandbox-supervisor:ci
+          platforms: linux/amd64
+          cache-from: type=gha,scope=elitea-sandbox-supervisor-linux-amd64
+          cache-to: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=elitea-sandbox-supervisor-linux-amd64,ignore-error=true' || '' }}
+      - name: Save the image for the lane
+        working-directory: ${{ github.workspace }}
+        run: docker save elitea-sandbox-supervisor:ci | gzip -1 > "${RUNNER_TEMP}/elitea-sandbox-supervisor.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sandbox-supervisor-image
+          path: ${{ runner.temp }}/elitea-sandbox-supervisor.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  # #2206, #2208: the agent `run_code` tool (the "Python sandbox" toggle, PRs
+  # #2197 and #2207) against the REAL code sandbox. The full standalone stack
+  # plus docker-compose.sandbox.yml (a supervisor on the runner's Docker
+  # socket), TLS on the stack's PostgreSQL, the two runner images by ID, and
+  # the worker's `sandbox_runtimes`. The model is the offline mock scripting a
+  # `run_code` call; the sandbox is real, and each journey asserts the tool
+  # result a runner container returned. deploy/runtime/sandbox-deployment.md
+  # ("Docker Compose") documents the same minimal configuration.
+  #
+  # Runs when a change touches what it exercises (`reaches-sandbox`: the
+  # worker, the agent runtime, the runner and supervisor images, the sandbox
+  # compose files, the journeys), on main's nightly and on dispatch.
+  code-sandbox:
+    name: Agent run_code on the real code sandbox
+    needs: [model-path-changes, web-images, stack-images, sandbox-supervisor-image]
+    if: ${{ !cancelled() && (needs.web-images.result == 'success' || needs.web-images.result == 'skipped') && (needs.stack-images.result == 'success' || needs.stack-images.result == 'skipped') && needs.sandbox-supervisor-image.result == 'success' && needs.model-path-changes.outputs.reaches-sandbox == 'true' }}
+    permissions:
+      contents: read
+      # Pulls the ci-* images by digest; only the build jobs write packages.
+      packages: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          # The npm cache is .github/actions/npm-cache below.
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+      - name: Install (locked)
+        run: |
+          for attempt in 1 2 3; do
+            npm ci && exit 0
+            [ "$attempt" = 3 ] && { echo "::error::npm ci failed after 3 attempts"; exit 1; }
+            echo "::warning::npm ci attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+      - name: Pre-pull the pinned Playwright container (background)
+        run: |
+          nohup bash -c 'timeout 600 docker pull -q mcr.microsoft.com/playwright:v1.62.1-noble' >/tmp/prepull.log 2>&1 &
+      - name: Stack images for this lane (pulled by digest; built here on a fork)
+        uses: ./.github/actions/stack-images
+        with:
+          built: ${{ needs.web-images.result == 'success' && needs.stack-images.result == 'success' }}
+          compose-files: |
+            docker-compose.standalone-full.yml
+            docker-compose.standalone-rust-agent.yml
+          cache-hcl: |
+            ci/bake-cache.hcl
+            ci/bake-cache-rust.hcl
+          targets: standalone-rust
+          mount-cache-suffix: rust
+      - uses: actions/download-artifact@v8
+        with:
+          name: sandbox-supervisor-image
+          path: ${{ runner.temp }}/sandbox-supervisor
+      - name: Load the supervisor image
+        working-directory: ${{ github.workspace }}
+        run: gunzip -c "${RUNNER_TEMP}/sandbox-supervisor/elitea-sandbox-supervisor.tar.gz" | docker load
+      - uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: image=ghcr.io/elitea-ng/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+      # The runner images, from the same Actions-cache scopes ci-rust.yml writes
+      # (each target reads all three, as there).
+      - name: Build the code runner Deno/Pyodide image
+        uses: docker/build-push-action@v7
+        with:
+          context: services/elitea-code-runner
+          file: services/elitea-code-runner/Containerfile
+          target: default
+          push: false
+          load: true
+          tags: elitea-code-runner:ci-default
+          platforms: linux/amd64
+          cache-from: |
+            type=gha,scope=elitea-code-runner-verification-linux-amd64
+            type=gha,scope=elitea-code-runner-default-linux-amd64
+            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
+      - name: Build the code runner Rust image
+        uses: docker/build-push-action@v7
+        with:
+          context: services/elitea-code-runner
+          file: services/elitea-code-runner/Containerfile
+          target: rust-runtime
+          push: false
+          load: true
+          tags: elitea-code-runner:ci-rust
+          platforms: linux/amd64
+          cache-from: |
+            type=gha,scope=elitea-code-runner-verification-linux-amd64
+            type=gha,scope=elitea-code-runner-default-linux-amd64
+            type=gha,scope=elitea-code-runner-rust-runtime-linux-amd64
+      - name: Run the journeys against a fresh stack with the code sandbox
+        working-directory: ${{ github.workspace }}
+        env:
+          COMPOSE_BIN: docker compose
+          CI: "true"
+          STANDALONE_SKIP_BUILD: "1"
+          STANDALONE_WORKER: rust
+          CODE_SANDBOX_PROJECT: elitea-code-sandbox-ci
+          CODE_SANDBOX_PORT: "8091"
+          MOCK_LLM_CHUNK_DELAY_MS: "120"
+          PLAYWRIGHT_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.62.1-noble
+          ELITEA_SANDBOX_SUPERVISOR_IMAGE: elitea-sandbox-supervisor:ci
+          ELITEA_SANDBOX_DENO_IMAGE: elitea-code-runner:ci-default
+          ELITEA_SANDBOX_RUST_IMAGE: elitea-code-runner:ci-rust
+        run: bash apps/elitea-web/scripts/code-sandbox-e2e.sh
+      - name: Give the report back to the runner user
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" playwright-results playwright-report 2>/dev/null || true
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-code-sandbox
+          path: apps/elitea-web/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
   model-path-changes:
     name: Which E2E lanes does this change reach?
     # Decides, on a pull request, which lanes below run. Two outputs:
@@ -872,6 +1042,7 @@ jobs:
       reaches-model: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-model }}
       reaches-stack: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-stack }}
       reaches-handoff: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-handoff }}
+      reaches-sandbox: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reaches-sandbox }}
     steps:
       - uses: actions/checkout@v7
         if: github.event_name == 'pull_request'
