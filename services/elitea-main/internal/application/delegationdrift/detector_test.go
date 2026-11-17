@@ -18,7 +18,7 @@ type fakeStore struct {
 	below   map[int64][]dg.Grant
 }
 
-func (f *fakeStore) ListTracked(context.Context, int64, []int64) ([]dg.Tracked, error) {
+func (f *fakeStore) ListTracked(context.Context, int64, []int64, int64) ([]dg.Tracked, error) {
 	return f.tracked, nil
 }
 

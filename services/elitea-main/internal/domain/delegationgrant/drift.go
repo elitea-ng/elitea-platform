@@ -1,6 +1,8 @@
 package delegationgrant
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"sort"
 	"strconv"
 	"strings"
@@ -97,7 +99,22 @@ func (c Closure) Grew(before Closure) bool {
 	return false
 }
 
-// Key is a stable text for a closure, used in the notification dedup key.
+// Equal reports whether two readings are the same closure. A reading that was
+// never taken (nil) equals nothing, so the first reading is always recorded.
+func (c Closure) Equal(other Closure) bool {
+	if c == nil || other == nil || len(c) != len(other) {
+		return false
+	}
+	for id, digest := range c {
+		if previous, ok := other[id]; !ok || previous != digest {
+			return false
+		}
+	}
+	return true
+}
+
+// Key is a fixed-size digest of a closure, used in the notification dedup key
+// (a closure of many agents would not fit a btree index row as text).
 func (c Closure) Key() string {
 	ids := make([]int64, 0, len(c))
 	for id := range c {
@@ -111,7 +128,8 @@ func (c Closure) Key() string {
 		b.WriteString(c[id])
 		b.WriteByte(';')
 	}
-	return b.String()
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
 }
 
 // The notification event types of delegation drift. The message in the meta

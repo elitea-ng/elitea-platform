@@ -3,7 +3,6 @@ package repos
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 
@@ -31,7 +30,7 @@ const maxEditorVersions = 25
 // recorded drift and closure. calleeIDs narrows the list to grants into those
 // callees; nil lists every grant of the project. A tenant schema without the
 // table answers none.
-func (s *DelegationGrants) ListTracked(ctx context.Context, projectID int64, calleeIDs []int64) ([]dg.Tracked, error) {
+func (s *DelegationGrants) ListTracked(ctx context.Context, projectID int64, calleeIDs []int64, callerID int64) ([]dg.Tracked, error) {
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {
 		return nil, err
@@ -39,7 +38,8 @@ func (s *DelegationGrants) ListTracked(ctx context.Context, projectID int64, cal
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 SELECT %s, closure FROM %s.delegation_grants
 WHERE state IN ('approved', 'stale') AND ($1::int[] IS NULL OR callee_entity_id = ANY($1))
-ORDER BY caller_entity_id, callee_entity_id, edge_kind`, delegationGrantColumns, schema), driftCalleeFilter(calleeIDs))
+  AND ($2::int = 0 OR caller_entity_id = $2)
+ORDER BY caller_entity_id, callee_entity_id, edge_kind`, delegationGrantColumns, schema), driftCalleeFilter(calleeIDs), int32(callerID)) //nolint:gosec // application ids are int4 rows
 	if err != nil {
 		if undefinedTable(err) {
 			return nil, nil
@@ -174,6 +174,14 @@ UPDATE %s.delegation_grants SET state = 'approved', drift = NULL, updated_at = c
 			return err
 		}
 		out.Grant, out.Changed = updated, true
+		// A drift that comes back after a restore is a new event: forget what was
+		// announced for this edge.
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`
+DELETE FROM %s.delegation_drift_notices
+WHERE caller_entity_id = $1 AND callee_entity_id = $2 AND edge_kind = $3 AND notice_kind = 'stale'`, schema),
+			updated.Edge.CallerEntityID, updated.Edge.CalleeEntityID, string(updated.Edge.Kind)); err != nil {
+			return fmt.Errorf("delegation grants: forget the notices: %w", err)
+		}
 		return s.append(ctx, tx, grantEvent(updated, dg.ActionApproved, 0, "callee_restored"))
 	}
 	return nil
@@ -183,7 +191,7 @@ func (s *DelegationGrants) applyClosure(ctx context.Context, tx pgx.Tx, schema s
 	if closure == nil {
 		return nil
 	}
-	if sameClosure(before, closure) {
+	if closure.Equal(before) {
 		return nil
 	}
 	encoded, err := encodeClosure(closure)
@@ -204,26 +212,18 @@ func (s *DelegationGrants) applyClosure(ctx context.Context, tx pgx.Tx, schema s
 	return err
 }
 
-func sameClosure(a, b dg.Closure) bool {
-	if a == nil {
-		return false // never read: the first reading is recorded as the baseline
-	}
-	if len(a) != len(b) {
-		return false
-	}
-	for id, digest := range a {
-		if other, ok := b[id]; !ok || other != digest {
-			return false
-		}
-	}
-	return true
-}
-
 // notifyDrift tells the caller's owners and editors once per edge and digest:
 // the notice row is the dedup record, so a repeated check, a second writer or
 // a notification deleted from the bell never repeats it. It answers how many
 // people were told.
 func (s *DelegationGrants) notifyDrift(ctx context.Context, tx pgx.Tx, schema string, grant dg.Grant, kind, digest, message string) (int, error) {
+	people, err := callerEditors(ctx, tx, schema, grant)
+	if err != nil {
+		return 0, err
+	}
+	if len(people) == 0 {
+		return 0, nil // nobody to tell: leave the digest unannounced rather than record it as told
+	}
 	tag, err := tx.Exec(ctx, fmt.Sprintf(`
 INSERT INTO %s.delegation_drift_notices (caller_entity_id, callee_entity_id, edge_kind, notice_kind, digest)
 VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`, schema),
@@ -233,10 +233,6 @@ VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`, schema),
 	}
 	if tag.RowsAffected() == 0 {
 		return 0, nil
-	}
-	people, err := callerEditors(ctx, tx, schema, grant)
-	if err != nil {
-		return 0, err
 	}
 	eventType := dg.NotifyStale
 	if kind == "closure" {
@@ -273,14 +269,10 @@ func callerEditors(ctx context.Context, tx pgx.Tx, schema string, grant dg.Grant
 			out = append(out, id)
 		}
 	}
-	var business, technical *int64
-	err := tx.QueryRow(ctx, `
-SELECT business_owner_id, technical_owner_id FROM elitea_lifecycle.agent_registry
-WHERE tenant_project_id = $1 AND application_id = $2`, grant.ProjectID, grant.Edge.CallerEntityID).Scan(&business, &technical)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("delegation grants: read the owners: %w", err)
+	for _, id := range marketplace.OwnersOf(ctx, tx, grant.ProjectID, grant.Edge.CallerEntityID, 0) {
+		add(id)
 	}
-	for _, id := range []*int64{business, technical, grant.ProposedBy, grant.ApprovedBy} {
+	for _, id := range []*int64{grant.ProposedBy, grant.ApprovedBy} {
 		if id != nil {
 			add(*id)
 		}

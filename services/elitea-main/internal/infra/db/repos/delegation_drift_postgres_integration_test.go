@@ -163,10 +163,10 @@ func TestDriftWiderCalleeMarksStaleAndNotifiesOnceAndReapprovalRestores(t *testi
 		t.Fatalf("back within the grant: %+v", got)
 	}
 
-	// The same drift again is the same (edge, digest): no second notification.
+	// A drift that comes back after a restore is a new event and is told again.
 	setCalleeTools(t, pool, "list_products", "list_releases")
-	if result, err = detector.CheckProject(ctx, 1); err != nil || result.Stale != 1 || result.Notified != 0 {
-		t.Fatalf("the same drift again: %+v %v", result, err)
+	if result, err = detector.CheckProject(ctx, 1); err != nil || result.Stale != 1 || result.Notified != 3 {
+		t.Fatalf("the drift again after a restore: %+v %v", result, err)
 	}
 	// A different drift is a new digest and is told.
 	setCalleeTools(t, pool, "list_products", "list_releases", "delete_product")

@@ -67,7 +67,16 @@ func (s *DelegationGrants) ReconcileCompositionTx(ctx context.Context, tx pgx.Tx
 		return err
 	}
 	actor := in.ApproverIDs[0]
-	if err := s.revokeOrphanedTx(ctx, tx, schema, in.ProjectID, actor); err != nil {
+	orphans, err := tx.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.revokeOrphanedTx(ctx, orphans, schema, in.ProjectID, actor); err != nil {
+		slog.ErrorContext(ctx, "delegation grants: the orphaned grants were not revoked", "project_id", in.ProjectID, "error", err)
+		if err := orphans.Rollback(ctx); err != nil {
+			return err
+		}
+	} else if err := orphans.Commit(ctx); err != nil {
 		return err
 	}
 	edges, err := compositionEdges(ctx, tx, schema, in.RootApplicationID)

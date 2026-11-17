@@ -7,9 +7,10 @@ import (
 	"time"
 )
 
-// DefaultDelay is how long a project's checks are held back so a burst of
-// writes (a version publish writes the version, its tools and its tags) runs
-// one check, after the last of them.
+// DefaultDelay is how long after a write the project's check runs. Writes that
+// arrive while one is waiting are absorbed by it, so a burst (a version publish
+// writes the version, its tools and its tags) runs one check; a write that
+// lands after it runs arms the next.
 const DefaultDelay = 2 * time.Second
 
 // checkTimeout bounds one project check.

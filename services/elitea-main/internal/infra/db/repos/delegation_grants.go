@@ -460,6 +460,11 @@ func (s *DelegationGrants) ApplyDelegationTx(ctx context.Context, tx pgx.Tx, app
 	if err != nil {
 		return err
 	}
+	if grant.State == dg.StateApproved {
+		// The callee came back within the grant while the re-approval request was
+		// open (a drift restore): the grant already covers it.
+		return nil
+	}
 	if grant.State == dg.StateStale {
 		// The change request re-approves a stale grant: the callee's set as the
 		// drift recorded it replaces the old grant, which stays as superseded.

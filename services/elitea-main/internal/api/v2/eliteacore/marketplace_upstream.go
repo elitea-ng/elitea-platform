@@ -517,6 +517,13 @@ func (h *Handler) writeMerge(ctx context.Context, req mergeRequest) (map[string]
 	}
 	tier := registryTier(ctx, h.pool, req.ProjectID, req.ApplicationID)
 	needsApproval := marketplace.NeedsApproval(tier, marketplace.Requirements{})
+	if !needsApproval && req.Fork.base > 0 {
+		// A merge that gives an internal edge's agent more than the base did needs
+		// a person, and approving it re-approves the edge.
+		if base, err := marketplace.LoadVersion(ctx, h.pool, req.Fork.listing, req.Fork.base); err == nil {
+			needsApproval = marketplace.WidensEdges(base.Requirements, req.Fork.target.Requirements)
+		}
+	}
 	selfApprove, reason := !needsApproval, "direct_low_tier"
 	if needsApproval {
 		personal, err := marketplace.IsPersonalProject(ctx, h.pool, req.ProjectID)

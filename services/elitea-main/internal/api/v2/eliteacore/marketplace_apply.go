@@ -47,6 +47,12 @@ func (h *Handler) ApplyMarketplaceTx(ctx context.Context, tx pgx.Tx, apply agent
 	// The request approves the agent's internal edges: a widened edge is
 	// re-approved by it (ADR-0044 amendment 1, A1.2 rule 3).
 	proposer, approvers := apply.ProposerID, apply.ApproverIDs
+	if apply.Kind == agentlifecycle.KindUpstreamMerge && len(approvers) == 0 {
+		// A direct merge only moves the fork's origin; the fork's own edges are
+		// its editors' and the drift check watches them. Only a merge a request
+		// approved re-approves the edges.
+		return nil
+	}
 	if len(approvers) == 0 && apply.ActorID > 0 {
 		proposer, approvers = apply.ActorID, []int64{apply.ActorID}
 	}

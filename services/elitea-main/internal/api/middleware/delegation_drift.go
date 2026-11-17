@@ -12,13 +12,19 @@ import (
 // can widen the set of a delegation grant's callee (ADR-0044 amendment 1,
 // A1.2 rule 3), so the drift check runs after it.
 //
-// The list is broad on purpose: the check is one indexed read of the project's
-// approved grants, run once per burst of writes, and a fragment that matches a
-// write which changes nothing costs only that. A fragment that is missing costs
-// a late detection, which the check on reading the caller's grants makes good.
+// The list is broad on purpose, minus the routes that only test or validate
+// (delegationDriftReadOnlyWrites). The check is debounced per project and reads
+// the project's approved grants; a fragment that is missing costs a late
+// detection, which the check on reading the caller's grants makes good.
 var delegationDriftSurfaces = []string{
 	"application", "toolkit", "/tool", "/version", "publish", "marketplace_", "agent_registry",
 	"change_requests", "credential_reference", "/mcp", "pipeline",
+}
+
+// delegationDriftReadOnlyWrites are the POST routes under those fragments that
+// test, validate, discover or stream and change no callee.
+var delegationDriftReadOnlyWrites = []string{
+	"test_", "validator", "validate", "discover", "generate_", "_stream", "tools_call", "predict", "check_",
 }
 
 // DelegationDriftSurfaces returns a copy of the fragments, so a router-level
@@ -34,6 +40,12 @@ func driftSurface(path string) bool {
 	// The delegation grant routes themselves never change a callee.
 	if strings.Contains(path, "/delegation_grant") || strings.Contains(path, "/delegation_preview") {
 		return false
+	}
+	// Routes that run, test or validate something and write nothing a callee holds.
+	for _, fragment := range delegationDriftReadOnlyWrites {
+		if strings.Contains(path, fragment) {
+			return false
+		}
 	}
 	for _, fragment := range delegationDriftSurfaces {
 		if strings.Contains(path, fragment) {
