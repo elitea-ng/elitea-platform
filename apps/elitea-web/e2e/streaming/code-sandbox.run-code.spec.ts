@@ -207,6 +207,8 @@ journey(
   'pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {\n    println!("{}", 1 + 1);\n    let _ = state;\n    Ok(serde_json::json!(1 + 1))\n}',
   (result) => {
     expect(result.result).toBe(2);
-    expect((result.output ?? '').trim()).toBe('2');
+    // The Rust runner's output carries cargo's compile log before the program's
+    // own line, so the program's print is the LAST line.
+    expect((result.output ?? '').trim().split('\n').pop()?.trim()).toBe('2');
   },
 );
