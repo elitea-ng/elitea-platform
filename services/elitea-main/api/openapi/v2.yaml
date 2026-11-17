@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.58"
+  x-elitea-client-contract: "1.59"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4078,8 +4078,9 @@ components:
         state:
           type: string
           description: >
-            `pending` (not approved yet), `approved`, `stale` (the callee changed after
-            approval; the grant still covers what it recorded), `superseded` (replaced
+            `pending` (not approved yet), `approved`, `stale` (the callee now holds more
+            than the grant recorded, see `drift`; the grant still covers what it
+            recorded and the callee runs without the new items), `superseded` (replaced
             by a re-approval) or `revoked`.
         legacy:
           type: boolean
@@ -4139,6 +4140,30 @@ components:
         change_state:
           type: string
           description: The state of that change request.
+        drift:
+          $ref: "#/components/schemas/DelegationDrift"
+
+    DelegationDrift:
+      type: object
+      description: >
+        Client contract 1.59. What the callee of a `stale` grant holds now that the
+        grant does not cover: the changes an editor of the caller reviews when they
+        re-approve. Set containment against what the callee held when the grant was
+        proposed, never version equality: a version with the same or a smaller set
+        is not drift.
+      required: [callee_version_id, digest, added]
+      properties:
+        callee_version_id:
+          type: integer
+          format: int64
+          description: The callee version the changed set was read from; re-approving lists this version's set.
+        digest:
+          type: string
+          description: The SHA-256 of the callee's current set. One notification is sent per edge and digest.
+        added:
+          type: array
+          items:
+            $ref: "#/components/schemas/DelegationItem"
 
     DelegationGrantList:
       type: object
@@ -30223,7 +30248,7 @@ paths:
           format: int64
     post:
       operationId: approveDelegationGrant
-      summary: Approve a pending delegation grant
+      summary: Approve a pending delegation grant, or re-approve a stale one
       description: |
         Client contract 1.58, ADR-0044 amendment 1. An editor of the caller approves a
         pending grant, all of it (no body) or only the items they choose (`items`).
@@ -30235,7 +30260,12 @@ paths:
         the agent that holds the reference. Under the governed profile the grant is
         approved through its change request instead, and this answers 409 with the
         code `DELEGATION_GOVERNED` and the `change_request_id`. Needs the permission
-        that edits an agent. Audited. NOTE(W2):
+        that edits an agent. Audited. Since 1.59 the grant may also be `stale`: the
+        callee now holds more than the grant recorded (`drift` lists what). Approving
+        re-approves it against what the callee holds now: the old grant is kept as
+        `superseded` and the answer is the new, approved grant. Under the governed
+        profile a stale grant is re-approved through a new change request, and this
+        answers 409 `DELEGATION_GOVERNED` with that request. NOTE(W2):
         internal/api/v2/delegationgrants/handler.go:270 (`Approve`).
       tags:
         - applications
@@ -30265,7 +30295,7 @@ paths:
         "404":
           $ref: "#/components/responses/404"
         "409":
-          description: The grant is not pending, or it is governed and is approved through its change request.
+          description: The grant is neither pending nor stale, or it is governed and is approved through its change request.
           content:
             application/json:
               schema:

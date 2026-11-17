@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/delegationgrant"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
@@ -29,13 +31,29 @@ func (h *Handler) ApplyMarketplaceTx(ctx context.Context, tx pgx.Tx, apply agent
 	if err != nil {
 		return fmt.Errorf("marketplace apply: project schema: %w", err)
 	}
+	var applied error
+	origin := delegationgrant.OriginMarketplaceUpgrade
 	switch apply.Kind {
 	case agentlifecycle.KindUpgrade:
-		return h.applyUpgradeTx(ctx, tx, schema, apply)
+		applied = h.applyUpgradeTx(ctx, tx, schema, apply)
 	case agentlifecycle.KindUpstreamMerge:
-		return applyMergeTx(ctx, tx, schema, apply)
+		applied = applyMergeTx(ctx, tx, schema, apply)
+	default:
+		return agentlifecycle.Refuse(agentlifecycle.InvalidCode, "Only an upgrade or an upstream merge is applied here.")
 	}
-	return agentlifecycle.Refuse(agentlifecycle.InvalidCode, "Only an upgrade or an upstream merge is applied here.")
+	if applied != nil {
+		return applied
+	}
+	// The request approves the agent's internal edges: a widened edge is
+	// re-approved by it (ADR-0044 amendment 1, A1.2 rule 3).
+	proposer, approvers := apply.ProposerID, apply.ApproverIDs
+	if len(approvers) == 0 && apply.ActorID > 0 {
+		proposer, approvers = apply.ActorID, []int64{apply.ActorID}
+	}
+	return h.reconcileComposition(ctx, tx, repos.CompositionApproval{
+		ProjectID: apply.ProjectID, RootApplicationID: apply.ApplicationID, Origin: origin,
+		ProposerID: proposer, ApproverIDs: approvers,
+	})
 }
 
 // loadTarget reads the target version of a change and checks that it is still
@@ -342,4 +360,21 @@ WHERE application_id = $1 ORDER BY id LIMIT 1`, schema), apply.ApplicationID).Sc
 		return agentlifecycle.Refuse(agentlifecycle.InvalidCode, "An installed agent is upgraded, not merged.")
 	}
 	return marketplace.MoveFork(ctx, tx, schema, apply.ProjectID, apply.ApplicationID, target, apply.ActorID)
+}
+
+// reconcileComposition approves the internal edges a Marketplace change wrote,
+// in the change's transaction. Without a composed hook that can, it does
+// nothing, and the edges keep whatever grants they have.
+func (h *Handler) reconcileComposition(ctx context.Context, tx pgx.Tx, in repos.CompositionApproval) error {
+	reconciler, ok := h.delegation.(compositionReconciler)
+	if !ok {
+		return nil
+	}
+	return reconciler.ReconcileCompositionTx(ctx, tx, in)
+}
+
+// compositionReconciler is the optional half of the delegation grant hook that
+// approves the internal edges of an installed agent (repos.DelegationGrants).
+type compositionReconciler interface {
+	ReconcileCompositionTx(ctx context.Context, tx pgx.Tx, in repos.CompositionApproval) error
 }

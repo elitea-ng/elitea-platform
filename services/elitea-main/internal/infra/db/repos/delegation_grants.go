@@ -106,6 +106,10 @@ type ProposeInput struct {
 	Governed bool
 	// ProposedBy is the proposer; nil only for a migration.
 	ProposedBy *int64
+	// NoChangeRequest records a governed grant WITHOUT its own change request:
+	// a Marketplace hire, upgrade or merge approves its edges in the request that
+	// carries them (ADR-0051, ADR-0044 amendment 1 A1.2 rule 3).
+	NoChangeRequest bool
 }
 
 func (in ProposeInput) validate() error {
@@ -197,7 +201,7 @@ func (s *DelegationGrants) ProposeTx(ctx context.Context, tx pgx.Tx, in ProposeI
 	if err := s.append(ctx, tx, grantEvent(grant, dg.ActionProposed, proposerOf(grant))); err != nil {
 		return dg.Grant{}, err
 	}
-	if grant.Governed {
+	if grant.Governed && !in.NoChangeRequest {
 		if s.changes == nil {
 			return dg.Grant{}, errors.New("delegation grants: no change request recorder is composed for a governed grant")
 		}
@@ -301,6 +305,18 @@ func (s *DelegationGrants) Reapprove(ctx context.Context, in ReapproveInput) (dg
 	}
 	var out dg.Grant
 	err = s.inTx(ctx, func(tx pgx.Tx) error {
+		grant, err := s.reapproveTx(ctx, tx, schema, in)
+		out = grant
+		return err
+	})
+	return out, err
+}
+
+// reapproveTx is Reapprove in the caller's transaction: the final approval of a
+// governed re-approval's change request runs it in its own.
+func (s *DelegationGrants) reapproveTx(ctx context.Context, tx pgx.Tx, schema string, in ReapproveInput) (dg.Grant, error) {
+	var out dg.Grant
+	err := func() error {
 		old, err := lockGrant(ctx, tx, schema, in.ProjectID, in.GrantID)
 		if err != nil {
 			return err
@@ -355,7 +371,7 @@ UPDATE %s.delegation_grants SET state = 'superseded', superseded_by = id, update
 			return err
 		}
 		return s.append(ctx, tx, grantEvent(grant, dg.ActionApproved, in.ApprovedBy, partialReason(omitted)...))
-	})
+	}()
 	return out, err
 }
 
@@ -436,8 +452,120 @@ func (s *DelegationGrants) ApplyDelegationTx(ctx context.Context, tx pgx.Tx, app
 		}
 		holders = append(holders, access)
 	}
-	_, err := s.approveTx(ctx, tx, apply.ProjectID, apply.GrantID, apply.FinalApproverID, nil, allHold(holders))
+	schema, err := tenantSchema(strconv.FormatInt(apply.ProjectID, 10))
+	if err != nil {
+		return err
+	}
+	grant, err := lockGrant(ctx, tx, schema, apply.ProjectID, apply.GrantID)
+	if err != nil {
+		return err
+	}
+	if grant.State == dg.StateStale {
+		// The change request re-approves a stale grant: the callee's set as the
+		// drift recorded it replaces the old grant, which stays as superseded.
+		return s.reapproveStaleTx(ctx, tx, schema, grant, apply.ProposerID, apply.FinalApproverID, allHold(holders))
+	}
+	_, err = s.approveTx(ctx, tx, apply.ProjectID, apply.GrantID, apply.FinalApproverID, nil, allHold(holders))
 	return err
+}
+
+// reapproveStaleTx re-approves a stale grant against what its callee holds now:
+// the callee version the drift recorded, read again, so an approval made days
+// after the drift lists what the callee holds when it is made.
+func (s *DelegationGrants) reapproveStaleTx(ctx context.Context, tx pgx.Tx, schema string, grant dg.Grant, proposer, approver int64, access dg.Access) error {
+	if s.callees == nil || grant.Drift == nil {
+		return dg.ErrWrongState
+	}
+	callee, err := s.callees.Snapshot(ctx, grant.ProjectID, grant.Edge.CalleeEntityID, grant.Drift.CalleeVersionID)
+	if err != nil {
+		return err
+	}
+	var proposedBy *int64
+	if proposer > 0 {
+		proposedBy = &proposer
+	}
+	_, err = s.reapproveTx(ctx, tx, schema, ReapproveInput{
+		ProjectID: grant.ProjectID, GrantID: grant.ID, CalleeVersionID: grant.Drift.CalleeVersionID, Requested: callee.Set,
+		Access: access, Origin: grant.Origin, Governed: grant.Governed, ProposedBy: proposedBy, ApprovedBy: approver,
+	})
+	return err
+}
+
+// ReapproveStale re-approves a stale grant of an ungoverned edge against what
+// its callee holds now (the approve of a stale grant). The approver's access
+// limits what the new grant lists, as it does for a first approval.
+func (s *DelegationGrants) ReapproveStale(ctx context.Context, projectID, id, approver int64, choose []dg.Item, access dg.Access) (dg.Grant, error) {
+	if approver <= 0 || access == nil {
+		return dg.Grant{}, fmt.Errorf("%w: an approver and their access are required", dg.ErrInvalid)
+	}
+	if s.callees == nil {
+		return dg.Grant{}, errors.New("delegation grants: no callee reader is composed")
+	}
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return dg.Grant{}, err
+	}
+	var out dg.Grant
+	err = s.inTx(ctx, func(tx pgx.Tx) error {
+		grant, err := lockGrant(ctx, tx, schema, projectID, id)
+		if err != nil {
+			return err
+		}
+		if grant.State != dg.StateStale || grant.Drift == nil {
+			return dg.ErrWrongState
+		}
+		callee, err := s.callees.Snapshot(ctx, projectID, grant.Edge.CalleeEntityID, grant.Drift.CalleeVersionID)
+		if err != nil {
+			return err
+		}
+		out, err = s.reapproveTx(ctx, tx, schema, ReapproveInput{
+			ProjectID: projectID, GrantID: id, CalleeVersionID: grant.Drift.CalleeVersionID, Requested: callee.Set,
+			Choose: choose, Access: access, Origin: grant.Origin, Governed: false, ProposedBy: grant.ProposedBy, ApprovedBy: approver,
+		})
+		return err
+	})
+	return out, err
+}
+
+// RequestReapproval records the change request that re-approves a stale
+// governed grant, and answers whether it recorded a new one. A request that is
+// already open is left as it is.
+func (s *DelegationGrants) RequestReapproval(ctx context.Context, projectID, id, proposer int64) (bool, error) {
+	if s.changes == nil {
+		return false, errors.New("delegation grants: no change request recorder is composed")
+	}
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return false, err
+	}
+	created := false
+	err = s.inTx(ctx, func(tx pgx.Tx) error {
+		grant, err := lockGrant(ctx, tx, schema, projectID, id)
+		if err != nil {
+			return err
+		}
+		if grant.State != dg.StateStale {
+			return dg.ErrWrongState
+		}
+		var open int
+		if err := tx.QueryRow(ctx, `
+SELECT count(*) FROM elitea_lifecycle.change_requests
+WHERE tenant_project_id = $1 AND kind = 'delegation' AND delegation_grant_id = $2 AND state IN ('draft', 'submitted')`, projectID, id).Scan(&open); err != nil {
+			return fmt.Errorf("delegation grants: read the open change requests: %w", err)
+		}
+		if open > 0 {
+			return nil
+		}
+		if _, err := s.changes.RecordDelegationChangeTx(ctx, tx, agentlifecycle.NewDelegationChange{
+			ProjectID: projectID, ApplicationID: grant.Edge.CallerEntityID, GrantID: grant.ID, ProposedBy: proposer,
+			Summary: fmt.Sprintf("Re-approve the delegation from agent %d to %d (%s)", grant.Edge.CallerEntityID, grant.Edge.CalleeEntityID, grant.Edge.Kind),
+		}); err != nil {
+			return err
+		}
+		created = true
+		return nil
+	})
+	return created, err
 }
 
 // RevokeDelegationTx revokes the grant of a rejected or withdrawn change
@@ -666,7 +794,7 @@ ORDER BY caller_entity_id, callee_entity_id, edge_kind`, delegationGrantColumns,
 
 const delegationGrantColumns = `id, project_id, caller_entity_id, callee_entity_id, edge_kind, callee_version_id,
 requested_set, requested_digest, grant_set, digest, omitted, state, legacy, governed, origin,
-proposed_by, approved_by, approved_at, revoked_by, revoked_at, superseded_by, created_at, updated_at`
+proposed_by, approved_by, approved_at, revoked_by, revoked_at, superseded_by, created_at, updated_at, drift`
 
 type grantQuerier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -742,18 +870,24 @@ WHERE caller_entity_id = $1 AND callee_entity_id = $2 AND edge_kind = $3 AND sta
 }
 
 func scanDelegationGrant(row pgx.Row) (dg.Grant, error) {
+	return scanDelegationGrantExtra(row)
+}
+
+// scanDelegationGrantExtra scans a grant row followed by extra columns.
+func scanDelegationGrantExtra(row pgx.Row, extra ...any) (dg.Grant, error) {
 	var (
 		g                                               dg.Grant
 		kind, state, origin                             string
-		requested, approved, omitted                    []byte
+		requested, approved, omitted, drift             []byte
 		proposedBy, approvedBy, revokedBy, supersededBy *int64
 		approvedAt, revokedAt                           *time.Time
 		calleeVersion                                   int32
 		caller, callee                                  int32
 	)
-	if err := row.Scan(&g.ID, &g.ProjectID, &caller, &callee, &kind, &calleeVersion,
+	dest := append([]any{&g.ID, &g.ProjectID, &caller, &callee, &kind, &calleeVersion,
 		&requested, &g.RequestedDigest, &approved, &g.Digest, &omitted, &state, &g.Legacy, &g.Governed, &origin,
-		&proposedBy, &approvedBy, &approvedAt, &revokedBy, &revokedAt, &supersededBy, &g.CreatedAt, &g.UpdatedAt); err != nil {
+		&proposedBy, &approvedBy, &approvedAt, &revokedBy, &revokedAt, &supersededBy, &g.CreatedAt, &g.UpdatedAt, &drift}, extra...)
+	if err := row.Scan(dest...); err != nil {
 		return dg.Grant{}, err
 	}
 	var err error
@@ -771,6 +905,13 @@ func scanDelegationGrant(row pgx.Row) (dg.Grant, error) {
 	g.Omitted = []dg.Item{}
 	if err := json.Unmarshal(omitted, &g.Omitted); err != nil {
 		return dg.Grant{}, fmt.Errorf("delegation grants: omitted: %w", err)
+	}
+	if len(drift) > 0 {
+		var recorded dg.Drift
+		if err := json.Unmarshal(drift, &recorded); err != nil {
+			return dg.Grant{}, fmt.Errorf("delegation grants: drift: %w", err)
+		}
+		g.Drift = &recorded
 	}
 	g.Edge = dg.Edge{CallerEntityID: int64(caller), CalleeEntityID: int64(callee), Kind: dg.EdgeKind(kind)}
 	g.CalleeVersionID = int64(calleeVersion)

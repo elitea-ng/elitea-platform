@@ -248,6 +248,13 @@ type MarketplaceApply struct {
 	Payload       json.RawMessage
 	// ActorID is the person who approved, or proposed a direct change.
 	ActorID int64
+	// ProposerID asked for the change and ApproverIDs approved it, for the
+	// delegation grants of the agent's internal edges (ADR-0044 amendment 1,
+	// A1.2 rule 3): the request approves them, so every approver must hold what
+	// they list. Both are empty for a change that records no request, and then
+	// ActorID is both.
+	ProposerID  int64
+	ApproverIDs []int64
 	// Tier is the tier the request was recorded at.
 	Tier Tier
 }

@@ -97,6 +97,7 @@ WHERE v.listing_id = $1 AND v.version_id = $2`, listingID, versionID).
 	if err := json.Unmarshal(reqsRaw, &v.Requirements); err != nil {
 		return StoredVersion{}, fmt.Errorf("marketplace: read the requirements: %w", err)
 	}
+	v.Requirements.Edges = edgesOfDefinition(v.Definition)
 	return v, nil
 }
 

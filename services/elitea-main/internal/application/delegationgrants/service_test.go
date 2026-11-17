@@ -13,6 +13,9 @@ type fakeStore struct {
 	grants   map[int64]dg.Grant
 	approved int
 	governed bool
+	// reapproved and requested count the re-approvals of stale grants, direct
+	// and through a change request.
+	reapproved, requested int
 }
 
 func (f *fakeStore) ProposeGrant(_ context.Context, projectID int64, edge dg.Edge, version int64, set dg.GrantSet, origin dg.Origin, governed bool, by int64) (dg.Grant, error) {
@@ -60,6 +63,17 @@ func (f *fakeStore) ListForCaller(_ context.Context, _, caller int64, _ bool) ([
 }
 func (f *fakeStore) ActiveForEdge(context.Context, int64, dg.Edge) (dg.Grant, bool, error) {
 	return dg.Grant{}, false, nil
+}
+func (f *fakeStore) ReapproveStale(_ context.Context, _, id, approver int64, _ []dg.Item, _ dg.Access) (dg.Grant, error) {
+	g := f.grants[id]
+	g.State, g.ApprovedBy, g.Drift = dg.StateApproved, &approver, nil
+	f.grants[id] = g
+	f.reapproved++
+	return g, nil
+}
+func (f *fakeStore) RequestReapproval(context.Context, int64, int64, int64) (bool, error) {
+	f.requested++
+	return true, nil
 }
 
 type fakeCallees map[int64]dg.Callee
@@ -173,6 +187,43 @@ func TestGovernedGrantIsApprovedThroughItsChangeRequest(t *testing.T) {
 	}
 	if _, err := service.Approve(ctx, 1, 2, v.Grant.ID, 8, nil); !errors.Is(err, dg.ErrGoverned) || store.approved != 0 {
 		t.Fatalf("the direct route must refuse a governed grant: %v", err)
+	}
+}
+
+func staleGrant(store *fakeStore, id int64) {
+	g := store.grants[id]
+	g.State = dg.StateStale
+	g.Drift = &dg.Drift{CalleeVersionID: 5, Digest: "d"}
+	store.grants[id] = g
+}
+
+func TestApprovingAStaleGrantReapprovesIt(t *testing.T) {
+	service, store := newService(t, false, fakeAccess{toolkits: true, credentials: true})
+	ctx := context.Background()
+	v, _ := service.Propose(ctx, ProposeRequest{ProjectID: 1, CallerID: 2, CalleeID: 1, CalleeVersionID: 5, EdgeKind: dg.EdgeAgentTool, Actor: 7})
+	staleGrant(store, v.Grant.ID)
+	got, err := service.Approve(ctx, 1, 2, v.Grant.ID, 7, nil)
+	if err != nil || got.Grant.State != dg.StateApproved || store.reapproved != 1 || store.approved != 0 {
+		t.Fatalf("re-approve: %+v %v (reapproved %d)", got, err, store.reapproved)
+	}
+}
+
+func TestAStaleGovernedGrantIsReapprovedThroughAChangeRequest(t *testing.T) {
+	service, store := newService(t, true, fakeAccess{toolkits: true, credentials: true})
+	ctx := context.Background()
+	v, _ := service.Propose(ctx, ProposeRequest{ProjectID: 1, CallerID: 2, CalleeID: 1, CalleeVersionID: 5, EdgeKind: dg.EdgeAgentTool, Actor: 7})
+	staleGrant(store, v.Grant.ID)
+	if _, err := service.Approve(ctx, 1, 2, v.Grant.ID, 8, nil); !errors.Is(err, dg.ErrGoverned) || store.requested != 1 || store.reapproved != 0 {
+		t.Fatalf("a governed re-approval goes through a change request: %v (requested %d)", err, store.requested)
+	}
+}
+
+func TestListRunsTheDriftCheckFirst(t *testing.T) {
+	service, _ := newService(t, false, fakeAccess{toolkits: true})
+	var checked []int64
+	service.WithDriftCheck(func(_ context.Context, _, caller int64) { checked = append(checked, caller) })
+	if _, err := service.List(context.Background(), 1, 2, false); err != nil || len(checked) != 1 || checked[0] != 2 {
+		t.Fatalf("list must check the caller's edges first: %v %v", checked, err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationdrift"
 	appgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/delegationgrants"
 	platformauth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -20,6 +21,10 @@ import (
 type delegationWiring struct {
 	store   *dbrepos.DelegationGrants
 	service *appgrants.Service
+	// trigger runs the drift check of a project after a write that can change a
+	// callee (story S4); the service runs the check for a caller when its grants
+	// are read.
+	trigger *delegationdrift.Trigger
 }
 
 // composeDelegationGrants builds the grant store over the pool and composes it
@@ -69,7 +74,12 @@ func composeDelegationGrants(cfg RouterConfig, lifecycle *dbrepos.AgentLifecycle
 	if err != nil {
 		return fail("service", err)
 	}
-	return &delegationWiring{store: store, service: service}
+	detector, err := delegationdrift.New(store, callees)
+	if err != nil {
+		return fail("drift detector", err)
+	}
+	service.WithDriftCheck(detector.CheckCallerQuietly)
+	return &delegationWiring{store: store, service: service, trigger: delegationdrift.NewTrigger(detector, delegationdrift.DefaultDelay)}
 }
 
 // permissionChecker answers what the REST routes' RBAC middleware asks: the

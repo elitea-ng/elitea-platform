@@ -30,6 +30,12 @@ type Store interface {
 	Get(ctx context.Context, projectID, id int64) (dg.Grant, error)
 	ListForCaller(ctx context.Context, projectID, callerEntityID int64, includeHistory bool) ([]dg.Grant, error)
 	ActiveForEdge(ctx context.Context, projectID int64, edge dg.Edge) (dg.Grant, bool, error)
+	// ReapproveStale replaces a stale grant with one for what its callee holds
+	// now, approved by approver; the old grant stays as superseded.
+	ReapproveStale(ctx context.Context, projectID, id, approver int64, choose []dg.Item, access dg.Access) (dg.Grant, error)
+	// RequestReapproval records the change request that re-approves a stale
+	// grant (kind delegation), unless one is open.
+	RequestReapproval(ctx context.Context, projectID, id, proposer int64) (bool, error)
 }
 
 // Callees reads what a version holds now.
@@ -57,6 +63,17 @@ type Service struct {
 	changes  Changes
 	access   Access
 	governed func(context.Context) bool
+	// driftCheck runs the drift check of a caller's edges before they are read
+	// (WithDriftCheck); nil reads the grants as stored.
+	driftCheck func(ctx context.Context, projectID, callerID int64)
+}
+
+// WithDriftCheck composes the drift check run when a caller's grants are read,
+// so an editor who opens them sees drift that no write path caught (a callee
+// changed by a path that does not run the check). It never fails the read.
+func (s *Service) WithDriftCheck(check func(ctx context.Context, projectID, callerID int64)) *Service {
+	s.driftCheck = check
+	return s
 }
 
 // New builds the service. governed reports whether the governed profile is on.
@@ -65,6 +82,12 @@ func New(grants Store, callees Callees, changes Changes, access Access, governed
 		return nil, errors.New("delegation grants: every dependency is required")
 	}
 	return &Service{grants: grants, callees: callees, changes: changes, access: access, governed: governed}, nil
+}
+
+func (s *Service) checkDrift(ctx context.Context, projectID, callerID int64) {
+	if s.driftCheck != nil {
+		s.driftCheck(ctx, projectID, callerID)
+	}
 }
 
 // View is a grant with what a client needs to show it.
@@ -137,6 +160,7 @@ func (s *Service) Propose(ctx context.Context, req ProposeRequest) (View, error)
 
 // Get reads one grant of the caller.
 func (s *Service) Get(ctx context.Context, projectID, callerID, grantID int64) (View, error) {
+	s.checkDrift(ctx, projectID, callerID)
 	grant, err := s.grants.Get(ctx, projectID, grantID)
 	if err != nil {
 		return View{}, err
@@ -149,6 +173,7 @@ func (s *Service) Get(ctx context.Context, projectID, callerID, grantID int64) (
 
 // List lists the grants of the caller's edges.
 func (s *Service) List(ctx context.Context, projectID, callerID int64, history bool) ([]View, error) {
+	s.checkDrift(ctx, projectID, callerID)
 	grants, err := s.grants.ListForCaller(ctx, projectID, callerID, history)
 	if err != nil {
 		return nil, err
@@ -175,19 +200,38 @@ func (s *Service) Approve(ctx context.Context, projectID, callerID, grantID, app
 	if grant.Edge.CallerEntityID != callerID {
 		return View{}, dg.ErrNotFound
 	}
-	// A grant that is not pending is a state conflict whatever its profile: the
-	// client must not be sent to a change request that is already decided.
-	if grant.State != dg.StatePending {
+	// A grant that is neither pending nor stale is a state conflict whatever its
+	// profile: the client must not be sent to a change request that is already
+	// decided.
+	if grant.State != dg.StatePending && grant.State != dg.StateStale {
 		return View{}, dg.ErrWrongState
 	}
-	if grant.Governed {
+	governed := grant.Governed
+	if grant.State == dg.StateStale && !governed {
+		governed = s.governed(ctx)
+	}
+	if governed {
+		// A stale grant is re-approved through a change request too: record it
+		// (once) so the 409 can name it.
+		if grant.State == dg.StateStale {
+			if _, err := s.grants.RequestReapproval(ctx, projectID, grantID, approver); err != nil {
+				return View{}, err
+			}
+		}
 		return View{}, dg.ErrGoverned
 	}
 	access, err := s.access.AccessFor(ctx, projectID, approver)
 	if err != nil {
 		return View{}, err
 	}
-	approved, err := s.grants.Approve(ctx, projectID, grantID, approver, choose, access)
+	var approved dg.Grant
+	if grant.State == dg.StateStale {
+		// Re-approval: the grant is replaced by one for what the callee holds
+		// now, and the old one is kept as superseded (A1.2 rule 3).
+		approved, err = s.grants.ReapproveStale(ctx, projectID, grantID, approver, choose, access)
+	} else {
+		approved, err = s.grants.Approve(ctx, projectID, grantID, approver, choose, access)
+	}
 	if err != nil {
 		return View{}, err
 	}

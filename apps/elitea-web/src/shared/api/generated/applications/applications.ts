@@ -8932,9 +8932,14 @@ export const getApproveDelegationGrantUrl = (
  * the agent that holds the reference. Under the governed profile the grant is
  * approved through its change request instead, and this answers 409 with the
  * code `DELEGATION_GOVERNED` and the `change_request_id`. Needs the permission
- * that edits an agent. Audited. NOTE(W2):
+ * that edits an agent. Audited. Since 1.59 the grant may also be `stale`: the
+ * callee now holds more than the grant recorded (`drift` lists what). Approving
+ * re-approves it against what the callee holds now: the old grant is kept as
+ * `superseded` and the answer is the new, approved grant. Under the governed
+ * profile a stale grant is re-approved through a new change request, and this
+ * answers 409 `DELEGATION_GOVERNED` with that request. NOTE(W2):
  * internal/api/v2/delegationgrants/handler.go:270 (`Approve`).
- * @summary Approve a pending delegation grant
+ * @summary Approve a pending delegation grant, or re-approve a stale one
  */
 export const approveDelegationGrant = async (
   projectId: string,
@@ -9168,7 +9173,7 @@ export function useApproveDelegationGrant<
   queryKey: DataTag<QueryKey, TData, TError>;
 };
 /**
- * @summary Approve a pending delegation grant
+ * @summary Approve a pending delegation grant, or re-approve a stale one
  */
 
 export function useApproveDelegationGrant<

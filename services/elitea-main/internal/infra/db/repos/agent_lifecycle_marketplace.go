@@ -10,8 +10,51 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/delegationgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 )
+
+// compositionReconciler is the optional half of the delegation applier that
+// approves the internal edges a Marketplace change wrote (DelegationGrants).
+type compositionReconciler interface {
+	ReconcileCompositionTx(ctx context.Context, tx pgx.Tx, in CompositionApproval) error
+}
+
+// approverIDsOf lists everyone who approved the change, the final approver
+// included, once each.
+func approverIDsOf(change agentlifecycle.ChangeRequest, finalApprover int64) []int64 {
+	seen := map[int64]bool{}
+	var out []int64
+	for _, id := range append([]int64{finalApprover}, approvedBy(change)...) {
+		if id > 0 && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func approvedBy(change agentlifecycle.ChangeRequest) []int64 {
+	out := make([]int64, 0, len(change.Approvals))
+	for _, recorded := range change.Approvals {
+		out = append(out, recorded.ApproverID)
+	}
+	return out
+}
+
+// reconcileComposition approves the internal edges of the agent a hire wrote,
+// in the transaction of the hire request's final approval. Without a composed
+// reconciler it does nothing.
+func (s *AgentLifecycle) reconcileComposition(ctx context.Context, tx pgx.Tx, change agentlifecycle.ChangeRequest, approverID int64, origin delegationgrant.Origin) error {
+	reconciler, ok := s.delegationApplier.(compositionReconciler)
+	if !ok {
+		return nil
+	}
+	return reconciler.ReconcileCompositionTx(ctx, tx, CompositionApproval{
+		ProjectID: change.ProjectID, RootApplicationID: change.ApplicationID, Origin: origin,
+		ProposerID: change.ProposedBy, ApproverIDs: approverIDsOf(change, approverID),
+	})
+}
 
 // The Marketplace side of agent lifecycle governance (ADR-0051 decision 3).
 //
@@ -135,12 +178,17 @@ func (s *AgentLifecycle) finalizeMarketplace(ctx context.Context, tx pgx.Tx, cha
 			}
 			return fmt.Errorf("agent lifecycle: enable the tools of the hired agent: %w", err)
 		}
+		// The hire request approves the internal edges of the hired agent.
+		if err := s.reconcileComposition(ctx, tx, change, approverID, delegationgrant.OriginMarketplaceHire); err != nil {
+			return err
+		}
 	case agentlifecycle.KindUpgrade, agentlifecycle.KindUpstreamMerge:
 		if s.marketplaceApplier == nil {
 			return errors.New("agent lifecycle: no Marketplace applier is composed")
 		}
 		apply := agentlifecycle.MarketplaceApply{
 			ProjectID: change.ProjectID, ApplicationID: change.ApplicationID, Kind: change.Kind, ActorID: approverID, Tier: change.Tier,
+			ProposerID: change.ProposedBy, ApproverIDs: approverIDsOf(change, approverID),
 		}
 		var digest, payload []byte
 		if err := tx.QueryRow(ctx, `

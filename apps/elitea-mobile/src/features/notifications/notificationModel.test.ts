@@ -112,6 +112,22 @@ describe('icons, details and labels', () => {
     ).toBe('Marketplace update available');
   });
 
+  it('shows the delegation drift and closure notices by their title and message', () => {
+    expect(
+      describeNotification({
+        event_type: 'delegation_grant_stale',
+        meta: { message: 'Re-approval needed: Agent1 now holds more than Agent2 approved for it (git push).' },
+      }),
+    ).toMatchObject({
+      title: 'Delegation grant stale',
+      detail: 'Re-approval needed: Agent1 now holds more than Agent2 approved for it (git push).',
+      icon: 'bell',
+    });
+    expect(
+      describeNotification({ event_type: 'delegation_closure_grew', meta: { message: 'The delegation now reaches more agents.' } }).title,
+    ).toBe('Delegation closure grew');
+  });
+
   it('reads title, detail, age and unread', () => {
     expect(notificationLabel({ title: 'T', detail: 'D' }, '5m', true)).toBe('T, D, 5m, unread');
     expect(notificationLabel({ title: 'T', detail: null }, '', false)).toBe('T');

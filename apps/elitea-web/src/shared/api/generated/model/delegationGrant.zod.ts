@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { DelegationDrift } from "./delegationDrift.zod";
 import { DelegationItem } from "./delegationItem.zod";
 
 export const DelegationGrant = zod
@@ -59,7 +60,7 @@ export const DelegationGrant = zod
     state: zod
       .string()
       .describe(
-        "`pending` (not approved yet), `approved`, `stale` (the callee changed after approval; the grant still covers what it recorded), `superseded` (replaced by a re-approval) or `revoked`.\n",
+        "`pending` (not approved yet), `approved`, `stale` (the callee now holds more than the grant recorded, see `drift`; the grant still covers what it recorded and the callee runs without the new items), `superseded` (replaced by a re-approval) or `revoked`.\n",
       ),
     legacy: zod
       .boolean()
@@ -105,6 +106,7 @@ export const DelegationGrant = zod
       .string()
       .optional()
       .describe("The state of that change request."),
+    drift: DelegationDrift.optional(),
   })
   .describe(
     "The grant of one composition edge (ADR-0044 amendment 1). `items` is what the approver approved; `requested_items` is what the callee held when the grant was proposed; `omitted` is the part of the second that is not in the first.\n",

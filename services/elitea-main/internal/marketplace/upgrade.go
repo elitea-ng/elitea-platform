@@ -81,6 +81,10 @@ func WideningOf(prev, next Requirements) []Widening {
 	if tierRankOrLow(next.Tier) > tierRankOrLow(prev.Tier) {
 		out = append(out, Widening{Kind: WidenTier, Detail: tierOrLow(prev.Tier) + " to " + tierOrLow(next.Tier)})
 	}
+	// An internal edge whose agent holds more than before is a delegation that
+	// needs a new approval (ADR-0044 amendment 1, A1.2 rule 3): the upgrade
+	// lists it, approving the request re-approves it, and `auto` never applies.
+	out = append(out, edgeWidenings(prev.Edges, next.Edges)...)
 	return out
 }
 
@@ -151,7 +155,9 @@ func Changes(prev, next StoredVersion) ([]agentrelease.Change, error) {
 	if err != nil {
 		return nil, err
 	}
-	return agentrelease.Diff(before, after), nil
+	changes := agentrelease.Diff(before, after)
+	// The widened internal edges, next to the definition's own changes.
+	return append(changes, edgeChanges(edgesOfDefinition(prev.Definition), edgesOfDefinition(next.Definition))...), nil
 }
 
 func diffView(version StoredVersion) (map[string]any, error) {

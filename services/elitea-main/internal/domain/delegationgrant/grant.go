@@ -97,8 +97,11 @@ type Grant struct {
 	RevokedBy       *int64
 	RevokedAt       *time.Time
 	SupersededBy    *int64
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// Drift is what the callee holds now that the grant does not cover, on a
+	// stale grant; nil otherwise.
+	Drift     *Drift
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Stale reports whether the callee's current set has drifted from the one the

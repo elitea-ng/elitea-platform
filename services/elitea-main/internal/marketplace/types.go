@@ -118,6 +118,11 @@ type Requirements struct {
 	ModelClass    string        `json:"model_class"`
 	Tier          string        `json:"tier"`
 	HasWriteTools bool          `json:"has_write_tools"`
+	// Edges are the internal edges of the version's definition (EdgesOf): what
+	// each nested agent holds. They are derived when a stored version is loaded,
+	// never stored with the requirements, so a snapshot taken before they existed
+	// still compares.
+	Edges []EdgeRequirement `json:"-"`
 }
 
 // Model classes.

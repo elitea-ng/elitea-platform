@@ -236,7 +236,7 @@ func (h *Handler) buildUpgradePlan(ctx context.Context, projectID, appID int64, 
 		Requirements:    target.Requirements,
 		Bindings:        bindingsResponse(target, boundFrom(carried), true).Bindings,
 		NewRequirements: unboundRequirements(target.Requirements, carried),
-		NeedsApproval:   marketplace.NeedsApproval(tier, target.Requirements),
+		NeedsApproval:   marketplace.NeedsApproval(tier, target.Requirements) || marketplace.WidensEdges(prev.Requirements, target.Requirements),
 		AutoEligible:    eligible && direction == "up",
 		Hireable:        target.Hireable(),
 		Feedback:        planFeedback{RatingAvg: avg, RatingCount: count},
@@ -384,6 +384,17 @@ func (h *Handler) recordAndApplyUpgrade(ctx context.Context, req upgradeRequest)
 	}
 	tier := registryTier(ctx, h.pool, req.ProjectID, req.ApplicationID)
 	needsApproval := marketplace.NeedsApproval(tier, req.Target.Requirements)
+	if !needsApproval {
+		// A version that gives an internal edge's agent more than the pinned one
+		// did needs a person: approving the request re-approves the edge
+		// (ADR-0044 amendment 1, A1.2 rule 3).
+		prev, err := marketplace.LoadVersion(ctx, h.pool, req.Held.ListingID, req.Held.VersionID)
+		if err != nil {
+			slog.ErrorContext(ctx, "marketplace upgrade: read the pinned version failed", "application_id", req.ApplicationID, "error", err)
+			return internal()
+		}
+		needsApproval = marketplace.WidensEdges(prev.Requirements, req.Target.Requirements)
+	}
 	if req.Automatic && needsApproval {
 		return nil, http.StatusConflict, "needs_approval", "An automatic upgrade never needs an approval."
 	}

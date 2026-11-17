@@ -2249,8 +2249,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// Without a pool the routes and the attach hook are absent.
 	delegationService := cfg.DelegationGrants
 	var delegationHook v2core.DelegationGrantHook
+	// driftTrigger asks for a drift check of a project after a write that can
+	// change a callee agent (story S4); nil without the grant store.
+	var driftTrigger func(projectID int64)
 	if delegation := composeDelegationGrants(cfg, agentLifecycle, permissionResolver); delegation != nil {
 		delegationHook = delegation.store
+		driftTrigger = delegation.trigger.ProjectChanged
 		if delegationService == nil {
 			delegationService = delegation.service
 		}
@@ -2460,6 +2464,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		//     (403) is recorded rather than silently disappearing — which is
 		//     the question an audit trail is most often opened to answer.
 		r.Use(apimw.Audit(auditRecorder))
+		// A write that can change what a callee agent holds asks for the drift
+		// check of its delegation grants (ADR-0044 amendment 1, A1.2 rule 3).
+		// Below Audit so it sees the final status; it never changes a response.
+		r.Use(apimw.DelegationDrift(driftTrigger))
 
 		r.Route("/api/v2", func(r chi.Router) {
 			// THE GROUP'S OWN "no such route" ANSWER (F3).
