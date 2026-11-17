@@ -18,6 +18,9 @@ use minijinja::{Error as JinjaError, ErrorKind, State as JinjaState};
 /// The widest `center` may pad to, so a template cannot ask for a huge string.
 const MAX_WIDTH: usize = 8 * 1024;
 
+/// The longest `replace` result, in bytes (the node's own input bound).
+const MAX_REPLACED: usize = 64 * 1024;
+
 fn invalid(message: &'static str) -> JinjaError {
     JinjaError::new(ErrorKind::InvalidOperation, message)
 }
@@ -88,7 +91,7 @@ fn split_whitespace_n(text: &str, limit: usize) -> Vec<String> {
     let mut rest = text.trim_start();
     while !rest.is_empty() {
         if parts.len() == limit {
-            parts.push(rest.trim_end().to_owned());
+            parts.push(rest.to_owned());
             break;
         }
         match rest.find(char::is_whitespace) {
@@ -105,11 +108,39 @@ fn split_whitespace_n(text: &str, limit: usize) -> Vec<String> {
     parts
 }
 
+/// `text.rsplit(None, limit)`: at most `limit` splits from the right, the rest
+/// kept whole.
+fn rsplit_whitespace_n(text: &str, limit: usize) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut rest = text.trim_end();
+    while !rest.is_empty() {
+        if parts.len() == limit {
+            parts.push(rest.to_owned());
+            break;
+        }
+        match rest.rfind(char::is_whitespace) {
+            Some(start) => {
+                let word_start = start + rest[start..].chars().next().map_or(1, char::len_utf8);
+                parts.push(rest[word_start..].to_owned());
+                rest = rest[..start].trim_end();
+            }
+            None => {
+                parts.push(rest.to_owned());
+                break;
+            }
+        }
+    }
+    parts.reverse();
+    parts
+}
+
 fn rsplit(text: &str, args: &[JinjaValue]) -> Result<JinjaValue, JinjaError> {
     let limit = max_split(args, 1)?;
     let Some(separator) = str_arg(args, 0)? else {
-        // Whitespace rsplit with a limit is rare; it is served as `split`.
-        return split(text, args);
+        return Ok(match limit {
+            None => strings(text.split_whitespace().map(ToOwned::to_owned)),
+            Some(limit) => strings(rsplit_whitespace_n(text, limit)),
+        });
     };
     if separator.is_empty() {
         return Err(invalid("empty separator"));
@@ -192,6 +223,37 @@ fn join(separator: &str, args: &[JinjaValue]) -> Result<JinjaValue, JinjaError> 
     Ok(JinjaValue::from(parts.join(separator)))
 }
 
+/// Refuses extra arguments rather than ignoring them: `s.find('x', 5)` must not
+/// quietly search from the start.
+fn at_most(args: &[JinjaValue], count: usize) -> Result<(), JinjaError> {
+    if args.len() > count {
+        Err(invalid("method does not take that many arguments"))
+    } else {
+        Ok(())
+    }
+}
+
+/// `text.replace(old, new[, count])`, bounded: the result may not outgrow
+/// `MAX_REPLACED` bytes, so a template cannot multiply a large input.
+fn replace(text: &str, args: &[JinjaValue]) -> Result<JinjaValue, JinjaError> {
+    at_most(args, 3)?;
+    let old = required_str(args, 0)?;
+    let new = required_str(args, 1)?;
+    if old.is_empty() {
+        return Err(invalid("empty substring"));
+    }
+    let limit = max_split(args, 2)?;
+    let hits = text.matches(old).count().min(limit.unwrap_or(usize::MAX));
+    let grown = new.len().saturating_sub(old.len()).saturating_mul(hits);
+    if text.len().saturating_add(grown) > MAX_REPLACED {
+        return Err(invalid("replace result is outside its bound"));
+    }
+    Ok(JinjaValue::from(match limit {
+        None => text.replace(old, new),
+        Some(limit) => text.replacen(old, new, limit),
+    }))
+}
+
 fn string_method(text: &str, method: &str, args: &[JinjaValue]) -> Result<JinjaValue, JinjaError> {
     Ok(match method {
         "split" => return split(text, args),
@@ -204,14 +266,24 @@ fn string_method(text: &str, method: &str, args: &[JinjaValue]) -> Result<JinjaV
         "upper" => JinjaValue::from(text.to_uppercase()),
         "capitalize" => JinjaValue::from(capitalize(text)),
         "title" => JinjaValue::from(title(text)),
-        "startswith" => JinjaValue::from(text.starts_with(required_str(args, 0)?)),
-        "endswith" => JinjaValue::from(text.ends_with(required_str(args, 0)?)),
-        "replace" => JinjaValue::from(text.replace(required_str(args, 0)?, required_str(args, 1)?)),
-        "find" => JinjaValue::from(
-            text.find(required_str(args, 0)?)
-                .map_or(-1, |byte| char_index(text, byte)),
-        ),
+        "startswith" => {
+            at_most(args, 1)?;
+            JinjaValue::from(text.starts_with(required_str(args, 0)?))
+        }
+        "endswith" => {
+            at_most(args, 1)?;
+            JinjaValue::from(text.ends_with(required_str(args, 0)?))
+        }
+        "replace" => return replace(text, args),
+        "find" => {
+            at_most(args, 1)?;
+            JinjaValue::from(
+                text.find(required_str(args, 0)?)
+                    .map_or(-1, |byte| char_index(text, byte)),
+            )
+        }
         "count" => {
+            at_most(args, 1)?;
             let needle = required_str(args, 0)?;
             if needle.is_empty() {
                 return Err(invalid("empty substring"));

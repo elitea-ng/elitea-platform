@@ -165,7 +165,9 @@ function againstText(comparison: RunComparison): string {
   const mode =
     comparison.previousMode === 'runtime_plane'
       ? t('features.agentEvaluation.insights.modeAgent', 'agent run')
-      : t('features.agentEvaluation.insights.modeSingle', 'one call per case');
+      : comparison.previousMode === 'predict_blocking'
+        ? t('features.agentEvaluation.insights.modeSingle', 'one call per case')
+        : comparison.previousMode;
   const parts = [mode];
   if (comparison.previousVersionId !== undefined) {
     parts.push(t('features.agentEvaluation.insights.againstVersion', 'version {{id}}', { id: comparison.previousVersionId }));

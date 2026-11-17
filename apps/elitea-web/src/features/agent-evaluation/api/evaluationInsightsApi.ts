@@ -38,8 +38,8 @@ export async function fetchRunAnalytics(projectId: string, runId: string): Promi
 }
 
 /** Rows asked per page while looking for the previous run, and how many pages are read. */
-const PREVIOUS_PAGE_SIZE = 50;
-const PREVIOUS_MAX_PAGES = 6;
+const PREVIOUS_PAGE_SIZE = 200;
+const PREVIOUS_MAX_PAGES = 5;
 
 /**
  * The nearest earlier scored run of the same suite (dataset) that ran in the
@@ -53,7 +53,9 @@ const PREVIOUS_MAX_PAGES = 6;
  *
  * The server filters by suite, agent and "scored" (`before_run_id`,
  * `scored_only`) and not by mode, so the mode is matched here, page by page,
- * walking back through older runs until one fits or the bounded history is read.
+ * walking back through older runs until one fits or the bounded history (1000
+ * runs) is read. A server-side mode filter would remove the walk; it needs an
+ * API contract change, so it is left as the follow-up.
  */
 export async function fetchPreviousScoredRun(projectId: string, run: EvalRun): Promise<EvalRun | undefined> {
   const base = {

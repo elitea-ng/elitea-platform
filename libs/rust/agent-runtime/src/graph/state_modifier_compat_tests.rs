@@ -38,6 +38,9 @@ async fn python_str_methods_render_like_jinja2() {
         ("{{ v.split() | length }}", json!("  one two   three "), "3"),
         ("{{ v.split(',', 1) | join('|') }}", json!("a,b,c"), "a|b,c"),
         ("{{ v.rsplit(',', 1) | join('|') }}", json!("a,b,c"), "a,b|c"),
+        ("{{ v.rsplit(None, 1) | join('|') }}", json!("a b c"), "a b|c"),
+        ("{{ v.split(None, 1) | join('|') }}", json!("a b  "), "a|b  "),
+        ("{{ v.replace(',', ';', 1) }}", json!("a,b,c"), "a;b,c"),
         ("{{ v.splitlines() | length }}", json!("x\ny\nz"), "3"),
         ("[{{ v.strip() }}]", json!("  hi \n"), "[hi]"),
         (
@@ -131,4 +134,7 @@ async fn jinja2_text_filters_render_like_jinja2() {
 async fn unknown_python_methods_still_fail() {
     assert_eq!(render("{{ v.nonexistent() }}", json!("x")).await, None);
     assert_eq!(render("{{ v.split('') }}", json!("x")).await, None);
+    // An argument that would be ignored is refused instead.
+    assert_eq!(render("{{ v.find('x', 5) }}", json!("x")).await, None);
+    assert_eq!(render("{{ v.replace('', 'y') }}", json!("x")).await, None);
 }

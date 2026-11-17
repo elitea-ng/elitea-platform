@@ -45,7 +45,7 @@ describe('fetchPreviousScoredRun', () => {
 
   it('walks back through full pages until a run of the same mode turns up', async () => {
     const page = (start: number) =>
-      Array.from({ length: 50 }, (_, index) => run(String(start - index), 'runtime_plane'));
+      Array.from({ length: 200 }, (_, index) => run(String(start - index), 'runtime_plane'));
     const seen: string[] = [];
     server.use(
       http.get(URL_RUNS, ({ request }) => {
@@ -57,7 +57,7 @@ describe('fetchPreviousScoredRun', () => {
     );
     const previous = await fetchPreviousScoredRun('1', run('200', 'predict_blocking'));
     expect(previous?.id).toBe('100');
-    expect(seen).toEqual(['200', '150']);
+    expect(seen).toEqual(['200', '0']);
   });
 
   it('answers undefined when no earlier run shares the mode', async () => {
