@@ -11,7 +11,6 @@ import (
 
 type fakeStore struct {
 	grants   map[int64]dg.Grant
-	proposed []dg.Grant
 	approved int
 	governed bool
 }
