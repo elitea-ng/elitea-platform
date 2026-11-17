@@ -160,6 +160,23 @@ export function EfficiencyStrip({ efficiency, trajectory }: EfficiencyStripProps
   );
 }
 
+/** "Against run 7 (agent run, version 3, 2026-11-01)": names the run the deltas are against. */
+function againstText(comparison: RunComparison): string {
+  const mode =
+    comparison.previousMode === 'runtime_plane'
+      ? t('features.agentEvaluation.insights.modeAgent', 'agent run')
+      : t('features.agentEvaluation.insights.modeSingle', 'one call per case');
+  const parts = [mode];
+  if (comparison.previousVersionId !== undefined) {
+    parts.push(t('features.agentEvaluation.insights.againstVersion', 'version {{id}}', { id: comparison.previousVersionId }));
+  }
+  if (comparison.previousStartedAt !== undefined) parts.push(comparison.previousStartedAt.slice(0, 10));
+  return t('features.agentEvaluation.insights.against', 'Against run {{id}} ({{details}})', {
+    id: comparison.previousRunId,
+    details: parts.join(', '),
+  });
+}
+
 export interface ComparisonCardProps {
   readonly comparison: RunComparison | undefined;
   /** True when no earlier scored run of this dataset exists. */
@@ -174,13 +191,13 @@ export function ComparisonCard({ comparison, noPrevious, dimensionNames }: Compa
       <Typography variant="labelMedium">{t('features.agentEvaluation.insights.comparison', 'Compared with the previous run')}</Typography>
       {noPrevious && (
         <Typography variant="bodySmall" color="text.secondary" data-testid="run-comparison-none">
-          {t('features.agentEvaluation.insights.noPrevious', 'No earlier scored run on this dataset.')}
+          {t('features.agentEvaluation.insights.noPrevious', 'No earlier scored run of this suite in the same mode.')}
         </Typography>
       )}
       {comparison !== undefined && (
         <>
           <Typography variant="bodySmall" color="text.secondary">
-            {t('features.agentEvaluation.insights.against', 'Against run {{id}}', { id: comparison.previousRunId })}
+            {againstText(comparison)}
           </Typography>
           <Box sx={stripSx}>
             <Stat label={t('features.agentEvaluation.insights.headlineDelta', 'Overall score')} value={formatDelta(comparison.headline, (n) => n.toFixed(1))} testId="run-comparison-headline" />

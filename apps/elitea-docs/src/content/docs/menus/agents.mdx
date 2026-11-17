@@ -135,7 +135,7 @@ Open a finished run's scorecard to see three cards above the scores:
 
 - **Consumption** shows the tokens and estimated cost of the agent's answers and of the judge, side by side, with a total. The money is an estimate at the catalogue rate. A run that started before consumption was recorded, or whose calls the gateway has pruned, says so instead of showing zero. The card needs the analytics permission.
 - **Efficiency** shows the latency of the agent's answer at p50 and p95, how many answers timed out, and tokens and cost per case. Latency is recorded from now on; a run scored before that reads "not recorded".
-- **Compared with the previous run** shows the change in the overall score, in each dimension's average, in p50 latency and in cost per case against the nearest earlier scored run of the same dataset.
+- **Compared with the previous run** shows the change in the overall score, in each dimension's average, in p50 latency and in cost per case against the nearest earlier scored run of the same suite that ran in the same mode (one call per case, or agent run). The card names that run with its mode, agent version and date. The agent version is not matched on purpose: comparing a new version with the one before it is the point.
 
 A run of one model call per case has no tools or steps to measure, so it shows no trajectory or tool metrics. A run of agent runs adds the **Trajectory** card and tool metrics, described next.
 

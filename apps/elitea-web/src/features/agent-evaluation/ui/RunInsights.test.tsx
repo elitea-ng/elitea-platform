@@ -95,7 +95,7 @@ describe('RunInsights', () => {
     expect(screen.getByTestId('run-comparison-latency')).toHaveTextContent('-1.0 s');
     expect(previousQueries[0]?.get('before_run_id')).toBe('2');
     expect(previousQueries[0]?.get('scored_only')).toBe('true');
-    expect(previousQueries[0]?.get('limit')).toBe('1');
+    expect(previousQueries[0]?.get('limit')).toBe('50');
     expect(previousQueries[0]?.get('dataset_id')).toBe('5');
   });
 

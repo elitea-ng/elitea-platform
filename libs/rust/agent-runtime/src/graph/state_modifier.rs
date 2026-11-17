@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use super::PIPELINE_YAML_BUDGET;
+use super::state_modifier_compat as compat;
 use super::yaml::{valid_graph_id, valid_output_key};
 use crate::bounded_yaml;
 
@@ -253,6 +254,12 @@ fn render_template(
     environment.add_filter("base64_to_string", base64_to_string_filter);
     environment.add_filter("split_by_words", split_by_words_filter);
     environment.add_filter("split_by_regex", split_by_regex_filter);
+    // Jinja2 compatibility for templates written for the legacy Python runtime.
+    environment.set_unknown_method_callback(compat::unknown_method);
+    environment.add_filter("wordcount", compat::wordcount_filter);
+    environment.add_filter("capitalize", compat::capitalize_filter);
+    environment.add_filter("truncate", compat::truncate_filter);
+    environment.add_filter("center", compat::center_filter);
     let template = environment
         .template_from_str(source)
         .map_err(|_| StateModifierExecutionError::Template)?;

@@ -37,20 +37,41 @@ export async function fetchRunAnalytics(projectId: string, runId: string): Promi
   return body<AnalyticsEvaluationRun>(await getEvaluationRunAnalytics(projectId, runId));
 }
 
+/** Rows asked per page while looking for the previous run, and how many pages are read. */
+const PREVIOUS_PAGE_SIZE = 50;
+const PREVIOUS_MAX_PAGES = 6;
+
 /**
- * The nearest earlier run of the same dataset (and agent) that finished with a
- * score. The server answers it (`before_run_id`, `scored_only`, limit 1), so
- * it is found however long the history is.
+ * The nearest earlier scored run of the same suite (dataset) that ran in the
+ * SAME execution mode. Modes are not comparable: a one-call-per-case run and an
+ * agent run measure different things, so a delta across them is a false
+ * regression or improvement.
+ *
+ * The agent VERSION is deliberately NOT matched: comparing a new version
+ * against the one before it is the point of the comparison. The card names the
+ * run and its version so the reader sees what the delta is against.
+ *
+ * The server filters by suite, agent and "scored" (`before_run_id`,
+ * `scored_only`) and not by mode, so the mode is matched here, page by page,
+ * walking back through older runs until one fits or the bounded history is read.
  */
 export async function fetchPreviousScoredRun(projectId: string, run: EvalRun): Promise<EvalRun | undefined> {
-  const params = {
+  const base = {
     dataset_id: run.dataset_id,
-    before_run_id: run.id,
     scored_only: true,
-    limit: 1,
+    limit: PREVIOUS_PAGE_SIZE,
     ...(run.application_id === null || run.application_id === undefined ? {} : { application_id: run.application_id }),
   };
-  return body<{ readonly rows: EvalRun[] }>(await listEvalRuns(projectId, params)).rows[0];
+  let before = run.id;
+  for (let page = 0; page < PREVIOUS_MAX_PAGES; page += 1) {
+    const { rows } = body<{ readonly rows: EvalRun[] }>(await listEvalRuns(projectId, { ...base, before_run_id: before }));
+    const match = rows.find((row) => row.execution_mode === run.execution_mode);
+    if (match !== undefined) return match;
+    const last = rows.at(-1);
+    if (last === undefined || rows.length < PREVIOUS_PAGE_SIZE) return undefined;
+    before = last.id;
+  }
+  return undefined;
 }
 
 export async function requestEnhancement(projectId: string, runId: string): Promise<EvalEnhanceProposal> {
